@@ -8,6 +8,7 @@ from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.services.profile_service import load_claude_profiles
+from hivepilot.utils.env import merge_environments
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,8 +40,7 @@ class ClaudeRunner(BaseRunner):
         if self.definition.agent:
             args.extend(["--agent", self.definition.agent])
         args.append(prompt)
-        env = payload.project.env.copy()
-        env.update(self.definition.env)
+        env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         logger.info("claude_runner.start", project=payload.project_name, step=payload.step.name)
         subprocess.run(args, cwd=str(payload.project.path), env=env, check=True, text=True)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)

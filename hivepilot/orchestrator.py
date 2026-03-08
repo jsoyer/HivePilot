@@ -18,6 +18,7 @@ from hivepilot.services.project_service import load_pipelines, load_projects, lo
 from hivepilot.services import state_service
 from hivepilot.services import policy_service, notification_service, knowledge_service
 from hivepilot.services.artifact_service import ArtifactManager
+from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.plugins import PluginManager
 from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
@@ -239,6 +240,7 @@ class Orchestrator:
                 task_name=task_name,
                 step=placeholder_step,
                 metadata=metadata,
+                secrets=self._resolve_secrets(placeholder_step),
             )
             try:
                 run_engine(task=task, project=project, payload=payload)
@@ -251,12 +253,14 @@ class Orchestrator:
             logger.info("task.end", project=project.path.name, task=task_name)
             return
         for step in task.steps:
+            secrets = self._resolve_secrets(step)
             payload = RunnerPayload(
                 project_name=project.path.name,
                 project=project,
                 task_name=task_name,
                 step=step,
                 metadata=metadata,
+                secrets=secrets,
             )
             try:
                 self.plugins.run_hook("before_step", payload=payload)
@@ -283,6 +287,12 @@ class Orchestrator:
         if name not in self.projects.projects:
             raise ValueError(f"Unknown project: {name}")
         return self.projects.projects[name]
+
+    def _resolve_secrets(self, step: TaskStep) -> dict[str, str]:
+        if not step.secrets:
+            return {}
+        return secret_resolver.resolve(step.secrets)
+
     def _collect_artifacts(
         self,
         *,

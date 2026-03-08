@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 
@@ -8,6 +7,7 @@ from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.templates import render_template
+from hivepilot.utils.env import merge_environments
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -34,9 +34,7 @@ class ShellRunner(BaseRunner):
             "extra_prompt": payload.metadata.get("extra_prompt", ""),
         }
         command_str = render_template(template, context)
-        env = os.environ.copy()
-        env.update(payload.project.env)
-        env.update(self.definition.env)
+        env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
 
         logger.info("shell_runner.start", project=payload.project_name, step=payload.step.name)
         subprocess.run(

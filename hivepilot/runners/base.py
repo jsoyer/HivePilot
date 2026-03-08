@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from hivepilot.config import Settings
@@ -14,6 +14,7 @@ class RunnerPayload:
     task_name: str
     step: TaskStep
     metadata: dict[str, Any]
+    secrets: dict[str, str] = field(default_factory=dict)
 
 
 class BaseRunner(Protocol):

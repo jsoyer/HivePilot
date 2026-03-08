@@ -7,4 +7,14 @@ Here is a roadmap:
 - Phase 6 – Metrics & Dashboards ✅
 - Phase 7 – Config Lint & Validation ✅
 - Phase 8 – Containerized Runners ✅
-- Phase 9 – GitHub Enhancements & Secrets (next)
+- Phase 9 – GitHub Enhancements & Secrets ✅
+- Phase 10 – Scheduler Resilience & Retry Queue
+- Phase 11 – Multi-Agent Collaboration Playbooks
+- Phase 12 – Infrastructure-as-Code Integration (Terraform/Pulumi)
+- Phase 13 – Observability Hooks (OpenTelemetry tracing/export)
+- Phase 14 – Policy-Driven Secrets Backends (Vault/SOPS/KMS)
+- Phase 15 – Drift Detection & Auto-Remediation Guardrails
+- Phase 16 – Supply Chain Scanning & SBOM Export
+- Phase 17 – Blueprinted Project Templates & Starters
+- Phase 18 – Advanced ChatOps Actions (run diff/apply/rollback)
+- Phase 19 – Insight Dashboard & SLA Reporting

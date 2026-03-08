@@ -153,6 +153,8 @@ tasks:
         command: hivepilot gh repo-init {project_name} --set-remote --push
 ```
 
+Secrets declared per-step (env or file sources) are resolved right before the runner executes and injected into the CLI/API/container environment, so commands get tokens such as `OPENAI_API_KEY` without committing them directly to YAML.
+
 #### Command templating
 
 Shell/CLI commands accept `{variables}`: `project_name`, `project_path`, `project_default_branch`, `project_owner_repo`, `task_name`, `step_name`, `extra_prompt`. Escape braces via `{{` / `}}`.
@@ -404,6 +406,8 @@ Add new runners by dropping a Python class in `hivepilot/runners/` and registeri
 - `git_service.py` handles checkout, add/commit, push, auto-git enforcement.
 - `github_service.py` wraps `gh repo/issue/release` (with retries, templated URLs).
 - Use YAML `gh-*` tasks or CLI `hivepilot gh repo-init|issue|release` to manage repos, issues, releases.
+- `hivepilot gh repo-init` now accepts `--set-remote/--no-set-remote`, `--remote-protocol`, and `--visibility` so you can pick SSH vs HTTPS remotes and control how repos are created.
+- `hivepilot gh release` exposes `--notes-file` plus `--generate-notes/--no-generate-notes`, making it easy to publish either handcrafted or auto-generated release notes from automation.
 
 ---
 

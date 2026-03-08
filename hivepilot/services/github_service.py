@@ -29,7 +29,21 @@ def create_repo(slug: str, *, settings: Settings, project: ProjectConfig, visibi
     run_command(args, cwd=project.path)
 
 
-def ensure_repository(project: ProjectConfig, settings: Settings, push: bool) -> None:
+def ensure_repository(
+    project: ProjectConfig,
+    settings: Settings,
+    *,
+    push: bool,
+    set_remote: bool = True,
+    remote_protocol: str = "ssh",
+    visibility: str = "private",
+) -> None:
+    remote_protocol = remote_protocol.lower()
+    visibility = visibility.lower()
+    if remote_protocol not in {"ssh", "https"}:
+        raise ValueError("remote_protocol must be 'ssh' or 'https'")
+    if visibility not in {"private", "public"}:
+        raise ValueError("visibility must be 'private' or 'public'")
     slug = project.owner_repo
     if not slug:
         raise ValueError("owner_repo missing in project configuration.")
@@ -37,12 +51,13 @@ def ensure_repository(project: ProjectConfig, settings: Settings, push: bool) ->
         logger.info("github.repo_exists", repo=slug)
     else:
         logger.info("github.repo_create", repo=slug)
-        create_repo(slug, settings=settings, project=project, visibility="private", description=project.description)
-    run_command(
-        [settings.git_command, "remote", "set-url", "origin", build_repo_url(slug, "ssh")],
-        cwd=project.path,
-        check=False,
-    )
+        create_repo(slug, settings=settings, project=project, visibility=visibility, description=project.description)
+    if set_remote:
+        run_command(
+            [settings.git_command, "remote", "set-url", "origin", build_repo_url(slug, remote_protocol)],
+            cwd=project.path,
+            check=False,
+        )
     if push:
         run_command(
             [settings.git_command, "push", "-u", "origin", project.default_branch],
@@ -85,6 +100,7 @@ def create_release(
     tag: str,
     title: str | None,
     notes_file: Path | None = None,
+    generate_notes: bool = True,
 ) -> None:
     slug = project.owner_repo
     if not slug:
@@ -96,8 +112,9 @@ def create_release(
         tag,
         "--repo",
         slug,
-        "--generate-notes",
     ]
+    if generate_notes and not notes_file:
+        args.append("--generate-notes")
     if title:
         args.extend(["--title", title])
     if notes_file:

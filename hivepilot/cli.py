@@ -211,10 +211,26 @@ def dashboard() -> None:
 def gh_repo_init(
     project: str = typer.Argument(..., help="Project key"),
     push: bool = typer.Option(True, "--push/--no-push", help="Push default branch after linking repo"),
+    set_remote: bool = typer.Option(True, "--set-remote/--no-set-remote", help="Update origin remote URL"),
+    remote_protocol: str = typer.Option("ssh", "--remote-protocol", help="Remote protocol (ssh or https)", show_default=True),
+    visibility: str = typer.Option("private", "--visibility", help="Repo visibility (private/public)", show_default=True),
 ) -> None:
     orchestrator = Orchestrator()
     project_cfg = orchestrator._project(project)  # pylint: disable=protected-access
-    ensure_repository(project_cfg, settings, push=push)
+    remote_protocol = remote_protocol.lower()
+    if remote_protocol not in {"ssh", "https"}:
+        raise typer.BadParameter("remote-protocol must be 'ssh' or 'https'")
+    visibility = visibility.lower()
+    if visibility not in {"private", "public"}:
+        raise typer.BadParameter("visibility must be 'private' or 'public'")
+    ensure_repository(
+        project_cfg,
+        settings,
+        push=push,
+        set_remote=set_remote,
+        remote_protocol=remote_protocol,
+        visibility=visibility,
+    )
     typer.echo(f"Repository ready for {project}")
 
 
@@ -235,10 +251,19 @@ def gh_release(
     project: str = typer.Argument(..., help="Project key"),
     tag: str = typer.Argument(..., help="Release tag"),
     title: Optional[str] = typer.Option(None, "--title", help="Release title"),
+    notes_file: Optional[Path] = typer.Option(None, "--notes-file", help="Path to release notes file"),
+    generate_notes: bool = typer.Option(True, "--generate-notes/--no-generate-notes", help="Auto-generate release notes"),
 ) -> None:
     orchestrator = Orchestrator()
     project_cfg = orchestrator._project(project)  # pylint: disable=protected-access
-    create_release(project=project_cfg, settings=settings, tag=tag, title=title)
+    create_release(
+        project=project_cfg,
+        settings=settings,
+        tag=tag,
+        title=title,
+        notes_file=notes_file,
+        generate_notes=generate_notes,
+    )
     typer.echo("Release created.")
 
 

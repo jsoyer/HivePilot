@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 
 from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
+from hivepilot.utils.env import gather_overrides
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -24,8 +24,7 @@ class ContainerRunner(BaseRunner):
             raise ValueError("Container runner requires image and command options.")
 
         volumes = self.definition.options.get("volumes", [])
-        env_vars = payload.project.env.copy()
-        env_vars.update(self.definition.env)
+        env_vars = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
 
         docker_command = [
             "docker",

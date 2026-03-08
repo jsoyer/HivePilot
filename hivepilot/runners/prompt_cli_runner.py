@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ import requests
 from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
+from hivepilot.utils.env import merge_environments
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -34,8 +34,9 @@ class PromptCliRunner(BaseRunner):
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
 
+        env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         if mode == "api":
-            self._run_api(prompt_text, payload)
+            self._run_api(prompt_text, payload, env)
         else:
             command_str = self.definition.command or self.command_name
             if not command_str:
@@ -45,8 +46,6 @@ class PromptCliRunner(BaseRunner):
             if model:
                 args.extend(["--model", model])
             args.append(prompt_text)
-            env = payload.project.env.copy()
-            env.update(self.definition.env)
             logger.info(
                 "cli_runner.start",
                 project=payload.project_name,
@@ -56,15 +55,15 @@ class PromptCliRunner(BaseRunner):
             subprocess.run(args, cwd=str(payload.project.path), env=env, check=True, text=True)
             logger.info("cli_runner.end", project=payload.project_name, step=payload.step.name)
 
-    def _run_api(self, prompt: str, payload: RunnerPayload) -> None:
+    def _run_api(self, prompt: str, payload: RunnerPayload, env: dict[str, str]) -> None:
         provider = self.definition.options.get("api_provider")
         model = payload.step.metadata.get("model") or self.definition.options.get("api_model")
         if not provider or not model:
             raise ValueError("API mode requires api_provider and api_model.")
 
         if provider == "openai":
-            endpoint = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
-            api_key = os.environ.get("OPENAI_API_KEY")
+            endpoint = env.get("OPENAI_API_BASE", "https://api.openai.com/v1")
+            api_key = env.get("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY missing.")
             self._post_json(
@@ -73,7 +72,7 @@ class PromptCliRunner(BaseRunner):
                 payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
             )
         elif provider == "anthropic":
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            api_key = env.get("ANTHROPIC_API_KEY")
             if not api_key:
                 raise RuntimeError("ANTHROPIC_API_KEY missing.")
             self._post_json(
@@ -85,7 +84,7 @@ class PromptCliRunner(BaseRunner):
                 payload={"model": model, "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
             )
         elif provider == "google":
-            api_key = os.environ.get("GOOGLE_API_KEY")
+            api_key = env.get("GOOGLE_API_KEY")
             if not api_key:
                 raise RuntimeError("GOOGLE_API_KEY missing.")
             self._post_json(
@@ -94,7 +93,7 @@ class PromptCliRunner(BaseRunner):
                 payload={"contents": [{"parts": [{"text": prompt}]}]},
             )
         elif provider == "mistral":
-            api_key = os.environ.get("MISTRAL_API_KEY")
+            api_key = env.get("MISTRAL_API_KEY")
             if not api_key:
                 raise RuntimeError("MISTRAL_API_KEY missing.")
             self._post_json(
@@ -103,7 +102,7 @@ class PromptCliRunner(BaseRunner):
                 payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
             )
         elif provider == "perplexity":
-            api_key = os.environ.get("PERPLEXITY_API_KEY")
+            api_key = env.get("PERPLEXITY_API_KEY")
             if not api_key:
                 raise RuntimeError("PERPLEXITY_API_KEY missing.")
             self._post_json(
@@ -112,7 +111,7 @@ class PromptCliRunner(BaseRunner):
                 payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
             )
         elif provider == "openrouter":
-            api_key = os.environ.get("OPENROUTER_API_KEY")
+            api_key = env.get("OPENROUTER_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENROUTER_API_KEY missing.")
             self._post_json(

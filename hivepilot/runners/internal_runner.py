@@ -24,6 +24,9 @@ class InternalRunner(BaseRunner):
                 project=payload.project,
                 settings=self.settings,
                 push=payload.step.metadata.get("push", True),
+                set_remote=payload.step.metadata.get("set_remote", True),
+                remote_protocol=payload.step.metadata.get("remote_protocol", "ssh"),
+                visibility=payload.step.metadata.get("visibility", "private"),
             )
         elif action == "gh_issue":
             title = payload.step.metadata.get("title") or payload.metadata.get("extra_prompt")
