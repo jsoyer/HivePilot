@@ -1,0 +1,7 @@
+claude_profiles:
+  coding:
+    model: sonnet
+  architecture:
+    model: opus
+  automation:
+    model: haiku

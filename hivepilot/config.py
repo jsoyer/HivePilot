@@ -1,40 +1,39 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-import yaml
-from pydantic import ValidationError
-
-from hivepilot.models import ProjectsFile, TasksFile
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class ConfigError(RuntimeError):
-    pass
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="HIVEPILOT_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    base_dir: Path = Field(default_factory=lambda: Path.cwd())
+    projects_file: Path = Path("projects.yaml")
+    tasks_file: Path = Path("tasks.yaml")
+    pipelines_file: Path = Path("pipelines.yaml")
+    prompts_dir: Path = Path("prompts")
+    runs_dir: Path = Path("runs")
+    logs_dir: Path = Path("runs/logs")
+    claude_profiles_file: Path = Path("model_profiles.yaml")
+    default_runner: str = "claude"
+    default_model: str | None = None
+    claude_command: str = "claude"
+    gh_command: str = "gh"
+    git_command: str = "git"
+    concurrency_limit: int = 4
+    interactive_default_all: bool = False
+    enable_textual_ui: bool = False
+    output_format: str = "json"
+
+    def resolve_path(self, path: Path) -> Path:
+        return (self.base_dir / path).expanduser().resolve()
 
 
-
-def _read_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise ConfigError(f"Missing configuration file: {path}")
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
-    if not isinstance(data, dict):
-        raise ConfigError(f"Invalid YAML root in {path}. Expected a mapping.")
-    return data
-
-
-
-def load_projects(path: Path) -> ProjectsFile:
-    try:
-        return ProjectsFile.model_validate(_read_yaml(path))
-    except ValidationError as exc:
-        raise ConfigError(f"Invalid projects config in {path}: {exc}") from exc
-
-
-
-def load_tasks(path: Path) -> TasksFile:
-    try:
-        return TasksFile.model_validate(_read_yaml(path))
-    except ValidationError as exc:
-        raise ConfigError(f"Invalid tasks config in {path}: {exc}") from exc
+settings = Settings()

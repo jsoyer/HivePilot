@@ -1,9 +1,39 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+
+class RunnerDefinition(BaseModel):
+    name: str | None = None
+    kind: Literal["claude", "shell", "langchain", "internal", "codex", "gemini", "opencode", "ollama", "api"]
+    command: str | None = None
+    model: str | None = None
+    agent: str | None = None
+    append_prompt: str | None = None
+    timeout_seconds: int | None = None
+    env: dict[str, str] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskStep(BaseModel):
+    name: str
+    runner: str
+    runner_ref: str | None = None
+    prompt_file: str | None = None
+    command: str | None = None
+    allow_failure: bool = False
+    append_prompt: str | None = None
+    timeout_seconds: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> TaskStep:
+        if not self.runner:
+            raise ValueError(f"Step '{self.name}' requires a runner")
+        return self
 
 
 class GitActions(BaseModel):
@@ -16,30 +46,14 @@ class GitActions(BaseModel):
     branch_prefix: str = "hivepilot"
 
 
-class TaskStep(BaseModel):
-    name: str
-    runner: Literal["claude", "shell"]
-    prompt_file: str | None = None
-    command: str | None = None
-    agent: str | None = None
-    model: str | None = None
-    append_prompt: str | None = None
-    allow_failure: bool = False
-    timeout_seconds: int = 3600
-
-    @model_validator(mode="after")
-    def _validate_runner(self) -> TaskStep:
-        if self.runner == "claude" and not self.prompt_file:
-            raise ValueError(f"Claude step '{self.name}' requires prompt_file")
-        if self.runner == "shell" and not self.command:
-            raise ValueError(f"Shell step '{self.name}' requires command")
-        return self
-
-
 class TaskConfig(BaseModel):
     description: str
+    engine: Literal["native", "langgraph", "crewai"] = "native"
+    graph: str | None = None
+    crew: str | None = None
     steps: list[TaskStep] = Field(default_factory=list)
     git: GitActions = Field(default_factory=GitActions)
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectConfig(BaseModel):
@@ -50,10 +64,36 @@ class ProjectConfig(BaseModel):
     owner_repo: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def expand_path(self) -> ProjectConfig:
+        self.path = self.path.expanduser().resolve()
+        return self
+
+
+class PipelineStage(BaseModel):
+    name: str
+    task: str
+
+
+class PipelineConfig(BaseModel):
+    description: str
+    stages: list[PipelineStage] = Field(default_factory=list)
+
 
 class ProjectsFile(BaseModel):
     projects: dict[str, ProjectConfig]
 
 
 class TasksFile(BaseModel):
+    runners: dict[str, RunnerDefinition] = Field(default_factory=dict)
     tasks: dict[str, TaskConfig]
+
+    @model_validator(mode="after")
+    def inject_runner_names(self) -> TasksFile:
+        for name, runner in self.runners.items():
+            runner.name = runner.name or name
+        return self
+
+
+class PipelinesFile(BaseModel):
+    pipelines: dict[str, PipelineConfig] = Field(default_factory=dict)

@@ -1,0 +1,16 @@
+pipelines:
+  pentest-fix-review:
+    description: Run a security review, refactor fixes, then refresh docs.
+    stages:
+      - name: pentest
+        task: pentest
+      - name: refactor follow-up
+        task: refactor
+      - name: docs summary
+        task: docs
+
+  gh-repo-init:
+    description: Ensure GitHub repository exists and push current branch.
+    stages:
+      - name: initialize repo
+        task: gh-repo-init-task

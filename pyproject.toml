@@ -4,20 +4,42 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hivepilot"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI orchestration for development projects"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "typer>=0.16,<1.0",
-  "rich>=14.0,<15.0",
+  "rich>=13.7,<14.0",
   "pydantic>=2.8,<3.0",
   "pydantic-settings>=2.3,<3.0",
   "PyYAML>=6.0,<7.0",
+  "gitpython>=3.1,<4.0",
+  "structlog>=24.1,<25.0",
+  "tenacity>=8.2,<9.0",
+  "questionary>=2.0,<3.0",
+  "langchain>=0.2,<0.3",
+  "langchain-community>=0.2,<0.3",
+  "langgraph>=0.0.59,<1.0",
+  "crewai>=0.28,<1.0",
+  "textual>=0.47,<1.0",
 ]
 
 [project.scripts]
 hivepilot = "hivepilot.cli:app"
+
+[project.optional-dependencies]
+langgraph = ["langgraph>=0.0.59,<1.0"]
+crewai = ["crewai>=0.28,<1.0"]
+textual = ["textual>=0.47,<1.0"]
+langchain = ["langchain>=0.2,<0.3", "langchain-community>=0.2,<0.3"]
+full = [
+  "langgraph>=0.0.59,<1.0",
+  "crewai>=0.28,<1.0",
+  "textual>=0.47,<1.0",
+  "langchain>=0.2,<0.3",
+  "langchain-community>=0.2,<0.3",
+]
 
 [tool.setuptools]
 include-package-data = true
