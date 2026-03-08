@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class RunnerDefinition(BaseModel):
     name: str | None = None
-    kind: Literal["claude", "shell", "langchain", "internal", "codex", "gemini", "opencode", "ollama", "api"]
+    kind: Literal["claude", "shell", "langchain", "internal", "codex", "gemini", "opencode", "ollama", "api", "container"]
     command: str | None = None
     model: str | None = None
     agent: str | None = None
@@ -28,6 +28,8 @@ class TaskStep(BaseModel):
     append_prompt: str | None = None
     timeout_seconds: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    knowledge_files: list[str] = Field(default_factory=list)
+    secrets: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_fields(self) -> TaskStep:
@@ -54,6 +56,7 @@ class TaskConfig(BaseModel):
     steps: list[TaskStep] = Field(default_factory=list)
     git: GitActions = Field(default_factory=GitActions)
     options: dict[str, Any] = Field(default_factory=dict)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectConfig(BaseModel):

@@ -10,6 +10,7 @@ from hivepilot.runners.shell_runner import ShellRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
 from hivepilot.runners.internal_runner import InternalRunner
 from hivepilot.runners.prompt_cli_runner import CodexRunner, GeminiRunner, OpenCodeRunner, OllamaRunner
+from hivepilot.runners.container_runner import ContainerRunner
 
 
 RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
@@ -21,6 +22,7 @@ RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
     "gemini": GeminiRunner,
     "opencode": OpenCodeRunner,
     "ollama": OllamaRunner,
+    "container": ContainerRunner,
 }
 
 

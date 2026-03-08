@@ -30,7 +30,8 @@ class ClaudeRunner(BaseRunner):
         if not prompt_path.exists():
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
-        prompt = self._build_prompt(payload, prompt_text)
+        knowledge_context = self._build_knowledge_context(payload)
+        prompt = self._build_prompt(payload, prompt_text, knowledge_context)
         args = [command]
         model = self._resolve_model(payload)
         if model:
@@ -44,7 +45,7 @@ class ClaudeRunner(BaseRunner):
         subprocess.run(args, cwd=str(payload.project.path), env=env, check=True, text=True)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
-    def _build_prompt(self, payload: RunnerPayload, instructions: str) -> str:
+    def _build_prompt(self, payload: RunnerPayload, instructions: str, knowledge_context: str | None) -> str:
         sections = [
             f"Project: {payload.project_name}",
             f"Task: {payload.task_name}",
@@ -61,6 +62,8 @@ class ClaudeRunner(BaseRunner):
         append = payload.step.append_prompt or self.definition.append_prompt
         if append:
             sections.append(f"Step-specific instructions: {append}")
+        if knowledge_context:
+            sections.append(f"Knowledge context:\n{knowledge_context}")
         return "\n".join(sections) + f"\n\nInstructions:\n{instructions}"
 
     def _resolve_model(self, payload: RunnerPayload) -> str | None:
@@ -76,3 +79,11 @@ class ClaudeRunner(BaseRunner):
             or self.definition.model
             or self.settings.default_model
         )
+
+    def _build_knowledge_context(self, payload: RunnerPayload) -> str | None:
+        from hivepilot.services.knowledge_service import build_context
+
+        files = payload.step.metadata.get("knowledge_files") or payload.step.knowledge_files
+        if not files:
+            return None
+        return build_context(payload.project.path, [Path(file) for file in files])

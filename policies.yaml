@@ -1,0 +1,10 @@
+policies:
+  default:
+    allow_auto_git: true
+    require_approval: false
+    allow_containers: true
+  projects:
+    example-api:
+      allow_auto_git: true
+      require_approval: true
+      allow_containers: false

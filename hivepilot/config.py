@@ -18,10 +18,14 @@ class Settings(BaseSettings):
     projects_file: Path = Path("projects.yaml")
     tasks_file: Path = Path("tasks.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
+    policies_file: Path = Path("policies.yaml")
+    schedules_file: Path = Path("schedules.yaml")
     prompts_dir: Path = Path("prompts")
     runs_dir: Path = Path("runs")
     logs_dir: Path = Path("runs/logs")
     claude_profiles_file: Path = Path("model_profiles.yaml")
+    state_db: Path = Path("state.db")
+    tokens_file: Path = Path("api_tokens.yaml")
     default_runner: str = "claude"
     default_model: str | None = None
     claude_command: str = "claude"
@@ -31,6 +35,10 @@ class Settings(BaseSettings):
     interactive_default_all: bool = False
     enable_textual_ui: bool = False
     output_format: str = "json"
+    plugins_entry: str | None = None
+    discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
+    api_host: str = "127.0.0.1"
+    api_port: int = 8045
 
     def resolve_path(self, path: Path) -> Path:
         return (self.base_dir / path).expanduser().resolve()

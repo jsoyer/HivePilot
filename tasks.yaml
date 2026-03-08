@@ -52,6 +52,14 @@ runners:
       mode: api
       api_provider: openrouter
       api_model: openrouter/anthropic/claude-3.5-sonnet
+  container-validation:
+    kind: container
+    command: |
+      pip install -r requirements.txt && pytest
+    options:
+      image: python:3.11
+      volumes:
+        - ${PWD}:/workspace
 
 tasks:
   docs:
@@ -65,6 +73,11 @@ tasks:
         timeout_seconds: 3600
         metadata:
           claude_profile: automation
+          knowledge_files: ["README.md", "docs/architecture.md"]
+        secrets:
+          OPENAI_API_KEY:
+            source: env
+            key: OPENAI_API_KEY
     git:
       commit: true
       push: true
@@ -142,8 +155,8 @@ tasks:
         metadata:
           claude_profile: coding
       - name: validation
-        runner: shell
-        runner_ref: validation-suite
+        runner: container
+        runner_ref: container-validation
         allow_failure: true
         timeout_seconds: 1800
     git:

@@ -1,0 +1,11 @@
+schedules:
+  docs-weekly:
+    task: docs
+    projects: ["example-api"]
+    interval_minutes: 10080
+    enabled: true
+  pentest-daily:
+    task: pentest
+    projects: ["example-api"]
+    interval_minutes: 1440
+    enabled: false
