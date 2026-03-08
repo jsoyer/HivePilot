@@ -1,4 +1,16 @@
-
 projects:
   example-api:
-    path: ./example-api
+    path: ~/dev/example-api
+    description: Example API project.
+    claude_md: CLAUDE.md
+    default_branch: main
+    owner_repo: your-user/example-api
+    env:
+      PYTHONUNBUFFERED: "1"
+
+  example-site:
+    path: ~/dev/example-site
+    description: Example frontend project.
+    claude_md: CLAUDE.md
+    default_branch: main
+    owner_repo: your-user/example-site

@@ -1,9 +1,5 @@
-
-typer
-rich
-pydantic
-pydantic-settings
-pyyaml
-langchain
-langchain-community
-gitpython
+typer>=0.16,<1.0
+rich>=14.0,<15.0
+pydantic>=2.8,<3.0
+pydantic-settings>=2.3,<3.0
+PyYAML>=6.0,<7.0

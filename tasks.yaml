@@ -1,5 +1,79 @@
-
 tasks:
   docs:
-    runner: claude
-    prompt: prompts/docs.md
+    description: Rewrite and normalize repository documentation.
+    steps:
+      - name: rewrite docs
+        runner: claude
+        prompt_file: docs_rewrite.md
+        agent: docs-writer
+        model: sonnet
+        timeout_seconds: 3600
+    git:
+      commit: true
+      push: true
+      create_pr: true
+      commit_message: "docs: rewrite project documentation"
+      pr_title: "docs: rewrite project documentation"
+      pr_body_file: PR_BODY.md
+      branch_prefix: hivepilot
+
+  pentest:
+    description: Run a security review and generate a markdown report.
+    steps:
+      - name: security review
+        runner: claude
+        prompt_file: security_review.md
+        agent: security-audit
+        model: sonnet
+        timeout_seconds: 5400
+      - name: local validation
+        runner: shell
+        command: |
+          if [ -f package.json ]; then npm test || true; fi
+          if [ -f pyproject.toml ]; then pytest || true; fi
+        allow_failure: true
+        timeout_seconds: 1800
+    git:
+      commit: true
+      push: false
+      create_pr: false
+      commit_message: "security: add repository review report"
+      branch_prefix: hivepilot
+
+  arch:
+    description: Review the repository architecture and suggest improvements.
+    steps:
+      - name: architecture review
+        runner: claude
+        prompt_file: architecture_review.md
+        agent: architect
+        model: opus
+        timeout_seconds: 3600
+    git:
+      commit: false
+      push: false
+      create_pr: false
+      branch_prefix: hivepilot
+
+  refactor:
+    description: Refactor the codebase with a light validation pass.
+    steps:
+      - name: refactor
+        runner: claude
+        prompt_file: refactor.md
+        agent: refactorer
+        model: sonnet
+        timeout_seconds: 5400
+      - name: validation
+        runner: shell
+        command: |
+          if [ -f package.json ]; then npm test; fi
+          if [ -f pyproject.toml ]; then pytest; fi
+        allow_failure: true
+        timeout_seconds: 1800
+    git:
+      commit: true
+      push: false
+      create_pr: false
+      commit_message: "refactor: orchestrated cleanup"
+      branch_prefix: hivepilot
