@@ -1,0 +1,5 @@
+
+tasks:
+  docs:
+    runner: claude
+    prompt: prompts/docs.md

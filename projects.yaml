@@ -1,0 +1,4 @@
+
+projects:
+  example-api:
+    path: ./example-api

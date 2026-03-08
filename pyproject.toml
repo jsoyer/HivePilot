@@ -1,0 +1,11 @@
+
+[project]
+name = "hivepilot"
+version = "0.1.0"
+description = "AI orchestration for development projects"
+authors = [{name="HivePilot"}]
+dependencies = []
+requires-python = ">=3.10"
+
+[project.scripts]
+hivepilot = "hivepilot.cli:app"
