@@ -3,23 +3,28 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from pathlib import Path
 
 import questionary
 
 from hivepilot.config import settings
-from hivepilot.models import PipelineConfig, ProjectConfig, TaskConfig, TaskStep
+from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+from hivepilot.plugins import PluginManager
 from hivepilot.registry import RunnerRegistry
 from hivepilot.runners.base import RunnerPayload
+from hivepilot.services import (
+    knowledge_service,
+    notification_service,
+    policy_service,
+    state_service,
+)
+from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.git_service import perform_git_actions
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
-from hivepilot.services import state_service
-from hivepilot.services import policy_service, notification_service, knowledge_service
-from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.secrets_service import secret_resolver
-from hivepilot.plugins import PluginManager
 from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
 
@@ -36,6 +41,9 @@ class RunResult:
 
 class Orchestrator:
     def __init__(self) -> None:
+        self._load()
+
+    def _load(self) -> None:
         self.projects = load_projects()
         self.tasks = load_tasks()
         self.pipelines = load_pipelines()
@@ -43,7 +51,7 @@ class Orchestrator:
         self.plugins = PluginManager()
 
     def refresh(self) -> None:
-        self.__init__()
+        self._load()
 
     def run_task(
         self,
@@ -76,8 +84,8 @@ class Orchestrator:
                     "auto_git": auto_git,
                 }
                 state_service.record_approval_request(run_id, project.path.name, task_name, approval_meta)
-                notification_service.send_notification(
-                    f"Approval required for run {run_id}: {project.path.name} -> {task_name}"
+                notification_service.send_approval_keyboard(
+                    run_id=run_id, project=project.path.name, task=task_name
                 )
                 results.append(RunResult(project.path.name, task_name, False, f"Pending approval (run {run_id})"))
             else:
@@ -162,6 +170,15 @@ class Orchestrator:
                 concurrency=concurrency,
             )
             results.extend([RunResult(r.project, f"{pipeline_name}:{stage.name}", r.success, r.detail) for r in stage_results])
+            stage_failed = any(not r.success for r in stage_results)
+            if stage_failed and not stage.continue_on_failure:
+                logger.warning(
+                    "pipeline.fail_fast",
+                    pipeline=pipeline_name,
+                    stage=stage.name,
+                    remaining=[s.name for s in pipeline.stages[pipeline.stages.index(stage) + 1:]],
+                )
+                break
         return results
 
     def run_approved(
@@ -194,15 +211,23 @@ class Orchestrator:
         notification_service.send_notification(
             f"✅ Run {run_id} for {project_name}:{task_name} approved by {approver}."
         )
-        self._execute_task(
-            project=project,
-            task_name=task_name,
-            task=task,
-            extra_prompt=metadata.get("extra_prompt"),
-            auto_git=metadata.get("auto_git", False),
-            run_id=run_id,
-            policy=policy,
-        )
+        try:
+            self._execute_task(
+                project=project,
+                task_name=task_name,
+                task=task,
+                extra_prompt=metadata.get("extra_prompt"),
+                auto_git=metadata.get("auto_git", False),
+                run_id=run_id,
+                policy=policy,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("run_approved.failure", run_id=run_id, error=str(exc))
+            state_service.complete_run(run_id, "failed", str(exc))
+            notification_service.send_notification(
+                f"❌ Run {run_id} for {project_name}:{task_name} failed after approval ({exc})"
+            )
+            return RunResult(project_name, task_name, False, str(exc))
         state_service.complete_run(run_id, "success")
         return RunResult(project_name, task_name, True)
 

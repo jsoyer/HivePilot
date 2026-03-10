@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     domain: str | None = None        # public domain used by caddy + webhook auto-registration
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids: list[int] = Field(default_factory=list)
+    telegram_notification_chat_id: int | None = None  # proactive notifications (approvals, run results)
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443

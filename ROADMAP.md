@@ -346,7 +346,11 @@ Priority: **medium** -- fondations nécessaires avant toute exposition publique.
 - [x] Singleton orchestrator reuse in bot handlers (via `chatops_service._get_orchestrator()`)
 - [x] `auto_git=True` in bot `/run` handler — honours task git config (commit + push)
 - [x] Free-form instructions via `/run <project> <task> <instructions>` passed as `extra_prompt`
-- [ ] Interactive approval threads (inline keyboard buttons for approve/deny)
+- [x] Interactive approval threads — inline ✅ Approve / ❌ Deny buttons sent proactively
+  - `notify_approval_required()` envoie le keyboard au `telegram_notification_chat_id`
+  - `CallbackQueryHandler` gère les clics, édite le message avec le résultat
+  - `/approvals` liste les runs en attente avec un keyboard par run
+  - Setting `HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID` pour les notifications proactives
 
 ## Phase 23c -- Slack Bot (dual-mode)
 

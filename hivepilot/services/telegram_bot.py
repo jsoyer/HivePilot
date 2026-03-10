@@ -48,6 +48,15 @@ def _get_orch():
     return _get_orchestrator()
 
 
+def _notification_chat_id() -> int | None:
+    """Return the chat_id to use for proactive notifications."""
+    if settings.telegram_notification_chat_id:
+        return settings.telegram_notification_chat_id
+    if settings.telegram_allowed_chat_ids:
+        return settings.telegram_allowed_chat_ids[0]
+    return None
+
+
 def _format_results(results) -> str:
     lines = [
         f"{'✓' if r.success else '✗'} {r.project} → {r.target}"
@@ -205,11 +214,14 @@ async def _cmd_approvals(update, context) -> None:
     if not pending:
         await update.message.reply_text("No pending approvals.")
         return
-    lines = [
-        f"#{row['run_id']} {row['project']} / {row['task']} @ {row['requested_at']}"
-        for row in pending
-    ]
-    await update.message.reply_text("Pending approvals:\n" + "\n".join(lines))
+    for row in pending:
+        await _send_approval_keyboard_message(
+            context.bot,
+            chat_id=update.effective_chat.id,
+            run_id=row["run_id"],
+            project=row["project"],
+            task=row["task"],
+        )
 
 
 async def _cmd_approve(update, context) -> None:
@@ -273,12 +285,103 @@ async def _cmd_status(update, context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Inline keyboard — approval flow
+# ---------------------------------------------------------------------------
+
+async def _send_approval_keyboard_message(bot, *, chat_id: int, run_id: int, project: str, task: str) -> None:
+    """Send a message with ✅ Approve / ❌ Deny inline buttons."""
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    except ImportError as exc:
+        raise RuntimeError("python-telegram-bot required: pip install hivepilot[notifications]") from exc
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"approve:{run_id}"),
+        InlineKeyboardButton("❌ Deny", callback_data=f"deny:{run_id}"),
+    ]])
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"*Approval required* — run #{run_id}\nProject: `{project}`\nTask: `{task}`",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+
+
+async def _callback_approval(update, context) -> None:
+    """Handle ✅ Approve / ❌ Deny button presses."""
+    query = update.callback_query
+    await query.answer()  # acknowledge immediately to remove the loading indicator
+
+    if not _require_allowed(query.message.chat.id):
+        await query.edit_message_text("Unauthorized.")
+        return
+
+    data = query.data  # e.g. "approve:42" or "deny:42"
+    try:
+        action, raw_id = data.split(":", 1)
+        run_id = int(raw_id)
+    except (ValueError, AttributeError):
+        await query.edit_message_text(f"Invalid callback data: {data!r}")
+        return
+
+    approve = action == "approve"
+    approver = query.from_user.username or str(query.from_user.id)
+
+    try:
+        result = _get_orch().run_approved(
+            run_id=run_id,
+            approve=approve,
+            approver=f"telegram:{approver}",
+            reason=None if approve else "Denied via Telegram button",
+        )
+        if approve:
+            outcome = "succeeded" if result.success else "failed"
+            icon = "✅" if result.success else "❌"
+            text = f"{icon} Run #{run_id} approved by @{approver} — {outcome}."
+        else:
+            text = f"❌ Run #{run_id} denied by @{approver}."
+        await query.edit_message_text(text)
+    except Exception as exc:
+        logger.error("telegram.callback_approval.error", run_id=run_id, error=str(exc))
+        await query.edit_message_text(f"Error processing run #{run_id}: {exc}")
+
+
+def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
+    """
+    Send an approval keyboard to the notification chat (sync, fire-and-forget).
+    Called from notification_service — safe to call from non-async context.
+    """
+    chat_id = _notification_chat_id()
+    if not chat_id:
+        raise RuntimeError("No Telegram notification chat_id configured")
+
+    token = _token()
+
+    async def _send():
+        from telegram import Bot
+        async with Bot(token) as bot:
+            await _send_approval_keyboard_message(
+                bot, chat_id=chat_id, run_id=run_id, project=project, task=task
+            )
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Inside an existing event loop (FastAPI / webhook mode) — schedule as a task
+            loop.create_task(_send())
+        else:
+            loop.run_until_complete(_send())
+    except RuntimeError:
+        asyncio.run(_send())
+
+
+# ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
 
 def _build_application(token: str):
     try:
-        from telegram.ext import Application, CommandHandler
+        from telegram.ext import Application, CallbackQueryHandler, CommandHandler
     except ImportError as exc:
         raise RuntimeError(
             "python-telegram-bot is required: pip install hivepilot[notifications]"
@@ -294,6 +397,7 @@ def _build_application(token: str):
     app.add_handler(CommandHandler("approve", _cmd_approve))
     app.add_handler(CommandHandler("deny", _cmd_deny))
     app.add_handler(CommandHandler("status", _cmd_status))
+    app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
     return app
 
 
