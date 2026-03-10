@@ -278,8 +278,8 @@ Priority: **medium** -- fondations nécessaires avant toute exposition publique.
 - [x] **Pulumi** runner — preview / up / destroy / output / refresh
 - [x] Drift detection — `tofu/terraform plan --detailed-exitcode` → RuntimeError("Drift detected")
 - [x] CLI: `hivepilot iac plan|apply|destroy|drift|output --project <name> --runner opentofu|terraform|pulumi`
-- [ ] Cost estimation before apply (Infracost integration)
-- [ ] State locking et remote backends (S3, GCS, Terraform Cloud)
+- [x] Cost estimation before apply — `hivepilot iac cost --project <name>` (requires infracost CLI)
+- [x] Remote backends (S3, GCS, Terraform Cloud) — `backend_config` option in runner definition
 
 ### 17b -- Configuration Management Runners
 
@@ -335,7 +335,7 @@ Priority: **medium** -- fondations nécessaires avant toute exposition publique.
 - [x] Template registry for project scaffolding (minimal, blog, iac, security)
 - [x] `hivepilot init` command with template selection + `--list`
 - [x] Variable interpolation in templates (`{{project_name}}`, `{{project_path}}`, `{{author}}`)
-- [ ] Community template marketplace
+- [x] Community template marketplace — `hivepilot templates list-remote [--source user/repo]` + `hivepilot templates pull <name>`
 
 ## Phase 23 -- Advanced ChatOps Actions
 
