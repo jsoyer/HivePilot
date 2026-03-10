@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import yaml
 from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
+
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
 
@@ -24,20 +26,29 @@ def _load_yaml(path: Path) -> dict:
 
 
 def load_policies(path: Path | None = None) -> dict:
-    resolved = settings.resolve_path(path or settings.policies_file)
+    resolved = settings.resolve_config_path(path or settings.policies_file)
     return _load_yaml(resolved)
 
 
-POLICIES = load_policies(settings.policies_file)
+def reload_policies() -> None:
+    """Invalidate the policies cache so the next call re-reads the file."""
+    _cache.clear()
+
+
+# Internal cache — populated on first use, cleared by reload_policies()
+_cache: dict = {}
+
+
+def _get_policies() -> dict:
+    if "data" not in _cache:
+        _cache["data"] = load_policies(settings.policies_file)
+    return _cache["data"]
 
 
 def get_policy(project_name: str) -> Policy:
-    project_rules = (
-        POLICIES.get("projects", {}).get(project_name)
-        if POLICIES
-        else None
-    )
-    default = POLICIES.get("default", {}) if POLICIES else {}
+    policies = _get_policies()
+    project_rules = policies.get("projects", {}).get(project_name) if policies else None
+    default = policies.get("default", {}) if policies else {}
     rules = {**default, **(project_rules or {})}
     return Policy(
         allow_auto_git=rules.get("allow_auto_git", True),

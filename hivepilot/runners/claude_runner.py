@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from hivepilot.config import Settings
@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 class ClaudeRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
-    profiles: dict[str, dict[str, str]] = load_claude_profiles()
+    profiles: dict[str, dict[str, str]] = field(default_factory=load_claude_profiles)
 
     def run(self, payload: RunnerPayload) -> None:
         command = self.definition.command or self.settings.claude_command
@@ -27,7 +27,7 @@ class ClaudeRunner(BaseRunner):
         prompt_file = payload.step.prompt_file
         if not prompt_file:
             raise ValueError(f"Step '{payload.step.name}' requires a prompt_file for Claude runner.")
-        prompt_path = self.settings.resolve_path(Path(prompt_file))
+        prompt_path = self.settings.resolve_config_path(prompt_file)
         if not prompt_path.exists():
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
