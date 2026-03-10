@@ -101,10 +101,12 @@ Priority: **high** -- valider les corrections de la phase 10 et prevenir les reg
   - [x] Pre-commit hook `detect-secrets` + `gitleaks` (`.pre-commit-config.yaml`)
   - [x] Baseline `.secrets.baseline` initialisé
   - [x] Gitleaks dans le CI security workflow (scan historique complet)
-- [ ] Pen test periodique
-  - Checklist OWASP Top 10 appliquee aux endpoints FastAPI
-  - Test des ChatOps endpoints avec payloads malicieux
-  - Validation de l'isolation container runner (escape, mount sensible)
+- [x] Pen test périodique — `tests/test_pentest.py` (OWASP A01/A03/A05 + container isolation)
+  - A01 Broken Access Control: tous les endpoints protégés testés sans token / mauvais rôle
+  - A03 Injection: 7 payloads malicieux sur handle_slack/discord/telegram (shell, path traversal, null bytes…)
+  - A05 Misconfiguration: CORS non-wildcard + rate limiting 429
+  - Container runner: volumes sensibles (/etc, /root, /proc) bloqués
+  - ChatOps: commandes inconnues retournent une string d'erreur, pas d'exception
 
 ## Phase 13 -- Dependency Cleanup & Startup Performance
 
