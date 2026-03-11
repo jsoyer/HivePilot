@@ -74,6 +74,16 @@ class Settings(BaseSettings):
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
+    slack_bot_token: str | None = None
+    slack_signing_secret: str | None = None
+    slack_app_token: str | None = None          # for Socket Mode (xapp-...)
+    slack_allowed_channel_ids: list[str] = Field(default_factory=list)
+    slack_notification_channel_id: str | None = None  # proactive notifications
+    discord_bot_token: str | None = None
+    discord_public_key: str | None = None       # Ed25519 public key for HTTP interactions
+    discord_allowed_guild_ids: list[int] = Field(default_factory=list)
+    discord_allowed_channel_ids: list[int] = Field(default_factory=list)
+    discord_notification_channel_id: int | None = None  # proactive notifications
 
     @property
     def xdg_config_home(self) -> Path:

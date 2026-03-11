@@ -58,13 +58,25 @@ def _send_telegram(message: str) -> None:
 
 
 def send_approval_keyboard(run_id: int, project: str, task: str) -> None:
-    """Send an approval request with inline Approve/Deny buttons via Telegram."""
+    """Send an approval request with inline Approve/Deny buttons via Telegram and Slack."""
     try:
         from hivepilot.services.telegram_bot import notify_approval_required
         notify_approval_required(run_id=run_id, project=project, task=task)
     except _NotConfigured:
         pass
     except Exception as exc:  # noqa: BLE001
-        logger.warning("notification.approval_keyboard.failed", error=str(exc))
+        logger.warning("notification.approval_keyboard.failed", channel="telegram", error=str(exc))
         # Fallback to plain text
-        send_notification(f"Approval required for run #{run_id}: {project} → {task}")
+        send_notification(f"Approval required for run #{run_id}: {project} -> {task}")
+
+    try:
+        from hivepilot.services.slack_bot import notify_approval_required as slack_notify
+        slack_notify(run_id=run_id, project=project, task=task)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        from hivepilot.services.discord_bot import notify_approval_required as discord_notify
+        discord_notify(run_id=run_id, project=project, task=task)
+    except Exception:  # noqa: BLE001
+        pass

@@ -358,29 +358,28 @@ Priority: **medium** -- fondations nécessaires avant toute exposition publique.
 
 Priority: **medium** -- parité avec le bot Telegram.
 
-- [ ] Settings : `slack_bot_token`, `slack_signing_secret`, `slack_allowed_channel_ids`, `slack_socket_mode`, `slack_app_token`
-- [ ] **Mode Socket Mode** (`slack_bolt` + `SocketModeHandler`) — RPI / NAT, zéro URL publique, WebSocket vers Slack
-- [ ] **Mode HTTP webhook** — VPS, endpoint `/webhook/slack` dans FastAPI, vérification `X-Slack-Signature`
-- [ ] Commandes slash : `/hp run <project> <task>`, `/hp approvals`, `/hp approve <id>`, `/hp deny <id>`, `/hp status`
-- [ ] Notifications proactives (run terminé, approbation requise) vers un channel configuré
-- [ ] Auth par channel ID whitelist (`slack_allowed_channel_ids`)
-- [ ] CLI : `hivepilot slack start --mode socket|webhook`
-- [ ] Graceful shutdown intégré au lifecycle FastAPI
-- [ ] Tests : handlers, auth, cas limites
+- [x] Settings : `slack_bot_token`, `slack_signing_secret`, `slack_app_token`, `slack_allowed_channel_ids`, `slack_notification_channel_id`
+- [x] **Mode Socket Mode** (`slack_bolt` + `SocketModeHandler`) — RPI / NAT, zéro URL publique
+- [x] **Mode HTTP webhook** — VPS, endpoint `/webhook/slack` dans FastAPI, vérification `X-Slack-Signature`
+- [x] Slash commands : `/hp-run`, `/hp-approvals`, `/hp-approve`, `/hp-deny`, `/hp-status`
+- [x] Notifications proactives Block Kit avec boutons Approve/Deny vers `slack_notification_channel_id`
+- [x] Auth par channel ID whitelist (`slack_allowed_channel_ids`)
+- [x] CLI : `hivepilot slack start --mode socket|webhook` + `hivepilot slack notify <message>`
+- [x] Graceful shutdown intégré au lifecycle FastAPI
+- [x] `send_approval_keyboard()` route vers Slack en parallèle de Telegram
 
 ## Phase 23d -- Discord Bot (dual-mode)
 
 Priority: **medium** -- parité avec le bot Telegram.
 
-- [ ] Settings : `discord_bot_token`, `discord_allowed_guild_ids`, `discord_allowed_channel_ids`, `discord_public_key`
-- [ ] **Mode Gateway** (`discord.py` / `py-cord`) — RPI / NAT, WebSocket persistant vers Discord, zéro URL publique
-- [ ] **Mode HTTP interactions** — VPS, endpoint `/webhook/discord` dans FastAPI, vérification signature Ed25519
-- [ ] Slash commands Discord : `/run`, `/approvals`, `/approve`, `/deny`, `/status`
-- [ ] Notifications proactives vers un channel configuré
-- [ ] Auth par guild ID + channel ID whitelist
-- [ ] CLI : `hivepilot discord start --mode gateway|webhook`
-- [ ] Graceful shutdown intégré au lifecycle FastAPI
-- [ ] Tests : handlers, auth, vérification signature, cas limites
+- [x] Settings : `discord_bot_token`, `discord_public_key`, `discord_allowed_guild_ids`, `discord_allowed_channel_ids`, `discord_notification_channel_id`
+- [x] **Mode Gateway** (`discord.py`) — RPI / NAT, WebSocket persistant vers Discord, zéro URL publique
+- [x] **Mode HTTP interactions** — VPS, endpoint `/webhook/discord` dans FastAPI, vérification signature Ed25519 (PyNaCl)
+- [x] Slash commands : `/run`, `/approvals`, `/approve`, `/deny`, `/status`
+- [x] Notifications proactives avec embed + boutons Approve/Deny composants vers `discord_notification_channel_id`
+- [x] Auth par guild ID + channel ID whitelist
+- [x] CLI : `hivepilot discord start --mode gateway|webhook` + `hivepilot discord notify <message>`
+- [x] `send_approval_keyboard()` route vers Discord en parallèle de Telegram + Slack
 
 ## Phase 24 -- Insight Dashboard & SLA Reporting
 

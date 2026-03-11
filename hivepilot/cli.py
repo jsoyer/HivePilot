@@ -31,6 +31,10 @@ telegram_app = typer.Typer(help="Telegram bot")
 app.add_typer(telegram_app, name="telegram")
 caddy_app = typer.Typer(help="Caddy reverse proxy management")
 app.add_typer(caddy_app, name="caddy")
+slack_app = typer.Typer(help="Slack bot")
+app.add_typer(slack_app, name="slack")
+discord_app = typer.Typer(help="Discord bot")
+app.add_typer(discord_app, name="discord")
 iac_app = typer.Typer(help="Infrastructure-as-Code operations")
 app.add_typer(iac_app, name="iac")
 logger = get_logger(__name__)
@@ -914,6 +918,97 @@ def lint_config() -> None:
             typer.echo(f"- {error}")
         raise typer.Exit(code=1)
     typer.echo("Configuration looks good.")
+
+
+# ---------------------------------------------------------------------------
+# slack subapp
+# ---------------------------------------------------------------------------
+
+@slack_app.command("start")
+def slack_start(
+    mode: str = typer.Option("socket", "--mode", "-m", help="socket or webhook"),
+) -> None:
+    """Start the Slack bot. Blocking — run in a dedicated terminal or systemd unit."""
+    from hivepilot.services import slack_bot
+
+    mode = mode.lower()
+    try:
+        if mode == "socket":
+            typer.echo("Starting Slack bot in Socket Mode (Ctrl+C to stop)...")
+            slack_bot.run_socket_mode()
+        elif mode == "webhook":
+            typer.echo("Starting Slack bot in webhook mode (served via FastAPI /webhook/slack)...")
+            slack_bot.run_webhook_mode()
+        else:
+            typer.echo(f"Unknown mode: {mode!r}. Use 'socket' or 'webhook'.", err=True)
+            raise typer.Exit(1)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@slack_app.command("notify")
+def slack_notify(
+    message: str = typer.Argument(..., help="Message to send to the notification channel"),
+) -> None:
+    """Send a plain text message to the configured Slack notification channel."""
+    from hivepilot.services import slack_bot
+
+    try:
+        slack_bot.notify(message)
+        typer.echo("Message sent.")
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Discord commands (Phase 23d)
+# ---------------------------------------------------------------------------
+
+@discord_app.command("start")
+def discord_start(
+    mode: str = typer.Option("gateway", "--mode", "-m", help="gateway or webhook"),
+) -> None:
+    """Start the Discord bot. Blocking for gateway mode. For webhook mode, shows the endpoint URL."""
+    from hivepilot.services import discord_bot as dbot
+
+    mode = mode.lower()
+    try:
+        if mode == "gateway":
+            typer.echo("Starting Discord bot in gateway mode (Ctrl+C to stop)…")
+            dbot.run_gateway()
+        elif mode == "webhook":
+            base = settings.domain or f"http://{settings.api_host}:{settings.api_port}"
+            endpoint = f"{base.rstrip('/')}/webhook/discord"
+            typer.echo(f"Discord webhook endpoint: {endpoint}")
+            typer.echo(
+                "Register this URL in your Discord application's Interactions Endpoint URL field."
+            )
+            typer.echo(
+                "Then start the API server with: hivepilot api start"
+            )
+        else:
+            typer.echo(f"Unknown mode: {mode!r}. Use 'gateway' or 'webhook'.", err=True)
+            raise typer.Exit(1)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@discord_app.command("notify")
+def discord_notify(
+    message: str = typer.Argument(..., help="Message to send to the notification channel"),
+) -> None:
+    """Send a plain text message to the configured Discord notification channel."""
+    from hivepilot.services import discord_bot as dbot
+
+    try:
+        dbot.notify(message)
+        typer.echo("Message sent.")
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("init")
