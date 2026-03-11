@@ -35,8 +35,12 @@ slack_app = typer.Typer(help="Slack bot")
 app.add_typer(slack_app, name="slack")
 discord_app = typer.Typer(help="Discord bot")
 app.add_typer(discord_app, name="discord")
+linear_app = typer.Typer(help="Linear issue tracker integration")
+app.add_typer(linear_app, name="linear")
 iac_app = typer.Typer(help="Infrastructure-as-Code operations")
 app.add_typer(iac_app, name="iac")
+notion_app = typer.Typer(help="Notion integration")
+app.add_typer(notion_app, name="notion")
 logger = get_logger(__name__)
 
 
@@ -1231,4 +1235,198 @@ def templates_cmd(
 
     else:
         typer.echo(f"Unknown action: {action!r}. Use list, list-remote, or pull.", err=True)
+
+
+# ---------------------------------------------------------------------------
+# Notion integration
+# ---------------------------------------------------------------------------
+
+
+@notion_app.command("status")
+def notion_status() -> None:
+    """Show Notion runs database info and last 5 run pages."""
+    from hivepilot.services import notion_service
+
+    if not settings.notion_token:
+        typer.echo("HIVEPILOT_NOTION_TOKEN is not configured.", err=True)
         raise typer.Exit(1)
+    if not settings.notion_runs_database_id:
+        typer.echo("HIVEPILOT_NOTION_RUNS_DATABASE_ID is not configured.", err=True)
+        raise typer.Exit(1)
+
+    info = notion_service.get_database_info()
+    if not info:
+        typer.echo("Could not retrieve database info.", err=True)
+        raise typer.Exit(1)
+
+    title_parts = info.get("title", [])
+    title = title_parts[0]["plain_text"] if title_parts else "(untitled)"
+    typer.echo(f"Database: {title} ({info.get('id', '')})")
+
+    runs = notion_service.list_recent_runs(limit=5)
+    if not runs:
+        typer.echo("No run pages found.")
+        return
+
+    typer.echo(f"\nLast {len(runs)} run(s):")
+    for page in runs:
+        props = page.get("properties", {})
+        name_parts = props.get("Name", {}).get("title", [])
+        name = name_parts[0]["plain_text"] if name_parts else "(no name)"
+        status_sel = props.get("Status", {}).get("select") or {}
+        status = status_sel.get("name", "unknown")
+        typer.echo(f"  [{status}] {name}")
+
+
+@notion_app.command("setup")
+def notion_setup(
+    parent_page_id: str = typer.Argument(..., help="Notion page ID to create the runs database under"),
+) -> None:
+    """Create the HivePilot runs database schema in Notion. Prints the database_id to add to .env."""
+    from hivepilot.services import notion_service
+
+    if not settings.notion_token:
+        typer.echo("HIVEPILOT_NOTION_TOKEN is not configured.", err=True)
+        raise typer.Exit(1)
+
+    try:
+        database_id = notion_service.setup_database(parent_page_id)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Created runs database: {database_id}")
+    typer.echo("Add this to your .env:")
+    typer.echo(f"  HIVEPILOT_NOTION_RUNS_DATABASE_ID={database_id}")
+
+
+@notion_app.command("sync")
+def notion_sync() -> None:
+    """Push last 20 runs from local state to Notion (backfill)."""
+    from hivepilot.services import notion_service
+
+    if not settings.notion_token or not settings.notion_runs_database_id:
+        typer.echo("Notion is not fully configured (token + runs_database_id required).", err=True)
+        raise typer.Exit(1)
+
+    runs = state_service.list_recent_runs(20)
+    if not runs:
+        typer.echo("No runs found in local state.")
+        return
+
+    synced = 0
+    for run in runs:
+        page_id = notion_service.log_run(
+            run_id=run["id"],
+            project=run.get("project", ""),
+            task=run.get("task", ""),
+            status=run.get("status", "unknown"),
+            detail=run.get("detail") or "",
+            started_at=run.get("started_at") or "",
+        )
+        if page_id:
+            synced += 1
+
+    typer.echo(f"Synced {synced}/{len(runs)} run(s) to Notion.")
+
+
+# ---------------------------------------------------------------------------
+# Linear commands (Phase 17d)
+# ---------------------------------------------------------------------------
+
+@linear_app.command("teams")
+def linear_teams() -> None:
+    """List Linear teams."""
+    from hivepilot.services.linear_service import get_teams
+
+    try:
+        teams = get_teams()
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not teams:
+        typer.echo("No teams found.")
+        return
+
+    for team in teams:
+        typer.echo(f"  {team.get('key', '?'):<10} {team.get('name', '?')}  (id={team.get('id', '?')})")
+
+
+@linear_app.command("issue")
+def linear_issue(
+    project: str = typer.Argument(..., help="Project name"),
+    task: str = typer.Argument(..., help="Task name"),
+    error: str | None = typer.Option(None, "--error", "-e", help="Error message to include in issue body"),
+    priority: int = typer.Option(2, "--priority", "-p", help="Priority: 0=none 1=urgent 2=high 3=medium 4=low"),
+    team_id: str | None = typer.Option(None, "--team-id", help="Linear team ID (overrides config)"),
+) -> None:
+    """Manually create a Linear issue for a project/task."""
+    from hivepilot.services.linear_service import create_issue
+
+    title = f"[HivePilot] {project}/{task} failed"
+    description_parts = [f"**Project:** {project}", f"**Task:** {task}"]
+    if error:
+        description_parts.append(f"**Error:** {error}")
+    description = "\n".join(description_parts)
+
+    try:
+        issue = create_issue(title, description, team_id=team_id, priority=priority)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Created issue: {issue.get('identifier', '?')} — {issue.get('title', '?')}")
+    typer.echo(f"URL: {issue.get('url', '?')}")
+
+
+@linear_app.command("states")
+def linear_states(
+    team_id: str | None = typer.Option(None, "--team-id", help="Team ID (defaults to linear_team_id in config)"),
+) -> None:
+    """List workflow states for a Linear team."""
+    from hivepilot.services.linear_service import get_workflow_states
+
+    resolved_team_id = team_id or settings.linear_team_id
+    if not resolved_team_id:
+        typer.echo(
+            "Error: --team-id required or set HIVEPILOT_LINEAR_TEAM_ID.", err=True
+        )
+        raise typer.Exit(1)
+
+    try:
+        states = get_workflow_states(resolved_team_id)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not states:
+        typer.echo("No workflow states found.")
+        return
+
+    for state in states:
+        typer.echo(
+            f"  {state.get('name', '?'):<20} type={state.get('type', '?'):<12} id={state.get('id', '?')}"
+        )
+
+
+@linear_app.command("sync")
+def linear_sync() -> None:
+    """Show last 10 runs and their Linear issue status."""
+    from hivepilot.services import state_service
+
+    runs = state_service.list_recent_runs(limit=10)
+    if not runs:
+        typer.echo("No runs recorded.")
+        return
+
+    configured = bool(settings.linear_api_key)
+    typer.echo(f"Linear configured: {'yes' if configured else 'no'}")
+    typer.echo("")
+    typer.echo(f"{'ID':<6} {'Project':<20} {'Task':<20} {'Status':<10} {'Started'}")
+    typer.echo("-" * 80)
+    for run in runs:
+        typer.echo(
+            f"{run['id']:<6} {run['project']:<20} {run['task']:<20} "
+            f"{run['status']:<10} {run.get('started_at', '?')}"
+        )

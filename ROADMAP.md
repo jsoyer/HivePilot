@@ -18,6 +18,8 @@
 - Phase 14 / 14b / 14c / 14d / 14e -- Architecture, API Maturity, Config Repo, Proxy, Caddy
 - Phase 15 -- Scheduler Resilience & Retry Queue
 - Phase 23b -- Telegram Bot (dual-mode)
+- Phase 17d -- Linear Integration
+- Phase 17e -- Notion Integration
 
 ---
 
@@ -298,11 +300,19 @@ Priority: **medium** -- fondations nécessaires avant toute exposition publique.
 
 ### 17d -- Linear Integration
 
-- [ ] Créer automatiquement une issue Linear sur échec de run
-- [ ] Mettre à jour le statut d'une issue Linear à la complétion d'un task
-- [ ] Déclencher un run HivePilot depuis un webhook Linear (changement de statut, assignation)
-- [ ] Lier un pipeline HivePilot à un cycle / projet Linear
-- [ ] CLI : `hivepilot linear sync` — synchroniser les tâches Linear avec les tasks HivePilot
+- [x] Créer automatiquement une issue Linear sur échec de run (`on_run_failure()`)
+- [x] Mettre à jour le statut d'une issue Linear à la complétion d'un task (`update_issue()`)
+- [x] Déclencher un run HivePilot depuis un webhook Linear (`POST /webhook/linear`, `handle_webhook()`)
+- [x] GraphQL client : `create_issue()`, `get_teams()`, `get_workflow_states()`, HMAC webhook verification
+- [x] CLI : `hivepilot linear teams|issue|states|sync`
+
+### 17e -- Notion Integration
+
+- [x] Settings : `notion_token`, `notion_runs_database_id`
+- [x] Notion REST client : `log_run()`, `update_run()`, `setup_database()`, `list_recent_runs()`
+- [x] Orchestrator hooks : `on_run_start()` crée la page, `on_run_complete()` met à jour le statut
+- [x] Schema automatique : colonnes Name, Status, Project, Task, RunID, Detail, StartedAt
+- [x] CLI : `hivepilot notion status|setup|sync`
 
 ## Phase 18 -- Observability Hooks (OpenTelemetry)
 

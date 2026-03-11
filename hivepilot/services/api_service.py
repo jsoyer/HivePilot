@@ -303,6 +303,20 @@ async def slack_webhook(request: Request):
     return await handle_webhook_request(request)
 
 
+@app.post("/webhook/linear")
+@v1.post("/webhook/linear")
+async def linear_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("Linear-Delivery", "")
+    from hivepilot.services.linear_service import handle_webhook, verify_webhook
+    if not verify_webhook(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    import json as _json
+    payload = _json.loads(body)
+    result = handle_webhook(payload)
+    return {"status": "ok", "detail": result}
+
+
 @app.post("/webhook/discord")
 @v1.post("/webhook/discord")
 async def discord_webhook(request: Request):

@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     discord_allowed_guild_ids: list[int] = Field(default_factory=list)
     discord_allowed_channel_ids: list[int] = Field(default_factory=list)
     discord_notification_channel_id: int | None = None  # proactive notifications
+    linear_api_key: str | None = None
+    linear_team_id: str | None = None           # default team for issue creation
+    linear_default_project_id: str | None = None  # default project
+    linear_webhook_secret: str | None = None    # HMAC secret for webhook verification
+    notion_token: str | None = None
+    notion_runs_database_id: str | None = None  # database where run logs are written
 
     @property
     def xdg_config_home(self) -> Path:

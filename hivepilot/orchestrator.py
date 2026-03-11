@@ -71,6 +71,7 @@ class Orchestrator:
         results: list[RunResult] = []
         run_policies: dict[str, policy_service.Policy] = {}
         run_ids: dict[str, int] = {}
+        notion_page_ids: dict[str, str | None] = {}
         immediate_projects: list[ProjectConfig] = []
         for project in projects:
             policy = policy_service.enforce_policy(project.path.name, auto_git=auto_git)
@@ -92,6 +93,13 @@ class Orchestrator:
                 run_id = state_service.record_run_start(project.path.name, task_name, status="running")
                 run_ids[project.path.name] = run_id
                 immediate_projects.append(project)
+                try:
+                    from hivepilot.services.notion_service import on_run_start
+                    notion_page_ids[project.path.name] = on_run_start(
+                        run_id=run_id, project=project.path.name, task=task_name
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 notification_service.send_notification(f"Starting {task_name} on {project.path.name}")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=limit) as executor:
@@ -115,6 +123,11 @@ class Orchestrator:
                     results.append(RunResult(project.path.name, task_name, True))
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "success")
+                    try:
+                        from hivepilot.services.notion_service import on_run_complete
+                        on_run_complete(notion_page_ids.get(project.path.name), status="success")
+                    except Exception:  # noqa: BLE001
+                        pass
                     notification_service.send_notification(f"✅ {project.path.name}: {task_name} completed")
                 except Exception as exc:  # noqa: BLE001
                     logger.error("run.failure", project=project.path.name, task=task_name, error=str(exc))
@@ -122,6 +135,18 @@ class Orchestrator:
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "failed", str(exc))
                     notification_service.send_notification(f"❌ {project.path.name}: {task_name} failed ({exc})")
+                    try:
+                        from hivepilot.services.notion_service import on_run_complete
+                        on_run_complete(
+                            notion_page_ids.get(project.path.name), status="failed", detail=str(exc)
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        from hivepilot.services.linear_service import on_run_failure
+                        on_run_failure(project=project.path.name, task=task_name, error=str(exc))
+                    except Exception:  # noqa: BLE001
+                        pass
         summary = {
             "task": task_name,
             "projects": [p.path.name for p in projects],
