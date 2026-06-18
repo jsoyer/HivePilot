@@ -5,3 +5,16 @@ claude_profiles:
     model: opus
   automation:
     model: haiku
+
+# Role-to-profile bindings for V4 agent roles (Phase 1 — all Claude).
+# Strategy/security roles use architecture (opus); implementation/review
+# roles use coding (sonnet); coordination/docs roles use automation (haiku).
+role_profiles:
+  ceo: architecture
+  cto: architecture
+  ciso: architecture
+  developer: coding
+  reviewer: coding
+  qa: coding
+  chief_of_staff: automation
+  documentation: automation

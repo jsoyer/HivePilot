@@ -249,3 +249,161 @@ tasks:
       commit: false
       push: false
       create_pr: false
+
+  # ---------------------------------------------------------------------------
+  # Company pipeline tasks — one per role, two variants for CEO and CoS
+  # ---------------------------------------------------------------------------
+
+  company-ceo-intake:
+    description: CEO reviews roadmap, metrics, and customer feedback; sets objectives and priorities.
+    steps:
+      - name: ceo intake
+        runner: claude
+        runner_ref: claude-architect
+        prompt_file: prompts/agents/ceo.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-cos-plan:
+    description: Chief of Staff translates CEO objectives into an execution plan.
+    steps:
+      - name: chief of staff plan
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-cto-review:
+    description: CTO reviews the execution plan and produces a technical spec or ADR.
+    steps:
+      - name: cto review
+        runner: claude
+        runner_ref: claude-architect
+        prompt_file: prompts/agents/cto.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-developer:
+    description: Developer implements the technical spec and produces code + tests.
+    steps:
+      - name: implementation
+        runner: claude
+        runner_ref: claude-refactor
+        prompt_file: prompts/agents/developer.md
+        timeout_seconds: 5400
+        metadata:
+          claude_profile: coding
+    git:
+      commit: true
+      push: false
+      create_pr: false
+      commit_message: "feat: company pipeline implementation"
+      branch_prefix: hivepilot
+
+  company-reviewer:
+    description: Reviewer inspects the implementation against the spec and issues a review report.
+    steps:
+      - name: code review
+        runner: claude
+        runner_ref: claude-refactor
+        prompt_file: prompts/agents/reviewer.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: coding
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-ciso:
+    description: CISO performs a security review and grants or withholds clearance.
+    steps:
+      - name: security review
+        runner: claude
+        runner_ref: claude-security
+        prompt_file: prompts/agents/ciso.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-qa:
+    description: QA builds the test suite, runs edge-case analysis, and produces a test report.
+    steps:
+      - name: qa validation
+        runner: claude
+        runner_ref: claude-refactor
+        prompt_file: prompts/agents/qa.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: coding
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-documentation:
+    description: Documentation role updates docs, ADRs, and changelog.
+    steps:
+      - name: documentation update
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/documentation.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: true
+      push: false
+      create_pr: false
+      commit_message: "docs: company pipeline documentation update"
+      branch_prefix: hivepilot
+
+  company-cos-report:
+    description: Chief of Staff compiles the cycle report for CEO review.
+    steps:
+      - name: cos cycle report
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-ceo-approval:
+    description: CEO reviews the cycle report and grants final approval or sends back for revision.
+    steps:
+      - name: ceo approval
+        runner: claude
+        runner_ref: claude-architect
+        prompt_file: prompts/agents/ceo.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+    git:
+      commit: false
+      push: false
+      create_pr: false
