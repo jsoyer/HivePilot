@@ -41,6 +41,8 @@ iac_app = typer.Typer(help="Infrastructure-as-Code operations")
 app.add_typer(iac_app, name="iac")
 notion_app = typer.Typer(help="Notion integration")
 app.add_typer(notion_app, name="notion")
+obsidian_app = typer.Typer(help="Obsidian vault integration")
+app.add_typer(obsidian_app, name="obsidian")
 logger = get_logger(__name__)
 
 
@@ -78,7 +80,9 @@ def _resolve_projects(project: str, extras: list[str], run_all: bool) -> list[st
 
 
 @app.command()
-def list_projects(projects_file: Path = typer.Option(settings.projects_file, help="Path to projects.yaml")) -> None:
+def list_projects(
+    projects_file: Path = typer.Option(settings.projects_file, help="Path to projects.yaml"),
+) -> None:
     projects = load_projects(projects_file)
     for name, project in projects.projects.items():
         typer.echo(f"- {name}: {project.path} ({project.description or 'n/a'})")
@@ -86,7 +90,9 @@ def list_projects(projects_file: Path = typer.Option(settings.projects_file, hel
 
 @app.command("discover")
 def discover(
-    roots: list[Path] = typer.Option([], "--root", "-r", help="Root directories to scan (repeatable)"),
+    roots: list[Path] = typer.Option(
+        [], "--root", "-r", help="Root directories to scan (repeatable)"
+    ),
     include_hidden: bool = typer.Option(False, "--include-hidden", help="Scan dot-directories"),
     max_depth: int = typer.Option(3, "--max-depth", help="Max directory depth"),
     github_org: str | None = typer.Option(None, "--github-org", help="GitHub organization to scan"),
@@ -116,22 +122,26 @@ def discover(
             f"""projects:
   {project.path.name}:
     path: {project.path}
-    description: {project.description or 'auto-discovered'}
+    description: {project.description or "auto-discovered"}
     default_branch: {project.default_branch}
-    owner_repo: {project.owner_repo or 'your-user/your-repo'}
+    owner_repo: {project.owner_repo or "your-user/your-repo"}
 """
         )
 
 
 @app.command()
-def list_tasks(tasks_file: Path = typer.Option(settings.tasks_file, help="Path to tasks.yaml")) -> None:
+def list_tasks(
+    tasks_file: Path = typer.Option(settings.tasks_file, help="Path to tasks.yaml"),
+) -> None:
     tasks = load_tasks(tasks_file)
     for name, task in tasks.tasks.items():
         typer.echo(f"- {name}: {task.description} [{len(task.steps)} steps]")
 
 
 @app.command("list-pipelines")
-def list_pipelines(pipelines_file: Path = typer.Option(settings.pipelines_file, help="Path to pipelines.yaml")) -> None:
+def list_pipelines(
+    pipelines_file: Path = typer.Option(settings.pipelines_file, help="Path to pipelines.yaml"),
+) -> None:
     from hivepilot.services.project_service import load_pipelines
 
     pipelines = load_pipelines(pipelines_file)
@@ -143,12 +153,16 @@ def list_pipelines(pipelines_file: Path = typer.Option(settings.pipelines_file, 
 def run(
     project: str = typer.Argument(..., help="Primary project"),
     task: str = typer.Argument(..., help="Task name"),
-    extra_prompt: str | None = typer.Option(None, "--extra-prompt", "-e", help="Extra instructions"),
+    extra_prompt: str | None = typer.Option(
+        None, "--extra-prompt", "-e", help="Extra instructions"
+    ),
     auto_git: bool = typer.Option(False, "--auto-git", help="Run post-task git actions"),
     all_projects: bool = typer.Option(False, "--all", help="Run on every configured project"),
     projects: list[str] = typer.Option([], "--project", "-p", help="Additional projects"),
     concurrency: int | None = typer.Option(None, "--concurrency", "-c", help="Parallel workers"),
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("run", token)
     orchestrator = Orchestrator()
@@ -171,12 +185,16 @@ def run(
 def run_pipeline(
     project: str = typer.Argument(..., help="Primary project"),
     pipeline: str = typer.Argument(..., help="Pipeline name"),
-    extra_prompt: str | None = typer.Option(None, "--extra-prompt", "-e", help="Extra instructions"),
+    extra_prompt: str | None = typer.Option(
+        None, "--extra-prompt", "-e", help="Extra instructions"
+    ),
     auto_git: bool = typer.Option(False, "--auto-git", help="Run post-task git actions"),
     all_projects: bool = typer.Option(False, "--all", help="Run on every configured project"),
     projects: list[str] = typer.Option([], "--project", "-p", help="Additional projects"),
     concurrency: int | None = typer.Option(None, "--concurrency", "-c", help="Parallel workers"),
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("run", token)
     orchestrator = Orchestrator()
@@ -219,7 +237,16 @@ def doctor() -> None:
         typer.echo(f"  {binary:<12}: {'found at ' + found if found else 'NOT FOUND'}")
 
     typer.echo("\n=== Optional Python extras ===")
-    for dep in ("langchain", "langgraph", "crewai", "boto3", "docker", "telegram", "fastapi", "textual"):
+    for dep in (
+        "langchain",
+        "langgraph",
+        "crewai",
+        "boto3",
+        "docker",
+        "telegram",
+        "fastapi",
+        "textual",
+    ):
         try:
             __import__(dep)
             typer.echo(f"  {dep:<14}: installed")
@@ -257,10 +284,18 @@ def dashboard() -> None:
 @gh_app.command("repo-init")
 def gh_repo_init(
     project: str = typer.Argument(..., help="Project key"),
-    push: bool = typer.Option(True, "--push/--no-push", help="Push default branch after linking repo"),
-    set_remote: bool = typer.Option(True, "--set-remote/--no-set-remote", help="Update origin remote URL"),
-    remote_protocol: str = typer.Option("ssh", "--remote-protocol", help="Remote protocol (ssh or https)", show_default=True),
-    visibility: str = typer.Option("private", "--visibility", help="Repo visibility (private/public)", show_default=True),
+    push: bool = typer.Option(
+        True, "--push/--no-push", help="Push default branch after linking repo"
+    ),
+    set_remote: bool = typer.Option(
+        True, "--set-remote/--no-set-remote", help="Update origin remote URL"
+    ),
+    remote_protocol: str = typer.Option(
+        "ssh", "--remote-protocol", help="Remote protocol (ssh or https)", show_default=True
+    ),
+    visibility: str = typer.Option(
+        "private", "--visibility", help="Repo visibility (private/public)", show_default=True
+    ),
 ) -> None:
     orchestrator = Orchestrator()
     project_cfg = orchestrator._project(project)  # pylint: disable=protected-access
@@ -299,7 +334,9 @@ def gh_release(
     tag: str = typer.Argument(..., help="Release tag"),
     title: str | None = typer.Option(None, "--title", help="Release title"),
     notes_file: Path | None = typer.Option(None, "--notes-file", help="Path to release notes file"),
-    generate_notes: bool = typer.Option(True, "--generate-notes/--no-generate-notes", help="Auto-generate release notes"),
+    generate_notes: bool = typer.Option(
+        True, "--generate-notes/--no-generate-notes", help="Auto-generate release notes"
+    ),
 ) -> None:
     orchestrator = Orchestrator()
     project_cfg = orchestrator._project(project)  # pylint: disable=protected-access
@@ -341,11 +378,14 @@ def api_systemd_unit(
     host: str = typer.Option(settings.api_host, "--host"),
     port: int = typer.Option(settings.api_port, "--port"),
     user: str = typer.Option("hivepilot", "--user", help="System user to run the service"),
-    working_dir: str = typer.Option(str(settings.base_dir), "--working-dir", help="Working directory"),
+    working_dir: str = typer.Option(
+        str(settings.base_dir), "--working-dir", help="Working directory"
+    ),
     env_file: str | None = typer.Option(None, "--env-file", help="Path to .env file"),
 ) -> None:
     """Print a systemd unit file for the HivePilot API server."""
     import shutil
+
     python_bin = shutil.which("python3") or "/usr/bin/python3"
     hivepilot_bin = shutil.which("hivepilot") or f"{python_bin} -m hivepilot"
     env_line = f"EnvironmentFile={env_file}" if env_file else ""
@@ -376,21 +416,29 @@ WantedBy=multi-user.target
 @schedule_app.command("daemon")
 def schedule_daemon(
     interval: int = typer.Option(30, "--interval", "-i", help="Seconds between schedule checks"),
-    shutdown_timeout: int = typer.Option(120, "--shutdown-timeout", help="Seconds to wait for in-flight tasks on SIGTERM"),
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    shutdown_timeout: int = typer.Option(
+        120, "--shutdown-timeout", help="Seconds to wait for in-flight tasks on SIGTERM"
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     """Run the scheduler daemon — polls due schedules and processes the retry queue."""
     _require_cli_role("run", token)
     from hivepilot.services.scheduler_daemon import SchedulerDaemon
 
-    typer.echo(f"Starting scheduler daemon (interval={interval}s, shutdown_timeout={shutdown_timeout}s)")
+    typer.echo(
+        f"Starting scheduler daemon (interval={interval}s, shutdown_timeout={shutdown_timeout}s)"
+    )
     typer.echo("Press Ctrl+C or send SIGTERM to stop gracefully.")
     SchedulerDaemon(check_interval=interval, shutdown_timeout=shutdown_timeout).run()
 
 
 @schedule_app.command("health")
 def schedule_health(
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     """Show schedule status, next run times, and retry queue depth."""
     _require_cli_role("read", token)
@@ -414,7 +462,9 @@ def schedule_health(
             next_str = f"due in {int(due_in)}s" if due_in > 0 else "OVERDUE"
         else:
             next_str = "never run"
-        typer.echo(f"  {name:<20} task={entry.task:<15} interval={entry.interval_minutes}m  last={last or 'never':<25} next={next_str}  [{status}]")
+        typer.echo(
+            f"  {name:<20} task={entry.task:<15} interval={entry.interval_minutes}m  last={last or 'never':<25} next={next_str}  [{status}]"
+        )
 
     pending = retry_service.list_queue("pending")
     running = retry_service.list_queue("running")
@@ -434,6 +484,7 @@ def schedule_systemd_unit(
 ) -> None:
     """Print a systemd unit file for the scheduler daemon."""
     import shutil
+
     hivepilot_bin = shutil.which("hivepilot") or "hivepilot"
     env_line = f"EnvironmentFile={env_file}" if env_file else ""
     unit = f"""[Unit]
@@ -456,13 +507,17 @@ WantedBy=multi-user.target
 """
     typer.echo(unit.strip())
     typer.echo("\nTo install:")
-    typer.echo("  sudo hivepilot schedule systemd-unit > /etc/systemd/system/hivepilot-scheduler.service")
+    typer.echo(
+        "  sudo hivepilot schedule systemd-unit > /etc/systemd/system/hivepilot-scheduler.service"
+    )
     typer.echo("  sudo systemctl daemon-reload && sudo systemctl enable --now hivepilot-scheduler")
 
 
 @schedule_app.command("retry-list")
 def schedule_retry_list(
-    status: str | None = typer.Option(None, "--status", help="Filter by status: pending/running/succeeded/dead"),
+    status: str | None = typer.Option(
+        None, "--status", help="Filter by status: pending/running/succeeded/dead"
+    ),
     token: str | None = typer.Option(None, "--token", envvar="HIVEPILOT_API_TOKEN"),
 ) -> None:
     """List jobs in the retry queue."""
@@ -475,6 +530,7 @@ def schedule_retry_list(
         return
     for job in jobs:
         import json as _json
+
         projects = _json.loads(job["projects"])
         typer.echo(
             f"id={job['id']} schedule={job['schedule_name']} task={job['task']} "
@@ -524,7 +580,9 @@ def schedule_dlq_purge(
 
 @schedule_app.command("list")
 def schedule_list(
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("read", token)
     from hivepilot.services.schedule_service import load_schedules
@@ -532,12 +590,16 @@ def schedule_list(
     schedules = load_schedules()
     for name, entry in schedules.items():
         status = "enabled" if entry.enabled else "disabled"
-        typer.echo(f"- {name}: task={entry.task} projects={entry.projects} interval={entry.interval_minutes}m ({status})")
+        typer.echo(
+            f"- {name}: task={entry.task} projects={entry.projects} interval={entry.interval_minutes}m ({status})"
+        )
 
 
 @schedule_app.command("run")
 def schedule_run(
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("run", token)
     from hivepilot.services import schedule_service
@@ -558,9 +620,13 @@ def schedule_run(
 
 if __name__ == "__main__":
     app()
+
+
 @approvals_app.command("list")
 def approvals_list(
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("run", token)
     pending = state_service.get_pending_approvals()
@@ -579,7 +645,9 @@ def approvals_list(
 def approvals_approve(
     run_id: int = typer.Argument(..., help="Run ID"),
     approver: str = typer.Option("cli", "--approver", help="Approver name"),
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("approve", token)
     orchestrator = Orchestrator()
@@ -592,7 +660,9 @@ def approvals_deny(
     run_id: int = typer.Argument(..., help="Run ID"),
     approver: str = typer.Option("cli", "--approver", help="Approver name"),
     reason: str = typer.Option("Denied via CLI", "--reason", help="Reason for rejection"),
-    token: str | None = typer.Option(None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("approve", token)
     orchestrator = Orchestrator()
@@ -602,12 +672,19 @@ def approvals_deny(
 
 @tokens_app.command("add")
 def tokens_add(
-    role: str = typer.Option("run", "--role", help="Token role (read/run/approve/admin)", show_default=True),
+    role: str = typer.Option(
+        "run", "--role", help="Token role (read/run/approve/admin)", show_default=True
+    ),
     note: str | None = typer.Option(None, "--note", help="Description"),
-    ttl: int | None = typer.Option(None, "--ttl", help="Expiry in days (overrides HIVEPILOT_TOKEN_TTL_DAYS)"),
-    token: str | None = typer.Option(None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"),
+    ttl: int | None = typer.Option(
+        None, "--ttl", help="Expiry in days (overrides HIVEPILOT_TOKEN_TTL_DAYS)"
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     from hivepilot.utils.validation import validate_note
+
     role = role.lower()
     if role not in token_service.ROLE_RANKS:
         raise typer.BadParameter("Role must be one of read/run/approve/admin")
@@ -632,9 +709,12 @@ def tokens_add(
 
 @tokens_app.command("list")
 def tokens_list(
-    token: str | None = typer.Option(None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     from datetime import datetime, timezone
+
     tokens = token_service.load_tokens()
     if not tokens:
         typer.echo("No tokens configured.")
@@ -657,7 +737,9 @@ def tokens_list(
 @tokens_app.command("rotate")
 def tokens_rotate(
     token_value: str = typer.Argument(..., help="Current raw token value to rotate"),
-    token: str | None = typer.Option(None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("admin", token)
     result = token_service.rotate_token(token_value)
@@ -674,7 +756,9 @@ def tokens_rotate(
 @tokens_app.command("remove")
 def tokens_remove(
     token_value: str = typer.Argument(..., help="Token value"),
-    token: str | None = typer.Option(None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"),
+    token: str | None = typer.Option(
+        None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"
+    ),
 ) -> None:
     _require_cli_role("admin", token)
     if token_service.remove_token(token_value):
@@ -743,7 +827,9 @@ def config_log(
 @telegram_app.command("start")
 def telegram_start(
     mode: str = typer.Option("polling", "--mode", "-m", help="polling or webhook"),
-    webhook_url: str | None = typer.Option(None, "--webhook-url", help="Public base URL for webhook mode (e.g. https://myserver.com)"),
+    webhook_url: str | None = typer.Option(
+        None, "--webhook-url", help="Public base URL for webhook mode (e.g. https://myserver.com)"
+    ),
     port: int | None = typer.Option(None, "--port", help="Local port for built-in webhook server"),
     secret: str | None = typer.Option(None, "--secret", help="Webhook secret token"),
 ) -> None:
@@ -764,7 +850,9 @@ def telegram_start(
                     err=True,
                 )
                 raise typer.Exit(1)
-            typer.echo(f"Starting Telegram bot in webhook mode on port {port or settings.telegram_webhook_port}…")
+            typer.echo(
+                f"Starting Telegram bot in webhook mode on port {port or settings.telegram_webhook_port}…"
+            )
             tgbot.run_webhook(webhook_url=url, port=port, secret=secret)
         else:
             typer.echo(f"Unknown mode: {mode!r}. Use 'polling' or 'webhook'.", err=True)
@@ -777,7 +865,9 @@ def telegram_start(
 @telegram_app.command("set-webhook")
 def telegram_set_webhook(
     url: str = typer.Argument(..., help="Public base URL, e.g. https://myserver.com"),
-    secret: str | None = typer.Option(None, "--secret", help="Secret token sent in X-Telegram-Bot-Api-Secret-Token header"),
+    secret: str | None = typer.Option(
+        None, "--secret", help="Secret token sent in X-Telegram-Bot-Api-Secret-Token header"
+    ),
 ) -> None:
     """Register the webhook URL with Telegram (one-shot, non-blocking)."""
     from hivepilot.services import telegram_bot as tgbot
@@ -829,18 +919,26 @@ def telegram_info() -> None:
 def caddy_generate(
     domain: str = typer.Argument(..., help="Public domain name (e.g. hivepilot.example.com)"),
     email: str = typer.Option("", "--email", help="ACME email for Let's Encrypt"),
-    tls_internal: bool = typer.Option(False, "--tls-internal", help="Use self-signed cert (LAN/dev)"),
+    tls_internal: bool = typer.Option(
+        False, "--tls-internal", help="Use self-signed cert (LAN/dev)"
+    ),
     api_port: int | None = typer.Option(None, "--api-port", help="Upstream API port"),
 ) -> None:
     """Print the generated Caddyfile without writing it."""
     from hivepilot.services import caddy_service
-    typer.echo(caddy_service.generate_caddyfile(domain=domain, email=email, tls_internal=tls_internal, api_port=api_port))
+
+    typer.echo(
+        caddy_service.generate_caddyfile(
+            domain=domain, email=email, tls_internal=tls_internal, api_port=api_port
+        )
+    )
 
 
 @caddy_app.command("show")
 def caddy_show() -> None:
     """Show the current Caddyfile on disk."""
     from hivepilot.services.caddy_service import _CADDYFILE_PATH
+
     path = _CADDYFILE_PATH
     if not path.exists():
         typer.echo(f"No Caddyfile found at {path}")
@@ -854,14 +952,20 @@ def caddy_setup(
     email: str = typer.Option("", "--email", help="ACME email for Let's Encrypt"),
     tls_internal: bool = typer.Option(False, "--tls-internal", help="Use self-signed cert"),
     api_port: int | None = typer.Option(None, "--api-port", help="Upstream API port"),
-    auto_install: bool = typer.Option(True, "--auto-install/--no-auto-install", help="Install Caddy if missing"),
+    auto_install: bool = typer.Option(
+        True, "--auto-install/--no-auto-install", help="Install Caddy if missing"
+    ),
 ) -> None:
     """Full one-shot Caddy setup: install, configure, start."""
     from hivepilot.services import caddy_service
+
     try:
         result = caddy_service.setup(
-            domain=domain, email=email, tls_internal=tls_internal,
-            api_port=api_port, auto_install=auto_install,
+            domain=domain,
+            email=email,
+            tls_internal=tls_internal,
+            api_port=api_port,
+            auto_install=auto_install,
         )
     except RuntimeError as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -875,6 +979,7 @@ def caddy_setup(
 def caddy_reload() -> None:
     """Reload Caddy configuration without downtime."""
     from hivepilot.services import caddy_service
+
     try:
         caddy_service.reload_caddy()
         typer.echo("Caddy reloaded.")
@@ -887,6 +992,7 @@ def caddy_reload() -> None:
 def caddy_status() -> None:
     """Show Caddy service status."""
     from hivepilot.services import caddy_service
+
     typer.echo(caddy_service.caddy_status())
 
 
@@ -896,6 +1002,7 @@ def caddy_logs(
 ) -> None:
     """Tail Caddy logs."""
     from hivepilot.services import caddy_service
+
     typer.echo(caddy_service.caddy_logs(lines=lines))
 
 
@@ -905,6 +1012,7 @@ def caddy_teardown(
 ) -> None:
     """Stop and disable Caddy."""
     from hivepilot.services import caddy_service
+
     if not confirm:
         typer.confirm("Stop and disable Caddy?", abort=True)
     caddy_service.teardown_caddy()
@@ -927,6 +1035,7 @@ def lint_config() -> None:
 # ---------------------------------------------------------------------------
 # slack subapp
 # ---------------------------------------------------------------------------
+
 
 @slack_app.command("start")
 def slack_start(
@@ -970,6 +1079,7 @@ def slack_notify(
 # Discord commands (Phase 23d)
 # ---------------------------------------------------------------------------
 
+
 @discord_app.command("start")
 def discord_start(
     mode: str = typer.Option("gateway", "--mode", "-m", help="gateway or webhook"),
@@ -989,9 +1099,7 @@ def discord_start(
             typer.echo(
                 "Register this URL in your Discord application's Interactions Endpoint URL field."
             )
-            typer.echo(
-                "Then start the API server with: hivepilot api start"
-            )
+            typer.echo("Then start the API server with: hivepilot api start")
         else:
             typer.echo(f"Unknown mode: {mode!r}. Use 'gateway' or 'webhook'.", err=True)
             raise typer.Exit(1)
@@ -1051,6 +1159,7 @@ def init_project(
     }
 
     import warnings
+
     dest_path = Path(dest)
     dest_path.mkdir(parents=True, exist_ok=True)
 
@@ -1080,6 +1189,7 @@ def init_project(
 # IaC commands (Phase 17a)
 # ---------------------------------------------------------------------------
 
+
 def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu") -> None:
     from hivepilot.models import RunnerDefinition, TaskStep
     from hivepilot.registry import RUNNER_MAP
@@ -1108,7 +1218,9 @@ def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu"
 @iac_app.command("plan")
 def iac_plan(
     project: str = typer.Option(..., "--project", "-p", help="Project name"),
-    runner: str = typer.Option("opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"),
+    runner: str = typer.Option(
+        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"
+    ),
 ) -> None:
     """Run infrastructure plan."""
     _run_iac_operation(project, "plan", kind=runner)
@@ -1117,7 +1229,9 @@ def iac_plan(
 @iac_app.command("apply")
 def iac_apply(
     project: str = typer.Option(..., "--project", "-p", help="Project name"),
-    runner: str = typer.Option("opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"),
+    runner: str = typer.Option(
+        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Apply infrastructure changes."""
@@ -1129,19 +1243,25 @@ def iac_apply(
 @iac_app.command("destroy")
 def iac_destroy(
     project: str = typer.Option(..., "--project", "-p", help="Project name"),
-    runner: str = typer.Option("opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"),
+    runner: str = typer.Option(
+        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Destroy infrastructure."""
     if not yes:
-        typer.confirm(f"Destroy infrastructure for project '{project}'? This is irreversible.", abort=True)
+        typer.confirm(
+            f"Destroy infrastructure for project '{project}'? This is irreversible.", abort=True
+        )
     _run_iac_operation(project, "destroy", kind=runner)
 
 
 @iac_app.command("drift")
 def iac_drift(
     project: str = typer.Option(..., "--project", "-p", help="Project name"),
-    runner: str = typer.Option("opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"),
+    runner: str = typer.Option(
+        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"
+    ),
 ) -> None:
     """Detect infrastructure drift."""
     try:
@@ -1155,7 +1275,9 @@ def iac_drift(
 @iac_app.command("output")
 def iac_output(
     project: str = typer.Option(..., "--project", "-p", help="Project name"),
-    runner: str = typer.Option("opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"),
+    runner: str = typer.Option(
+        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"
+    ),
 ) -> None:
     """Show infrastructure outputs as JSON."""
     _run_iac_operation(project, "output", kind=runner)
@@ -1178,11 +1300,14 @@ def iac_cost(
 # Templates marketplace (Phase 22)
 # ---------------------------------------------------------------------------
 
+
 @app.command("templates")
 def templates_cmd(
     action: str = typer.Argument("list", help="Action: list, list-remote, pull"),
     name: Optional[str] = typer.Argument(None, help="Template name (for pull)"),
-    source: Optional[str] = typer.Option(None, "--source", "-s", help="Remote source: user/repo or HTTPS URL"),
+    source: Optional[str] = typer.Option(
+        None, "--source", "-s", help="Remote source: user/repo or HTTPS URL"
+    ),
     dest: str = typer.Option(".", "--dest", "-d", help="Destination directory (for pull)"),
 ) -> None:
     """Manage built-in and community templates."""
@@ -1215,6 +1340,7 @@ def templates_cmd(
             raise typer.Exit(1)
         typer.echo(f"Pulling template {name!r} from {source or 'official registry'}…")
         import warnings
+
         dest_path = Path(dest)
         dest_path.mkdir(parents=True, exist_ok=True)
         try:
@@ -1280,7 +1406,9 @@ def notion_status() -> None:
 
 @notion_app.command("setup")
 def notion_setup(
-    parent_page_id: str = typer.Argument(..., help="Notion page ID to create the runs database under"),
+    parent_page_id: str = typer.Argument(
+        ..., help="Notion page ID to create the runs database under"
+    ),
 ) -> None:
     """Create the HivePilot runs database schema in Notion. Prints the database_id to add to .env."""
     from hivepilot.services import notion_service
@@ -1334,6 +1462,7 @@ def notion_sync() -> None:
 # Linear commands (Phase 17d)
 # ---------------------------------------------------------------------------
 
+
 @linear_app.command("teams")
 def linear_teams() -> None:
     """List Linear teams."""
@@ -1350,15 +1479,21 @@ def linear_teams() -> None:
         return
 
     for team in teams:
-        typer.echo(f"  {team.get('key', '?'):<10} {team.get('name', '?')}  (id={team.get('id', '?')})")
+        typer.echo(
+            f"  {team.get('key', '?'):<10} {team.get('name', '?')}  (id={team.get('id', '?')})"
+        )
 
 
 @linear_app.command("issue")
 def linear_issue(
     project: str = typer.Argument(..., help="Project name"),
     task: str = typer.Argument(..., help="Task name"),
-    error: str | None = typer.Option(None, "--error", "-e", help="Error message to include in issue body"),
-    priority: int = typer.Option(2, "--priority", "-p", help="Priority: 0=none 1=urgent 2=high 3=medium 4=low"),
+    error: str | None = typer.Option(
+        None, "--error", "-e", help="Error message to include in issue body"
+    ),
+    priority: int = typer.Option(
+        2, "--priority", "-p", help="Priority: 0=none 1=urgent 2=high 3=medium 4=low"
+    ),
     team_id: str | None = typer.Option(None, "--team-id", help="Linear team ID (overrides config)"),
 ) -> None:
     """Manually create a Linear issue for a project/task."""
@@ -1382,16 +1517,16 @@ def linear_issue(
 
 @linear_app.command("states")
 def linear_states(
-    team_id: str | None = typer.Option(None, "--team-id", help="Team ID (defaults to linear_team_id in config)"),
+    team_id: str | None = typer.Option(
+        None, "--team-id", help="Team ID (defaults to linear_team_id in config)"
+    ),
 ) -> None:
     """List workflow states for a Linear team."""
     from hivepilot.services.linear_service import get_workflow_states
 
     resolved_team_id = team_id or settings.linear_team_id
     if not resolved_team_id:
-        typer.echo(
-            "Error: --team-id required or set HIVEPILOT_LINEAR_TEAM_ID.", err=True
-        )
+        typer.echo("Error: --team-id required or set HIVEPILOT_LINEAR_TEAM_ID.", err=True)
         raise typer.Exit(1)
 
     try:
@@ -1430,3 +1565,54 @@ def linear_sync() -> None:
             f"{run['id']:<6} {run['project']:<20} {run['task']:<20} "
             f"{run['status']:<10} {run.get('started_at', '?')}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Obsidian vault integration
+# ---------------------------------------------------------------------------
+
+
+@obsidian_app.command("audit")
+def obsidian_audit(
+    vault: str | None = typer.Option(
+        None,
+        "--vault",
+        "-v",
+        help="Path to Obsidian vault root (defaults to HIVEPILOT_OBSIDIAN_VAULT setting)",
+    ),
+) -> None:
+    """Scan the Obsidian vault and report present/missing folders and HivePilot subtree status."""
+
+    from hivepilot.services.obsidian_service import ObsidianService
+
+    vault_path = vault or str(settings.obsidian_vault)
+    svc = ObsidianService(vault_path=vault_path, dry_run=True)
+
+    try:
+        report = svc.audit()
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Vault: {vault_path}\n")
+
+    typer.echo(f"Present folders ({len(report['present'])}):")
+    for folder in report["present"]:
+        typer.echo(f"  [x] {folder}")
+
+    typer.echo(f"\nMissing folders ({len(report['missing'])}):")
+    for folder in report["missing"]:
+        typer.echo(f"  [ ] {folder}")
+
+    typer.echo("\nFrozen folders (must not be renamed or deleted):")
+    for folder in report["frozen"]:
+        typer.echo(f"  {folder}")
+
+    subtree = report["hivepilot_subtree"]
+    exists = subtree.get("exists", False)
+    typer.echo(f"\n12 - HivePilot subtree: {'exists' if exists else 'MISSING'}")
+    for key, val in subtree.items():
+        if key == "exists":
+            continue
+        status = "[x]" if val else "[ ]"
+        typer.echo(f"  {status} {key}")

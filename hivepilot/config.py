@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
     api_host: str = "127.0.0.1"
     api_port: int = 8045
-    api_root_path: str = ""          # set to "/hivepilot" when behind a path-prefix proxy
+    api_root_path: str = ""  # set to "/hivepilot" when behind a path-prefix proxy
     api_allowed_origins: list[str] = Field(default_factory=list)
     chatops_token: str | None = None
     secrets_allowed_dirs: list[str] = Field(default_factory=list)
@@ -67,29 +67,32 @@ class Settings(BaseSettings):
     no_proxy: str | None = None
     config_repo: str | None = None
     config_branch: str = "main"
-    domain: str | None = None        # public domain used by caddy + webhook auto-registration
+    domain: str | None = None  # public domain used by caddy + webhook auto-registration
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids: list[int] = Field(default_factory=list)
-    telegram_notification_chat_id: int | None = None  # proactive notifications (approvals, run results)
+    telegram_notification_chat_id: int | None = (
+        None  # proactive notifications (approvals, run results)
+    )
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
     slack_bot_token: str | None = None
     slack_signing_secret: str | None = None
-    slack_app_token: str | None = None          # for Socket Mode (xapp-...)
+    slack_app_token: str | None = None  # for Socket Mode (xapp-...)
     slack_allowed_channel_ids: list[str] = Field(default_factory=list)
     slack_notification_channel_id: str | None = None  # proactive notifications
     discord_bot_token: str | None = None
-    discord_public_key: str | None = None       # Ed25519 public key for HTTP interactions
+    discord_public_key: str | None = None  # Ed25519 public key for HTTP interactions
     discord_allowed_guild_ids: list[int] = Field(default_factory=list)
     discord_allowed_channel_ids: list[int] = Field(default_factory=list)
     discord_notification_channel_id: int | None = None  # proactive notifications
     linear_api_key: str | None = None
-    linear_team_id: str | None = None           # default team for issue creation
+    linear_team_id: str | None = None  # default team for issue creation
     linear_default_project_id: str | None = None  # default project
-    linear_webhook_secret: str | None = None    # HMAC secret for webhook verification
+    linear_webhook_secret: str | None = None  # HMAC secret for webhook verification
     notion_token: str | None = None
     notion_runs_database_id: str | None = None  # database where run logs are written
+    obsidian_vault: Path = Path("/home/jeromesoyer/Documents/Github/jsoyer/obsidian-vault/Noxys")
 
     @property
     def xdg_config_home(self) -> Path:
