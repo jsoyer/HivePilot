@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime
-from pathlib import Path
+from enum import Enum
 from typing import Any
 
 from hivepilot.config import settings
@@ -11,6 +11,75 @@ from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 DB_PATH = settings.resolve_path(settings.state_db)
+
+# ---------------------------------------------------------------------------
+# Formal run-status enum
+# ---------------------------------------------------------------------------
+
+# The enum values deliberately match the historical string literals stored in
+# the SQLite ``status`` column so existing rows remain fully compatible.
+
+
+class RunStatus(str, Enum):
+    """Canonical pipeline run-status values.
+
+    Inherits ``str`` so that ``RunStatus.RUNNING == "running"`` is ``True``
+    and values can be stored directly in the SQLite ``status`` column without
+    conversion.
+
+    Backward-compatible: the legacy strings ``'running'``, ``'pending'``, and
+    ``'complete'`` are accepted via :meth:`from_str`.
+    """
+
+    # --- primary states ---
+    NEW = "new"
+    PLANNED = "planned"
+    RUNNING = "running"
+    PAUSED = "paused"
+    REVIEW = "review"
+    APPROVAL = "approval"
+    COMPLETE = "complete"
+
+    # --- failure states ---
+    RATE_LIMIT = "rate_limit"
+    AUTH_EXPIRED = "auth_expired"
+    TEST_FAILURE = "test_failure"
+    SECURITY_BLOCKER = "security_blocker"
+
+    @classmethod
+    def from_str(cls, value: str) -> "RunStatus":
+        """Return the ``RunStatus`` for *value*.
+
+        Accepts:
+        - Any ``RunStatus`` member name (case-insensitive), e.g. ``"RUNNING"``
+        - Any ``RunStatus`` member value, e.g. ``"running"``
+        - Legacy alias ``"pending"`` -> :attr:`NEW`
+
+        Raises
+        ------
+        ValueError
+            If *value* cannot be mapped to any known status.
+        """
+        normalised = value.strip().lower()
+
+        # Legacy alias
+        if normalised == "pending":
+            return cls.NEW
+
+        # Try by value first (covers "running", "complete", ...)
+        try:
+            return cls(normalised)
+        except ValueError:
+            pass
+
+        # Try by name (covers "RUNNING", "running" as name, ...)
+        upper = normalised.upper()
+        try:
+            return cls[upper]
+        except KeyError:
+            pass
+
+        raise ValueError(f"Unknown status: {value!r}")
 
 
 def init_db() -> None:
@@ -221,6 +290,8 @@ def get_token(token: str) -> dict[str, Any] | None:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM tokens WHERE token=?", (token,)).fetchone()
     return dict(row) if row else None
+
+
 def list_all_runs() -> list[dict[str, Any]]:
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
