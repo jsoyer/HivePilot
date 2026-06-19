@@ -53,3 +53,21 @@ _LANGCHAIN_MODULES = [
 for _mod_name in _LANGCHAIN_MODULES:
     if _mod_name not in sys.modules:
         _make_stub(_mod_name)
+
+
+# ---------------------------------------------------------------------------
+# DB isolation — redirect state DB to a per-test tmp file
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402  (must come after sys.modules stubs are installed)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state_db(tmp_path, monkeypatch):
+    """Redirect the SQLite state DB to a per-test tmp file so tests never
+    touch the real ./state.db. DB_PATH is captured at import time, so patch
+    the module attribute directly."""
+    from hivepilot.services import state_service
+
+    monkeypatch.setattr(state_service, "DB_PATH", tmp_path / "test_state.db")
+    yield

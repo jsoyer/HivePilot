@@ -113,6 +113,21 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER,
+                actor TEXT,
+                action TEXT,
+                target TEXT,
+                summary TEXT,
+                metadata TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS schedule_runs (
                 name TEXT PRIMARY KEY,
                 last_run TIMESTAMP
@@ -197,6 +212,60 @@ def get_steps_for_run(run_id: int) -> list[dict[str, Any]]:
         rows = conn.execute(
             "SELECT * FROM steps WHERE run_id=? ORDER BY timestamp", (run_id,)
         ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def record_interaction(
+    actor: str,
+    action: str,
+    target: str | None,
+    summary: str,
+    timestamp: str | None = None,
+    run_id: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> int:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO interactions (run_id, actor, action, target, summary, metadata, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
+            """,
+            (
+                run_id,
+                actor,
+                action,
+                target,
+                summary,
+                json.dumps(metadata) if metadata is not None else None,
+                timestamp,
+            ),
+        )
+        conn.commit()
+        interaction_id = cursor.lastrowid
+        logger.info(
+            "state.interaction",
+            interaction_id=interaction_id,
+            actor=actor,
+            action=action,
+            run_id=run_id,
+        )
+        return interaction_id
+
+
+def list_recent_interactions(limit: int = 50, run_id: int | None = None) -> list[dict[str, Any]]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        if run_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM interactions WHERE run_id=? ORDER BY id DESC LIMIT ?",
+                (run_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM interactions ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
     return [dict(row) for row in rows]
 
 

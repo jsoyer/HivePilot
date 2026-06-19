@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from hivepilot.services import state_service
 from hivepilot.services.interaction_service import Interaction, InteractionService
 
 # ---------------------------------------------------------------------------
@@ -227,3 +228,50 @@ class TestRenderTimeline:
         result = svc.render_timeline(interactions)
         assert "ceo" in result
         assert "broadcasts update" in result
+
+
+# ---------------------------------------------------------------------------
+# InteractionService — DB dual-write
+# ---------------------------------------------------------------------------
+
+
+class TestInteractionServiceDbWrite:
+    def test_log_interaction_writes_db_row_when_vault_is_none(self) -> None:
+        """DB row is written unconditionally, even when no vault is configured."""
+        svc = InteractionService(vault_path=None)
+        result = svc.log_interaction(_make_interaction(actor="pm", action="assigns task"))
+        assert result is None  # vault absent → still returns None
+
+        rows = state_service.list_recent_interactions()
+        assert len(rows) == 1
+        assert rows[0]["actor"] == "pm"
+        assert rows[0]["action"] == "assigns task"
+
+    def test_log_interaction_writes_db_row_when_vault_exists(self, tmp_path: Path) -> None:
+        """DB row is written and returned dict includes interaction_id."""
+        vault = _make_fake_vault(tmp_path)
+        svc = InteractionService(vault_path=vault, dry_run=True)
+        result = svc.log_interaction(
+            _make_interaction(actor="cto", action="approves design", run_id=5)
+        )
+
+        assert result is not None
+        assert "interaction_id" in result
+        assert isinstance(result["interaction_id"], int)
+
+        rows = state_service.list_recent_interactions()
+        assert len(rows) == 1
+        assert rows[0]["actor"] == "cto"
+        assert rows[0]["run_id"] == 5
+        assert rows[0]["id"] == result["interaction_id"]
+
+    def test_multiple_log_interaction_calls_accumulate_db_rows(self) -> None:
+        """Each call to log_interaction appends a new DB row."""
+        svc = InteractionService(vault_path=None)
+        svc.log_interaction(_make_interaction(actor="a", action="step1"))
+        svc.log_interaction(_make_interaction(actor="b", action="step2"))
+
+        rows = state_service.list_recent_interactions()
+        assert len(rows) == 2
+        actors = {r["actor"] for r in rows}
+        assert actors == {"a", "b"}

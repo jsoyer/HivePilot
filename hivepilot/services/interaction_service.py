@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hivepilot.services import state_service
 from hivepilot.services.obsidian_service import ObsidianService
 
 # ---------------------------------------------------------------------------
@@ -105,6 +106,16 @@ class InteractionService:
         dict with keys ``path``, ``content``, ``dry_run`` — or ``None`` when
         no vault is available.
         """
+        interaction_id = state_service.record_interaction(
+            actor=interaction.actor,
+            action=interaction.action,
+            target=interaction.target,
+            summary=interaction.summary,
+            timestamp=interaction.timestamp,
+            run_id=interaction.run_id,
+            metadata=interaction.metadata,
+        )
+
         if self._obsidian is None:
             return None
 
@@ -129,12 +140,15 @@ class InteractionService:
             "timestamp": interaction.timestamp,
         }
 
-        return self._obsidian.write_note(
+        result = self._obsidian.write_note(
             subpath=subpath,
             title=title,
             body=body,
             frontmatter_fields=frontmatter_fields,
         )
+        if isinstance(result, dict):
+            result = {**result, "interaction_id": interaction_id}
+        return result
 
     def render_timeline(self, interactions: list[Interaction]) -> str:
         """Render interactions as a Mermaid ``sequenceDiagram`` fenced block.
