@@ -8,7 +8,19 @@ from pydantic import BaseModel, Field, model_validator
 
 class RunnerDefinition(BaseModel):
     name: str | None = None
-    kind: Literal["claude", "shell", "langchain", "internal", "codex", "gemini", "opencode", "ollama", "api", "container"]
+    kind: Literal[
+        "claude",
+        "shell",
+        "langchain",
+        "internal",
+        "codex",
+        "gemini",
+        "opencode",
+        "ollama",
+        "api",
+        "container",
+        "cursor",
+    ]
     command: str | None = None
     model: str | None = None
     agent: str | None = None

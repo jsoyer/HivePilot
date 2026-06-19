@@ -192,6 +192,9 @@ def run_pipeline(
     all_projects: bool = typer.Option(False, "--all", help="Run on every configured project"),
     projects: list[str] = typer.Option([], "--project", "-p", help="Additional projects"),
     concurrency: int | None = typer.Option(None, "--concurrency", "-c", help="Parallel workers"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--no-dry-run", help="Skip vault writes (default: dry-run)"
+    ),
     token: str | None = typer.Option(
         None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
     ),
@@ -205,6 +208,7 @@ def run_pipeline(
         extra_prompt=extra_prompt,
         auto_git=auto_git,
         concurrency=concurrency,
+        dry_run=dry_run,
     )
     for result in results:
         status = "✅" if result.success else "❌"

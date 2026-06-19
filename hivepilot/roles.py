@@ -36,6 +36,10 @@ class Role(BaseModel):
     outputs: list[str]
     can_block: bool
     order: int
+    # Sprint 2.1: runner + model binding (additive, defaulted — no existing tests broken)
+    runner: str | None = None
+    model: str | None = None
+    models: list[str] | None = None
 
 
 ROLES: dict[str, Role] = {
@@ -48,6 +52,8 @@ ROLES: dict[str, Role] = {
         outputs=["objectives", "priorities", "constraints"],
         can_block=False,
         order=1,
+        runner="opencode",
+        models=["qwen", "kimi"],
     ),
     "chief_of_staff": Role(
         name="chief_of_staff",
@@ -58,6 +64,7 @@ ROLES: dict[str, Role] = {
         outputs=["execution_plan", "blocker_report", "cycle_report"],
         can_block=False,
         order=2,
+        runner="cursor",
     ),
     "cto": Role(
         name="cto",
@@ -68,6 +75,8 @@ ROLES: dict[str, Role] = {
         outputs=["technical_spec", "adr", "rejection_notice"],
         can_block=True,
         order=3,
+        runner="opencode",
+        model="kimi",
     ),
     "developer": Role(
         name="developer",
@@ -78,6 +87,7 @@ ROLES: dict[str, Role] = {
         outputs=["implementation", "test_suite", "implementation_notes"],
         can_block=False,
         order=4,
+        runner="claude",
     ),
     "reviewer": Role(
         name="reviewer",
@@ -88,6 +98,7 @@ ROLES: dict[str, Role] = {
         outputs=["review_report", "approval"],
         can_block=True,
         order=5,
+        runner="codex",
     ),
     "ciso": Role(
         name="ciso",
@@ -98,6 +109,8 @@ ROLES: dict[str, Role] = {
         outputs=["security_report", "clearance"],
         can_block=True,
         order=6,
+        runner="opencode",
+        model="glm",
     ),
     "qa": Role(
         name="qa",
@@ -108,6 +121,7 @@ ROLES: dict[str, Role] = {
         outputs=["qa_test_suite", "test_report", "edge_case_log"],
         can_block=False,
         order=7,
+        runner="gemini",
     ),
     "documentation": Role(
         name="documentation",
@@ -118,6 +132,7 @@ ROLES: dict[str, Role] = {
         outputs=["updated_docs", "updated_adrs", "changelog_entry"],
         can_block=False,
         order=8,
+        runner="gemini",
     ),
 }
 

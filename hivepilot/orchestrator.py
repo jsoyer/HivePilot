@@ -10,7 +10,8 @@ from pathlib import Path
 import questionary
 
 from hivepilot.config import settings
-from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+from hivepilot.models import PipelineStage, ProjectConfig, TaskConfig, TaskStep
+from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager
 from hivepilot.registry import RunnerRegistry
 from hivepilot.runners.base import RunnerPayload
@@ -25,10 +26,21 @@ from hivepilot.services.git_service import perform_git_actions
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
 from hivepilot.services.secrets_service import secret_resolver
+from hivepilot.services.state_service import RunStatus
 from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _runner_for_stage(stage: PipelineStage) -> str:
+    """Return the runner name for a pipeline stage.
+
+    Currently always returns ``"claude"`` (Claude-first seam).  Future sprints
+    may inspect *stage* fields (e.g. a ``runner`` override) to route to other
+    runners.
+    """
+    return "claude"
 
 
 @dataclass
@@ -77,30 +89,43 @@ class Orchestrator:
             policy = policy_service.enforce_policy(project.path.name, auto_git=auto_git)
             run_policies[project.path.name] = policy
             if policy.require_approval:
-                run_id = state_service.record_run_start(project.path.name, task_name, status="pending")
+                run_id = state_service.record_run_start(
+                    project.path.name, task_name, status="pending"
+                )
                 approval_meta = {
                     "task": task_name,
                     "project": project.path.name,
                     "extra_prompt": extra_prompt,
                     "auto_git": auto_git,
                 }
-                state_service.record_approval_request(run_id, project.path.name, task_name, approval_meta)
+                state_service.record_approval_request(
+                    run_id, project.path.name, task_name, approval_meta
+                )
                 notification_service.send_approval_keyboard(
                     run_id=run_id, project=project.path.name, task=task_name
                 )
-                results.append(RunResult(project.path.name, task_name, False, f"Pending approval (run {run_id})"))
+                results.append(
+                    RunResult(
+                        project.path.name, task_name, False, f"Pending approval (run {run_id})"
+                    )
+                )
             else:
-                run_id = state_service.record_run_start(project.path.name, task_name, status="running")
+                run_id = state_service.record_run_start(
+                    project.path.name, task_name, status="running"
+                )
                 run_ids[project.path.name] = run_id
                 immediate_projects.append(project)
                 try:
                     from hivepilot.services.notion_service import on_run_start
+
                     notion_page_ids[project.path.name] = on_run_start(
                         run_id=run_id, project=project.path.name, task=task_name
                     )
                 except Exception:  # noqa: BLE001
                     pass
-                notification_service.send_notification(f"Starting {task_name} on {project.path.name}")
+                notification_service.send_notification(
+                    f"Starting {task_name} on {project.path.name}"
+                )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=limit) as executor:
             future_map = {
@@ -125,18 +150,26 @@ class Orchestrator:
                         state_service.complete_run(run_ids[project.path.name], "success")
                     try:
                         from hivepilot.services.notion_service import on_run_complete
+
                         on_run_complete(notion_page_ids.get(project.path.name), status="success")
                     except Exception:  # noqa: BLE001
                         pass
-                    notification_service.send_notification(f"✅ {project.path.name}: {task_name} completed")
+                    notification_service.send_notification(
+                        f"✅ {project.path.name}: {task_name} completed"
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    logger.error("run.failure", project=project.path.name, task=task_name, error=str(exc))
+                    logger.error(
+                        "run.failure", project=project.path.name, task=task_name, error=str(exc)
+                    )
                     results.append(RunResult(project.path.name, task_name, False, str(exc)))
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "failed", str(exc))
-                    notification_service.send_notification(f"❌ {project.path.name}: {task_name} failed ({exc})")
+                    notification_service.send_notification(
+                        f"❌ {project.path.name}: {task_name} failed ({exc})"
+                    )
                     try:
                         from hivepilot.services.notion_service import on_run_complete
+
                         on_run_complete(
                             notion_page_ids.get(project.path.name), status="failed", detail=str(exc)
                         )
@@ -144,6 +177,7 @@ class Orchestrator:
                         pass
                     try:
                         from hivepilot.services.linear_service import on_run_failure
+
                         on_run_failure(project=project.path.name, task=task_name, error=str(exc))
                     except Exception:  # noqa: BLE001
                         pass
@@ -180,12 +214,25 @@ class Orchestrator:
         extra_prompt: str | None,
         auto_git: bool,
         concurrency: int | None = None,
+        dry_run: bool = True,
     ) -> list[RunResult]:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
         pipeline = self.pipelines.pipelines[pipeline_name]
         validate_pipeline(pipeline, self.tasks)
+
+        # Resolve vault path — None means artifact writes are silent no-ops
+        vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
+
+        # Open a state-service run record (RUNNING)
+        run_id = state_service.record_run_start(
+            pipeline_name,
+            pipeline_name,
+            status=RunStatus.RUNNING.value,
+        )
+
         results: list[RunResult] = []
+        final_status = RunStatus.COMPLETE
         for stage in pipeline.stages:
             stage_results = self.run_task(
                 project_names=project_names,
@@ -194,16 +241,37 @@ class Orchestrator:
                 auto_git=auto_git,
                 concurrency=concurrency,
             )
-            results.extend([RunResult(r.project, f"{pipeline_name}:{stage.name}", r.success, r.detail) for r in stage_results])
+            results.extend(
+                [
+                    RunResult(r.project, f"{pipeline_name}:{stage.name}", r.success, r.detail)
+                    for r in stage_results
+                ]
+            )
+
+            # Aggregate stage output for the vault artifact
+            stage_output = "\n".join(
+                r.detail or f"{r.project}: {'ok' if r.success else 'failed'}" for r in stage_results
+            )
+            write_stage_artifact(
+                vault_path=vault_path,
+                run_id=run_id,
+                stage_name=stage.name,
+                output=stage_output,
+                dry_run=dry_run,
+            )
+
             stage_failed = any(not r.success for r in stage_results)
-            if stage_failed and not stage.continue_on_failure:
+            if stage_failed and not getattr(stage, "continue_on_failure", False):
                 logger.warning(
                     "pipeline.fail_fast",
                     pipeline=pipeline_name,
                     stage=stage.name,
-                    remaining=[s.name for s in pipeline.stages[pipeline.stages.index(stage) + 1:]],
+                    remaining=[s.name for s in pipeline.stages[pipeline.stages.index(stage) + 1 :]],
                 )
+                final_status = RunStatus.TEST_FAILURE
                 break
+
+        state_service.complete_run(run_id, final_status.value)
         return results
 
     def run_approved(
@@ -257,7 +325,9 @@ class Orchestrator:
         return RunResult(project_name, task_name, True)
 
     def interactive(self) -> None:
-        project = questionary.select("Select project", choices=list(self.projects.projects.keys())).ask()
+        project = questionary.select(
+            "Select project", choices=list(self.projects.projects.keys())
+        ).ask()
         if not project:
             return
         task = questionary.select("Select task", choices=list(self.tasks.tasks.keys())).ask()
@@ -265,7 +335,9 @@ class Orchestrator:
             return
         extra = questionary.text("Extra instructions (optional)", default="").ask()
         auto_git = questionary.confirm("Run auto-git?", default=False).ask()
-        self.run_task(project_names=[project], task_name=task, extra_prompt=extra or None, auto_git=auto_git)
+        self.run_task(
+            project_names=[project], task_name=task, extra_prompt=extra or None, auto_git=auto_git
+        )
 
     def _execute_task(
         self,
@@ -283,7 +355,11 @@ class Orchestrator:
         if task.engine != "native":
             from hivepilot.engines import run_engine
 
-            placeholder_step = task.steps[0] if task.steps else TaskStep(name=f"{task.engine}-engine", runner="internal")
+            placeholder_step = (
+                task.steps[0]
+                if task.steps
+                else TaskStep(name=f"{task.engine}-engine", runner="internal")
+            )
             payload = RunnerPayload(
                 project_name=project.path.name,
                 project=project,
@@ -317,7 +393,9 @@ class Orchestrator:
                 runner_key = step.runner_ref or step.runner
                 runner_def = self.registry._definition_for(runner_key)
                 if runner_def.kind == "container" and policy and not policy.allow_containers:
-                    raise RuntimeError(f"Containers are disabled by policy for project {project.path.name}")
+                    raise RuntimeError(
+                        f"Containers are disabled by policy for project {project.path.name}"
+                    )
                 self.registry.execute(runner_key, payload)
                 if run_id:
                     state_service.record_step(run_id, step.name, "success")

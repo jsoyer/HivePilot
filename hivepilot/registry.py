@@ -6,12 +6,17 @@ from hivepilot.config import settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
-from hivepilot.runners.shell_runner import ShellRunner
-from hivepilot.runners.langchain_runner import LangChainRunner
-from hivepilot.runners.internal_runner import InternalRunner
-from hivepilot.runners.prompt_cli_runner import CodexRunner, GeminiRunner, OpenCodeRunner, OllamaRunner
 from hivepilot.runners.container_runner import ContainerRunner
-
+from hivepilot.runners.cursor_runner import CursorRunner
+from hivepilot.runners.internal_runner import InternalRunner
+from hivepilot.runners.langchain_runner import LangChainRunner
+from hivepilot.runners.prompt_cli_runner import (
+    CodexRunner,
+    GeminiRunner,
+    OllamaRunner,
+    OpenCodeRunner,
+)
+from hivepilot.runners.shell_runner import ShellRunner
 
 RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
     "claude": ClaudeRunner,
@@ -23,6 +28,7 @@ RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
     "opencode": OpenCodeRunner,
     "ollama": OllamaRunner,
     "container": ContainerRunner,
+    "cursor": CursorRunner,
 }
 
 
