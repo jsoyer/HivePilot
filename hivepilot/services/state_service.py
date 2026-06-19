@@ -158,6 +158,25 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT, role TEXT, endpoint TEXT, method TEXT, result TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retry_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schedule_name TEXT, task TEXT, projects TEXT, error TEXT,
+                attempt INTEGER, max_attempts INTEGER, status TEXT DEFAULT 'pending',
+                next_retry_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.commit()
 
 
@@ -367,3 +386,27 @@ def list_all_runs() -> list[dict[str, Any]]:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM runs ORDER BY started_at DESC").fetchall()
     return [dict(row) for row in rows]
+
+
+def record_audit(
+    token_hash: str,
+    role: str,
+    endpoint: str,
+    method: str,
+    result: str,
+) -> None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO audit_log (token_hash, role, endpoint, method, result) VALUES (?,?,?,?,?)",
+            (token_hash, role, endpoint, method, result),
+        )
+        conn.commit()
+
+
+def list_audit_log(limit: int = 100) -> list[dict[str, Any]]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]

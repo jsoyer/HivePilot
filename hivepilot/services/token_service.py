@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import secrets
-import yaml
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List
+
+import yaml
 
 from hivepilot.config import settings
 from hivepilot.services import state_service
@@ -20,6 +21,13 @@ class TokenEntry:
     token: str
     role: str
     note: str | None = None
+    expires_at: datetime | None = None
+
+    @property
+    def is_expired(self) -> bool:
+        if self.expires_at is None:
+            return False
+        return datetime.now(timezone.utc) >= self.expires_at
 
 
 def role_rank(role: str) -> int:
@@ -33,25 +41,80 @@ def load_tokens(path: Path | None = None) -> list[TokenEntry]:
     data = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
     tokens = []
     for entry in data.get("tokens", []):
-        tokens.append(TokenEntry(token=entry["token"], role=entry["role"], note=entry.get("note")))
+        raw_expires = entry.get("expires_at")
+        if isinstance(raw_expires, str):
+            expires_at: datetime | None = datetime.fromisoformat(raw_expires)
+        elif isinstance(raw_expires, datetime):
+            expires_at = raw_expires
+        else:
+            expires_at = None
+        tokens.append(
+            TokenEntry(
+                token=entry["token"],
+                role=entry["role"],
+                note=entry.get("note"),
+                expires_at=expires_at,
+            )
+        )
     return tokens
 
 
 def save_tokens(tokens: list[TokenEntry], path: Path | None = None) -> None:
     resolved = settings.resolve_path(path or settings.tokens_file)
-    payload = {"tokens": [entry.__dict__ for entry in tokens]}
+    rows = []
+    for entry in tokens:
+        row: dict = {
+            "token": entry.token,
+            "role": entry.role,
+            "note": entry.note,
+        }
+        if entry.expires_at is not None:
+            row["expires_at"] = entry.expires_at.isoformat()
+        rows.append(row)
+    payload = {"tokens": rows}
     resolved.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
 
-def add_token(role: str, note: str | None = None) -> TokenEntry:
+def add_token(
+    role: str, note: str | None = None, ttl_days: int | None = None
+) -> tuple[str, TokenEntry]:
+    """Create a new token and return ``(raw_token, entry)``."""
     token = secrets.token_hex(16)
+    expires_at: datetime | None = None
+    if ttl_days is not None:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
     tokens = load_tokens()
-    entry = TokenEntry(token=token, role=role, note=note)
+    entry = TokenEntry(token=token, role=role, note=note, expires_at=expires_at)
     tokens.append(entry)
     save_tokens(tokens)
     state_service.store_token(entry)
     logger.info("tokens.added", role=role, note=note)
-    return entry
+    return entry.token, entry
+
+
+def rotate_token(token_value: str) -> tuple[str, TokenEntry] | None:
+    """Replace *token_value* with a fresh token keeping the same role/note/expiry.
+
+    Returns ``(new_raw_token, new_entry)`` or ``None`` if the token was not found.
+    """
+    tokens = load_tokens()
+    old = next((e for e in tokens if e.token == token_value), None)
+    if old is None:
+        return None
+    remove_token(token_value)
+    new_hex = secrets.token_hex(16)
+    new_entry = TokenEntry(
+        token=new_hex,
+        role=old.role,
+        note=old.note,
+        expires_at=old.expires_at,
+    )
+    current = load_tokens()
+    current.append(new_entry)
+    save_tokens(current)
+    state_service.store_token(new_entry)
+    logger.info("tokens.rotated", role=new_entry.role)
+    return new_entry.token, new_entry
 
 
 def remove_token(token_value: str) -> bool:

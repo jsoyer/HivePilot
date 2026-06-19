@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 # hivepilot.orchestrator is imported at module level so it is in sys.modules
@@ -23,6 +24,9 @@ import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch res
 from hivepilot.models import PipelineConfig, PipelineStage
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.services.state_service import RunStatus
+
+if TYPE_CHECKING:
+    from hivepilot.orchestrator import Orchestrator
 
 # ---------------------------------------------------------------------------
 # Helpers

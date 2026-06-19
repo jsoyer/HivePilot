@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from importlib import import_module
-from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
@@ -33,7 +32,7 @@ def load_plugins(entry: str | None = None) -> list[Callable[..., Any]]:
 class PluginManager:
     def __init__(self) -> None:
         self.plugins = load_plugins(settings.__dict__.get("plugins_entry"))
-        self.hooks = {"before_step": [], "after_step": []}
+        self.hooks: dict[str, list[Any]] = {"before_step": [], "after_step": []}
         for plugin in self.plugins:
             hooks = plugin()
             for hook_name, hook_callable in hooks.items():

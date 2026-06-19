@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import typer
 
@@ -1195,7 +1195,7 @@ def init_project(
 
 
 def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu") -> None:
-    from hivepilot.models import RunnerDefinition, TaskStep
+    from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
     from hivepilot.registry import RUNNER_MAP
     from hivepilot.runners.base import RunnerPayload
 
@@ -1204,7 +1204,7 @@ def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu"
         raise typer.BadParameter(f"Unknown project: {project_name}")
     project = projects.projects[project_name]
 
-    definition = RunnerDefinition(name=kind, kind=kind, command=operation)
+    definition = RunnerDefinition(name=kind, kind=cast(RunnerKind, kind), command=operation)
     step = TaskStep(name=f"iac-{operation}", runner=kind, command=operation)
     payload = RunnerPayload(
         project_name=project_name,
