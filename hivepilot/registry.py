@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict, Type
+from typing import Dict, Type, cast
 
 from hivepilot.config import settings
-from hivepilot.models import RunnerDefinition
+from hivepilot.models import RunnerDefinition, RunnerKind
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
@@ -48,7 +48,7 @@ class RunnerRegistry:
             return self.runner_defs[name]
         if name in RUNNER_MAP:
             default_command = settings.claude_command if name == "claude" else None
-            return RunnerDefinition(name=name, kind=name, command=default_command)
+            return RunnerDefinition(name=name, kind=cast(RunnerKind, name), command=default_command)
         raise KeyError(f"Runner '{name}' not found in registry.")
 
     def execute(self, runner_name: str, payload: RunnerPayload) -> None:
