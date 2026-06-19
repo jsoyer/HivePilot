@@ -18,6 +18,7 @@ _app_instance = None
 # Config helpers
 # ---------------------------------------------------------------------------
 
+
 def _token() -> str:
     token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -45,6 +46,7 @@ def _require_allowed(chat_id: int) -> bool:
 
 def _get_orch():
     from hivepilot.services.chatops_service import _get_orchestrator
+
     return _get_orchestrator()
 
 
@@ -70,6 +72,7 @@ def _format_results(results) -> str:
 # Command handlers  (all async — python-telegram-bot v20+)
 # ---------------------------------------------------------------------------
 
+
 async def _cmd_help(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
@@ -82,6 +85,7 @@ async def _cmd_help(update, context) -> None:
         "/approve `<run_id>` — approve a run\n"
         "/deny `<run_id>` \\[reason\\] — deny a run\n"
         "/status — last 5 runs\n"
+        "/interactions `[limit]` — recent agent interactions\n"
         "/help — this message\n"
     )
     await update.message.reply_text(text, parse_mode="MarkdownV2")
@@ -144,6 +148,7 @@ async def _cmd_diff(update, context) -> None:
     project_name = args[0]
     try:
         from hivepilot.services.project_service import load_projects
+
         projects = load_projects()
         project = projects.projects.get(project_name)
         if not project:
@@ -157,7 +162,9 @@ async def _cmd_diff(update, context) -> None:
             timeout=10,
         )
         output = result.stdout.strip() or "(no changes)"
-        await update.message.reply_text(f"*{project_name}* — last commit:\n```\n{output}\n```", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"*{project_name}* — last commit:\n```\n{output}\n```", parse_mode="Markdown"
+        )
     except Exception as exc:
         await update.message.reply_text(f"Error: {exc}")
 
@@ -172,6 +179,7 @@ async def _cmd_rollback(update, context) -> None:
     project_name = args[0]
     try:
         from hivepilot.services.project_service import load_projects
+
         projects = load_projects()
         project = projects.projects.get(project_name)
         if not project:
@@ -186,9 +194,7 @@ async def _cmd_rollback(update, context) -> None:
             timeout=10,
         )
         commit_line = log.stdout.strip()
-        await update.message.reply_text(
-            f"⏳ Reverting: `{commit_line}`", parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"⏳ Reverting: `{commit_line}`", parse_mode="Markdown")
         subprocess.run(
             ["git", "revert", "HEAD", "--no-edit"],
             cwd=str(project.path),
@@ -206,6 +212,7 @@ async def _cmd_approvals(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
     from hivepilot.services import state_service
+
     try:
         pending = state_service.get_pending_approvals()
     except Exception as exc:
@@ -265,10 +272,37 @@ async def _cmd_deny(update, context) -> None:
         await update.message.reply_text(f"Error: {exc}")
 
 
+async def _cmd_interactions(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    from hivepilot.services import state_service
+
+    limit = 10
+    run_id = None
+    args = context.args or []
+    if args and args[0].isdigit():
+        limit = int(args[0])
+    try:
+        rows = state_service.list_recent_interactions(limit=limit, run_id=run_id)
+    except Exception as exc:
+        await update.message.reply_text(f"Error: {exc}")
+        return
+    if not rows:
+        await update.message.reply_text("No interactions logged yet.")
+        return
+    lines = [
+        f"[#{i['run_id'] if i['run_id'] is not None else '-'}] "
+        f"{i['actor']} → {i['action']} → {i['target'] or 'all'}: {i['summary']}"
+        for i in rows
+    ]
+    await update.message.reply_text("Recent interactions:\n" + "\n".join(lines))
+
+
 async def _cmd_status(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
     from hivepilot.services import state_service
+
     try:
         runs = state_service.list_recent_runs(limit=5)
     except Exception as exc:
@@ -277,10 +311,7 @@ async def _cmd_status(update, context) -> None:
     if not runs:
         await update.message.reply_text("No recent runs.")
         return
-    lines = [
-        f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}"
-        for r in runs
-    ]
+    lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
     await update.message.reply_text("Recent runs:\n" + "\n".join(lines))
 
 
@@ -288,17 +319,26 @@ async def _cmd_status(update, context) -> None:
 # Inline keyboard — approval flow
 # ---------------------------------------------------------------------------
 
-async def _send_approval_keyboard_message(bot, *, chat_id: int, run_id: int, project: str, task: str) -> None:
+
+async def _send_approval_keyboard_message(
+    bot, *, chat_id: int, run_id: int, project: str, task: str
+) -> None:
     """Send a message with ✅ Approve / ❌ Deny inline buttons."""
     try:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     except ImportError as exc:
-        raise RuntimeError("python-telegram-bot required: pip install hivepilot[notifications]") from exc
+        raise RuntimeError(
+            "python-telegram-bot required: pip install hivepilot[notifications]"
+        ) from exc
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Approve", callback_data=f"approve:{run_id}"),
-        InlineKeyboardButton("❌ Deny", callback_data=f"deny:{run_id}"),
-    ]])
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Approve", callback_data=f"approve:{run_id}"),
+                InlineKeyboardButton("❌ Deny", callback_data=f"deny:{run_id}"),
+            ]
+        ]
+    )
     await bot.send_message(
         chat_id=chat_id,
         text=f"*Approval required* — run #{run_id}\nProject: `{project}`\nTask: `{task}`",
@@ -359,6 +399,7 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
 
     async def _send():
         from telegram import Bot
+
         async with Bot(token) as bot:
             await _send_approval_keyboard_message(
                 bot, chat_id=chat_id, run_id=run_id, project=project, task=task
@@ -379,6 +420,7 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
 # Application factory
 # ---------------------------------------------------------------------------
 
+
 def _build_application(token: str):
     try:
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler
@@ -397,6 +439,7 @@ def _build_application(token: str):
     app.add_handler(CommandHandler("approve", _cmd_approve))
     app.add_handler(CommandHandler("deny", _cmd_deny))
     app.add_handler(CommandHandler("status", _cmd_status))
+    app.add_handler(CommandHandler("interactions", _cmd_interactions))
     app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
     return app
 
@@ -404,6 +447,7 @@ def _build_application(token: str):
 # ---------------------------------------------------------------------------
 # Polling mode  (RPI / NAT — no public URL needed)
 # ---------------------------------------------------------------------------
+
 
 def run_polling() -> None:
     """Start the bot in long-polling mode. Blocking. No public URL required."""
@@ -416,6 +460,7 @@ def run_polling() -> None:
 # ---------------------------------------------------------------------------
 # Webhook mode — built-in server  (VPS with public HTTPS)
 # ---------------------------------------------------------------------------
+
 
 def run_webhook(
     webhook_url: str,
@@ -451,6 +496,7 @@ def run_webhook(
 # ---------------------------------------------------------------------------
 # Webhook mode — FastAPI-integrated  (share port with the API server)
 # ---------------------------------------------------------------------------
+
 
 async def _get_or_init_app():
     """Lazily initialise the Application for use inside an existing event loop."""
@@ -488,6 +534,7 @@ async def shutdown() -> None:
 # Webhook registration helpers  (one-shot, non-blocking)
 # ---------------------------------------------------------------------------
 
+
 def set_webhook(webhook_url: str, secret: str | None = None) -> str:
     """Register the webhook URL with Telegram. Returns the registered URL."""
     token = _token()
@@ -497,6 +544,7 @@ def set_webhook(webhook_url: str, secret: str | None = None) -> str:
 
     async def _set():
         from telegram import Bot
+
         async with Bot(token) as bot:
             await bot.set_webhook(
                 url=full_url,
@@ -517,6 +565,7 @@ def delete_webhook() -> None:
 
     async def _delete():
         from telegram import Bot
+
         async with Bot(token) as bot:
             await bot.delete_webhook(drop_pending_updates=True)
 
@@ -530,6 +579,7 @@ def get_webhook_info() -> dict[str, Any]:
 
     async def _info():
         from telegram import Bot
+
         async with Bot(token) as bot:
             info = await bot.get_webhook_info()
             return {
