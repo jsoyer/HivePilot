@@ -365,12 +365,10 @@ tasks:
     description: Documentation role updates docs, ADRs, and changelog.
     steps:
       - name: documentation update
-        runner: claude
-        runner_ref: claude-docs
+        runner: gemini
+        runner_ref: gemini-cli
         prompt_file: prompts/agents/documentation.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: automation
     git:
       commit: true
       push: false

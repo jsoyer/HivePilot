@@ -23,6 +23,8 @@ from hivepilot.services import (
 )
 from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.git_service import perform_git_actions
+from hivepilot.services.interaction_service import Interaction, InteractionService
+from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
 from hivepilot.services.secrets_service import secret_resolver
@@ -231,9 +233,11 @@ class Orchestrator:
             status=RunStatus.RUNNING.value,
         )
 
+        interactions_svc = InteractionService(vault_path, dry_run=dry_run)
+
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
-        for stage in pipeline.stages:
+        for stage_idx, stage in enumerate(pipeline.stages):
             stage_results = self.run_task(
                 project_names=project_names,
                 task_name=stage.task,
@@ -260,13 +264,46 @@ class Orchestrator:
                 dry_run=dry_run,
             )
 
+            # Per-stage interaction log (2.6a)
+            next_stages = pipeline.stages[stage_idx + 1 :]
+            next_target = next_stages[0].name if next_stages else None
+            from datetime import datetime, timezone
+
+            interactions_svc.log_interaction(
+                Interaction(
+                    actor=stage.name,
+                    action="completed stage",
+                    target=next_target,
+                    summary=stage_output,
+                    timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                    run_id=run_id,
+                    metadata={"pipeline": pipeline_name, "stage_index": stage_idx},
+                )
+            )
+
+            # Documentation vault changelog note (2.6c)
+            if stage.task == "company-documentation" and vault_path is not None:
+                doc_svc = ObsidianService(vault_path, dry_run=dry_run)
+                doc_svc.write_note(
+                    subpath=f"Docs/changelog-run-{run_id}.md",
+                    title=f"Documentation update — pipeline run {run_id}",
+                    body=stage_output,
+                    frontmatter_fields={
+                        "type": "documentation",
+                        "run_id": run_id,
+                        "pipeline": pipeline_name,
+                        "agent": "gemini-cli",
+                        "stage": stage.name,
+                    },
+                )
+
             stage_failed = any(not r.success for r in stage_results)
             if stage_failed and not getattr(stage, "continue_on_failure", False):
                 logger.warning(
                     "pipeline.fail_fast",
                     pipeline=pipeline_name,
                     stage=stage.name,
-                    remaining=[s.name for s in pipeline.stages[pipeline.stages.index(stage) + 1 :]],
+                    remaining=[s.name for s in next_stages],
                 )
                 final_status = RunStatus.TEST_FAILURE
                 break
