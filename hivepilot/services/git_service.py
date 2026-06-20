@@ -55,11 +55,12 @@ def perform_git_actions(
     repo = ensure_repo(project.path)
     branch = f"{git.branch_prefix}/{project_name}"
     if git.commit or git.push:
-        if git.commit and not repo.is_dirty(untracked_files=True):
-            raise RuntimeError(f"No changes detected for {project_name}")
         checkout_branch(project.path, branch)
-        repo.git.add("-A")
-        if git.commit:
+        # The agent (e.g. claude) may have already committed its work; only commit
+        # when there are uncommitted changes. The branch still carries the agent's
+        # commits, so push/PR proceed either way.
+        if git.commit and repo.is_dirty(untracked_files=True):
+            repo.git.add("-A")
             message = git.commit_message or f"chore({project_name}): automated task run"
             repo.git.commit("-m", message)
         if git.push:
