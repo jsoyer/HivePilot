@@ -92,6 +92,7 @@ class ProjectConfig(BaseModel):
 class PipelineStage(BaseModel):
     name: str
     task: str
+    pause_before: bool = False  # pause pipeline for human plan approval before this stage
 
 
 class PipelineConfig(BaseModel):

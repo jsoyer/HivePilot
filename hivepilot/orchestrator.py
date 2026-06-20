@@ -233,6 +233,8 @@ class Orchestrator:
         concurrency: int | None = None,
         dry_run: bool = True,
         simulate: bool = False,
+        start_index: int = 0,
+        run_id: int | None = None,
     ) -> list[RunResult]:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
@@ -251,18 +253,61 @@ class Orchestrator:
         # Resolve vault path — None means artifact writes are silent no-ops
         vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
 
-        # Open a state-service run record (RUNNING)
-        run_id = state_service.record_run_start(
-            pipeline_name,
-            pipeline_name,
-            status=RunStatus.RUNNING.value,
-        )
+        # Open (or resume) a state-service run record (RUNNING)
+        if run_id is None:
+            run_id = state_service.record_run_start(
+                pipeline_name,
+                pipeline_name,
+                status=RunStatus.RUNNING.value,
+            )
 
         interactions_svc = InteractionService(vault_path, dry_run=dry_run)
 
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
         for stage_idx, stage in enumerate(pipeline.stages):
+            if stage_idx < start_index:
+                continue  # already executed before the checkpoint pause
+
+            # Plan checkpoint: pause for human approval before this stage.
+            # Skipped under --simulate, consistent with simulate bypassing approvals.
+            if stage.pause_before and stage_idx != start_index and not simulate:
+                completed = [s.name for s in pipeline.stages[:stage_idx]]
+                checkpoint_meta = {
+                    "kind": "pipeline_checkpoint",
+                    "pipeline": pipeline_name,
+                    "projects": project_names,
+                    "resume_from_index": stage_idx,
+                    "extra_prompt": extra_prompt,
+                    "auto_git": auto_git,
+                    "dry_run": dry_run,
+                    "simulate": simulate,
+                    "next_stage": stage.name,
+                    "completed_stages": completed,
+                }
+                state_service.record_approval_request(
+                    run_id,
+                    project_names[0] if project_names else pipeline_name,
+                    pipeline_name,
+                    checkpoint_meta,
+                )
+                notification_service.send_approval_keyboard(
+                    run_id=run_id,
+                    project=", ".join(project_names) or pipeline_name,
+                    task=f"plan → {stage.name}",
+                )
+                notification_service.stream_agent_turn(
+                    actor="HivePilot",
+                    stage="checkpoint",
+                    summary=(
+                        f"Plan prêt ({', '.join(completed)}). "
+                        f"Approuve (run #{run_id}) pour lancer « {stage.name} »."
+                    ),
+                    icon="⏸️",
+                )
+                state_service.complete_run(run_id, RunStatus.PAUSED.value)
+                return results
+
             stage_results = self.run_task(
                 project_names=project_names,
                 task_name=stage.task,
@@ -343,6 +388,51 @@ class Orchestrator:
 
         state_service.complete_run(run_id, final_status.value)
         return results
+
+    def resume_pipeline(
+        self,
+        *,
+        run_id: int,
+        approve: bool,
+        approver: str,
+    ) -> RunResult:
+        """Resume (or deny) a pipeline parked at a plan checkpoint.
+
+        On approve, continue ``run_pipeline`` from the saved resume point under the
+        same ``run_id``; on deny, mark the run denied and run nothing further.
+        """
+        approval = state_service.get_approval(run_id)
+        if not approval or approval.get("status") != "pending":
+            raise ValueError(f"Run {run_id} is not a pending checkpoint.")
+        meta = json.loads(approval.get("metadata") or "{}")
+        if meta.get("kind") != "pipeline_checkpoint":
+            raise ValueError(f"Run {run_id} is not a pipeline checkpoint.")
+        pipeline_name = meta["pipeline"]
+
+        if not approve:
+            state_service.update_approval(run_id, "denied", approver)
+            state_service.complete_run(run_id, "denied", "Plan denied at checkpoint")
+            notification_service.send_notification(
+                f"❌ Plan #{run_id} ({pipeline_name}) refusé — pipeline arrêté."
+            )
+            return RunResult(pipeline_name, pipeline_name, False, "Plan denied at checkpoint")
+
+        state_service.update_approval(run_id, "approved", approver)
+        notification_service.send_notification(
+            f"✅ Plan #{run_id} ({pipeline_name}) approuvé — lancement du développement."
+        )
+        results = self.run_pipeline(
+            project_names=meta["projects"],
+            pipeline_name=pipeline_name,
+            extra_prompt=meta.get("extra_prompt"),
+            auto_git=meta.get("auto_git", False),
+            dry_run=meta.get("dry_run", True),
+            simulate=meta.get("simulate", False),
+            start_index=meta["resume_from_index"],
+            run_id=run_id,
+        )
+        ok = all(r.success for r in results)
+        return RunResult(pipeline_name, pipeline_name, ok)
 
     def run_approved(
         self,

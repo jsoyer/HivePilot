@@ -14,6 +14,7 @@ pipelines:
         task: company-cto-review
       - name: Implementation
         task: company-developer
+        pause_before: true   # human approves the plan before the developer codes
       - name: Review
         task: company-reviewer
       - name: Security
