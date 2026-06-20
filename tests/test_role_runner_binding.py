@@ -35,6 +35,7 @@ EXPECTED_RUNNER: dict[str, str] = {
 EXPECTED_MODEL: dict[str, str] = {
     "cto": "opencode-go/kimi-k2.7-code",
     "ciso": "opencode-go/glm-5.2",
+    "reviewer": "gpt-5.5",
 }
 
 # Roles that have dual models (list)
@@ -85,7 +86,7 @@ class TestRoleModelField:
     def test_roles_without_explicit_model_are_none(self):
         from hivepilot.roles import get_role
 
-        no_explicit_model = {"chief_of_staff", "developer", "reviewer", "qa", "documentation"}
+        no_explicit_model = {"chief_of_staff", "developer", "qa", "documentation"}
         for role_name in no_explicit_model:
             role = get_role(role_name)
             assert role.model is None, f"Role '{role_name}' expected model=None, got '{role.model}'"

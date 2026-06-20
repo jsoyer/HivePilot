@@ -186,6 +186,7 @@ class PromptCliRunner(BaseRunner):
 class CodexRunner(PromptCliRunner):
     command_name: str = "codex"
     cli_subcommand: str | None = "exec"
+    cli_flags: tuple[str, ...] = ("-c", "model_reasoning_effort=medium")
 
 
 @dataclass

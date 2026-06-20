@@ -99,6 +99,7 @@ ROLES: dict[str, Role] = {
         can_block=True,
         order=5,
         runner="codex",
+        model="gpt-5.5",
     ),
     "ciso": Role(
         name="ciso",
