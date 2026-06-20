@@ -365,6 +365,77 @@ class Orchestrator:
         state_service.complete_run(run_id, "success")
         return RunResult(project_name, task_name, True)
 
+    def run_debate(
+        self,
+        *,
+        project_name: str,
+        role_name: str,
+        topic: str,
+        dry_run: bool = True,
+        simulate: bool = False,
+    ) -> dict | None:
+        """Run a dual-model debate for *role_name*: capture each model's position,
+        synthesize via DebateService, and write an ADR. Returns the ADR emit dict."""
+        from typing import cast
+
+        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.roles import get_role, resolve_runner
+        from hivepilot.services.debate_service import DebateService, Position
+
+        role = get_role(role_name)
+        models = list(role.models or ([role.model] if role.model else []))
+        if len(models) < 2:
+            raise ValueError(
+                f"Role '{role_name}' is not a dual-model debate role (models={models})."
+            )
+        project = self._project(project_name)
+        policy = policy_service.get_policy(project_name)
+        runner_kind, _ = resolve_runner(role_name, policy)  # also enforces allowed_runners
+        vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
+
+        positions: list[Position] = []
+        for model in models:
+            step = TaskStep(
+                name=f"{role_name}-{model}",
+                runner=runner_kind,
+                prompt_file=str(role.prompt_file),
+            )
+            payload = RunnerPayload(
+                project_name=project.path.name,
+                project=project,
+                task_name=f"debate:{role_name}",
+                step=step,
+                metadata={},
+                secrets=self._resolve_secrets(step),
+            )
+            if simulate:
+                output = f"[simulated {model} position on: {topic}]"
+            else:
+                rdef = RunnerDefinition(
+                    name=f"debate:{role_name}:{model}",
+                    kind=cast(RunnerKind, runner_kind),
+                    command=None,
+                    model=model,
+                )
+                output = self.registry.capture_definition(rdef, payload)
+            positions.append(
+                Position(role=f"{role_name}:{model}", stance="proposal", rationale=output.strip()[:1000])
+            )
+
+        decision = (
+            f"Synthesis of {len(models)} model proposals ({', '.join(models)}) for: {topic}. "
+            f"Each model's proposal is recorded; final arbitration by {role_name} / human review."
+        )
+        adr = DebateService(vault_path, dry_run=dry_run).run(
+            topic=topic, positions=positions, decision=decision
+        )
+        state_service.record_interaction(
+            actor=role_name, action="debate", target=None, summary=topic,
+            metadata={"models": models},
+        )
+        logger.info("debate.complete", role=role_name, models=models, project=project.path.name)
+        return adr
+
     def interactive(self) -> None:
         project = questionary.select(
             "Select project", choices=list(self.projects.projects.keys())

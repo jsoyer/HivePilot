@@ -592,3 +592,46 @@ class TestRoleDrivenExecution:
 
         with pytest.raises(RuntimeError):
             self._run("reviewer", policy=Policy(allowed_runners=["opencode", "claude"]))
+
+
+# ---------------------------------------------------------------------------
+# Dual-model debate (item B) — DebateService wired & reachable
+# ---------------------------------------------------------------------------
+
+
+class TestDebate:
+    def test_run_debate_one_position_per_model(self, monkeypatch) -> None:
+        from hivepilot.models import ProjectConfig
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        monkeypatch.setattr(orch, "_project", lambda name: ProjectConfig(path=Path("/tmp/p")))
+        monkeypatch.setattr(orch, "_resolve_secrets", lambda step: {})
+
+        captured: dict = {}
+
+        class FakeDebate:
+            def __init__(self, vault, dry_run=True):
+                pass
+
+            def run(self, topic, positions, decision=None, **kw):
+                captured["positions"] = positions
+                captured["decision"] = decision
+                return {"path": "ADR.md", "dry_run": True}
+
+        monkeypatch.setattr("hivepilot.services.debate_service.DebateService", FakeDebate)
+        with patch("hivepilot.orchestrator.state_service.record_interaction"):
+            adr = orch.run_debate(
+                project_name="p", role_name="ceo", topic="adopt X?", simulate=True
+            )
+
+        assert adr == {"path": "ADR.md", "dry_run": True}
+        assert {pos.role for pos in captured["positions"]} == {"ceo:qwen", "ceo:kimi"}
+        orch.registry.capture_definition.assert_not_called()  # simulate -> no real calls
+
+    def test_run_debate_rejects_single_model_role(self) -> None:
+        import pytest
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        with pytest.raises(ValueError):
+            orch.run_debate(project_name="p", role_name="developer", topic="x", simulate=True)

@@ -1646,3 +1646,31 @@ def obsidian_audit(
             continue
         status = "[x]" if val else "[ ]"
         typer.echo(f"  {status} {key}")
+
+
+@app.command("debate")
+def debate(
+    project: str = typer.Argument(..., help="Project to debate within"),
+    topic: str = typer.Argument(..., help="Debate topic / decision"),
+    role: str = typer.Option("ceo", "--role", help="Dual-model role (default: ceo)"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--no-dry-run", help="Skip vault ADR write (default: dry-run)"
+    ),
+    simulate: bool = typer.Option(
+        False, "--simulate", help="Stub model positions instead of invoking runners"
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
+) -> None:
+    """Run a dual-model debate for a role and write the outcome as an ADR."""
+    _require_cli_role("run", token)
+    orchestrator = Orchestrator()
+    adr = orchestrator.run_debate(
+        project_name=project, role_name=role, topic=topic, dry_run=dry_run, simulate=simulate
+    )
+    if adr is None:
+        typer.echo("Debate complete — no vault configured, ADR not written.")
+    else:
+        prefix = "(dry-run) " if adr.get("dry_run") else ""
+        typer.echo(f"ADR {prefix}-> {adr.get('path')}")

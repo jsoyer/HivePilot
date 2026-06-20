@@ -60,3 +60,13 @@ class RunnerRegistry:
         if not runner_cls:
             raise KeyError(f"No runner implementation for kind '{definition.kind}'")
         runner_cls(definition, settings).run(payload)
+
+    def capture_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> str:
+        runner_cls = RUNNER_MAP.get(definition.kind)
+        if not runner_cls:
+            raise KeyError(f"No runner implementation for kind '{definition.kind}'")
+        runner = runner_cls(definition, settings)
+        capture = getattr(runner, "capture", None)
+        if capture is None:
+            raise RuntimeError(f"Runner kind '{definition.kind}' does not support capture.")
+        return capture(payload)

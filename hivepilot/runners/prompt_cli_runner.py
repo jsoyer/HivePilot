@@ -28,40 +28,59 @@ class PromptCliRunner(BaseRunner):
     prompt_flag: str | None = None  # if set, prompt passed as [flag, prompt] (gemini '-p')
     model_flag: str = "--model"
 
-    def run(self, payload: RunnerPayload) -> None:
-        mode = (
-            payload.step.metadata.get("mode") or self.definition.options.get("mode") or "cli"
-        ).lower()
-
+    def _load_prompt(self, payload: RunnerPayload) -> str:
         prompt_file = payload.step.prompt_file
         if not prompt_file:
             raise ValueError(f"Step '{payload.step.name}' must set prompt_file for CLI runner.")
         prompt_path = self.settings.resolve_config_path(prompt_file)
         if not prompt_path.exists():
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-        prompt_text = prompt_path.read_text(encoding="utf-8").strip()
+        return prompt_path.read_text(encoding="utf-8").strip()
+
+    def _build_cli_args(self, payload: RunnerPayload, prompt_text: str) -> list[str]:
+        command_str = self.definition.command or self.command_name
+        if not command_str:
+            raise ValueError("CLI runner requires a command.")
+        opts = self.definition.options
+        args = shlex.split(command_str)
+        subcommand = opts.get("subcommand", self.cli_subcommand)
+        if subcommand:
+            args.append(subcommand)
+        args.extend(opts.get("cli_flags", list(self.cli_flags)))
+        model = payload.step.metadata.get("model") or self.definition.model
+        if model:
+            args.extend([opts.get("model_flag", self.model_flag), model])
+        prompt_flag = opts.get("prompt_flag", self.prompt_flag)
+        if prompt_flag:
+            args.extend([prompt_flag, prompt_text])
+        else:
+            args.append(prompt_text)
+        return args
+
+    def capture(self, payload: RunnerPayload) -> str:
+        """Run the CLI in capture mode and return stdout (used for debate positions)."""
+        env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
+        args = self._build_cli_args(payload, self._load_prompt(payload))
+        timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
+        result = subprocess.run(
+            args, cwd=str(payload.project.path), env=env, check=True, text=True,
+            capture_output=True, timeout=timeout,
+        )
+        return result.stdout
+
+    def run(self, payload: RunnerPayload) -> None:
+        mode = (
+            payload.step.metadata.get("mode") or self.definition.options.get("mode") or "cli"
+        ).lower()
+
+        prompt_text = self._load_prompt(payload)
 
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         if mode == "api":
             self._run_api(prompt_text, payload, env)
         else:
-            command_str = self.definition.command or self.command_name
-            if not command_str:
-                raise ValueError("CLI runner requires a command.")
-            opts = self.definition.options
-            args = shlex.split(command_str)
-            subcommand = opts.get("subcommand", self.cli_subcommand)
-            if subcommand:
-                args.append(subcommand)
-            args.extend(opts.get("cli_flags", list(self.cli_flags)))
-            model = payload.step.metadata.get("model") or self.definition.model
-            if model:
-                args.extend([opts.get("model_flag", self.model_flag), model])
-            prompt_flag = opts.get("prompt_flag", self.prompt_flag)
-            if prompt_flag:
-                args.extend([prompt_flag, prompt_text])
-            else:
-                args.append(prompt_text)
+            args = self._build_cli_args(payload, prompt_text)
+            command_str = args[0]
             timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
             logger.info(
                 "cli_runner.start",
