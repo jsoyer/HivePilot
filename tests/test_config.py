@@ -28,3 +28,19 @@ class TestObsidianVaultConfig:
         """obsidian_vault field is a Path, not a string."""
         s = Settings()
         assert isinstance(s.obsidian_vault, Path)
+
+
+def test_blank_notification_chat_id_is_none(monkeypatch) -> None:
+    from hivepilot.config import Settings
+
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID", "")
+    s = Settings()
+    assert s.telegram_notification_chat_id is None
+
+
+def test_numeric_notification_chat_id(monkeypatch) -> None:
+    from hivepilot.config import Settings
+
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID", "12345")
+    s = Settings()
+    assert s.telegram_notification_chat_id == 12345
