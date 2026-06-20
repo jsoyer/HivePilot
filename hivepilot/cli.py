@@ -892,6 +892,20 @@ def telegram_start(
         raise typer.Exit(1)
 
 
+@telegram_app.command("chat-id")
+def telegram_chat_id() -> None:
+    """List chat IDs that recently messaged the bot (DM the bot first)."""
+    from hivepilot.services import telegram_bot
+
+    chats = telegram_bot.fetch_recent_chats()
+    if not chats:
+        typer.echo("No recent chats. Send a message to your bot in Telegram, then retry.")
+        raise typer.Exit(1)
+    for ch in chats:
+        typer.echo(f"{ch['id']}\t{ch['name']}")
+    typer.echo("\nAdd to .env: HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS=[<id>]")
+
+
 @telegram_app.command("set-webhook")
 def telegram_set_webhook(
     url: str = typer.Argument(..., help="Public base URL, e.g. https://myserver.com"),

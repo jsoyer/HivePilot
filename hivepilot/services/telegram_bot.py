@@ -68,6 +68,33 @@ def _format_results(results) -> str:
     return "\n".join(lines) or "Done."
 
 
+def fetch_recent_chats() -> list[dict[str, Any]]:
+    """Return unique chats that recently messaged the bot (via getUpdates).
+
+    DM the bot first, then call this to discover your chat id.
+    """
+    import requests
+
+    url = f"https://api.telegram.org/bot{_token()}/getUpdates"
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    seen: dict[int, str] = {}
+    for upd in resp.json().get("result", []):
+        msg = upd.get("message") or upd.get("edited_message") or upd.get("channel_post") or {}
+        chat = msg.get("chat") or {}
+        cid = chat.get("id")
+        if cid is None or cid in seen:
+            continue
+        name = (
+            chat.get("title")
+            or " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")]))
+            or chat.get("username")
+            or chat.get("type", "")
+        )
+        seen[cid] = name
+    return [{"id": cid, "name": name} for cid, name in seen.items()]
+
+
 # ---------------------------------------------------------------------------
 # Command handlers  (all async — python-telegram-bot v20+)
 # ---------------------------------------------------------------------------
