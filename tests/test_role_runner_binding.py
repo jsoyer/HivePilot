@@ -27,7 +27,7 @@ EXPECTED_RUNNER: dict[str, str] = {
     "developer": "claude",
     "reviewer": "codex",
     "ciso": "opencode",
-    "qa": "gemini",
+    "qa": "cursor",
     "documentation": "gemini",
 }
 

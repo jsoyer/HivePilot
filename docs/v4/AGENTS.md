@@ -15,14 +15,14 @@ project via `policies.yaml`).
 | 4 | Implementation | company-developer | developer | claude | (default) | commit + push **branch** |
 | 5 | Review | company-reviewer | reviewer | **codex** | (default) | **review → open PR** |
 | 6 | Security | company-ciso | ciso | opencode | glm-5.2 | — |
-| 7 | QA | company-qa | qa | gemini | (default) | — |
+| 7 | QA | company-qa | qa | **cursor** | (default) | — |
 | 8 | Documentation | company-documentation | documentation | **gemini** | (default) | commit |
 | 9 | Report | company-cos-report | chief_of_staff | cursor | (default) | — |
 | 10 | Approval | company-ceo-approval | ceo | opencode | qwen3.7-max + kimi-k2.6 → **debate→ADR** | — |
 
-So: **codex** does code review, **gemini** does QA + documentation, **claude**
+So: **codex** does code review, **gemini** does documentation, **claude**
 implements, **opencode** drives the strategy/security roles (qwen/kimi/glm), and
-**cursor** drives coordination.
+**cursor** drives QA + coordination (a dedicated QA runner, separate from docs).
 
 ## Code review & pull requests
 

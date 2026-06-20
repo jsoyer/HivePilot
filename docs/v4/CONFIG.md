@@ -21,7 +21,7 @@ All config lives at the repo root (resolved via `settings.resolve_config_path`).
 "developer":      runner=claude
 "reviewer":       runner=codex
 "ciso":           runner=opencode, model="opencode-go/glm-5.2"
-"qa":             runner=gemini
+"qa":             runner=cursor       # dedicated QA runner (distinct from docs)
 "documentation":  runner=gemini
 ```
 `resolve_runner(role, policy)` = these defaults + per-project overrides.
