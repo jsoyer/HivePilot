@@ -214,22 +214,34 @@ def run_pipeline(
     ),
 ) -> None:
     _require_cli_role("run", token)
-    if project in load_groups().groups:
-        raise typer.BadParameter(
-            f"'{project}' is a group. Group-wide pipeline runs (plan once, fan out) "
-            "arrive in E2 — pass a component, or use `run` for a single task."
-        )
     orchestrator = Orchestrator()
-    target_projects = _resolve_projects(project, projects, all_projects)
-    results = orchestrator.run_pipeline(
-        project_names=target_projects,
-        pipeline_name=pipeline,
-        extra_prompt=extra_prompt,
-        auto_git=auto_git,
-        concurrency=concurrency,
-        dry_run=dry_run,
-        simulate=simulate,
-    )
+    _groups = load_groups().groups
+    if project in _groups:
+        # Group mode: plan once in the hub, fan out execution over the components.
+        grp = _groups[project]
+        hub = grp.hub or project
+        results = orchestrator.run_pipeline(
+            project_names=[hub],
+            pipeline_name=pipeline,
+            extra_prompt=extra_prompt,
+            auto_git=auto_git,
+            concurrency=concurrency,
+            dry_run=dry_run,
+            simulate=simulate,
+            hub=hub,
+            components=grp.components,
+        )
+    else:
+        target_projects = _resolve_projects(project, projects, all_projects)
+        results = orchestrator.run_pipeline(
+            project_names=target_projects,
+            pipeline_name=pipeline,
+            extra_prompt=extra_prompt,
+            auto_git=auto_git,
+            concurrency=concurrency,
+            dry_run=dry_run,
+            simulate=simulate,
+        )
     for result in results:
         status = "✅" if result.success else "❌"
         typer.echo(f"{status} {result.project} -> {result.target}")
