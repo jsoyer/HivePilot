@@ -45,6 +45,25 @@ def _runner_for_stage(stage: PipelineStage) -> str:
     return "claude"
 
 
+def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
+    """Split a debate brain spec into ``(runner, model)``.
+
+    ``"runner:model"`` (e.g. ``"claude:claude-sonnet-4-6"``) pins a runner for that
+    brain; a bare model uses the role's default runner. Only a recognised
+    ``RunnerKind`` prefix is treated as a runner, so ``"opencode-go/kimi"`` and
+    other slash-style ids stay plain models.
+    """
+    from typing import get_args
+
+    from hivepilot.models import RunnerKind
+
+    if ":" in entry:
+        prefix, rest = entry.split(":", 1)
+        if prefix in set(get_args(RunnerKind)):
+            return prefix, rest
+    return default_runner, entry
+
+
 @dataclass
 class RunResult:
     project: str
@@ -519,10 +538,13 @@ class Orchestrator:
         vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
 
         positions: list[Position] = []
-        for model in models:
+        for entry in models:
+            # A brain may pin its own runner via "runner:model"
+            # (e.g. "claude:claude-sonnet-4-6"); a bare model uses the role's runner.
+            brain_runner, brain_model = _parse_brain(entry, runner_kind)
             step = TaskStep(
-                name=f"{role_name}-{model}",
-                runner=runner_kind,
+                name=f"{role_name}-{brain_model}",
+                runner=brain_runner,
                 prompt_file=str(role.prompt_file),
             )
             payload = RunnerPayload(
@@ -534,22 +556,24 @@ class Orchestrator:
                 secrets=self._resolve_secrets(step),
             )
             if simulate:
-                output = f"[simulated {model} position on: {topic}]"
+                output = f"[simulated {brain_model} position on: {topic}]"
             else:
                 rdef = RunnerDefinition(
-                    name=f"debate:{role_name}:{model}",
-                    kind=cast(RunnerKind, runner_kind),
+                    name=f"debate:{role_name}:{brain_model}",
+                    kind=cast(RunnerKind, brain_runner),
                     command=None,
-                    model=model,
+                    model=brain_model,
                 )
                 output = self.registry.capture_definition(rdef, payload)
             positions.append(
                 Position(
-                    role=f"{role_name}:{model}", stance="proposal", rationale=output.strip()[:1000]
+                    role=f"{role_name}:{brain_model}",
+                    stance="proposal",
+                    rationale=output.strip()[:1000],
                 )
             )
             notification_service.stream_agent_turn(
-                actor=f"{role.display_name or role_name} ({role.title}) · {model}",
+                actor=f"{role.display_name or role_name} ({role.title}) · {brain_model}",
                 stage="débat",
                 summary=output,
                 icon="💬",

@@ -33,14 +33,15 @@ EXPECTED_RUNNER: dict[str, str] = {
 
 # Roles that have a single explicit model override
 EXPECTED_MODEL: dict[str, str] = {
-    "cto": "opencode-go/kimi-k2.7-code",
-    "ciso": "opencode-go/glm-5.2",
     "reviewer": "gpt-5.5",
 }
 
-# Roles that have dual models (list)
+# Roles that have dual models (list). cto/ciso each pair their primary opencode
+# brain with a claude second brain (per-brain runner via "runner:model").
 EXPECTED_MODELS: dict[str, list[str]] = {
     "ceo": ["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"],
+    "cto": ["opencode-go/kimi-k2.7-code", "claude:claude-sonnet-4-6"],
+    "ciso": ["opencode-go/glm-5.2", "claude:claude-haiku-4-5"],
 }
 
 
@@ -109,15 +110,22 @@ class TestRoleModelsField:
             f"CEO dual models mismatch: got {ceo.models}"
         )
 
+    def test_dual_model_bindings_match_spec(self):
+        from hivepilot.roles import get_role
+
+        for role_name, expected in EXPECTED_MODELS.items():
+            role = get_role(role_name)
+            assert role.models == expected, (
+                f"Role '{role_name}' models mismatch: expected {expected}, got {role.models}"
+            )
+
     def test_non_dual_roles_have_none_models(self):
         from hivepilot.roles import get_role
 
         single_model_roles = {
             "chief_of_staff",
-            "cto",
             "developer",
             "reviewer",
-            "ciso",
             "qa",
             "documentation",
         }
@@ -200,9 +208,14 @@ class TestCursorAgentEnvPresence:
 
 
 EXPECTED_DISPLAY_NAMES = {
-    "ceo": "Aliénor", "chief_of_staff": "Colbert", "cto": "Blaise",
-    "developer": "Gustave", "reviewer": "Voltaire", "ciso": "Vauban",
-    "qa": "Marie", "documentation": "Diderot",
+    "ceo": "Aliénor",
+    "chief_of_staff": "Colbert",
+    "cto": "Blaise",
+    "developer": "Gustave",
+    "reviewer": "Voltaire",
+    "ciso": "Vauban",
+    "qa": "Marie",
+    "documentation": "Diderot",
 }
 
 

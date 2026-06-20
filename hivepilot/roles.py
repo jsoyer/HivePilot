@@ -80,7 +80,7 @@ ROLES: dict[str, Role] = {
         can_block=True,
         order=3,
         runner="opencode",
-        model="opencode-go/kimi-k2.7-code",
+        models=["opencode-go/kimi-k2.7-code", "claude:claude-sonnet-4-6"],
     ),
     "developer": Role(
         name="developer",
@@ -118,7 +118,7 @@ ROLES: dict[str, Role] = {
         can_block=True,
         order=6,
         runner="opencode",
-        model="opencode-go/glm-5.2",
+        models=["opencode-go/glm-5.2", "claude:claude-haiku-4-5"],
     ),
     "qa": Role(
         name="qa",

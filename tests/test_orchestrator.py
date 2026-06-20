@@ -570,19 +570,20 @@ class TestRoleDrivenExecution:
         return orch
 
     def test_role_resolves_runner_and_model(self) -> None:
-        orch = self._run("cto")
+        # reviewer is single-model (cto/ciso are now bi-modal → debate path)
+        orch = self._run("reviewer")
         orch.registry.execute_definition.assert_called_once()
         orch.registry.execute.assert_not_called()
         rdef = orch.registry.execute_definition.call_args.args[0]
-        assert rdef.kind == "opencode"
-        assert rdef.model == "opencode-go/kimi-k2.7-code"
+        assert rdef.kind == "codex"
+        assert rdef.model == "gpt-5.5"
 
     def test_policy_override_changes_model(self) -> None:
         from hivepilot.services.policy_service import Policy
 
-        orch = self._run("cto", policy=Policy(role_overrides={"cto": {"model": "glm"}}))
+        orch = self._run("reviewer", policy=Policy(role_overrides={"reviewer": {"model": "glm"}}))
         rdef = orch.registry.execute_definition.call_args.args[0]
-        assert rdef.kind == "opencode"
+        assert rdef.kind == "codex"
         assert rdef.model == "glm"
 
     def test_allowed_runners_blocks_disallowed(self) -> None:
