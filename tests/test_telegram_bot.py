@@ -244,3 +244,84 @@ class TestHelpUpdated:
         assert "interactions" in src, (
             "/interactions line not found in _cmd_help — help text not updated"
         )
+
+
+# ---------------------------------------------------------------------------
+# Remote command + control commands (run-pipeline / debate / steps / discovery)
+# ---------------------------------------------------------------------------
+
+import types  # noqa: E402
+
+
+def _orch_mock(**attrs) -> MagicMock:
+    orch = MagicMock()
+    for k, v in attrs.items():
+        setattr(orch, k, v)
+    return orch
+
+
+def test_cmd_pipelines_lists_pipelines() -> None:
+    update, ctx = _make_update(), _make_context()
+    orch = MagicMock()
+    orch.pipelines.pipelines = {"company": types.SimpleNamespace(description="Full company")}
+    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch.object(
+        telegram_bot, "_get_orch", return_value=orch
+    ):
+        asyncio.run(telegram_bot._cmd_pipelines(update, ctx))
+    out = update.message.reply_text.call_args.args[0]
+    assert "company" in out
+
+
+def test_cmd_run_pipeline_usage_error() -> None:
+    update, ctx = _make_update(), _make_context(["onlyproject"])
+    with patch.object(telegram_bot, "_require_allowed", return_value=True):
+        asyncio.run(telegram_bot._cmd_run_pipeline(update, ctx))
+    assert "Usage:" in update.message.reply_text.call_args.args[0]
+
+
+def test_cmd_run_pipeline_passes_simulate() -> None:
+    update, ctx = _make_update(), _make_context(["noxys", "company", "simulate"])
+    orch = MagicMock()
+    orch.run_pipeline.return_value = []
+    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch.object(
+        telegram_bot, "_get_orch", return_value=orch
+    ):
+        asyncio.run(telegram_bot._cmd_run_pipeline(update, ctx))
+    assert orch.run_pipeline.call_args.kwargs["simulate"] is True
+    assert orch.run_pipeline.call_args.kwargs["pipeline_name"] == "company"
+
+
+def test_cmd_debate_calls_run_debate() -> None:
+    update, ctx = _make_update(), _make_context(["noxys", "adopt", "X"])
+    orch = MagicMock()
+    orch.run_debate.return_value = {"path": "ADR.md", "dry_run": True}
+    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch.object(
+        telegram_bot, "_get_orch", return_value=orch
+    ):
+        asyncio.run(telegram_bot._cmd_debate(update, ctx))
+    assert orch.run_debate.call_args.kwargs["topic"] == "adopt X"
+    assert "ADR.md" in update.message.reply_text.call_args.args[0]
+
+
+def test_cmd_steps_queries_state() -> None:
+    update, ctx = _make_update(), _make_context(["7"])
+    rows = [{"status": "success", "step": "ceo intake", "timestamp": "t", "detail": "ok"}]
+    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch(
+        "hivepilot.services.state_service.get_steps_for_run", return_value=rows
+    ):
+        asyncio.run(telegram_bot._cmd_steps(update, ctx))
+    out = update.message.reply_text.call_args.args[0]
+    assert "ceo intake" in out and "success" in out
+
+
+def test_cmd_steps_usage_error() -> None:
+    update, ctx = _make_update(), _make_context([])
+    with patch.object(telegram_bot, "_require_allowed", return_value=True):
+        asyncio.run(telegram_bot._cmd_steps(update, ctx))
+    assert "Usage:" in update.message.reply_text.call_args.args[0]
+
+
+def test_new_commands_registered_in_source() -> None:
+    src = inspect.getsource(telegram_bot._build_application)
+    for cmd in ("runpipeline", "debate", "steps", "pipelines", "projects", "tasks"):
+        assert cmd in src, f"{cmd} not registered"

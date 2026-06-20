@@ -86,6 +86,12 @@ async def _cmd_help(update, context) -> None:
         "/deny `<run_id>` \\[reason\\] — deny a run\n"
         "/status — last 5 runs\n"
         "/interactions `[limit]` — recent agent interactions\n"
+        "/runpipeline `<project> <pipeline> [simulate]` \u2014 run a pipeline\n"
+        "/debate `<project> <topic>` \u2014 CEO dual-model debate\n"
+        "/steps `<run_id>` \u2014 what the agents did in a run\n"
+        "/pipelines \u2014 list pipelines\n"
+        "/projects \u2014 list projects\n"
+        "/tasks \u2014 list tasks\n"
         "/help — this message\n"
     )
     await update.message.reply_text(text, parse_mode="MarkdownV2")
@@ -421,6 +427,133 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _await_with_heartbeat(update, future, interval: int = 60):
+    elapsed = 0
+    while True:
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout=interval)
+        except asyncio.TimeoutError:
+            elapsed += interval
+            await update.message.reply_text(f"\u23f3 Still running\u2026 ({elapsed}s)")
+
+
+async def _cmd_pipelines(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    pipes = _get_orch().pipelines.pipelines
+    if not pipes:
+        await update.message.reply_text("No pipelines configured.")
+        return
+    lines = [f"\u2022 {name}: {(p.description or '').strip()[:80]}" for name, p in pipes.items()]
+    await update.message.reply_text("Pipelines:\n" + "\n".join(lines))
+
+
+async def _cmd_projects(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    projs = _get_orch().projects.projects
+    if not projs:
+        await update.message.reply_text("No projects configured.")
+        return
+    await update.message.reply_text("Projects:\n" + "\n".join(f"\u2022 {n}" for n in projs))
+
+
+async def _cmd_tasks(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    tasks = _get_orch().tasks.tasks
+    if not tasks:
+        await update.message.reply_text("No tasks configured.")
+        return
+    await update.message.reply_text("Tasks:\n" + "\n".join(f"\u2022 {n}" for n in tasks))
+
+
+async def _cmd_run_pipeline(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /runpipeline <project> <pipeline> [simulate]")
+        return
+    project, pipeline = args[0], args[1]
+    simulate = "simulate" in args[2:]
+    suffix = " (simulate)" if simulate else ""
+    await update.message.reply_text(
+        f"\u23f3 Pipeline `{pipeline}` on `{project}`{suffix}\u2026", parse_mode="Markdown"
+    )
+    loop = asyncio.get_event_loop()
+    future = loop.run_in_executor(
+        None,
+        lambda: _get_orch().run_pipeline(
+            project_names=[project],
+            pipeline_name=pipeline,
+            extra_prompt=None,
+            auto_git=False,
+            dry_run=True,
+            simulate=simulate,
+        ),
+    )
+    try:
+        results = await _await_with_heartbeat(update, future)
+    except Exception as exc:
+        logger.error("telegram.cmd_run_pipeline.error", error=str(exc))
+        await update.message.reply_text(f"\u274c Error: {exc}")
+        return
+    await update.message.reply_text(_format_results(results))
+
+
+async def _cmd_debate(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /debate <project> <topic...>")
+        return
+    project = args[0]
+    topic = " ".join(args[1:])
+    await update.message.reply_text(f"\u23f3 CEO debate on `{project}`\u2026", parse_mode="Markdown")
+    loop = asyncio.get_event_loop()
+    future = loop.run_in_executor(
+        None,
+        lambda: _get_orch().run_debate(
+            project_name=project, role_name="ceo", topic=topic, dry_run=True
+        ),
+    )
+    try:
+        adr = await _await_with_heartbeat(update, future)
+    except Exception as exc:
+        logger.error("telegram.cmd_debate.error", error=str(exc))
+        await update.message.reply_text(f"\u274c Error: {exc}")
+        return
+    if adr is None:
+        await update.message.reply_text("Debate complete \u2014 no vault configured.")
+    else:
+        prefix = "(dry-run) " if adr.get("dry_run") else ""
+        await update.message.reply_text(f"\u2705 Debate ADR {prefix}\u2192 {adr.get('path')}")
+
+
+async def _cmd_steps(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("Usage: /steps <run_id>")
+        return
+    from hivepilot.services import state_service
+
+    steps = state_service.get_steps_for_run(int(args[0]))
+    if not steps:
+        await update.message.reply_text(f"No steps for run {args[0]}.")
+        return
+    lines = []
+    for s in steps:
+        line = f"[{s['status']}] {s['step']} \u2014 {s.get('timestamp', '')}"
+        if s.get("detail"):
+            line += f"\n  {str(s['detail'])[:120]}"
+        lines.append(line)
+    await update.message.reply_text(f"Run {args[0]} steps:\n" + "\n".join(lines))
+
+
 def _build_application(token: str):
     try:
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler
@@ -440,6 +573,12 @@ def _build_application(token: str):
     app.add_handler(CommandHandler("deny", _cmd_deny))
     app.add_handler(CommandHandler("status", _cmd_status))
     app.add_handler(CommandHandler("interactions", _cmd_interactions))
+    app.add_handler(CommandHandler("pipelines", _cmd_pipelines))
+    app.add_handler(CommandHandler("projects", _cmd_projects))
+    app.add_handler(CommandHandler("tasks", _cmd_tasks))
+    app.add_handler(CommandHandler("runpipeline", _cmd_run_pipeline))
+    app.add_handler(CommandHandler("debate", _cmd_debate))
+    app.add_handler(CommandHandler("steps", _cmd_steps))
     app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
     return app
 
