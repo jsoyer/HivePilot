@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -52,7 +52,7 @@ def append_feedback(project_path: Path, task_name: str, summary: str) -> None:
     entry = {
         "task": task_name,
         "summary": summary,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry) + "\n")
