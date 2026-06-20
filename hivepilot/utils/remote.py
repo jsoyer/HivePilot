@@ -12,9 +12,25 @@ installed + authenticated and the repo checked out at the same path.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Sequence
 from pathlib import Path
+
+# Strict allow-lists to prevent argv flag-smuggling / shell injection via config.
+_HOST_RE = re.compile(r"[A-Za-z0-9_.@:-]+")  # ssh alias or user@host[:port]
+_SSH_OPT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_=./@:+-]*")  # e.g. ConnectTimeout=5
+_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")  # POSIX env var name
+
+
+def _validate_host(host: str) -> None:
+    if host.startswith("-") or not _HOST_RE.fullmatch(host):
+        raise ValueError(f"Invalid SSH host (flag smuggling guard): {host!r}")
+
+
+def _validate_ssh_option(opt: str) -> None:
+    if opt.startswith("-") or not _SSH_OPT_RE.fullmatch(opt):
+        raise ValueError(f"Invalid ssh option: {opt!r}")
 
 
 def ssh_wrap(
@@ -30,11 +46,18 @@ def ssh_wrap(
     *env* is forwarded as inline assignments in the remote command (task/project
     env only — secrets are NOT forwarded; the remote CLI uses its own local auth).
     """
-    assigns = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in (env or {}).items())
+    _validate_host(host)
+    assign_parts: list[str] = []
+    for k, v in (env or {}).items():
+        if not _ENV_KEY_RE.fullmatch(k):
+            raise ValueError(f"Invalid env var name: {k!r}")
+        assign_parts.append(f"{k}={shlex.quote(str(v))}")
+    assigns = " ".join(assign_parts)
     cli = shlex.join(list(args))
     remote_cmd = f"cd {shlex.quote(str(cwd))} && " + (f"{assigns} " if assigns else "") + cli
     ssh: list[str] = ["ssh", "-o", "BatchMode=yes"]
     for opt in ssh_options or []:
+        _validate_ssh_option(opt)
         ssh += ["-o", opt]
     ssh += [host, remote_cmd]
     return ssh
