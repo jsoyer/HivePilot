@@ -106,3 +106,23 @@ fait) ou la note du run dans le vault Obsidian.
 > Le checkpoint ne se déclenche pas en `--simulate` côté CLI direct mais bien sur
 > un vrai run. Pour ajouter un point de validation ailleurs, pose `pause_before: true`
 > sur l'étape voulue dans `pipelines.yaml`.
+
+
+## Pipeline `company-v2` (planification réordonnée + checkpoint)
+
+Variante de `company` où la **sécurité et la synthèse passent avant le dev**, avec
+ton checkpoint de plan après la synthèse :
+
+**Phase 1 — Planification → checkpoint**
+1. Aliénor (CEO) — débat bi-modèle (2 propositions + synthèse)
+2. Blaise (CTO) — architecture (bi-modèle)
+3. Hugo (CISO) — sécurité de l'architecture (bi-modèle)
+4. Jules (Chief of Staff / CSO) — **concatène CEO+CTO+CISO et produit la proposition**
+5. ⏸️ **checkpoint** — tu valides la proposition (Approve/Deny) avant le dev
+
+**Phase 2 — Développement → PR**
+6. Gustave (Dev) → 7. Victor (Reviewer, ouvre la PR) → 8. Hugo (CISO, clearance du code)
+→ 9. Marie (QA) → 10. Théo (Documentation) → 11. Jules (**check final + approbation de la PR**)
+
+Lancer : `hivepilot run-pipeline noxys-api company-v2` (ou `/runpipeline` dans Telegram).
+Le `company` original reste disponible inchangé.
