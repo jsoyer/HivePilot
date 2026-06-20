@@ -82,6 +82,7 @@ class Settings(BaseSettings):
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
     container_runtime: str = "docker"  # container runtime for the container runner: docker | podman
+    auto_commit_vault: bool = False  # git add/commit/push the Obsidian vault after a pipeline run
     ssh_options: list[str] = Field(default_factory=list)  # extra ssh -o options for remote agents
     worker_token: str | None = None  # shared bearer token between hub and remote workers
     worker_port: int = 8900  # default port for `hivepilot worker`

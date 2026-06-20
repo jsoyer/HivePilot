@@ -186,3 +186,15 @@ role_overrides:
 - La sortie de l'agent distant est capturée et remonte comme en local (stream /
   interactions / Obsidian).
 - `host` absent → exécution locale (comportement par défaut, inchangé).
+
+
+## Versionner le Vault Obsidian (auto-commit)
+
+Par défaut HivePilot **écrit** les notes (plans, ADR, synthèses) dans le Vault mais
+ne les commit pas. Avec `HIVEPILOT_AUTO_COMMIT_VAULT=true`, après un run de pipeline
+**réel** (`--no-dry-run`), HivePilot fait un **`git add`/`commit`/`push` du Vault**
+(seules les modifs du Vault sont mises en index). Best-effort : si le Vault n'est
+pas un dépôt git ou n'a aucun changement, c'est un no-op silencieux.
+
+> Rappel : les écritures vault ne se font qu'en `--no-dry-run` ; les étapes de
+> planification (CEO/CTO/CISO/Jules) ne touchent aucun dépôt de **code**.

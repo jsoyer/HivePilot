@@ -469,6 +469,16 @@ class Orchestrator:
 
         state_service.complete_run(run_id, final_status.value)
 
+        # Version the plan/ADR notes: commit+push the Obsidian vault (best-effort,
+        # opt-in, only on a real write run).
+        if settings.auto_commit_vault and not simulate and not dry_run and vault_path is not None:
+            try:
+                from hivepilot.services.git_service import commit_vault
+
+                commit_vault(vault_path, f"HivePilot: {pipeline_name} run {run_id}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("vault.commit_failed", run_id=run_id, error=str(exc))
+
         # Henri (external auditor) observes the completed cycle — best-effort, never
         # breaks a run; skipped under --simulate and when disabled.
         if settings.auditor_auto and not simulate and project_names:
