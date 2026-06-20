@@ -57,10 +57,30 @@ class PromptCliRunner(BaseRunner):
             args.append(prompt_text)
         return args
 
+    def _augment_prompt(self, payload: RunnerPayload, prompt_text: str) -> str:
+        """Prepend user instructions + previous agents' outputs to the prompt.
+
+        Mirrors ClaudeRunner so non-Claude CLIs (opencode/cursor/codex/gemini/vibe)
+        also receive the pipeline hand-off context — e.g. so the synthesizer can
+        actually see what the earlier agents produced.
+        """
+        sections: list[str] = []
+        extra = payload.metadata.get("extra_prompt")
+        if extra:
+            sections.append(f"Extra instructions from user: {extra}")
+        prior = payload.metadata.get("prior_context")
+        if prior:
+            sections.append(f"Outputs from previous agents:\n{prior}")
+        if not sections:
+            return prompt_text
+        return "\n\n".join(sections) + f"\n\nInstructions:\n{prompt_text}"
+
     def capture(self, payload: RunnerPayload) -> str:
         """Run the CLI in capture mode and return stdout (used for debate positions)."""
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
-        args = self._build_cli_args(payload, self._load_prompt(payload))
+        args = self._build_cli_args(
+            payload, self._augment_prompt(payload, self._load_prompt(payload))
+        )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         result = subprocess.run(
             args,
@@ -78,7 +98,7 @@ class PromptCliRunner(BaseRunner):
             payload.step.metadata.get("mode") or self.definition.options.get("mode") or "cli"
         ).lower()
 
-        prompt_text = self._load_prompt(payload)
+        prompt_text = self._augment_prompt(payload, self._load_prompt(payload))
 
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         if mode == "api":
