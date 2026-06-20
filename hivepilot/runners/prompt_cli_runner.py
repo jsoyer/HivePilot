@@ -63,8 +63,13 @@ class PromptCliRunner(BaseRunner):
         args = self._build_cli_args(payload, self._load_prompt(payload))
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         result = subprocess.run(
-            args, cwd=str(payload.project.path), env=env, check=True, text=True,
-            capture_output=True, timeout=timeout,
+            args,
+            cwd=str(payload.project.path),
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
         )
         return result.stdout
 
@@ -199,6 +204,21 @@ class GeminiRunner(PromptCliRunner):
 class OpenCodeRunner(PromptCliRunner):
     command_name: str = "opencode"
     cli_subcommand: str | None = "run"
+
+
+@dataclass
+class VibeRunner(PromptCliRunner):
+    """Mistral 'vibe' coding CLI (mistral-vibe).
+
+    Non-interactive "programmatic mode" via ``--prompt``; ``--auto-approve`` skips
+    tool-call confirmations during automation. ``vibe`` has no ``--model`` flag —
+    the model comes from its own config / ``MISTRAL_API_KEY`` — so none is passed
+    unless explicitly set on the runner definition.
+    """
+
+    command_name: str = "vibe"
+    cli_flags: tuple[str, ...] = ("--auto-approve",)
+    prompt_flag: str | None = "--prompt"
 
 
 @dataclass

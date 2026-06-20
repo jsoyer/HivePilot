@@ -78,6 +78,7 @@ the runner's `options`:
 | gemini | `-p "<prompt>"` |
 | codex | `exec` subcommand |
 | opencode | `run` subcommand, model as `provider/model` (e.g. `opencode-go/kimi-k2.7-code`) |
+| vibe (Mistral) | `--prompt "<prompt>"` + `--auto-approve`; no `--model` (model via its own config / `MISTRAL_API_KEY`) |
 
 Override example: `options: { subcommand: exec, model_flag: "-m", prompt_flag: "-p" }`.
 

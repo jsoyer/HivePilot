@@ -15,6 +15,7 @@ from hivepilot.runners.prompt_cli_runner import (
     GeminiRunner,
     OllamaRunner,
     OpenCodeRunner,
+    VibeRunner,
 )
 from hivepilot.runners.shell_runner import ShellRunner
 
@@ -29,6 +30,7 @@ RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
     "ollama": OllamaRunner,
     "container": ContainerRunner,
     "cursor": CursorRunner,
+    "vibe": VibeRunner,
 }
 
 
