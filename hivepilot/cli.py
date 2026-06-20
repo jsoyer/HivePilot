@@ -1812,3 +1812,17 @@ def groups_cmd() -> None:
             typer.echo(f"  {g.description}")
         for c in g.components:
             typer.echo(f"  - {c}")
+
+
+@app.command("worker")
+def worker(
+    port: int = typer.Option(settings.worker_port, "--port", help="Port to listen on"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),  # noqa: S104
+) -> None:
+    """Start a HivePilot worker that runs agent steps dispatched by a remote hub."""
+    import uvicorn
+
+    from hivepilot.services.worker_service import create_app
+
+    typer.echo(f"HivePilot worker listening on {host}:{port}")
+    uvicorn.run(create_app(), host=host, port=port)

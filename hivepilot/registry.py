@@ -57,13 +57,26 @@ class RunnerRegistry:
         runner = self.get_runner(runner_name)
         runner.run(payload)
 
+    @staticmethod
+    def _is_worker_host(definition: RunnerDefinition) -> bool:
+        return bool(definition.host) and definition.host.startswith(("http://", "https://"))
+
     def execute_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> None:
+        if self._is_worker_host(definition):
+            from hivepilot.runners.worker_runner import RemoteWorkerRunner
+
+            RemoteWorkerRunner(definition, settings).run(payload)
+            return
         runner_cls = RUNNER_MAP.get(definition.kind)
         if not runner_cls:
             raise KeyError(f"No runner implementation for kind '{definition.kind}'")
         runner_cls(definition, settings).run(payload)
 
     def capture_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> str:
+        if self._is_worker_host(definition):
+            from hivepilot.runners.worker_runner import RemoteWorkerRunner
+
+            return RemoteWorkerRunner(definition, settings).capture(payload)
         runner_cls = RUNNER_MAP.get(definition.kind)
         if not runner_cls:
             raise KeyError(f"No runner implementation for kind '{definition.kind}'")

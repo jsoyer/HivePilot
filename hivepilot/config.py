@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     )
     container_runtime: str = "docker"  # container runtime for the container runner: docker | podman
     ssh_options: list[str] = Field(default_factory=list)  # extra ssh -o options for remote agents
+    worker_token: str | None = None  # shared bearer token between hub and remote workers
+    worker_port: int = 8900  # default port for `hivepilot worker`
 
     @field_validator("telegram_notification_chat_id", mode="before")
     @classmethod
