@@ -28,6 +28,35 @@ pipelines:
       - name: Approval
         task: company-ceo-approval
 
+  company-v2:
+    description: >
+      Reordered company cycle. Planning phase (CEO debate -> CTO architecture ->
+      CISO architecture security -> Chief of Staff synthesis) ends with a human
+      plan checkpoint; then development, review (opens PR), CISO code clearance,
+      QA, documentation, and a final Chief of Staff PR approval.
+    stages:
+      - name: CEO Intake
+        task: company-ceo-intake
+      - name: CTO Architecture
+        task: company-cto-review
+      - name: Security (architecture)
+        task: company-ciso
+      - name: Plan Synthesis
+        task: company-cos-synthesis
+      - name: Implementation
+        task: company-developer
+        pause_before: true
+      - name: Review
+        task: company-reviewer
+      - name: Security (code)
+        task: company-ciso
+      - name: QA
+        task: company-qa
+      - name: Documentation
+        task: company-documentation
+      - name: PR Approval
+        task: company-cos-pr-approval
+
   pentest-fix-review:
     description: Run a security review, refactor fixes, then refresh docs.
     stages:
