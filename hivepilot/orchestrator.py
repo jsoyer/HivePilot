@@ -75,6 +75,7 @@ class Orchestrator:
         extra_prompt: str | None,
         auto_git: bool,
         concurrency: int | None = None,
+        simulate: bool = False,
     ) -> list[RunResult]:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
@@ -140,6 +141,7 @@ class Orchestrator:
                     auto_git=auto_git,
                     run_id=run_ids.get(project.path.name),
                     policy=run_policies.get(project.path.name),
+                    simulate=simulate,
                 ): project
                 for project in immediate_projects
             }
@@ -217,6 +219,7 @@ class Orchestrator:
         auto_git: bool,
         concurrency: int | None = None,
         dry_run: bool = True,
+        simulate: bool = False,
     ) -> list[RunResult]:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
@@ -244,6 +247,7 @@ class Orchestrator:
                 extra_prompt=extra_prompt,
                 auto_git=auto_git,
                 concurrency=concurrency,
+                simulate=simulate,
             )
             results.extend(
                 [
@@ -386,6 +390,7 @@ class Orchestrator:
         auto_git: bool,
         run_id: int | None = None,
         policy: policy_service.Policy | None = None,
+        simulate: bool = False,
     ) -> None:
         logger.info("task.start", project=project.path.name, task=task_name)
         metadata = {"extra_prompt": extra_prompt or ""}
@@ -406,7 +411,10 @@ class Orchestrator:
                 secrets=self._resolve_secrets(placeholder_step),
             )
             try:
-                run_engine(task=task, project=project, payload=payload)
+                if simulate:
+                    logger.info("task.simulate.engine", project=project.path.name, engine=task.engine)
+                else:
+                    run_engine(task=task, project=project, payload=payload)
                 if run_id:
                     state_service.record_step(run_id, placeholder_step.name, "success")
             except Exception as exc:
@@ -433,7 +441,10 @@ class Orchestrator:
                     raise RuntimeError(
                         f"Containers are disabled by policy for project {project.path.name}"
                     )
-                self.registry.execute(runner_key, payload)
+                if simulate:
+                    logger.info("step.simulate", step=step.name, runner=runner_key, project=project.path.name)
+                else:
+                    self.registry.execute(runner_key, payload)
                 if run_id:
                     state_service.record_step(run_id, step.name, "success")
                 self.plugins.run_hook("after_step", payload=payload)

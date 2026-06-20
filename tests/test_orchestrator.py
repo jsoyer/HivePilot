@@ -480,3 +480,56 @@ class TestTasksYamlDocumentationBinding:
         assert step.timeout_seconds == 3600, (
             f"timeout_seconds changed unexpectedly: {step.timeout_seconds}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Simulate mode (item 5) — exercise wiring without invoking real runners
+# ---------------------------------------------------------------------------
+
+
+class TestSimulateMode:
+    def test_execute_task_simulate_skips_runner(self) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        task = TaskConfig(
+            description="t", engine="native", steps=[TaskStep(name="s", runner="claude")]
+        )
+        project = ProjectConfig(path=Path("/tmp/simproj"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+                simulate=True,
+            )
+        orch.registry.execute.assert_not_called()
+        # step is still recorded as success (simulated)
+        mock_step.assert_called_with(1, "s", "success")
+
+    def test_run_pipeline_forwards_simulate_to_run_task(self) -> None:
+        pipeline = _make_pipeline_by_name("stage-a")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=7),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch("hivepilot.orchestrator.InteractionService", return_value=MagicMock()),
+            patch.object(orch, "run_task", return_value=[]) as mock_run_task,
+        ):
+            orch.run_pipeline(
+                project_names=["p"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                simulate=True,
+            )
+        assert mock_run_task.call_args.kwargs.get("simulate") is True

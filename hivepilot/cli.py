@@ -160,6 +160,9 @@ def run(
     all_projects: bool = typer.Option(False, "--all", help="Run on every configured project"),
     projects: list[str] = typer.Option([], "--project", "-p", help="Additional projects"),
     concurrency: int | None = typer.Option(None, "--concurrency", "-c", help="Parallel workers"),
+    simulate: bool = typer.Option(
+        False, "--simulate", help="Simulate agents — record steps without invoking real runners"
+    ),
     token: str | None = typer.Option(
         None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
     ),
@@ -173,6 +176,7 @@ def run(
         extra_prompt=extra_prompt,
         auto_git=auto_git,
         concurrency=concurrency,
+        simulate=simulate,
     )
     for result in results:
         status = "✅" if result.success else "❌"
@@ -195,6 +199,9 @@ def run_pipeline(
     dry_run: bool = typer.Option(
         True, "--dry-run/--no-dry-run", help="Skip vault writes (default: dry-run)"
     ),
+    simulate: bool = typer.Option(
+        False, "--simulate", help="Simulate agents — record steps without invoking real runners"
+    ),
     token: str | None = typer.Option(
         None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
     ),
@@ -209,6 +216,7 @@ def run_pipeline(
         auto_git=auto_git,
         concurrency=concurrency,
         dry_run=dry_run,
+        simulate=simulate,
     )
     for result in results:
         status = "✅" if result.success else "❌"
