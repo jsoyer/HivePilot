@@ -20,7 +20,7 @@ class ClaudeRunner(BaseRunner):
     settings: Settings
     profiles: dict[str, dict[str, str]] = field(default_factory=load_claude_profiles)
 
-    def run(self, payload: RunnerPayload) -> None:
+    def _build_invocation(self, payload: RunnerPayload) -> tuple[list[str], dict[str, str]]:
         command = self.definition.command or self.settings.claude_command
         if not command:
             raise ValueError("Claude command not configured.")
@@ -43,9 +43,29 @@ class ClaudeRunner(BaseRunner):
             args.extend(["--agent", self.definition.agent])
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
+        return args, env
+
+    def run(self, payload: RunnerPayload) -> None:
+        args, env = self._build_invocation(payload)
         logger.info("claude_runner.start", project=payload.project_name, step=payload.step.name)
         subprocess.run(args, cwd=str(payload.project.path), env=env, check=True, text=True)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
+
+    def capture(self, payload: RunnerPayload) -> str:
+        """Run claude and return its stdout (so the agent's output can be surfaced
+        in the interaction log / live stream, not just discarded)."""
+        args, env = self._build_invocation(payload)
+        timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
+        result = subprocess.run(
+            args,
+            cwd=str(payload.project.path),
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+        return result.stdout
 
     def _build_prompt(
         self, payload: RunnerPayload, instructions: str, knowledge_context: str | None

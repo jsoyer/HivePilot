@@ -547,6 +547,7 @@ class TestRoleDrivenExecution:
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
         orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "agent output"
         task = TaskConfig(
             description="t",
             role=role,
@@ -572,9 +573,9 @@ class TestRoleDrivenExecution:
     def test_role_resolves_runner_and_model(self) -> None:
         # reviewer is single-model (cto/ciso are now bi-modal → debate path)
         orch = self._run("reviewer")
-        orch.registry.execute_definition.assert_called_once()
+        orch.registry.capture_definition.assert_called_once()  # output is captured + surfaced
         orch.registry.execute.assert_not_called()
-        rdef = orch.registry.execute_definition.call_args.args[0]
+        rdef = orch.registry.capture_definition.call_args.args[0]
         assert rdef.kind == "codex"
         assert rdef.model == "gpt-5.5"
 
@@ -582,7 +583,7 @@ class TestRoleDrivenExecution:
         from hivepilot.services.policy_service import Policy
 
         orch = self._run("reviewer", policy=Policy(role_overrides={"reviewer": {"model": "glm"}}))
-        rdef = orch.registry.execute_definition.call_args.args[0]
+        rdef = orch.registry.capture_definition.call_args.args[0]
         assert rdef.kind == "codex"
         assert rdef.model == "glm"
 
