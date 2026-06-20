@@ -906,6 +906,42 @@ def telegram_chat_id() -> None:
     typer.echo("\nAdd to .env: HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS=[<id>]")
 
 
+@telegram_app.command("systemd-unit")
+def telegram_systemd_unit(
+    working_dir: str = typer.Option(str(settings.base_dir), "--working-dir"),
+    env_file: str | None = typer.Option(None, "--env-file", help="Optional EnvironmentFile"),
+) -> None:
+    """Print a systemd *user* unit to run the Telegram bot persistently."""
+    import shutil
+
+    hivepilot_bin = shutil.which("hivepilot") or str(settings.base_dir / ".venv" / "bin" / "hivepilot")
+    env_line = f"EnvironmentFile={env_file}\n" if env_file else ""
+    unit = f"""[Unit]
+Description=HivePilot Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={working_dir}
+{env_line}ExecStart={hivepilot_bin} telegram start
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+"""
+    typer.echo(unit.strip())
+    typer.echo("\n# Install (user service, no sudo):")
+    typer.echo("#   mkdir -p ~/.config/systemd/user")
+    typer.echo("#   hivepilot telegram systemd-unit > ~/.config/systemd/user/hivepilot-telegram.service")
+    typer.echo("#   systemctl --user daemon-reload && systemctl --user enable --now hivepilot-telegram")
+    typer.echo("#   loginctl enable-linger $USER   # keep running after logout")
+    typer.echo("#   journalctl --user -u hivepilot-telegram -f   # logs (token is no longer logged)")
+
+
 @telegram_app.command("set-webhook")
 def telegram_set_webhook(
     url: str = typer.Argument(..., help="Public base URL, e.g. https://myserver.com"),
