@@ -912,9 +912,17 @@ def telegram_systemd_unit(
     env_file: str | None = typer.Option(None, "--env-file", help="Optional EnvironmentFile"),
 ) -> None:
     """Print a systemd *user* unit to run the Telegram bot persistently."""
+    import os
     import shutil
 
     hivepilot_bin = shutil.which("hivepilot") or str(settings.base_dir / ".venv" / "bin" / "hivepilot")
+    # Capture the dirs of the agent CLIs so the (minimal-PATH) systemd service finds them.
+    _dirs: list[str] = [str(settings.base_dir / ".venv" / "bin")]
+    for _b in ("claude", "codex", "gemini", "opencode", "cursor-agent", "gh", "git"):
+        _p = shutil.which(_b)
+        if _p and os.path.dirname(_p) not in _dirs:
+            _dirs.append(os.path.dirname(_p))
+    path_line = "Environment=PATH=" + ":".join(_dirs + ["/usr/local/bin", "/usr/bin", "/bin"]) + "\n"
     env_line = f"EnvironmentFile={env_file}\n" if env_file else ""
     unit = f"""[Unit]
 Description=HivePilot Telegram bot
@@ -924,7 +932,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={working_dir}
-{env_line}ExecStart={hivepilot_bin} telegram start
+{path_line}{env_line}ExecStart={hivepilot_bin} telegram start
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
