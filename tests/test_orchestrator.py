@@ -575,7 +575,7 @@ class TestRoleDrivenExecution:
         orch.registry.execute.assert_not_called()
         rdef = orch.registry.execute_definition.call_args.args[0]
         assert rdef.kind == "opencode"
-        assert rdef.model == "kimi"
+        assert rdef.model == "opencode-go/kimi-k2.7-code"
 
     def test_policy_override_changes_model(self) -> None:
         from hivepilot.services.policy_service import Policy
@@ -626,7 +626,10 @@ class TestDebate:
             )
 
         assert adr == {"path": "ADR.md", "dry_run": True}
-        assert {pos.role for pos in captured["positions"]} == {"ceo:qwen", "ceo:kimi"}
+        assert {pos.role for pos in captured["positions"]} == {
+            "ceo:opencode-go/qwen3.7-max",
+            "ceo:opencode-go/kimi-k2.6",
+        }
         orch.registry.capture_definition.assert_not_called()  # simulate -> no real calls
 
     def test_run_debate_rejects_single_model_role(self) -> None:

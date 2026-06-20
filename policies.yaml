@@ -17,3 +17,7 @@ policies:
       allow_auto_git: true
       require_approval: true
       allow_containers: false
+    noxys:
+      allow_auto_git: false      # agents must not push to the product repo unattended
+      require_approval: true     # human approves each run before it executes
+      allow_containers: false

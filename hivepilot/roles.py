@@ -53,7 +53,7 @@ ROLES: dict[str, Role] = {
         can_block=False,
         order=1,
         runner="opencode",
-        models=["qwen", "kimi"],
+        models=["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"],
     ),
     "chief_of_staff": Role(
         name="chief_of_staff",
@@ -76,7 +76,7 @@ ROLES: dict[str, Role] = {
         can_block=True,
         order=3,
         runner="opencode",
-        model="kimi",
+        model="opencode-go/kimi-k2.7-code",
     ),
     "developer": Role(
         name="developer",
@@ -110,7 +110,7 @@ ROLES: dict[str, Role] = {
         can_block=True,
         order=6,
         runner="opencode",
-        model="glm",
+        model="opencode-go/glm-5.2",
     ),
     "qa": Role(
         name="qa",

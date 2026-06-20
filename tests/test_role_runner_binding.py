@@ -3,7 +3,7 @@ Sprint 2.1 — Role → runner + model binding tests.
 
 Covers:
 - Every role in the mapping resolves to the expected runner and model/models.
-- CEO has dual models ["qwen", "kimi"].
+- CEO has dual models (real opencode IDs).
 - `cursor` is registered in RUNNER_MAP and CursorRunner subclasses PromptCliRunner.
 - CursorRunner raises a clear error when cursor-agent binary is missing.
 - Existing tests/test_roles.py assertions continue to hold (no regression).
@@ -33,13 +33,13 @@ EXPECTED_RUNNER: dict[str, str] = {
 
 # Roles that have a single explicit model override
 EXPECTED_MODEL: dict[str, str] = {
-    "cto": "kimi",
-    "ciso": "glm",
+    "cto": "opencode-go/kimi-k2.7-code",
+    "ciso": "opencode-go/glm-5.2",
 }
 
 # Roles that have dual models (list)
 EXPECTED_MODELS: dict[str, list[str]] = {
-    "ceo": ["qwen", "kimi"],
+    "ceo": ["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"],
 }
 
 
@@ -104,8 +104,8 @@ class TestRoleModelsField:
         from hivepilot.roles import get_role
 
         ceo = get_role("ceo")
-        assert ceo.models == ["qwen", "kimi"], (
-            f"CEO dual models mismatch: expected ['qwen', 'kimi'], got {ceo.models}"
+        assert ceo.models == ["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"], (
+            f"CEO dual models mismatch: got {ceo.models}"
         )
 
     def test_non_dual_roles_have_none_models(self):
