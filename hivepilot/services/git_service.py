@@ -45,6 +45,29 @@ def run_git_command(args: list[str], cwd: Path) -> None:
     subprocess.run([settings.git_command, *args], cwd=str(cwd), check=True)
 
 
+def commit_vault(
+    vault_path: Path, message: str = "HivePilot: update Obsidian notes", *, push: bool = True
+) -> bool:
+    """git add/commit/push changes under the Obsidian *vault_path*.
+
+    Best-effort and self-contained: returns False (no raise) if the vault is not a
+    git work tree or has nothing to commit. Only the vault's own changes are staged.
+    """
+    try:
+        repo = Repo(vault_path, search_parent_directories=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("vault.not_git_repo", path=str(vault_path), error=str(exc))
+        return False
+    repo.git.add("-A", str(vault_path))
+    if not repo.git.diff("--cached", "--name-only").strip():
+        return False  # nothing changed
+    repo.git.commit("-m", message)
+    if push:
+        repo.git.push()
+    logger.info("vault.committed", path=str(vault_path), pushed=push)
+    return True
+
+
 def perform_git_actions(
     *,
     project_name: str,

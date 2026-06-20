@@ -40,6 +40,36 @@ def test_merge_pr_raises_on_gh_failure(tmp_path: Path) -> None:
             git_service.merge_pr(project=project, branch="hivepilot/z", git=git)
 
 
+def test_commit_vault_commits_and_pushes(tmp_path: Path, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    fake = MagicMock()
+    fake.git.diff.return_value = "Notes/plan.md"  # staged changes present
+    monkeypatch.setattr(git_service, "Repo", lambda *a, **k: fake)
+    assert git_service.commit_vault(tmp_path, "msg", push=True) is True
+    fake.git.add.assert_called()
+    fake.git.commit.assert_called_with("-m", "msg")
+    fake.git.push.assert_called_once()
+
+
+def test_commit_vault_no_changes_returns_false(tmp_path: Path, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    fake = MagicMock()
+    fake.git.diff.return_value = ""  # nothing staged
+    monkeypatch.setattr(git_service, "Repo", lambda *a, **k: fake)
+    assert git_service.commit_vault(tmp_path, "m") is False
+    fake.git.commit.assert_not_called()
+
+
+def test_commit_vault_not_a_repo_returns_false(tmp_path: Path, monkeypatch) -> None:
+    def boom(*a, **k):
+        raise Exception("not a repo")
+
+    monkeypatch.setattr(git_service, "Repo", boom)
+    assert git_service.commit_vault(tmp_path, "m") is False
+
+
 def test_perform_git_actions_merges_when_flag_set(tmp_path: Path) -> None:
     import git as gitlib
 
