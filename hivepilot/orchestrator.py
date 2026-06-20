@@ -256,6 +256,9 @@ class Orchestrator:
         simulate: bool = False,
         start_index: int = 0,
         run_id: int | None = None,
+        hub: str | None = None,
+        components: list[str] | None = None,
+        seed_context: str | None = None,
     ) -> list[RunResult]:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
@@ -263,6 +266,13 @@ class Orchestrator:
         validate_pipeline(pipeline, self.tasks)
 
         project_names = list(project_names)
+
+        # Group mode: planning stages (before the checkpoint) run once in the hub;
+        # execution stages (the pause_before stage onward) fan out over components.
+        group_mode = bool(components)
+        pause_index = next(
+            (i for i, s in enumerate(pipeline.stages) if s.pause_before), len(pipeline.stages)
+        )
 
         notification_service.stream_agent_turn(
             actor="HivePilot",
@@ -287,6 +297,13 @@ class Orchestrator:
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
         prior_chunks: list[str] = []  # outputs of completed stages, fed to later agents
+        if seed_context:
+            prior_chunks.append(seed_context)
+        elif group_mode:
+            prior_chunks.append(
+                "Components of this product (decide which ones this change should touch):\n"
+                + "\n".join(f"- {c}" for c in (components or []))
+            )
         for stage_idx, stage in enumerate(pipeline.stages):
             if stage_idx < start_index:
                 continue  # already executed before the checkpoint pause
@@ -306,6 +323,9 @@ class Orchestrator:
                     "simulate": simulate,
                     "next_stage": stage.name,
                     "completed_stages": completed,
+                    "hub": hub,
+                    "components": components,
+                    "planning_context": "\n\n".join(prior_chunks) or None,
                 }
                 state_service.record_approval_request(
                     run_id,
@@ -330,8 +350,12 @@ class Orchestrator:
                 state_service.complete_run(run_id, RunStatus.PAUSED.value)
                 return results
 
+            if group_mode:
+                targets = [hub] if (stage_idx < pause_index and hub) else list(components or [])
+            else:
+                targets = project_names
             stage_results = self.run_task(
-                project_names=project_names,
+                project_names=targets,
                 task_name=stage.task,
                 extra_prompt=extra_prompt,
                 auto_git=auto_git,
@@ -469,6 +493,9 @@ class Orchestrator:
             simulate=meta.get("simulate", False),
             start_index=meta["resume_from_index"],
             run_id=run_id,
+            hub=meta.get("hub"),
+            components=meta.get("components"),
+            seed_context=meta.get("planning_context"),
         )
         ok = all(r.success for r in results)
         return RunResult(pipeline_name, pipeline_name, ok)

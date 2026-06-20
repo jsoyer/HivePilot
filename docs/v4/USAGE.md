@@ -153,5 +153,8 @@ planif au niveau groupe, à partir de E2). Config : `groups.yaml`.
 - Lister : `hivepilot groups`
 - **Tâche unique fan-out** : `hivepilot run noxys lint` → la tâche tourne sur tous
   les composants du groupe.
-- **Pipeline sur groupe** : pas encore (E2) — un pipeline lancé sur `noxys` est
-  refusé pour l'instant ; la planif-une-fois + fan-out arrive ensuite.
+- **Pipeline sur groupe (E2)** : `hivepilot run-pipeline noxys company-v2` → la
+  **planification tourne une seule fois dans le hub** (avec le manifeste des
+  composants en contexte), puis la **phase 2 (dev → … → PR) fan-out sur les
+  composants**. Le checkpoint de plan se trouve entre les deux.
+  *(E3 : les agents choisiront le sous-ensemble de composants impactés.)*
