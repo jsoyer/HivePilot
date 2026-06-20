@@ -77,6 +77,7 @@ class Orchestrator:
         concurrency: int | None = None,
         simulate: bool = False,
         dry_run: bool = True,
+        prior_context: str | None = None,
     ) -> list[RunResult]:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
@@ -144,6 +145,7 @@ class Orchestrator:
                     policy=run_policies.get(project.path.name),
                     simulate=simulate,
                     dry_run=dry_run,
+                    prior_context=prior_context,
                 ): project
                 for project in immediate_projects
             }
@@ -265,6 +267,7 @@ class Orchestrator:
 
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
+        prior_chunks: list[str] = []  # outputs of completed stages, fed to later agents
         for stage_idx, stage in enumerate(pipeline.stages):
             if stage_idx < start_index:
                 continue  # already executed before the checkpoint pause
@@ -316,6 +319,7 @@ class Orchestrator:
                 concurrency=concurrency,
                 simulate=simulate,
                 dry_run=dry_run,
+                prior_context="\n\n".join(prior_chunks) or None,
             )
             results.extend(
                 [
@@ -328,6 +332,7 @@ class Orchestrator:
             stage_output = "\n".join(
                 r.detail or f"{r.project}: {'ok' if r.success else 'failed'}" for r in stage_results
             )
+            prior_chunks.append(f"## {self._agent_name(stage)} ({stage.name})\n{stage_output}")
             write_stage_artifact(
                 vault_path=vault_path,
                 run_id=run_id,
@@ -492,6 +497,7 @@ class Orchestrator:
         topic: str,
         dry_run: bool = True,
         simulate: bool = False,
+        prior_context: str | None = None,
     ) -> dict | None:
         """Run a dual-model debate for *role_name*: capture each model's position,
         synthesize via DebateService, and write an ADR. Returns the ADR emit dict."""
@@ -524,7 +530,7 @@ class Orchestrator:
                 project=project,
                 task_name=f"debate:{role_name}",
                 step=step,
-                metadata={},
+                metadata={"prior_context": prior_context or ""},
                 secrets=self._resolve_secrets(step),
             )
             if simulate:
@@ -599,9 +605,10 @@ class Orchestrator:
         policy: policy_service.Policy | None = None,
         simulate: bool = False,
         dry_run: bool = True,
+        prior_context: str | None = None,
     ) -> None:
         logger.info("task.start", project=project.path.name, task=task_name)
-        metadata = {"extra_prompt": extra_prompt or ""}
+        metadata = {"extra_prompt": extra_prompt or "", "prior_context": prior_context or ""}
         if task.engine != "native":
             from hivepilot.engines import run_engine
 
@@ -645,6 +652,7 @@ class Orchestrator:
                     topic=topic,
                     dry_run=dry_run,
                     simulate=simulate,
+                    prior_context=prior_context,
                 )
                 if run_id:
                     state_service.record_step(run_id, f"{task.role}-debate", "success")

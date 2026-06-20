@@ -63,6 +63,9 @@ class ClaudeRunner(BaseRunner):
         extra = payload.metadata.get("extra_prompt")
         if extra:
             sections.append(f"Extra instructions from user: {extra}")
+        prior = payload.metadata.get("prior_context")
+        if prior:
+            sections.append(f"Outputs from previous agents:\n{prior}")
         append = payload.step.append_prompt or self.definition.append_prompt
         if append:
             sections.append(f"Step-specific instructions: {append}")
