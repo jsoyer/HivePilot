@@ -212,6 +212,17 @@ class Orchestrator:
             knowledge_service.append_feedback(project_cfg.path, result.target, summary_text)
         return results
 
+    def _agent_name(self, stage: PipelineStage) -> str:
+        """Human-facing agent name for a stage (FR theme), falling back to stage name."""
+        from hivepilot.roles import ROLES
+
+        task = self.tasks.tasks.get(stage.task)
+        if task and task.role:
+            role = ROLES.get(task.role)
+            if role and role.display_name:
+                return role.display_name
+        return stage.name
+
     def run_pipeline(
         self,
         *,
@@ -273,12 +284,12 @@ class Orchestrator:
 
             # Per-stage interaction log (2.6a)
             next_stages = pipeline.stages[stage_idx + 1 :]
-            next_target = next_stages[0].name if next_stages else None
+            next_target = self._agent_name(next_stages[0]) if next_stages else None
             from datetime import datetime, timezone
 
             interactions_svc.log_interaction(
                 Interaction(
-                    actor=stage.name,
+                    actor=self._agent_name(stage),
                     action="completed stage",
                     target=next_target,
                     summary=stage_output,
