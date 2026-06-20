@@ -17,6 +17,21 @@ def test_run_step_requires_token(monkeypatch) -> None:
     assert r.status_code == 401
 
 
+def test_run_step_fails_closed_when_token_unset(monkeypatch) -> None:
+    # No token configured → refuse to serve (never fall open to unauthenticated RCE).
+    monkeypatch.setattr(settings, "worker_token", None, raising=False)
+    client = TestClient(worker_service.create_app())
+    r = client.post("/run-step", json={}, headers={"Authorization": "Bearer anything"})
+    assert r.status_code == 503
+
+
+def test_run_step_rejects_wrong_token(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "worker_token", "secret", raising=False)
+    client = TestClient(worker_service.create_app())
+    r = client.post("/run-step", json={}, headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+
+
 def test_run_step_executes_and_returns_output(monkeypatch) -> None:
     monkeypatch.setattr(settings, "worker_token", "secret", raising=False)
     monkeypatch.setattr(worker_service, "execute_step", lambda body: "REMOTE OUT")
