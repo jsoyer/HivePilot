@@ -62,4 +62,23 @@ then `hivepilot telegram`.
 This gives full remote control: launch the company, watch interactions/steps,
 and gate execution via approvals — from your phone.
 
+### Live agent streaming (Telegram)
+
+During a pipeline run (and CEO debate), HivePilot live-streams each agent's
+turn to Telegram via `sendMessage` as it happens, so you watch the agents
+hand off to each other in real time. Each message shows an icon + the agent's
+display name (FR theme: Aliénor/Colbert/Blaise/Gustave/Voltaire/Vauban/Marie/Diderot)
++ the stage name, the next agent it hands off to (`↳`), and a short summary.
+
+| Icon | Meaning |
+|---|---|
+| 🚀 | pipeline start |
+| 🗣 | pipeline hand-off (an agent's turn) |
+| 💬 | debate model proposal |
+| ⚖️ | debate synthesis |
+
+This requires `HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID` configured (plus a bot
+token); it is Telegram-only and a silent no-op if Telegram is not configured.
+On by default — turn it off with `HIVEPILOT_TELEGRAM_STREAM_LIVE=false`.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md), [AGENTS.md](AGENTS.md), [CONFIG.md](CONFIG.md), [NOXYS.md](NOXYS.md).

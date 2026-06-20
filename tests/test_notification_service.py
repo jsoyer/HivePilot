@@ -1,0 +1,63 @@
+"""Tests for the live agent-turn streaming helper (notification_service).
+
+stream_agent_turn pushes an outbound Telegram message per agent turn during a
+run. It must format the turn conversationally, honour the telegram_stream_live
+toggle, and never raise — Telegram being unconfigured is a silent no-op.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from hivepilot.services import notification_service as ns
+
+
+@pytest.fixture
+def captured(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    sent: list[str] = []
+    monkeypatch.setattr(ns, "_send_telegram", lambda msg: sent.append(msg))
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    return sent
+
+
+def test_streams_actor_target_and_summary(captured: list[str]) -> None:
+    ns.stream_agent_turn(actor="Aliénor", stage="CEO Intake", target="Colbert", summary="ok")
+    assert len(captured) == 1
+    msg = captured[0]
+    assert "Aliénor" in msg
+    assert "CEO Intake" in msg
+    assert "Colbert" in msg
+    assert "ok" in msg
+
+
+def test_disabled_toggle_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[str] = []
+    monkeypatch.setattr(ns, "_send_telegram", lambda msg: sent.append(msg))
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", False, raising=False)
+    ns.stream_agent_turn(actor="Aliénor", summary="should not send")
+    assert sent == []
+
+
+def test_unconfigured_telegram_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(_msg: str) -> None:
+        raise ns._NotConfigured("no token")
+
+    monkeypatch.setattr(ns, "_send_telegram", _raise)
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    ns.stream_agent_turn(actor="Blaise", summary="x")  # must not raise
+
+
+def test_long_summary_truncated(captured: list[str]) -> None:
+    ns.stream_agent_turn(actor="Gustave", summary="y" * 1000)
+    assert "…" in captured[0]
+    assert len(captured[0]) < 400
+
+
+def test_collapses_whitespace_and_newlines(captured: list[str]) -> None:
+    ns.stream_agent_turn(actor="Voltaire", summary="line1\n\n   line2")
+    assert "line1 line2" in captured[0]
+
+
+def test_minimal_call_actor_only(captured: list[str]) -> None:
+    ns.stream_agent_turn(actor="Diderot")
+    assert "Diderot" in captured[0]

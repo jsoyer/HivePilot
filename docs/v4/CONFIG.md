@@ -89,6 +89,7 @@ Override example: `options: { subcommand: exec, model_flag: "-m", prompt_flag: "
 | state_db | `HIVEPILOT_STATE_DB` | `state.db` |
 | telegram_bot_token | `HIVEPILOT_TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` | — |
 | telegram_allowed_chat_ids | `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` | `[]` (open) |
+| telegram_stream_live | `HIVEPILOT_TELEGRAM_STREAM_LIVE` | `true` (live-stream each agent turn to Telegram; silent no-op if Telegram/notification chat id unset) |
 | gh_command / git_command | — | `gh` / `git` |
 
 (Settings are `pydantic-settings`; any field is overridable via `HIVEPILOT_<NAME>`.)
