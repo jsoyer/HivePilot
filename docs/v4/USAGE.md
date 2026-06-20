@@ -67,7 +67,7 @@ and gate execution via approvals — from your phone.
 During a pipeline run (and CEO debate), HivePilot live-streams each agent's
 turn to Telegram via `sendMessage` as it happens, so you watch the agents
 hand off to each other in real time. Each message shows an icon + the agent's
-display name (FR theme: Aliénor/Colbert/Blaise/Gustave/Voltaire/Vauban/Marie/Diderot)
+display name (FR theme: Aliénor/Jules/Blaise/Gustave/Victor/Hugo/Marie/Théo)
 + the stage name, the next agent it hands off to (`↳`), and a short summary.
 
 | Icon | Meaning |
@@ -91,7 +91,7 @@ juste avant de l'exécuter**, le temps que tu valides le plan produit par les
 étapes précédentes.
 
 Dans le pipeline `company`, l'étape **Implementation** (le développeur, Gustave)
-porte ce flag : le pipeline déroule donc CEO → Plan (Colbert) → Spec CTO (Blaise),
+porte ce flag : le pipeline déroule donc CEO → Plan (Jules) → Spec CTO (Blaise),
 écrit le plan dans Obsidian, puis **s'arrête** et t'envoie dans Telegram un message
 avec boutons **✅ Approve / ❌ Deny** (et le live `⏸️ checkpoint`).
 
