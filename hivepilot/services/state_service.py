@@ -177,7 +177,43 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workers (
+                name TEXT PRIMARY KEY,
+                url TEXT,
+                status TEXT,
+                detail TEXT,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.commit()
+
+
+def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:
+    """Record/refresh a worker's health (pull model: hub pinged its /health)."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO workers (name, url, status, detail, last_seen)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(name) DO UPDATE SET
+                url=excluded.url, status=excluded.status,
+                detail=excluded.detail, last_seen=CURRENT_TIMESTAMP
+            """,
+            (name, url, status, detail),
+        )
+        conn.commit()
+
+
+def list_workers() -> list[dict[str, Any]]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM workers ORDER BY name").fetchall()
+    return [dict(row) for row in rows]
 
 
 def record_run_start(project: str, task: str, status: str = "running") -> int:
