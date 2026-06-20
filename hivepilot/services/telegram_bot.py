@@ -615,8 +615,17 @@ def _build_application(token: str):
 # ---------------------------------------------------------------------------
 
 
+def _quiet_http_logging() -> None:
+    """Silence libraries that log full request URLs (which embed the bot token)."""
+    import logging
+
+    for _name in ("httpx", "httpcore", "telegram", "telegram.ext", "telegram.bot"):
+        logging.getLogger(_name).setLevel(logging.WARNING)
+
+
 def run_polling() -> None:
     """Start the bot in long-polling mode. Blocking. No public URL required."""
+    _quiet_http_logging()
     token = _token()
     logger.info("telegram.polling.start")
     app = _build_application(token)
@@ -641,13 +650,14 @@ def run_webhook(
     port        : local port to listen on (default: settings.telegram_webhook_port)
     secret      : X-Telegram-Bot-Api-Secret-Token (recommended)
     """
+    _quiet_http_logging()
     token = _token()
     effective_port = port or settings.telegram_webhook_port
     effective_secret = secret or settings.telegram_webhook_secret
     url_path = token.split(":")[1]
     full_url = f"{webhook_url.rstrip('/')}/{url_path}"
 
-    logger.info("telegram.webhook.start", url=full_url, port=effective_port)
+    logger.info("telegram.webhook.start", base=webhook_url, port=effective_port)
     app = _build_application(token)
     app.run_webhook(
         listen="0.0.0.0",
