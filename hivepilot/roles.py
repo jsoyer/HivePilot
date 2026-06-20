@@ -40,11 +40,13 @@ class Role(BaseModel):
     runner: str | None = None
     model: str | None = None
     models: list[str] | None = None
+    display_name: str | None = None  # human-facing agent name (FR theme)
 
 
 ROLES: dict[str, Role] = {
     "ceo": Role(
         name="ceo",
+        display_name="Aliénor",
         title="CEO",
         prompt_file=_PROMPTS_DIR / "ceo.md",
         model_profile="architecture",
@@ -57,6 +59,7 @@ ROLES: dict[str, Role] = {
     ),
     "chief_of_staff": Role(
         name="chief_of_staff",
+        display_name="Colbert",
         title="Chief of Staff",
         prompt_file=_PROMPTS_DIR / "chief_of_staff.md",
         model_profile="automation",
@@ -68,6 +71,7 @@ ROLES: dict[str, Role] = {
     ),
     "cto": Role(
         name="cto",
+        display_name="Blaise",
         title="CTO",
         prompt_file=_PROMPTS_DIR / "cto.md",
         model_profile="architecture",
@@ -80,6 +84,7 @@ ROLES: dict[str, Role] = {
     ),
     "developer": Role(
         name="developer",
+        display_name="Gustave",
         title="Developer",
         prompt_file=_PROMPTS_DIR / "developer.md",
         model_profile="coding",
@@ -91,6 +96,7 @@ ROLES: dict[str, Role] = {
     ),
     "reviewer": Role(
         name="reviewer",
+        display_name="Voltaire",
         title="Reviewer",
         prompt_file=_PROMPTS_DIR / "reviewer.md",
         model_profile="coding",
@@ -103,6 +109,7 @@ ROLES: dict[str, Role] = {
     ),
     "ciso": Role(
         name="ciso",
+        display_name="Vauban",
         title="CISO",
         prompt_file=_PROMPTS_DIR / "ciso.md",
         model_profile="architecture",
@@ -115,6 +122,7 @@ ROLES: dict[str, Role] = {
     ),
     "qa": Role(
         name="qa",
+        display_name="Marie",
         title="QA",
         prompt_file=_PROMPTS_DIR / "qa.md",
         model_profile="coding",
@@ -126,6 +134,7 @@ ROLES: dict[str, Role] = {
     ),
     "documentation": Role(
         name="documentation",
+        display_name="Diderot",
         title="Documentation",
         prompt_file=_PROMPTS_DIR / "documentation.md",
         model_profile="automation",

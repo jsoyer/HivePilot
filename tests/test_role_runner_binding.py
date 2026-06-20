@@ -197,3 +197,17 @@ class TestCursorAgentEnvPresence:
         # Informational: presence noted in summary, not a hard requirement
         # (the missing-binary guard covers runtime absence)
         assert True, f"cursor-agent on PATH: {path}"
+
+
+EXPECTED_DISPLAY_NAMES = {
+    "ceo": "Aliénor", "chief_of_staff": "Colbert", "cto": "Blaise",
+    "developer": "Gustave", "reviewer": "Voltaire", "ciso": "Vauban",
+    "qa": "Marie", "documentation": "Diderot",
+}
+
+
+def test_roles_have_french_display_names() -> None:
+    from hivepilot.roles import get_role
+
+    for role_name, expected in EXPECTED_DISPLAY_NAMES.items():
+        assert get_role(role_name).display_name == expected
