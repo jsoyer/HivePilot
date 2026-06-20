@@ -65,8 +65,13 @@ class RunnerRegistry:
         if self._is_worker_host(definition):
             from hivepilot.runners.worker_runner import RemoteWorkerRunner
 
-            RemoteWorkerRunner(definition, settings).run(payload)
-            return
+            try:
+                RemoteWorkerRunner(definition, settings).run(payload)
+                return
+            except Exception:
+                if not settings.worker_fallback_local:
+                    raise
+                definition = definition.model_copy(update={"host": None})  # W3: run locally
         runner_cls = RUNNER_MAP.get(definition.kind)
         if not runner_cls:
             raise KeyError(f"No runner implementation for kind '{definition.kind}'")
@@ -76,7 +81,12 @@ class RunnerRegistry:
         if self._is_worker_host(definition):
             from hivepilot.runners.worker_runner import RemoteWorkerRunner
 
-            return RemoteWorkerRunner(definition, settings).capture(payload)
+            try:
+                return RemoteWorkerRunner(definition, settings).capture(payload)
+            except Exception:
+                if not settings.worker_fallback_local:
+                    raise
+                definition = definition.model_copy(update={"host": None})  # W3: run locally
         runner_cls = RUNNER_MAP.get(definition.kind)
         if not runner_cls:
             raise KeyError(f"No runner implementation for kind '{definition.kind}'")

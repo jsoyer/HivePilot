@@ -8,6 +8,8 @@ This keeps remote execution behind the same ``host`` abstraction as SSH.
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -22,6 +24,19 @@ from hivepilot.utils.logging import get_logger
 logger = get_logger(__name__)
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+# Per-worker concurrency limiters (W4) — keyed by host, shared across runner instances.
+_SEMAPHORES: dict[str, threading.Semaphore] = {}
+_SEMAPHORES_LOCK = threading.Lock()
+
+
+def _semaphore_for(host: str, limit: int) -> threading.Semaphore:
+    with _SEMAPHORES_LOCK:
+        sem = _SEMAPHORES.get(host)
+        if sem is None:
+            sem = threading.Semaphore(max(1, limit))
+            _SEMAPHORES[host] = sem
+        return sem
 
 
 def _require_secure_transport(host: str) -> None:
@@ -62,9 +77,27 @@ class RemoteWorkerRunner(BaseRunner):
         logger.info(
             "worker_runner.dispatch", url=url, kind=self.definition.kind, step=payload.step.name
         )
-        resp = requests.post(url, json=body, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json().get("output", "")
+
+        retries = max(0, self.settings.worker_retries)
+        sem = _semaphore_for(host, self.settings.worker_max_concurrency)
+        with sem:  # W4: cap concurrent dispatches to this worker
+            last_exc: Exception | None = None
+            for attempt in range(retries + 1):
+                try:
+                    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+                except requests.RequestException as exc:  # connection/timeout — transient
+                    last_exc = exc
+                else:
+                    if resp.status_code < 500:
+                        resp.raise_for_status()  # 4xx → raise now, do NOT retry
+                        return resp.json().get("output", "")
+                    last_exc = requests.HTTPError(f"worker returned {resp.status_code}")
+                logger.warning("worker_runner.retry", url=url, attempt=attempt, error=str(last_exc))
+                if attempt < retries:
+                    time.sleep(min(2**attempt, 5))
+        raise RuntimeError(
+            f"Worker dispatch to {url} failed after {retries + 1} attempts: {last_exc}"
+        )
 
     def capture(self, payload: RunnerPayload) -> str:
         return self._post(payload)
