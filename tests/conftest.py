@@ -71,3 +71,22 @@ def _isolate_state_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(state_service, "DB_PATH", tmp_path / "test_state.db")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_notifications(monkeypatch):
+    """Tests must NEVER send real Slack/Discord/Telegram messages.
+
+    Pipeline tests exercise run_pipeline, which live-streams agent turns; without
+    this guard a configured Telegram chat gets spammed with test pipeline output.
+    Disable the live stream and stub the low-level senders. Tests that specifically
+    exercise the senders re-enable/override these via their own monkeypatch.
+    """
+    from hivepilot.services import notification_service
+
+    monkeypatch.setattr(notification_service.settings, "telegram_stream_live", False, raising=False)
+    monkeypatch.setattr(notification_service, "_send_telegram", lambda *a, **k: None)
+    monkeypatch.setattr(notification_service, "_send_slack", lambda *a, **k: None)
+    monkeypatch.setattr(notification_service, "_send_discord", lambda *a, **k: None)
+    monkeypatch.setattr(notification_service, "send_approval_keyboard", lambda *a, **k: None)
+    yield
