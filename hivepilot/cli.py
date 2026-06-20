@@ -1828,3 +1828,20 @@ def worker(
 
     typer.echo(f"HivePilot worker listening on {host}:{port}")
     uvicorn.run(create_app(), host=host, port=port)
+
+
+@app.command("workers")
+def workers(
+    check: bool = typer.Option(
+        True, "--check/--no-check", help="Ping each worker's /health and refresh status"
+    ),
+) -> None:
+    """List remote HivePilot workers (referenced by role hosts) and their health."""
+    from hivepilot.services import state_service, worker_registry
+
+    rows = worker_registry.refresh() if check else state_service.list_workers()
+    if not rows:
+        typer.echo("No workers configured (set a role host to an http(s):// URL).")
+        return
+    for w in rows:
+        typer.echo(f"{w['status']:<11} {w['url']}  (seen {w.get('last_seen')})")

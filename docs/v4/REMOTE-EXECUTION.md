@@ -7,7 +7,7 @@ HivePilot can run agents on other machines. Three approaches; **(1) is shipped**
 |---|---|---|---|---|
 | 1 | **SSH per role** | ✅ shipped (PR #28) | low | "CTO on B, dev on C" with hosts you own |
 | 2 | **Remote container runtime** | ✅ shipped | low–med | reproducible, isolated remote execution |
-| 3 | **Distributed HivePilot daemon** | 🟡 W1 shipped (HTTP worker) | high | fleet / prod scale, no SSH into hosts |
+| 3 | **Distributed HivePilot daemon** | 🟡 W1+W2 shipped | high | fleet / prod scale, no SSH into hosts |
 
 Recap of (1): a role carries a `host`; its CLI runs via `ssh <host> 'cd <repo> && <cli>'`.
 Auth = operator's `~/.ssh` (BatchMode), nothing secret stored. See USAGE.md.
@@ -92,8 +92,8 @@ tasks to workers over the network instead of SSH-ing per call. This is the
 1. **W1** ✅ — `hivepilot worker` HTTP server exposing `POST /run-step` (bearer
    token); a `RemoteWorkerRunner` on the hub, routed automatically when a role's
    `host` is an `http(s)://` URL. Reuses `RunnerPayload` over the wire.
-2. **W2** — registration + heartbeat + health in `state_service`; `hivepilot workers`
-   CLI to list them.
+2. **W2** ✅ — worker health in `state_service` (pull model: the hub pings each
+   worker's `/health`); `hivepilot workers` lists them with live/unreachable status.
 3. **W3** — streamed output (SSE/websocket) → live stream; retries + failover.
 4. **W4** — queue transport + concurrency limits per worker.
 
