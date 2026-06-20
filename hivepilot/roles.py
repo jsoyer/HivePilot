@@ -59,7 +59,7 @@ ROLES: dict[str, Role] = {
     ),
     "chief_of_staff": Role(
         name="chief_of_staff",
-        display_name="Colbert",
+        display_name="Jules",
         title="Chief of Staff",
         prompt_file=_PROMPTS_DIR / "chief_of_staff.md",
         model_profile="automation",
@@ -96,7 +96,7 @@ ROLES: dict[str, Role] = {
     ),
     "reviewer": Role(
         name="reviewer",
-        display_name="Voltaire",
+        display_name="Victor",
         title="Reviewer",
         prompt_file=_PROMPTS_DIR / "reviewer.md",
         model_profile="coding",
@@ -109,7 +109,7 @@ ROLES: dict[str, Role] = {
     ),
     "ciso": Role(
         name="ciso",
-        display_name="Vauban",
+        display_name="Hugo",
         title="CISO",
         prompt_file=_PROMPTS_DIR / "ciso.md",
         model_profile="architecture",
@@ -134,7 +134,7 @@ ROLES: dict[str, Role] = {
     ),
     "documentation": Role(
         name="documentation",
-        display_name="Diderot",
+        display_name="Théo",
         title="Documentation",
         prompt_file=_PROMPTS_DIR / "documentation.md",
         model_profile="automation",

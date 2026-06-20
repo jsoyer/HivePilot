@@ -209,13 +209,13 @@ class TestCursorAgentEnvPresence:
 
 EXPECTED_DISPLAY_NAMES = {
     "ceo": "Aliénor",
-    "chief_of_staff": "Colbert",
+    "chief_of_staff": "Jules",
     "cto": "Blaise",
     "developer": "Gustave",
-    "reviewer": "Voltaire",
-    "ciso": "Vauban",
+    "reviewer": "Victor",
+    "ciso": "Hugo",
     "qa": "Marie",
-    "documentation": "Diderot",
+    "documentation": "Théo",
 }
 
 
