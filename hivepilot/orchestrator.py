@@ -64,6 +64,25 @@ def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
     return default_runner, entry
 
 
+def _parse_components(text: str, valid: list[str]) -> list[str]:
+    """Extract the component subset an agent selected via a ``COMPONENTS:`` line,
+    intersected with the *valid* component set. Returns ``[]`` if none matched
+    (callers fall back to all components)."""
+    import re
+
+    valid_set = set(valid)
+    found: list[str] = []
+    for line in text.splitlines():
+        m = re.match(r"\s*COMPONENTS\s*:\s*(.+)", line, re.IGNORECASE)
+        if not m:
+            continue
+        for tok in re.split(r"[,\s]+", m.group(1).strip()):
+            tok = tok.strip().strip(".`*")
+            if tok in valid_set and tok not in found:
+                found.append(tok)
+    return found
+
+
 @dataclass
 class RunResult:
     project: str
@@ -303,10 +322,19 @@ class Orchestrator:
             prior_chunks.append(
                 "Components of this product (decide which ones this change should touch):\n"
                 + "\n".join(f"- {c}" for c in (components or []))
+                + "\n\nWhen you synthesize the plan, end with a line listing the impacted "
+                "components exactly as: `COMPONENTS: name1, name2` (using the names above)."
             )
+        selected_components = list(components or [])  # narrowed by the agents' COMPONENTS line
         for stage_idx, stage in enumerate(pipeline.stages):
             if stage_idx < start_index:
                 continue  # already executed before the checkpoint pause
+
+            # Group mode: the agents pick which components the change touches.
+            if group_mode and stage_idx == pause_index:
+                picked = _parse_components("\n\n".join(prior_chunks), components or [])
+                if picked:
+                    selected_components = picked
 
             # Plan checkpoint: pause for human approval before this stage.
             # Skipped under --simulate, consistent with simulate bypassing approvals.
@@ -324,7 +352,7 @@ class Orchestrator:
                     "next_stage": stage.name,
                     "completed_stages": completed,
                     "hub": hub,
-                    "components": components,
+                    "components": selected_components,
                     "planning_context": "\n\n".join(prior_chunks) or None,
                 }
                 state_service.record_approval_request(
@@ -343,7 +371,12 @@ class Orchestrator:
                     stage="checkpoint",
                     summary=(
                         f"Plan prêt ({', '.join(completed)}). "
-                        f"Approuve (run #{run_id}) pour lancer « {stage.name} »."
+                        + (
+                            f"Composants ciblés : {', '.join(selected_components)}. "
+                            if group_mode
+                            else ""
+                        )
+                        + f"Approuve (run #{run_id}) pour lancer « {stage.name} »."
                     ),
                     icon="⏸️",
                 )
@@ -351,7 +384,7 @@ class Orchestrator:
                 return results
 
             if group_mode:
-                targets = [hub] if (stage_idx < pause_index and hub) else list(components or [])
+                targets = [hub] if (stage_idx < pause_index and hub) else selected_components
             else:
                 targets = project_names
             stage_results = self.run_task(
