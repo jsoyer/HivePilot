@@ -21,3 +21,123 @@ projects:
     default_branch: main
     env:
       PYTHONUNBUFFERED: "1"
+
+  noxys-adjudication-worker:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-adjudication-worker
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-adjudication-worker
+
+  noxys-agent:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-agent
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-agent
+
+  noxys-ai-forge:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-ai-forge
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-ai-forge
+
+  noxys-api:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-api
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-api
+
+  noxys-console:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-console
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-console
+
+  noxys-contracts:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-contracts
+    default_branch: chore/sdk-publish-ops-docs
+    owner_repo: noxys-eu/noxys-contracts
+
+  noxys-demo:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-demo
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-demo
+
+  noxys-detection-core:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-detection-core
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-detection-core
+
+  noxys-doc:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-doc
+    default_branch: docs/adr-031-activation-code
+    owner_repo: noxys-eu/noxys-doc
+
+  noxys-extension:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-extension
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-extension
+
+  noxys-feedback:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-feedback
+    default_branch: staging
+    owner_repo: noxys-eu/feedback
+
+  noxys-infra:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-infra
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-infra
+
+  noxys-ml:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-ml
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-ml
+
+  noxys-onnx-worker:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-onnx-worker
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-onnx-worker
+
+  noxys-pdf-renderer:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-pdf-renderer
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-pdf-renderer
+
+  noxys-presidio:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-presidio
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-presidio
+
+  noxys-product-hub:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-product-hub
+    default_branch: main
+    owner_repo: noxys-eu/noxys-product-hub
+
+  noxys-proxy:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-proxy
+    default_branch: main
+    owner_repo: noxys-eu/noxys-proxy
+
+  noxys-sales-questionnaires:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-sales-questionnaires
+    default_branch: main
+    owner_repo: noxys-eu/noxys-sales-questionnaires
+
+  noxys-status:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-status
+    default_branch: staging
+    owner_repo: jsoyer/noxys-status
+
+  noxys-support:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-support
+    default_branch: main
+    owner_repo: noxys-eu/noxys-support
+
+  noxys-vision-worker:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-vision-worker
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-vision-worker
+
+  noxys-vscode:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-vscode
+    default_branch: staging
+    owner_repo: noxys-eu/noxys-vscode
+
+  noxys-website:
+    path: /home/jeromesoyer/Documents/Github/noxys/noxys-website
+    default_branch: main
+    owner_repo: noxys-eu/noxys-website
