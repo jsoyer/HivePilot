@@ -264,6 +264,25 @@ async def _cmd_approvals(update, context) -> None:
         )
 
 
+def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | None = None):
+    """Route an approve/deny to the right orchestrator entrypoint.
+
+    Pipeline-checkpoint approvals resume the parked pipeline; everything else is a
+    single-task approval.
+    """
+    import json
+
+    from hivepilot.services import state_service
+
+    appr = state_service.get_approval(run_id)
+    meta = json.loads(appr.get("metadata") or "{}") if appr else {}
+    if meta.get("kind") == "pipeline_checkpoint":
+        return _get_orch().resume_pipeline(run_id=run_id, approve=approve, approver=approver)
+    return _get_orch().run_approved(
+        run_id=run_id, approve=approve, approver=approver, reason=reason
+    )
+
+
 async def _cmd_approve(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
@@ -278,7 +297,7 @@ async def _cmd_approve(update, context) -> None:
         return
     await update.message.reply_text(f"⏳ Running approved task #{run_id}…")
     try:
-        result = _get_orch().run_approved(run_id=run_id, approve=True, approver="telegram")
+        result = _dispatch_approval(run_id, approve=True, approver="telegram")
         status = "succeeded" if result.success else "failed"
         await update.message.reply_text(f"Run #{run_id} approved — {status}.")
     except Exception as exc:
@@ -299,7 +318,7 @@ async def _cmd_deny(update, context) -> None:
         return
     reason = " ".join(args[1:]) if len(args) > 1 else "Denied via Telegram"
     try:
-        _get_orch().run_approved(run_id=run_id, approve=False, approver="telegram", reason=reason)
+        _dispatch_approval(run_id, approve=False, approver="telegram", reason=reason)
         await update.message.reply_text(f"Run #{run_id} denied.")
     except Exception as exc:
         await update.message.reply_text(f"Error: {exc}")
@@ -401,8 +420,8 @@ async def _callback_approval(update, context) -> None:
     approver = query.from_user.username or str(query.from_user.id)
 
     try:
-        result = _get_orch().run_approved(
-            run_id=run_id,
+        result = _dispatch_approval(
+            run_id,
             approve=approve,
             approver=f"telegram:{approver}",
             reason=None if approve else "Denied via Telegram button",
@@ -538,7 +557,9 @@ async def _cmd_debate(update, context) -> None:
         return
     project = args[0]
     topic = " ".join(args[1:])
-    await update.message.reply_text(f"\u23f3 CEO debate on `{project}`\u2026", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"\u23f3 CEO debate on `{project}`\u2026", parse_mode="Markdown"
+    )
     loop = asyncio.get_event_loop()
     future = loop.run_in_executor(
         None,

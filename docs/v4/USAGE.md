@@ -82,3 +82,27 @@ token); it is Telegram-only and a silent no-op if Telegram is not configured.
 On by default — turn it off with `HIVEPILOT_TELEGRAM_STREAM_LIVE=false`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [AGENTS.md](AGENTS.md), [CONFIG.md](CONFIG.md), [NOXYS.md](NOXYS.md).
+
+
+## Plan checkpoint (validation du plan avant le dev)
+
+Une étape de pipeline marquée `pause_before: true` met le pipeline **en pause
+juste avant de l'exécuter**, le temps que tu valides le plan produit par les
+étapes précédentes.
+
+Dans le pipeline `company`, l'étape **Implementation** (le développeur, Gustave)
+porte ce flag : le pipeline déroule donc CEO → Plan (Colbert) → Spec CTO (Blaise),
+écrit le plan dans Obsidian, puis **s'arrête** et t'envoie dans Telegram un message
+avec boutons **✅ Approve / ❌ Deny** (et le live `⏸️ checkpoint`).
+
+- **Approuver** : `/approve <run_id>` (ou le bouton) → le pipeline **reprend** à
+  l'étape développeur sous le **même run** et va jusqu'au bout.
+- **Refuser** : `/deny <run_id> [raison]` (ou le bouton) → le pipeline **s'arrête**,
+  aucun code n'est écrit.
+
+Pour relire le plan avant de décider : `/steps <run_id>` (ce que les agents ont
+fait) ou la note du run dans le vault Obsidian.
+
+> Le checkpoint ne se déclenche pas en `--simulate` côté CLI direct mais bien sur
+> un vrai run. Pour ajouter un point de validation ailleurs, pose `pause_before: true`
+> sur l'étape voulue dans `pipelines.yaml`.
