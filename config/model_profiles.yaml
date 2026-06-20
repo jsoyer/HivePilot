@@ -27,7 +27,7 @@ roles:
     runner: opencode
     model: glm
   qa:
-    runner: gemini
+    runner: cursor
   documentation:
     runner: gemini
 

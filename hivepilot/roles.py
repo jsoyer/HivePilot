@@ -121,7 +121,7 @@ ROLES: dict[str, Role] = {
         outputs=["qa_test_suite", "test_report", "edge_case_log"],
         can_block=False,
         order=7,
-        runner="gemini",
+        runner="cursor",
     ),
     "documentation": Role(
         name="documentation",
