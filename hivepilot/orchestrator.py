@@ -190,8 +190,8 @@ class Orchestrator:
             for future in concurrent.futures.as_completed(future_map):
                 project = future_map[future]
                 try:
-                    future.result()
-                    results.append(RunResult(project.path.name, task_name, True))
+                    detail = future.result()
+                    results.append(RunResult(project.path.name, task_name, True, detail))
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "success")
                     try:
@@ -705,7 +705,7 @@ class Orchestrator:
         simulate: bool = False,
         dry_run: bool = True,
         prior_context: str | None = None,
-    ) -> None:
+    ) -> str | None:
         logger.info("task.start", project=project.path.name, task=task_name)
         metadata = {"extra_prompt": extra_prompt or "", "prior_context": prior_context or ""}
         if task.engine != "native":
@@ -738,14 +738,14 @@ class Orchestrator:
                     state_service.record_step(run_id, placeholder_step.name, "failed", str(exc))
                 raise
             logger.info("task.end", project=project.path.name, task=task_name)
-            return
+            return None
         if task.role:
             from hivepilot.roles import get_role as _get_role
 
             _role = _get_role(task.role)
             if _role.models and len(_role.models) > 1:
                 topic = extra_prompt or task.description or task_name
-                self.run_debate(
+                adr = self.run_debate(
                     project_name=project.path.name,
                     role_name=task.role,
                     topic=topic,
@@ -756,7 +756,9 @@ class Orchestrator:
                 if run_id:
                     state_service.record_step(run_id, f"{task.role}-debate", "success")
                 logger.info("task.end", project=project.path.name, task=task_name)
-                return
+                adr_path = adr.get("path") if adr else None
+                return "débat bi-modèle → synthèse" + (f" ({adr_path})" if adr_path else "")
+        outputs: list[str] = []
         for step in task.steps:
             secrets = self._resolve_secrets(step)
             payload = RunnerPayload(
@@ -797,10 +799,11 @@ class Orchestrator:
                         runner=runner_key,
                         project=project.path.name,
                     )
+                    outputs.append(f"[simulated {runner_key}]")
                 elif task.role:
-                    self.registry.execute_definition(runner_def, payload)
+                    outputs.append(self.registry.capture_definition(runner_def, payload))
                 else:
-                    self.registry.execute(runner_key, payload)
+                    outputs.append(self._capture_or_execute(runner_key, payload))
                 if run_id:
                     state_service.record_step(run_id, step.name, "success")
                 self.plugins.run_hook("after_step", payload=payload)
@@ -814,6 +817,17 @@ class Orchestrator:
         if auto_git:
             perform_git_actions(project_name=project.path.name, project=project, git=task.git)
         logger.info("task.end", project=project.path.name, task=task_name)
+        return "\n".join(o for o in outputs if o).strip() or None
+
+    def _capture_or_execute(self, runner_key: str, payload: RunnerPayload) -> str:
+        """Run a non-role step, capturing its stdout when the runner supports it
+        (so the agent's output surfaces in the interaction log / stream)."""
+        runner = self.registry.get_runner(runner_key)
+        capture = getattr(runner, "capture", None)
+        if capture is not None:
+            return capture(payload)
+        runner.run(payload)
+        return ""
 
     def _project(self, name: str) -> ProjectConfig:
         if name not in self.projects.projects:
