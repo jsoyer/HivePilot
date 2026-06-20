@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -28,7 +29,6 @@ def _runner(options: dict) -> ContainerRunner:
 
 
 def _run_cmd(runner: ContainerRunner, tmp_path: Path):
-    from unittest.mock import patch
 
     with patch("hivepilot.runners.container_runner.subprocess.run") as m:
         runner.run(_payload(tmp_path))
@@ -73,3 +73,39 @@ def test_requires_image_and_command(tmp_path: Path) -> None:
 def test_volume_validation_blocks_sensitive_paths() -> None:
     with pytest.raises(ValueError):
         _validate_volume("/etc:/x")
+
+
+def test_docker_remote_sets_docker_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "container_runtime", "docker", raising=False)
+    r = _runner({"image": "img", "command": "echo hi", "host": "ssh://user@hostB"})
+    with patch("hivepilot.runners.container_runner.subprocess.run") as m:
+        r.run(_payload(tmp_path))
+    assert m.call_args.args[0][0] == "docker"
+    assert m.call_args.kwargs["env"]["DOCKER_HOST"] == "ssh://user@hostB"
+
+
+def test_podman_remote_uses_url_flags(tmp_path: Path) -> None:
+    url = "ssh://user@hostB/run/podman/podman.sock"
+    r = _runner({"image": "img", "command": "echo hi", "runtime": "podman", "host": url})
+    with patch("hivepilot.runners.container_runner.subprocess.run") as m:
+        r.run(_payload(tmp_path))
+    cmd = m.call_args.args[0]
+    assert cmd[0] == "podman"
+    assert "--remote" in cmd
+    assert cmd[cmd.index("--url") + 1] == url
+    assert cmd.index("--url") < cmd.index("run")  # remote flags precede the subcommand
+
+
+def test_local_engine_has_no_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "container_runtime", "docker", raising=False)
+    r = _runner({"image": "img", "command": "echo hi"})
+    with patch("hivepilot.runners.container_runner.subprocess.run") as m:
+        r.run(_payload(tmp_path))
+    assert m.call_args.kwargs["env"] is None
+
+
+def test_invalid_engine_host_rejected(tmp_path: Path) -> None:
+    r = _runner({"image": "img", "command": "echo hi", "host": "-evil"})
+    with patch("hivepilot.runners.container_runner.subprocess.run"):
+        with pytest.raises(ValueError, match="engine host"):
+            r.run(_payload(tmp_path))

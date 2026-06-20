@@ -49,16 +49,23 @@ class ContainerRunner(BaseRunner):
                 f"Unsupported container runtime {runtime!r}; expected one of {_SUPPORTED_RUNTIMES}."
             )
 
+        # Remote engine endpoint (e.g. ssh://user@hostB) — run the container on
+        # another machine's docker/podman daemon. None = local engine.
+        engine_host = self.definition.options.get("host")
+        if engine_host and (engine_host.startswith("-") or any(c.isspace() for c in engine_host)):
+            raise ValueError(f"Invalid container engine host: {engine_host!r}")
+
         volumes = self.definition.options.get("volumes", [])
         env_vars = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
 
-        run_command = [
-            runtime,
-            "run",
-            "--rm",
-            "-w",
-            str(payload.project.path),
-        ]
+        run_command = [runtime]
+        proc_env: dict[str, str] | None = None
+        if engine_host:
+            if runtime == "podman":
+                run_command.extend(["--remote", "--url", engine_host])
+            else:  # docker talks to a remote daemon via DOCKER_HOST
+                proc_env = {**os.environ, "DOCKER_HOST": engine_host}
+        run_command.extend(["run", "--rm", "-w", str(payload.project.path)])
         for volume in volumes:
             _validate_volume(volume)
             run_command.extend(["-v", volume])
@@ -72,5 +79,6 @@ class ContainerRunner(BaseRunner):
             image=image,
             command=command,
             project=payload.project_name,
+            engine_host=engine_host,
         )
-        subprocess.run(run_command, check=True)
+        subprocess.run(run_command, check=True, env=proc_env)

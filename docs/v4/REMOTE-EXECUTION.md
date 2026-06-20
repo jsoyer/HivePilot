@@ -6,7 +6,7 @@ HivePilot can run agents on other machines. Three approaches; **(1) is shipped**
 | # | Approach | Status | Effort | Best for |
 |---|---|---|---|---|
 | 1 | **SSH per role** | ✅ shipped (PR #28) | low | "CTO on B, dev on C" with hosts you own |
-| 2 | **Remote container runtime** | 📐 designed | low–med | reproducible, isolated remote execution |
+| 2 | **Remote container runtime** | ✅ shipped | low–med | reproducible, isolated remote execution |
 | 3 | **Distributed HivePilot daemon** | 📐 designed | high | fleet / prod scale, no SSH into hosts |
 
 Recap of (1): a role carries a `host`; its CLI runs via `ssh <host> 'cd <repo> && <cli>'`.
