@@ -325,3 +325,22 @@ def test_new_commands_registered_in_source() -> None:
     src = inspect.getsource(telegram_bot._build_application)
     for cmd in ("runpipeline", "debate", "steps", "pipelines", "projects", "tasks"):
         assert cmd in src, f"{cmd} not registered"
+
+
+def test_fetch_recent_chats_dedupes(monkeypatch) -> None:
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": [
+                {"message": {"chat": {"id": 42, "first_name": "Jo", "type": "private"}}},
+                {"message": {"chat": {"id": 42, "first_name": "Jo"}}},
+                {"message": {"chat": {"id": -100, "title": "Team", "type": "group"}}},
+            ]}
+
+    monkeypatch.setattr(telegram_bot.settings, "telegram_bot_token", "T")
+    monkeypatch.setattr("requests.get", lambda *a, **k: FakeResp())
+    chats = telegram_bot.fetch_recent_chats()
+    assert {c["id"] for c in chats} == {42, -100}
+    assert any(c["name"] == "Team" for c in chats)
