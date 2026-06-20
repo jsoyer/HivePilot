@@ -14,7 +14,12 @@ from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
-from hivepilot.runners.prompt_cli_runner import CodexRunner, GeminiRunner, OpenCodeRunner
+from hivepilot.runners.prompt_cli_runner import (
+    CodexRunner,
+    GeminiRunner,
+    OpenCodeRunner,
+    VibeRunner,
+)
 
 
 def _payload(tmp_path: Path) -> RunnerPayload:
@@ -54,6 +59,16 @@ def test_opencode_uses_run_subcommand_and_model(tmp_path: Path) -> None:
     args = _cli_args(OpenCodeRunner, "opencode", "opencode", "kimi", tmp_path)
     assert args[:2] == ["opencode", "run"]
     assert "--model" in args and args[args.index("--model") + 1] == "kimi"
+
+
+def test_vibe_uses_prompt_flag_and_auto_approve(tmp_path: Path) -> None:
+    args = _cli_args(VibeRunner, "vibe", "vibe", None, tmp_path)
+    assert args[0] == "vibe"
+    assert "--auto-approve" in args
+    assert "--prompt" in args
+    assert args[args.index("--prompt") + 1] == "do the thing"
+    # vibe has no --model flag — model comes from its own config; none passed here
+    assert "--model" not in args
 
 
 def test_claude_uses_print_flag(tmp_path: Path) -> None:

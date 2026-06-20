@@ -5,7 +5,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-
 RunnerKind = Literal[
     "claude",
     "shell",
@@ -18,6 +17,7 @@ RunnerKind = Literal[
     "api",
     "container",
     "cursor",
+    "vibe",
 ]
 
 
