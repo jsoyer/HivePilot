@@ -20,6 +20,7 @@ from hivepilot.runners.prompt_cli_runner import PromptCliRunner
 @dataclass
 class CursorRunner(PromptCliRunner):
     command_name: str = "cursor-agent"
+    cli_flags: tuple[str, ...] = ("--print",)
 
     def _check_binary(self) -> None:
         """Raise RuntimeError if the cursor-agent binary is not on PATH."""

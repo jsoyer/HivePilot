@@ -22,9 +22,16 @@ class PromptCliRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
     command_name: str = ""
+    # Per-CLI non-interactive invocation (overridable via definition.options):
+    cli_subcommand: str | None = None  # e.g. codex 'exec', opencode 'run'
+    cli_flags: tuple[str, ...] = ()  # e.g. ('--print',) for cursor-agent
+    prompt_flag: str | None = None  # if set, prompt passed as [flag, prompt] (gemini '-p')
+    model_flag: str = "--model"
 
     def run(self, payload: RunnerPayload) -> None:
-        mode = (payload.step.metadata.get("mode") or self.definition.options.get("mode") or "cli").lower()
+        mode = (
+            payload.step.metadata.get("mode") or self.definition.options.get("mode") or "cli"
+        ).lower()
 
         prompt_file = payload.step.prompt_file
         if not prompt_file:
@@ -41,11 +48,20 @@ class PromptCliRunner(BaseRunner):
             command_str = self.definition.command or self.command_name
             if not command_str:
                 raise ValueError("CLI runner requires a command.")
+            opts = self.definition.options
             args = shlex.split(command_str)
+            subcommand = opts.get("subcommand", self.cli_subcommand)
+            if subcommand:
+                args.append(subcommand)
+            args.extend(opts.get("cli_flags", list(self.cli_flags)))
             model = payload.step.metadata.get("model") or self.definition.model
             if model:
-                args.extend(["--model", model])
-            args.append(prompt_text)
+                args.extend([opts.get("model_flag", self.model_flag), model])
+            prompt_flag = opts.get("prompt_flag", self.prompt_flag)
+            if prompt_flag:
+                args.extend([prompt_flag, prompt_text])
+            else:
+                args.append(prompt_text)
             timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
             logger.info(
                 "cli_runner.start",
@@ -53,7 +69,9 @@ class PromptCliRunner(BaseRunner):
                 step=payload.step.name,
                 command=command_str,
             )
-            subprocess.run(args, cwd=str(payload.project.path), env=env, check=True, text=True, timeout=timeout)
+            subprocess.run(
+                args, cwd=str(payload.project.path), env=env, check=True, text=True, timeout=timeout
+            )
             logger.info("cli_runner.end", project=payload.project_name, step=payload.step.name)
 
     def _run_api(self, prompt: str, payload: RunnerPayload, env: dict[str, str]) -> None:
@@ -84,7 +102,11 @@ class PromptCliRunner(BaseRunner):
                     "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
                 },
-                payload={"model": model, "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
+                payload={
+                    "model": model,
+                    "max_tokens": 1000,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
                 timeout=timeout,
             )
         elif provider == "google":
@@ -130,7 +152,9 @@ class PromptCliRunner(BaseRunner):
         else:
             raise ValueError(f"Unsupported API provider: {provider}")
 
-    def _post_json(self, url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int | None = None) -> None:
+    def _post_json(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int | None = None
+    ) -> None:
         logger.info("api_runner.request", url=url, model=payload.get("model"))
         response = requests.post(url, json=payload, headers=headers, timeout=timeout or 60)
         if not response.ok:
@@ -142,16 +166,19 @@ class PromptCliRunner(BaseRunner):
 @dataclass
 class CodexRunner(PromptCliRunner):
     command_name: str = "codex"
+    cli_subcommand: str | None = "exec"
 
 
 @dataclass
 class GeminiRunner(PromptCliRunner):
     command_name: str = "gemini"
+    prompt_flag: str | None = "-p"
 
 
 @dataclass
 class OpenCodeRunner(PromptCliRunner):
     command_name: str = "opencode"
+    cli_subcommand: str | None = "run"
 
 
 @dataclass
