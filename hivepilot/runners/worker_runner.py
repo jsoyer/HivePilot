@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -20,6 +21,19 @@ from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _require_secure_transport(host: str) -> None:
+    """Refuse to send the worker bearer token over plaintext http to a non-loopback
+    host — require https:// (or a loopback http:// for local dev)."""
+    parsed = urlparse(host)
+    if parsed.scheme == "http" and (parsed.hostname or "") not in _LOOPBACK_HOSTS:
+        raise ValueError(
+            f"Refusing plaintext http to non-loopback worker {parsed.hostname!r}; "
+            "use https:// (or a loopback host)."
+        )
+
 
 @dataclass
 class RemoteWorkerRunner(BaseRunner):
@@ -28,6 +42,7 @@ class RemoteWorkerRunner(BaseRunner):
 
     def _post(self, payload: RunnerPayload) -> str:
         host = (self.definition.host or "").rstrip("/")
+        _require_secure_transport(host)
         url = f"{host}/run-step"
         body: dict[str, Any] = {
             "kind": self.definition.kind,
