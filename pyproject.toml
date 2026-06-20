@@ -9,7 +9,9 @@ description = "AI orchestration for development projects"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  # Lightweight core — fast startup, no ML models, no cloud SDKs
+  # Core runtime. Kept lean (no cloud SDKs); langchain is required because
+  # knowledge_service imports it unconditionally and is pulled in by the
+  # orchestrator → cli entrypoint, so the CLI cannot start without it.
   "typer>=0.16,<1.0",
   "rich>=13.7,<14.0",
   "pydantic>=2.8,<3.0",
@@ -21,12 +23,19 @@ dependencies = [
   "questionary>=2.0,<3.0",
   "python-dotenv>=1.0,<2.0",
   "requests>=2.31,<3.0",
+  # Knowledge service (RAG) — imported unconditionally by orchestrator/cli
+  "langchain>=0.2,<0.3",
+  "langchain-community>=0.2,<0.3",
+  "faiss-cpu>=1.7,<2.0",
+  "nltk>=3.8,<4.0",
 ]
 
 [project.scripts]
 hivepilot = "hivepilot.cli:app"
 
 [project.optional-dependencies]
+# Redundant since langchain moved to core deps; kept for backward-compatible
+# `hivepilot[langchain]` references (ROADMAP, langchain_runner error message).
 langchain = [
   "langchain>=0.2,<0.3",
   "langchain-community>=0.2,<0.3",
