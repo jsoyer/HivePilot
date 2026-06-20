@@ -315,9 +315,10 @@ tasks:
           claude_profile: coding
     git:
       commit: true
-      push: false
-      create_pr: false
+      push: true
+      create_pr: true
       commit_message: "feat: company pipeline implementation"
+      pr_title: "HivePilot: company pipeline implementation"
       branch_prefix: hivepilot
 
   company-reviewer:
