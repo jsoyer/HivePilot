@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     auditor_auto: bool = (
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
+    container_runtime: str = "docker"  # container runtime for the container runner: docker | podman
 
     @field_validator("telegram_notification_chat_id", mode="before")
     @classmethod

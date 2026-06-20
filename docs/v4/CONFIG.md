@@ -87,6 +87,7 @@ Override example: `options: { subcommand: exec, model_flag: "-m", prompt_flag: "
 | Setting | Env | Default |
 |---|---|---|
 | obsidian_vault | `HIVEPILOT_OBSIDIAN_VAULT` | `…/obsidian-vault/Noxys` |
+| container_runtime | `HIVEPILOT_CONTAINER_RUNTIME` | `docker` (or `podman`; per-runner override via `options.runtime`) |
 | state_db | `HIVEPILOT_STATE_DB` | `state.db` |
 | telegram_bot_token | `HIVEPILOT_TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` | — |
 | telegram_allowed_chat_ids | `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` | `[]` (open) |
