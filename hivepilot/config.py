@@ -79,9 +79,20 @@ class Settings(BaseSettings):
 
     @field_validator("telegram_notification_chat_id", mode="before")
     @classmethod
-    def _blank_chat_id_to_none(cls, v: object) -> object:
-        # an empty .env value (HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID=) means unset
-        return None if v in ("", None) else v
+    def _coerce_notification_chat_id(cls, v: object) -> object:
+        # Lenient: empty -> None; a pasted JSON array / list -> its first id.
+        if v in ("", None):
+            return None
+        if isinstance(v, str) and v.strip().startswith("["):
+            import json
+            try:
+                items = json.loads(v)
+            except Exception:
+                return None
+            return items[0] if items else None
+        if isinstance(v, (list, tuple)):
+            return v[0] if v else None
+        return v
     slack_bot_token: str | None = None
     slack_signing_secret: str | None = None
     slack_app_token: str | None = None  # for Socket Mode (xapp-...)
