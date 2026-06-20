@@ -142,3 +142,16 @@ modifie jamais un prompt lui-même — il propose, tu approuves**.
 - **Observer un run précis** : `hivepilot audit noxys-api --run-id <id>`.
 
 > Nécessite `vibe` installé (`pip install mistral-vibe` + `MISTRAL_API_KEY`).
+
+
+## Groupes : projet `noxys` ↔ composants (E1)
+
+Un **groupe** = un produit fait de plusieurs dépôts. `noxys` regroupe ses 24
+composants (`noxys-api`, `noxys-web`, …), avec un `hub` (le dépôt où tournera la
+planif au niveau groupe, à partir de E2). Config : `groups.yaml`.
+
+- Lister : `hivepilot groups`
+- **Tâche unique fan-out** : `hivepilot run noxys lint` → la tâche tourne sur tous
+  les composants du groupe.
+- **Pipeline sur groupe** : pas encore (E2) — un pipeline lancé sur `noxys` est
+  refusé pour l'instant ; la planif-une-fois + fan-out arrive ensuite.
