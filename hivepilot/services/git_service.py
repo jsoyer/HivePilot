@@ -53,16 +53,17 @@ def perform_git_actions(
     git: GitActions,
 ) -> None:
     repo = ensure_repo(project.path)
-    if not repo.is_dirty(untracked_files=True):
-        raise RuntimeError(f"No changes detected for {project_name}")
     branch = f"{git.branch_prefix}/{project_name}"
-    checkout_branch(project.path, branch)
-    repo.git.add("-A")
-    if git.commit:
-        message = git.commit_message or f"chore({project_name}): automated task run"
-        repo.git.commit("-m", message)
-    if git.push:
-        push(project.path, "origin", branch)
+    if git.commit or git.push:
+        if git.commit and not repo.is_dirty(untracked_files=True):
+            raise RuntimeError(f"No changes detected for {project_name}")
+        checkout_branch(project.path, branch)
+        repo.git.add("-A")
+        if git.commit:
+            message = git.commit_message or f"chore({project_name}): automated task run"
+            repo.git.commit("-m", message)
+        if git.push:
+            push(project.path, "origin", branch)
     if git.create_pr:
         create_pr(project=project, branch=branch, git=git)
 

@@ -41,8 +41,9 @@ hivepilot run-pipeline noxys company --simulate
 hivepilot run-pipeline noxys company --auto-git
 hivepilot approvals                 # review the pending run
 # approve (CLI or Telegram /approve <id>) -> the company executes:
-#   CEO debate -> CoS plan -> CTO -> Developer (commits + opens PR) ->
-#   Reviewer (codex) -> CISO -> QA -> Documentation -> Report -> CEO approval
+#   CEO debate -> CoS plan -> CTO -> Developer (commits + pushes branch) ->
+#   Reviewer (codex reviews, then opens the PR) -> CISO -> QA -> Documentation
+#   -> Report -> CEO approval
 # You merge the PR.
 
 # 3. A standalone CEO decision:

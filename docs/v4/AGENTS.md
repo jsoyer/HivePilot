@@ -12,8 +12,8 @@ project via `policies.yaml`).
 | 1 | CEO Intake | company-ceo-intake | ceo | opencode | qwen3.7-max **+** kimi-k2.6 → **debate→ADR** | — |
 | 2 | Chief of Staff Plan | company-cos-plan | chief_of_staff | cursor | (default) | — |
 | 3 | CTO Review | company-cto-review | cto | opencode | kimi-k2.7-code | — |
-| 4 | Implementation | company-developer | developer | claude | (default) | commit + push + **open PR** |
-| 5 | Review | company-reviewer | reviewer | **codex** | (default) | — |
+| 4 | Implementation | company-developer | developer | claude | (default) | commit + push **branch** |
+| 5 | Review | company-reviewer | reviewer | **codex** | (default) | **review → open PR** |
 | 6 | Security | company-ciso | ciso | opencode | glm-5.2 | — |
 | 7 | QA | company-qa | qa | gemini | (default) | — |
 | 8 | Documentation | company-documentation | documentation | **gemini** | (default) | commit |
@@ -26,9 +26,10 @@ implements, **opencode** drives the strategy/security roles (qwen/kimi/glm), and
 
 ## Code review & pull requests
 
-- **Developer (claude)** implements, then commits, pushes a branch
-  `hivepilot/<project>`, and **opens a PR** (`git_service.create_pr` via `gh`).
-- **Reviewer (codex)** runs next and reviews the change.
+- **Developer (claude)** implements, commits, and pushes the branch
+  `hivepilot/<project>` — **no PR yet**.
+- **Reviewer (codex)** reviews the pushed branch, then **opens the PR**
+  (`git_service.create_pr` via `gh`) — so review happens **before** the PR exists.
 - A **human merges** the PR. (Agents never merge.)
 - This only happens when the run is invoked with `--auto-git` **and** the
   project policy has `allow_auto_git: true`. With `require_approval: true`

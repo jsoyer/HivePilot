@@ -316,9 +316,8 @@ tasks:
     git:
       commit: true
       push: true
-      create_pr: true
+      create_pr: false
       commit_message: "feat: company pipeline implementation"
-      pr_title: "HivePilot: company pipeline implementation"
       branch_prefix: hivepilot
 
   company-reviewer:
@@ -335,7 +334,9 @@ tasks:
     git:
       commit: false
       push: false
-      create_pr: false
+      create_pr: true
+      pr_title: "HivePilot: company pipeline implementation"
+      branch_prefix: hivepilot
 
   company-ciso:
     role: ciso

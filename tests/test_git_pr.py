@@ -42,3 +42,15 @@ def test_create_pr_raises_on_gh_failure(tmp_path: Path) -> None:
     with patch("hivepilot.services.git_service.subprocess.run", side_effect=OSError("gh boom")):
         with pytest.raises(RuntimeError, match="Failed to create PR"):
             git_service.create_pr(project=project, branch="hivepilot/z", git=git)
+
+
+def test_perform_git_actions_pr_only_on_clean_repo(tmp_path: Path) -> None:
+    """A PR-only action (reviewer stage) must not require dirty changes."""
+    import git as gitlib
+
+    gitlib.Repo.init(tmp_path)
+    project = ProjectConfig(path=tmp_path, default_branch="main")
+    ga = GitActions(create_pr=True)  # no commit/push
+    with patch("hivepilot.services.git_service.create_pr") as mock_pr:
+        git_service.perform_git_actions(project_name="p", project=project, git=ga)
+    mock_pr.assert_called_once()
