@@ -411,6 +411,21 @@ class Orchestrator:
                 break
 
         state_service.complete_run(run_id, final_status.value)
+
+        # Henri (external auditor) observes the completed cycle — best-effort, never
+        # breaks a run; skipped under --simulate and when disabled.
+        if settings.auditor_auto and not simulate and project_names:
+            try:
+                from hivepilot.services import auditor_service
+
+                auditor_service.observe(
+                    project=self._project(project_names[0]),
+                    run_id=run_id,
+                    registry=self.registry,
+                    dry_run=dry_run,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("auditor.observe_failed", run_id=run_id, error=str(exc))
         return results
 
     def resume_pipeline(

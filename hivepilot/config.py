@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
     telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
+    auditor_auto: bool = (
+        True  # run Henri (external auditor) automatically after each pipeline cycle
+    )
 
     @field_validator("telegram_notification_chat_id", mode="before")
     @classmethod

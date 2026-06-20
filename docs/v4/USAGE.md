@@ -126,3 +126,19 @@ ton checkpoint de plan après la synthèse :
 
 Lancer : `hivepilot run-pipeline noxys-api company-v2` (ou `/runpipeline` dans Telegram).
 Le `company` original reste disponible inchangé.
+
+
+## Henri — l'auditeur externe
+
+**Henri** est un méta-agent (hors pipeline) qui observe les cycles et aide les
+autres agents à s'améliorer. Il tourne sur **Mistral (runner `vibe`)** et **ne
+modifie jamais un prompt lui-même — il propose, tu approuves**.
+
+- **Après chaque cycle (auto)** : Henri écrit une courte observation du run dans
+  le vault Obsidian (`Audit/observation-run-<id>.md`). Désactivable via
+  `HIVEPILOT_AUDITOR_AUTO=false`.
+- **Audit profond (à la demande)** : `hivepilot audit noxys-api --deep` → Henri
+  propose des diffs concrets sur `prompts/agents/*.md` (`Audit/proposal-latest.md`).
+- **Observer un run précis** : `hivepilot audit noxys-api --run-id <id>`.
+
+> Nécessite `vibe` installé (`pip install mistral-vibe` + `MISTRAL_API_KEY`).
