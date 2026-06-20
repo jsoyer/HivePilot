@@ -57,6 +57,8 @@ class GitActions(BaseModel):
     commit: bool = False
     push: bool = False
     create_pr: bool = False
+    merge_pr: bool = False  # Jules' autonomous final approval: merge the branch's PR
+    merge_method: str = "merge"  # merge | squash | rebase
     commit_message: str | None = None
     pr_title: str | None = None
     pr_body_file: str | None = None
