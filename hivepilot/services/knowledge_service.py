@@ -1,3 +1,14 @@
+"""Knowledge/context service for agent prompts.
+
+Default path reads the declared ``knowledge_files`` directly (no ML deps) — this
+keeps the core install lightweight and lets the CLI start without langchain/torch.
+
+If the optional embedding stack is installed (``hivepilot[langchain]`` —
+langchain, langchain-community, faiss-cpu, sentence-transformers, torch) a FAISS
+similarity search is used instead, which is worthwhile for large corpora. For a
+couple of small doc files the plain read is equivalent and far cheaper.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -6,28 +17,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-EMBED_DIR = settings.base_dir / ".hivepilot" / "embeddings"
-EMBED_DIR.mkdir(parents=True, exist_ok=True)
 FEEDBACK_DIR = settings.base_dir / ".hivepilot" / "feedback"
 FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+EMBED_DIR = settings.base_dir / ".hivepilot" / "embeddings"
 
-splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# Cap per-file content in the plain-read path to keep prompts bounded.
+_MAX_CHARS_PER_FILE = 4000
 
 
 def build_context(project_path: Path, files: Iterable[Path]) -> str:
-    vectors = _load_or_build(project_path, files)
-    docs = vectors.similarity_search("Provide key documentation context", k=5)
-    sections = [doc.page_content for doc in docs]
+    """Build prompt context from *files* under *project_path*.
+
+    Uses the optional embedding RAG when available, otherwise reads the files
+    directly. Appends recent AI feedback either way.
+    """
+    file_list = list(files)
+    sections = _embedding_context(project_path, file_list)
+    if sections is None:
+        sections = _plain_context(project_path, file_list)
+
     feedback = _latest_feedback(project_path, limit=5)
     if feedback:
         sections.append("Recent AI feedback:\n" + "\n".join(feedback))
@@ -46,6 +59,65 @@ def append_feedback(project_path: Path, task_name: str, summary: str) -> None:
     logger.info("knowledge.feedback.append", project=project_path.name)
 
 
+# ---------------------------------------------------------------------------
+# Context builders
+# ---------------------------------------------------------------------------
+
+
+def _plain_context(project_path: Path, files: list[Path]) -> list[str]:
+    """Read each knowledge file directly (truncated). No external deps."""
+    sections: list[str] = []
+    for file in files:
+        full = project_path / file
+        if not full.exists():
+            continue
+        text = full.read_text(encoding="utf-8", errors="ignore")
+        if len(text) > _MAX_CHARS_PER_FILE:
+            text = text[:_MAX_CHARS_PER_FILE] + "\n…(truncated)"
+        sections.append(f"# {file}\n{text}")
+    return sections
+
+
+def _embedding_context(project_path: Path, files: list[Path]) -> list[str] | None:
+    """Optional RAG path. Returns ``None`` if the embedding stack is unavailable
+    or the embedding build fails, so the caller falls back to the plain read."""
+    if not files:
+        return None
+    try:
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        from langchain_community.vectorstores import FAISS
+    except Exception:
+        return None
+
+    try:
+        EMBED_DIR.mkdir(parents=True, exist_ok=True)
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        digest = _hash_files(project_path, files)
+        vector_path = EMBED_DIR / f"{project_path.name}-{digest}"
+        if vector_path.exists():
+            logger.info("knowledge.cache_hit", project=str(project_path))
+            vectors = FAISS.load_local(
+                str(vector_path), embeddings, allow_dangerous_deserialization=True
+            )
+        else:
+            contents = [
+                (project_path / f).read_text(encoding="utf-8", errors="ignore")
+                for f in files
+                if (project_path / f).exists()
+            ]
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            documents = splitter.create_documents(["\n".join(contents)])
+            vectors = FAISS.from_documents(documents, embeddings)
+            vectors.save_local(str(vector_path))
+            logger.info("knowledge.cache_build", project=str(project_path), chunks=len(documents))
+        docs = vectors.similarity_search("Provide key documentation context", k=5)
+        return [doc.page_content for doc in docs]
+    except Exception as exc:  # noqa: BLE001 — never let optional RAG break a run
+        logger.warning("knowledge.embedding_failed", error=str(exc))
+        return None
+
+
 def _latest_feedback(project_path: Path, limit: int = 5) -> list[str]:
     log_path = FEEDBACK_DIR / f"{project_path.name}.jsonl"
     if not log_path.exists():
@@ -53,26 +125,6 @@ def _latest_feedback(project_path: Path, limit: int = 5) -> list[str]:
     lines = log_path.read_text(encoding="utf-8").splitlines()
     entries = [json.loads(line) for line in lines[-limit:]]
     return [f"[{e['timestamp']}] {e['task']}: {e['summary']}" for e in entries]
-
-
-def _load_or_build(project_path: Path, files: Iterable[Path]):
-    digest = _hash_files(project_path, files)
-    vector_path = EMBED_DIR / f"{project_path.name}-{digest}"
-    if vector_path.exists():
-        logger.info("knowledge.cache_hit", project=project_path)
-        return FAISS.load_local(str(vector_path), embeddings, allow_dangerous_deserialization=True)
-
-    contents = []
-    for file in files:
-        full = project_path / file
-        if full.exists():
-            contents.append(full.read_text(encoding="utf-8", errors="ignore"))
-    text = "\n".join(contents)
-    documents = splitter.create_documents([text])
-    vectorstore = FAISS.from_documents(documents, embeddings)
-    vectorstore.save_local(str(vector_path))
-    logger.info("knowledge.cache_build", project=project_path, chunks=len(documents))
-    return vectorstore
 
 
 def _hash_files(project_path: Path, files: Iterable[Path]) -> str:
