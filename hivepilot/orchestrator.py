@@ -239,6 +239,15 @@ class Orchestrator:
         pipeline = self.pipelines.pipelines[pipeline_name]
         validate_pipeline(pipeline, self.tasks)
 
+        project_names = list(project_names)
+
+        notification_service.stream_agent_turn(
+            actor="HivePilot",
+            stage=f"pipeline {pipeline_name}",
+            summary=f"démarrage sur {', '.join(project_names)}",
+            icon="🚀",
+        )
+
         # Resolve vault path — None means artifact writes are silent no-ops
         vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
 
@@ -297,6 +306,12 @@ class Orchestrator:
                     run_id=run_id,
                     metadata={"pipeline": pipeline_name, "stage_index": stage_idx},
                 )
+            )
+            notification_service.stream_agent_turn(
+                actor=self._agent_name(stage),
+                stage=stage.name,
+                target=next_target,
+                summary=stage_output,
             )
 
             # Documentation vault changelog note (2.6c)
@@ -433,7 +448,15 @@ class Orchestrator:
                 )
                 output = self.registry.capture_definition(rdef, payload)
             positions.append(
-                Position(role=f"{role_name}:{model}", stance="proposal", rationale=output.strip()[:1000])
+                Position(
+                    role=f"{role_name}:{model}", stance="proposal", rationale=output.strip()[:1000]
+                )
+            )
+            notification_service.stream_agent_turn(
+                actor=f"{role.display_name or role_name} · {model}",
+                stage="débat",
+                summary=output,
+                icon="💬",
             )
 
         decision = (
@@ -443,8 +466,17 @@ class Orchestrator:
         adr = DebateService(vault_path, dry_run=dry_run).run(
             topic=topic, positions=positions, decision=decision
         )
+        notification_service.stream_agent_turn(
+            actor=role.display_name or role_name,
+            stage="synthèse",
+            summary=decision,
+            icon="⚖️",
+        )
         state_service.record_interaction(
-            actor=role_name, action="debate", target=None, summary=topic,
+            actor=role_name,
+            action="debate",
+            target=None,
+            summary=topic,
             metadata={"models": models},
         )
         logger.info("debate.complete", role=role_name, models=models, project=project.path.name)
@@ -498,7 +530,9 @@ class Orchestrator:
             )
             try:
                 if simulate:
-                    logger.info("task.simulate.engine", project=project.path.name, engine=task.engine)
+                    logger.info(
+                        "task.simulate.engine", project=project.path.name, engine=task.engine
+                    )
                 else:
                     run_engine(task=task, project=project, payload=payload)
                 if run_id:
@@ -561,7 +595,10 @@ class Orchestrator:
                     )
                 if simulate:
                     logger.info(
-                        "step.simulate", step=step.name, runner=runner_key, project=project.path.name
+                        "step.simulate",
+                        step=step.name,
+                        runner=runner_key,
+                        project=project.path.name,
                     )
                 elif task.role:
                     self.registry.execute_definition(runner_def, payload)

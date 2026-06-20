@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
+    telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
 
     @field_validator("telegram_notification_chat_id", mode="before")
     @classmethod
@@ -85,6 +86,7 @@ class Settings(BaseSettings):
             return None
         if isinstance(v, str) and v.strip().startswith("["):
             import json
+
             try:
                 items = json.loads(v)
             except Exception:
@@ -93,6 +95,7 @@ class Settings(BaseSettings):
         if isinstance(v, (list, tuple)):
             return v[0] if v else None
         return v
+
     slack_bot_token: str | None = None
     slack_signing_secret: str | None = None
     slack_app_token: str | None = None  # for Socket Mode (xapp-...)
