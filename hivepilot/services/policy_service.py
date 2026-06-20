@@ -43,7 +43,9 @@ _cache: dict = {}
 
 def _get_policies() -> dict:
     if "data" not in _cache:
-        _cache["data"] = load_policies(settings.policies_file)
+        raw = load_policies(settings.policies_file)
+        # policies.yaml nests default/projects under a top-level "policies" key.
+        _cache["data"] = raw.get("policies", raw)
     return _cache["data"]
 
 
