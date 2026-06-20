@@ -29,6 +29,7 @@ class RunnerDefinition(BaseModel):
     agent: str | None = None
     append_prompt: str | None = None
     timeout_seconds: int | None = None
+    host: str | None = None  # SSH host/alias to run this agent on (None = local)
     env: dict[str, str] = Field(default_factory=dict)
     options: dict[str, Any] = Field(default_factory=dict)
 

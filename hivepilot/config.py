@@ -82,6 +82,7 @@ class Settings(BaseSettings):
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
     container_runtime: str = "docker"  # container runtime for the container runner: docker | podman
+    ssh_options: list[str] = Field(default_factory=list)  # extra ssh -o options for remote agents
 
     @field_validator("telegram_notification_chat_id", mode="before")
     @classmethod

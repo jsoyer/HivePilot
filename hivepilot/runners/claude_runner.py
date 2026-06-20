@@ -10,6 +10,7 @@ from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.utils.env import merge_environments
 from hivepilot.utils.logging import get_logger
+from hivepilot.utils.remote import build_invocation
 
 logger = get_logger(__name__)
 
@@ -47,19 +48,38 @@ class ClaudeRunner(BaseRunner):
 
     def run(self, payload: RunnerPayload) -> None:
         args, env = self._build_invocation(payload)
-        logger.info("claude_runner.start", project=payload.project_name, step=payload.step.name)
-        subprocess.run(args, cwd=str(payload.project.path), env=env, check=True, text=True)
+        argv, cwd, run_env = build_invocation(
+            args,
+            payload.project.path,
+            env,
+            host=self.definition.host,
+            ssh_options=self.settings.ssh_options or None,
+        )
+        logger.info(
+            "claude_runner.start",
+            project=payload.project_name,
+            step=payload.step.name,
+            host=self.definition.host,
+        )
+        subprocess.run(argv, cwd=cwd, env=run_env, check=True, text=True)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
     def capture(self, payload: RunnerPayload) -> str:
         """Run claude and return its stdout (so the agent's output can be surfaced
         in the interaction log / live stream, not just discarded)."""
         args, env = self._build_invocation(payload)
+        argv, cwd, run_env = build_invocation(
+            args,
+            payload.project.path,
+            env,
+            host=self.definition.host,
+            ssh_options=self.settings.ssh_options or None,
+        )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         result = subprocess.run(
-            args,
-            cwd=str(payload.project.path),
-            env=env,
+            argv,
+            cwd=cwd,
+            env=run_env,
             check=True,
             text=True,
             capture_output=True,

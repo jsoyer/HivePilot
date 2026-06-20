@@ -598,7 +598,7 @@ class Orchestrator:
         from typing import cast
 
         from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
-        from hivepilot.roles import get_role, resolve_runner
+        from hivepilot.roles import get_role, resolve_host, resolve_runner
         from hivepilot.services.debate_service import DebateService, Position
 
         role = get_role(role_name)
@@ -610,6 +610,7 @@ class Orchestrator:
         project = self._project(project_name)
         policy = policy_service.get_policy(project_name)
         runner_kind, _ = resolve_runner(role_name, policy)  # also enforces allowed_runners
+        debate_host = resolve_host(role_name, policy)
         vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
 
         positions: list[Position] = []
@@ -638,6 +639,7 @@ class Orchestrator:
                     kind=cast(RunnerKind, brain_runner),
                     command=None,
                     model=brain_model,
+                    host=debate_host,
                 )
                 output = self.registry.capture_definition(rdef, payload)
             positions.append(
@@ -775,7 +777,7 @@ class Orchestrator:
                     from typing import cast
 
                     from hivepilot.models import RunnerDefinition, RunnerKind
-                    from hivepilot.roles import resolve_runner
+                    from hivepilot.roles import resolve_host, resolve_runner
 
                     runner_kind, role_model = resolve_runner(task.role, policy)
                     runner_def = RunnerDefinition(
@@ -783,6 +785,7 @@ class Orchestrator:
                         kind=cast(RunnerKind, runner_kind),
                         command=None,
                         model=role_model,
+                        host=resolve_host(task.role, policy),
                     )
                     runner_key = task.role
                 else:

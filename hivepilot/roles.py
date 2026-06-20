@@ -41,6 +41,7 @@ class Role(BaseModel):
     model: str | None = None
     models: list[str] | None = None
     display_name: str | None = None  # human-facing agent name (FR theme)
+    host: str | None = None  # SSH host/alias to run this agent on (None = local)
 
 
 ROLES: dict[str, Role] = {
@@ -169,6 +170,16 @@ def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, s
     if not runner:
         raise RuntimeError(f"Role '{role_name}' has no runner binding.")
     return runner, model
+
+
+def resolve_host(role_name: str, policy: object | None = None) -> str | None:
+    """Resolve the SSH host for *role_name* — role default, overridable per project
+    via policy ``role_overrides[role].host``. ``None`` means run locally."""
+    host = ROLES[role_name].host
+    if policy is not None:
+        override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
+        host = override.get("host", host)
+    return host
 
 
 def get_role(name: str) -> Role:

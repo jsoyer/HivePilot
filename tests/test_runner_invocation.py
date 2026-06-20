@@ -71,6 +71,18 @@ def test_vibe_uses_prompt_flag_and_auto_approve(tmp_path: Path) -> None:
     assert "--model" not in args
 
 
+def test_runner_with_host_wraps_in_ssh(tmp_path: Path) -> None:
+    runner = VibeRunner(
+        RunnerDefinition(name="vibe", kind="vibe", command="vibe", host="user@hostB"), settings
+    )
+    with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as m:
+        runner.run(_payload(tmp_path))
+    args = m.call_args.args[0]
+    assert args[0] == "ssh"
+    assert "user@hostB" in args
+    assert "vibe" in args[-1]  # the agent CLI runs inside the remote command
+
+
 def test_claude_uses_print_flag(tmp_path: Path) -> None:
     runner = ClaudeRunner(
         RunnerDefinition(name="claude", kind="claude", command="claude"), settings

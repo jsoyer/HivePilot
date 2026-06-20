@@ -161,3 +161,28 @@ planif au niveau groupe, à partir de E2). Config : `groups.yaml`.
   par une ligne `COMPONENTS: …` ; le fan-out de la phase 2 ne cible que ce
   sous-ensemble (affiché dans le checkpoint). À défaut de ligne, tous les
   composants sont ciblés.
+
+
+## Agents sur machines distantes (SSH)
+
+Chaque agent peut tourner sur une **autre machine** : on associe un `host` (alias
+`~/.ssh/config` ou `user@machine`) à un rôle, et son CLI est exécuté via
+`ssh <host> 'cd <repo> && <cli>'` au lieu d'en local.
+
+```yaml
+# policies.yaml (override par projet) ou roles.py (défaut)
+role_overrides:
+  ceo:            { host: machineA }
+  chief_of_staff: { host: machineA }   # CSO
+  cto:            { host: machineB }
+  developer:      { host: machineC }
+```
+
+- **Auth** : on s'appuie sur le `~/.ssh/config` + clés/agent de l'opérateur
+  (rien de secret stocké dans HivePilot), avec `BatchMode=yes` (pas de prompt).
+  Options ssh additionnelles via `HIVEPILOT_SSH_OPTIONS`.
+- **Prérequis** sur l'hôte distant : le CLI de l'agent installé + authentifié, et
+  le dépôt cloné au **même chemin**.
+- La sortie de l'agent distant est capturée et remonte comme en local (stream /
+  interactions / Obsidian).
+- `host` absent → exécution locale (comportement par défaut, inchangé).
