@@ -3,11 +3,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from git import Repo, GitCommandError  # type: ignore
-
-from hivepilot.models import GitActions, ProjectConfig
+from git import GitCommandError, Repo  # type: ignore
 
 from hivepilot.config import settings
+from hivepilot.models import GitActions, ProjectConfig
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +66,8 @@ def perform_git_actions(
             push(project.path, "origin", branch)
     if git.create_pr:
         create_pr(project=project, branch=branch, git=git)
+    if git.merge_pr:
+        merge_pr(project=project, branch=branch, git=git)
 
 
 def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
@@ -83,3 +84,18 @@ def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
         logger.info("git.pr_created", project=project.path.name, branch=branch, base=base)
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"Failed to create PR for {project.path.name}: {exc}") from exc
+
+
+def merge_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
+    """Merge the open PR for *branch* via gh — Jules' autonomous final approval.
+
+    Merge (not a review approval) because GitHub forbids approving your own PR, so
+    the actionable autonomous step in a solo workflow is the merge itself.
+    """
+    method = git.merge_method if git.merge_method in {"merge", "squash", "rebase"} else "merge"
+    cmd = [settings.gh_command, "pr", "merge", branch, f"--{method}"]
+    try:
+        subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
+        logger.info("git.pr_merged", project=project.path.name, branch=branch, method=method)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Failed to merge PR for {project.path.name}: {exc}") from exc

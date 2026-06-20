@@ -433,6 +433,9 @@ tasks:
       commit: false
       push: false
       create_pr: false
+      merge_pr: true
+      merge_method: squash
+      branch_prefix: hivepilot
 
   company-ceo-approval:
     role: ceo
