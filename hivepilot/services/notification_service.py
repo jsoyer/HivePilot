@@ -10,6 +10,15 @@ from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Human-readable meaning shown next to each live-stream emoji.
+_ICON_LABELS = {
+    "🚀": "démarrage",
+    "🗣": "passation",
+    "⏸️": "validation requise",
+    "💬": "proposition",
+    "⚖️": "synthèse",
+}
+
 
 def send_notification(message: str, channels: Iterable[str] | None = None) -> None:
     channels = list(channels) if channels else ["slack", "discord", "telegram"]
@@ -75,7 +84,9 @@ def stream_agent_turn(
     """
     if not settings.telegram_stream_live:
         return
-    header = f"{icon} {actor}" + (f" — {stage}" if stage else "")
+    label = _ICON_LABELS.get(icon)
+    tag = f"{icon} ({label})" if label else icon
+    header = f"{tag} {actor}" + (f" — {stage}" if stage else "")
     lines = [header]
     if target:
         lines.append(f"   ↳ {target}")
