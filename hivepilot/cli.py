@@ -1817,7 +1817,9 @@ def groups_cmd() -> None:
 @app.command("worker")
 def worker(
     port: int = typer.Option(settings.worker_port, "--port", help="Port to listen on"),
-    host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),  # noqa: S104
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Bind address (use 0.0.0.0 to expose; token required)"
+    ),
 ) -> None:
     """Start a HivePilot worker that runs agent steps dispatched by a remote hub."""
     import uvicorn

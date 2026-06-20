@@ -7,6 +7,7 @@ owns all state (runs, approvals, checkpoints); the worker is a stateless executo
 
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 from hivepilot.config import settings
@@ -59,7 +60,11 @@ def create_app():
         body: dict[str, Any], authorization: str | None = Header(None)
     ) -> dict[str, str]:
         token = settings.worker_token
-        if token and authorization != f"Bearer {token}":
+        # Fail CLOSED: /run-step is RCE by design, so refuse to serve it unless a
+        # token is configured, and compare in constant time.
+        if not token:
+            raise HTTPException(status_code=503, detail="worker_token not configured")
+        if not authorization or not hmac.compare_digest(authorization, f"Bearer {token}"):
             raise HTTPException(status_code=401, detail="unauthorized")
         return {"output": execute_step(body)}
 
