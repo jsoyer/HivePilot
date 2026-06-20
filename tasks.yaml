@@ -402,6 +402,38 @@ tasks:
       push: false
       create_pr: false
 
+  company-cos-synthesis:
+    role: chief_of_staff
+    description: Chief of Staff (CSO) concatenates the CEO direction, CTO architecture, and CISO security review, adjusts, and produces the consolidated proposal for human approval.
+    steps:
+      - name: plan synthesis
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  company-cos-pr-approval:
+    role: chief_of_staff
+    description: Chief of Staff performs the final check after QA and documentation and approves or rejects the pull request.
+    steps:
+      - name: pr approval
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
   company-ceo-approval:
     role: ceo
     description: CEO reviews the cycle report and grants final approval or sends back for revision.
