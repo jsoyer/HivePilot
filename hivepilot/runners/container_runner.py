@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 
@@ -10,6 +11,22 @@ from hivepilot.utils.env import gather_overrides
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Host paths that must never be bind-mounted into a container (escape / disclosure).
+_BLOCKED_VOLUME_PREFIXES = ("/etc", "/root", "/proc", "/sys", "/dev", "/boot", "/var/run")
+
+
+def _validate_volume(volume: str) -> None:
+    """Reject volume mounts exposing sensitive host paths or using traversal."""
+    host = volume.split(":", 1)[0]
+    if not host:
+        raise ValueError(f"Invalid volume spec: {volume!r}")
+    if ".." in host.split("/"):
+        raise ValueError(f"Unsafe volume (path traversal): {volume!r}")
+    resolved = os.path.realpath(host)
+    for blocked in _BLOCKED_VOLUME_PREFIXES:
+        if resolved == blocked or resolved.startswith(blocked + os.sep):
+            raise ValueError(f"Blocked volume mount to sensitive host path: {volume!r}")
 
 
 @dataclass
@@ -34,10 +51,13 @@ class ContainerRunner(BaseRunner):
             str(payload.project.path),
         ]
         for volume in volumes:
+            _validate_volume(volume)
             docker_command.extend(["-v", volume])
         for key, value in env_vars.items():
             docker_command.extend(["-e", f"{key}={value}"])
         docker_command.extend([image, "bash", "-lc", command])
 
-        logger.info("container_runner.start", image=image, command=command, project=payload.project_name)
+        logger.info(
+            "container_runner.start", image=image, command=command, project=payload.project_name
+        )
         subprocess.run(docker_command, check=True)
