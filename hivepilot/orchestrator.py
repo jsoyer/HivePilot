@@ -220,7 +220,7 @@ class Orchestrator:
         if task and task.role:
             role = ROLES.get(task.role)
             if role and role.display_name:
-                return role.display_name
+                return f"{role.display_name} ({role.title})"
         return stage.name
 
     def run_pipeline(
@@ -453,7 +453,7 @@ class Orchestrator:
                 )
             )
             notification_service.stream_agent_turn(
-                actor=f"{role.display_name or role_name} · {model}",
+                actor=f"{role.display_name or role_name} ({role.title}) · {model}",
                 stage="débat",
                 summary=output,
                 icon="💬",
@@ -467,7 +467,7 @@ class Orchestrator:
             topic=topic, positions=positions, decision=decision
         )
         notification_service.stream_agent_turn(
-            actor=role.display_name or role_name,
+            actor=f"{role.display_name or role_name} ({role.title})",
             stage="synthèse",
             summary=decision,
             icon="⚖️",
