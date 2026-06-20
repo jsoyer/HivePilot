@@ -15,6 +15,9 @@ logger = get_logger(__name__)
 # Host paths that must never be bind-mounted into a container (escape / disclosure).
 _BLOCKED_VOLUME_PREFIXES = ("/etc", "/root", "/proc", "/sys", "/dev", "/boot", "/var/run")
 
+# Supported container runtimes — docker and podman share the same run CLI surface.
+_SUPPORTED_RUNTIMES = ("docker", "podman")
+
 
 def _validate_volume(volume: str) -> None:
     """Reject volume mounts exposing sensitive host paths or using traversal."""
@@ -40,11 +43,17 @@ class ContainerRunner(BaseRunner):
         if not image or not command:
             raise ValueError("Container runner requires image and command options.")
 
+        runtime = self.definition.options.get("runtime") or self.settings.container_runtime
+        if runtime not in _SUPPORTED_RUNTIMES:
+            raise ValueError(
+                f"Unsupported container runtime {runtime!r}; expected one of {_SUPPORTED_RUNTIMES}."
+            )
+
         volumes = self.definition.options.get("volumes", [])
         env_vars = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
 
-        docker_command = [
-            "docker",
+        run_command = [
+            runtime,
             "run",
             "--rm",
             "-w",
@@ -52,12 +61,16 @@ class ContainerRunner(BaseRunner):
         ]
         for volume in volumes:
             _validate_volume(volume)
-            docker_command.extend(["-v", volume])
+            run_command.extend(["-v", volume])
         for key, value in env_vars.items():
-            docker_command.extend(["-e", f"{key}={value}"])
-        docker_command.extend([image, "bash", "-lc", command])
+            run_command.extend(["-e", f"{key}={value}"])
+        run_command.extend([image, "bash", "-lc", command])
 
         logger.info(
-            "container_runner.start", image=image, command=command, project=payload.project_name
+            "container_runner.start",
+            runtime=runtime,
+            image=image,
+            command=command,
+            project=payload.project_name,
         )
-        subprocess.run(docker_command, check=True)
+        subprocess.run(run_command, check=True)
