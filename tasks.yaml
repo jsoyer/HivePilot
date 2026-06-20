@@ -34,7 +34,7 @@ runners:
       api_model: gpt-4o
   gemini-cli:
     kind: gemini
-    command: gemini-cli
+    command: gemini
     options:
       mode: cli
       api_provider: google

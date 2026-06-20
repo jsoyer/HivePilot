@@ -240,6 +240,24 @@ def doctor() -> None:
         found = shutil.which(binary)
         typer.echo(f"  {binary:<12}: {'found at ' + found if found else 'NOT FOUND'}")
 
+    typer.echo("\n=== Agent runner CLIs ===")
+    try:
+        from hivepilot.services.project_service import load_tasks
+
+        _cli_kinds = {"claude", "codex", "gemini", "opencode", "ollama", "cursor"}
+        _seen: set[str] = set()
+        for _name, _rdef in load_tasks().runners.items():
+            if _rdef.kind not in _cli_kinds or not _rdef.command:
+                continue
+            _binary = _rdef.command.strip().split()[0]
+            if _binary in _seen:
+                continue
+            _seen.add(_binary)
+            _found = shutil.which(_binary)
+            typer.echo(f"  {_binary:<14}: {'found at ' + _found if _found else 'NOT FOUND'}")
+    except Exception as _exc:  # noqa: BLE001
+        typer.echo(f"  (could not inspect runners: {_exc})")
+
     typer.echo("\n=== Optional Python extras ===")
     for dep in (
         "langchain",
