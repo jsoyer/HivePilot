@@ -12,8 +12,7 @@ how to drive it.
   - `require_approval: true` — every run waits for a human `/approve`.
   - `allow_auto_git: true` — the developer stage may push a branch + open a PR (you merge).
   - `allow_containers: false`.
-- **Models** = the approved mapping with real opencode IDs (ceo qwen3.7-max+kimi-k2.6,
-  cto kimi-k2.7-code, ciso glm-5.2; developer=claude, reviewer=codex, qa/doc=gemini).
+- **Models** = the approved mapping with real opencode IDs — see the table below.
 - **Governance**: the role prompts read Noxys's `CLAUDE.md`, `AGENTS.md`,
   `AGENT-GOVERNANCE.md`, `.cursorrules`, `.windsurfrules`, `GEMINI.md`, and the vault
   `AGENT-DETECTION-FABRIC.md` — all present.
@@ -22,6 +21,26 @@ how to drive it.
 > the configured models (qwen/kimi/glm) are non-EU. This was an explicit choice
 > (perf over sovereignty for now). To switch later, add `role_overrides` /
 > `allowed_runners` for `noxys` in `policies.yaml` — no code change.
+
+## Effective role → runner + model (Noxys)
+
+Noxys uses the global `roles.py` defaults (no per-project `role_overrides`), so the
+effective mapping is:
+
+| Role | Runner | Model | Pipeline stage(s) |
+|---|---|---|---|
+| ceo | opencode | `opencode-go/qwen3.7-max` + `opencode-go/kimi-k2.6` (→ debate→ADR) | CEO Intake, CEO Approval |
+| chief_of_staff | cursor | (cursor default) | Plan, Report |
+| cto | opencode | `opencode-go/kimi-k2.7-code` | CTO Review |
+| developer | claude | (claude default) | Implementation (commit + push branch) |
+| reviewer | codex | (codex default) | Review (→ opens the PR) |
+| ciso | opencode | `opencode-go/glm-5.2` | Security |
+| qa | cursor | (cursor default) | QA — dedicated runner, distinct from docs |
+| documentation | gemini | (gemini default) | Documentation |
+
+> cursor is shared by `chief_of_staff` and `qa` (different roles, different stages).
+> To change Noxys without touching the global defaults, add
+> `policies.yaml > projects.noxys > role_overrides` / `allowed_runners`.
 
 ## Prerequisites for a real run
 
