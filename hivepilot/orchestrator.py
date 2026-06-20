@@ -435,14 +435,33 @@ class Orchestrator:
             )
             try:
                 self.plugins.run_hook("before_step", payload=payload)
-                runner_key = step.runner_ref or step.runner
-                runner_def = self.registry._definition_for(runner_key)
+                if task.role:
+                    from typing import cast
+
+                    from hivepilot.models import RunnerDefinition, RunnerKind
+                    from hivepilot.roles import resolve_runner
+
+                    runner_kind, role_model = resolve_runner(task.role, policy)
+                    runner_def = RunnerDefinition(
+                        name=f"role:{task.role}",
+                        kind=cast(RunnerKind, runner_kind),
+                        command=None,
+                        model=role_model,
+                    )
+                    runner_key = task.role
+                else:
+                    runner_key = step.runner_ref or step.runner
+                    runner_def = self.registry._definition_for(runner_key)
                 if runner_def.kind == "container" and policy and not policy.allow_containers:
                     raise RuntimeError(
                         f"Containers are disabled by policy for project {project.path.name}"
                     )
                 if simulate:
-                    logger.info("step.simulate", step=step.name, runner=runner_key, project=project.path.name)
+                    logger.info(
+                        "step.simulate", step=step.name, runner=runner_key, project=project.path.name
+                    )
+                elif task.role:
+                    self.registry.execute_definition(runner_def, payload)
                 else:
                     self.registry.execute(runner_key, payload)
                 if run_id:

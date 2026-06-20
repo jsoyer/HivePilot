@@ -137,6 +137,30 @@ ROLES: dict[str, Role] = {
 }
 
 
+def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, str | None]:
+    """Resolve the effective (runner_kind, model) for *role_name*.
+
+    Defaults come from the role binding (ROLES); a per-project policy may override
+    runner/model (``role_overrides``) and constrain runners (``allowed_runners``).
+    Raises if the role has no runner or the resolved runner is not allowed.
+    """
+    role = ROLES[role_name]
+    runner = role.runner
+    model = role.model or (role.models[0] if role.models else None)
+    if policy is not None:
+        override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
+        runner = override.get("runner", runner)
+        model = override.get("model", model)
+        allowed = getattr(policy, "allowed_runners", None)
+        if allowed and runner not in allowed:
+            raise RuntimeError(
+                f"Role '{role_name}' resolves to runner '{runner}', not in allowed_runners {allowed}."
+            )
+    if not runner:
+        raise RuntimeError(f"Role '{role_name}' has no runner binding.")
+    return runner, model
+
+
 def get_role(name: str) -> Role:
     """Return the Role for *name*; raises KeyError if not found."""
     return ROLES[name]

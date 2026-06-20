@@ -146,7 +146,7 @@ class CodexRunner(PromptCliRunner):
 
 @dataclass
 class GeminiRunner(PromptCliRunner):
-    command_name: str = "gemini-cli"
+    command_name: str = "gemini"
 
 
 @dataclass

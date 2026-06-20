@@ -533,3 +533,62 @@ class TestSimulateMode:
                 simulate=True,
             )
         assert mock_run_task.call_args.kwargs.get("simulate") is True
+
+
+# ---------------------------------------------------------------------------
+# Role-driven execution (item A) — task.role resolves runner+model via roles.py
+# + per-project policy overrides
+# ---------------------------------------------------------------------------
+
+
+class TestRoleDrivenExecution:
+    def _run(self, role: str, policy=None):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        task = TaskConfig(
+            description="t",
+            role=role,
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+                policy=policy,
+            )
+        return orch
+
+    def test_role_resolves_runner_and_model(self) -> None:
+        orch = self._run("cto")
+        orch.registry.execute_definition.assert_called_once()
+        orch.registry.execute.assert_not_called()
+        rdef = orch.registry.execute_definition.call_args.args[0]
+        assert rdef.kind == "opencode"
+        assert rdef.model == "kimi"
+
+    def test_policy_override_changes_model(self) -> None:
+        from hivepilot.services.policy_service import Policy
+
+        orch = self._run("cto", policy=Policy(role_overrides={"cto": {"model": "glm"}}))
+        rdef = orch.registry.execute_definition.call_args.args[0]
+        assert rdef.kind == "opencode"
+        assert rdef.model == "glm"
+
+    def test_allowed_runners_blocks_disallowed(self) -> None:
+        import pytest
+
+        from hivepilot.services.policy_service import Policy
+
+        with pytest.raises(RuntimeError):
+            self._run("reviewer", policy=Policy(allowed_runners=["opencode", "claude"]))

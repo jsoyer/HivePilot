@@ -65,6 +65,7 @@ class GitActions(BaseModel):
 
 class TaskConfig(BaseModel):
     description: str
+    role: str | None = None
     engine: Literal["native", "langgraph", "crewai"] = "native"
     graph: str | None = None
     crew: str | None = None

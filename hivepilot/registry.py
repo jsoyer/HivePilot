@@ -54,3 +54,9 @@ class RunnerRegistry:
     def execute(self, runner_name: str, payload: RunnerPayload) -> None:
         runner = self.get_runner(runner_name)
         runner.run(payload)
+
+    def execute_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> None:
+        runner_cls = RUNNER_MAP.get(definition.kind)
+        if not runner_cls:
+            raise KeyError(f"No runner implementation for kind '{definition.kind}'")
+        runner_cls(definition, settings).run(payload)

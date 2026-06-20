@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -16,6 +16,8 @@ class Policy:
     allow_auto_git: bool = True
     require_approval: bool = False
     allow_containers: bool = True
+    role_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
+    allowed_runners: list[str] | None = None
 
 
 def _load_yaml(path: Path) -> dict:
@@ -54,6 +56,8 @@ def get_policy(project_name: str) -> Policy:
         allow_auto_git=rules.get("allow_auto_git", True),
         require_approval=rules.get("require_approval", False),
         allow_containers=rules.get("allow_containers", True),
+        role_overrides=rules.get("role_overrides", {}) or {},
+        allowed_runners=rules.get("allowed_runners"),
     )
 
 

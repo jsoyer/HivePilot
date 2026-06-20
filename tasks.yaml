@@ -255,6 +255,7 @@ tasks:
   # ---------------------------------------------------------------------------
 
   company-ceo-intake:
+    role: ceo
     description: CEO reviews roadmap, metrics, and customer feedback; sets objectives and priorities.
     steps:
       - name: ceo intake
@@ -270,6 +271,7 @@ tasks:
       create_pr: false
 
   company-cos-plan:
+    role: chief_of_staff
     description: Chief of Staff translates CEO objectives into an execution plan.
     steps:
       - name: chief of staff plan
@@ -285,6 +287,7 @@ tasks:
       create_pr: false
 
   company-cto-review:
+    role: cto
     description: CTO reviews the execution plan and produces a technical spec or ADR.
     steps:
       - name: cto review
@@ -300,6 +303,7 @@ tasks:
       create_pr: false
 
   company-developer:
+    role: developer
     description: Developer implements the technical spec and produces code + tests.
     steps:
       - name: implementation
@@ -317,6 +321,7 @@ tasks:
       branch_prefix: hivepilot
 
   company-reviewer:
+    role: reviewer
     description: Reviewer inspects the implementation against the spec and issues a review report.
     steps:
       - name: code review
@@ -332,6 +337,7 @@ tasks:
       create_pr: false
 
   company-ciso:
+    role: ciso
     description: CISO performs a security review and grants or withholds clearance.
     steps:
       - name: security review
@@ -347,6 +353,7 @@ tasks:
       create_pr: false
 
   company-qa:
+    role: qa
     description: QA builds the test suite, runs edge-case analysis, and produces a test report.
     steps:
       - name: qa validation
@@ -362,6 +369,7 @@ tasks:
       create_pr: false
 
   company-documentation:
+    role: documentation
     description: Documentation role updates docs, ADRs, and changelog.
     steps:
       - name: documentation update
@@ -377,6 +385,7 @@ tasks:
       branch_prefix: hivepilot
 
   company-cos-report:
+    role: chief_of_staff
     description: Chief of Staff compiles the cycle report for CEO review.
     steps:
       - name: cos cycle report
@@ -392,6 +401,7 @@ tasks:
       create_pr: false
 
   company-ceo-approval:
+    role: ceo
     description: CEO reviews the cycle report and grants final approval or sends back for revision.
     steps:
       - name: ceo approval
