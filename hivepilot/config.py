@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
+
+    @field_validator("telegram_notification_chat_id", mode="before")
+    @classmethod
+    def _blank_chat_id_to_none(cls, v: object) -> object:
+        # an empty .env value (HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID=) means unset
+        return None if v in ("", None) else v
     slack_bot_token: str | None = None
     slack_signing_secret: str | None = None
     slack_app_token: str | None = None  # for Socket Mode (xapp-...)
