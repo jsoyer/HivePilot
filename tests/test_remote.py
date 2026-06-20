@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from hivepilot.utils.remote import build_invocation, ssh_wrap
 
 
@@ -28,6 +30,26 @@ def test_ssh_wrap_quotes_paths_and_values() -> None:
 def test_ssh_wrap_passes_ssh_options() -> None:
     cmd = ssh_wrap(["x"], Path("/r"), {}, host="h", ssh_options=["ConnectTimeout=5"])
     assert "ConnectTimeout=5" in cmd
+
+
+def test_ssh_wrap_rejects_flag_smuggling_host() -> None:
+    with pytest.raises(ValueError, match="host"):
+        ssh_wrap(["x"], Path("/r"), {}, host="-oProxyCommand=evil")
+
+
+def test_ssh_wrap_rejects_bad_host_chars() -> None:
+    with pytest.raises(ValueError, match="host"):
+        ssh_wrap(["x"], Path("/r"), {}, host="host; rm -rf /")
+
+
+def test_ssh_wrap_rejects_invalid_env_key() -> None:
+    with pytest.raises(ValueError, match="env var name"):
+        ssh_wrap(["x"], Path("/r"), {"X; rm -rf /": "1"}, host="h")
+
+
+def test_ssh_wrap_rejects_bad_ssh_option() -> None:
+    with pytest.raises(ValueError, match="ssh option"):
+        ssh_wrap(["x"], Path("/r"), {}, host="h", ssh_options=["-oProxyCommand=evil"])
 
 
 def test_build_invocation_local_passthrough() -> None:
