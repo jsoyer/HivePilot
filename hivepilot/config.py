@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     tasks_file: Path = Path("tasks.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
     policies_file: Path = Path("policies.yaml")
+    groups_file: Path = Path("groups.yaml")
     schedules_file: Path = Path("schedules.yaml")
     prompts_dir: Path = Path("prompts")
     runs_dir: Path = Path("runs")

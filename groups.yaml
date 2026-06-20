@@ -1,0 +1,32 @@
+# Component groups (a "project" in product terms, e.g. Noxys, made of many repos).
+# A group expands to its component projects (each its own git repo). The `hub` is
+# the project where group-level planning runs (used from E2 onward).
+groups:
+  noxys:
+    description: The Noxys product — all components, each its own repo.
+    hub: noxys
+    components:
+      - noxys-adjudication-worker
+      - noxys-agent
+      - noxys-ai-forge
+      - noxys-api
+      - noxys-console
+      - noxys-contracts
+      - noxys-demo
+      - noxys-detection-core
+      - noxys-doc
+      - noxys-extension
+      - noxys-feedback
+      - noxys-infra
+      - noxys-ml
+      - noxys-onnx-worker
+      - noxys-pdf-renderer
+      - noxys-presidio
+      - noxys-product-hub
+      - noxys-proxy
+      - noxys-sales-questionnaires
+      - noxys-status
+      - noxys-support
+      - noxys-vision-worker
+      - noxys-vscode
+      - noxys-website

@@ -106,6 +106,18 @@ class ProjectsFile(BaseModel):
     projects: dict[str, ProjectConfig]
 
 
+class Group(BaseModel):
+    """A product made of many component repos (e.g. Noxys → noxys-api, ...)."""
+
+    description: str | None = None
+    hub: str | None = None  # project where group-level planning runs (from E2)
+    components: list[str] = Field(default_factory=list)
+
+
+class GroupsFile(BaseModel):
+    groups: dict[str, Group] = Field(default_factory=dict)
+
+
 class TasksFile(BaseModel):
     runners: dict[str, RunnerDefinition] = Field(default_factory=dict)
     tasks: dict[str, TaskConfig]

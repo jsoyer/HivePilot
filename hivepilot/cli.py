@@ -11,7 +11,12 @@ from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import state_service, token_service
 from hivepilot.services.github_service import create_issue, create_release, ensure_repository
-from hivepilot.services.project_service import load_projects, load_tasks
+from hivepilot.services.project_service import (
+    load_groups,
+    load_projects,
+    load_tasks,
+    resolve_targets,
+)
 from hivepilot.utils.logging import get_logger
 
 app = typer.Typer(help="HivePilot advanced orchestrator")
@@ -67,7 +72,9 @@ def _resolve_projects(project: str, extras: list[str], run_all: bool) -> list[st
     projects = load_projects()
     if run_all:
         return list(projects.projects.keys())
-    names = [project, *extras]
+    names: list[str] = []
+    for _n in [project, *extras]:
+        names.extend(resolve_targets(_n))
     seen = set()
     ordered = []
     for name in names:
@@ -207,6 +214,11 @@ def run_pipeline(
     ),
 ) -> None:
     _require_cli_role("run", token)
+    if project in load_groups().groups:
+        raise typer.BadParameter(
+            f"'{project}' is a group. Group-wide pipeline runs (plan once, fan out) "
+            "arrive in E2 — pass a component, or use `run` for a single task."
+        )
     orchestrator = Orchestrator()
     target_projects = _resolve_projects(project, projects, all_projects)
     results = orchestrator.run_pipeline(
@@ -1773,3 +1785,18 @@ def audit(
             project=proj, run_id=run_id, registry=orch.registry, dry_run=dry_run
         )
     typer.echo(out[:1000])
+
+
+@app.command("groups")
+def groups_cmd() -> None:
+    """List configured component groups (e.g. noxys -> its component repos)."""
+    groups = load_groups().groups
+    if not groups:
+        typer.echo("No groups configured.")
+        return
+    for name, g in groups.items():
+        typer.echo(f"{name} ({len(g.components)} components, hub={g.hub or '-'})")
+        if g.description:
+            typer.echo(f"  {g.description}")
+        for c in g.components:
+            typer.echo(f"  - {c}")
