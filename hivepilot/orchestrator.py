@@ -76,6 +76,7 @@ class Orchestrator:
         auto_git: bool,
         concurrency: int | None = None,
         simulate: bool = False,
+        dry_run: bool = True,
     ) -> list[RunResult]:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
@@ -91,7 +92,7 @@ class Orchestrator:
         for project in projects:
             policy = policy_service.enforce_policy(project.path.name, auto_git=auto_git)
             run_policies[project.path.name] = policy
-            if policy.require_approval:
+            if policy.require_approval and not simulate:
                 run_id = state_service.record_run_start(
                     project.path.name, task_name, status="pending"
                 )
@@ -142,6 +143,7 @@ class Orchestrator:
                     run_id=run_ids.get(project.path.name),
                     policy=run_policies.get(project.path.name),
                     simulate=simulate,
+                    dry_run=dry_run,
                 ): project
                 for project in immediate_projects
             }
@@ -248,6 +250,7 @@ class Orchestrator:
                 auto_git=auto_git,
                 concurrency=concurrency,
                 simulate=simulate,
+                dry_run=dry_run,
             )
             results.extend(
                 [
@@ -462,6 +465,7 @@ class Orchestrator:
         run_id: int | None = None,
         policy: policy_service.Policy | None = None,
         simulate: bool = False,
+        dry_run: bool = True,
     ) -> None:
         logger.info("task.start", project=project.path.name, task=task_name)
         metadata = {"extra_prompt": extra_prompt or ""}
@@ -494,6 +498,23 @@ class Orchestrator:
                 raise
             logger.info("task.end", project=project.path.name, task=task_name)
             return
+        if task.role:
+            from hivepilot.roles import get_role as _get_role
+
+            _role = _get_role(task.role)
+            if _role.models and len(_role.models) > 1:
+                topic = extra_prompt or task.description or task_name
+                self.run_debate(
+                    project_name=project.path.name,
+                    role_name=task.role,
+                    topic=topic,
+                    dry_run=dry_run,
+                    simulate=simulate,
+                )
+                if run_id:
+                    state_service.record_step(run_id, f"{task.role}-debate", "success")
+                logger.info("task.end", project=project.path.name, task=task_name)
+                return
         for step in task.steps:
             secrets = self._resolve_secrets(step)
             payload = RunnerPayload(
