@@ -157,4 +157,7 @@ planif au niveau groupe, à partir de E2). Config : `groups.yaml`.
   **planification tourne une seule fois dans le hub** (avec le manifeste des
   composants en contexte), puis la **phase 2 (dev → … → PR) fan-out sur les
   composants**. Le checkpoint de plan se trouve entre les deux.
-  *(E3 : les agents choisiront le sous-ensemble de composants impactés.)*
+  Les **agents choisissent les composants impactés** : Jules termine sa synthèse
+  par une ligne `COMPONENTS: …` ; le fan-out de la phase 2 ne cible que ce
+  sous-ensemble (affiché dans le checkpoint). À défaut de ligne, tous les
+  composants sont ciblés.
