@@ -36,6 +36,10 @@ class Role(BaseModel):
     outputs: list[str]
     can_block: bool
     order: int
+    # Sprint 2.1: runner + model binding (additive, defaulted — no existing tests broken)
+    runner: str | None = None
+    model: str | None = None
+    models: list[str] | None = None
 
 
 ROLES: dict[str, Role] = {
@@ -48,6 +52,8 @@ ROLES: dict[str, Role] = {
         outputs=["objectives", "priorities", "constraints"],
         can_block=False,
         order=1,
+        runner="opencode",
+        models=["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"],
     ),
     "chief_of_staff": Role(
         name="chief_of_staff",
@@ -58,6 +64,7 @@ ROLES: dict[str, Role] = {
         outputs=["execution_plan", "blocker_report", "cycle_report"],
         can_block=False,
         order=2,
+        runner="cursor",
     ),
     "cto": Role(
         name="cto",
@@ -68,6 +75,8 @@ ROLES: dict[str, Role] = {
         outputs=["technical_spec", "adr", "rejection_notice"],
         can_block=True,
         order=3,
+        runner="opencode",
+        model="opencode-go/kimi-k2.7-code",
     ),
     "developer": Role(
         name="developer",
@@ -78,6 +87,7 @@ ROLES: dict[str, Role] = {
         outputs=["implementation", "test_suite", "implementation_notes"],
         can_block=False,
         order=4,
+        runner="claude",
     ),
     "reviewer": Role(
         name="reviewer",
@@ -88,6 +98,7 @@ ROLES: dict[str, Role] = {
         outputs=["review_report", "approval"],
         can_block=True,
         order=5,
+        runner="codex",
     ),
     "ciso": Role(
         name="ciso",
@@ -98,6 +109,8 @@ ROLES: dict[str, Role] = {
         outputs=["security_report", "clearance"],
         can_block=True,
         order=6,
+        runner="opencode",
+        model="opencode-go/glm-5.2",
     ),
     "qa": Role(
         name="qa",
@@ -108,6 +121,7 @@ ROLES: dict[str, Role] = {
         outputs=["qa_test_suite", "test_report", "edge_case_log"],
         can_block=False,
         order=7,
+        runner="gemini",
     ),
     "documentation": Role(
         name="documentation",
@@ -118,8 +132,33 @@ ROLES: dict[str, Role] = {
         outputs=["updated_docs", "updated_adrs", "changelog_entry"],
         can_block=False,
         order=8,
+        runner="gemini",
     ),
 }
+
+
+def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, str | None]:
+    """Resolve the effective (runner_kind, model) for *role_name*.
+
+    Defaults come from the role binding (ROLES); a per-project policy may override
+    runner/model (``role_overrides``) and constrain runners (``allowed_runners``).
+    Raises if the role has no runner or the resolved runner is not allowed.
+    """
+    role = ROLES[role_name]
+    runner = role.runner
+    model = role.model or (role.models[0] if role.models else None)
+    if policy is not None:
+        override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
+        runner = override.get("runner", runner)
+        model = override.get("model", model)
+        allowed = getattr(policy, "allowed_runners", None)
+        if allowed and runner not in allowed:
+            raise RuntimeError(
+                f"Role '{role_name}' resolves to runner '{runner}', not in allowed_runners {allowed}."
+            )
+    if not runner:
+        raise RuntimeError(f"Role '{role_name}' has no runner binding.")
+    return runner, model
 
 
 def get_role(name: str) -> Role:

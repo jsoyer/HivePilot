@@ -14,3 +14,10 @@ projects:
     claude_md: CLAUDE.md
     default_branch: main
     owner_repo: your-user/example-site
+
+  noxys:
+    path: /home/jeromesoyer/Documents/Github/noxys
+    description: Noxys — primary product; agent-driven development target.
+    default_branch: main
+    env:
+      PYTHONUNBUFFERED: "1"

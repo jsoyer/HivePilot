@@ -1,21 +1,22 @@
 from __future__ import annotations
 
-from typing import Any
-
-from textual import events
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Footer, Header
 
 from hivepilot.services import state_service
+from hivepilot.ui.formatting import INTERACTION_COLUMNS, interaction_rows
 
 
 class RunDashboard(App):
     CSS = """
     #runs {
-        height: 60%;
+        height: 40%;
     }
     #steps {
-        height: 40%;
+        height: 30%;
+    }
+    #interactions {
+        height: 30%;
     }
     """
 
@@ -29,18 +30,24 @@ class RunDashboard(App):
         self.metrics_table.add_columns("Metric", "Value")
         self.steps_table = DataTable(id="steps")
         self.steps_table.add_columns("Run ID", "Step", "Status", "Detail", "Timestamp")
+        self.interactions_table = DataTable(id="interactions")
+        self.interactions_table.add_columns(*INTERACTION_COLUMNS)
         yield self.metrics_table
         yield self.runs_table
         yield self.steps_table
+        yield self.interactions_table
         yield Footer()
 
     def on_mount(self) -> None:
         self.refresh_runs()
         self.set_interval(10, self.refresh_runs)
+        self.refresh_interactions()
+        self.set_interval(10, self.refresh_interactions)
         self.runs_table.focus()
 
     def action_refresh(self) -> None:
         self.refresh_runs()
+        self.refresh_interactions()
 
     def refresh_runs(self) -> None:
         runs = state_service.list_recent_runs(50)
@@ -100,6 +107,12 @@ class RunDashboard(App):
                 (step.get("detail") or "")[:80],
                 step["timestamp"],
             )
+
+    def refresh_interactions(self) -> None:
+        interactions = state_service.list_recent_interactions(50)
+        self.interactions_table.clear()
+        for row in interaction_rows(interactions):
+            self.interactions_table.add_row(*row)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:  # type: ignore[override]
         if event.table.id != "runs":

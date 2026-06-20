@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from typing import Dict, Type
+from typing import Dict, Type, cast
 
 from hivepilot.config import settings
-from hivepilot.models import RunnerDefinition
+from hivepilot.models import RunnerDefinition, RunnerKind
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
-from hivepilot.runners.shell_runner import ShellRunner
-from hivepilot.runners.langchain_runner import LangChainRunner
-from hivepilot.runners.internal_runner import InternalRunner
-from hivepilot.runners.prompt_cli_runner import CodexRunner, GeminiRunner, OpenCodeRunner, OllamaRunner
 from hivepilot.runners.container_runner import ContainerRunner
-
+from hivepilot.runners.cursor_runner import CursorRunner
+from hivepilot.runners.internal_runner import InternalRunner
+from hivepilot.runners.langchain_runner import LangChainRunner
+from hivepilot.runners.prompt_cli_runner import (
+    CodexRunner,
+    GeminiRunner,
+    OllamaRunner,
+    OpenCodeRunner,
+)
+from hivepilot.runners.shell_runner import ShellRunner
 
 RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
     "claude": ClaudeRunner,
@@ -23,6 +28,7 @@ RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
     "opencode": OpenCodeRunner,
     "ollama": OllamaRunner,
     "container": ContainerRunner,
+    "cursor": CursorRunner,
 }
 
 
@@ -42,9 +48,25 @@ class RunnerRegistry:
             return self.runner_defs[name]
         if name in RUNNER_MAP:
             default_command = settings.claude_command if name == "claude" else None
-            return RunnerDefinition(name=name, kind=name, command=default_command)
+            return RunnerDefinition(name=name, kind=cast(RunnerKind, name), command=default_command)
         raise KeyError(f"Runner '{name}' not found in registry.")
 
     def execute(self, runner_name: str, payload: RunnerPayload) -> None:
         runner = self.get_runner(runner_name)
         runner.run(payload)
+
+    def execute_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> None:
+        runner_cls = RUNNER_MAP.get(definition.kind)
+        if not runner_cls:
+            raise KeyError(f"No runner implementation for kind '{definition.kind}'")
+        runner_cls(definition, settings).run(payload)
+
+    def capture_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> str:
+        runner_cls = RUNNER_MAP.get(definition.kind)
+        if not runner_cls:
+            raise KeyError(f"No runner implementation for kind '{definition.kind}'")
+        runner = runner_cls(definition, settings)
+        capture = getattr(runner, "capture", None)
+        if capture is None:
+            raise RuntimeError(f"Runner kind '{definition.kind}' does not support capture.")
+        return capture(payload)

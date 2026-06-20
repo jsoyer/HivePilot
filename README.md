@@ -1,6 +1,24 @@
-# 🐝 HivePilot v2
+# 🐝 HivePilot v4
 
-HivePilot is an AI command center for multi-repo workflows. It dispatches Claude Code, LangChain, LangGraph, CrewAI, shell runners, Codex/Gemini/OpenCode/Ollama CLIs, and Git/GitHub automation from a single YAML-driven orchestrator. This release adds an interactive TUI, concurrency, structured logging + run history, state persistence, and optional API fallbacks for every runner.
+HivePilot is an AI command center for multi-repo workflows. It dispatches Claude Code, LangChain, LangGraph, CrewAI, shell runners, Codex/Gemini/OpenCode/Cursor/Ollama CLIs, and Git/GitHub automation from a single YAML-driven orchestrator.
+
+## 🆕 V4 — the agent company
+
+V4 turns the orchestrator into a **company of role-bound agents** that runs a full
+software pipeline against any repo, with multi-model execution, code review + PRs,
+a CEO dual-model debate, full interaction visibility, and remote control.
+
+- **The chain**: CEO → Chief of Staff → CTO → Developer → Reviewer → CISO → QA → Documentation → Report → CEO Approval. Each stage is bound to a **role** that resolves to a **runner + model** (`opencode`/qwen·kimi·glm, `claude`, `codex`, `gemini`, `cursor`), overridable per project.
+- **Code review & PRs**: the **developer (claude)** opens a PR; the **reviewer (codex)** reviews it; a human merges. **Documentation/QA** run on **gemini**.
+- **CEO debate → ADR**: dual-model (qwen + kimi) positions synthesized into an Architecture Decision Record.
+- **Visibility**: interactions store (SQLite) + Obsidian notes + Mermaid timeline + Telegram + Textual dashboard.
+- **Remote control via Telegram**: `/runpipeline`, `/debate`, `/steps`, `/interactions`, `/approve` … command and monitor the agents from your phone.
+- **Safety**: `--simulate` (preview, no real calls), per-project approval gates, prompt-injection validation, container isolation, lightweight core (langchain/torch/boto3 optional).
+
+📖 **V4 docs:** [Architecture](docs/v4/ARCHITECTURE.md) · [The agent company](docs/v4/AGENTS.md) · [Usage (CLI & Telegram)](docs/v4/USAGE.md) · [Configuration](docs/v4/CONFIG.md) · [Noxys setup](docs/v4/NOXYS.md)
+
+The YAML reference below still applies (projects/tasks/pipelines/policies); V4 adds
+`role:` on tasks and per-project `role_overrides`/`allowed_runners` in policies.
 
 ---
 

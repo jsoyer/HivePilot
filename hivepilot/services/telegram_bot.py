@@ -18,6 +18,7 @@ _app_instance = None
 # Config helpers
 # ---------------------------------------------------------------------------
 
+
 def _token() -> str:
     token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -45,6 +46,7 @@ def _require_allowed(chat_id: int) -> bool:
 
 def _get_orch():
     from hivepilot.services.chatops_service import _get_orchestrator
+
     return _get_orchestrator()
 
 
@@ -70,6 +72,7 @@ def _format_results(results) -> str:
 # Command handlers  (all async — python-telegram-bot v20+)
 # ---------------------------------------------------------------------------
 
+
 async def _cmd_help(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
@@ -82,6 +85,13 @@ async def _cmd_help(update, context) -> None:
         "/approve `<run_id>` — approve a run\n"
         "/deny `<run_id>` \\[reason\\] — deny a run\n"
         "/status — last 5 runs\n"
+        "/interactions `[limit]` — recent agent interactions\n"
+        "/runpipeline `<project> <pipeline> [simulate]` \u2014 run a pipeline\n"
+        "/debate `<project> <topic>` \u2014 CEO dual-model debate\n"
+        "/steps `<run_id>` \u2014 what the agents did in a run\n"
+        "/pipelines \u2014 list pipelines\n"
+        "/projects \u2014 list projects\n"
+        "/tasks \u2014 list tasks\n"
         "/help — this message\n"
     )
     await update.message.reply_text(text, parse_mode="MarkdownV2")
@@ -144,6 +154,7 @@ async def _cmd_diff(update, context) -> None:
     project_name = args[0]
     try:
         from hivepilot.services.project_service import load_projects
+
         projects = load_projects()
         project = projects.projects.get(project_name)
         if not project:
@@ -157,7 +168,9 @@ async def _cmd_diff(update, context) -> None:
             timeout=10,
         )
         output = result.stdout.strip() or "(no changes)"
-        await update.message.reply_text(f"*{project_name}* — last commit:\n```\n{output}\n```", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"*{project_name}* — last commit:\n```\n{output}\n```", parse_mode="Markdown"
+        )
     except Exception as exc:
         await update.message.reply_text(f"Error: {exc}")
 
@@ -172,6 +185,7 @@ async def _cmd_rollback(update, context) -> None:
     project_name = args[0]
     try:
         from hivepilot.services.project_service import load_projects
+
         projects = load_projects()
         project = projects.projects.get(project_name)
         if not project:
@@ -186,9 +200,7 @@ async def _cmd_rollback(update, context) -> None:
             timeout=10,
         )
         commit_line = log.stdout.strip()
-        await update.message.reply_text(
-            f"⏳ Reverting: `{commit_line}`", parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"⏳ Reverting: `{commit_line}`", parse_mode="Markdown")
         subprocess.run(
             ["git", "revert", "HEAD", "--no-edit"],
             cwd=str(project.path),
@@ -206,6 +218,7 @@ async def _cmd_approvals(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
     from hivepilot.services import state_service
+
     try:
         pending = state_service.get_pending_approvals()
     except Exception as exc:
@@ -265,10 +278,37 @@ async def _cmd_deny(update, context) -> None:
         await update.message.reply_text(f"Error: {exc}")
 
 
+async def _cmd_interactions(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    from hivepilot.services import state_service
+
+    limit = 10
+    run_id = None
+    args = context.args or []
+    if args and args[0].isdigit():
+        limit = int(args[0])
+    try:
+        rows = state_service.list_recent_interactions(limit=limit, run_id=run_id)
+    except Exception as exc:
+        await update.message.reply_text(f"Error: {exc}")
+        return
+    if not rows:
+        await update.message.reply_text("No interactions logged yet.")
+        return
+    lines = [
+        f"[#{i['run_id'] if i['run_id'] is not None else '-'}] "
+        f"{i['actor']} → {i['action']} → {i['target'] or 'all'}: {i['summary']}"
+        for i in rows
+    ]
+    await update.message.reply_text("Recent interactions:\n" + "\n".join(lines))
+
+
 async def _cmd_status(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
     from hivepilot.services import state_service
+
     try:
         runs = state_service.list_recent_runs(limit=5)
     except Exception as exc:
@@ -277,10 +317,7 @@ async def _cmd_status(update, context) -> None:
     if not runs:
         await update.message.reply_text("No recent runs.")
         return
-    lines = [
-        f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}"
-        for r in runs
-    ]
+    lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
     await update.message.reply_text("Recent runs:\n" + "\n".join(lines))
 
 
@@ -288,17 +325,26 @@ async def _cmd_status(update, context) -> None:
 # Inline keyboard — approval flow
 # ---------------------------------------------------------------------------
 
-async def _send_approval_keyboard_message(bot, *, chat_id: int, run_id: int, project: str, task: str) -> None:
+
+async def _send_approval_keyboard_message(
+    bot, *, chat_id: int, run_id: int, project: str, task: str
+) -> None:
     """Send a message with ✅ Approve / ❌ Deny inline buttons."""
     try:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     except ImportError as exc:
-        raise RuntimeError("python-telegram-bot required: pip install hivepilot[notifications]") from exc
+        raise RuntimeError(
+            "python-telegram-bot required: pip install hivepilot[notifications]"
+        ) from exc
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Approve", callback_data=f"approve:{run_id}"),
-        InlineKeyboardButton("❌ Deny", callback_data=f"deny:{run_id}"),
-    ]])
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Approve", callback_data=f"approve:{run_id}"),
+                InlineKeyboardButton("❌ Deny", callback_data=f"deny:{run_id}"),
+            ]
+        ]
+    )
     await bot.send_message(
         chat_id=chat_id,
         text=f"*Approval required* — run #{run_id}\nProject: `{project}`\nTask: `{task}`",
@@ -359,6 +405,7 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
 
     async def _send():
         from telegram import Bot
+
         async with Bot(token) as bot:
             await _send_approval_keyboard_message(
                 bot, chat_id=chat_id, run_id=run_id, project=project, task=task
@@ -379,6 +426,134 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
 # Application factory
 # ---------------------------------------------------------------------------
 
+
+async def _await_with_heartbeat(update, future, interval: int = 60):
+    elapsed = 0
+    while True:
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout=interval)
+        except asyncio.TimeoutError:
+            elapsed += interval
+            await update.message.reply_text(f"\u23f3 Still running\u2026 ({elapsed}s)")
+
+
+async def _cmd_pipelines(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    pipes = _get_orch().pipelines.pipelines
+    if not pipes:
+        await update.message.reply_text("No pipelines configured.")
+        return
+    lines = [f"\u2022 {name}: {(p.description or '').strip()[:80]}" for name, p in pipes.items()]
+    await update.message.reply_text("Pipelines:\n" + "\n".join(lines))
+
+
+async def _cmd_projects(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    projs = _get_orch().projects.projects
+    if not projs:
+        await update.message.reply_text("No projects configured.")
+        return
+    await update.message.reply_text("Projects:\n" + "\n".join(f"\u2022 {n}" for n in projs))
+
+
+async def _cmd_tasks(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    tasks = _get_orch().tasks.tasks
+    if not tasks:
+        await update.message.reply_text("No tasks configured.")
+        return
+    await update.message.reply_text("Tasks:\n" + "\n".join(f"\u2022 {n}" for n in tasks))
+
+
+async def _cmd_run_pipeline(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /runpipeline <project> <pipeline> [simulate]")
+        return
+    project, pipeline = args[0], args[1]
+    simulate = "simulate" in args[2:]
+    suffix = " (simulate)" if simulate else ""
+    await update.message.reply_text(
+        f"\u23f3 Pipeline `{pipeline}` on `{project}`{suffix}\u2026", parse_mode="Markdown"
+    )
+    loop = asyncio.get_event_loop()
+    future = loop.run_in_executor(
+        None,
+        lambda: _get_orch().run_pipeline(
+            project_names=[project],
+            pipeline_name=pipeline,
+            extra_prompt=None,
+            auto_git=False,
+            dry_run=True,
+            simulate=simulate,
+        ),
+    )
+    try:
+        results = await _await_with_heartbeat(update, future)
+    except Exception as exc:
+        logger.error("telegram.cmd_run_pipeline.error", error=str(exc))
+        await update.message.reply_text(f"\u274c Error: {exc}")
+        return
+    await update.message.reply_text(_format_results(results))
+
+
+async def _cmd_debate(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /debate <project> <topic...>")
+        return
+    project = args[0]
+    topic = " ".join(args[1:])
+    await update.message.reply_text(f"\u23f3 CEO debate on `{project}`\u2026", parse_mode="Markdown")
+    loop = asyncio.get_event_loop()
+    future = loop.run_in_executor(
+        None,
+        lambda: _get_orch().run_debate(
+            project_name=project, role_name="ceo", topic=topic, dry_run=True
+        ),
+    )
+    try:
+        adr = await _await_with_heartbeat(update, future)
+    except Exception as exc:
+        logger.error("telegram.cmd_debate.error", error=str(exc))
+        await update.message.reply_text(f"\u274c Error: {exc}")
+        return
+    if adr is None:
+        await update.message.reply_text("Debate complete \u2014 no vault configured.")
+    else:
+        prefix = "(dry-run) " if adr.get("dry_run") else ""
+        await update.message.reply_text(f"\u2705 Debate ADR {prefix}\u2192 {adr.get('path')}")
+
+
+async def _cmd_steps(update, context) -> None:
+    if not _require_allowed(update.effective_chat.id):
+        return
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_text("Usage: /steps <run_id>")
+        return
+    from hivepilot.services import state_service
+
+    steps = state_service.get_steps_for_run(int(args[0]))
+    if not steps:
+        await update.message.reply_text(f"No steps for run {args[0]}.")
+        return
+    lines = []
+    for s in steps:
+        line = f"[{s['status']}] {s['step']} \u2014 {s.get('timestamp', '')}"
+        if s.get("detail"):
+            line += f"\n  {str(s['detail'])[:120]}"
+        lines.append(line)
+    await update.message.reply_text(f"Run {args[0]} steps:\n" + "\n".join(lines))
+
+
 def _build_application(token: str):
     try:
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler
@@ -397,6 +572,13 @@ def _build_application(token: str):
     app.add_handler(CommandHandler("approve", _cmd_approve))
     app.add_handler(CommandHandler("deny", _cmd_deny))
     app.add_handler(CommandHandler("status", _cmd_status))
+    app.add_handler(CommandHandler("interactions", _cmd_interactions))
+    app.add_handler(CommandHandler("pipelines", _cmd_pipelines))
+    app.add_handler(CommandHandler("projects", _cmd_projects))
+    app.add_handler(CommandHandler("tasks", _cmd_tasks))
+    app.add_handler(CommandHandler("runpipeline", _cmd_run_pipeline))
+    app.add_handler(CommandHandler("debate", _cmd_debate))
+    app.add_handler(CommandHandler("steps", _cmd_steps))
     app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
     return app
 
@@ -404,6 +586,7 @@ def _build_application(token: str):
 # ---------------------------------------------------------------------------
 # Polling mode  (RPI / NAT — no public URL needed)
 # ---------------------------------------------------------------------------
+
 
 def run_polling() -> None:
     """Start the bot in long-polling mode. Blocking. No public URL required."""
@@ -416,6 +599,7 @@ def run_polling() -> None:
 # ---------------------------------------------------------------------------
 # Webhook mode — built-in server  (VPS with public HTTPS)
 # ---------------------------------------------------------------------------
+
 
 def run_webhook(
     webhook_url: str,
@@ -451,6 +635,7 @@ def run_webhook(
 # ---------------------------------------------------------------------------
 # Webhook mode — FastAPI-integrated  (share port with the API server)
 # ---------------------------------------------------------------------------
+
 
 async def _get_or_init_app():
     """Lazily initialise the Application for use inside an existing event loop."""
@@ -488,6 +673,7 @@ async def shutdown() -> None:
 # Webhook registration helpers  (one-shot, non-blocking)
 # ---------------------------------------------------------------------------
 
+
 def set_webhook(webhook_url: str, secret: str | None = None) -> str:
     """Register the webhook URL with Telegram. Returns the registered URL."""
     token = _token()
@@ -497,6 +683,7 @@ def set_webhook(webhook_url: str, secret: str | None = None) -> str:
 
     async def _set():
         from telegram import Bot
+
         async with Bot(token) as bot:
             await bot.set_webhook(
                 url=full_url,
@@ -517,6 +704,7 @@ def delete_webhook() -> None:
 
     async def _delete():
         from telegram import Bot
+
         async with Bot(token) as bot:
             await bot.delete_webhook(drop_pending_updates=True)
 
@@ -530,6 +718,7 @@ def get_webhook_info() -> dict[str, Any]:
 
     async def _info():
         from telegram import Bot
+
         async with Bot(token) as bot:
             info = await bot.get_webhook_info()
             return {

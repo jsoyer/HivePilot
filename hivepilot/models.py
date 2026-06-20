@@ -6,9 +6,24 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+RunnerKind = Literal[
+    "claude",
+    "shell",
+    "langchain",
+    "internal",
+    "codex",
+    "gemini",
+    "opencode",
+    "ollama",
+    "api",
+    "container",
+    "cursor",
+]
+
+
 class RunnerDefinition(BaseModel):
     name: str | None = None
-    kind: Literal["claude", "shell", "langchain", "internal", "codex", "gemini", "opencode", "ollama", "api", "container"]
+    kind: RunnerKind
     command: str | None = None
     model: str | None = None
     agent: str | None = None
@@ -50,6 +65,7 @@ class GitActions(BaseModel):
 
 class TaskConfig(BaseModel):
     description: str
+    role: str | None = None
     engine: Literal["native", "langgraph", "crewai"] = "native"
     graph: str | None = None
     crew: str | None = None

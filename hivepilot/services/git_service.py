@@ -53,13 +53,32 @@ def perform_git_actions(
     git: GitActions,
 ) -> None:
     repo = ensure_repo(project.path)
-    if not repo.is_dirty(untracked_files=True):
-        raise RuntimeError(f"No changes detected for {project_name}")
     branch = f"{git.branch_prefix}/{project_name}"
-    checkout_branch(project.path, branch)
-    repo.git.add("-A")
-    if git.commit:
-        message = git.commit_message or f"chore({project_name}): automated task run"
-        repo.git.commit("-m", message)
-    if git.push:
-        push(project.path, "origin", branch)
+    if git.commit or git.push:
+        if git.commit and not repo.is_dirty(untracked_files=True):
+            raise RuntimeError(f"No changes detected for {project_name}")
+        checkout_branch(project.path, branch)
+        repo.git.add("-A")
+        if git.commit:
+            message = git.commit_message or f"chore({project_name}): automated task run"
+            repo.git.commit("-m", message)
+        if git.push:
+            push(project.path, "origin", branch)
+    if git.create_pr:
+        create_pr(project=project, branch=branch, git=git)
+
+
+def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
+    """Open a pull request via the gh CLI (run from the project repo)."""
+    base = project.default_branch or "main"
+    title = git.pr_title or f"HivePilot: {branch}"
+    cmd = [settings.gh_command, "pr", "create", "--base", base, "--head", branch, "--title", title]
+    if git.pr_body_file:
+        cmd += ["--body-file", git.pr_body_file]
+    else:
+        cmd += ["--body", "Automated pull request opened by HivePilot."]
+    try:
+        subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
+        logger.info("git.pr_created", project=project.path.name, branch=branch, base=base)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Failed to create PR for {project.path.name}: {exc}") from exc

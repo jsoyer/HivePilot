@@ -21,5 +21,8 @@ class BaseRunner(Protocol):
     definition: RunnerDefinition
     settings: Settings
 
+    def __init__(self, definition: RunnerDefinition, settings: Settings) -> None:
+        ...
+
     def run(self, payload: RunnerPayload) -> None:
         ...

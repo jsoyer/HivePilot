@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-import boto3  # type: ignore
-
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
 
@@ -40,6 +38,13 @@ class ArtifactManager:
                 logger.warning("artifact.unknown_exporter", target=target)
 
     def _export_s3(self, config: dict[str, Any]) -> None:
+        try:
+            import boto3  # type: ignore
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "S3 artifact export requires boto3. Install hivepilot[cloud]."
+            ) from exc
+
         bucket = config["bucket"]
         prefix = config.get("prefix", f"runs/{self.run_dir.name}")
         session = boto3.session.Session()

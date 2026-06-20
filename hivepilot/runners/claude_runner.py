@@ -26,14 +26,16 @@ class ClaudeRunner(BaseRunner):
             raise ValueError("Claude command not configured.")
         prompt_file = payload.step.prompt_file
         if not prompt_file:
-            raise ValueError(f"Step '{payload.step.name}' requires a prompt_file for Claude runner.")
+            raise ValueError(
+                f"Step '{payload.step.name}' requires a prompt_file for Claude runner."
+            )
         prompt_path = self.settings.resolve_config_path(prompt_file)
         if not prompt_path.exists():
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
         knowledge_context = self._build_knowledge_context(payload)
         prompt = self._build_prompt(payload, prompt_text, knowledge_context)
-        args = [command]
+        args = [command, "--print"]
         model = self._resolve_model(payload)
         if model:
             args.extend(["--model", model])
@@ -45,7 +47,9 @@ class ClaudeRunner(BaseRunner):
         subprocess.run(args, cwd=str(payload.project.path), env=env, check=True, text=True)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
-    def _build_prompt(self, payload: RunnerPayload, instructions: str, knowledge_context: str | None) -> str:
+    def _build_prompt(
+        self, payload: RunnerPayload, instructions: str, knowledge_context: str | None
+    ) -> str:
         sections = [
             f"Project: {payload.project_name}",
             f"Task: {payload.task_name}",

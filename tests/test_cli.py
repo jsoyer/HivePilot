@@ -46,8 +46,16 @@ _STUBS = [
     "nacl.signing",
 ]
 
+import importlib  # noqa: E402
+
 for _mod in _STUBS:
-    if _mod not in sys.modules:
+    if _mod in sys.modules:
+        continue
+    try:
+        # Prefer the real module when installed so flat MagicMock stubs do not
+        # shadow proper packages (e.g. fastapi) for later tests like test_pentest.
+        importlib.import_module(_mod)
+    except Exception:
         sys.modules[_mod] = MagicMock()
 
 from typer.testing import CliRunner  # noqa: E402

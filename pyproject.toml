@@ -27,11 +27,16 @@ dependencies = [
 hivepilot = "hivepilot.cli:app"
 
 [project.optional-dependencies]
+# Optional knowledge/RAG stack: enables embedding-based context in
+# knowledge_service (otherwise it falls back to a plain file read) and the
+# langchain_runner. sentence-transformers pulls in torch (large) — opt-in only.
 langchain = [
   "langchain>=0.2,<0.3",
   "langchain-community>=0.2,<0.3",
   "faiss-cpu>=1.7,<2.0",
   "nltk>=3.8,<4.0",
+  "sentence-transformers>=2.2,<4.0",
+  "torch>=2.0,<3.0",
 ]
 langgraph = [
   "langgraph>=0.0.59,<1.0",
@@ -69,6 +74,8 @@ full = [
   "langchain-community>=0.2,<0.3",
   "faiss-cpu>=1.7,<2.0",
   "nltk>=3.8,<4.0",
+  "sentence-transformers>=2.2,<4.0",
+  "torch>=2.0,<3.0",
   "langgraph>=0.0.59,<1.0",
   "crewai>=0.28,<1.0",
   "textual>=0.47,<1.0",
@@ -89,6 +96,7 @@ dev = [
   "pytest-cov>=5.0,<6.0",
   "ruff>=0.4,<1.0",
   "mypy>=1.10,<2.0",
+  "types-PyYAML>=6.0,<7.0",
   "bandit[toml]>=1.7,<2.0",
   "pip-audit>=2.7,<3.0",
   "detect-secrets>=1.5,<2.0",
@@ -118,6 +126,9 @@ ignore = ["E501"]
 python_version = "3.11"
 ignore_missing_imports = true
 no_strict_optional = true
+# Optional / untyped third-party libs (yaml without types-PyYAML, requests,
+# langchain, torch, …): don't fail the typecheck hook on missing stubs.
+disable_error_code = ["import-untyped"]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "build", "dist"]

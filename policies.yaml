@@ -1,3 +1,12 @@
+# Per-project policy overrides.
+# Besides allow_auto_git / require_approval / allow_containers, a project may
+# override the role->runner+model mapping (defaults live in hivepilot/roles.py):
+#   projects:
+#     <project>:
+#       allowed_runners: [opencode, claude]      # whitelist; resolved runner must be in it
+#       role_overrides:
+#         cto:  { model: glm }                    # keep runner, force EU-hosted model
+#         qa:   { runner: opencode, model: qwen } # change runner + model
 policies:
   default:
     allow_auto_git: true
@@ -7,4 +16,8 @@ policies:
     example-api:
       allow_auto_git: true
       require_approval: true
+      allow_containers: false
+    noxys:
+      allow_auto_git: true       # developer stage may push + open a PR (human merges)
+      require_approval: true     # human approves each run before it executes
       allow_containers: false

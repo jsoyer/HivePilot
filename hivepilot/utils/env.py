@@ -20,3 +20,18 @@ def gather_overrides(*layers: Mapping[str, str] | None) -> dict[str, str]:
         if layer:
             combined.update(layer)
     return combined
+
+
+def proxy_env() -> dict[str, str]:
+    """Return proxy-related environment variables present in the process env."""
+    keys = (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "all_proxy",
+    )
+    return {k: os.environ[k] for k in keys if k in os.environ}

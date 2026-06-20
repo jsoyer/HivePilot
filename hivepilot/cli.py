@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import typer
 
@@ -160,6 +160,9 @@ def run(
     all_projects: bool = typer.Option(False, "--all", help="Run on every configured project"),
     projects: list[str] = typer.Option([], "--project", "-p", help="Additional projects"),
     concurrency: int | None = typer.Option(None, "--concurrency", "-c", help="Parallel workers"),
+    simulate: bool = typer.Option(
+        False, "--simulate", help="Simulate agents — record steps without invoking real runners"
+    ),
     token: str | None = typer.Option(
         None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
     ),
@@ -173,6 +176,7 @@ def run(
         extra_prompt=extra_prompt,
         auto_git=auto_git,
         concurrency=concurrency,
+        simulate=simulate,
     )
     for result in results:
         status = "✅" if result.success else "❌"
@@ -192,6 +196,12 @@ def run_pipeline(
     all_projects: bool = typer.Option(False, "--all", help="Run on every configured project"),
     projects: list[str] = typer.Option([], "--project", "-p", help="Additional projects"),
     concurrency: int | None = typer.Option(None, "--concurrency", "-c", help="Parallel workers"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--no-dry-run", help="Skip vault writes (default: dry-run)"
+    ),
+    simulate: bool = typer.Option(
+        False, "--simulate", help="Simulate agents — record steps without invoking real runners"
+    ),
     token: str | None = typer.Option(
         None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
     ),
@@ -205,6 +215,8 @@ def run_pipeline(
         extra_prompt=extra_prompt,
         auto_git=auto_git,
         concurrency=concurrency,
+        dry_run=dry_run,
+        simulate=simulate,
     )
     for result in results:
         status = "✅" if result.success else "❌"
@@ -235,6 +247,24 @@ def doctor() -> None:
     for binary in [settings.claude_command, settings.gh_command, settings.git_command, "caddy"]:
         found = shutil.which(binary)
         typer.echo(f"  {binary:<12}: {'found at ' + found if found else 'NOT FOUND'}")
+
+    typer.echo("\n=== Agent runner CLIs ===")
+    try:
+        from hivepilot.services.project_service import load_tasks
+
+        _cli_kinds = {"claude", "codex", "gemini", "opencode", "ollama", "cursor"}
+        _seen: set[str] = set()
+        for _name, _rdef in load_tasks().runners.items():
+            if _rdef.kind not in _cli_kinds or not _rdef.command:
+                continue
+            _binary = _rdef.command.strip().split()[0]
+            if _binary in _seen:
+                continue
+            _seen.add(_binary)
+            _found = shutil.which(_binary)
+            typer.echo(f"  {_binary:<14}: {'found at ' + _found if _found else 'NOT FOUND'}")
+    except Exception as _exc:  # noqa: BLE001
+        typer.echo(f"  (could not inspect runners: {_exc})")
 
     typer.echo("\n=== Optional Python extras ===")
     for dep in (
@@ -1191,7 +1221,7 @@ def init_project(
 
 
 def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu") -> None:
-    from hivepilot.models import RunnerDefinition, TaskStep
+    from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
     from hivepilot.registry import RUNNER_MAP
     from hivepilot.runners.base import RunnerPayload
 
@@ -1200,7 +1230,7 @@ def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu"
         raise typer.BadParameter(f"Unknown project: {project_name}")
     project = projects.projects[project_name]
 
-    definition = RunnerDefinition(name=kind, kind=kind, command=operation)
+    definition = RunnerDefinition(name=kind, kind=cast(RunnerKind, kind), command=operation)
     step = TaskStep(name=f"iac-{operation}", runner=kind, command=operation)
     payload = RunnerPayload(
         project_name=project_name,
@@ -1616,3 +1646,31 @@ def obsidian_audit(
             continue
         status = "[x]" if val else "[ ]"
         typer.echo(f"  {status} {key}")
+
+
+@app.command("debate")
+def debate(
+    project: str = typer.Argument(..., help="Project to debate within"),
+    topic: str = typer.Argument(..., help="Debate topic / decision"),
+    role: str = typer.Option("ceo", "--role", help="Dual-model role (default: ceo)"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--no-dry-run", help="Skip vault ADR write (default: dry-run)"
+    ),
+    simulate: bool = typer.Option(
+        False, "--simulate", help="Stub model positions instead of invoking runners"
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
+) -> None:
+    """Run a dual-model debate for a role and write the outcome as an ADR."""
+    _require_cli_role("run", token)
+    orchestrator = Orchestrator()
+    adr = orchestrator.run_debate(
+        project_name=project, role_name=role, topic=topic, dry_run=dry_run, simulate=simulate
+    )
+    if adr is None:
+        typer.echo("Debate complete — no vault configured, ADR not written.")
+    else:
+        prefix = "(dry-run) " if adr.get("dry_run") else ""
+        typer.echo(f"ADR {prefix}-> {adr.get('path')}")
