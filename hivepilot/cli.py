@@ -915,14 +915,18 @@ def telegram_systemd_unit(
     import os
     import shutil
 
-    hivepilot_bin = shutil.which("hivepilot") or str(settings.base_dir / ".venv" / "bin" / "hivepilot")
+    hivepilot_bin = shutil.which("hivepilot") or str(
+        settings.base_dir / ".venv" / "bin" / "hivepilot"
+    )
     # Capture the dirs of the agent CLIs so the (minimal-PATH) systemd service finds them.
     _dirs: list[str] = [str(settings.base_dir / ".venv" / "bin")]
     for _b in ("claude", "codex", "gemini", "opencode", "cursor-agent", "gh", "git"):
         _p = shutil.which(_b)
         if _p and os.path.dirname(_p) not in _dirs:
             _dirs.append(os.path.dirname(_p))
-    path_line = "Environment=PATH=" + ":".join(_dirs + ["/usr/local/bin", "/usr/bin", "/bin"]) + "\n"
+    path_line = (
+        "Environment=PATH=" + ":".join(_dirs + ["/usr/local/bin", "/usr/bin", "/bin"]) + "\n"
+    )
     env_line = f"EnvironmentFile={env_file}\n" if env_file else ""
     unit = f"""[Unit]
 Description=HivePilot Telegram bot
@@ -944,10 +948,16 @@ WantedBy=default.target
     typer.echo(unit.strip())
     typer.echo("\n# Install (user service, no sudo):")
     typer.echo("#   mkdir -p ~/.config/systemd/user")
-    typer.echo("#   hivepilot telegram systemd-unit > ~/.config/systemd/user/hivepilot-telegram.service")
-    typer.echo("#   systemctl --user daemon-reload && systemctl --user enable --now hivepilot-telegram")
+    typer.echo(
+        "#   hivepilot telegram systemd-unit > ~/.config/systemd/user/hivepilot-telegram.service"
+    )
+    typer.echo(
+        "#   systemctl --user daemon-reload && systemctl --user enable --now hivepilot-telegram"
+    )
     typer.echo("#   loginctl enable-linger $USER   # keep running after logout")
-    typer.echo("#   journalctl --user -u hivepilot-telegram -f   # logs (token is no longer logged)")
+    typer.echo(
+        "#   journalctl --user -u hivepilot-telegram -f   # logs (token is no longer logged)"
+    )
 
 
 @telegram_app.command("set-webhook")
@@ -1732,3 +1742,34 @@ def debate(
     else:
         prefix = "(dry-run) " if adr.get("dry_run") else ""
         typer.echo(f"ADR {prefix}-> {adr.get('path')}")
+
+
+@app.command("audit")
+def audit(
+    project: str = typer.Argument(..., help="Project to audit"),
+    deep: bool = typer.Option(
+        False, "--deep", help="Deep audit: propose improvements to the agent prompts"
+    ),
+    run_id: int | None = typer.Option(
+        None, "--run-id", help="Observe a specific completed run (light mode)"
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--no-dry-run", help="Skip vault note write (default: dry-run)"
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
+) -> None:
+    """Run Henri (external auditor): observe a cycle or propose prompt improvements."""
+    _require_cli_role("run", token)
+    from hivepilot.services import auditor_service
+
+    orch = Orchestrator()
+    proj = orch._project(project)
+    if deep or run_id is None:
+        out = auditor_service.audit(project=proj, registry=orch.registry, dry_run=dry_run)
+    else:
+        out = auditor_service.observe(
+            project=proj, run_id=run_id, registry=orch.registry, dry_run=dry_run
+        )
+    typer.echo(out[:1000])

@@ -89,4 +89,6 @@ def _no_outbound_notifications(monkeypatch):
     monkeypatch.setattr(notification_service, "_send_slack", lambda *a, **k: None)
     monkeypatch.setattr(notification_service, "_send_discord", lambda *a, **k: None)
     monkeypatch.setattr(notification_service, "send_approval_keyboard", lambda *a, **k: None)
+    # Henri's auto-observation runs vibe (not installed in CI) — keep it off in tests.
+    monkeypatch.setattr(notification_service.settings, "auditor_auto", False, raising=False)
     yield
