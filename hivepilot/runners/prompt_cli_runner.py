@@ -13,6 +13,7 @@ from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.utils.env import merge_environments
 from hivepilot.utils.logging import get_logger
+from hivepilot.utils.remote import build_invocation
 
 logger = get_logger(__name__)
 
@@ -81,11 +82,18 @@ class PromptCliRunner(BaseRunner):
         args = self._build_cli_args(
             payload, self._augment_prompt(payload, self._load_prompt(payload))
         )
+        argv, cwd, run_env = build_invocation(
+            args,
+            payload.project.path,
+            env,
+            host=self.definition.host,
+            ssh_options=self.settings.ssh_options or None,
+        )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         result = subprocess.run(
-            args,
-            cwd=str(payload.project.path),
-            env=env,
+            argv,
+            cwd=cwd,
+            env=run_env,
             check=True,
             text=True,
             capture_output=True,
@@ -106,16 +114,22 @@ class PromptCliRunner(BaseRunner):
         else:
             args = self._build_cli_args(payload, prompt_text)
             command_str = args[0]
+            argv, cwd, run_env = build_invocation(
+                args,
+                payload.project.path,
+                env,
+                host=self.definition.host,
+                ssh_options=self.settings.ssh_options or None,
+            )
             timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
             logger.info(
                 "cli_runner.start",
                 project=payload.project_name,
                 step=payload.step.name,
                 command=command_str,
+                host=self.definition.host,
             )
-            subprocess.run(
-                args, cwd=str(payload.project.path), env=env, check=True, text=True, timeout=timeout
-            )
+            subprocess.run(argv, cwd=cwd, env=run_env, check=True, text=True, timeout=timeout)
             logger.info("cli_runner.end", project=payload.project_name, step=payload.step.name)
 
     def _run_api(self, prompt: str, payload: RunnerPayload, env: dict[str, str]) -> None:
