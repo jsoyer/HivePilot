@@ -1,0 +1,116 @@
+{
+  "name": "HivePilot — events → notify + approval links",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hivepilot-events",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a1111111-1111-1111-1111-111111111111",
+      "name": "HivePilot Events (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 320],
+      "webhookId": "hivepilot-events"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "checkpoint",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2222222-2222-2222-2222-222222222222",
+      "name": "Is checkpoint?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [520, 320]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "message",
+              "value": "=Plan ready for run {{ $json.body.run_id }} ({{ $json.body.pipeline }}). Components: {{ ($json.body.components || []).join(', ') }}",
+              "type": "string"
+            },
+            {
+              "id": "f2",
+              "name": "approve_url",
+              "value": "={{ $env.N8N_BASE_URL }}/webhook/hivepilot-approve?run_id={{ $json.body.run_id }}&action=approve",
+              "type": "string"
+            },
+            {
+              "id": "f3",
+              "name": "deny_url",
+              "value": "={{ $env.N8N_BASE_URL }}/webhook/hivepilot-approve?run_id={{ $json.body.run_id }}&action=deny",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3333333-3333-3333-3333-333333333333",
+      "name": "Build approve/deny links",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [800, 220]
+    },
+    {
+      "parameters": {},
+      "id": "a4444444-4444-4444-4444-444444444444",
+      "name": "Notify me (Slack/email/…)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1060, 220]
+    },
+    {
+      "parameters": {},
+      "id": "a5555555-5555-5555-5555-555555555555",
+      "name": "Log event",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [800, 440]
+    },
+    {
+      "parameters": {
+        "content": "## HivePilot events\nReceives pipeline lifecycle events from HivePilot\n(`HIVEPILOT_EVENT_WEBHOOK_URL` → this webhook).\n\nOn **checkpoint**: builds approve/deny links that hit the\n`hivepilot-approve` workflow, then replace the NoOp with your\nSlack/email node (use {{message}}, {{approve_url}}, {{deny_url}}).",
+        "height": 220,
+        "width": 360
+      },
+      "id": "a6666666-6666-6666-6666-666666666666",
+      "name": "Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [220, 60]
+    }
+  ],
+  "connections": {
+    "HivePilot Events (Webhook)": {
+      "main": [[{ "node": "Is checkpoint?", "type": "main", "index": 0 }]]
+    },
+    "Is checkpoint?": {
+      "main": [
+        [{ "node": "Build approve/deny links", "type": "main", "index": 0 }],
+        [{ "node": "Log event", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build approve/deny links": {
+      "main": [[{ "node": "Notify me (Slack/email/…)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "active": false
+}
