@@ -398,14 +398,21 @@ class Orchestrator:
                 return results
 
             if group_mode:
-                targets = [hub] if (stage_idx < pause_index and hub) else selected_components
+                is_hub_stage = bool(stage_idx < pause_index and hub)
+                targets = [hub] if is_hub_stage else selected_components
+                # Planning stages run on the hub, which is the product/parent dir
+                # (not a code git repo). Code git actions only make sense on the
+                # component repos in the post-checkpoint fan-out; the hub's planning
+                # artifacts are persisted via the vault auto-commit instead.
+                stage_auto_git = auto_git and not is_hub_stage
             else:
                 targets = project_names
+                stage_auto_git = auto_git
             stage_results = self.run_task(
                 project_names=targets,
                 task_name=stage.task,
                 extra_prompt=extra_prompt,
-                auto_git=auto_git,
+                auto_git=stage_auto_git,
                 concurrency=concurrency,
                 simulate=simulate,
                 dry_run=dry_run,
