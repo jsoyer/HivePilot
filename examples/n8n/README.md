@@ -23,10 +23,21 @@ See also: [`docs/v4/INTEGRATIONS.md`](../../docs/v4/INTEGRATIONS.md).
    ```
 3. **n8n env** (Settings → Variables, or process env):
    ```
-   N8N_BASE_URL       = https://<your-n8n>
-   HIVEPILOT_API_URL  = https://<your-hivepilot-api>        # the `hivepilot api` server
-   HIVEPILOT_API_TOKEN= <a token with the "approve" role>
+   N8N_BASE_URL           = https://<your-n8n>
+   HIVEPILOT_API_URL      = https://<your-hivepilot-api>    # the `hivepilot api` server
+   HIVEPILOT_API_TOKEN    = <a token with the "approve" role>
+   HIVEPILOT_APPROVE_SECRET = <random shared secret guarding the approve webhook>
    ```
+
+## Security notes
+The approve webhook performs a privileged action, so the example is hardened:
+- it's **POST** (a prefetched GET link can't trigger an approval);
+- a shared **token** (`HIVEPILOT_APPROVE_SECRET`) is required, and `run_id`
+  (`^[0-9]+$`) + `action` (`approve`/`deny`) are validated before any API call,
+  so no path injection / unauthenticated approvals.
+For stronger per-link binding, replace the shared token with an
+`HMAC(secret, run_id|action|expiry)` generated in the events workflow and verified
+here. Never expose the approve webhook publicly without these guards.
 4. Run a real pipeline with a checkpoint:
    `hivepilot run-pipeline noxys company-v2 --no-dry-run` →
    you get a notification with **Approve / Deny** links → clicking resumes (or

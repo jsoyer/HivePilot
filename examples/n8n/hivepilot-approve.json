@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "GET",
+        "httpMethod": "POST",
         "path": "hivepilot-approve",
         "responseMode": "lastNode",
         "options": {}
@@ -17,8 +17,18 @@
     },
     {
       "parameters": {
+        "jsCode": "// Validate + authorize BEFORE touching the HivePilot API.\n// Inputs come from query (?run_id=&action=&token=) or JSON body.\nconst src = { ...( $json.query || {} ), ...( $json.body || {} ) };\nconst runId = String(src.run_id ?? '');\nconst action = String(src.action ?? '');\nconst token = String(src.token ?? '');\nconst secret = $env.HIVEPILOT_APPROVE_SECRET || '';\n\nif (!secret || token !== secret) {\n  throw new Error('unauthorized: bad or missing token');\n}\nif (!/^[0-9]+$/.test(runId)) {\n  throw new Error('invalid run_id (must be digits)');\n}\nif (action !== 'approve' && action !== 'deny') {\n  throw new Error(\"invalid action (must be 'approve' or 'deny')\");\n}\nreturn [{ json: { run_id: runId, action } }];"
+      },
+      "id": "b4444444-4444-4444-4444-444444444444",
+      "name": "Validate & authorize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 320]
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "={{ $env.HIVEPILOT_API_URL }}/approvals/{{ $json.query.run_id }}",
+        "url": "={{ $env.HIVEPILOT_API_URL }}/approvals/{{ $json.run_id }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -27,30 +37,33 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ action: $json.query.action }) }}",
+        "jsonBody": "={{ JSON.stringify({ action: $json.action }) }}",
         "options": {}
       },
       "id": "b2222222-2222-2222-2222-222222222222",
       "name": "Call HivePilot /approvals",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [540, 320]
+      "position": [800, 320]
     },
     {
       "parameters": {
-        "content": "## Approve / deny callback\nHit by the approve/deny links from the events workflow\n(or any Slack/email button).\n\n`GET /webhook/hivepilot-approve?run_id=42&action=approve`\n→ `POST {HIVEPILOT_API_URL}/approvals/42` `{ \"action\": \"approve\" }`\n\nSet env: `HIVEPILOT_API_URL`, `HIVEPILOT_API_TOKEN`.",
-        "height": 220,
-        "width": 360
+        "content": "## Approve / deny callback (hardened)\nInvoked (POST) by the approve/deny action from the events workflow / a Slack button / a confirm page.\n\nGuards (in `Validate & authorize`):\n- shared **token** must equal `HIVEPILOT_APPROVE_SECRET`\n- `run_id` must match `^[0-9]+$` (no path injection)\n- `action` must be exactly `approve` or `deny`\n\nThen → `POST {HIVEPILOT_API_URL}/approvals/{run_id}` `{ \"action\": … }`.\n\nEnv: `HIVEPILOT_API_URL`, `HIVEPILOT_API_TOKEN`, `HIVEPILOT_APPROVE_SECRET`.\nPOST (not GET) so link prefetch can't trigger the action. For per-link binding,\nreplace the shared token with an HMAC(secret, run_id|action|exp).",
+        "height": 260,
+        "width": 380
       },
       "id": "b3333333-3333-3333-3333-333333333333",
       "name": "Notes",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [220, 60]
+      "position": [220, 20]
     }
   ],
   "connections": {
     "Approve/Deny (Webhook)": {
+      "main": [[{ "node": "Validate & authorize", "type": "main", "index": 0 }]]
+    },
+    "Validate & authorize": {
       "main": [[{ "node": "Call HivePilot /approvals", "type": "main", "index": 0 }]]
     }
   },
