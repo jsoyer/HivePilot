@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import unicodedata
@@ -18,6 +19,9 @@ logger = get_logger(__name__)
 # messages at ~4096; keep headroom for the header lines).
 _STREAM_MAX_CHARS = 1500
 
+# Telegram HTML card: keep total under this (Telegram limit is ~4096 bytes).
+_RICH_MAX_CHARS = 3500
+
 # Human-readable meaning shown next to each live-stream emoji.
 _ICON_LABELS = {
     "🚀": "start",
@@ -25,6 +29,14 @@ _ICON_LABELS = {
     "⏸️": "approval needed",
     "💬": "proposal",
     "⚖️": "synthesis",
+}
+
+# Status badge mapping for the rich HTML card.
+_STATUS_BADGES = {
+    "PASS": "✅ PASS",
+    "BLOCKED": "⛔ BLOCKED",
+    "NEEDS_HUMAN": "🙋 NEEDS_HUMAN",
+    "ADVISORY": "📋 ADVISORY",
 }
 
 # Path for persisting agent_key -> message_thread_id across runs.
@@ -83,8 +95,12 @@ def _send_discord(message: str) -> None:
     requests.post(webhook, json={"content": message}, timeout=5)
 
 
-def _send_telegram(message: str, chat_id: int | str | None = None, message_thread_id: int | None = None) -> None:
-
+def _send_telegram(
+    message: str,
+    chat_id: int | str | None = None,
+    message_thread_id: int | None = None,
+    parse_mode: str | None = None,
+) -> None:
     token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = (
         chat_id or settings.telegram_notification_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
@@ -97,6 +113,8 @@ def _send_telegram(message: str, chat_id: int | str | None = None, message_threa
     payload: dict[str, Any] = {"chat_id": chat_id, "text": message}
     if message_thread_id is not None:
         payload["message_thread_id"] = message_thread_id
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
     requests.post(url, json=payload, timeout=5)
 
 
@@ -175,6 +193,65 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
     return None
 
 
+def _render_rich_card(
+    *,
+    icon: str,
+    actor: str,
+    target: str | None,
+    report: Any,  # AgentReport
+) -> str:
+    """Render an HTML card for Telegram's HTML parse mode.
+
+    Returns a string ready for ``parse_mode="HTML"``.
+    All user-derived text is escaped via ``html.escape``.
+    Total length is kept under ``_RICH_MAX_CHARS``.
+    """
+    lines: list[str] = []
+
+    # Header: icon <b>Actor</b> → <i>Target</i>
+    header = f"{icon} <b>{html.escape(actor)}</b>"
+    if target:
+        header += f" → <i>{html.escape(target)}</i>"
+    lines.append(header)
+
+    # Status badge
+    if report.status:
+        badge = _STATUS_BADGES.get(report.status.upper(), f"📋 {html.escape(report.status)}")
+        lines.append(badge)
+
+    # Summary bullets (max 5)
+    for bullet in report.summary[:5]:
+        lines.append(f"• {html.escape(bullet)}")
+
+    # Next handoff
+    if report.next_handoff:
+        lines.append(f"↪ next: {html.escape(report.next_handoff)}")
+
+    # Confidence
+    if report.confidence:
+        lines.append(f"confidence: {html.escape(report.confidence)}")
+
+    # Links (as <a> tags)
+    for link in report.links:
+        safe = html.escape(link)
+        if link.startswith("http"):
+            lines.append(f'<a href="{safe}">{safe}</a>')
+        else:
+            lines.append(f'<a href="file://{safe}">{safe}</a>')
+
+    card = "\n".join(lines)
+
+    # Truncate if needed — drop trailing bullets (never mid-tag)
+    if len(card) > _RICH_MAX_CHARS:
+        # Rebuild without links first
+        lines_no_links = [l for l in lines if not l.startswith('<a href=')]
+        card = "\n".join(lines_no_links)
+        if len(card) > _RICH_MAX_CHARS:
+            card = card[: _RICH_MAX_CHARS - 1] + "…"
+
+    return card
+
+
 def stream_agent_turn(
     *,
     actor: str,
@@ -189,32 +266,70 @@ def stream_agent_turn(
     in real time. Intentionally Telegram-only (the live channel) and a silent
     no-op when streaming is disabled or Telegram is unconfigured — it must never
     break a run.
+
+    When ``settings.telegram_stream_rich`` is True and the summary contains
+    structured content (status badge or bullet points), renders an HTML card
+    instead of plain text.
     """
     if not settings.telegram_stream_live:
         return
-    label = _ICON_LABELS.get(icon)
-    tag = f"{icon} ({label})" if label else icon
-    header = f"{tag} {actor}" + (f" — {stage}" if stage else "")
-    lines = [header]
-    if target:
-        lines.append(f"   ↳ {target}")
-    if summary:
-        snippet = " ".join(summary.split())
-        if len(snippet) > _STREAM_MAX_CHARS:
-            snippet = snippet[: _STREAM_MAX_CHARS - 1] + "…"
-        if snippet:
-            lines.append(f"   {snippet}")
+
     message_thread_id: int | None = None
     if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
         agent_key = _resolve_agent_key(actor)
         message_thread_id = _ensure_topic_thread(agent_key, f"{actor}")
+
+    # --- Attempt rich HTML card rendering ---
+    use_rich = getattr(settings, "telegram_stream_rich", True)
+    send_kwargs: dict[str, Any] = {
+        "chat_id": settings.telegram_stream_chat_id,
+        "message_thread_id": message_thread_id,
+    }
+    message_text: str | None = None
+    parse_mode: str | None = None
+
+    if use_rich and summary:
+        try:
+            from hivepilot.services.agent_report import parse_agent_report
+
+            report = parse_agent_report(summary)
+            has_structure = bool(report.status or report.summary)
+            if has_structure:
+                message_text = _render_rich_card(
+                    icon=icon,
+                    actor=actor,
+                    target=target,
+                    report=report,
+                )
+                parse_mode = "HTML"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stream.rich_render_failed", error=str(exc))
+            # Fall through to plain text
+
+    # --- Plain-text fallback ---
+    if message_text is None:
+        label = _ICON_LABELS.get(icon)
+        tag = f"{icon} ({label})" if label else icon
+        header = f"{tag} {actor}" + (f" — {stage}" if stage else "")
+        plain_lines = [header]
+        if target:
+            plain_lines.append(f"   ↳ {target}")
+        if summary:
+            snippet = " ".join(summary.split())
+            if len(snippet) > _STREAM_MAX_CHARS:
+                snippet = snippet[: _STREAM_MAX_CHARS - 1] + "…"
+            if snippet:
+                plain_lines.append(f"   {snippet}")
+        message_text = "\n".join(plain_lines)
+
     try:
         # Live agent stream goes to its dedicated channel when set, else falls
         # back to the main notification chat.
         _send_telegram(
-            "\n".join(lines),
-            chat_id=settings.telegram_stream_chat_id,
-            message_thread_id=message_thread_id,
+            message_text,
+            chat_id=send_kwargs["chat_id"],
+            message_thread_id=send_kwargs["message_thread_id"],
+            parse_mode=parse_mode,
         )
     except _NotConfigured:
         pass  # Telegram not set up — streaming is best-effort
