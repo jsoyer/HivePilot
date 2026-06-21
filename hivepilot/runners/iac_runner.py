@@ -27,7 +27,9 @@ class _TfBaseRunner(BaseRunner):
             or self.definition.command
             or self.definition.options.get("operation", "plan")
         )
-        timeout = payload.step.timeout_seconds or self.definition.timeout_seconds or _DEFAULT_TF_TIMEOUT
+        timeout = (
+            payload.step.timeout_seconds or self.definition.timeout_seconds or _DEFAULT_TF_TIMEOUT
+        )
         env = merge_environments(payload.project.env, self.definition.env)
         cwd = str(payload.project.path)
         opts = self.definition.options
@@ -83,6 +85,7 @@ class _TfBaseRunner(BaseRunner):
     def _run_cost_estimate(self, *, cwd: str, env: dict, timeout: int) -> None:
         """Run infracost breakdown. Requires infracost CLI to be installed."""
         import shutil
+
         if not shutil.which("infracost"):
             raise RuntimeError(
                 "infracost CLI not found. Install from https://www.infracost.io/docs/"
@@ -162,7 +165,11 @@ class PulumiRunner(BaseRunner):
             or self.definition.command
             or self.definition.options.get("operation", "preview")
         )
-        timeout = payload.step.timeout_seconds or self.definition.timeout_seconds or _DEFAULT_PULUMI_TIMEOUT
+        timeout = (
+            payload.step.timeout_seconds
+            or self.definition.timeout_seconds
+            or _DEFAULT_PULUMI_TIMEOUT
+        )
         env = merge_environments(payload.project.env, self.definition.env)
         cwd = str(payload.project.path)
         opts = self.definition.options

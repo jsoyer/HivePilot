@@ -46,6 +46,7 @@ async def body_size_limit(request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > _MAX_BODY_BYTES:
             from fastapi.responses import JSONResponse
+
             return JSONResponse({"detail": "Request body too large"}, status_code=413)
     return await call_next(request)
 
@@ -66,8 +67,16 @@ _RATE_WINDOW = 60.0
 _rate_lock = threading.Lock()
 _rate_counts: dict[str, list[float]] = defaultdict(list)
 
-_RATE_LIMITED_PATHS = {"/run", "/v1/run", "/chatops/slack", "/chatops/discord", "/chatops/telegram",
-                       "/v1/chatops/slack", "/v1/chatops/discord", "/v1/chatops/telegram"}
+_RATE_LIMITED_PATHS = {
+    "/run",
+    "/v1/run",
+    "/chatops/slack",
+    "/chatops/discord",
+    "/chatops/telegram",
+    "/v1/chatops/slack",
+    "/v1/chatops/discord",
+    "/v1/chatops/telegram",
+}
 
 
 def _client_ip(request: Request) -> str:
@@ -87,6 +96,7 @@ async def rate_limit_middleware(request: Request, call_next):
             _rate_counts[ip] = [t for t in _rate_counts[ip] if t > window_start]
             if len(_rate_counts[ip]) >= _RATE_LIMIT:
                 from fastapi.responses import JSONResponse
+
                 return JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
             _rate_counts[ip].append(now)
     return await call_next(request)
@@ -161,6 +171,7 @@ class RunRequest(BaseModel):
         hits = check_prompt_injection(cleaned)
         if hits:
             from hivepilot.utils.logging import get_logger
+
             get_logger(__name__).warning("prompt_injection.detected", patterns=hits)
         return cleaned
 
@@ -184,7 +195,9 @@ def health():
 
     try:
         orch = _get_orchestrator()
-        runner_count = len(orch.registry._definitions) if hasattr(orch.registry, "_definitions") else -1
+        runner_count = (
+            len(orch.registry._definitions) if hasattr(orch.registry, "_definitions") else -1
+        )
         checks["runners"] = f"ok ({runner_count} defined)" if runner_count >= 0 else "ok"
     except Exception:  # noqa: BLE001
         checks["runners"] = "error"
@@ -300,6 +313,7 @@ async def telegram_webhook(url_path: str, request: Request):
 @v1.post("/webhook/slack")
 async def slack_webhook(request: Request):
     from hivepilot.services.slack_bot import handle_webhook_request
+
     return await handle_webhook_request(request)
 
 
@@ -309,9 +323,11 @@ async def linear_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("Linear-Delivery", "")
     from hivepilot.services.linear_service import handle_webhook, verify_webhook
+
     if not verify_webhook(body, signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
     import json as _json
+
     payload = _json.loads(body)
     result = handle_webhook(payload)
     return {"status": "ok", "detail": result}
@@ -329,11 +345,13 @@ async def discord_webhook(request: Request):
     timestamp = request.headers.get("X-Signature-Timestamp", "")
     try:
         from hivepilot.services.discord_bot import verify_signature
+
         if not verify_signature(body, signature, timestamp):
             raise HTTPException(status_code=401, detail="Invalid signature")
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     from hivepilot.services.discord_bot import handle_interaction
+
     result = handle_interaction(body, signature, timestamp)
     return result
 
@@ -341,12 +359,14 @@ async def discord_webhook(request: Request):
 @app.on_event("shutdown")
 async def _shutdown_telegram():
     from hivepilot.services import telegram_bot as tgbot
+
     await tgbot.shutdown()
 
 
 @app.on_event("shutdown")
 async def _shutdown_slack():
     from hivepilot.services import slack_bot
+
     slack_bot.shutdown()
 
 
@@ -391,7 +411,10 @@ def trigger_schedule(schedule_name: str, request: Request):
             schedule_service.run_entry(entry, _get_orchestrator())
         except Exception as exc:  # noqa: BLE001
             from hivepilot.utils.logging import get_logger
-            get_logger(__name__).error("webhook.trigger.failed", schedule=schedule_name, error=str(exc))
+
+            get_logger(__name__).error(
+                "webhook.trigger.failed", schedule=schedule_name, error=str(exc)
+            )
 
     threading.Thread(target=_fire, daemon=True).start()
     return TriggerResponse(

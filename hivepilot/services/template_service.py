@@ -345,6 +345,7 @@ def list_templates() -> list[str]:
 # Community marketplace
 # ---------------------------------------------------------------------------
 
+
 def list_remote_templates(source: str | None = None) -> list[dict]:
     """
     Fetch the template index from a remote source.
@@ -425,7 +426,9 @@ def _resolve_index_url(source: str | None) -> str:
     # GitHub shorthand: user/repo
     if "/" in source and not source.startswith("/"):
         return f"https://raw.githubusercontent.com/{source}/main/index.json"
-    raise ValueError(f"Unrecognised source format: {source!r}. Use 'user/repo' or a full HTTPS URL.")
+    raise ValueError(
+        f"Unrecognised source format: {source!r}. Use 'user/repo' or a full HTTPS URL."
+    )
 
 
 def get_template(name: str) -> dict:

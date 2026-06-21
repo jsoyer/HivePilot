@@ -289,5 +289,7 @@ def handle_webhook(payload: dict) -> str:
         statuses = [("success" if r.success else "failed") for r in results]
         return f"triggered {project_name}/{task_name}: {', '.join(statuses)}"
     except Exception as exc:  # noqa: BLE001
-        logger.error("linear.webhook.run_error", project=project_name, task=task_name, error=str(exc))
+        logger.error(
+            "linear.webhook.run_error", project=project_name, task=task_name, error=str(exc)
+        )
         return f"error triggering {project_name}/{task_name}: {exc}"

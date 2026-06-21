@@ -264,8 +264,9 @@ def test_cmd_pipelines_lists_pipelines() -> None:
     update, ctx = _make_update(), _make_context()
     orch = MagicMock()
     orch.pipelines.pipelines = {"company": types.SimpleNamespace(description="Full company")}
-    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch.object(
-        telegram_bot, "_get_orch", return_value=orch
+    with (
+        patch.object(telegram_bot, "_require_allowed", return_value=True),
+        patch.object(telegram_bot, "_get_orch", return_value=orch),
     ):
         asyncio.run(telegram_bot._cmd_pipelines(update, ctx))
     out = update.message.reply_text.call_args.args[0]
@@ -283,8 +284,9 @@ def test_cmd_run_pipeline_passes_simulate() -> None:
     update, ctx = _make_update(), _make_context(["noxys", "company", "simulate"])
     orch = MagicMock()
     orch.run_pipeline.return_value = []
-    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch.object(
-        telegram_bot, "_get_orch", return_value=orch
+    with (
+        patch.object(telegram_bot, "_require_allowed", return_value=True),
+        patch.object(telegram_bot, "_get_orch", return_value=orch),
     ):
         asyncio.run(telegram_bot._cmd_run_pipeline(update, ctx))
     assert orch.run_pipeline.call_args.kwargs["simulate"] is True
@@ -295,8 +297,9 @@ def test_cmd_debate_calls_run_debate() -> None:
     update, ctx = _make_update(), _make_context(["noxys", "adopt", "X"])
     orch = MagicMock()
     orch.run_debate.return_value = {"path": "ADR.md", "dry_run": True}
-    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch.object(
-        telegram_bot, "_get_orch", return_value=orch
+    with (
+        patch.object(telegram_bot, "_require_allowed", return_value=True),
+        patch.object(telegram_bot, "_get_orch", return_value=orch),
     ):
         asyncio.run(telegram_bot._cmd_debate(update, ctx))
     assert orch.run_debate.call_args.kwargs["topic"] == "adopt X"
@@ -306,8 +309,9 @@ def test_cmd_debate_calls_run_debate() -> None:
 def test_cmd_steps_queries_state() -> None:
     update, ctx = _make_update(), _make_context(["7"])
     rows = [{"status": "success", "step": "ceo intake", "timestamp": "t", "detail": "ok"}]
-    with patch.object(telegram_bot, "_require_allowed", return_value=True), patch(
-        "hivepilot.services.state_service.get_steps_for_run", return_value=rows
+    with (
+        patch.object(telegram_bot, "_require_allowed", return_value=True),
+        patch("hivepilot.services.state_service.get_steps_for_run", return_value=rows),
     ):
         asyncio.run(telegram_bot._cmd_steps(update, ctx))
     out = update.message.reply_text.call_args.args[0]
@@ -333,11 +337,13 @@ def test_fetch_recent_chats_dedupes(monkeypatch) -> None:
             pass
 
         def json(self):
-            return {"result": [
-                {"message": {"chat": {"id": 42, "first_name": "Jo", "type": "private"}}},
-                {"message": {"chat": {"id": 42, "first_name": "Jo"}}},
-                {"message": {"chat": {"id": -100, "title": "Team", "type": "group"}}},
-            ]}
+            return {
+                "result": [
+                    {"message": {"chat": {"id": 42, "first_name": "Jo", "type": "private"}}},
+                    {"message": {"chat": {"id": 42, "first_name": "Jo"}}},
+                    {"message": {"chat": {"id": -100, "title": "Team", "type": "group"}}},
+                ]
+            }
 
     monkeypatch.setattr(telegram_bot.settings, "telegram_bot_token", "T")
     monkeypatch.setattr("requests.get", lambda *a, **k: FakeResp())

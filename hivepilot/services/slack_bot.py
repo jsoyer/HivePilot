@@ -18,12 +18,12 @@ _app_lock = threading.Lock()
 # Config helpers
 # ---------------------------------------------------------------------------
 
+
 def _bot_token() -> str:
     token = settings.slack_bot_token or os.environ.get("SLACK_BOT_TOKEN")
     if not token:
         raise RuntimeError(
-            "Slack bot token not configured. "
-            "Set HIVEPILOT_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN."
+            "Slack bot token not configured. Set HIVEPILOT_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN."
         )
     return token
 
@@ -58,6 +58,7 @@ def _is_allowed(channel_id: str) -> bool:
 
 def _get_orch():
     from hivepilot.services.chatops_service import _get_orchestrator
+
     return _get_orchestrator()
 
 
@@ -68,7 +69,8 @@ def _notification_channel_id() -> str | None:
 
 def _format_results(results) -> str:
     lines = [
-        ("ok" if r.success else "fail") + f" {r.project} -> {r.target}"
+        ("ok" if r.success else "fail")
+        + f" {r.project} -> {r.target}"
         + (f"\n  {r.detail}" if r.detail else "")
         for r in results
     ]
@@ -107,6 +109,7 @@ def _approval_blocks(run_id: int, project: str, task: str) -> list[dict[str, Any
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
+
 
 def _build_app():
     try:
@@ -157,6 +160,7 @@ def _register_handlers(bolt_app) -> None:
             respond("Unauthorized channel.")
             return
         from hivepilot.services import state_service
+
         try:
             pending = state_service.get_pending_approvals()
         except Exception as exc:
@@ -225,6 +229,7 @@ def _register_handlers(bolt_app) -> None:
             respond("Unauthorized channel.")
             return
         from hivepilot.services import state_service
+
         try:
             runs = state_service.list_recent_runs(limit=5)
         except Exception as exc:
@@ -233,10 +238,7 @@ def _register_handlers(bolt_app) -> None:
         if not runs:
             respond("No recent runs.")
             return
-        lines = [
-            f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}"
-            for r in runs
-        ]
+        lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
         respond("Recent runs:\n" + "\n".join(lines))
 
     # -- Approval button actions -----------------------------------------------
@@ -252,7 +254,9 @@ def _register_handlers(bolt_app) -> None:
             respond(f"Invalid action: {action_id!r}")
             return
         approve = verb == "approve"
-        user = (body.get("user") or {}).get("username") or (body.get("user") or {}).get("id", "unknown")
+        user = (body.get("user") or {}).get("username") or (body.get("user") or {}).get(
+            "id", "unknown"
+        )
         try:
             result = _get_orch().run_approved(
                 run_id=run_id,
@@ -274,6 +278,7 @@ def _register_handlers(bolt_app) -> None:
 # Socket Mode  (RPI / NAT — no public URL needed)
 # ---------------------------------------------------------------------------
 
+
 def run_socket_mode() -> None:
     """Start the bot in Socket Mode. Blocking. No public URL required."""
     try:
@@ -290,6 +295,7 @@ def run_socket_mode() -> None:
 # ---------------------------------------------------------------------------
 # Webhook mode — FastAPI-integrated
 # ---------------------------------------------------------------------------
+
 
 def _get_or_init_webhook_app():
     """Lazily initialise the bolt App for FastAPI webhook mode."""
@@ -335,13 +341,17 @@ def shutdown() -> None:
 # Proactive notifications
 # ---------------------------------------------------------------------------
 
+
 def notify(message: str) -> None:
     """Send a plain text message to the notification channel."""
     channel_id = _notification_channel_id()
     if not channel_id:
-        raise RuntimeError("No Slack notification channel_id configured (HIVEPILOT_SLACK_NOTIFICATION_CHANNEL_ID)")
+        raise RuntimeError(
+            "No Slack notification channel_id configured (HIVEPILOT_SLACK_NOTIFICATION_CHANNEL_ID)"
+        )
     try:
         import requests as _requests
+
         token = _bot_token()
         resp = _requests.post(
             "https://slack.com/api/chat.postMessage",
@@ -362,12 +372,15 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
     """
     channel_id = _notification_channel_id()
     if not channel_id:
-        raise RuntimeError("No Slack notification channel_id configured (HIVEPILOT_SLACK_NOTIFICATION_CHANNEL_ID)")
+        raise RuntimeError(
+            "No Slack notification channel_id configured (HIVEPILOT_SLACK_NOTIFICATION_CHANNEL_ID)"
+        )
 
     token = _bot_token()
     blocks = _approval_blocks(run_id=run_id, project=project, task=task)
     try:
         import requests as _requests
+
         resp = _requests.post(
             "https://slack.com/api/chat.postMessage",
             headers={"Authorization": f"Bearer {token}"},

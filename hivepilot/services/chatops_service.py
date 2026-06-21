@@ -79,6 +79,7 @@ def _dispatch(command: str, args: list[str], source: str) -> str:
 # Source-specific handlers — parse platform command format, delegate to _dispatch
 # ---------------------------------------------------------------------------
 
+
 def handle_slack(payload: dict[str, str]) -> str:
     """Handle Slack slash command payload."""
     command = payload.get("command", "")
@@ -107,6 +108,6 @@ def handle_telegram(update: dict[str, Any]) -> str:
         return "Unsupported command"
     parts = text.split()
     # /hp_run project task → command=run, args=[project, task]
-    raw_command = parts[0].lstrip("/")               # hp_run
+    raw_command = parts[0].lstrip("/")  # hp_run
     command = raw_command.removeprefix("hp_").removeprefix("hp")  # run
     return _dispatch(command, parts[1:], source="telegram")

@@ -12,7 +12,12 @@ def register():
         logger.info("plugin.before_step", project=payload.project_name, step=payload.step.name)
 
     def after_step(payload, **kwargs):
-        logger.info("plugin.after_step", project=payload.project_name, step=payload.step.name, metadata=payload.metadata)
+        logger.info(
+            "plugin.after_step",
+            project=payload.project_name,
+            step=payload.step.name,
+            metadata=payload.metadata,
+        )
 
     return {
         "before_step": before_step,

@@ -13,12 +13,24 @@ logger = get_logger(__name__)
 
 
 def repo_exists(slug: str, settings: Settings, project: ProjectConfig) -> bool:
-    result = run_command([settings.gh_command, "repo", "view", slug], cwd=project.path, check=False, capture_output=True)
+    result = run_command(
+        [settings.gh_command, "repo", "view", slug],
+        cwd=project.path,
+        check=False,
+        capture_output=True,
+    )
     return result.returncode == 0
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))
-def create_repo(slug: str, *, settings: Settings, project: ProjectConfig, visibility: str, description: str | None) -> None:
+def create_repo(
+    slug: str,
+    *,
+    settings: Settings,
+    project: ProjectConfig,
+    visibility: str,
+    description: str | None,
+) -> None:
     args = [settings.gh_command, "repo", "create", slug, "--confirm"]
     if visibility == "private":
         args.append("--private")
@@ -51,10 +63,22 @@ def ensure_repository(
         logger.info("github.repo_exists", repo=slug)
     else:
         logger.info("github.repo_create", repo=slug)
-        create_repo(slug, settings=settings, project=project, visibility=visibility, description=project.description)
+        create_repo(
+            slug,
+            settings=settings,
+            project=project,
+            visibility=visibility,
+            description=project.description,
+        )
     if set_remote:
         run_command(
-            [settings.git_command, "remote", "set-url", "origin", build_repo_url(slug, remote_protocol)],
+            [
+                settings.git_command,
+                "remote",
+                "set-url",
+                "origin",
+                build_repo_url(slug, remote_protocol),
+            ],
             cwd=project.path,
             check=False,
         )
