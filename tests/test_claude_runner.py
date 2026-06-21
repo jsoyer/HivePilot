@@ -39,6 +39,63 @@ def test_build_prompt_without_prior_context_is_clean(tmp_path: Path) -> None:
     assert "INSTRUCTIONS" in out
 
 
+def test_permission_mode_flag_when_configured(tmp_path: Path, monkeypatch) -> None:
+    pf = tmp_path / "p.md"
+    pf.write_text("do it", encoding="utf-8")
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+        metadata={},
+        secrets={},
+    )
+    runner = _runner()
+    monkeypatch.setattr(runner.settings, "claude_permission_mode", "acceptEdits", raising=False)
+    args, _ = runner._build_invocation(payload)
+    assert "--permission-mode" in args
+    assert args[args.index("--permission-mode") + 1] == "acceptEdits"
+
+
+def test_no_permission_flag_by_default(tmp_path: Path, monkeypatch) -> None:
+    pf = tmp_path / "p.md"
+    pf.write_text("do it", encoding="utf-8")
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+        metadata={},
+        secrets={},
+    )
+    runner = _runner()
+    monkeypatch.setattr(runner.settings, "claude_permission_mode", None, raising=False)
+    args, _ = runner._build_invocation(payload)
+    assert "--permission-mode" not in args
+
+
+def test_step_metadata_overrides_global_permission_mode(tmp_path: Path, monkeypatch) -> None:
+    pf = tmp_path / "p.md"
+    pf.write_text("do it", encoding="utf-8")
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(
+            name="s",
+            runner="claude",
+            prompt_file=str(pf),
+            metadata={"permission_mode": "bypassPermissions"},
+        ),
+        metadata={},
+        secrets={},
+    )
+    runner = _runner()
+    monkeypatch.setattr(runner.settings, "claude_permission_mode", "acceptEdits", raising=False)
+    args, _ = runner._build_invocation(payload)
+    assert args[args.index("--permission-mode") + 1] == "bypassPermissions"
+
+
 def test_capture_returns_agent_stdout(tmp_path: Path) -> None:
     from unittest.mock import MagicMock, patch
 

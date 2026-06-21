@@ -832,15 +832,20 @@ class Orchestrator:
                     from typing import cast
 
                     from hivepilot.models import RunnerDefinition, RunnerKind
-                    from hivepilot.roles import resolve_host, resolve_runner
+                    from hivepilot.roles import get_role, resolve_host, resolve_runner
 
                     runner_kind, role_model = resolve_runner(task.role, policy)
+                    role_options: dict[str, str] = {}
+                    role_perm = get_role(task.role).permission_mode
+                    if role_perm:
+                        role_options["permission_mode"] = role_perm
                     runner_def = RunnerDefinition(
                         name=f"role:{task.role}",
                         kind=cast(RunnerKind, runner_kind),
                         command=None,
                         model=role_model,
                         host=resolve_host(task.role, policy),
+                        options=role_options,
                     )
                     runner_key = task.role
                 else:

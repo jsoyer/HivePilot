@@ -42,6 +42,10 @@ class Role(BaseModel):
     models: list[str] | None = None
     display_name: str | None = None  # human-facing agent name (FR theme)
     host: str | None = None  # SSH host/alias to run this agent on (None = local)
+    # Headless permission mode for claude-backed roles (the developer needs to
+    # write code AND run tests autonomously). Without it, `claude --print` blocks
+    # on an interactive permission prompt it cannot show and the run hangs.
+    permission_mode: str | None = None
 
 
 ROLES: dict[str, Role] = {
@@ -94,6 +98,10 @@ ROLES: dict[str, Role] = {
         can_block=False,
         order=4,
         runner="claude",
+        # Full headless autonomy: Gustave writes code and runs the test suite
+        # (TDD) without confirmation prompts. The human plan checkpoint gates the
+        # pipeline before this stage, and execution is scoped to the component repo.
+        permission_mode="bypassPermissions",
     ),
     "reviewer": Role(
         name="reviewer",
