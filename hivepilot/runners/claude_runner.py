@@ -104,6 +104,7 @@ class ClaudeRunner(BaseRunner):
     def _build_prompt(
         self, payload: RunnerPayload, instructions: str, knowledge_context: str | None
     ) -> str:
+        # Stable sections first so Anthropic/OpenAI prefix caching covers the static prefix.
         sections = [
             f"Project: {payload.project_name}",
             f"Task: {payload.task_name}",
@@ -114,17 +115,18 @@ class ClaudeRunner(BaseRunner):
             sections.append(f"Project description: {payload.project.description}")
         if payload.project.claude_md:
             sections.append(f"Repository instructions file: {payload.project.claude_md}")
+        if knowledge_context:
+            sections.append(f"Knowledge context:\n{knowledge_context}")
+        # Volatile sections last (user-specific, per-run context).
         extra = payload.metadata.get("extra_prompt")
         if extra:
             sections.append(f"Extra instructions from user: {extra}")
-        prior = payload.metadata.get("prior_context")
-        if prior:
-            sections.append(f"Outputs from previous agents:\n{prior}")
         append = payload.step.append_prompt or self.definition.append_prompt
         if append:
             sections.append(f"Step-specific instructions: {append}")
-        if knowledge_context:
-            sections.append(f"Knowledge context:\n{knowledge_context}")
+        prior = payload.metadata.get("prior_context")
+        if prior:
+            sections.append(f"Outputs from previous agents:\n{prior}")
         return "\n".join(sections) + f"\n\nInstructions:\n{instructions}"
 
     def _resolve_model(self, payload: RunnerPayload) -> str | None:

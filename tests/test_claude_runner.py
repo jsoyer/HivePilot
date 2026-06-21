@@ -133,3 +133,27 @@ def test_capture_surfaces_stderr_on_failure(tmp_path: Path) -> None:
         m.return_value = MagicMock(returncode=1, stdout="", stderr="boom: bad model")
         with __import__("pytest").raises(RuntimeError, match="boom: bad model"):
             _runner().capture(payload)
+
+
+# ── L1: prompt ordering tests ────────────────────────────────────────────────
+
+def test_stable_sections_before_volatile(tmp_path: Path) -> None:
+    """knowledge_context (stable) must appear before prior_context (volatile)."""
+    payload = _payload(tmp_path, {"prior_context": "PRIOR_DATA"})
+    out = _runner()._build_prompt(payload, "INSTRUCTIONS", "KNOWLEDGE_DATA")
+    idx_knowledge = out.index("KNOWLEDGE_DATA")
+    idx_prior = out.index("PRIOR_DATA")
+    assert idx_knowledge < idx_prior, (
+        "knowledge_context (stable) should precede prior_context (volatile)"
+    )
+
+
+def test_extra_prompt_after_knowledge_context(tmp_path: Path) -> None:
+    """extra_prompt (volatile) must appear after knowledge_context (stable)."""
+    payload = _payload(tmp_path, {"extra_prompt": "EXTRA_USER_INSTRUCTIONS"})
+    out = _runner()._build_prompt(payload, "INSTRUCTIONS", "KNOWLEDGE_DATA")
+    idx_knowledge = out.index("KNOWLEDGE_DATA")
+    idx_extra = out.index("EXTRA_USER_INSTRUCTIONS")
+    assert idx_knowledge < idx_extra, (
+        "knowledge_context (stable) should precede extra_prompt (volatile)"
+    )
