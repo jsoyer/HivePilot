@@ -108,6 +108,7 @@ gated), `bypassPermissions` (full autonomy), `plan`, `default`. Unset = no flag
 | telegram_bot_token | `HIVEPILOT_TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` | — |
 | telegram_allowed_chat_ids | `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` | `[]` (open) |
 | telegram_stream_live | `HIVEPILOT_TELEGRAM_STREAM_LIVE` | `true` (live-stream each agent turn to Telegram; silent no-op if Telegram/notification chat id unset) |
+| telegram_stream_topics | `HIVEPILOT_TELEGRAM_STREAM_TOPICS` | `false` — When `true` AND `telegram_stream_chat_id` is set, each agent's live-stream turns are routed to their own forum topic in the supergroup. The bot must be admin of the forum supergroup with the `manage_topics` permission. Topic thread IDs are persisted to `.hivepilot/stream_topics.json`. |
 | gh_command / git_command | — | `gh` / `git` |
 
 (Settings are `pydantic-settings`; any field is overridable via `HIVEPILOT_<NAME>`.)
