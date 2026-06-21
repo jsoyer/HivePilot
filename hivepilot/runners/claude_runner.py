@@ -42,6 +42,17 @@ class ClaudeRunner(BaseRunner):
             args.extend(["--model", model])
         if self.definition.agent:
             args.extend(["--agent", self.definition.agent])
+        # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
+        # agent actually write code in headless --print mode. Without it claude
+        # blocks on an interactive permission prompt it cannot show and the run
+        # hangs to timeout. A per-step/runner override wins over the global setting.
+        permission_mode = (
+            payload.step.metadata.get("permission_mode")
+            or self.definition.options.get("permission_mode")
+            or self.settings.claude_permission_mode
+        )
+        if permission_mode:
+            args.extend(["--permission-mode", permission_mode])
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         return args, env

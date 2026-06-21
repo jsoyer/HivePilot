@@ -82,12 +82,28 @@ the runner's `options`:
 
 Override example: `options: { subcommand: exec, model_flag: "-m", prompt_flag: "-p" }`.
 
+### Headless permission mode (autonomous dev)
+
+`claude --print` cannot show an interactive permission prompt, so an agent that
+needs to edit files / run commands **hangs to timeout writing nothing** unless a
+permission mode is passed. The developer role (Gustave) ships with
+`permission_mode="bypassPermissions"` so it writes code and runs the test suite
+autonomously — gated by the human plan checkpoint that precedes the Implementation
+stage, and scoped to the component repo.
+
+Precedence (first wins): step `metadata.permission_mode` → runner
+`options.permission_mode` → role `permission_mode` (roles.py) → global
+`HIVEPILOT_CLAUDE_PERMISSION_MODE`. Values: `acceptEdits` (edits only, shell still
+gated), `bypassPermissions` (full autonomy), `plan`, `default`. Unset = no flag
+(safe for read-only planning agents).
+
 ## Key environment variables / settings
 
 | Setting | Env | Default |
 |---|---|---|
 | obsidian_vault | `HIVEPILOT_OBSIDIAN_VAULT` | `…/obsidian-vault/Noxys` |
 | container_runtime | `HIVEPILOT_CONTAINER_RUNTIME` | `docker` (or `podman`; per-runner override via `options.runtime`) |
+| claude_permission_mode | `HIVEPILOT_CLAUDE_PERMISSION_MODE` | — (global fallback; developer role already sets `bypassPermissions`) |
 | state_db | `HIVEPILOT_STATE_DB` | `state.db` |
 | telegram_bot_token | `HIVEPILOT_TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` | — |
 | telegram_allowed_chat_ids | `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` | `[]` (open) |

@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     default_runner: str = "claude"
     default_model: str | None = None
     claude_command: str = "claude"
+    # Permission mode passed to `claude --print` so the developer agent can edit
+    # files autonomously in headless mode. Without it, claude blocks waiting for
+    # an interactive permission prompt it can never show (the run hangs to timeout
+    # and writes nothing). Values: acceptEdits (edits autonomously, bash still
+    # gated) | bypassPermissions (full autonomy) | plan | default. None = no flag
+    # (the safe default; suitable for read-only planning agents).
+    claude_permission_mode: str | None = None
     gh_command: str = "gh"
     git_command: str = "git"
     concurrency_limit: int = 4
