@@ -14,8 +14,8 @@ from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.runners.prompt_cli_runner import PromptCliRunner, VibeRunner
 
-
 # ── VibeRunner defaults ───────────────────────────────────────────────────────
+
 
 def test_vibe_runner_defaults() -> None:
     assert VibeRunner.command_name == "vibe"
@@ -26,6 +26,7 @@ def test_vibe_runner_defaults() -> None:
 
 
 # ── L1: _augment_prompt ordering + anthropic cache_control ───────────────────
+
 
 def _cli_payload(tmp_path: Path, metadata: dict) -> RunnerPayload:
     return RunnerPayload(
@@ -78,7 +79,7 @@ def test_anthropic_payload_with_cache_control(tmp_path: Path, monkeypatch) -> No
     def fake_post(url, headers, payload, timeout):  # noqa: ANN001
         captured.append({"headers": headers, "payload": payload})
 
-    runner._post_json = fake_post  # type: ignore[method-assign]
+    runner._post_json = fake_post  # type: ignore[method-assign,assignment]
 
     payload = _cli_payload(tmp_path, {})
     env = {"ANTHROPIC_API_KEY": "test-key"}
@@ -103,7 +104,7 @@ def test_anthropic_payload_without_cache_control(tmp_path: Path, monkeypatch) ->
     def fake_post(url, headers, payload, timeout):  # noqa: ANN001
         captured.append({"headers": headers, "payload": payload})
 
-    runner._post_json = fake_post  # type: ignore[method-assign]
+    runner._post_json = fake_post  # type: ignore[method-assign,assignment]
 
     payload = _cli_payload(tmp_path, {})
     env = {"ANTHROPIC_API_KEY": "test-key"}
