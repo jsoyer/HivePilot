@@ -49,13 +49,13 @@
             {
               "id": "f2",
               "name": "approve_url",
-              "value": "={{ $env.N8N_BASE_URL }}/webhook/hivepilot-approve?run_id={{ $json.body.run_id }}&action=approve",
+              "value": "={{ $env.N8N_BASE_URL }}/webhook/hivepilot-approve?run_id={{ $json.body.run_id }}&action=approve&token={{ $env.HIVEPILOT_APPROVE_SECRET }}",
               "type": "string"
             },
             {
               "id": "f3",
               "name": "deny_url",
-              "value": "={{ $env.N8N_BASE_URL }}/webhook/hivepilot-approve?run_id={{ $json.body.run_id }}&action=deny",
+              "value": "={{ $env.N8N_BASE_URL }}/webhook/hivepilot-approve?run_id={{ $json.body.run_id }}&action=deny&token={{ $env.HIVEPILOT_APPROVE_SECRET }}",
               "type": "string"
             }
           ]
@@ -86,7 +86,7 @@
     },
     {
       "parameters": {
-        "content": "## HivePilot events\nReceives pipeline lifecycle events from HivePilot\n(`HIVEPILOT_EVENT_WEBHOOK_URL` → this webhook).\n\nOn **checkpoint**: builds approve/deny links that hit the\n`hivepilot-approve` workflow, then replace the NoOp with your\nSlack/email node (use {{message}}, {{approve_url}}, {{deny_url}}).",
+        "content": "## HivePilot events\nReceives pipeline lifecycle events from HivePilot\n(`HIVEPILOT_EVENT_WEBHOOK_URL` → this webhook).\n\nOn **checkpoint**: builds approve/deny endpoints (with a shared\n`HIVEPILOT_APPROVE_SECRET` token) for the `hivepilot-approve`\nworkflow. Replace the NoOp with your Slack/email node — have the\nbutton **POST** to {{approve_url}} / {{deny_url}} (not a plain GET\nlink, so prefetch can't trigger it).",
         "height": 220,
         "width": 360
       },
