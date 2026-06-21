@@ -36,12 +36,13 @@ EXPECTED_MODEL: dict[str, str] = {
     "reviewer": "gpt-5.5",
 }
 
-# Roles that have dual models (list). cto/ciso each pair their primary opencode
-# brain with a claude second brain (per-brain runner via "runner:model").
+# Roles that have multiple models (list). CEO retains dual-model debate.
+# CTO and CISO now run single-model opencode (claude brain removed to spare
+# the claude quota the developer stage needs).
 EXPECTED_MODELS: dict[str, list[str]] = {
     "ceo": ["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"],
-    "cto": ["opencode-go/kimi-k2.7-code", "claude:claude-sonnet-4-6"],
-    "ciso": ["opencode-go/glm-5.2", "claude:claude-haiku-4-5"],
+    "cto": ["opencode-go/kimi-k2.7-code"],
+    "ciso": ["opencode-go/glm-5.2"],
 }
 
 
@@ -94,7 +95,7 @@ class TestRoleModelField:
 
 
 class TestRoleModelsField:
-    """CEO must have dual models via `models` list."""
+    """CEO has dual models via `models` list; CTO/CISO have single-element lists."""
 
     def test_all_roles_have_models_field(self):
         from hivepilot.roles import ROLES
@@ -110,7 +111,7 @@ class TestRoleModelsField:
             f"CEO dual models mismatch: got {ceo.models}"
         )
 
-    def test_dual_model_bindings_match_spec(self):
+    def test_models_bindings_match_spec(self):
         from hivepilot.roles import get_role
 
         for role_name, expected in EXPECTED_MODELS.items():
@@ -119,17 +120,18 @@ class TestRoleModelsField:
                 f"Role '{role_name}' models mismatch: expected {expected}, got {role.models}"
             )
 
-    def test_non_dual_roles_have_none_models(self):
+    def test_non_models_roles_have_none_models(self):
         from hivepilot.roles import get_role
 
-        single_model_roles = {
+        # Roles with no models list (use model= or no model at all)
+        none_models_roles = {
             "chief_of_staff",
             "developer",
             "reviewer",
             "qa",
             "documentation",
         }
-        for role_name in single_model_roles:
+        for role_name in none_models_roles:
             role = get_role(role_name)
             assert role.models is None, (
                 f"Role '{role_name}' expected models=None, got '{role.models}'"
