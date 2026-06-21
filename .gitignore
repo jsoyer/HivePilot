@@ -16,3 +16,6 @@ htmlcov/
 coverage.*
 state.db
 !.env.example
+
+# local API token store (never commit)
+api_tokens.yaml
