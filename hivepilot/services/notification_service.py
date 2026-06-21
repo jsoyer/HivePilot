@@ -77,10 +77,12 @@ def _send_discord(message: str) -> None:
     requests.post(webhook, json={"content": message}, timeout=5)
 
 
-def _send_telegram(message: str) -> None:
+def _send_telegram(message: str, chat_id: int | str | None = None) -> None:
 
     token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = settings.telegram_notification_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+    chat_id = (
+        chat_id or settings.telegram_notification_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+    )
     if not chat_id and settings.telegram_allowed_chat_ids:
         chat_id = settings.telegram_allowed_chat_ids[0]
     if not token or not chat_id:
@@ -119,7 +121,9 @@ def stream_agent_turn(
         if snippet:
             lines.append(f"   {snippet}")
     try:
-        _send_telegram("\n".join(lines))
+        # Live agent stream goes to its dedicated channel when set, else falls
+        # back to the main notification chat.
+        _send_telegram("\n".join(lines), chat_id=settings.telegram_stream_chat_id)
     except _NotConfigured:
         pass  # Telegram not set up — streaming is best-effort
     except Exception as exc:  # noqa: BLE001

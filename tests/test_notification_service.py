@@ -15,9 +15,20 @@ from hivepilot.services import notification_service as ns
 @pytest.fixture
 def captured(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     sent: list[str] = []
-    monkeypatch.setattr(ns, "_send_telegram", lambda msg: sent.append(msg))
+    monkeypatch.setattr(ns, "_send_telegram", lambda msg, chat_id=None: sent.append(msg))
     monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
     return sent
+
+
+def test_stream_routes_to_dedicated_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict = {}
+    monkeypatch.setattr(
+        ns, "_send_telegram", lambda msg, chat_id=None: seen.update(chat_id=chat_id)
+    )
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", -100123, raising=False)
+    ns.stream_agent_turn(actor="Blaise (CTO)", summary="x")
+    assert seen["chat_id"] == -100123  # live stream → dedicated channel
 
 
 def test_streams_actor_target_and_summary(captured: list[str]) -> None:
