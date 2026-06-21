@@ -296,7 +296,7 @@ class Orchestrator:
         notification_service.stream_agent_turn(
             actor="HivePilot",
             stage=f"pipeline {pipeline_name}",
-            summary=f"démarrage sur {', '.join(project_names)}",
+            summary=f"started on {', '.join(project_names)}",
             icon="🚀",
         )
 
@@ -370,13 +370,13 @@ class Orchestrator:
                     actor="HivePilot",
                     stage="checkpoint",
                     summary=(
-                        f"Plan prêt ({', '.join(completed)}). "
+                        f"Plan ready ({', '.join(completed)}). "
                         + (
-                            f"Composants ciblés : {', '.join(selected_components)}. "
+                            f"Target components: {', '.join(selected_components)}. "
                             if group_mode
                             else ""
                         )
-                        + f"Approuve (run #{run_id}) pour lancer « {stage.name} »."
+                        + f'Approve (run #{run_id}) to start "{stage.name}".'
                     ),
                     icon="⏸️",
                 )
@@ -519,13 +519,13 @@ class Orchestrator:
             state_service.update_approval(run_id, "denied", approver)
             state_service.complete_run(run_id, "denied", "Plan denied at checkpoint")
             notification_service.send_notification(
-                f"❌ Plan #{run_id} ({pipeline_name}) refusé — pipeline arrêté."
+                f"❌ Plan #{run_id} ({pipeline_name}) denied — pipeline stopped."
             )
             return RunResult(pipeline_name, pipeline_name, False, "Plan denied at checkpoint")
 
         state_service.update_approval(run_id, "approved", approver)
         notification_service.send_notification(
-            f"✅ Plan #{run_id} ({pipeline_name}) approuvé — lancement du développement."
+            f"✅ Plan #{run_id} ({pipeline_name}) approved — starting development."
         )
         results = self.run_pipeline(
             project_names=meta["projects"],
@@ -661,7 +661,7 @@ class Orchestrator:
             )
             notification_service.stream_agent_turn(
                 actor=f"{role.display_name or role_name} ({role.title}) · {brain_model}",
-                stage="débat",
+                stage="debate",
                 summary=output,
                 icon="💬",
             )
@@ -675,7 +675,7 @@ class Orchestrator:
         )
         notification_service.stream_agent_turn(
             actor=f"{role.display_name or role_name} ({role.title})",
-            stage="synthèse",
+            stage="synthesis",
             summary=decision,
             icon="⚖️",
         )
@@ -769,7 +769,7 @@ class Orchestrator:
                     state_service.record_step(run_id, f"{task.role}-debate", "success")
                 logger.info("task.end", project=project.path.name, task=task_name)
                 adr_path = adr.get("path") if adr else None
-                return "débat bi-modèle → synthèse" + (f" ({adr_path})" if adr_path else "")
+                return "dual-model debate → synthesis" + (f" ({adr_path})" if adr_path else "")
         outputs: list[str] = []
         for step in task.steps:
             secrets = self._resolve_secrets(step)
