@@ -5,16 +5,41 @@ Each stage is a task (`tasks.yaml`) bound to a **role**; the role decides which
 **runner** (CLI tool) and **model** execute it (`roles.py`, overridable per
 project via `policies.yaml`).
 
+## Agent roster (`roles.py`) — canonical reference
+
+| # | Agent | Role | Runner | Model(s) | Can block | Function |
+|---|---|---|---|---|---|---|
+| 1 | **Aliénor** | CEO | opencode | `qwen3.7-max` + `kimi-k2.6` ² | no | Debate (2 proposals + synthesis) → strategic direction |
+| 2 | **Jules** | Chief of Staff (CSO) | cursor | (default) | no | Synthesizes CEO+CTO+CISO → proposal; final check + **approves the PR** |
+| 3 | **Blaise** | CTO | opencode | `kimi-k2.7-code` + `claude:claude-sonnet-4-6` ² | **yes** | Architecture |
+| 4 | **Gustave** | Developer | claude | (default) | no | Implementation |
+| 5 | **Victor** | Reviewer | codex | `gpt-5.5` | **yes** | Code review → **opens the PR** |
+| 6 | **Hugo** | CISO | opencode | `glm-5.2` + `claude:claude-haiku-4-5` ² | **yes** | Security (architecture + code clearance) |
+| 7 | **Marie** | QA | cursor | (default) | no | Tests / edge cases |
+| 8 | **Théo** | Documentation | gemini | (default) | no | Docs + README per component repo |
+
+² = **dual-model** (debate → synthesis). The `claude:…` brain runs via the claude
+runner, the other via opencode (per-brain runner). `(default)` = no pinned model
+(the CLI uses its own local config/login).
+
+**Meta-agent (outside the pipeline): Henri** — external auditor, runs on Mistral
+via the `vibe` runner; observes cycles and **proposes** prompt improvements
+(`hivepilot audit <project> [--deep]`), never auto-applies. See USAGE.md.
+
+> The 10-stage `company` pipeline below is the original. The reordered
+> **`company-v2`** (planning → plan checkpoint → dev → … → Jules approves the PR)
+> is documented in [USAGE.md](USAGE.md).
+
 ## The chain (pipeline `company`)
 
 | # | Stage | Task | Role | Runner | Model | git |
 |---|---|---|---|---|---|---|
 | 1 | CEO Intake | company-ceo-intake | ceo | opencode | qwen3.7-max **+** kimi-k2.6 → **debate→ADR** | — |
 | 2 | Chief of Staff Plan | company-cos-plan | chief_of_staff | cursor | (default) | — |
-| 3 | CTO Review | company-cto-review | cto | opencode | kimi-k2.7-code | — |
+| 3 | CTO Review | company-cto-review | cto | opencode | kimi-k2.7-code **+** claude:claude-sonnet-4-6 → **debate→ADR** | — |
 | 4 | Implementation | company-developer | developer | claude | (default) | commit + push **branch** |
 | 5 | Review | company-reviewer | reviewer | **codex** | (default) | **review → open PR** |
-| 6 | Security | company-ciso | ciso | opencode | glm-5.2 | — |
+| 6 | Security | company-ciso | ciso | opencode | glm-5.2 **+** claude:claude-haiku-4-5 → **debate→ADR** | — |
 | 7 | QA | company-qa | qa | **cursor** | (default) | — |
 | 8 | Documentation | company-documentation | documentation | **gemini** | (default) | commit |
 | 9 | Report | company-cos-report | chief_of_staff | cursor | (default) | — |
@@ -35,12 +60,15 @@ implements, **opencode** drives the strategy/security roles (qwen/kimi/glm), and
   project policy has `allow_auto_git: true`. With `require_approval: true`
   (e.g. noxys) the run still waits for a human `/approve` before anything runs.
 
-## CEO dual-model debate
+## Dual-model debates
 
-The CEO role has two models (`qwen3.7-max`, `kimi-k2.6`). On a CEO stage the
-orchestrator runs **each model**, captures its proposal as a `Position`,
-synthesizes via `DebateService`, and writes an **ADR** to the vault
-(`03 - Decisions/`). Also invokable directly: `hivepilot debate <project> <topic>`.
+Three roles are **bi-modal** — CEO (`qwen3.7-max` + `kimi-k2.6`), CTO
+(`kimi-k2.7-code` + `claude-sonnet-4-6`), CISO (`glm-5.2` + `claude-haiku-4-5`).
+On such a stage the orchestrator runs **each brain** (each via its own runner),
+captures its proposal as a `Position`, synthesizes via `DebateService`, and writes
+an **ADR** to the vault (`03 - Decisions/`). Brains are written `runner:model`
+(e.g. `claude:claude-sonnet-4-6`). Also invokable directly:
+`hivepilot debate <project> <topic> [--role cto|ciso]`.
 
 ## Role → runner + model resolution
 
