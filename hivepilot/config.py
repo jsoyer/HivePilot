@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     tokens_file: Path = Path("api_tokens.yaml")
     default_runner: str = "claude"
     default_model: str | None = None
+    # Default target (project or group) for direct agent orders when no @target is
+    # given (Telegram /ask, /dev, … and @mention routing). Required by telegram_bot.
+    default_target: str = "noxys"
     claude_command: str = "claude"
     # Permission mode passed to `claude --print` so the developer agent can edit
     # files autonomously in headless mode. Without it, claude blocks waiting for
