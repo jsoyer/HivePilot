@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import unicodedata
 from typing import Any
 
 from hivepilot.config import settings
@@ -68,6 +69,231 @@ def _format_results(results) -> str:
     return "\n".join(lines) or "Done."
 
 
+# ---------------------------------------------------------------------------
+# Agent registry — source of truth for direct agent commands
+# ---------------------------------------------------------------------------
+
+# Each entry: role_key -> {task, display, aliases (ascii-lowercase only)}
+_AGENT_REGISTRY: dict[str, dict[str, Any]] = {
+    "ceo": {
+        "task": "company-ceo-intake",
+        "display": "Aliénor (CEO)",
+        "aliases": ["ceo", "alienor"],
+    },
+    "chief_of_staff": {
+        "task": "company-cos-synthesis",
+        "display": "Jules (Chief of Staff)",
+        "aliases": ["cos", "jules"],
+    },
+    "cto": {
+        "task": "company-cto-review",
+        "display": "Blaise (CTO)",
+        "aliases": ["cto", "blaise"],
+    },
+    "developer": {
+        "task": "company-developer",
+        "display": "Gustave (Developer)",
+        "aliases": ["dev", "developer", "gustave"],
+    },
+    "reviewer": {
+        "task": "company-reviewer",
+        "display": "Victor (Reviewer)",
+        "aliases": ["review", "reviewer", "victor"],
+    },
+    "ciso": {
+        "task": "company-ciso",
+        "display": "Hugo (CISO)",
+        "aliases": ["ciso", "hugo"],
+    },
+    "qa": {
+        "task": "company-qa",
+        "display": "Marie (QA)",
+        "aliases": ["qa", "marie"],
+    },
+    "documentation": {
+        "task": "company-documentation",
+        "display": "Théo (Documentation)",
+        "aliases": ["docs", "documentation", "theo"],
+    },
+    "auditor": {
+        "task": None,  # special — handled separately
+        "display": "Henri (Auditor)",
+        "aliases": ["audit", "henri"],
+    },
+}
+
+# Build reverse lookup: normalised alias -> role_key
+_ALIAS_TO_ROLE: dict[str, str] = {}
+for _role_key, _entry in _AGENT_REGISTRY.items():
+    for _alias in _entry["aliases"]:
+        _ALIAS_TO_ROLE[_alias] = _role_key
+
+
+def _normalise(text: str) -> str:
+    """Strip accents and lowercase — used for accent-insensitive alias matching."""
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
+
+def _resolve_agent(token: str) -> str | None:
+    """Resolve a user-supplied token to a role_key, or None if unknown.
+
+    Accepts: role key, any registered alias (ascii or accented), case-insensitive.
+    """
+    normalised = _normalise(token)
+    if normalised in _ALIAS_TO_ROLE:
+        return _ALIAS_TO_ROLE[normalised]
+    # Also check role keys directly
+    if normalised in _AGENT_REGISTRY:
+        return normalised
+    return None
+
+
+def _parse_ask_args(args: list[str], default_target: str) -> tuple[str | None, str, str]:
+    """Parse args for /ask: [<agent> [@target] <order...>].
+
+    Returns (role_key_or_None, target, order).
+    role_key_or_None is None when the agent token doesn't resolve.
+    target defaults to default_target when no @target is given.
+    order is the remaining text joined with spaces.
+    """
+    if not args:
+        return (None, default_target, "")
+
+    agent_token = args[0]
+    role_key = _resolve_agent(agent_token)
+    rest = args[1:]
+
+    # Optional @target
+    target = default_target
+    if rest and rest[0].startswith("@"):
+        target = rest[0][1:]
+        rest = rest[1:]
+
+    order = " ".join(rest)
+    return (role_key, target, order)
+
+
+def _parse_alias_args(args: list[str], default_target: str) -> tuple[str, str]:
+    """Parse args for a pre-bound alias command: [[@target] <order...>].
+
+    Returns (target, order).
+    """
+    if not args:
+        return (default_target, "")
+
+    target = default_target
+    rest = list(args)
+    if rest and rest[0].startswith("@"):
+        target = rest[0][1:]
+        rest = rest[1:]
+
+    order = " ".join(rest)
+    return (target, order)
+
+
+async def _run_agent_order(update: Any, role_key: str, target: str, order: str) -> None:
+    """Shared coroutine: run a single agent task with the 60-s heartbeat pattern."""
+    entry = _AGENT_REGISTRY[role_key]
+    display = entry["display"]
+    task_name = entry["task"]
+
+    # Special case: auditor has no ad-hoc entrypoint
+    if task_name is None:
+        await update.message.reply_text(
+            "Henri (Auditor) runs automatically after each cycle; ad-hoc audit not wired yet."
+        )
+        return
+
+    ack = await update.message.reply_text(
+        f"⏳ Asking {display} on `{target}`…", parse_mode="Markdown"
+    )
+
+    loop = asyncio.get_event_loop()
+    future = loop.run_in_executor(
+        None,
+        lambda: _get_orch().run_task(
+            project_names=[target],
+            task_name=task_name,
+            extra_prompt=order or None,
+            auto_git=True,
+        ),
+    )
+
+    heartbeat_interval = 60
+    elapsed = 0
+    try:
+        while True:
+            try:
+                results = await asyncio.wait_for(asyncio.shield(future), timeout=heartbeat_interval)
+                break
+            except asyncio.TimeoutError:
+                elapsed += heartbeat_interval
+                await update.message.reply_text(f"⏳ Still running… ({elapsed}s)")
+    except Exception as exc:
+        logger.error("telegram.cmd_ask.error", role=role_key, error=str(exc))
+        await ack.delete()
+        await update.message.reply_text(f"❌ Error: {exc}")
+        return
+
+    await ack.delete()
+    await update.message.reply_text(_format_results(results))
+
+
+async def _cmd_ask(update: Any, context: Any) -> None:
+    """/ask <agent> [@target] <order...> — address one agent directly."""
+    if not _require_allowed(update.effective_chat.id):
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Usage: /ask <agent> [@target] <order…>\n"
+            "Example: /ask gustave @noxys-api add unit tests"
+        )
+        return
+
+    role_key, target, order = _parse_ask_args(args, settings.default_target)
+
+    if role_key is None:
+        await update.message.reply_text(
+            f"Unknown agent: {args[0]!r}. Use /help to see the list of agents and their aliases."
+        )
+        return
+    if not order:
+        await update.message.reply_text(
+            f"Please provide an order for {_AGENT_REGISTRY[role_key]['display']}."
+        )
+        return
+
+    await _run_agent_order(update, role_key, target, order)
+
+
+def _make_alias_handler(role_key: str):
+    """Factory: return an async handler pre-bound to role_key."""
+
+    async def _handler(update: Any, context: Any) -> None:
+        if not _require_allowed(update.effective_chat.id):
+            return
+        args = context.args or []
+        target, order = _parse_alias_args(args, settings.default_target)
+        if not order:
+            entry = _AGENT_REGISTRY[role_key]
+            await update.message.reply_text(f"Usage: /{entry['aliases'][0]} [@target] <order…>")
+            return
+        await _run_agent_order(update, role_key, target, order)
+
+    _handler.__name__ = f"_cmd_{role_key}"
+    return _handler
+
+
+# Build alias-handler map: alias -> coroutine function (one per alias, all unique)
+_ALIAS_HANDLERS: dict[str, Any] = {}
+for _role_key, _entry in _AGENT_REGISTRY.items():
+    _h = _make_alias_handler(_role_key)
+    for _alias in _entry["aliases"]:
+        _ALIAS_HANDLERS[_alias] = _h
+
+
 def fetch_recent_chats() -> list[dict[str, Any]]:
     """Return unique chats that recently messaged the bot (via getUpdates).
 
@@ -113,13 +339,28 @@ async def _cmd_help(update, context) -> None:
         "/deny `<run_id>` \\[reason\\] — deny a run\n"
         "/status — last 5 runs\n"
         "/interactions `[limit]` — recent agent interactions\n"
-        "/runpipeline `<project> <pipeline> [simulate]` \u2014 run a pipeline\n"
-        "/debate `<project> <topic>` \u2014 CEO dual-model debate\n"
-        "/steps `<run_id>` \u2014 what the agents did in a run\n"
-        "/pipelines \u2014 list pipelines\n"
-        "/projects \u2014 list projects\n"
-        "/tasks \u2014 list tasks\n"
+        "/runpipeline `<project> <pipeline> [simulate]` — run a pipeline\n"
+        "/debate `<project> <topic>` — CEO dual\\-model debate\n"
+        "/steps `<run_id>` — what the agents did in a run\n"
+        "/pipelines — list pipelines\n"
+        "/projects — list projects\n"
+        "/tasks — list tasks\n"
         "/help — this message\n"
+        "\n"
+        "*Ask an agent directly*\n\n"
+        "/ask `<agent> [@target] <order>` — address one agent \\(no full pipeline\\)\n"
+        "`@target` overrides the default project/group \\(default: `noxys`\\)\n"
+        "Orders run with auto\\-git \\(commit/push/PR\\); humans merge\\.\n\n"
+        "Agent aliases:\n"
+        "\u2022 Aliénor \\(CEO\\) — `/ceo`, `/alienor`\n"
+        "\u2022 Jules \\(Chief of Staff\\) — `/cos`, `/jules`\n"
+        "\u2022 Blaise \\(CTO\\) — `/cto`, `/blaise`\n"
+        "\u2022 Gustave \\(Developer\\) — `/dev`, `/developer`, `/gustave`\n"
+        "\u2022 Victor \\(Reviewer\\) — `/review`, `/reviewer`, `/victor`\n"
+        "\u2022 Hugo \\(CISO\\) — `/ciso`, `/hugo`\n"
+        "\u2022 Marie \\(QA\\) — `/qa`, `/marie`\n"
+        "\u2022 Théo \\(Documentation\\) — `/docs`, `/documentation`, `/theo`\n"
+        "\u2022 Henri \\(Auditor\\) — `/audit`, `/henri`\n"
     )
     await update.message.reply_text(text, parse_mode="MarkdownV2")
 
@@ -627,6 +868,28 @@ def _build_application(token: str):
     app.add_handler(CommandHandler("runpipeline", _cmd_run_pipeline))
     app.add_handler(CommandHandler("debate", _cmd_debate))
     app.add_handler(CommandHandler("steps", _cmd_steps))
+    app.add_handler(CommandHandler("ask", _cmd_ask))
+    app.add_handler(CommandHandler("ceo", _ALIAS_HANDLERS["ceo"]))
+    app.add_handler(CommandHandler("alienor", _ALIAS_HANDLERS["alienor"]))
+    app.add_handler(CommandHandler("cos", _ALIAS_HANDLERS["cos"]))
+    app.add_handler(CommandHandler("jules", _ALIAS_HANDLERS["jules"]))
+    app.add_handler(CommandHandler("cto", _ALIAS_HANDLERS["cto"]))
+    app.add_handler(CommandHandler("blaise", _ALIAS_HANDLERS["blaise"]))
+    app.add_handler(CommandHandler("dev", _ALIAS_HANDLERS["dev"]))
+    app.add_handler(CommandHandler("developer", _ALIAS_HANDLERS["developer"]))
+    app.add_handler(CommandHandler("gustave", _ALIAS_HANDLERS["gustave"]))
+    app.add_handler(CommandHandler("review", _ALIAS_HANDLERS["review"]))
+    app.add_handler(CommandHandler("reviewer", _ALIAS_HANDLERS["reviewer"]))
+    app.add_handler(CommandHandler("victor", _ALIAS_HANDLERS["victor"]))
+    app.add_handler(CommandHandler("ciso", _ALIAS_HANDLERS["ciso"]))
+    app.add_handler(CommandHandler("hugo", _ALIAS_HANDLERS["hugo"]))
+    app.add_handler(CommandHandler("qa", _ALIAS_HANDLERS["qa"]))
+    app.add_handler(CommandHandler("marie", _ALIAS_HANDLERS["marie"]))
+    app.add_handler(CommandHandler("docs", _ALIAS_HANDLERS["docs"]))
+    app.add_handler(CommandHandler("documentation", _ALIAS_HANDLERS["documentation"]))
+    app.add_handler(CommandHandler("theo", _ALIAS_HANDLERS["theo"]))
+    app.add_handler(CommandHandler("audit", _ALIAS_HANDLERS["audit"]))
+    app.add_handler(CommandHandler("henri", _ALIAS_HANDLERS["henri"]))
     app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
     return app
 

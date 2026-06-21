@@ -128,6 +128,66 @@ Lancer : `hivepilot run-pipeline noxys-api company-v2` (ou `/runpipeline` dans T
 Le `company` original reste disponible inchangé.
 
 
+## Direct agent orders (Telegram)
+
+Address **one agent directly** — no full pipeline, no CEO → … → Docs chain.
+
+### Generic `/ask`
+
+```
+/ask <agent> [@target] <order…>
+```
+
+- `<agent>` — role key or any alias (case-insensitive, accent-insensitive)
+- `[@target]` — optional `@project` / `@group` (defaults to `HIVEPILOT_DEFAULT_TARGET`, default `noxys`)
+- `<order…>` — the instruction forwarded to the agent
+
+```
+/ask gustave @noxys-api add unit tests for the auth module
+/ask cto review the new schema proposal
+/ask aliénor kickoff sprint 4
+```
+
+### Per-agent alias commands
+
+Each agent has its own shortcut command — no need to type the agent name:
+
+| Command | Agent | Full name |
+|---|---|---|
+| `/ceo` or `/alienor` | Aliénor | CEO |
+| `/cos` or `/jules` | Jules | Chief of Staff |
+| `/cto` or `/blaise` | Blaise | CTO |
+| `/dev`, `/developer`, `/gustave` | Gustave | Developer |
+| `/review`, `/reviewer`, `/victor` | Victor | Reviewer |
+| `/ciso` or `/hugo` | Hugo | CISO |
+| `/qa` or `/marie` | Marie | QA |
+| `/docs`, `/documentation`, `/theo` | Théo | Documentation |
+| `/audit` or `/henri` | Henri | Auditor (graceful reply — see below) |
+
+All alias commands accept `[@target] <order…>`:
+
+```
+/gustave @noxys-api add unit tests for the auth module
+/docs @noxys-web update the API reference
+/theo write the changelog entry for v1.2
+```
+
+### Henri (Auditor) — ad-hoc limitation
+
+Henri (`/audit`, `/henri`, `/ask henri`) replies gracefully when invoked directly:
+`"Henri (Auditor) runs automatically after each cycle; ad-hoc audit not wired yet."`
+
+Henri still runs automatically after each pipeline cycle (disable with
+`HIVEPILOT_AUDITOR_AUTO=false`). Deep audits remain available via the CLI:
+`hivepilot audit <project> --deep`.
+
+### Default target
+
+Set `HIVEPILOT_DEFAULT_TARGET` to change the project/group used when no `@target`
+is given (default: `noxys`).
+
+---
+
 ## Henri — l'auditeur externe
 
 **Henri** est un méta-agent (hors pipeline) qui observe les cycles et aide les
