@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     telegram_notification_chat_id: int | None = (
         None  # proactive notifications (approvals, run results)
     )
+    telegram_stream_chat_id: int | None = (
+        None  # dedicated channel for the live agent stream (falls back to notification chat)
+    )
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
@@ -92,7 +95,7 @@ class Settings(BaseSettings):
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
 
-    @field_validator("telegram_notification_chat_id", mode="before")
+    @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
     def _coerce_notification_chat_id(cls, v: object) -> object:
         # Lenient: empty -> None; a pasted JSON array / list -> its first id.

@@ -198,3 +198,21 @@ pas un dépôt git ou n'a aucun changement, c'est un no-op silencieux.
 
 > Rappel : les écritures vault ne se font qu'en `--no-dry-run` ; les étapes de
 > planification (CEO/CTO/CISO/Jules) ne touchent aucun dépôt de **code**.
+
+
+## Dedicated stream channel (Telegram)
+
+By default the live agent stream and the approval/notification messages share one
+chat. Set a **dedicated channel** for the agent conversation so it stays separate
+from your control/approval chat:
+
+```bash
+export HIVEPILOT_TELEGRAM_STREAM_CHAT_ID=-100xxxxxxxxxx   # a channel/group id
+```
+
+- Live agent turns (each labelled with the agent + role) -> this channel.
+- Approvals, run start/result notifications -> the main notification chat.
+- Unset -> stream falls back to the notification chat (unchanged behaviour).
+
+> Gives the "agent conversation in its own channel" effect with a single bot — no
+> need for one bot per role (each message already carries the agent name + role).
