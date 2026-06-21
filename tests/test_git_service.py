@@ -45,11 +45,14 @@ def test_commit_vault_commits_and_pushes(tmp_path: Path, monkeypatch) -> None:
 
     fake = MagicMock()
     fake.git.diff.return_value = "Notes/plan.md"  # staged changes present
+    fake.head.is_detached = False
+    fake.active_branch.name = "main"
     monkeypatch.setattr(git_service, "Repo", lambda *a, **k: fake)
     assert git_service.commit_vault(tmp_path, "msg", push=True) is True
-    fake.git.add.assert_called()
-    fake.git.commit.assert_called_with("-m", "msg")
-    fake.git.push.assert_called_once()
+    # add/commit scoped to the vault pathspec; push explicit remote+branch
+    fake.git.add.assert_called_with("-A", "--", str(tmp_path))
+    fake.git.commit.assert_called_with("-m", "msg", "--", str(tmp_path))
+    fake.git.push.assert_called_once_with("origin", "main")
 
 
 def test_commit_vault_no_changes_returns_false(tmp_path: Path, monkeypatch) -> None:

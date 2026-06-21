@@ -58,13 +58,19 @@ def commit_vault(
     except Exception as exc:  # noqa: BLE001
         logger.warning("vault.not_git_repo", path=str(vault_path), error=str(exc))
         return False
-    repo.git.add("-A", str(vault_path))
-    if not repo.git.diff("--cached", "--name-only").strip():
-        return False  # nothing changed
-    repo.git.commit("-m", message)
+    # Scope every operation to the vault pathspec so we never stage/commit/push
+    # unrelated changes that happen to be in the enclosing repo's index.
+    pathspec = str(vault_path)
+    repo.git.add("-A", "--", pathspec)
+    if not repo.git.diff("--cached", "--name-only", "--", pathspec).strip():
+        return False  # nothing changed under the vault
+    repo.git.commit("-m", message, "--", pathspec)  # commit only the vault's paths
     if push:
-        repo.git.push()
-    logger.info("vault.committed", path=str(vault_path), pushed=push)
+        if repo.head.is_detached:
+            logger.warning("vault.detached_head_no_push", path=pathspec)
+        else:
+            repo.git.push("origin", repo.active_branch.name)  # explicit remote + branch
+    logger.info("vault.committed", path=pathspec, pushed=push)
     return True
 
 
