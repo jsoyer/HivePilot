@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
+import unicodedata
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -23,6 +26,9 @@ _ICON_LABELS = {
     "💬": "proposal",
     "⚖️": "synthesis",
 }
+
+# Path for persisting agent_key -> message_thread_id across runs.
+_TOPICS_REGISTRY_PATH = Path(".hivepilot/stream_topics.json")
 
 
 def send_notification(message: str, channels: Iterable[str] | None = None) -> None:
@@ -77,7 +83,7 @@ def _send_discord(message: str) -> None:
     requests.post(webhook, json={"content": message}, timeout=5)
 
 
-def _send_telegram(message: str, chat_id: int | str | None = None) -> None:
+def _send_telegram(message: str, chat_id: int | str | None = None, message_thread_id: int | None = None) -> None:
 
     token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = (
@@ -88,7 +94,85 @@ def _send_telegram(message: str, chat_id: int | str | None = None) -> None:
     if not token or not chat_id:
         raise _NotConfigured("Telegram not configured (token or notification chat_id missing)")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=5)
+    payload: dict[str, Any] = {"chat_id": chat_id, "text": message}
+    if message_thread_id is not None:
+        payload["message_thread_id"] = message_thread_id
+    requests.post(url, json=payload, timeout=5)
+
+
+def _load_topics() -> dict[str, int]:
+    """Load the agent_key -> message_thread_id registry from disk. Best-effort."""
+    try:
+        path = _TOPICS_REGISTRY_PATH
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.topics.load_failed", error=str(exc))
+    return {}
+
+
+def _save_topics(mapping: dict[str, int]) -> None:
+    """Persist the topics registry to disk. Best-effort."""
+    try:
+        path = _TOPICS_REGISTRY_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.topics.save_failed", error=str(exc))
+
+
+def _normalize(text: str) -> str:
+    """Lowercase + strip accents for fuzzy matching."""
+    return unicodedata.normalize("NFD", text.lower()).encode("ascii", "ignore").decode()
+
+
+def _resolve_agent_key(actor: str) -> str:
+    """Map an actor display string (e.g. 'Blaise (CTO)') to a stable role key.
+
+    Matches against ROLES display_name (accent/case-insensitive). Falls back to
+    a slug derived from the actor string. Never returns an empty string.
+    """
+    from hivepilot.roles import ROLES
+
+    actor_norm = _normalize(actor)
+    for key, role in ROLES.items():
+        if role.display_name and _normalize(role.display_name) in actor_norm:
+            return key
+        if _normalize(role.title) in actor_norm:
+            return key
+    # Fallback: slug from first word of actor
+    slug = actor_norm.split()[0] if actor_norm.strip() else "general"
+    return slug or "general"
+
+
+def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
+    """Return the message_thread_id for *agent_key*, creating it if absent.
+
+    Calls Telegram createForumTopic when the key is not in the registry.
+    Best-effort: any failure returns None (never raises).
+    """
+    token = settings.telegram_bot_token
+    chat_id = settings.telegram_stream_chat_id
+    if not token or not chat_id:
+        return None
+
+    registry = _load_topics()
+    if agent_key in registry:
+        return registry[agent_key]
+
+    try:
+        url = f"https://api.telegram.org/bot{token}/createForumTopic"
+        resp = requests.post(url, json={"chat_id": chat_id, "name": title}, timeout=5)
+        data = resp.json()
+        if data.get("ok"):
+            thread_id: int = data["result"]["message_thread_id"]
+            registry[agent_key] = thread_id
+            _save_topics(registry)
+            return thread_id
+        logger.warning("stream.topics.create_failed", agent_key=agent_key, response=data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.topics.create_error", agent_key=agent_key, error=str(exc))
+    return None
 
 
 def stream_agent_turn(
@@ -120,10 +204,18 @@ def stream_agent_turn(
             snippet = snippet[: _STREAM_MAX_CHARS - 1] + "…"
         if snippet:
             lines.append(f"   {snippet}")
+    message_thread_id: int | None = None
+    if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
+        agent_key = _resolve_agent_key(actor)
+        message_thread_id = _ensure_topic_thread(agent_key, f"{actor}")
     try:
         # Live agent stream goes to its dedicated channel when set, else falls
         # back to the main notification chat.
-        _send_telegram("\n".join(lines), chat_id=settings.telegram_stream_chat_id)
+        _send_telegram(
+            "\n".join(lines),
+            chat_id=settings.telegram_stream_chat_id,
+            message_thread_id=message_thread_id,
+        )
     except _NotConfigured:
         pass  # Telegram not set up — streaming is best-effort
     except Exception as exc:  # noqa: BLE001

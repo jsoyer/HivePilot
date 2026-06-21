@@ -15,7 +15,9 @@ from hivepilot.services import notification_service as ns
 @pytest.fixture
 def captured(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     sent: list[str] = []
-    monkeypatch.setattr(ns, "_send_telegram", lambda msg, chat_id=None: sent.append(msg))
+    monkeypatch.setattr(
+        ns, "_send_telegram", lambda msg, chat_id=None, message_thread_id=None: sent.append(msg)
+    )
     monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
     return sent
 
@@ -23,7 +25,9 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_stream_routes_to_dedicated_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict = {}
     monkeypatch.setattr(
-        ns, "_send_telegram", lambda msg, chat_id=None: seen.update(chat_id=chat_id)
+        ns,
+        "_send_telegram",
+        lambda msg, chat_id=None, message_thread_id=None: seen.update(chat_id=chat_id),
     )
     monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
     monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", -100123, raising=False)
@@ -50,7 +54,7 @@ def test_disabled_toggle_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_unconfigured_telegram_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _raise(_msg: str) -> None:
+    def _raise(_msg: str, chat_id=None, message_thread_id=None) -> None:
         raise ns._NotConfigured("no token")
 
     monkeypatch.setattr(ns, "_send_telegram", _raise)

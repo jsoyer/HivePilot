@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
     telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
+    telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — route each agent's turns to its own forum topic
     auditor_auto: bool = (
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
@@ -101,9 +102,6 @@ class Settings(BaseSettings):
     worker_retries: int = 2  # retry attempts on transient worker dispatch failures (W3)
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
-    default_target: str = Field(
-        default="noxys", description="Default project/group target for /ask and alias commands"
-    )  # env: HIVEPILOT_DEFAULT_TARGET
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
