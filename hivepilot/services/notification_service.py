@@ -12,11 +12,11 @@ logger = get_logger(__name__)
 
 # Human-readable meaning shown next to each live-stream emoji.
 _ICON_LABELS = {
-    "🚀": "démarrage",
-    "🗣": "passation",
-    "⏸️": "validation requise",
-    "💬": "proposition",
-    "⚖️": "synthèse",
+    "🚀": "start",
+    "🗣": "hand-off",
+    "⏸️": "approval needed",
+    "💬": "proposal",
+    "⚖️": "synthesis",
 }
 
 
