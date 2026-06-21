@@ -26,7 +26,7 @@ via the `vibe` runner; observes cycles and **proposes** prompt improvements
 (`hivepilot audit <project> [--deep]`), never auto-applies. See USAGE.md.
 
 > The 10-stage `company` pipeline below is the original. The reordered
-> **`company-v2`** (planning → plan checkpoint → dev → … → Jules approves the PR)
+> **`noxys-v2`** (planning → plan checkpoint → dev → … → Jules approves the PR)
 > is documented in [USAGE.md](USAGE.md).
 
 ## The chain (pipeline `company`)

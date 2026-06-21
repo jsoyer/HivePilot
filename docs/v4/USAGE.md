@@ -108,7 +108,7 @@ fait) ou la note du run dans le vault Obsidian.
 > sur l'étape voulue dans `pipelines.yaml`.
 
 
-## Pipeline `company-v2` (planification réordonnée + checkpoint)
+## Pipeline `noxys-v2` (planification réordonnée + checkpoint)
 
 Variante de `company` où la **sécurité et la synthèse passent avant le dev**, avec
 ton checkpoint de plan après la synthèse :
@@ -124,7 +124,7 @@ ton checkpoint de plan après la synthèse :
 6. Gustave (Dev) → 7. Victor (Reviewer, ouvre la PR) → 8. Hugo (CISO, clearance du code)
 → 9. Marie (QA) → 10. Théo (Documentation) → 11. Jules (**check final + approbation de la PR**)
 
-Lancer : `hivepilot run-pipeline noxys-api company-v2` (ou `/runpipeline` dans Telegram).
+Lancer : `hivepilot run-pipeline noxys-api noxys-v2` (ou `/runpipeline` dans Telegram).
 Le `company` original reste disponible inchangé.
 
 
@@ -213,7 +213,7 @@ planif au niveau groupe, à partir de E2). Config : `groups.yaml`.
 - Lister : `hivepilot groups`
 - **Tâche unique fan-out** : `hivepilot run noxys lint` → la tâche tourne sur tous
   les composants du groupe.
-- **Pipeline sur groupe (E2)** : `hivepilot run-pipeline noxys company-v2` → la
+- **Pipeline sur groupe (E2)** : `hivepilot run-pipeline noxys noxys-v2` → la
   **planification tourne une seule fois dans le hub** (avec le manifeste des
   composants en contexte), puis la **phase 2 (dev → … → PR) fan-out sur les
   composants**. Le checkpoint de plan se trouve entre les deux.
@@ -286,8 +286,8 @@ The bot accepts plain (non-slash) messages starting with `@`:
 |--------|--------|
 | `@gustave fix auth bug` | Run Gustave (Developer) on the default project |
 | `@blaise @noxys-api review API` | Run Blaise (CTO) on the `noxys-api` project |
-| `@noxys ship device-fleet API` | Launch `company-v2` pipeline on the `noxys` group |
-| `@noxys-api implement X` | Launch `company-v2` pipeline on project `noxys-api` |
+| `@noxys ship device-fleet API` | Launch `noxys-v2` pipeline on the `noxys` group |
+| `@noxys-api implement X` | Launch `noxys-v2` pipeline on project `noxys-api` |
 
 Resolution priority: group > agent > project. So if `noxys` is both a group and a project, it routes to the group.
 

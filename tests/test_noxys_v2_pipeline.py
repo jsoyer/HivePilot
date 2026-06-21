@@ -1,4 +1,4 @@
-"""Structure of the reordered company-v2 pipeline.
+"""Structure of the reordered noxys-v2 pipeline.
 
 Planning phase (CEO → CTO → CISO architecture → Jules synthesis) ends with a
 human plan checkpoint before the developer; then dev → review (PR) → CISO code
@@ -25,7 +25,7 @@ EXPECTED_STAGES = [
 
 
 def _pipeline():
-    return load_pipelines().pipelines["company-v2"]
+    return load_pipelines().pipelines["noxys-v2"]
 
 
 def test_company_v2_exists_and_validates() -> None:

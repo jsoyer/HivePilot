@@ -52,9 +52,7 @@ class SqliteStageCache:
     def get(self, key: str) -> str | None:
         try:
             with sqlite3.connect(self._db_path) as conn:
-                row = conn.execute(
-                    "SELECT value FROM stage_cache WHERE key = ?", (key,)
-                ).fetchone()
+                row = conn.execute("SELECT value FROM stage_cache WHERE key = ?", (key,)).fetchone()
             return row[0] if row else None
         except Exception as exc:  # noqa: BLE001
             logger.warning("stage_cache.get_failed", key=key, error=str(exc))
@@ -84,8 +82,7 @@ class RedisStageCache:
             import redis as redis_lib  # type: ignore[import]
         except ImportError as exc:
             raise RuntimeError(
-                "redis package is not installed. "
-                "Install it with: pip install redis"
+                "redis package is not installed. Install it with: pip install redis"
             ) from exc
         self._client = redis_lib.from_url(redis_url)
 
