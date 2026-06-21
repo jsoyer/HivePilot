@@ -150,3 +150,34 @@ def test_resume_pipeline_deny_stops_and_marks_denied() -> None:
     assert mock_update.call_args.args[1] == "denied"
     mock_complete.assert_called_once()
     mock_run_task.assert_not_called()
+
+
+def test_resume_pipeline_auto_git_override() -> None:
+    orch = _orch(_pipeline())
+    approval = {
+        "status": "pending",
+        "metadata": json.dumps(
+            {
+                "kind": "pipeline_checkpoint",
+                "pipeline": "p",
+                "projects": ["proj"],
+                "resume_from_index": 1,
+                "auto_git": False,  # launched WITHOUT --auto-git
+            }
+        ),
+    }
+    captured: dict = {}
+
+    def fake_run_pipeline(**kw):
+        captured.update(kw)
+        return []
+
+    with (
+        patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval),
+        patch("hivepilot.orchestrator.state_service.update_approval"),
+        patch("hivepilot.orchestrator.notification_service.send_notification"),
+        patch.object(orch, "run_pipeline", side_effect=fake_run_pipeline),
+    ):
+        orch.resume_pipeline(run_id=7, approve=True, approver="me", auto_git=True)
+
+    assert captured["auto_git"] is True  # override wins over stored auto_git=False
