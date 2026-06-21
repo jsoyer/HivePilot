@@ -865,6 +865,25 @@ class Orchestrator:
                 logger.info("task.end", project=project.path.name, task=task_name)
                 adr_path = adr.get("path") if adr else None
                 return "dual-model debate → synthesis" + (f" ({adr_path})" if adr_path else "")
+        # Stage cache (L3) — skip runner on cache hit
+        _stage_cache = None
+        _stage_cache_key_val: str | None = None
+        if settings.stage_cache_enabled and not simulate and not auto_git:
+            from hivepilot.services.stage_cache import get_stage_cache, stage_cache_key
+
+            _stage_cache = get_stage_cache(settings)
+            _stage_cache_key_val = stage_cache_key(
+                task_name=task_name,
+                model=None,  # model resolved per-runner; use None for key stability
+                extra_prompt=extra_prompt,
+                prior_context=prior_context,
+                repo_head=self._get_repo_head(project.path),
+            )
+            _cached_result = _stage_cache.get(_stage_cache_key_val)
+            if _cached_result is not None:
+                logger.info("stage.cache_hit", task=task_name, project=project.path.name)
+                return _cached_result or None
+
         outputs: list[str] = []
         for step in task.steps:
             secrets = self._resolve_secrets(step)
@@ -927,10 +946,16 @@ class Orchestrator:
                     logger.warning("step.failure_allowed", step=step.name, error=str(exc))
                     continue
                 raise
+        task_result = "\n".join(o for o in outputs if o).strip() or None
+
+        # Stage cache (L3) — store result on success
+        if _stage_cache is not None and _stage_cache_key_val is not None and task_result:
+            _stage_cache.put(_stage_cache_key_val, task_result)
+
         if auto_git:
             perform_git_actions(project_name=project.path.name, project=project, git=task.git)
         logger.info("task.end", project=project.path.name, task=task_name)
-        return "\n".join(o for o in outputs if o).strip() or None
+        return task_result
 
     def _capture_or_execute(self, runner_key: str, payload: RunnerPayload) -> str:
         """Run a non-role step, capturing its stdout when the runner supports it
@@ -941,6 +966,22 @@ class Orchestrator:
             return capture(payload)
         runner.run(payload)
         return ""
+
+    @staticmethod
+    def _get_repo_head(path: Path) -> str | None:
+        """Return the current git HEAD sha for a repo path, or None on error."""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
     def _project(self, name: str) -> ProjectConfig:
         if name not in self.projects.projects:
