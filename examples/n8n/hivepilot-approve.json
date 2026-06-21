@@ -1,0 +1,59 @@
+{
+  "name": "HivePilot — approve/deny callback",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "hivepilot-approve",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "b1111111-1111-1111-1111-111111111111",
+      "name": "Approve/Deny (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 320],
+      "webhookId": "hivepilot-approve"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.HIVEPILOT_API_URL }}/approvals/{{ $json.query.run_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.HIVEPILOT_API_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: $json.query.action }) }}",
+        "options": {}
+      },
+      "id": "b2222222-2222-2222-2222-222222222222",
+      "name": "Call HivePilot /approvals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 320]
+    },
+    {
+      "parameters": {
+        "content": "## Approve / deny callback\nHit by the approve/deny links from the events workflow\n(or any Slack/email button).\n\n`GET /webhook/hivepilot-approve?run_id=42&action=approve`\n→ `POST {HIVEPILOT_API_URL}/approvals/42` `{ \"action\": \"approve\" }`\n\nSet env: `HIVEPILOT_API_URL`, `HIVEPILOT_API_TOKEN`.",
+        "height": 220,
+        "width": 360
+      },
+      "id": "b3333333-3333-3333-3333-333333333333",
+      "name": "Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [220, 60]
+    }
+  ],
+  "connections": {
+    "Approve/Deny (Webhook)": {
+      "main": [[{ "node": "Call HivePilot /approvals", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "active": false
+}
