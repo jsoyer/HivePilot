@@ -433,7 +433,7 @@ tasks:
       commit: false
       push: false
       create_pr: false
-      merge_pr: true
+      merge_pr: false
       merge_method: squash
       branch_prefix: hivepilot
 

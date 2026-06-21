@@ -21,3 +21,7 @@ policies:
       allow_auto_git: true       # developer stage may push + open a PR (human merges)
       require_approval: true     # human approves each run before it executes
       allow_containers: false
+    noxys-api:
+      allow_auto_git: true
+      require_approval: false    # company-v2 uses the plan CHECKPOINT as the gate, not per-task approval
+      allow_containers: false
