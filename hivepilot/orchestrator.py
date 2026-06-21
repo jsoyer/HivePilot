@@ -537,11 +537,14 @@ class Orchestrator:
         run_id: int,
         approve: bool,
         approver: str,
+        auto_git: bool | None = None,
     ) -> RunResult:
         """Resume (or deny) a pipeline parked at a plan checkpoint.
 
         On approve, continue ``run_pipeline`` from the saved resume point under the
         same ``run_id``; on deny, mark the run denied and run nothing further.
+        ``auto_git`` (when not None) overrides the run's stored auto_git — e.g. to
+        enable push/PR at approval time on a run launched without ``--auto-git``.
         """
         approval = state_service.get_approval(run_id)
         if not approval or approval.get("status") != "pending":
@@ -573,7 +576,7 @@ class Orchestrator:
             project_names=meta["projects"],
             pipeline_name=pipeline_name,
             extra_prompt=meta.get("extra_prompt"),
-            auto_git=meta.get("auto_git", False),
+            auto_git=auto_git if auto_git is not None else meta.get("auto_git", False),
             dry_run=meta.get("dry_run", True),
             simulate=meta.get("simulate", False),
             start_index=meta["resume_from_index"],
