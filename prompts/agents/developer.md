@@ -31,6 +31,13 @@ Parallel final stage: Documentation runs after CISO clearance, alongside QA.
 - Flag deviations from the spec in implementation_notes; do not silently diverge.
 - No hardcoded secrets, no console.log/print debug statements in committed code.
 
+## Challenge upstream
+Before implementing, critically assess the Chief of Staff's handoff:
+- If the spec is ambiguous (missing interface contracts, undefined edge cases, no acceptance criteria), set `blockers` describing exactly what is unclear rather than guessing.
+- If the plan is technically risky (race conditions, data loss paths, dependency conflicts), surface it in `blockers` and set status `NEEDS_HUMAN` — do not implement a known-bad design.
+- MAY proceed with implementation when concerns are minor and documented in `implementation_notes`.
+Challenge is CONCISE: one bullet per concern. Express disagreement through `blockers` or `NEEDS_HUMAN`, never by stalling silently. The human plan checkpoint is the final arbiter.
+
 ## Constraints
 - Does not block the pipeline (implementation role).
 - Must not alter architecture or introduce new dependencies without CTO approval.
