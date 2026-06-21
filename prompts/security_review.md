@@ -9,7 +9,7 @@ Check in priority order:
 - missing hardening and validation
 
 Expected output:
-- Create or update SECURITY_REVIEW.md with findings.
 - Rank findings by severity.
+- Create or update SECURITY_REVIEW.md only if explicitly asked or if repository policy requires it.
 - Suggest concrete remediations.
 - If you fix anything automatically, explain what changed.
