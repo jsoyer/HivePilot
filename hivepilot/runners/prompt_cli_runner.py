@@ -59,22 +59,24 @@ class PromptCliRunner(BaseRunner):
         return args
 
     def _augment_prompt(self, payload: RunnerPayload, prompt_text: str) -> str:
-        """Prepend user instructions + previous agents' outputs to the prompt.
+        """Append volatile context to the stable base prompt for cache-friendliness.
 
+        Stable role/system instructions go FIRST so prefix caching covers them.
+        Volatile sections (extra_prompt, prior_context) go LAST.
         Mirrors ClaudeRunner so non-Claude CLIs (opencode/cursor/codex/gemini/vibe)
-        also receive the pipeline hand-off context — e.g. so the synthesizer can
-        actually see what the earlier agents produced.
+        also receive the pipeline hand-off context.
         """
-        sections: list[str] = []
+        # Volatile sections (user-specific, per-run context).
+        volatile: list[str] = []
         extra = payload.metadata.get("extra_prompt")
         if extra:
-            sections.append(f"Extra instructions from user: {extra}")
+            volatile.append(f"Extra instructions from user: {extra}")
         prior = payload.metadata.get("prior_context")
         if prior:
-            sections.append(f"Outputs from previous agents:\n{prior}")
-        if not sections:
+            volatile.append(f"Outputs from previous agents:\n{prior}")
+        if not volatile:
             return prompt_text
-        return "\n\n".join(sections) + f"\n\nInstructions:\n{prompt_text}"
+        return f"Instructions:\n{prompt_text}\n\n" + "\n\n".join(volatile)
 
     def capture(self, payload: RunnerPayload) -> str:
         """Run the CLI in capture mode and return stdout (used for debate positions)."""
@@ -157,17 +159,36 @@ class PromptCliRunner(BaseRunner):
             api_key = env.get("ANTHROPIC_API_KEY")
             if not api_key:
                 raise RuntimeError("ANTHROPIC_API_KEY missing.")
-            self._post_json(
-                url="https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-                payload={
+            headers: dict[str, str] = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            }
+            # Split into stable system (cacheable) + volatile user trigger.
+            # The prompt has already been ordered stable→volatile by _augment_prompt.
+            if self.settings.anthropic_prompt_cache:
+                headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+                api_payload: dict = {
+                    "model": model,
+                    "max_tokens": 1000,
+                    "system": [
+                        {
+                            "type": "text",
+                            "text": prompt,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    "messages": [{"role": "user", "content": "Execute the instructions above."}],
+                }
+            else:
+                api_payload = {
                     "model": model,
                     "max_tokens": 1000,
                     "messages": [{"role": "user", "content": prompt}],
-                },
+                }
+            self._post_json(
+                url="https://api.anthropic.com/v1/messages",
+                headers=headers,
+                payload=api_payload,
                 timeout=timeout,
             )
         elif provider == "google":

@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
 
+    # Token-saving caching (L1-L3)
+    anthropic_prompt_cache: bool = True  # add cache_control to Anthropic system block (L1)
+    prior_context_mode: str = "cap"  # full | synthesis | cap (L2)
+    max_prior_context_chars: int = 8000  # max chars for cap mode (L2)
+    stage_cache_enabled: bool = False  # opt-in SQLite stage memoization (L3)
+    cache_backend: str = "sqlite"  # sqlite | redis (L3)
+    redis_url: str | None = None  # required when cache_backend=redis (L3)
+
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
     def _coerce_notification_chat_id(cls, v: object) -> object:
