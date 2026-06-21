@@ -244,7 +244,7 @@ def _render_rich_card(
     # Truncate if needed — drop trailing bullets (never mid-tag)
     if len(card) > _RICH_MAX_CHARS:
         # Rebuild without links first
-        lines_no_links = [l for l in lines if not l.startswith('<a href=')]
+        lines_no_links = [l for l in lines if not l.startswith("<a href=")]
         card = "\n".join(lines_no_links)
         if len(card) > _RICH_MAX_CHARS:
             card = card[: _RICH_MAX_CHARS - 1] + "…"

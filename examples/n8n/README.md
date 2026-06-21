@@ -39,7 +39,7 @@ For stronger per-link binding, replace the shared token with an
 `HMAC(secret, run_id|action|expiry)` generated in the events workflow and verified
 here. Never expose the approve webhook publicly without these guards.
 4. Run a real pipeline with a checkpoint:
-   `hivepilot run-pipeline noxys company-v2 --no-dry-run` →
+   `hivepilot run-pipeline noxys noxys-v2 --no-dry-run` →
    you get a notification with **Approve / Deny** links → clicking resumes (or
    stops) the pipeline via the API.
 

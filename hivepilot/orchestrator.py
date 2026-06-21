@@ -103,9 +103,7 @@ def build_prior_context(
     if not prior_chunks:
         return None
     if mode == "synthesis":
-        synthesis = next(
-            (c for c in prior_chunks if "plan synthesis" in c.lower()), None
-        )
+        synthesis = next((c for c in prior_chunks if "plan synthesis" in c.lower()), None)
         last = prior_chunks[-1]
         parts = []
         if synthesis and synthesis is not last:

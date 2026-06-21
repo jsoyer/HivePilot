@@ -24,7 +24,7 @@ Events (payload is `{"event": <name>, …}`):
 
 Example `checkpoint` payload:
 ```json
-{"event":"checkpoint","run_id":42,"pipeline":"company-v2","next_stage":"Implementation",
+{"event":"checkpoint","run_id":42,"pipeline":"noxys-v2","next_stage":"Implementation",
  "components":["noxys-api"],"status":"awaiting_approval"}
 ```
 
@@ -39,7 +39,7 @@ From an n8n *HTTP Request* node:
 
 - **Trigger a run** — `POST /run` (role `run`):
   ```json
-  { "project": "noxys", "task": "company-v2", "extra_prompt": "ship the X feature" }
+  { "project": "noxys", "task": "noxys-v2", "extra_prompt": "ship the X feature" }
   ```
 - **Approve / deny a checkpoint** — `POST /approvals/{run_id}` (role `approve`):
   ```json

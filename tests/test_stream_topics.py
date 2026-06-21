@@ -1,4 +1,5 @@
 """Tests for Telegram forum topic routing (per-agent message threads)."""
+
 from __future__ import annotations
 
 import json
@@ -16,6 +17,7 @@ from hivepilot.services.notification_service import (
 # ---------------------------------------------------------------------------
 # _resolve_agent_key
 # ---------------------------------------------------------------------------
+
 
 class TestResolveAgentKey:
     def test_cto_by_display_name(self):
@@ -44,6 +46,7 @@ class TestResolveAgentKey:
 # ---------------------------------------------------------------------------
 # _load_topics / _save_topics
 # ---------------------------------------------------------------------------
+
 
 class TestTopicsRegistry:
     def test_round_trip(self, tmp_path: Path, monkeypatch):
@@ -79,6 +82,7 @@ class TestTopicsRegistry:
 # _send_telegram — message_thread_id in payload
 # ---------------------------------------------------------------------------
 
+
 class TestSendTelegramThreadId:
     def _make_settings(self, **kw):
         s = MagicMock()
@@ -91,6 +95,7 @@ class TestSendTelegramThreadId:
 
     def test_includes_thread_id_when_provided(self):
         captured = {}
+
         def fake_post(url, json=None, timeout=None):
             captured["payload"] = json
             r = MagicMock()
@@ -107,6 +112,7 @@ class TestSendTelegramThreadId:
 
     def test_omits_thread_id_when_none(self):
         captured = {}
+
         def fake_post(url, json=None, timeout=None):
             captured["payload"] = json
             r = MagicMock()
@@ -125,6 +131,7 @@ class TestSendTelegramThreadId:
 # ---------------------------------------------------------------------------
 # stream_agent_turn — topics enabled vs disabled
 # ---------------------------------------------------------------------------
+
 
 class TestStreamAgentTurnTopics:
     def _make_settings(self, topics_enabled: bool):

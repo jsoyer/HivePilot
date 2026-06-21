@@ -373,9 +373,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
 
     # kind == "group" or kind == "project"
     if not rest:
-        await update.message.reply_text(
-            f"Please provide a request after @{name}."
-        )
+        await update.message.reply_text(f"Please provide a request after @{name}.")
         return
 
     ack = await update.message.reply_text(
@@ -391,7 +389,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
             None,
             lambda: _get_orch().run_pipeline(
                 project_names=[hub],
-                pipeline_name="company-v2",
+                pipeline_name="noxys-v2",
                 extra_prompt=rest,
                 auto_git=True,
                 hub=hub,
@@ -404,7 +402,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
             None,
             lambda: _get_orch().run_pipeline(
                 project_names=[name],
-                pipeline_name="company-v2",
+                pipeline_name="noxys-v2",
                 extra_prompt=rest,
                 auto_git=True,
             ),
@@ -1060,6 +1058,7 @@ def _build_application(token: str):
     app.add_handler(CommandHandler("audit", _ALIAS_HANDLERS["audit"]))
     app.add_handler(CommandHandler("henri", _ALIAS_HANDLERS["henri"]))
     from telegram.ext import MessageHandler, filters
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _cmd_mention))
     app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
     return app

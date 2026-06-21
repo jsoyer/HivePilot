@@ -137,6 +137,7 @@ def test_capture_surfaces_stderr_on_failure(tmp_path: Path) -> None:
 
 # ── L1: prompt ordering tests ────────────────────────────────────────────────
 
+
 def test_stable_sections_before_volatile(tmp_path: Path) -> None:
     """knowledge_context (stable) must appear before prior_context (volatile)."""
     payload = _payload(tmp_path, {"prior_context": "PRIOR_DATA"})

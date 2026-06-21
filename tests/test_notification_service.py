@@ -16,7 +16,9 @@ from hivepilot.services import notification_service as ns
 def captured(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     sent: list[str] = []
     monkeypatch.setattr(
-        ns, "_send_telegram", lambda msg, chat_id=None, message_thread_id=None, parse_mode=None: sent.append(msg)
+        ns,
+        "_send_telegram",
+        lambda msg, chat_id=None, message_thread_id=None, parse_mode=None: sent.append(msg),
     )
     monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
     monkeypatch.setattr(ns.settings, "telegram_stream_rich", False, raising=False)
@@ -28,7 +30,9 @@ def test_stream_routes_to_dedicated_channel(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(
         ns,
         "_send_telegram",
-        lambda msg, chat_id=None, message_thread_id=None, parse_mode=None: seen.update(chat_id=chat_id),
+        lambda msg, chat_id=None, message_thread_id=None, parse_mode=None: seen.update(
+            chat_id=chat_id
+        ),
     )
     monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
     monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", -100123, raising=False)
@@ -94,9 +98,9 @@ def test_emit_event_posts_payload(monkeypatch: pytest.MonkeyPatch) -> None:
         "post",
         lambda url, json, headers, timeout: sent.update(url=url, json=json, headers=headers),
     )
-    ns.emit_event("checkpoint", run_id=42, pipeline="company-v2")
+    ns.emit_event("checkpoint", run_id=42, pipeline="noxys-v2")
     assert sent["url"] == "https://n8n/hook"
-    assert sent["json"] == {"event": "checkpoint", "run_id": 42, "pipeline": "company-v2"}
+    assert sent["json"] == {"event": "checkpoint", "run_id": 42, "pipeline": "noxys-v2"}
     assert sent["headers"]["Authorization"] == "Bearer tok"
 
 

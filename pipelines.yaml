@@ -28,7 +28,7 @@ pipelines:
       - name: Approval
         task: company-ceo-approval
 
-  company-v2:
+  noxys-v2:
     description: >
       Reordered company cycle. Planning phase (CEO debate -> CTO architecture ->
       CISO architecture security -> Chief of Staff synthesis) ends with a human
