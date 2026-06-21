@@ -60,3 +60,34 @@ class TestPluginManagerHooksAnnotation:
 
         result = load_plugins()
         assert isinstance(result, list)
+
+
+class TestLoadPluginsByPath:
+    """Plugins load by file path — no dependency on `plugins` being on sys.path
+    (regression: the installed binary / Telegram bot crashed with
+    ModuleNotFoundError: No module named 'plugins')."""
+
+    def test_loads_plugin_without_plugins_on_syspath(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "good.py").write_text(
+            "def register():\n    return {'before_step': lambda **k: None}\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        assert "plugins" not in sys.modules  # not importable as a package here
+        loaded = plugins_mod.load_plugins()
+        assert len(loaded) == 1
+        assert callable(loaded[0])
+
+    def test_broken_plugin_is_skipped_not_fatal(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "ok.py").write_text("def register():\n    return {}\n", encoding="utf-8")
+        (pdir / "broken.py").write_text("raise RuntimeError('boom')\n", encoding="utf-8")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        loaded = plugins_mod.load_plugins()  # must not raise
+        assert len(loaded) == 1  # ok loaded, broken skipped

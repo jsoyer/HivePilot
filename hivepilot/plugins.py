@@ -20,11 +20,25 @@ def load_plugins(entry: str | None = None) -> list[Callable[..., Any]]:
     else:
         plugin_dir = settings.base_dir / "plugins"
         if plugin_dir.exists():
-            for file in plugin_dir.glob("*.py"):
-                module_name = f"plugins.{file.stem}"
-                module = import_module(module_name)
-                if hasattr(module, "register"):
-                    plugins.append(module.register)
+            import importlib.util
+
+            for file in sorted(plugin_dir.glob("*.py")):
+                if file.stem.startswith("_"):
+                    continue
+                # Load by file path so it works regardless of cwd / sys.path
+                # (the installed `hivepilot` binary and the Telegram bot don't have
+                # the project root on sys.path → `import plugins.x` would fail).
+                try:
+                    spec = importlib.util.spec_from_file_location(
+                        f"hivepilot_plugin_{file.stem}", file
+                    )
+                    if spec and spec.loader:
+                        module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(module)
+                        if hasattr(module, "register"):
+                            plugins.append(module.register)
+                except Exception as exc:  # noqa: BLE001 — a broken plugin must not kill a run
+                    logger.warning("plugins.load_failed", file=str(file), error=str(exc))
     logger.info("plugins.loaded", count=len(plugins))
     return plugins
 
