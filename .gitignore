@@ -19,3 +19,9 @@ state.db
 
 # local API token store (never commit)
 api_tokens.yaml
+
+# runtime artifacts & local state (machine-specific, never commit)
+runs/
+.hivepilot/
+.claude/worktrees/
+.claude/settings.local.json
