@@ -53,7 +53,26 @@ def test_capture_returns_agent_stdout(tmp_path: Path) -> None:
         secrets={},
     )
     with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
-        m.return_value = MagicMock(stdout="AGENT SAID THIS")
+        m.return_value = MagicMock(stdout="AGENT SAID THIS", returncode=0)
         out = _runner().capture(payload)
     assert out == "AGENT SAID THIS"
     assert m.call_args.kwargs["capture_output"] is True
+
+
+def test_capture_surfaces_stderr_on_failure(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock, patch
+
+    pf = tmp_path / "p.md"
+    pf.write_text("do it", encoding="utf-8")
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+        metadata={},
+        secrets={},
+    )
+    with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+        m.return_value = MagicMock(returncode=1, stdout="", stderr="boom: bad model")
+        with __import__("pytest").raises(RuntimeError, match="boom: bad model"):
+            _runner().capture(payload)
