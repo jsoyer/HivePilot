@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     )
     container_runtime: str = "docker"  # container runtime for the container runner: docker | podman
     auto_commit_vault: bool = False  # git add/commit/push the Obsidian vault after a pipeline run
+    event_webhook_url: str | None = None  # POST pipeline lifecycle events here (n8n, etc.)
+    event_webhook_token: str | None = None  # optional bearer token for the event webhook
     ssh_options: list[str] = Field(default_factory=list)  # extra ssh -o options for remote agents
     worker_token: str | None = None  # shared bearer token between hub and remote workers
     worker_port: int = 8900  # default port for `hivepilot worker`
