@@ -312,6 +312,9 @@ class Orchestrator:
             )
 
         interactions_svc = InteractionService(vault_path, dry_run=dry_run)
+        notification_service.emit_event(
+            "pipeline_start", run_id=run_id, pipeline=pipeline_name, projects=project_names
+        )
 
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
@@ -379,6 +382,14 @@ class Orchestrator:
                         + f'Approve (run #{run_id}) to start "{stage.name}".'
                     ),
                     icon="⏸️",
+                )
+                notification_service.emit_event(
+                    "checkpoint",
+                    run_id=run_id,
+                    pipeline=pipeline_name,
+                    next_stage=stage.name,
+                    components=selected_components if group_mode else None,
+                    status="awaiting_approval",
                 )
                 state_service.complete_run(run_id, RunStatus.PAUSED.value)
                 return results
@@ -468,6 +479,9 @@ class Orchestrator:
                 break
 
         state_service.complete_run(run_id, final_status.value)
+        notification_service.emit_event(
+            "complete", run_id=run_id, pipeline=pipeline_name, status=final_status.value
+        )
 
         # Version the plan/ADR notes: commit+push the Obsidian vault (best-effort,
         # opt-in, only on a real write run).
@@ -521,11 +535,17 @@ class Orchestrator:
             notification_service.send_notification(
                 f"❌ Plan #{run_id} ({pipeline_name}) denied — pipeline stopped."
             )
+            notification_service.emit_event(
+                "denied", run_id=run_id, pipeline=pipeline_name, approver=approver
+            )
             return RunResult(pipeline_name, pipeline_name, False, "Plan denied at checkpoint")
 
         state_service.update_approval(run_id, "approved", approver)
         notification_service.send_notification(
             f"✅ Plan #{run_id} ({pipeline_name}) approved — starting development."
+        )
+        notification_service.emit_event(
+            "approved", run_id=run_id, pipeline=pipeline_name, approver=approver
         )
         results = self.run_pipeline(
             project_names=meta["projects"],

@@ -61,3 +61,26 @@ def test_collapses_whitespace_and_newlines(captured: list[str]) -> None:
 def test_minimal_call_actor_only(captured: list[str]) -> None:
     ns.stream_agent_turn(actor="Diderot")
     assert "Diderot" in captured[0]
+
+
+def test_emit_event_posts_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ns.settings, "event_webhook_url", "https://n8n/hook", raising=False)
+    monkeypatch.setattr(ns.settings, "event_webhook_token", "tok", raising=False)
+    sent: dict = {}
+    monkeypatch.setattr(
+        ns.requests,
+        "post",
+        lambda url, json, headers, timeout: sent.update(url=url, json=json, headers=headers),
+    )
+    ns.emit_event("checkpoint", run_id=42, pipeline="company-v2")
+    assert sent["url"] == "https://n8n/hook"
+    assert sent["json"] == {"event": "checkpoint", "run_id": 42, "pipeline": "company-v2"}
+    assert sent["headers"]["Authorization"] == "Bearer tok"
+
+
+def test_emit_event_noop_without_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ns.settings, "event_webhook_url", None, raising=False)
+    called: list[int] = []
+    monkeypatch.setattr(ns.requests, "post", lambda *a, **k: called.append(1))
+    ns.emit_event("complete", run_id=1)
+    assert called == []

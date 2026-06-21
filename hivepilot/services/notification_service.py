@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
+from typing import Any
 
 import requests
 
@@ -35,6 +36,23 @@ def send_notification(message: str, channels: Iterable[str] | None = None) -> No
             pass  # silently skip unconfigured channels
         except Exception as exc:  # noqa: BLE001
             logger.warning("notification.failed", channel=channel, error=str(exc))
+
+
+def emit_event(event: str, **fields: Any) -> None:
+    """POST a structured pipeline-lifecycle event to the configured webhook (n8n,
+    Zapier, a dashboard, …). Best-effort and a silent no-op when no webhook is set
+    — it must never break a run. Payload: ``{"event": <event>, **fields}``."""
+    url = settings.event_webhook_url
+    if not url:
+        return
+    payload: dict[str, Any] = {"event": event, **fields}
+    headers = {}
+    if settings.event_webhook_token:
+        headers["Authorization"] = f"Bearer {settings.event_webhook_token}"
+    try:
+        requests.post(url, json=payload, headers=headers, timeout=5)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("event.emit_failed", event=event, error=str(exc))
 
 
 class _NotConfigured(Exception):
