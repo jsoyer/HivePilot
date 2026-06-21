@@ -192,6 +192,53 @@ def _parse_alias_args(args: list[str], default_target: str) -> tuple[str, str]:
     return (target, order)
 
 
+def _parse_mention(
+    text: str,
+    *,
+    groups: dict,
+    agents_known: set,
+    projects_known: set,
+) -> tuple[str, str, str]:
+    """Parse a free-text @mention message.
+
+    Returns (kind, name, rest) where kind is one of:
+      "none"    — text doesn't start with @
+      "group"   — first token matched a group name
+      "agent"   — first token resolved via _resolve_agent
+      "project" — first token matched a project name
+      "unknown" — @ present but token didn't match anything
+    """
+    import re as _re
+
+    text = text.strip()
+    if not text.startswith("@"):
+        return ("none", "", "")
+
+    # Extract first token after @: letters/digits/_/- until whitespace
+    m = _re.match(r"@([\w\-]+)(.*)", text, _re.DOTALL)
+    if not m:
+        return ("unknown", "", "")
+
+    raw_token = m.group(1)
+    rest = m.group(2).strip()
+    normalised = _normalise(raw_token)
+
+    # Resolution priority: group > agent > project > unknown
+    norm_groups = {_normalise(g): g for g in groups}
+    if normalised in norm_groups:
+        return ("group", norm_groups[normalised], rest)
+
+    role_key = _resolve_agent(normalised)
+    if role_key is not None:
+        return ("agent", role_key, rest)
+
+    norm_projects = {_normalise(p): p for p in projects_known}
+    if normalised in norm_projects:
+        return ("project", norm_projects[normalised], rest)
+
+    return ("unknown", "", rest)
+
+
 async def _run_agent_order(update: Any, role_key: str, target: str, order: str) -> None:
     """Shared coroutine: run a single agent task with the 60-s heartbeat pattern."""
     entry = _AGENT_REGISTRY[role_key]
@@ -266,6 +313,121 @@ async def _cmd_ask(update: Any, context: Any) -> None:
         return
 
     await _run_agent_order(update, role_key, target, order)
+
+
+async def _cmd_mention(update: Any, context: Any) -> None:
+    """Handle free-text @mention messages (non-command)."""
+    if not _require_allowed(update.effective_chat.id):
+        return
+
+    text = (update.message.text or "").strip()
+
+    # Load resolution tables
+    from hivepilot.services.project_service import load_groups, load_projects
+
+    try:
+        grp_file = load_groups()
+        proj_file = load_projects()
+    except Exception:
+        grp_file = type("G", (), {"groups": {}})()
+        proj_file = type("P", (), {"projects": {}})()
+
+    groups = grp_file.groups  # dict name -> GroupEntry
+    projects_known = set(proj_file.projects.keys())
+    agents_known = set(_ALIAS_TO_ROLE.keys())
+
+    kind, name, rest = _parse_mention(
+        text,
+        groups=groups,
+        agents_known=agents_known,
+        projects_known=projects_known,
+    )
+
+    if kind == "none":
+        return  # silently ignore non-@ messages
+
+    if kind == "unknown":
+        # Extract token for error message (just the part after @)
+        tok = text[1:].split()[0] if text.startswith("@") else text
+        await update.message.reply_text(
+            f"Unknown @target '{tok}'. Use @<agent> <order> or @noxys <request>."
+        )
+        return
+
+    if kind == "agent":
+        # Parse optional @target from rest (same convention as /ask)
+        rest_parts = rest.split()
+        target = settings.default_target
+        order_parts = rest_parts
+        if rest_parts and rest_parts[0].startswith("@"):
+            target = rest_parts[0][1:]
+            order_parts = rest_parts[1:]
+        order = " ".join(order_parts)
+        if not order:
+            await update.message.reply_text(
+                f"Please provide an order for {_AGENT_REGISTRY[name]['display']}."
+            )
+            return
+        await _run_agent_order(update, name, target, order)
+        return
+
+    # kind == "group" or kind == "project"
+    if not rest:
+        await update.message.reply_text(
+            f"Please provide a request after @{name}."
+        )
+        return
+
+    ack = await update.message.reply_text(
+        f"⏳ Launching company pipeline on `{name}`…", parse_mode="Markdown"
+    )
+
+    loop = asyncio.get_event_loop()
+
+    if kind == "group":
+        grp = groups[name]
+        hub = grp.hub or name
+        future = loop.run_in_executor(
+            None,
+            lambda: _get_orch().run_pipeline(
+                project_names=[hub],
+                pipeline_name="company-v2",
+                extra_prompt=rest,
+                auto_git=True,
+                hub=hub,
+                components=grp.components,
+                dry_run=False,
+            ),
+        )
+    else:  # project
+        future = loop.run_in_executor(
+            None,
+            lambda: _get_orch().run_pipeline(
+                project_names=[name],
+                pipeline_name="company-v2",
+                extra_prompt=rest,
+                auto_git=True,
+            ),
+        )
+
+    heartbeat_interval = 60
+    elapsed = 0
+    try:
+        while True:
+            try:
+                results = await asyncio.wait_for(asyncio.shield(future), timeout=heartbeat_interval)
+                break
+            except asyncio.TimeoutError:
+                elapsed += heartbeat_interval
+                await update.message.reply_text(f"⏳ Still running… ({elapsed}s)")
+    except Exception as exc:
+        logger.error("telegram.cmd_mention.error", kind=kind, name=name, error=str(exc))
+        await ack.delete()
+        await update.message.reply_text(f"❌ Error: {exc}")
+        return
+
+    await ack.delete()
+    await update.message.reply_text(_format_results(results))
 
 
 def _make_alias_handler(role_key: str):
@@ -361,6 +523,13 @@ async def _cmd_help(update, context) -> None:
         "\u2022 Marie \\(QA\\) — `/qa`, `/marie`\n"
         "\u2022 Théo \\(Documentation\\) — `/docs`, `/documentation`, `/theo`\n"
         "\u2022 Henri \\(Auditor\\) — `/audit`, `/henri`\n"
+        "\n"
+        "*Mentions \\(no slash needed\\)*\n\n"
+        "@<agent> `<order>` \\— address one agent \\(same as /ask\\)\n"
+        "  e\\.g\\\\. `@gustave fix the auth bug`\n"
+        "@<group\\/project> `<request>` \\— full company\\-v2 pipeline\n"
+        "  e\\.g\\\\. `@noxys ship device\\\\-fleet API`\n"
+        "⚠️ In groups: BotFather privacy mode must be Disabled \\(/setprivacy\\) to receive plain messages\\."
     )
     await update.message.reply_text(text, parse_mode="MarkdownV2")
 
@@ -890,6 +1059,8 @@ def _build_application(token: str):
     app.add_handler(CommandHandler("theo", _ALIAS_HANDLERS["theo"]))
     app.add_handler(CommandHandler("audit", _ALIAS_HANDLERS["audit"]))
     app.add_handler(CommandHandler("henri", _ALIAS_HANDLERS["henri"]))
+    from telegram.ext import MessageHandler, filters
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _cmd_mention))
     app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
     return app
 

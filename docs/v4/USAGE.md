@@ -276,3 +276,27 @@ export HIVEPILOT_TELEGRAM_STREAM_CHAT_ID=-100xxxxxxxxxx   # a channel/group id
 
 > Gives the "agent conversation in its own channel" effect with a single bot — no
 > need for one bot per role (each message already carries the agent name + role).
+
+
+## Free-text @mentions
+
+The bot accepts plain (non-slash) messages starting with `@`:
+
+| Syntax | Effect |
+|--------|--------|
+| `@gustave fix auth bug` | Run Gustave (Developer) on the default project |
+| `@blaise @noxys-api review API` | Run Blaise (CTO) on the `noxys-api` project |
+| `@noxys ship device-fleet API` | Launch `company-v2` pipeline on the `noxys` group |
+| `@noxys-api implement X` | Launch `company-v2` pipeline on project `noxys-api` |
+
+Resolution priority: group > agent > project. So if `noxys` is both a group and a project, it routes to the group.
+
+### BotFather privacy mode (IMPORTANT for group chats)
+
+In **group chats**, Telegram's default privacy mode makes the bot ignore non-command messages. To receive `@mention` messages in a group:
+
+1. Open BotFather → `/setprivacy`
+2. Select your bot
+3. Choose **Disable**
+
+In **1:1 DMs and channels**, the bot receives all messages regardless of privacy mode.
