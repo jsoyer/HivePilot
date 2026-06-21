@@ -11,6 +11,10 @@ from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Max chars of an agent's output shown inline in a Telegram turn (Telegram caps
+# messages at ~4096; keep headroom for the header lines).
+_STREAM_MAX_CHARS = 1500
+
 # Human-readable meaning shown next to each live-stream emoji.
 _ICON_LABELS = {
     "🚀": "start",
@@ -110,8 +114,8 @@ def stream_agent_turn(
         lines.append(f"   ↳ {target}")
     if summary:
         snippet = " ".join(summary.split())
-        if len(snippet) > 280:
-            snippet = snippet[:279] + "…"
+        if len(snippet) > _STREAM_MAX_CHARS:
+            snippet = snippet[: _STREAM_MAX_CHARS - 1] + "…"
         if snippet:
             lines.append(f"   {snippet}")
     try:

@@ -369,6 +369,7 @@ class Orchestrator:
                     project=", ".join(project_names) or pipeline_name,
                     task=f"plan → {stage.name}",
                 )
+                proposal_excerpt = (prior_chunks[-1] if prior_chunks else "").strip()
                 notification_service.stream_agent_turn(
                     actor="HivePilot",
                     stage="checkpoint",
@@ -379,7 +380,9 @@ class Orchestrator:
                             if group_mode
                             else ""
                         )
-                        + f'Approve (run #{run_id}) to start "{stage.name}".'
+                        + f'Approve (run #{run_id}) to start "{stage.name}". '
+                        + "Full plan in the Obsidian vault."
+                        + (f"\n\n{proposal_excerpt}" if proposal_excerpt else "")
                     ),
                     icon="⏸️",
                 )
@@ -466,6 +469,25 @@ class Orchestrator:
                         "stage": stage.name,
                     },
                 )
+
+            # Commit+push the vault per stage so notes land in Obsidian as they're
+            # written (not just at run end). Opt-in, best-effort.
+            if (
+                settings.auto_commit_vault
+                and not simulate
+                and not dry_run
+                and vault_path is not None
+            ):
+                try:
+                    from hivepilot.services.git_service import commit_vault
+
+                    commit_vault(
+                        vault_path, f"HivePilot: {pipeline_name} run {run_id} — {stage.name}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "vault.commit_failed", run_id=run_id, stage=stage.name, error=str(exc)
+                    )
 
             stage_failed = any(not r.success for r in stage_results)
             if stage_failed and not getattr(stage, "continue_on_failure", False):
