@@ -112,3 +112,16 @@ gated), `bypassPermissions` (full autonomy), `plan`, `default`. Unset = no flag
 | gh_command / git_command | — | `gh` / `git` |
 
 (Settings are `pydantic-settings`; any field is overridable via `HIVEPILOT_<NAME>`.)
+
+## Token-saving caching (L1–L3)
+
+| Setting | Env | Default | Description |
+|---|---|---|---|
+| `anthropic_prompt_cache` | `HIVEPILOT_ANTHROPIC_PROMPT_CACHE` | `True` | When True, sends prompts as a cacheable system block with `cache_control: ephemeral` to Anthropic. Disable to use plain messages format. |
+| `prior_context_mode` | `HIVEPILOT_PRIOR_CONTEXT_MODE` | `cap` | How to build the inter-agent prior_context. `cap`: truncate to `max_prior_context_chars` keeping the tail. `synthesis`: keep only the Plan Synthesis chunk + last chunk. `full`: original join-all behaviour. |
+| `max_prior_context_chars` | `HIVEPILOT_MAX_PRIOR_CONTEXT_CHARS` | `8000` | Max characters for `prior_context_mode=cap`. Content beyond this limit is trimmed from the head. |
+| `stage_cache_enabled` | `HIVEPILOT_STAGE_CACHE_ENABLED` | `False` | Opt-in SQLite stage memoization. When True, skips the runner on a cache hit and stores results on miss. Disabled when `simulate=True` or `auto_git=True`. |
+| `cache_backend` | `HIVEPILOT_CACHE_BACKEND` | `sqlite` | Cache storage backend. `sqlite` reuses `state.db` (zero infra). `redis` requires `redis_url`. |
+| `redis_url` | `HIVEPILOT_REDIS_URL` | — | Redis connection URL (e.g. `redis://localhost:6379`). Required when `cache_backend=redis`. |
+
+**Default is SQLite (zero infra, reuses state.db).** Redis is opt-in for the distributed-workers setup (`cache_backend=redis` + `redis_url=redis://...`).
