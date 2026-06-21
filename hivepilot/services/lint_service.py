@@ -35,7 +35,18 @@ def lint_configuration() -> List[str]:
     return errors
 
 
-KNOWN_RUNNERS = {"claude", "shell", "langchain", "internal", "codex", "gemini", "opencode", "ollama", "api", "container"}
+KNOWN_RUNNERS = {
+    "claude",
+    "shell",
+    "langchain",
+    "internal",
+    "codex",
+    "gemini",
+    "opencode",
+    "ollama",
+    "api",
+    "container",
+}
 
 
 def _lint_task(name: str, task: TaskConfig) -> List[str]:
@@ -46,5 +57,7 @@ def _lint_task(name: str, task: TaskConfig) -> List[str]:
             if not path.exists():
                 errors.append(f"Task '{name}' step '{step.name}' missing prompt file {path}")
         if step.runner not in KNOWN_RUNNERS and not step.runner_ref:
-            errors.append(f"Task '{name}' step '{step.name}' references unknown runner '{step.runner}' (missing runner_ref?)")
+            errors.append(
+                f"Task '{name}' step '{step.name}' references unknown runner '{step.runner}' (missing runner_ref?)"
+            )
     return errors

@@ -121,6 +121,7 @@ def get_log(n: int = 10) -> str:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _copy_to_base_dir(repo: Repo) -> list[str]:
     """Copy config files from clone → XDG config home. Returns list of copied paths."""
     src = Path(repo.working_dir)

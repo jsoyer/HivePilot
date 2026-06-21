@@ -31,9 +31,7 @@ def _req(method: str, path: str, **kwargs) -> dict:
     url = f"{_NOTION_API}{path}"
     resp = requests.request(method, url, headers=_headers(), timeout=10, **kwargs)
     if not resp.ok:
-        raise RuntimeError(
-            f"Notion API error {resp.status_code} {method} {path}: {resp.text}"
-        )
+        raise RuntimeError(f"Notion API error {resp.status_code} {method} {path}: {resp.text}")
     return resp.json()
 
 
@@ -69,24 +67,12 @@ def log_run(
 
     title = f"{project} / {task} #{run_id}"
     properties: dict = {
-        "Name": {
-            "title": [{"text": {"content": title}}]
-        },
-        "Status": {
-            "select": {"name": status}
-        },
-        "Project": {
-            "rich_text": [{"text": {"content": project}}]
-        },
-        "Task": {
-            "rich_text": [{"text": {"content": task}}]
-        },
-        "RunID": {
-            "number": run_id
-        },
-        "Detail": {
-            "rich_text": [{"text": {"content": detail}}]
-        },
+        "Name": {"title": [{"text": {"content": title}}]},
+        "Status": {"select": {"name": status}},
+        "Project": {"rich_text": [{"text": {"content": project}}]},
+        "Task": {"rich_text": [{"text": {"content": task}}]},
+        "RunID": {"number": run_id},
+        "Detail": {"rich_text": [{"text": {"content": detail}}]},
     }
     if started_at:
         properties["StartedAt"] = {"date": {"start": started_at}}

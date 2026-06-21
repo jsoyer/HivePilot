@@ -57,7 +57,9 @@ def mark_run(entry: ScheduleEntry) -> None:
     state_service.update_schedule_run(entry.name)
 
 
-def run_entry(entry: ScheduleEntry, orchestrator, *, max_attempts: int = 3, base_delay_minutes: int = 2) -> bool:
+def run_entry(
+    entry: ScheduleEntry, orchestrator, *, max_attempts: int = 3, base_delay_minutes: int = 2
+) -> bool:
     """
     Run a schedule entry via the orchestrator.
     On failure, enqueue into the retry queue with exponential backoff.

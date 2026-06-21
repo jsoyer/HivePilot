@@ -18,13 +18,11 @@ _DISCORD_API = "https://discord.com/api/v10"
 # Config helpers
 # ---------------------------------------------------------------------------
 
+
 def _token() -> str:
     token = settings.discord_bot_token
     if not token:
-        raise RuntimeError(
-            "Discord bot token not configured. "
-            "Set HIVEPILOT_DISCORD_BOT_TOKEN."
-        )
+        raise RuntimeError("Discord bot token not configured. Set HIVEPILOT_DISCORD_BOT_TOKEN.")
     return token
 
 
@@ -45,12 +43,14 @@ def _is_allowed(guild_id: int | None, channel_id: int | None) -> bool:
 
 def _get_orch():
     from hivepilot.services.chatops_service import _get_orchestrator
+
     return _get_orchestrator()
 
 
 def _format_results(results) -> str:
     lines = [
-        ("+ " if r.success else "- ") + f"{r.project} -> {r.target}"
+        ("+ " if r.success else "- ")
+        + f"{r.project} -> {r.target}"
         + (f"\n  {r.detail}" if r.detail else "")
         for r in results
     ]
@@ -60,6 +60,7 @@ def _format_results(results) -> str:
 # ---------------------------------------------------------------------------
 # Discord REST helpers
 # ---------------------------------------------------------------------------
+
 
 def _bot_headers() -> dict[str, str]:
     return {
@@ -76,13 +77,16 @@ def _post_message(channel_id: int, payload: dict[str, Any]) -> None:
 
 def _followup_message(application_id: str, interaction_token: str, payload: dict[str, Any]) -> None:
     url = f"{_DISCORD_API}/webhooks/{application_id}/{interaction_token}"
-    resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=10)
+    resp = requests.post(
+        url, headers={"Content-Type": "application/json"}, json=payload, timeout=10
+    )
     resp.raise_for_status()
 
 
 # ---------------------------------------------------------------------------
 # Signature verification (Ed25519 via PyNaCl)
 # ---------------------------------------------------------------------------
+
 
 def verify_signature(body: bytes, signature: str, timestamp: str) -> bool:
     """Verify the Ed25519 signature sent by Discord on every interaction."""
@@ -92,9 +96,7 @@ def verify_signature(body: bytes, signature: str, timestamp: str) -> bool:
     except ImportError:
         raise RuntimeError("PyNaCl required: pip install hivepilot[discord]")
     if not settings.discord_public_key:
-        raise RuntimeError(
-            "Discord public key not configured. Set HIVEPILOT_DISCORD_PUBLIC_KEY."
-        )
+        raise RuntimeError("Discord public key not configured. Set HIVEPILOT_DISCORD_PUBLIC_KEY.")
     key = VerifyKey(bytes.fromhex(settings.discord_public_key))
     try:
         key.verify((timestamp + body.decode()).encode(), bytes.fromhex(signature))
@@ -106,6 +108,7 @@ def verify_signature(body: bytes, signature: str, timestamp: str) -> bool:
 # ---------------------------------------------------------------------------
 # Command logic (shared between gateway and HTTP modes)
 # ---------------------------------------------------------------------------
+
 
 def _exec_run(project: str, task: str, extra: str | None) -> str:
     try:
@@ -123,16 +126,14 @@ def _exec_run(project: str, task: str, extra: str | None) -> str:
 
 def _exec_approvals() -> str:
     from hivepilot.services import state_service
+
     try:
         pending = state_service.get_pending_approvals()
     except Exception as exc:
         return f"Error: {exc}"
     if not pending:
         return "No pending approvals."
-    lines = [
-        f"#{r['run_id']} — {r['project']} / {r['task']}"
-        for r in pending
-    ]
+    lines = [f"#{r['run_id']} — {r['project']} / {r['task']}" for r in pending]
     return "Pending approvals:\n" + "\n".join(lines)
 
 
@@ -155,16 +156,14 @@ def _exec_deny(run_id: int, reason: str) -> str:
 
 def _exec_status() -> str:
     from hivepilot.services import state_service
+
     try:
         runs = state_service.list_recent_runs(limit=5)
     except Exception as exc:
         return f"Error: {exc}"
     if not runs:
         return "No recent runs."
-    lines = [
-        f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}"
-        for r in runs
-    ]
+    lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
     return "Recent runs:\n" + "\n".join(lines)
 
 
@@ -172,14 +171,19 @@ def _exec_status() -> str:
 # HTTP interactions mode
 # ---------------------------------------------------------------------------
 
-def _handle_component(interaction: dict[str, Any], application_id: str, interaction_token: str) -> None:
+
+def _handle_component(
+    interaction: dict[str, Any], application_id: str, interaction_token: str
+) -> None:
     """Process a button component interaction in a background thread."""
     custom_id = interaction.get("data", {}).get("custom_id", "")
     try:
         action, raw_id = custom_id.split(":", 1)
         run_id = int(raw_id)
     except (ValueError, AttributeError):
-        _followup_message(application_id, interaction_token, {"content": f"Invalid component id: {custom_id!r}"})
+        _followup_message(
+            application_id, interaction_token, {"content": f"Invalid component id: {custom_id!r}"}
+        )
         return
 
     member = interaction.get("member") or {}
@@ -281,6 +285,7 @@ def handle_interaction(body: bytes, signature: str, timestamp: str) -> dict[str,
 # Proactive notifications (REST, synchronous)
 # ---------------------------------------------------------------------------
 
+
 def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
     """Post an approval embed with Approve/Deny buttons to the notification channel."""
     channel_id = settings.discord_notification_channel_id
@@ -288,28 +293,32 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
         raise RuntimeError("No Discord notification channel_id configured")
 
     payload: dict[str, Any] = {
-        "embeds": [{
-            "title": "Approval required",
-            "description": f"**Run #{run_id}**\nProject: `{project}`\nTask: `{task}`",
-            "color": 0xFFA500,
-        }],
-        "components": [{
-            "type": 1,
-            "components": [
-                {
-                    "type": 2,
-                    "style": 3,
-                    "label": "Approve",
-                    "custom_id": f"approve:{run_id}",
-                },
-                {
-                    "type": 2,
-                    "style": 4,
-                    "label": "Deny",
-                    "custom_id": f"deny:{run_id}",
-                },
-            ],
-        }],
+        "embeds": [
+            {
+                "title": "Approval required",
+                "description": f"**Run #{run_id}**\nProject: `{project}`\nTask: `{task}`",
+                "color": 0xFFA500,
+            }
+        ],
+        "components": [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 3,
+                        "label": "Approve",
+                        "custom_id": f"approve:{run_id}",
+                    },
+                    {
+                        "type": 2,
+                        "style": 4,
+                        "label": "Deny",
+                        "custom_id": f"deny:{run_id}",
+                    },
+                ],
+            }
+        ],
     }
     _post_message(channel_id, payload)
 
@@ -325,6 +334,7 @@ def notify(message: str) -> None:
 # ---------------------------------------------------------------------------
 # Gateway mode  (discord.py — blocking, no public URL needed)
 # ---------------------------------------------------------------------------
+
 
 def run_gateway() -> None:
     """Start the bot in gateway (WebSocket) mode. Blocking. No public URL required."""
@@ -362,6 +372,7 @@ def run_gateway() -> None:
             return
         await interaction.response.defer()
         import asyncio
+
         loop = asyncio.get_event_loop()
         msg = await loop.run_in_executor(None, lambda: _exec_run(project, task, instructions))
         await interaction.followup.send(msg)
@@ -373,6 +384,7 @@ def run_gateway() -> None:
             return
         await interaction.response.defer()
         import asyncio
+
         loop = asyncio.get_event_loop()
         msg = await loop.run_in_executor(None, _exec_approvals)
         await interaction.followup.send(msg)
@@ -385,6 +397,7 @@ def run_gateway() -> None:
             return
         await interaction.response.defer()
         import asyncio
+
         loop = asyncio.get_event_loop()
         msg = await loop.run_in_executor(None, lambda: _exec_approve(run_id))
         await interaction.followup.send(msg)
@@ -401,6 +414,7 @@ def run_gateway() -> None:
             return
         await interaction.response.defer()
         import asyncio
+
         loop = asyncio.get_event_loop()
         effective_reason = reason or "Denied via Discord"
         msg = await loop.run_in_executor(None, lambda: _exec_deny(run_id, effective_reason))
@@ -413,6 +427,7 @@ def run_gateway() -> None:
             return
         await interaction.response.defer()
         import asyncio
+
         loop = asyncio.get_event_loop()
         msg = await loop.run_in_executor(None, _exec_status)
         await interaction.followup.send(msg)
