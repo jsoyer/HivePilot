@@ -16,11 +16,11 @@ All config lives at the repo root (resolved via `settings.resolve_config_path`).
 
 ```python
 "ceo":            runner=opencode, models=["opencode-go/qwen3.7-max","opencode-go/kimi-k2.6"]  # dual → debate
-"chief_of_staff": runner=cursor
-"cto":            runner=opencode, model="opencode-go/kimi-k2.7-code"
+"chief_of_staff": runner=cursor                                  # Jules (CSO)
+"cto":            runner=opencode, models=["opencode-go/kimi-k2.7-code","claude:claude-sonnet-4-6"]  # Blaise, dual->debate
 "developer":      runner=claude
-"reviewer":       runner=codex
-"ciso":           runner=opencode, model="opencode-go/glm-5.2"
+"reviewer":       runner=codex, model="gpt-5.5"                  # Victor
+"ciso":           runner=opencode, models=["opencode-go/glm-5.2","claude:claude-haiku-4-5"]  # Hugo, dual->debate
 "qa":             runner=cursor       # dedicated QA runner (distinct from docs)
 "documentation":  runner=gemini
 ```
