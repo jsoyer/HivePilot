@@ -141,7 +141,7 @@ class TestStreamAgentTurnTopics:
         fake_thread_id = 42
         sent_kwargs = {}
 
-        def fake_send(message, chat_id=None, message_thread_id=None):
+        def fake_send(message, chat_id=None, message_thread_id=None, parse_mode=None):
             sent_kwargs["message_thread_id"] = message_thread_id
 
         with (
@@ -160,7 +160,7 @@ class TestStreamAgentTurnTopics:
     def test_topics_disabled_passes_none_thread_id(self):
         sent_kwargs = {}
 
-        def fake_send(message, chat_id=None, message_thread_id=None):
+        def fake_send(message, chat_id=None, message_thread_id=None, parse_mode=None):
             sent_kwargs["message_thread_id"] = message_thread_id
 
         with (

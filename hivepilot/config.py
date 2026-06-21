@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     telegram_webhook_port: int = 8443
     telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
     telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — route each agent's turns to its own forum topic
+    telegram_stream_rich: bool = True  # env: HIVEPILOT_TELEGRAM_STREAM_RICH — render HTML cards with status badge, bullets, links
     auditor_auto: bool = (
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
