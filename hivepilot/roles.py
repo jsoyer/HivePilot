@@ -85,7 +85,9 @@ ROLES: dict[str, Role] = {
         can_block=True,
         order=3,
         runner="opencode",
-        models=["opencode-go/kimi-k2.7-code", "claude:claude-sonnet-4-6"],
+        # Single opencode model (claude brain removed to spare the claude quota the
+        # developer stage needs). One model → runs single, no dual-model debate.
+        models=["opencode-go/kimi-k2.7-code"],
     ),
     "developer": Role(
         name="developer",
@@ -127,7 +129,9 @@ ROLES: dict[str, Role] = {
         can_block=True,
         order=6,
         runner="opencode",
-        models=["opencode-go/glm-5.2", "claude:claude-haiku-4-5"],
+        # Single opencode model (claude brain removed to spare the claude quota the
+        # developer stage needs). One model → runs single, no dual-model debate.
+        models=["opencode-go/glm-5.2"],
     ),
     "qa": Role(
         name="qa",
