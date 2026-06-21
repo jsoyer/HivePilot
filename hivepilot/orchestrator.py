@@ -83,6 +83,45 @@ def _parse_components(text: str, valid: list[str]) -> list[str]:
     return found
 
 
+def build_prior_context(
+    prior_chunks: list[str],
+    mode: str,
+    max_chars: int,
+) -> str | None:
+    """Build the prior_context string to pass to the next stage.
+
+    Modes:
+    - full: join all chunks unchanged.
+    - synthesis: keep only the chunk whose header contains "Plan Synthesis"
+      (case-insensitive) if found, plus the most recent chunk. If no synthesis
+      chunk exists, keep only the most recent chunk.
+    - cap: join all, truncate to max_chars keeping the TAIL (most recent content),
+      prepend '…[earlier context truncated]…' if truncation occurred.
+
+    Returns None if prior_chunks is empty.
+    """
+    if not prior_chunks:
+        return None
+    if mode == "synthesis":
+        synthesis = next(
+            (c for c in prior_chunks if "plan synthesis" in c.lower()), None
+        )
+        last = prior_chunks[-1]
+        parts = []
+        if synthesis and synthesis is not last:
+            parts.append(synthesis)
+        parts.append(last)
+        return "\n\n".join(parts)
+    joined = "\n\n".join(prior_chunks)
+    if mode == "cap":
+        if len(joined) > max_chars:
+            truncated = joined[-max_chars:]
+            return "\u2026[earlier context truncated]\u2026\n\n" + truncated
+        return joined
+    # mode == "full"
+    return joined
+
+
 @dataclass
 class RunResult:
     project: str
@@ -416,7 +455,11 @@ class Orchestrator:
                 concurrency=concurrency,
                 simulate=simulate,
                 dry_run=dry_run,
-                prior_context="\n\n".join(prior_chunks) or None,
+                prior_context=build_prior_context(
+                    prior_chunks,
+                    mode=settings.prior_context_mode,
+                    max_chars=settings.max_prior_context_chars,
+                ),
             )
             results.extend(
                 [
