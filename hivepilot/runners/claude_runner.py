@@ -80,11 +80,14 @@ class ClaudeRunner(BaseRunner):
             argv,
             cwd=cwd,
             env=run_env,
-            check=True,
+            check=False,
             text=True,
             capture_output=True,
             timeout=timeout,
         )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()[-2000:]
+            raise RuntimeError(f"claude exited {result.returncode}: {err}")
         return result.stdout
 
     def _build_prompt(
