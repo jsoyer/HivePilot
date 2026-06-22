@@ -1032,8 +1032,8 @@ class Orchestrator:
 
             if auto_git:
                 perform_git_actions(
-                    project_name=_exec_project.path.name,
-                    project=_exec_project,
+                    project_name=project.path.name,  # real component name → correct branch name
+                    project=_exec_project,  # worktree path → git ops run in the worktree
                     git=task.git,
                 )
 
