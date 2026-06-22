@@ -41,7 +41,11 @@ class PromptCliRunner(BaseRunner):
 
         raw = prompt_path.read_text(encoding="utf-8").strip()
         target_repo = str(payload.project.path) if payload.project.path else "."
-        obsidian_vault = str(self.settings.obsidian_vault) if getattr(self.settings, "obsidian_vault", None) else ""
+        obsidian_vault = (
+            str(self.settings.obsidian_vault)
+            if getattr(self.settings, "obsidian_vault", None)
+            else ""
+        )
         return render_prompt_vars(
             raw,
             target_repo=target_repo,
@@ -69,14 +73,34 @@ class PromptCliRunner(BaseRunner):
             args.append(prompt_text)
         return args
 
-    def _augment_prompt(self, payload: RunnerPayload, prompt_text: str) -> str:
-        """Append volatile context to the stable base prompt for cache-friendliness.
-
-        Stable role/system instructions go FIRST so prefix caching covers them.
-        Volatile sections (extra_prompt, prior_context) go LAST.
-        Mirrors ClaudeRunner so non-Claude CLIs (opencode/cursor/codex/gemini/vibe)
-        also receive the pipeline hand-off context.
+    def _build_knowledge_context(self, payload: RunnerPayload) -> str | None:
+        """Mirror ClaudeRunner._build_knowledge_context: read knowledge_files into a
+        single string that can be pre-injected before the (volatile) prompt body.
+        Tolerates no files (returns None) and missing files (knowledge_service skips them).
         """
+        from pathlib import Path
+
+        from hivepilot.services.knowledge_service import build_context
+
+        files = payload.step.metadata.get("knowledge_files") or payload.step.knowledge_files
+        if not files:
+            return None
+        return build_context(payload.project.path, [Path(f) for f in files])
+
+    def _augment_prompt(self, payload: RunnerPayload, prompt_text: str) -> str:
+        """Prepend stable knowledge context then append volatile sections.
+
+        Order (cache-friendly — stable content first):
+          1. Knowledge context (governance docs, injected inline)
+          2. Base prompt (role instructions)
+          3. Volatile: extra_prompt, prior_context
+
+        Mirrors ClaudeRunner so non-Claude CLIs (opencode/cursor/codex/gemini/vibe)
+        also receive the pipeline hand-off context and pre-injected governance docs.
+        """
+        # Stable: knowledge context goes BEFORE the prompt so prefix caching covers it.
+        knowledge = self._build_knowledge_context(payload)
+
         # Volatile sections (user-specific, per-run context).
         volatile: list[str] = []
         extra = payload.metadata.get("extra_prompt")
@@ -85,9 +109,16 @@ class PromptCliRunner(BaseRunner):
         prior = payload.metadata.get("prior_context")
         if prior:
             volatile.append(f"Outputs from previous agents:\n{prior}")
-        if not volatile:
+
+        if not knowledge and not volatile:
             return prompt_text
-        return f"Instructions:\n{prompt_text}\n\n" + "\n\n".join(volatile)
+
+        parts: list[str] = []
+        if knowledge:
+            parts.append(f"Knowledge context:\n{knowledge}")
+        parts.append(f"Instructions:\n{prompt_text}")
+        parts.extend(volatile)
+        return "\n\n".join(parts)
 
     def capture(self, payload: RunnerPayload) -> str:
         """Run the CLI in capture mode and return stdout (used for debate positions)."""

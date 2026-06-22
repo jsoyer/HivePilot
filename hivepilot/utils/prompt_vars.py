@@ -1,4 +1,5 @@
 """Runtime prompt variable substitution."""
+
 from __future__ import annotations
 
 

@@ -130,7 +130,11 @@ class ClaudeRunner(BaseRunner):
         if prior:
             sections.append(f"Outputs from previous agents:\n{prior}")
         target_repo = str(payload.project.path) if payload.project.path else "."
-        obsidian_vault = str(self.settings.obsidian_vault) if getattr(self.settings, "obsidian_vault", None) else ""
+        obsidian_vault = (
+            str(self.settings.obsidian_vault)
+            if getattr(self.settings, "obsidian_vault", None)
+            else ""
+        )
         instructions = render_prompt_vars(
             instructions,
             target_repo=target_repo,
