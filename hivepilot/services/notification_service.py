@@ -244,7 +244,7 @@ def _render_rich_card(
     # Truncate if needed — drop trailing bullets (never mid-tag)
     if len(card) > _RICH_MAX_CHARS:
         # Rebuild without links first
-        lines_no_links = [l for l in lines if not l.startswith("<a href=")]
+        lines_no_links = [ln for ln in lines if not ln.startswith("<a href=")]
         card = "\n".join(lines_no_links)
         if len(card) > _RICH_MAX_CHARS:
             card = card[: _RICH_MAX_CHARS - 1] + "…"
@@ -337,12 +337,14 @@ def stream_agent_turn(
         logger.warning("stream.failed", error=str(exc))
 
 
-def send_approval_keyboard(run_id: int, project: str, task: str) -> None:
+def send_approval_keyboard(
+    run_id: int, project: str, task: str, details: str | None = None
+) -> None:
     """Send an approval request with inline Approve/Deny buttons via Telegram and Slack."""
     try:
         from hivepilot.services.telegram_bot import notify_approval_required
 
-        notify_approval_required(run_id=run_id, project=project, task=task)
+        notify_approval_required(run_id=run_id, project=project, task=task, details=details)
     except _NotConfigured:
         pass
     except Exception as exc:  # noqa: BLE001

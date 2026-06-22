@@ -21,6 +21,7 @@ from hivepilot.services import (
     policy_service,
     state_service,
 )
+from hivepilot.services.agent_report import parse_agent_report
 from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.git_service import perform_git_actions
 from hivepilot.services.interaction_service import Interaction, InteractionService
@@ -33,6 +34,56 @@ from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+_DETAILS_MAX_BULLETS = 6
+_DETAILS_FALLBACK_CHARS = 600
+
+
+def _build_checkpoint_details(
+    prior_chunks: list[str],
+    completed: list[str],
+    next_stage: str,
+    components: list[str],
+    group_mode: bool,
+) -> str:
+    """Build a human-readable details string for the Telegram approval DM.
+
+    Pure function — no I/O, no side-effects; safe to unit-test in isolation.
+
+    The resulting string is composed of (in order):
+    - Components line (group mode only)
+    - Completed / next stage lines
+    - Plan summary extracted from the last prior_chunk via parse_agent_report;
+      falls back to a plain text excerpt when structured parsing yields nothing.
+    - A footer pointing to the Obsidian vault.
+    """
+    lines: list[str] = []
+
+    if group_mode and components:
+        lines.append(f"🎯 *Components:* {', '.join(components)}")
+
+    if completed:
+        lines.append(f"✅ *Completed:* {', '.join(completed)}")
+    lines.append(f"▶️ *Next:* {next_stage}")
+
+    last_chunk = prior_chunks[-1].strip() if prior_chunks else ""
+    if last_chunk:
+        report = parse_agent_report(last_chunk)
+        bullets = report.summary[:_DETAILS_MAX_BULLETS]
+        if bullets:
+            lines.append("\n📋 *Plan summary:*")
+            for bullet in bullets:
+                lines.append(f"  • {bullet}")
+        else:
+            # Fallback: plain excerpt of the last chunk
+            excerpt = last_chunk[:_DETAILS_FALLBACK_CHARS]
+            if len(last_chunk) > _DETAILS_FALLBACK_CHARS:
+                excerpt += "…"
+            lines.append(f"\n📋 *Plan excerpt:*\n{excerpt}")
+
+    lines.append("\n📂 _Full plan: in the Obsidian vault._")
+
+    return "\n".join(lines)
 
 
 def _runner_for_stage(stage: PipelineStage) -> str:
@@ -405,6 +456,13 @@ class Orchestrator:
                     run_id=run_id,
                     project=", ".join(project_names) or pipeline_name,
                     task=f"plan → {stage.name}",
+                    details=_build_checkpoint_details(
+                        prior_chunks=prior_chunks,
+                        completed=completed,
+                        next_stage=stage.name,
+                        components=selected_components,
+                        group_mode=group_mode,
+                    ),
                 )
                 proposal_excerpt = (prior_chunks[-1] if prior_chunks else "").strip()
                 notification_service.stream_agent_turn(
