@@ -45,7 +45,7 @@ Challenge is CONCISE: one bullet per concern. Express disagreement through `bloc
 
 ## Required Output Format
 - status: PASS | BLOCKED | NEEDS_HUMAN
-- summary: 3-5 bullet points max
+- summary: 3-5 SHORT plain-language bullets. NO markdown tables, NO file dumps, NO multi-paragraph prose. Put exhaustive detail (file lists, payloads, matrices) in the vault artifact, NOT here.
 - decisions: implementation decisions made
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context

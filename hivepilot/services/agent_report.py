@@ -17,6 +17,12 @@ from dataclasses import dataclass
 _URL_RE = re.compile(r"https?://\S+")
 _PATH_RE = re.compile(r"(?:/[\w.\-/]+)+\.(?:md|py|txt|json|yaml|yml|sh|ts|js|csv)")
 
+# Patterns for Telegram-unsafe markdown constructs
+_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_HRULE_RE = re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,}|={3,})[ \t]*$", re.MULTILINE)
+_TABLE_ROW_RE = re.compile(r"^[ \t]*\|.*\|[ \t]*$", re.MULTILINE)
+_MULTI_BLANK_RE = re.compile(r"\n{3,}")
+
 # Known structured field names (lower-case canonical keys)
 _KNOWN_FIELDS = {
     "status",
@@ -43,6 +49,28 @@ class AgentReport:
     raw: str
 
 
+def to_telegram_text(s: str) -> str:
+    """Strip markdown elements that Telegram does not render.
+
+    Removes:
+    - Heading markers (``#``, ``##``, ``###``, etc.) — keeps the heading text.
+    - Horizontal rules (lines of only ``---``, ``***``, ``___``, ``===``).
+    - Markdown table rows (lines matching ``| ... |``).
+    - Collapses 3+ consecutive blank lines down to 1 blank line.
+
+    Preserves: ``*bold*``, ``_italic_``, bullet ``-`` / ``*``, inline code.
+    """
+    # Strip heading markers but keep the heading text
+    result = _HEADING_RE.sub("", s)
+    # Remove horizontal rules entirely
+    result = _HRULE_RE.sub("", result)
+    # Remove table rows (including separator rows like |---|)
+    result = _TABLE_ROW_RE.sub("", result)
+    # Collapse 3+ blank lines down to a single blank line
+    result = _MULTI_BLANK_RE.sub("\n\n", result)
+    return result
+
+
 def _extract_links(text: str) -> list[str]:
     """Extract HTTP URLs and filesystem paths from *text*."""
     links: list[str] = []
@@ -61,14 +89,15 @@ def _parse_bullets(block: str) -> list[str]:
     """Extract bullet items from a block of text.
 
     Handles both ``- item`` and ``* item`` prefixes.
+    Applies :func:`to_telegram_text` to strip markdown constructs from each bullet.
     """
     bullets: list[str] = []
     for line in block.splitlines():
         stripped = line.strip()
         if stripped.startswith("- "):
-            bullets.append(stripped[2:].strip())
+            bullets.append(to_telegram_text(stripped[2:].strip()))
         elif stripped.startswith("* "):
-            bullets.append(stripped[2:].strip())
+            bullets.append(to_telegram_text(stripped[2:].strip()))
     return bullets
 
 
