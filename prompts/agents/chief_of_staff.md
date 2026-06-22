@@ -52,7 +52,11 @@ Challenge is CONCISE: one bullet per conflict, decision-oriented. Express disagr
 
 ## Required Output Format
 - status: ADVISORY | NEEDS_HUMAN
-- summary: 3-5 bullet points max
+- summary: 3-5 bullet points max. PLAIN-LANGUAGE and SELF-CONTAINED — a human approver
+  reads only this, not the vault. Describe WHAT will be done and WHY. Do NOT cite bare
+  internal identifiers (run numbers like "Run 70b", task IDs like "T2", control IDs
+  like "S13", decision IDs like "D4") unless you spell out what they mean in the same
+  sentence. No internal bookkeeping — the reader must understand it with zero prior context.
 - decisions: planning decisions made
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context
