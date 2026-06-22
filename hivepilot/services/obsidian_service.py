@@ -354,12 +354,18 @@ def _resolve_safe(allowed_root: Path, subpath: str, context: str) -> Path:
     return resolved
 
 
-def _slugify(text: str) -> str:
-    """Convert a title to a lowercase-kebab-case filename slug."""
+def _slugify(text: str, max_len: int = 80) -> str:
+    """Convert a title to a lowercase-kebab-case filename slug.
+
+    Capped to ``max_len`` chars so a long title (e.g. a full brief used as an ADR
+    title) can't produce a path that exceeds the filesystem limit (Errno 36).
+    """
     import re
 
     slug = text.lower()
     slug = re.sub(r"[^\w\s-]", "", slug)
     slug = re.sub(r"[\s_]+", "-", slug)
     slug = slug.strip("-")
+    if len(slug) > max_len:
+        slug = slug[:max_len].rstrip("-")
     return slug
