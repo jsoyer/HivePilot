@@ -158,3 +158,35 @@ def test_extra_prompt_after_knowledge_context(tmp_path: Path) -> None:
     assert idx_knowledge < idx_extra, (
         "knowledge_context (stable) should precede extra_prompt (volatile)"
     )
+
+
+def test_build_prompt_substitutes_target_repo(tmp_path: Path) -> None:
+    """Ensure {TARGET_REPO} in instructions is replaced with the real project path."""
+    payload = RunnerPayload(
+        project_name="test-proj",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+        secrets={},
+    )
+    out = _runner()._build_prompt(payload, "Read {TARGET_REPO}/CLAUDE.md", None)
+    assert "{TARGET_REPO}" not in out
+    assert str(tmp_path) in out
+
+
+def test_build_prompt_substitutes_governance_repo(tmp_path: Path) -> None:
+    """Ensure {GOVERNANCE_REPO} is replaced with the _NOXYS_ROOT constant."""
+    from hivepilot.agent_rules import _NOXYS_ROOT
+
+    payload = RunnerPayload(
+        project_name="test-proj",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+        secrets={},
+    )
+    out = _runner()._build_prompt(payload, "See {GOVERNANCE_REPO}/AGENT-GOVERNANCE.md", None)
+    assert "{GOVERNANCE_REPO}" not in out
+    assert _NOXYS_ROOT in out
