@@ -52,18 +52,12 @@ Challenge is CONCISE: one bullet per concern, decision-oriented. Express disagre
 
 A report without an explicit verdict is invalid.
 
-## Rules you MUST read before acting
+## Rules you MUST apply before acting
 
-Canonical sources — read by path, do not copy content:
-
-- `{TARGET_REPO}/CLAUDE.md`
-- `{TARGET_REPO}/AGENTS.md`
-- `{TARGET_REPO}/AGENT-GOVERNANCE.md`
-- `{TARGET_REPO}/.cursorrules`
-- `{TARGET_REPO}/.windsurfrules`
-- `{TARGET_REPO}/GEMINI.md`
-- `{OBSIDIAN_VAULT}/Noxys/08 - Security/AGENT-DETECTION-FABRIC.md`
-- `{OBSIDIAN_VAULT}/Noxys/08 - Security/AGENT-GIT-BRANCH-RULES.md`
+The governance context (CLAUDE.md, AGENTS.md, AGENT-GOVERNANCE.md) is ALREADY PROVIDED
+inline above under "Knowledge context". Analyze it directly — do NOT defer to reading
+external files or stop to fetch them. Produce your complete security report / clearance
+verdict in ONE response.
 
 Cross-cutting enforced rules (apply to every role):
 

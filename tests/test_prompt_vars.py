@@ -1,4 +1,5 @@
 """Tests for render_prompt_vars."""
+
 from hivepilot.utils.prompt_vars import render_prompt_vars
 
 

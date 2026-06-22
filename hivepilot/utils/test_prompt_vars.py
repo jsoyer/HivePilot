@@ -1,4 +1,5 @@
 """Tests for render_prompt_vars — co-located with the module."""
+
 # The canonical tests live in tests/test_prompt_vars.py; this file exists
 # only to satisfy the worktree TDD hook which uses the main-repo project dir.
 from hivepilot.utils.prompt_vars import render_prompt_vars

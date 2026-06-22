@@ -297,6 +297,10 @@ tasks:
         timeout_seconds: 3600
         metadata:
           claude_profile: architecture
+        knowledge_files:
+          - CLAUDE.md
+          - AGENTS.md
+          - AGENT-GOVERNANCE.md
     git:
       commit: false
       push: false
@@ -349,6 +353,10 @@ tasks:
         timeout_seconds: 3600
         metadata:
           claude_profile: architecture
+        knowledge_files:
+          - CLAUDE.md
+          - AGENTS.md
+          - AGENT-GOVERNANCE.md
     git:
       commit: false
       push: false
