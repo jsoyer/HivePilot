@@ -114,6 +114,7 @@ class Settings(BaseSettings):
     stage_cache_enabled: bool = False  # opt-in SQLite stage memoization (L3)
     cache_backend: str = "sqlite"  # sqlite | redis (L3)
     redis_url: str | None = None  # required when cache_backend=redis (L3)
+    worktree_isolation: bool = True  # run dev/role tasks inside a throwaway git worktree (env: HIVEPILOT_WORKTREE_ISOLATION)
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod

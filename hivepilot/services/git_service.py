@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from git import GitCommandError, Repo  # type: ignore
 
@@ -10,6 +13,70 @@ from hivepilot.models import GitActions, ProjectConfig
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def isolated_worktree(repo_path: Path, base_ref: str | None = None) -> Iterator[Path]:
+    """Create a throwaway git worktree for `repo_path`, yield its Path, then remove it.
+
+    The worktree is placed under `<repo_path>/.hivepilot-wt/<uuid>` (never under
+    .claude/worktrees). On exit — even if the body raises — the worktree is removed
+    with `git worktree remove --force`. Removal failures are logged as warnings and
+    never re-raised, so cleanup never masks the original exception.
+
+    Falls back to yielding `repo_path` itself when `git worktree add` fails (not a
+    git repo, old git version, etc.) — the run continues in-place with a warning.
+    """
+    wt_base = repo_path / ".hivepilot-wt"
+    wt_path = wt_base / str(uuid.uuid4())
+    wt_path.mkdir(parents=True, exist_ok=True)
+    git_ref = base_ref or "HEAD"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "worktree", "add", "--detach", str(wt_path), git_ref],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "worktree.add_failed",
+                repo=str(repo_path),
+                error=result.stderr.strip(),
+                fallback="in_place",
+            )
+            # Clean up the empty dir we created, fall back to real path
+            try:
+                wt_path.rmdir()
+            except Exception:  # noqa: BLE001
+                pass
+            yield repo_path
+            return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "worktree.add_exception", repo=str(repo_path), error=str(exc), fallback="in_place"
+        )
+        try:
+            wt_path.rmdir()
+        except Exception:  # noqa: BLE001
+            pass
+        yield repo_path
+        return
+
+    logger.info("worktree.created", path=str(wt_path), repo=str(repo_path))
+    try:
+        yield wt_path
+    finally:
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_path), "worktree", "remove", "--force", str(wt_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            logger.info("worktree.removed", path=str(wt_path))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("worktree.remove_failed", path=str(wt_path), error=str(exc))
 
 
 def ensure_repo(path: Path) -> Repo:

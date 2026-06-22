@@ -4,6 +4,7 @@ import concurrent.futures
 import json
 import subprocess
 from collections.abc import Iterable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from hivepilot.services import (
 )
 from hivepilot.services.agent_report import parse_agent_report
 from hivepilot.services.artifact_service import ArtifactManager
-from hivepilot.services.git_service import perform_git_actions
+from hivepilot.services.git_service import isolated_worktree, perform_git_actions
 from hivepilot.services.interaction_service import Interaction, InteractionService
 from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.services.pipeline_service import validate_pipeline
@@ -943,76 +944,99 @@ class Orchestrator:
                 logger.info("stage.cache_hit", task=task_name, project=project.path.name)
                 return _cached_result or None
 
-        outputs: list[str] = []
-        for step in task.steps:
-            secrets = self._resolve_secrets(step)
-            payload = RunnerPayload(
-                project_name=project.path.name,
-                project=project,
-                task_name=task_name,
-                step=step,
-                metadata=metadata,
-                secrets=secrets,
-            )
-            try:
-                self.plugins.run_hook("before_step", payload=payload)
-                if task.role:
-                    from typing import cast
+        # Determine if we should isolate this run in a git worktree
+        _use_worktree = (
+            settings.worktree_isolation
+            and not simulate
+            and auto_git
+            and (task.git.commit or task.git.push)
+            and self._is_git_repo(project.path)
+        )
 
-                    from hivepilot.models import RunnerDefinition, RunnerKind
-                    from hivepilot.roles import get_role, resolve_host, resolve_runner
+        _wt_ctx = isolated_worktree(project.path) if _use_worktree else nullcontext(project.path)
 
-                    runner_kind, role_model = resolve_runner(task.role, policy)
-                    role_options: dict[str, str] = {}
-                    role_perm = get_role(task.role).permission_mode
-                    if role_perm:
-                        role_options["permission_mode"] = role_perm
-                    runner_def = RunnerDefinition(
-                        name=f"role:{task.role}",
-                        kind=cast(RunnerKind, runner_kind),
-                        command=None,
-                        model=role_model,
-                        host=resolve_host(task.role, policy),
-                        options=role_options,
-                    )
-                    runner_key = task.role
-                else:
-                    runner_key = step.runner_ref or step.runner
-                    runner_def = self.registry._definition_for(runner_key)
-                if runner_def.kind == "container" and policy and not policy.allow_containers:
-                    raise RuntimeError(
-                        f"Containers are disabled by policy for project {project.path.name}"
-                    )
-                if simulate:
-                    logger.info(
-                        "step.simulate",
-                        step=step.name,
-                        runner=runner_key,
-                        project=project.path.name,
-                    )
-                    outputs.append(f"[simulated {runner_key}]")
-                elif task.role:
-                    outputs.append(self.registry.capture_definition(runner_def, payload))
-                else:
-                    outputs.append(self._capture_or_execute(runner_key, payload))
-                if run_id:
-                    state_service.record_step(run_id, step.name, "success")
-                self.plugins.run_hook("after_step", payload=payload)
-            except Exception as exc:
-                if run_id:
-                    state_service.record_step(run_id, step.name, "failed", str(exc))
-                if step.allow_failure:
-                    logger.warning("step.failure_allowed", step=step.name, error=str(exc))
-                    continue
-                raise
-        task_result = "\n".join(o for o in outputs if o).strip() or None
+        with _wt_ctx as _exec_path:
+            # Build a shallow copy of the project with the worktree path so both
+            # the runner CWD and git actions operate there (branches/commits live
+            # in the shared .git; the real working tree is never touched).
+            _exec_project = project.model_copy(update={"path": _exec_path})
 
-        # Stage cache (L3) — store result on success
-        if _stage_cache is not None and _stage_cache_key_val is not None and task_result:
-            _stage_cache.put(_stage_cache_key_val, task_result)
+            outputs: list[str] = []
+            for step in task.steps:
+                secrets = self._resolve_secrets(step)
+                payload = RunnerPayload(
+                    project_name=_exec_project.path.name,
+                    project=_exec_project,
+                    task_name=task_name,
+                    step=step,
+                    metadata=metadata,
+                    secrets=secrets,
+                )
+                try:
+                    self.plugins.run_hook("before_step", payload=payload)
+                    if task.role:
+                        from typing import cast
 
-        if auto_git:
-            perform_git_actions(project_name=project.path.name, project=project, git=task.git)
+                        from hivepilot.models import RunnerDefinition, RunnerKind
+                        from hivepilot.roles import get_role, resolve_host, resolve_runner
+
+                        runner_kind, role_model = resolve_runner(task.role, policy)
+                        role_options: dict[str, str] = {}
+                        role_perm = get_role(task.role).permission_mode
+                        if role_perm:
+                            role_options["permission_mode"] = role_perm
+                        runner_def = RunnerDefinition(
+                            name=f"role:{task.role}",
+                            kind=cast(RunnerKind, runner_kind),
+                            command=None,
+                            model=role_model,
+                            host=resolve_host(task.role, policy),
+                            options=role_options,
+                        )
+                        runner_key = task.role
+                    else:
+                        runner_key = step.runner_ref or step.runner
+                        runner_def = self.registry._definition_for(runner_key)
+                    if runner_def.kind == "container" and policy and not policy.allow_containers:
+                        raise RuntimeError(
+                            f"Containers are disabled by policy for project {project.path.name}"
+                        )
+                    if simulate:
+                        logger.info(
+                            "step.simulate",
+                            step=step.name,
+                            runner=runner_key,
+                            project=_exec_project.path.name,
+                        )
+                        outputs.append(f"[simulated {runner_key}]")
+                    elif task.role:
+                        outputs.append(self.registry.capture_definition(runner_def, payload))
+                    else:
+                        outputs.append(self._capture_or_execute(runner_key, payload))
+                    if run_id:
+                        state_service.record_step(run_id, step.name, "success")
+                    self.plugins.run_hook("after_step", payload=payload)
+                except Exception as exc:
+                    if run_id:
+                        state_service.record_step(run_id, step.name, "failed", str(exc))
+                    if step.allow_failure:
+                        logger.warning("step.failure_allowed", step=step.name, error=str(exc))
+                        continue
+                    raise
+
+            task_result = "\n".join(o for o in outputs if o).strip() or None
+
+            # Stage cache (L3) — store result on success
+            if _stage_cache is not None and _stage_cache_key_val is not None and task_result:
+                _stage_cache.put(_stage_cache_key_val, task_result)
+
+            if auto_git:
+                perform_git_actions(
+                    project_name=_exec_project.path.name,
+                    project=_exec_project,
+                    git=task.git,
+                )
+
         logger.info("task.end", project=project.path.name, task=task_name)
         return task_result
 
@@ -1041,6 +1065,20 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             pass
         return None
+
+    @staticmethod
+    def _is_git_repo(path: Path) -> bool:
+        """Return True if *path* is inside a git repository."""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--git-dir"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.returncode == 0
+        except Exception:  # noqa: BLE001
+            return False
 
     def _project(self, name: str) -> ProjectConfig:
         if name not in self.projects.projects:
