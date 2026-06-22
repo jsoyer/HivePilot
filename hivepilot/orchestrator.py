@@ -1010,7 +1010,55 @@ class Orchestrator:
                         )
                         outputs.append(f"[simulated {runner_key}]")
                     elif task.role:
-                        outputs.append(self.registry.capture_definition(runner_def, payload))
+                        from typing import cast
+
+                        from hivepilot.models import RunnerDefinition, RunnerKind
+                        from hivepilot.services.quota import parse_quota_error
+                        from hivepilot.services.runner_throttle import semaphore_for_kind
+
+                        _runner_def_to_try = runner_def
+                        _fallback_runners = (
+                            list(settings.dev_fallback_runners) if task.role == "developer" else []
+                        )
+                        _last_exc: BaseException | None = None
+
+                        while True:
+                            _sem = semaphore_for_kind(_runner_def_to_try.kind)
+                            _sem.acquire()
+                            try:
+                                outputs.append(
+                                    self.registry.capture_definition(_runner_def_to_try, payload)
+                                )
+                                _last_exc = None
+                                break  # success
+                            except Exception as _exc:
+                                _last_exc = _exc
+                                _quota_err = parse_quota_error(str(_exc))
+                                if _quota_err is None:
+                                    raise  # non-quota error → surface immediately
+                                # Quota error — try fallback runners
+                                if not _fallback_runners:
+                                    raise  # no fallbacks configured/remaining
+                                _next_kind = _fallback_runners.pop(0)
+                                logger.info(
+                                    "dev.fallback",
+                                    from_runner=_runner_def_to_try.kind,
+                                    to_runner=_next_kind,
+                                    reset_at=str(_quota_err.reset_at),
+                                )
+                                _runner_def_to_try = RunnerDefinition(
+                                    name=f"role:{task.role}:{_next_kind}",
+                                    kind=cast(RunnerKind, _next_kind),
+                                    command=None,
+                                    model=role_model,
+                                    host=resolve_host(task.role, policy),
+                                    options=role_options,
+                                )
+                            finally:
+                                _sem.release()
+
+                        if _last_exc is not None:
+                            raise _last_exc
                     else:
                         outputs.append(self._capture_or_execute(runner_key, payload))
                     if run_id:
