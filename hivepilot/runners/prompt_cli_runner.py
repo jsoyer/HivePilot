@@ -36,7 +36,18 @@ class PromptCliRunner(BaseRunner):
         prompt_path = self.settings.resolve_config_path(prompt_file)
         if not prompt_path.exists():
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-        return prompt_path.read_text(encoding="utf-8").strip()
+        from hivepilot.agent_rules import _NOXYS_ROOT
+        from hivepilot.utils.prompt_vars import render_prompt_vars
+
+        raw = prompt_path.read_text(encoding="utf-8").strip()
+        target_repo = str(payload.project.path) if payload.project.path else "."
+        obsidian_vault = str(self.settings.obsidian_vault) if getattr(self.settings, "obsidian_vault", None) else ""
+        return render_prompt_vars(
+            raw,
+            target_repo=target_repo,
+            governance_repo=_NOXYS_ROOT,
+            obsidian_vault=obsidian_vault,
+        )
 
     def _build_cli_args(self, payload: RunnerPayload, prompt_text: str) -> list[str]:
         command_str = self.definition.command or self.command_name
