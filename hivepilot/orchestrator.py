@@ -1010,7 +1010,14 @@ class Orchestrator:
                         )
                         outputs.append(f"[simulated {runner_key}]")
                     elif task.role:
-                        outputs.append(self.registry.capture_definition(runner_def, payload))
+                        from hivepilot.services.runner_throttle import semaphore_for_kind
+
+                        _sem = semaphore_for_kind(runner_def.kind)
+                        _sem.acquire()
+                        try:
+                            outputs.append(self.registry.capture_definition(runner_def, payload))
+                        finally:
+                            _sem.release()
                     else:
                         outputs.append(self._capture_or_execute(runner_key, payload))
                     if run_id:
