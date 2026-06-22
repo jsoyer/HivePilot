@@ -731,7 +731,10 @@ class Orchestrator:
                 project=project,
                 task_name=f"debate:{role_name}",
                 step=step,
-                metadata={"prior_context": prior_context or ""},
+                # The debate topic IS the brief / hand-off context for this role;
+                # inject it as extra_prompt so each brain actually sees it (otherwise
+                # e.g. the CEO gets no brief and correctly returns NEEDS_HUMAN).
+                metadata={"extra_prompt": topic, "prior_context": prior_context or ""},
                 secrets=self._resolve_secrets(step),
             )
             if simulate:
