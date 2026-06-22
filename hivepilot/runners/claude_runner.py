@@ -4,12 +4,14 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hivepilot.agent_rules import _NOXYS_ROOT
 from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.utils.env import merge_environments
 from hivepilot.utils.logging import get_logger
+from hivepilot.utils.prompt_vars import render_prompt_vars
 from hivepilot.utils.remote import build_invocation
 
 logger = get_logger(__name__)
@@ -127,6 +129,14 @@ class ClaudeRunner(BaseRunner):
         prior = payload.metadata.get("prior_context")
         if prior:
             sections.append(f"Outputs from previous agents:\n{prior}")
+        target_repo = str(payload.project.path) if payload.project.path else "."
+        obsidian_vault = str(self.settings.obsidian_vault) if getattr(self.settings, "obsidian_vault", None) else ""
+        instructions = render_prompt_vars(
+            instructions,
+            target_repo=target_repo,
+            governance_repo=_NOXYS_ROOT,
+            obsidian_vault=obsidian_vault,
+        )
         return "\n".join(sections) + f"\n\nInstructions:\n{instructions}"
 
     def _resolve_model(self, payload: RunnerPayload) -> str | None:
