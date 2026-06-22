@@ -74,7 +74,7 @@ class ClaudeRunner(BaseRunner):
             step=payload.step.name,
             host=self.definition.host,
         )
-        subprocess.run(argv, cwd=cwd, env=run_env, check=True, text=True)
+        subprocess.run(argv, cwd=cwd, env=run_env, check=True, text=True, stdin=subprocess.DEVNULL)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
     def capture(self, payload: RunnerPayload) -> str:
@@ -97,6 +97,7 @@ class ClaudeRunner(BaseRunner):
             text=True,
             capture_output=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()[-2000:]
