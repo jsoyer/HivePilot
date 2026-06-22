@@ -780,8 +780,19 @@ async def _cmd_status(update, context) -> None:
 # ---------------------------------------------------------------------------
 
 
+_TELEGRAM_MAX_MSG = 3500  # Telegram hard limit is ~4096; keep a safety margin
+
+
+def _truncate_md(text: str, max_len: int = _TELEGRAM_MAX_MSG) -> str:
+    """Truncate *text* to *max_len* chars without splitting mid-word."""
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len].rsplit("\n", 1)[0]
+    return cut + "\n…"
+
+
 async def _send_approval_keyboard_message(
-    bot, *, chat_id: int, run_id: int, project: str, task: str
+    bot, *, chat_id: int, run_id: int, project: str, task: str, details: str | None = None
 ) -> None:
     """Send a message with ✅ Approve / ❌ Deny inline buttons."""
     try:
@@ -799,9 +810,12 @@ async def _send_approval_keyboard_message(
             ]
         ]
     )
+    header = f"*Approval required* — run #{run_id}\nProject: `{project}`\nTask: `{task}`"
+    body = f"\n\n{details}" if details else ""
+    text = _truncate_md(header + body)
     await bot.send_message(
         chat_id=chat_id,
-        text=f"*Approval required* — run #{run_id}\nProject: `{project}`\nTask: `{task}`",
+        text=text,
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -846,7 +860,9 @@ async def _callback_approval(update, context) -> None:
         await query.edit_message_text(f"Error processing run #{run_id}: {exc}")
 
 
-def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
+def notify_approval_required(
+    *, run_id: int, project: str, task: str, details: str | None = None
+) -> None:
     """
     Send an approval keyboard to the notification chat (sync, fire-and-forget).
     Called from notification_service — safe to call from non-async context.
@@ -862,7 +878,7 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
 
         async with Bot(token) as bot:
             await _send_approval_keyboard_message(
-                bot, chat_id=chat_id, run_id=run_id, project=project, task=task
+                bot, chat_id=chat_id, run_id=run_id, project=project, task=task, details=details
             )
 
     try:
