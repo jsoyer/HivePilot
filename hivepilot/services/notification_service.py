@@ -219,9 +219,37 @@ def _render_rich_card(
         badge = _STATUS_BADGES.get(report.status.upper(), f"📋 {html.escape(report.status)}")
         lines.append(badge)
 
-    # Summary bullets (max 5)
+    # Summary bullets (max 5), cleaned and truncated
+    from hivepilot.services.agent_report import to_telegram_text
+
+    # Find vault artifact link (any .md path in report.links)
+    artifact_link: str | None = next(
+        (lnk for lnk in report.links if lnk.endswith(".md") and not lnk.startswith("http")),
+        None,
+    )
+
+    bullet_lines: list[str] = []
+    summary_chars = 0
+    _SUMMARY_MAX = 700
     for bullet in report.summary[:5]:
-        lines.append(f"• {html.escape(bullet)}")
+        clean = to_telegram_text(bullet).strip()
+        if not clean:
+            continue
+        if len(clean) > 180:
+            clean = clean[:179] + "…"
+        rendered = f"• {html.escape(clean)}"
+        if summary_chars + len(rendered) + 1 > _SUMMARY_MAX:
+            # Over budget — add truncation notice and stop
+            notice = "… (full details in the vault artifact)"
+            if artifact_link:
+                safe = html.escape(artifact_link)
+                notice += f' <a href="file://{safe}">{safe}</a>'
+            bullet_lines.append(notice)
+            break
+        bullet_lines.append(rendered)
+        summary_chars += len(rendered) + 1  # +1 for the newline
+
+    lines.extend(bullet_lines)
 
     # Next handoff
     if report.next_handoff:

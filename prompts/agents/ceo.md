@@ -50,7 +50,7 @@ do not fabricate a direction.
 
 ## Required Output Format
 - status: ADVISORY | NEEDS_HUMAN  (NEEDS_HUMAN when no brief was provided)
-- summary: 3-5 bullet points max
+- summary: 3-5 SHORT plain-language bullets. NO markdown tables, NO file dumps, NO multi-paragraph prose. Put exhaustive detail (file lists, payloads, matrices) in the vault artifact, NOT here.
 - decisions: concrete strategic decisions made
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context

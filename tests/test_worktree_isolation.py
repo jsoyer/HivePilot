@@ -1,4 +1,5 @@
 """Tests for git worktree isolation in HivePilot."""
+
 from __future__ import annotations
 
 import subprocess
@@ -13,20 +14,30 @@ from hivepilot.services.git_service import isolated_worktree
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _init_git_repo(tmp_path: Path) -> Path:
     """Create a minimal git repo with one commit so worktrees can be added."""
     subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@test.com"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@test.com"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True, capture_output=True
+    )
     (tmp_path / "README.md").write_text("init")
     subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-m", "init"], check=True, capture_output=True
+    )
     return tmp_path
 
 
 # ---------------------------------------------------------------------------
 # isolated_worktree tests
 # ---------------------------------------------------------------------------
+
 
 class TestIsolatedWorktree:
     def test_creates_and_removes_worktree(self, tmp_path: Path) -> None:
@@ -78,15 +89,18 @@ class TestIsolatedWorktree:
 # _execute_task worktree gating tests
 # ---------------------------------------------------------------------------
 
+
 class TestExecuteTaskWorktreeGating:
     """Unit tests for the worktree isolation gate inside _execute_task."""
 
     def _make_project(self, path: Path):
         from hivepilot.models import ProjectConfig
+
         return ProjectConfig(path=path)
 
     def _make_task(self, *, commit: bool = True, push: bool = False):
         from hivepilot.models import GitActions, TaskConfig, TaskStep
+
         return TaskConfig(
             description="test task",
             steps=[TaskStep(name="step1", runner="shell")],
@@ -99,7 +113,9 @@ class TestExecuteTaskWorktreeGating:
 
         with (
             patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
-            patch("hivepilot.orchestrator.load_tasks", return_value=MagicMock(tasks={}, runners={})),
+            patch(
+                "hivepilot.orchestrator.load_tasks", return_value=MagicMock(tasks={}, runners={})
+            ),
             patch("hivepilot.orchestrator.load_pipelines", return_value=MagicMock(pipelines={})),
             patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
             patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
