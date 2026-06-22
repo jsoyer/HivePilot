@@ -33,16 +33,16 @@ via the `vibe` runner; observes cycles and **proposes** prompt improvements
 
 | # | Stage | Task | Role | Runner | Model | git |
 |---|---|---|---|---|---|---|
-| 1 | CEO Intake | company-ceo-intake | ceo | opencode | qwen3.7-max **+** kimi-k2.6 → **debate→ADR** | — |
-| 2 | Chief of Staff Plan | company-cos-plan | chief_of_staff | cursor | (default) | — |
-| 3 | CTO Review | company-cto-review | cto | opencode | kimi-k2.7-code | — |
-| 4 | Implementation | company-developer | developer | claude | (default) | commit + push **branch** |
-| 5 | Review | company-reviewer | reviewer | **codex** | (default) | **review → open PR** |
-| 6 | Security | company-ciso | ciso | opencode | glm-5.2 | — |
-| 7 | QA | company-qa | qa | **cursor** | (default) | — |
-| 8 | Documentation | company-documentation | documentation | **gemini** | (default) | commit |
-| 9 | Report | company-cos-report | chief_of_staff | cursor | (default) | — |
-| 10 | Approval | company-ceo-approval | ceo | opencode | qwen3.7-max + kimi-k2.6 → **debate→ADR** | — |
+| 1 | CEO Intake | noxys-ceo-intake | ceo | opencode | qwen3.7-max **+** kimi-k2.6 → **debate→ADR** | — |
+| 2 | Chief of Staff Plan | noxys-cos-plan | chief_of_staff | cursor | (default) | — |
+| 3 | CTO Review | noxys-cto-review | cto | opencode | kimi-k2.7-code | — |
+| 4 | Implementation | noxys-developer | developer | claude | (default) | commit + push **branch** |
+| 5 | Review | noxys-reviewer | reviewer | **codex** | (default) | **review → open PR** |
+| 6 | Security | noxys-ciso | ciso | opencode | glm-5.2 | — |
+| 7 | QA | noxys-qa | qa | **cursor** | (default) | — |
+| 8 | Documentation | noxys-documentation | documentation | **gemini** | (default) | commit |
+| 9 | Report | noxys-cos-report | chief_of_staff | cursor | (default) | — |
+| 10 | Approval | noxys-ceo-approval | ceo | opencode | qwen3.7-max + kimi-k2.6 → **debate→ADR** | — |
 
 So: **codex** does code review, **gemini** does documentation, **claude**
 implements, **opencode** drives the strategy/security roles (qwen/kimi/glm), and

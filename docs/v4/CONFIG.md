@@ -53,7 +53,7 @@ policies:
 ## tasks.yaml (a task)
 
 ```yaml
-company-developer:
+noxys-developer:
   role: developer                 # role drives runner+model (overrides the step runner)
   steps:
     - name: implementation

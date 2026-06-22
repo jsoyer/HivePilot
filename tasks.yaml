@@ -254,7 +254,7 @@ tasks:
   # Company pipeline tasks — one per role, two variants for CEO and CoS
   # ---------------------------------------------------------------------------
 
-  company-ceo-intake:
+  noxys-ceo-intake:
     role: ceo
     description: CEO reviews roadmap, metrics, and customer feedback; sets objectives and priorities.
     steps:
@@ -270,7 +270,7 @@ tasks:
       push: false
       create_pr: false
 
-  company-cos-plan:
+  noxys-cos-plan:
     role: chief_of_staff
     description: Chief of Staff translates CEO objectives into an execution plan.
     steps:
@@ -286,7 +286,7 @@ tasks:
       push: false
       create_pr: false
 
-  company-cto-review:
+  noxys-cto-review:
     role: cto
     description: CTO reviews the execution plan and produces a technical spec or ADR.
     steps:
@@ -302,7 +302,7 @@ tasks:
       push: false
       create_pr: false
 
-  company-developer:
+  noxys-developer:
     role: developer
     description: Developer implements the technical spec and produces code + tests.
     steps:
@@ -320,7 +320,7 @@ tasks:
       commit_message: "feat: company pipeline implementation"
       branch_prefix: hivepilot
 
-  company-reviewer:
+  noxys-reviewer:
     role: reviewer
     description: Reviewer inspects the implementation against the spec and issues a review report.
     steps:
@@ -338,7 +338,7 @@ tasks:
       pr_title: "HivePilot: company pipeline implementation"
       branch_prefix: hivepilot
 
-  company-ciso:
+  noxys-ciso:
     role: ciso
     description: CISO performs a security review and grants or withholds clearance.
     steps:
@@ -354,7 +354,7 @@ tasks:
       push: false
       create_pr: false
 
-  company-qa:
+  noxys-qa:
     role: qa
     description: QA builds the test suite, runs edge-case analysis, and produces a test report.
     steps:
@@ -370,7 +370,7 @@ tasks:
       push: false
       create_pr: false
 
-  company-documentation:
+  noxys-documentation:
     role: documentation
     description: Documentation role updates docs, ADRs, and changelog.
     steps:
@@ -386,7 +386,7 @@ tasks:
       commit_message: "docs: company pipeline documentation update"
       branch_prefix: hivepilot
 
-  company-cos-report:
+  noxys-cos-report:
     role: chief_of_staff
     description: Chief of Staff compiles the cycle report for CEO review.
     steps:
@@ -402,7 +402,7 @@ tasks:
       push: false
       create_pr: false
 
-  company-cos-synthesis:
+  noxys-cos-synthesis:
     role: chief_of_staff
     description: Chief of Staff (CSO) concatenates the CEO direction, CTO architecture, and CISO security review, adjusts, and produces the consolidated proposal for human approval.
     steps:
@@ -418,7 +418,7 @@ tasks:
       push: false
       create_pr: false
 
-  company-cos-pr-approval:
+  noxys-cos-pr-approval:
     role: chief_of_staff
     description: Chief of Staff performs the final check after QA and documentation and approves or rejects the pull request.
     steps:
@@ -437,7 +437,7 @@ tasks:
       merge_method: squash
       branch_prefix: hivepilot
 
-  company-ceo-approval:
+  noxys-ceo-approval:
     role: ceo
     description: CEO reviews the cycle report and grants final approval or sends back for revision.
     steps:

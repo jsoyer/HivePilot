@@ -162,9 +162,9 @@ class TestCompanyPipelinePydantic:
 
         data = yaml.safe_load(TASKS_YAML.read_text())
         tf = TasksFile(**data)
-        company_tasks = [k for k in tf.tasks if k.startswith("company-")]
+        company_tasks = [k for k in tf.tasks if k.startswith("noxys-")]
         assert len(company_tasks) >= 9, (
-            f"Expected at least 9 company-* tasks, found {len(company_tasks)}: {company_tasks}"
+            f"Expected at least 9 noxys-* tasks, found {len(company_tasks)}: {company_tasks}"
         )
 
 

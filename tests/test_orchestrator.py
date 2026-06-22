@@ -3,7 +3,7 @@ Tests for Sprint 2.6 — Documentation agent active.
 
 Covers:
 - 2.6a: per-stage interaction logging in run_pipeline
-- 2.6b: tasks.yaml company-documentation step uses gemini runner/runner_ref
+- 2.6b: tasks.yaml noxys-documentation step uses gemini runner/runner_ref
 - 2.6c: documentation stage writes a vault note via ObsidianService.write_note
 """
 
@@ -250,10 +250,10 @@ class TestDocumentationVaultWrite:
     """Documentation stage triggers ObsidianService.write_note with correct args."""
 
     def test_write_note_called_for_doc_stage_with_vault(self, tmp_path: Path) -> None:
-        """When task == 'company-documentation' and vault_path exists, write_note is called."""
+        """When task == 'noxys-documentation' and vault_path exists, write_note is called."""
         from hivepilot.orchestrator import RunResult
 
-        pipeline = _make_pipeline(("doc-stage", "company-documentation"))
+        pipeline = _make_pipeline(("doc-stage", "noxys-documentation"))
         orch = _make_orchestrator_with_pipeline(pipeline)
 
         mock_obs = MagicMock()
@@ -306,8 +306,8 @@ class TestDocumentationVaultWrite:
         from hivepilot.orchestrator import RunResult
 
         pipeline = _make_pipeline(
-            ("ceo-stage", "company-ceo-intake"),
-            ("cto-stage", "company-cto-review"),
+            ("ceo-stage", "noxys-ceo-intake"),
+            ("cto-stage", "noxys-cto-review"),
         )
         orch = _make_orchestrator_with_pipeline(pipeline)
 
@@ -345,7 +345,7 @@ class TestDocumentationVaultWrite:
         """When vault_path is None (vault doesn't exist), write_note must not be called."""
         from hivepilot.orchestrator import RunResult
 
-        pipeline = _make_pipeline(("doc-stage", "company-documentation"))
+        pipeline = _make_pipeline(("doc-stage", "noxys-documentation"))
         orch = _make_orchestrator_with_pipeline(pipeline)
 
         mock_obs = MagicMock()
@@ -385,7 +385,7 @@ class TestDocumentationVaultWrite:
         """Frontmatter includes run_id and pipeline fields."""
         from hivepilot.orchestrator import RunResult
 
-        pipeline = _make_pipeline(("doc-stage", "company-documentation"))
+        pipeline = _make_pipeline(("doc-stage", "noxys-documentation"))
         orch = _make_orchestrator_with_pipeline(pipeline)
 
         mock_obs = MagicMock()
@@ -433,32 +433,32 @@ class TestDocumentationVaultWrite:
 
 
 # ---------------------------------------------------------------------------
-# 2.6b — tasks.yaml runner binding for company-documentation
+# 2.6b — tasks.yaml runner binding for noxys-documentation
 # ---------------------------------------------------------------------------
 
 
 class TestTasksYamlDocumentationBinding:
-    """company-documentation task step must use gemini runner and gemini-cli runner_ref."""
+    """noxys-documentation task step must use gemini runner and gemini-cli runner_ref."""
 
     def test_company_documentation_runner_is_gemini(self) -> None:
-        """company-documentation step.runner == 'gemini'."""
+        """noxys-documentation step.runner == 'gemini'."""
         from hivepilot.services.project_service import load_tasks
 
         tasks_config = load_tasks()
-        task = tasks_config.tasks.get("company-documentation")
-        assert task is not None, "company-documentation task not found in tasks.yaml"
-        assert task.steps, "company-documentation task has no steps"
+        task = tasks_config.tasks.get("noxys-documentation")
+        assert task is not None, "noxys-documentation task not found in tasks.yaml"
+        assert task.steps, "noxys-documentation task has no steps"
 
         step = task.steps[0]
         assert step.runner == "gemini", f"Expected runner='gemini', got: {step.runner!r}"
 
     def test_company_documentation_runner_ref_is_gemini_cli(self) -> None:
-        """company-documentation step.runner_ref == 'gemini-cli'."""
+        """noxys-documentation step.runner_ref == 'gemini-cli'."""
         from hivepilot.services.project_service import load_tasks
 
         tasks_config = load_tasks()
-        task = tasks_config.tasks.get("company-documentation")
-        assert task is not None, "company-documentation task not found in tasks.yaml"
+        task = tasks_config.tasks.get("noxys-documentation")
+        assert task is not None, "noxys-documentation task not found in tasks.yaml"
         step = task.steps[0]
 
         assert step.runner_ref == "gemini-cli", (
@@ -470,7 +470,7 @@ class TestTasksYamlDocumentationBinding:
         from hivepilot.services.project_service import load_tasks
 
         tasks_config = load_tasks()
-        task = tasks_config.tasks.get("company-documentation")
+        task = tasks_config.tasks.get("noxys-documentation")
         assert task is not None
         step = task.steps[0]
 
@@ -661,7 +661,7 @@ class TestDebateAutoTrigger:
         ):
             orch._execute_task(
                 project=project,
-                task_name="company-ceo-intake",
+                task_name="noxys-ceo-intake",
                 task=task,
                 extra_prompt=None,
                 auto_git=False,
@@ -692,7 +692,7 @@ class TestDebateAutoTrigger:
         ):
             orch._execute_task(
                 project=project,
-                task_name="company-developer",
+                task_name="noxys-developer",
                 task=task,
                 extra_prompt=None,
                 auto_git=False,
