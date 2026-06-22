@@ -76,42 +76,42 @@ def _format_results(results) -> str:
 # Each entry: role_key -> {task, display, aliases (ascii-lowercase only)}
 _AGENT_REGISTRY: dict[str, dict[str, Any]] = {
     "ceo": {
-        "task": "company-ceo-intake",
+        "task": "noxys-ceo-intake",
         "display": "Aliénor (CEO)",
         "aliases": ["ceo", "alienor"],
     },
     "chief_of_staff": {
-        "task": "company-cos-synthesis",
+        "task": "noxys-cos-synthesis",
         "display": "Jules (Chief of Staff)",
         "aliases": ["cos", "jules"],
     },
     "cto": {
-        "task": "company-cto-review",
+        "task": "noxys-cto-review",
         "display": "Blaise (CTO)",
         "aliases": ["cto", "blaise"],
     },
     "developer": {
-        "task": "company-developer",
+        "task": "noxys-developer",
         "display": "Gustave (Developer)",
         "aliases": ["dev", "developer", "gustave"],
     },
     "reviewer": {
-        "task": "company-reviewer",
+        "task": "noxys-reviewer",
         "display": "Victor (Reviewer)",
         "aliases": ["review", "reviewer", "victor"],
     },
     "ciso": {
-        "task": "company-ciso",
+        "task": "noxys-ciso",
         "display": "Hugo (CISO)",
         "aliases": ["ciso", "hugo"],
     },
     "qa": {
-        "task": "company-qa",
+        "task": "noxys-qa",
         "display": "Marie (QA)",
         "aliases": ["qa", "marie"],
     },
     "documentation": {
-        "task": "company-documentation",
+        "task": "noxys-documentation",
         "display": "Théo (Documentation)",
         "aliases": ["docs", "documentation", "theo"],
     },

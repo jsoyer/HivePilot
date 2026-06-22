@@ -7,26 +7,26 @@ pipelines:
       report, and final CEO approval.
     stages:
       - name: CEO Intake
-        task: company-ceo-intake
+        task: noxys-ceo-intake
       - name: Chief of Staff Plan
-        task: company-cos-plan
+        task: noxys-cos-plan
       - name: CTO Review
-        task: company-cto-review
+        task: noxys-cto-review
       - name: Implementation
-        task: company-developer
+        task: noxys-developer
         pause_before: true   # human approves the plan before the developer codes
       - name: Review
-        task: company-reviewer
+        task: noxys-reviewer
       - name: Security
-        task: company-ciso
+        task: noxys-ciso
       - name: QA
-        task: company-qa
+        task: noxys-qa
       - name: Documentation
-        task: company-documentation
+        task: noxys-documentation
       - name: Report
-        task: company-cos-report
+        task: noxys-cos-report
       - name: Approval
-        task: company-ceo-approval
+        task: noxys-ceo-approval
 
   noxys-v2:
     description: >
@@ -36,26 +36,26 @@ pipelines:
       QA, documentation, and a final Chief of Staff PR approval.
     stages:
       - name: CEO Intake
-        task: company-ceo-intake
+        task: noxys-ceo-intake
       - name: CTO Architecture
-        task: company-cto-review
+        task: noxys-cto-review
       - name: Security (architecture)
-        task: company-ciso
+        task: noxys-ciso
       - name: Plan Synthesis
-        task: company-cos-synthesis
+        task: noxys-cos-synthesis
       - name: Implementation
-        task: company-developer
+        task: noxys-developer
         pause_before: true
       - name: Review
-        task: company-reviewer
+        task: noxys-reviewer
       - name: Security (code)
-        task: company-ciso
+        task: noxys-ciso
       - name: QA
-        task: company-qa
+        task: noxys-qa
       - name: Documentation
-        task: company-documentation
+        task: noxys-documentation
       - name: PR Approval
-        task: company-cos-pr-approval
+        task: noxys-cos-pr-approval
 
   pentest-fix-review:
     description: Run a security review, refactor fixes, then refresh docs.

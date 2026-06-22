@@ -503,7 +503,7 @@ class Orchestrator:
             )
 
             # Documentation vault changelog note (2.6c)
-            if stage.task == "company-documentation" and vault_path is not None:
+            if stage.task == "noxys-documentation" and vault_path is not None:
                 doc_svc = ObsidianService(vault_path, dry_run=dry_run)
                 doc_svc.write_note(
                     subpath=f"Docs/changelog-run-{run_id}.md",

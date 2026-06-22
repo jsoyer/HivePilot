@@ -272,7 +272,7 @@ class TestRunnerForStage:
     def test_runner_for_stage_returns_claude(self) -> None:
         from hivepilot.orchestrator import _runner_for_stage
 
-        stage = PipelineStage(name="CEO Intake", task="company-ceo-intake")
+        stage = PipelineStage(name="CEO Intake", task="noxys-ceo-intake")
         assert _runner_for_stage(stage) == "claude"
 
     def test_runner_for_unknown_stage_returns_claude(self) -> None:
