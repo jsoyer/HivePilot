@@ -1,4 +1,5 @@
 """SchedulerDaemon — polls schedules and re-runs quota-deferred retry rows."""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,6 @@ import logging
 import signal
 import sqlite3
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -76,9 +76,12 @@ class SchedulerDaemon:
         except Exception:  # noqa: BLE001
             logger.exception("scheduler_daemon.due_schedules_error")
             return
+        if not schedules:
+            return
+        orch = Orchestrator()
         for sched in schedules:
             try:
-                run_entry(sched)
+                run_entry(sched, orch)
             except Exception:  # noqa: BLE001
                 logger.exception("scheduler_daemon.run_entry_error", extra={"schedule": sched})
 
