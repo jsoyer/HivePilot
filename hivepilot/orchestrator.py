@@ -259,6 +259,46 @@ class Orchestrator:
                     f"Starting {task_name} on {project.path.name}"
                 )
 
+        # Batch limiting: if dev_batch_size > 0, only dispatch the first N projects
+        # and defer the rest as quota-deferred entries (picked up by daemon).
+        if settings.dev_batch_size > 0 and len(immediate_projects) > settings.dev_batch_size:
+            from datetime import datetime as _dt
+            from datetime import timedelta
+            from datetime import timezone as _tz
+
+            from hivepilot.services.retry_service import enqueue_deferred as _enqueue_deferred
+
+            _batch = immediate_projects[: settings.dev_batch_size]
+            _remainder = immediate_projects[settings.dev_batch_size :]
+            immediate_projects = _batch
+            _defer_at = _dt.now(_tz.utc) + timedelta(minutes=1)
+            for _dp in _remainder:
+                _enqueue_deferred(
+                    task=task_name,
+                    projects=[_dp.path.name],
+                    error="batch limit: deferred to next window",
+                    next_retry_at=_defer_at,
+                    context={
+                        "task": task_name,
+                        "extra_prompt": extra_prompt,
+                        "auto_git": auto_git,
+                    },
+                )
+                results.append(
+                    RunResult(
+                        _dp.path.name,
+                        task_name,
+                        False,
+                        f"batch-deferred until {_defer_at}",
+                    )
+                )
+                logger.info(
+                    "run.batch_deferred",
+                    project=_dp.path.name,
+                    task=task_name,
+                    batch_size=settings.dev_batch_size,
+                )
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=limit) as executor:
             future_map = {
                 executor.submit(

@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     dev_fallback_runners: list[str] = Field(
         default_factory=lambda: ["codex", "opencode"]
     )  # fallback runner order for developer role on claude quota (env: HIVEPILOT_DEV_FALLBACK_RUNNERS)
+    dev_batch_size: int = Field(
+        default=0,
+        description="Max components per fan-out pass (0 = unlimited). env: HIVEPILOT_DEV_BATCH_SIZE",
+    )
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
