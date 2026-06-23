@@ -119,7 +119,7 @@ class Settings(BaseSettings):
         1  # max concurrent claude steps (env: HIVEPILOT_CLAUDE_MAX_CONCURRENCY)
     )
     dev_fallback_runners: list[str] = Field(
-        default_factory=lambda: ["codex", "opencode"]
+        default_factory=lambda: ["codex", "cursor"]
     )  # fallback runner order for developer role on claude quota (env: HIVEPILOT_DEV_FALLBACK_RUNNERS)
     dev_batch_size: int = Field(
         default=0,
