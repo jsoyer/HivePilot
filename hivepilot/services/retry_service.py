@@ -45,6 +45,42 @@ def enqueue(
         return int(cur.lastrowid)  # type: ignore[arg-type]
 
 
+def enqueue_deferred(
+    *,
+    task: str,
+    projects: list[str],
+    error: str,
+    next_retry_at: datetime,
+    context: dict,
+) -> int:
+    """Insert a quota-deferred row with an explicit next_retry_at and context JSON.
+
+    Unlike ``enqueue`` (which uses exponential backoff), this is for quota-aware
+    deferral — the retry time is the quota reset window, not a backoff formula.
+    Returns the inserted row id.
+    """
+    state_service.init_db()
+    with sqlite3.connect(state_service.DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT INTO retry_queue "
+            "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at, context) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "quota-deferred",
+                task,
+                json.dumps(list(projects)),
+                error,
+                0,
+                3,
+                "pending",
+                next_retry_at.isoformat(),
+                json.dumps(context),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)  # type: ignore[arg-type]
+
+
 def list_queue(status: str | None = None) -> list[dict[str, Any]]:
     """Return retry-queue rows, optionally filtered by *status*."""
     state_service.init_db()

@@ -259,6 +259,46 @@ class Orchestrator:
                     f"Starting {task_name} on {project.path.name}"
                 )
 
+        # Batch limiting: if dev_batch_size > 0, only dispatch the first N projects
+        # and defer the rest as quota-deferred entries (picked up by daemon).
+        if settings.dev_batch_size > 0 and len(immediate_projects) > settings.dev_batch_size:
+            from datetime import datetime as _dt
+            from datetime import timedelta
+            from datetime import timezone as _tz
+
+            from hivepilot.services.retry_service import enqueue_deferred as _enqueue_deferred
+
+            _batch = immediate_projects[: settings.dev_batch_size]
+            _remainder = immediate_projects[settings.dev_batch_size :]
+            immediate_projects = _batch
+            _defer_at = _dt.now(_tz.utc) + timedelta(minutes=1)
+            for _dp in _remainder:
+                _enqueue_deferred(
+                    task=task_name,
+                    projects=[_dp.path.name],
+                    error="batch limit: deferred to next window",
+                    next_retry_at=_defer_at,
+                    context={
+                        "task": task_name,
+                        "extra_prompt": extra_prompt,
+                        "auto_git": auto_git,
+                    },
+                )
+                results.append(
+                    RunResult(
+                        _dp.path.name,
+                        task_name,
+                        False,
+                        f"batch-deferred until {_defer_at}",
+                    )
+                )
+                logger.info(
+                    "run.batch_deferred",
+                    project=_dp.path.name,
+                    task=task_name,
+                    batch_size=settings.dev_batch_size,
+                )
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=limit) as executor:
             future_map = {
                 executor.submit(
@@ -276,6 +316,8 @@ class Orchestrator:
                 ): project
                 for project in immediate_projects
             }
+            from hivepilot.services.quota import QuotaDeferredError
+
             for future in concurrent.futures.as_completed(future_map):
                 project = future_map[future]
                 try:
@@ -292,6 +334,42 @@ class Orchestrator:
                     notification_service.send_notification(
                         f"✅ {project.path.name}: {task_name} completed"
                     )
+                except QuotaDeferredError as exc:  # noqa: BLE001
+                    from datetime import datetime as _datetime
+                    from datetime import timedelta, timezone
+
+                    from hivepilot.services.retry_service import enqueue_deferred
+
+                    _reset_at = exc.reset_at or (
+                        _datetime.now(timezone.utc) + timedelta(minutes=30)
+                    )
+                    enqueue_deferred(
+                        task=task_name,
+                        projects=[project.path.name],
+                        error=str(exc),
+                        next_retry_at=_reset_at,
+                        context={
+                            "task": task_name,
+                            "extra_prompt": extra_prompt,
+                            "auto_git": auto_git,
+                        },
+                    )
+                    logger.warning(
+                        "run.quota_deferred",
+                        project=project.path.name,
+                        task=task_name,
+                        reset_at=str(_reset_at),
+                    )
+                    results.append(
+                        RunResult(
+                            project.path.name,
+                            task_name,
+                            False,
+                            f"quota-deferred until {_reset_at}",
+                        )
+                    )
+                    if run_ids.get(project.path.name):
+                        state_service.complete_run(run_ids[project.path.name], "deferred")
                 except Exception as exc:  # noqa: BLE001
                     logger.error(
                         "run.failure", project=project.path.name, task=task_name, error=str(exc)
@@ -1038,7 +1116,13 @@ class Orchestrator:
                                     raise  # non-quota error → surface immediately
                                 # Quota error — try fallback runners
                                 if not _fallback_runners:
-                                    raise  # no fallbacks configured/remaining
+                                    if task.role == "developer":
+                                        from hivepilot.services.quota import QuotaDeferredError
+
+                                        raise QuotaDeferredError(
+                                            str(_quota_err.raw), reset_at=_quota_err.reset_at
+                                        ) from _exc
+                                    raise  # non-developer roles: surface the original exception
                                 _next_kind = _fallback_runners.pop(0)
                                 logger.info(
                                     "dev.fallback",

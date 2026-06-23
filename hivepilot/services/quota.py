@@ -11,6 +11,18 @@ class QuotaError:
     reset_at: datetime | None
 
 
+class QuotaDeferredError(Exception):
+    """Raised by _execute_task when quota is exhausted and all fallbacks are tried.
+
+    The caller (run_task fan-out) catches this to enqueue a deferred retry
+    instead of treating it as a hard failure.
+    """
+
+    def __init__(self, message: str, reset_at: "datetime | None" = None) -> None:
+        super().__init__(message)
+        self.reset_at = reset_at
+
+
 def parse_quota_error(message: str, now: datetime | None = None) -> QuotaError | None:
     """Parse a claude CLI quota/rate-limit error message.
 

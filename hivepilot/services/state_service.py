@@ -177,6 +177,10 @@ def init_db() -> None:
             )
             """
         )
+        # Idempotent migration: add context column if missing
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(retry_queue)")}
+        if "context" not in existing_cols:
+            conn.execute("ALTER TABLE retry_queue ADD COLUMN context TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS workers (
