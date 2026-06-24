@@ -36,7 +36,7 @@ class PromptCliRunner(BaseRunner):
         prompt_path = self.settings.resolve_config_path(prompt_file)
         if not prompt_path.exists():
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-        from hivepilot.agent_rules import _NOXYS_ROOT
+        from hivepilot.config import settings
         from hivepilot.utils.prompt_vars import render_prompt_vars
 
         raw = prompt_path.read_text(encoding="utf-8").strip()
@@ -49,7 +49,7 @@ class PromptCliRunner(BaseRunner):
         return render_prompt_vars(
             raw,
             target_repo=target_repo,
-            governance_repo=_NOXYS_ROOT,
+            governance_repo=settings.governance_repo or "",
             obsidian_vault=obsidian_vault,
         )
 

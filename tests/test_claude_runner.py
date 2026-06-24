@@ -175,9 +175,11 @@ def test_build_prompt_substitutes_target_repo(tmp_path: Path) -> None:
     assert str(tmp_path) in out
 
 
-def test_build_prompt_substitutes_governance_repo(tmp_path: Path) -> None:
-    """Ensure {GOVERNANCE_REPO} is replaced with the _NOXYS_ROOT constant."""
-    from hivepilot.agent_rules import _NOXYS_ROOT
+def test_build_prompt_substitutes_governance_repo(tmp_path: Path, monkeypatch) -> None:
+    """Ensure {GOVERNANCE_REPO} is replaced with settings.governance_repo."""
+    import hivepilot.runners.claude_runner as cr_mod
+
+    monkeypatch.setattr(cr_mod.settings, "governance_repo", "/some/governance/repo", raising=False)
 
     payload = RunnerPayload(
         project_name="test-proj",
@@ -189,4 +191,25 @@ def test_build_prompt_substitutes_governance_repo(tmp_path: Path) -> None:
     )
     out = _runner()._build_prompt(payload, "See {GOVERNANCE_REPO}/AGENT-GOVERNANCE.md", None)
     assert "{GOVERNANCE_REPO}" not in out
-    assert _NOXYS_ROOT in out
+    assert "/some/governance/repo" in out
+
+
+def test_build_prompt_governance_repo_empty_when_not_configured(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When governance_repo is None, {GOVERNANCE_REPO} expands to empty string."""
+    import hivepilot.runners.claude_runner as cr_mod
+
+    monkeypatch.setattr(cr_mod.settings, "governance_repo", None, raising=False)
+
+    payload = RunnerPayload(
+        project_name="test-proj",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+        secrets={},
+    )
+    out = _runner()._build_prompt(payload, "See {GOVERNANCE_REPO}/AGENT-GOVERNANCE.md", None)
+    assert "{GOVERNANCE_REPO}" not in out
+    assert "/AGENT-GOVERNANCE.md" in out
