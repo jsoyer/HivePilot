@@ -14,6 +14,9 @@ logger = get_logger(__name__)
 # Lazily-initialised Application instance (used by webhook/FastAPI mode)
 _app_instance = None
 
+# pending challenge state: {chat_id: (run_id, approver_username)}
+_pending_challenges: dict[int, tuple[int, str]] = {}
+
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -308,6 +311,39 @@ async def _cmd_ask(update: Any, context: Any) -> None:
 
 async def _cmd_mention(update: Any, context: Any) -> None:
     """Handle free-text @mention messages (non-command)."""
+    # Check for pending challenge FIRST
+    chat_id = update.message.chat.id
+    if chat_id in _pending_challenges and update.message.text:
+        run_id, approver = _pending_challenges.pop(chat_id)
+        challenge_text = update.message.text
+        try:
+            cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
+        except Exception as exc:
+            logger.error("telegram.challenge.error", run_id=run_id, error=str(exc))
+            await update.message.reply_text(f"⚠️ Challenge error for run #{run_id}: {exc}")
+            return
+        # Show CoS response
+        await update.message.reply_text(
+            f"🗣 Human → Jules\n{challenge_text}\n\n🛡️ Jules → Human\n{cos_response}"
+        )
+        # Re-send approval keyboard so user can approve/deny/challenge again
+        try:
+            from hivepilot.services import state_service as _ss
+
+            row = _ss.get_approval(run_id)
+            if row:
+                await _send_approval_keyboard_message(
+                    context.bot,
+                    chat_id=chat_id,
+                    run_id=run_id,
+                    project=row.get("project", ""),
+                    task=row.get("task", ""),
+                    details=cos_response[:500] if cos_response else None,
+                )
+        except Exception as exc:
+            logger.warning("telegram.challenge.resend_keyboard_error", error=str(exc))
+        return
+
     if not _require_allowed(update.effective_chat.id):
         return
 
@@ -798,7 +834,10 @@ async def _send_approval_keyboard_message(
             [
                 InlineKeyboardButton("✅ Approve", callback_data=f"approve:{run_id}"),
                 InlineKeyboardButton("❌ Deny", callback_data=f"deny:{run_id}"),
-            ]
+            ],
+            [
+                InlineKeyboardButton("🗣 Challenge / Ask", callback_data=f"challenge:{run_id}"),
+            ],
         ]
     )
     header = f"*Approval required* — run #{run_id}\nProject: `{project}`\nTask: `{task}`"
@@ -827,6 +866,17 @@ async def _callback_approval(update, context) -> None:
         run_id = int(raw_id)
     except (ValueError, AttributeError):
         await query.edit_message_text(f"Invalid callback data: {data!r}")
+        return
+
+    if action == "challenge":
+        approver = query.from_user.username or str(query.from_user.id)
+        chat_id = query.message.chat.id
+        _pending_challenges[chat_id] = (run_id, f"telegram:{approver}")
+        await query.message.reply_text(
+            f"✍️ Send your challenge or question for run #{run_id} as your next message"
+            " — the Chief of Staff will respond and may revise the plan."
+            " The run stays paused."
+        )
         return
 
     approve = action == "approve"
@@ -1067,7 +1117,9 @@ def _build_application(token: str):
     from telegram.ext import MessageHandler, filters
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _cmd_mention))
-    app.add_handler(CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny):\d+$"))
+    app.add_handler(
+        CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny|challenge):\d+$")
+    )
     return app
 
 

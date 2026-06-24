@@ -1279,6 +1279,116 @@ class Orchestrator:
         ok = all(r.success for r in results)
         return RunResult(pipeline_name, pipeline_name, ok)
 
+    def human_challenge(self, run_id: int, challenge_text: str, approver: str) -> str:
+        """Process a human challenge/question at a plan checkpoint.
+
+        The run stays paused — caller must not call resume_pipeline.
+        Returns the CoS response string.
+        """
+        import json as _json
+        from typing import cast
+
+        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.roles import get_role, resolve_host, resolve_runner
+        from hivepilot.runners.base import RunnerPayload
+
+        row = state_service.get_approval(run_id)
+        if not row:
+            raise ValueError(f"No approval row found for run_id={run_id}")
+
+        raw_meta = row.get("metadata") or "{}"
+        meta: dict = _json.loads(raw_meta) if isinstance(raw_meta, str) else (raw_meta or {})
+        planning_context = meta.get("planning_context", "")
+        project_name = row.get("project", "unknown")
+
+        # Resolve CoS role (Jules)
+        cos_role_key = "cos"
+        try:
+            cos_role = get_role(cos_role_key)
+        except Exception:
+            cos_role = None
+
+        # Get policy for this project
+        try:
+            policy = policy_service.get_policy(project_name)
+        except Exception:
+            policy = None
+
+        if cos_role is not None:
+            runner_kind, role_model = resolve_runner(cos_role_key, policy)
+            role_perm = cos_role.permission_mode
+            role_options: dict[str, str] = {}
+            if role_perm:
+                role_options["permission_mode"] = role_perm
+            runner_def = RunnerDefinition(
+                name="human_challenge:cos",
+                kind=cast(RunnerKind, runner_kind),
+                command=None,
+                model=role_model,
+                host=resolve_host(cos_role_key, policy),
+                options=role_options,
+            )
+            prompt_file = (
+                str(cos_role.prompt_file)
+                if cos_role.prompt_file and cos_role.prompt_file.exists()
+                else ""
+            )
+            step = TaskStep(
+                name="human_challenge:cos",
+                runner=runner_kind,
+                prompt_file=prompt_file,
+            )
+        else:
+            # Fallback: use default claude runner
+            runner_def = RunnerDefinition(
+                name="human_challenge:cos",
+                kind=cast(RunnerKind, "claude"),
+                command=None,
+                model=None,
+                host=None,
+                options={},
+            )
+            step = TaskStep(
+                name="human_challenge:cos",
+                runner="claude",
+                prompt_file="",
+            )
+
+        challenge_prompt = (
+            "You are Jules, the Chief of Staff. A human is challenging/asking about a paused"
+            " pipeline plan.\n\n"
+            f"CURRENT PLAN CONTEXT:\n{planning_context}\n\n"
+            f"HUMAN CHALLENGE/QUESTION: {challenge_text}\n\n"
+            "Respond with your analysis and any plan revisions needed."
+            " Keep your response concise (under 400 words)."
+        )
+        payload = RunnerPayload(
+            project_name=project_name,
+            project=None,
+            task_name="human_challenge:cos",
+            step=step,
+            metadata={"extra_prompt": challenge_prompt, "prior_context": ""},
+            secrets={},
+        )
+
+        answer = self.registry.capture_definition(runner_def, payload)
+
+        # Log interactions
+        try:
+            log_challenge_interaction(actor=approver, target="Jules (CoS)", point=challenge_text)
+            log_challenge_interaction(actor="Jules (CoS)", target=approver, point=answer)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("human_challenge.log_failed", error=str(exc))
+
+        # Persist challenge + response into planning_context
+        meta["planning_context"] = (
+            planning_context
+            + f"\n\n[HUMAN CHALLENGE by {approver}]: {challenge_text}\n[JULES RESPONSE]: {answer}"
+        )
+        state_service.update_approval_metadata(run_id, meta)
+
+        return answer
+
     def run_approved(
         self,
         *,
