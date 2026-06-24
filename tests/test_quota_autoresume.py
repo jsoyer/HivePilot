@@ -1,4 +1,5 @@
 """Tests for quota-aware auto-resume: enqueue_deferred and daemon re-run."""
+
 from __future__ import annotations
 
 import json
@@ -31,6 +32,7 @@ def test_enqueue_deferred_roundtrip(tmp_path, monkeypatch):
     db = _make_db(tmp_path)
 
     import hivepilot.services.state_service as svc
+
     monkeypatch.setattr(svc, "DB_PATH", str(db))
     monkeypatch.setattr(svc, "init_db", lambda: None)
 
@@ -77,6 +79,7 @@ def test_daemon_reruns_deferred_row(tmp_path, monkeypatch):
     db = _make_db(tmp_path)
 
     import hivepilot.services.state_service as svc
+
     monkeypatch.setattr(svc, "DB_PATH", str(db))
     monkeypatch.setattr(svc, "init_db", lambda: None)
 

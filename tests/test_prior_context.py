@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from hivepilot.orchestrator import build_prior_context
 
 

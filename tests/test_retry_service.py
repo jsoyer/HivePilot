@@ -9,9 +9,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-import hivepilot.services.retry_service as retry_service
 import pytest
 
+import hivepilot.services.retry_service as retry_service
 import hivepilot.services.state_service as state_service
 
 

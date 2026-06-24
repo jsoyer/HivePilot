@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 
 from hivepilot.models import TaskConfig
-from hivepilot.services.project_service import load_projects, load_tasks, load_pipelines
+from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import yaml
 from pathlib import Path
 from typing import Any, Dict
+
+import yaml
 
 from hivepilot.config import settings
 

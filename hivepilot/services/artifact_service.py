@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)

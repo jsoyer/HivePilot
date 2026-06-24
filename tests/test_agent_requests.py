@@ -103,9 +103,7 @@ class TestStreamAgentRequest:
             captured.append(message)
 
         monkeypatch.setattr(ns, "_send_telegram", fake_send)
-        ns.stream_agent_answer(
-            target="CISO", requester="CTO", answer_excerpt="Yes, all patched."
-        )
+        ns.stream_agent_answer(target="CISO", requester="CTO", answer_excerpt="Yes, all patched.")
         assert len(captured) == 1
         assert "↩️" in captured[0]
 
