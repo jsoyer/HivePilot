@@ -1,5 +1,7 @@
 # HivePilot V4 — Usage (CLI & Telegram)
 
+> For production deployment (install, services, secrets, quota, sandbox, multi-tenant, Postgres, observability): see [RUNBOOK.md](RUNBOOK.md).
+
 ## Install
 
 ```bash
