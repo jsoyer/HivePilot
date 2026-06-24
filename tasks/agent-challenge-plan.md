@@ -76,11 +76,47 @@ avant de continuer le pipeline → débat réel, visible, borné.
 
 ---
 
+## C — Palier 2 : requêtes d'agent à la demande (orchestré)
+
+But : un agent peut, **en cours de tâche**, demander un input à un **autre agent**
+(« j'ai besoin de X de l'agent Y ») → l'orchestrateur dispatche Y, récupère la réponse,
+puis ré-invoque le demandeur avec la réponse en contexte. **Appel de fonction entre agents,
+médié** (pas de pair-à-pair). Généralise la machinerie de re-invocation de B.
+
+### C1. Convention de requête (prompts)
+- Ligne de sortie structurée : `REQUEST: <agent> — <question précise>` (même style que la
+  convention `COMPONENTS:` déjà parsée). Optionnel, 0..N par tour. Rôles autorisés : au moins
+  Developer, CTO, CSO.
+
+### C2. Détection + routage (orchestrator)
+- Parser les `REQUEST:` dans la sortie d'un agent (réutilise le parsing de A).
+- Pour chaque requête : résoudre l'agent cible → l'invoquer (question + contexte pertinent) →
+  capturer la réponse → ré-invoquer le **demandeur** avec les réponses ajoutées au contexte.
+
+### C3. Garde-fous (le point dur)
+- `max_agent_requests` par tour + **profondeur max** (un agent sollicité peut demander à son
+  tour) → borne la récursion. Anti-cycle (détecter A→B→A) + budget global de requêtes/run.
+- Non résolu après N → `NEEDS_HUMAN`. Cibles **hors claude** quand possible (quota).
+
+### C4. Visibilité (réutilise A)
+- Streamer : `❓ Developer → CTO : <question>` puis `↩️ CTO → Developer : <réponse>`
+  (topic « Débats ») + logger en interactions.
+
+### C5. Tests
+- Parsing `REQUEST:` ; un REQUEST → 1 appel cible + ré-invocation demandeur (mock) ;
+  profondeur/anti-cycle/budget respectés ; non résolu → `NEEDS_HUMAN`.
+
+---
+
 ## Ordre de build
 1. **A** (A1→A4) — visibilité, socle, faible risque.
-2. **B** (B1→B6) — s'appuie sur le parsing + le streaming de A ; touche la boucle de stages
-   de l'orchestrator (cœur) → tests complets exigés, idempotence du re-run.
+2. **B** (B1→B6) — rebuttal ; s'appuie sur le parsing + streaming de A ; touche la boucle de
+   stages de l'orchestrator (cœur) → tests complets exigés, idempotence du re-run.
+3. **C / Palier 2** (C1→C5) — requêtes à la demande ; **généralise la re-invocation de B**
+   (parser une intention → dispatcher un agent → ré-injecter la réponse). Garde-fous
+   récursion/budget = le point dur.
 
 ## Note quota
-A = surtout prompts + rendu (coût quota nul à l'usage). B = +1 appel amont par challenge
-(opencode/cursor, hors quota claude). Build des sous-agents = après reset si nécessaire.
+A = prompts + rendu (coût nul à l'usage). B = +1 appel **amont** par challenge. C = +N appels
+**cible** par requête (bornés). Tout hors claude autant que possible (opencode/cursor) pour
+préserver le quota. Build des sous-agents = après reset si nécessaire.
