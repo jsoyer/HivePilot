@@ -52,8 +52,11 @@ Challenge is CONCISE: one bullet per concern. Express disagreement through `bloc
 - confidence: HIGH | MEDIUM | LOW, with reason
 - rejection_notice: spec issue or escalation reason, or "none"
 - challenge: <upstream agent> — <one-line objection>  |  none
+- request: <target agent> — <precise question>  |  none
 
 `challenge` names which upstream agent (e.g. "Chief of Staff", "CTO") is contested and why in one line, or `none` if no objection.
+
+`request` asks a specific downstream or upstream agent a targeted factual question (e.g. "CTO", "CISO"). The orchestrator mediates — the target is re-invoked and its answer injected. Use sparingly; prefer `challenge` for objections.
 
 ## Rules you MUST read before acting
 

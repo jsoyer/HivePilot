@@ -259,6 +259,39 @@ def log_challenge_interaction(actor: str, target: str, point: str) -> None:
         )
 
 
+def log_request_interaction(actor: str, target: str, question: str) -> None:
+    """Record a request or answer interaction without requiring an InteractionService instance.
+
+    Best-effort — logs a warning and returns if state_service raises.
+
+    Parameters
+    ----------
+    actor:
+        The agent sending the request (or the answering agent for answers).
+    target:
+        The agent receiving the request (or the requester for answers).
+    question:
+        The question asked (or the answer text prefixed with ``[ANSWER]``).
+    """
+    try:
+        timestamp = datetime.now(tz=timezone.utc).isoformat()
+        action = "answer" if question.startswith("[ANSWER]") else "request"
+        state_service.record_interaction(
+            actor=actor,
+            action=action,
+            target=target or None,
+            summary=question,
+            timestamp=timestamp,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "interaction.request_failed",
+            actor=actor,
+            target=target,
+            error=str(exc),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Private utilities
 # ---------------------------------------------------------------------------

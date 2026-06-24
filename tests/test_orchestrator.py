@@ -278,6 +278,14 @@ class TestDocumentationVaultWrite:
             ),
         ):
             mock_settings.obsidian_vault = tmp_path  # exists → vault_path set
+            mock_settings.enable_challenge_rounds = False
+            mock_settings.enable_agent_requests = False
+            mock_settings.max_requests_per_run = 20
+            mock_settings.prior_context_mode = "cap"
+            mock_settings.max_prior_context_chars = 8000
+            mock_settings.auditor_auto = False
+            mock_settings.auto_commit_vault = False
+            mock_settings.event_webhook_url = None
             orch.run_pipeline(
                 project_names=["proj"],
                 pipeline_name="test-pipe",
@@ -331,6 +339,14 @@ class TestDocumentationVaultWrite:
             ),
         ):
             mock_settings.obsidian_vault = tmp_path
+            mock_settings.enable_challenge_rounds = False
+            mock_settings.enable_agent_requests = False
+            mock_settings.max_requests_per_run = 20
+            mock_settings.prior_context_mode = "cap"
+            mock_settings.max_prior_context_chars = 8000
+            mock_settings.auditor_auto = False
+            mock_settings.auto_commit_vault = False
+            mock_settings.event_webhook_url = None
             orch.run_pipeline(
                 project_names=["proj"],
                 pipeline_name="test-pipe",
@@ -371,6 +387,14 @@ class TestDocumentationVaultWrite:
             ),
         ):
             mock_settings.obsidian_vault = non_existent  # .exists() → False → vault_path = None
+            mock_settings.enable_challenge_rounds = False
+            mock_settings.enable_agent_requests = False
+            mock_settings.max_requests_per_run = 20
+            mock_settings.prior_context_mode = "cap"
+            mock_settings.max_prior_context_chars = 8000
+            mock_settings.auditor_auto = False
+            mock_settings.auto_commit_vault = False
+            mock_settings.event_webhook_url = None
             orch.run_pipeline(
                 project_names=["proj"],
                 pipeline_name="test-pipe",
@@ -410,6 +434,14 @@ class TestDocumentationVaultWrite:
             ),
         ):
             mock_settings.obsidian_vault = tmp_path
+            mock_settings.enable_challenge_rounds = False
+            mock_settings.enable_agent_requests = False
+            mock_settings.max_requests_per_run = 20
+            mock_settings.prior_context_mode = "cap"
+            mock_settings.max_prior_context_chars = 8000
+            mock_settings.auditor_auto = False
+            mock_settings.auto_commit_vault = False
+            mock_settings.event_webhook_url = None
             orch.run_pipeline(
                 project_names=["proj"],
                 pipeline_name="test-pipe",

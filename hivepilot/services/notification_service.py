@@ -33,6 +33,8 @@ _ICON_LABELS = {
     "🛡️": "rebuttal",
     "⚖️ resolved": "resolved",
     "🙋": "needs human",
+    "❓": "request",
+    "↩️": "answer",
 }
 
 # Status badge mapping for the rich HTML card.
@@ -461,3 +463,45 @@ def send_approval_keyboard(
         discord_notify(run_id=run_id, project=project, task=task)
     except Exception:  # noqa: BLE001
         pass
+
+
+def stream_agent_request(requester: str, target: str, question: str) -> None:
+    """Stream a ❓ request turn: *requester* asks *target* a targeted question.
+
+    Best-effort, never raises.
+    """
+    try:
+        stream_agent_turn(
+            actor=requester,
+            target=target,
+            summary=question,
+            icon="❓",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "stream.agent_request_failed",
+            requester=requester,
+            target=target,
+            error=str(exc),
+        )
+
+
+def stream_agent_answer(target: str, requester: str, answer_excerpt: str) -> None:
+    """Stream a ↩️ answer turn: *target* answers *requester*'s request.
+
+    Best-effort, never raises.
+    """
+    try:
+        stream_agent_turn(
+            actor=target,
+            target=requester,
+            summary=answer_excerpt,
+            icon="↩️",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "stream.agent_answer_failed",
+            target=target,
+            requester=requester,
+            error=str(exc),
+        )
