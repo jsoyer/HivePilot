@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
-from hivepilot.services import state_service
+from hivepilot.services import db, state_service
 
 try:
     from hivepilot.services import metrics as _metrics  # noqa: F401
@@ -34,8 +33,9 @@ def enqueue(
     state_service.init_db()
     delay = base_delay_minutes * (2 ** max(attempt - 1, 0))
     next_retry_at = (datetime.now(timezone.utc) + timedelta(minutes=delay)).isoformat()
-    with sqlite3.connect(state_service.DB_PATH) as conn:
-        cur = conn.execute(
+    with db.connect() as conn:
+        return db.insert_returning_id(
+            conn,
             "INSERT INTO retry_queue "
             "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
             "VALUES (?,?,?,?,?,?, 'pending', ?)",
@@ -49,8 +49,6 @@ def enqueue(
                 next_retry_at,
             ),
         )
-        conn.commit()
-        return int(cur.lastrowid)  # type: ignore[arg-type]
 
 
 def enqueue_deferred(
@@ -68,8 +66,9 @@ def enqueue_deferred(
     Returns the inserted row id.
     """
     state_service.init_db()
-    with sqlite3.connect(state_service.DB_PATH) as conn:
-        cur = conn.execute(
+    with db.connect() as conn:
+        row_id = db.insert_returning_id(
+            conn,
             "INSERT INTO retry_queue "
             "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at, context) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -85,8 +84,6 @@ def enqueue_deferred(
                 json.dumps(context),
             ),
         )
-        conn.commit()
-        row_id = int(cur.lastrowid)  # type: ignore[arg-type]
     if _METRICS_AVAILABLE and _metrics is not None:
         try:
             _metrics.deferred_total.inc()
@@ -98,11 +95,10 @@ def enqueue_deferred(
 def list_queue(status: str | None = None) -> list[dict[str, Any]]:
     """Return retry-queue rows, optionally filtered by *status*."""
     state_service.init_db()
-    with sqlite3.connect(state_service.DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with db.connect() as conn:
         if status:
             rows = conn.execute(
-                "SELECT * FROM retry_queue WHERE status=? ORDER BY id", (status,)
+                db.ph("SELECT * FROM retry_queue WHERE status=? ORDER BY id"), (status,)
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM retry_queue ORDER BY id").fetchall()
@@ -117,7 +113,6 @@ def list_dlq() -> list[dict[str, Any]]:
 def purge_dlq() -> int:
     """Delete all dead-letter-queue rows and return the count deleted."""
     state_service.init_db()
-    with sqlite3.connect(state_service.DB_PATH) as conn:
+    with db.connect() as conn:
         cur = conn.execute("DELETE FROM retry_queue WHERE status='dead'")
-        conn.commit()
         return int(cur.rowcount)
