@@ -146,12 +146,9 @@ class TestLegacyMigration:
         assert "token" not in row
         assert row["token_hash"] == _sha256_hex(legacy_plaintext)
 
-    def test_legacy_plaintext_still_resolves_after_migration(
-        self, tmp_tokens_file: Path
-    ) -> None:
+    def test_legacy_plaintext_still_resolves_after_migration(self, tmp_tokens_file: Path) -> None:
         """After migration, the original plaintext still resolves correctly."""
         legacy_plaintext = "cafebabe" * 4  # 32-char hex
-
 
         data = {
             "tokens": [

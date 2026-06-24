@@ -29,6 +29,7 @@ class TokenEntry:
     role: str
     note: str | None = None
     expires_at: datetime | None = None
+    tenant: str = "default"
 
     @property
     def is_expired(self) -> bool:
@@ -72,6 +73,7 @@ def load_tokens(path: Path | None = None) -> list[TokenEntry]:
                 role=entry["role"],
                 note=entry.get("note"),
                 expires_at=expires_at,
+                tenant=entry.get("tenant", "default"),
             )
         )
 
@@ -95,6 +97,7 @@ def save_tokens(tokens: list[TokenEntry], path: Path | None = None) -> None:
             "token_hash": entry.token,  # entry.token holds the SHA-256 hash
             "role": entry.role,
             "note": entry.note,
+            "tenant": entry.tenant,
         }
         if entry.expires_at is not None:
             row["expires_at"] = entry.expires_at.isoformat()
@@ -104,7 +107,10 @@ def save_tokens(tokens: list[TokenEntry], path: Path | None = None) -> None:
 
 
 def add_token(
-    role: str, note: str | None = None, ttl_days: int | None = None
+    role: str,
+    note: str | None = None,
+    ttl_days: int | None = None,
+    tenant: str = "default",
 ) -> tuple[str, TokenEntry]:
     """Create a new token and return ``(raw_token, entry)``.
 
@@ -118,11 +124,11 @@ def add_token(
         expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
     tokens = load_tokens()
     # Store the hash in the entry (entry.token == hash)
-    entry = TokenEntry(token=token_hash, role=role, note=note, expires_at=expires_at)
+    entry = TokenEntry(token=token_hash, role=role, note=note, expires_at=expires_at, tenant=tenant)
     tokens.append(entry)
     save_tokens(tokens)
     state_service.store_token(entry)
-    logger.info("tokens.added", role=role, note=note)
+    logger.info("tokens.added", role=role, note=note, tenant=tenant)
     return plaintext, entry
 
 
@@ -145,6 +151,7 @@ def rotate_token(token_value: str) -> tuple[str, TokenEntry] | None:
         role=old.role,
         note=old.note,
         expires_at=old.expires_at,
+        tenant=old.tenant,
     )
     current = load_tokens()
     current.append(new_entry)
@@ -176,7 +183,12 @@ def resolve_token(token_value: str) -> TokenEntry | None:
     # Check state cache first (stored by hash)
     row = state_service.get_token(token_hash)
     if row:
-        return TokenEntry(token=row["token"], role=row["role"], note=row.get("note"))
+        return TokenEntry(
+            token=row["token"],
+            role=row["role"],
+            note=row.get("note"),
+            tenant=row.get("tenant", "default"),
+        )
     # Fall back to YAML (and cache on hit)
     for entry in load_tokens():
         if hmac.compare_digest(entry.token, token_hash):

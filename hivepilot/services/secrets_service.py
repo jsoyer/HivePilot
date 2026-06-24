@@ -99,9 +99,7 @@ class SecretResolver:
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"sops decryption failed for {file_path!r}: {result.stderr.strip()}"
-            )
+            raise RuntimeError(f"sops decryption failed for {file_path!r}: {result.stderr.strip()}")
 
         # Try YAML first, then JSON
         try:

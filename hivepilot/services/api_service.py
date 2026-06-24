@@ -134,6 +134,7 @@ def require_role(required: str):
                 endpoint=request.url.path,
                 method=request.method,
                 result="forbidden",
+                tenant=entry.tenant,
             )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
         state_service.record_audit(
@@ -142,6 +143,7 @@ def require_role(required: str):
             endpoint=request.url.path,
             method=request.method,
             result="authorized",
+            tenant=entry.tenant,
         )
         return entry
 
@@ -270,10 +272,22 @@ def list_tasks():
     return list(_get_orchestrator().tasks.tasks.keys())
 
 
-@v1.get("/approvals", dependencies=[Depends(require_role("run"))])
-@app.get("/approvals", dependencies=[Depends(require_role("run"))])
-def pending_approvals():
-    return state_service.get_pending_approvals()
+@v1.get("/runs")
+@app.get("/runs")
+def list_runs(caller: token_service.TokenEntry = Depends(require_role("run"))):
+    """List runs, filtered to caller's tenant for non-admin roles."""
+    if caller.role == "admin":
+        return state_service.list_recent_runs()
+    return state_service.list_recent_runs(tenant=caller.tenant)
+
+
+@v1.get("/approvals")
+@app.get("/approvals")
+def pending_approvals(caller: token_service.TokenEntry = Depends(require_role("run"))):
+    """List pending approvals, filtered to caller's tenant for non-admin roles."""
+    if caller.role == "admin":
+        return state_service.get_pending_approvals()
+    return state_service.get_pending_approvals(tenant=caller.tenant)
 
 
 class ApprovalAction(BaseModel):
@@ -282,9 +296,24 @@ class ApprovalAction(BaseModel):
     reason: str | None = None
 
 
-@v1.post("/approvals/{run_id}", dependencies=[Depends(require_role("approve"))])
-@app.post("/approvals/{run_id}", dependencies=[Depends(require_role("approve"))])
-def handle_approval(run_id: int, action: ApprovalAction):
+@v1.post("/approvals/{run_id}")
+@app.post("/approvals/{run_id}")
+def handle_approval(
+    run_id: int,
+    action: ApprovalAction,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+):
+    """Approve/deny a run. Non-admin callers may only act on their own tenant's runs."""
+    if caller.role != "admin":
+        row = state_service.get_approval(run_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Approval not found")
+        row_tenant = row.get("tenant", "default")
+        if row_tenant != caller.tenant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant approval not allowed",
+            )
     with run_duration_seconds.time():
         result = _get_orchestrator().run_approved(
             run_id=run_id,
