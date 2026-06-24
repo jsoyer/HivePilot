@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -16,9 +18,14 @@ logger = get_logger(__name__)
 ROLE_RANKS = {"read": 0, "run": 1, "approve": 2, "admin": 3}
 
 
+def _sha256_hex(value: str) -> str:
+    """Return the SHA-256 hex digest of *value*."""
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
 @dataclass
 class TokenEntry:
-    token: str
+    token: str  # Stores the SHA-256 hash of the plaintext token
     role: str
     note: str | None = None
     expires_at: datetime | None = None
@@ -40,7 +47,18 @@ def load_tokens(path: Path | None = None) -> list[TokenEntry]:
         resolved.write_text(yaml.safe_dump({"tokens": []}), encoding="utf-8")
     data = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
     tokens = []
-    for entry in data.get("tokens", []):
+    migrated_count = 0
+    rows = list(data.get("tokens", []))
+    needs_migration = False
+
+    for entry in rows:
+        # Migration: if entry has plaintext `token` but no `token_hash`, hash it now
+        if "token" in entry and "token_hash" not in entry:
+            entry["token_hash"] = _sha256_hex(entry["token"])
+            del entry["token"]
+            migrated_count += 1
+            needs_migration = True
+
         raw_expires = entry.get("expires_at")
         if isinstance(raw_expires, str):
             expires_at: datetime | None = datetime.fromisoformat(raw_expires)
@@ -50,12 +68,22 @@ def load_tokens(path: Path | None = None) -> list[TokenEntry]:
             expires_at = None
         tokens.append(
             TokenEntry(
-                token=entry["token"],
+                token=entry["token_hash"],
                 role=entry["role"],
                 note=entry.get("note"),
                 expires_at=expires_at,
             )
         )
+
+    if needs_migration:
+        logger.info(
+            "[token_service] migrated %d legacy token(s) to hashed storage",
+            migrated_count,
+        )
+        # Re-persist the migrated data
+        payload = {"tokens": rows}
+        resolved.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
     return tokens
 
 
@@ -64,7 +92,7 @@ def save_tokens(tokens: list[TokenEntry], path: Path | None = None) -> None:
     rows = []
     for entry in tokens:
         row: dict = {
-            "token": entry.token,
+            "token_hash": entry.token,  # entry.token holds the SHA-256 hash
             "role": entry.role,
             "note": entry.note,
         }
@@ -78,33 +106,42 @@ def save_tokens(tokens: list[TokenEntry], path: Path | None = None) -> None:
 def add_token(
     role: str, note: str | None = None, ttl_days: int | None = None
 ) -> tuple[str, TokenEntry]:
-    """Create a new token and return ``(raw_token, entry)``."""
-    token = secrets.token_hex(16)
+    """Create a new token and return ``(raw_token, entry)``.
+
+    The raw_token is shown ONCE to the caller.  Only the SHA-256 hash is
+    persisted on disk or in the state DB.
+    """
+    plaintext = secrets.token_hex(16)
+    token_hash = _sha256_hex(plaintext)
     expires_at: datetime | None = None
     if ttl_days is not None:
         expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
     tokens = load_tokens()
-    entry = TokenEntry(token=token, role=role, note=note, expires_at=expires_at)
+    # Store the hash in the entry (entry.token == hash)
+    entry = TokenEntry(token=token_hash, role=role, note=note, expires_at=expires_at)
     tokens.append(entry)
     save_tokens(tokens)
     state_service.store_token(entry)
     logger.info("tokens.added", role=role, note=note)
-    return entry.token, entry
+    return plaintext, entry
 
 
 def rotate_token(token_value: str) -> tuple[str, TokenEntry] | None:
     """Replace *token_value* with a fresh token keeping the same role/note/expiry.
 
     Returns ``(new_raw_token, new_entry)`` or ``None`` if the token was not found.
+    The raw_token is shown ONCE; only the hash is stored.
     """
     tokens = load_tokens()
-    old = next((e for e in tokens if e.token == token_value), None)
+    token_hash = _sha256_hex(token_value)
+    old = next((e for e in tokens if hmac.compare_digest(e.token, token_hash)), None)
     if old is None:
         return None
     remove_token(token_value)
-    new_hex = secrets.token_hex(16)
+    new_plaintext = secrets.token_hex(16)
+    new_hash = _sha256_hex(new_plaintext)
     new_entry = TokenEntry(
-        token=new_hex,
+        token=new_hash,
         role=old.role,
         note=old.note,
         expires_at=old.expires_at,
@@ -114,26 +151,35 @@ def rotate_token(token_value: str) -> tuple[str, TokenEntry] | None:
     save_tokens(current)
     state_service.store_token(new_entry)
     logger.info("tokens.rotated", role=new_entry.role)
-    return new_entry.token, new_entry
+    return new_plaintext, new_entry
 
 
 def remove_token(token_value: str) -> bool:
     tokens = load_tokens()
-    filtered = [token for token in tokens if token.token != token_value]
+    token_hash = _sha256_hex(token_value)
+    filtered = [t for t in tokens if not hmac.compare_digest(t.token, token_hash)]
     if len(filtered) == len(tokens):
         return False
     save_tokens(filtered)
-    state_service.delete_token(token_value)
-    logger.info("tokens.removed", token=token_value)
+    # state_service indexes tokens by their hash
+    state_service.delete_token(token_hash)
+    logger.info("tokens.removed")
     return True
 
 
 def resolve_token(token_value: str) -> TokenEntry | None:
-    row = state_service.get_token(token_value)
+    """Look up a token by its plaintext value.
+
+    Compares sha256(token_value) against stored hashes using constant-time comparison.
+    """
+    token_hash = _sha256_hex(token_value)
+    # Check state cache first (stored by hash)
+    row = state_service.get_token(token_hash)
     if row:
         return TokenEntry(token=row["token"], role=row["role"], note=row.get("note"))
+    # Fall back to YAML (and cache on hit)
     for entry in load_tokens():
-        if entry.token == token_value:
+        if hmac.compare_digest(entry.token, token_hash):
             state_service.store_token(entry)
             return entry
     return None

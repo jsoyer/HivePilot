@@ -45,9 +45,13 @@ class TestAddTokenReturnsTuple:
         assert len(result) == 2
 
     def test_add_token_raw_equals_entry_token(self, tmp_tokens_file: Path) -> None:
-        """The raw token returned equals entry.token (plaintext at rest)."""
+        """entry.token is the SHA-256 hash of the returned plaintext (not equal to raw)."""
+        import hashlib
+
         raw, entry = token_service.add_token("admin")
-        assert raw == entry.token
+        expected_hash = hashlib.sha256(raw.encode()).hexdigest()
+        assert entry.token == expected_hash
+        assert raw != entry.token
 
     def test_add_token_role_stored(self, tmp_tokens_file: Path) -> None:
         """entry.role matches the requested role."""
@@ -71,10 +75,13 @@ class TestAddTokenReturnsTuple:
         assert entry.expires_at <= after + timedelta(days=30, seconds=5)
 
     def test_add_token_token_persisted_in_yaml(self, tmp_tokens_file: Path) -> None:
-        """Token is saved to the YAML file."""
+        """Token hash is saved to the YAML file; plaintext is not stored."""
         raw, entry = token_service.add_token("read")
         loaded = token_service.load_tokens()
-        assert any(e.token == raw for e in loaded)
+        # entry.token is the hash; all loaded entries store hashes too
+        assert any(e.token == entry.token for e in loaded)
+        # Plaintext must not appear as any entry's token value
+        assert not any(e.token == raw for e in loaded)
 
 
 class TestTokenEntryIsExpired:
@@ -174,9 +181,14 @@ class TestRotateToken:
         assert new_entry.expires_at == original_expiry
 
     def test_rotate_token_new_token_resolvable(self, tmp_tokens_file: Path) -> None:
-        """The new token can be resolved after rotation."""
+        """The new token can be resolved after rotation; resolved.token is the hash."""
+        import hashlib
+
         old_raw, _ = token_service.add_token("run")
-        new_raw, _ = token_service.rotate_token(old_raw)
+        new_raw, new_entry = token_service.rotate_token(old_raw)
         resolved = token_service.resolve_token(new_raw)
         assert resolved is not None
-        assert resolved.token == new_raw
+        # resolved.token holds the hash, not the plaintext
+        expected_hash = hashlib.sha256(new_raw.encode()).hexdigest()
+        assert resolved.token == expected_hash
+        assert resolved.token == new_entry.token
