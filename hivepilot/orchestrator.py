@@ -44,6 +44,31 @@ _DETAILS_MAX_BULLETS = 6
 _DETAILS_FALLBACK_CHARS = 600
 
 
+def _resolve_role_from_display(display_name: str) -> str | None:
+    """Resolve a role key from a display string like "Aliénor (CEO)".
+
+    Searches the ROLES registry for a role whose ``display_name`` or ``title``
+    matches *display_name* (case-insensitive, partial/substring match).
+    Returns the role key (e.g. ``"ceo"``) or ``None`` if nothing matches.
+    """
+    from hivepilot.roles import ROLES
+
+    needle = display_name.strip().lower()
+    for role_key, role in ROLES.items():
+        candidates = []
+        if role.display_name:
+            candidates.append(role.display_name.lower())
+        if role.title:
+            candidates.append(role.title.lower())
+        # Also check the formatted "display_name (title)" pattern
+        if role.display_name and role.title:
+            candidates.append(f"{role.display_name.lower()} ({role.title.lower()})")
+        for candidate in candidates:
+            if candidate in needle or needle in candidate:
+                return role_key
+    return None
+
+
 def _build_checkpoint_details(
     prior_chunks: list[str],
     completed: list[str],
@@ -434,6 +459,227 @@ class Orchestrator:
                 return f"{role.display_name} ({role.title})"
         return stage.name
 
+    def _run_rebuttal_round(
+        self,
+        *,
+        challenger_name: str,
+        challenge_target: str,
+        challenge_point: str,
+        challenger_stage: PipelineStage,
+        completed_stages: list[PipelineStage],
+        prior_chunks: list[str],
+        policy: policy_service.Policy | None,
+        project_name: str,
+        simulate: bool,
+    ) -> None:
+        """Execute one bounded rebuttal round after a ⚔️ challenge.
+
+        Flow:
+          1. Resolve target role from *challenge_target* display name.
+          2. Confirm target is an upstream (already completed) stage.
+          3. Build rebuttal prompt and invoke target via capture_definition.
+          4. Stream 🛡️ rebuttal turn; log the interaction.
+          5. Re-invoke challenger with rebuttal → "ACCEPT or MAINTAIN?".
+          6. Stream ⚖️ (resolved) or 🙋 (escalated).
+          7. Append resolution note to *prior_chunks* for downstream stages.
+
+        Never raises — errors are logged and the pipeline continues with A-only
+        ⚔️ visibility.
+        """
+        from typing import cast
+
+        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.roles import get_role, resolve_host, resolve_runner
+        from hivepilot.runners.base import RunnerPayload
+
+        # 1. Resolve target role key
+        target_role_key = _resolve_role_from_display(challenge_target)
+        if target_role_key is None:
+            logger.info(
+                "rebuttal.target_unresolvable",
+                target=challenge_target,
+                challenger=challenger_name,
+            )
+            return
+
+        # 2. Confirm the target is an upstream completed stage
+        target_role = get_role(target_role_key)
+        # Find the completed stage whose task maps to this role
+        target_stage: PipelineStage | None = None
+        for s in completed_stages:
+            task_cfg = self.tasks.tasks.get(s.task)
+            if task_cfg and task_cfg.role == target_role_key:
+                target_stage = s
+                break
+        if target_stage is None:
+            logger.info(
+                "rebuttal.target_not_upstream",
+                target_role=target_role_key,
+                target_display=challenge_target,
+                completed=[s.task for s in completed_stages],
+            )
+            return
+
+        # 3. Build rebuttal prompt for the target
+        # Find the target's prior output from prior_chunks (search by agent display name)
+        target_agent_name = self._agent_name(target_stage)
+        prior_output = ""
+        for chunk in reversed(prior_chunks):
+            if target_agent_name in chunk or target_stage.name in chunk:
+                prior_output = chunk
+                break
+
+        rebuttal_prompt = (
+            f"You are {target_agent_name}. A colleague has challenged your previous output.\n\n"
+            f"YOUR PREVIOUS OUTPUT:\n{prior_output[:2000] if prior_output else '(not available)'}\n\n"
+            f"CHALLENGE from {challenger_name}:\n{challenge_point}\n\n"
+            "Respond with one of:\n"
+            "- ACCEPT: <brief acknowledgement and what you would change>\n"
+            "- DEFEND: <clear rationale for why your original position stands>\n"
+            "- ESCALATE: <brief statement of why this needs human review>\n\n"
+            "Keep your response concise (under 200 words)."
+        )
+
+        # 4. Invoke target role's runner for rebuttal
+        runner_kind, role_model = resolve_runner(target_role_key, policy)
+        role_perm = target_role.permission_mode
+        role_options: dict[str, str] = {}
+        if role_perm:
+            role_options["permission_mode"] = role_perm
+        runner_def = RunnerDefinition(
+            name=f"rebuttal:{target_role_key}",
+            kind=cast(RunnerKind, runner_kind),
+            command=None,
+            model=role_model,
+            host=resolve_host(target_role_key, policy),
+            options=role_options,
+        )
+        prompt_file = (
+            str(target_role.prompt_file)
+            if target_role.prompt_file and target_role.prompt_file.exists()
+            else ""
+        )
+        step = TaskStep(
+            name=f"rebuttal:{target_role_key}",
+            runner=runner_kind,
+            prompt_file=prompt_file,
+        )
+        rebuttal_project = self._project(project_name)
+        payload = RunnerPayload(
+            project_name=project_name,
+            project=rebuttal_project,
+            task_name=f"rebuttal:{target_role_key}",
+            step=step,
+            metadata={"extra_prompt": rebuttal_prompt, "prior_context": ""},
+            secrets={},
+        )
+
+        if simulate:
+            rebuttal_output = f"[simulated rebuttal from {target_agent_name}] DEFEND: My analysis stands."
+        else:
+            rebuttal_output = self.registry.capture_definition(runner_def, payload)
+
+        # Stream 🛡️ rebuttal turn
+        notification_service.stream_rebuttal(
+            actor=target_agent_name,
+            target=challenger_name,
+            point=rebuttal_output,
+        )
+        log_challenge_interaction(
+            actor=target_agent_name,
+            target=challenger_name,
+            point=f"[REBUTTAL] {rebuttal_output}",
+        )
+
+        # 5. Re-invoke challenger with the rebuttal → resolution check
+        challenger_role_key: str | None = None
+        challenger_task_cfg2 = self.tasks.tasks.get(challenger_stage.task)
+        if challenger_task_cfg2 and challenger_task_cfg2.role:
+            challenger_role_key = challenger_task_cfg2.role
+
+        resolution_prompt = (
+            f"You are {challenger_name}. You challenged {target_agent_name} and they responded.\n\n"
+            f"YOUR ORIGINAL CHALLENGE:\n{challenge_point}\n\n"
+            f"THEIR REBUTTAL:\n{rebuttal_output[:2000]}\n\n"
+            "Respond with exactly one of:\n"
+            "- ACCEPT: <brief acknowledgement — you are satisfied with their defence>\n"
+            "- MAINTAIN: <brief statement of why you still disagree — this will be escalated for human review>\n\n"
+            "Keep your response concise (under 100 words)."
+        )
+
+        if challenger_role_key is None:
+            # No role for challenger — default to ACCEPT to avoid blocking
+            resolution_output = "ACCEPT: Unable to determine challenger role for resolution check."
+        elif simulate:
+            resolution_output = f"[simulated resolution from {challenger_name}] ACCEPT: Satisfied."
+        else:
+            ch_runner_kind, ch_role_model = resolve_runner(challenger_role_key, policy)
+            ch_role = get_role(challenger_role_key)
+            ch_role_perm = ch_role.permission_mode
+            ch_role_options: dict[str, str] = {}
+            if ch_role_perm:
+                ch_role_options["permission_mode"] = ch_role_perm
+            ch_runner_def = RunnerDefinition(
+                name=f"resolution:{challenger_role_key}",
+                kind=cast(RunnerKind, ch_runner_kind),
+                command=None,
+                model=ch_role_model,
+                host=resolve_host(challenger_role_key, policy),
+                options=ch_role_options,
+            )
+            ch_step = TaskStep(
+                name=f"resolution:{challenger_role_key}",
+                runner=ch_runner_kind,
+                prompt_file=(
+                    str(ch_role.prompt_file)
+                    if ch_role.prompt_file and ch_role.prompt_file.exists()
+                    else ""
+                ),
+            )
+            ch_payload = RunnerPayload(
+                project_name=project_name,
+                project=rebuttal_project,
+                task_name=f"resolution:{challenger_role_key}",
+                step=ch_step,
+                metadata={"extra_prompt": resolution_prompt, "prior_context": ""},
+                secrets={},
+            )
+            resolution_output = self.registry.capture_definition(ch_runner_def, ch_payload)
+
+        # 6. Determine outcome and stream final icon
+        is_escalated = resolution_output.strip().upper().startswith("MAINTAIN")
+        if is_escalated:
+            notification_service.stream_needs_human(
+                actor=challenger_name,
+                target=target_agent_name,
+                point=resolution_output,
+            )
+            resolution_note = (
+                f"[NEEDS_HUMAN] Challenge between {challenger_name} → {target_agent_name} "
+                f"unresolved. Point: {challenge_point[:200]} | "
+                f"Rebuttal: {rebuttal_output[:200]} | "
+                f"Challenger maintained: {resolution_output[:200]}"
+            )
+        else:
+            notification_service.stream_resolved(
+                actor=challenger_name,
+                target=target_agent_name,
+                resolution=resolution_output,
+            )
+            resolution_note = (
+                f"[RESOLVED] Challenge between {challenger_name} → {target_agent_name} closed. "
+                f"Point: {challenge_point[:200]} | Resolution: {resolution_output[:200]}"
+            )
+
+        log_challenge_interaction(
+            actor=challenger_name,
+            target=target_agent_name,
+            point=f"[RESOLUTION] {resolution_output}",
+        )
+
+        # 7. Append resolution note to prior_chunks for downstream context
+        prior_chunks.append(f"## Challenge Resolution\n{resolution_note}")
+
     def run_pipeline(
         self,
         *,
@@ -643,19 +889,48 @@ class Orchestrator:
                 summary=stage_output,
             )
 
-            # Surface inter-agent challenges (⚔️)
+            # Surface inter-agent challenges (⚔️) and bounded rebuttal (🛡️/⚖️/🙋)
             _report = parse_agent_report(stage_output)
             if _report.challenge:
+                _challenger_name = self._agent_name(stage)
+                _challenge_target = _report.challenge.target
+                _challenge_point = _report.challenge.point
                 notification_service.stream_challenge(
-                    actor=self._agent_name(stage),
-                    target=_report.challenge.target,
-                    point=_report.challenge.point,
+                    actor=_challenger_name,
+                    target=_challenge_target,
+                    point=_challenge_point,
                 )
                 log_challenge_interaction(
-                    actor=self._agent_name(stage),
-                    target=_report.challenge.target,
-                    point=_report.challenge.point,
+                    actor=_challenger_name,
+                    target=_challenge_target,
+                    point=_challenge_point,
                 )
+
+                # Bounded rebuttal round: target defends → challenger accepts/maintains
+                if settings.enable_challenge_rounds and settings.max_challenge_rounds >= 1:
+                    try:
+                        _rebuttal_policy = policy_service.get_policy(
+                            project_names[0] if project_names else pipeline_name
+                        )
+                        _rebuttal_project_name = project_names[0] if project_names else pipeline_name
+                        self._run_rebuttal_round(
+                            challenger_name=_challenger_name,
+                            challenge_target=_challenge_target,
+                            challenge_point=_challenge_point,
+                            challenger_stage=stage,
+                            completed_stages=pipeline.stages[:stage_idx],
+                            prior_chunks=prior_chunks,
+                            policy=_rebuttal_policy,
+                            project_name=_rebuttal_project_name,
+                            simulate=simulate,
+                        )
+                    except Exception as _rebuttal_exc:  # noqa: BLE001
+                        logger.warning(
+                            "rebuttal.error",
+                            challenger=_challenger_name,
+                            target=_challenge_target,
+                            error=str(_rebuttal_exc),
+                        )
 
             # Documentation vault changelog note (2.6c)
             if stage.task == "noxys-documentation" and vault_path is not None:

@@ -30,6 +30,9 @@ _ICON_LABELS = {
     "💬": "proposal",
     "⚖️": "synthesis",
     "⚔️": "challenge",
+    "🛡️": "rebuttal",
+    "⚖️ resolved": "resolved",
+    "🙋": "needs human",
 }
 
 # Status badge mapping for the rich HTML card.
@@ -380,6 +383,54 @@ def stream_challenge(actor: str, target: str, point: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("stream.challenge_failed", actor=actor, target=target, error=str(exc))
+
+
+def stream_rebuttal(actor: str, target: str, point: str) -> None:
+    """Stream a 🛡️ rebuttal turn: *actor* defends against *target*'s challenge.
+
+    Best-effort, never raises.
+    """
+    try:
+        stream_agent_turn(
+            actor=actor,
+            target=target,
+            summary=point,
+            icon="🛡️",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.rebuttal_failed", actor=actor, target=target, error=str(exc))
+
+
+def stream_resolved(actor: str, target: str, resolution: str) -> None:
+    """Stream a ⚖️ resolved turn: challenge accepted or defended and closed.
+
+    Best-effort, never raises.
+    """
+    try:
+        stream_agent_turn(
+            actor=actor,
+            target=target,
+            summary=resolution,
+            icon="⚖️",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.resolved_failed", actor=actor, target=target, error=str(exc))
+
+
+def stream_needs_human(actor: str, target: str, point: str) -> None:
+    """Stream a 🙋 needs-human turn: challenge escalated for human review.
+
+    Best-effort, never raises.
+    """
+    try:
+        stream_agent_turn(
+            actor=actor,
+            target=target,
+            summary=point,
+            icon="🙋",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.needs_human_failed", actor=actor, target=target, error=str(exc))
 
 
 def send_approval_keyboard(
