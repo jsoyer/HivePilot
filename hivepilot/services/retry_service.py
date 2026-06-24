@@ -7,6 +7,14 @@ from typing import Any, Iterable
 
 from hivepilot.services import state_service
 
+try:
+    from hivepilot.services import metrics as _metrics  # noqa: F401
+
+    _METRICS_AVAILABLE = True
+except ImportError:
+    _metrics = None  # type: ignore[assignment]
+    _METRICS_AVAILABLE = False
+
 
 def enqueue(
     *,
@@ -78,7 +86,13 @@ def enqueue_deferred(
             ),
         )
         conn.commit()
-        return int(cur.lastrowid)  # type: ignore[arg-type]
+        row_id = int(cur.lastrowid)  # type: ignore[arg-type]
+    if _METRICS_AVAILABLE and _metrics is not None:
+        try:
+            _metrics.deferred_total.inc()
+        except Exception:  # noqa: BLE001
+            pass
+    return row_id
 
 
 def list_queue(status: str | None = None) -> list[dict[str, Any]]:
