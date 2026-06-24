@@ -71,7 +71,7 @@ def scrub_env(env: dict[str, str], allowlist: list[str] | None = None) -> dict[s
     Returns:
         A new ``dict[str, str]`` containing only the allowed keys.
     """
-    if allowlist is None:
+    if not allowlist:
         allowlist = DEFAULT_ALLOWLIST
 
     # Split into exact names and patterns once so the inner loop stays O(n).
