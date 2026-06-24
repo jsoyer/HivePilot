@@ -736,6 +736,7 @@ def tokens_add(
     token: str | None = typer.Option(
         None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"
     ),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant this token belongs to"),
 ) -> None:
     from hivepilot.utils.validation import validate_note
 
@@ -752,13 +753,15 @@ def tokens_add(
     else:
         if role != "admin":
             raise typer.BadParameter("First token must be admin")
-    raw_token, entry = token_service.add_token(role, note, ttl_days=ttl)
+    raw_token, entry = token_service.add_token(role, note, ttl_days=ttl, tenant=tenant)
     typer.echo(f"New token ({entry.role}): {raw_token}")
     typer.echo("Save this token now -- it will not be shown again.")
     if entry.note:
         typer.echo(f"Note: {entry.note}")
     if entry.expires_at:
         typer.echo(f"Expires: {entry.expires_at.strftime('%Y-%m-%d %H:%M UTC')}")
+    if entry.tenant != "default":
+        typer.echo(f"Tenant: {entry.tenant}")
 
 
 @tokens_app.command("list")
