@@ -130,9 +130,9 @@ class Settings(BaseSettings):
     max_challenge_rounds: int = 1  # 1 = one rebuttal + one resolution check
     # Tier-2: on-demand orchestrator-mediated agent requests
     enable_agent_requests: bool = True
-    max_agent_requests: int = 3        # per stage turn (max REQUEST: lines honoured)
-    max_request_depth: int = 2         # recursion depth cap (requests from answers)
-    max_requests_per_run: int = 20     # global budget per pipeline run
+    max_agent_requests: int = 3  # per stage turn (max REQUEST: lines honoured)
+    max_request_depth: int = 2  # recursion depth cap (requests from answers)
+    max_requests_per_run: int = 20  # global budget per pipeline run
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
@@ -168,7 +168,26 @@ class Settings(BaseSettings):
     linear_webhook_secret: str | None = None  # HMAC secret for webhook verification
     notion_token: str | None = None
     notion_runs_database_id: str | None = None  # database where run logs are written
-    obsidian_vault: Path = Path("/home/jeromesoyer/Documents/Github/jsoyer/obsidian-vault/Noxys")
+    obsidian_vault: Path = Path("obsidian-vault")
+
+    # Governance repository root (e.g. /path/to/shared-governance-repo or https URL)
+    # Deployment-specific; leave None to disable governance file injection.
+    governance_repo: str | None = Field(
+        default=None,
+        validation_alias="HIVEPILOT_GOVERNANCE_REPO",
+    )
+
+    # Governance file names (relative to governance_repo root) to inject into prompts.
+    governance_files: list[str] = Field(
+        default_factory=lambda: [
+            "CLAUDE.md",
+            "AGENTS.md",
+            "AGENT-GOVERNANCE.md",
+            ".cursorrules",
+            ".windsurfrules",
+            "GEMINI.md",
+        ],
+    )
 
     @property
     def xdg_config_home(self) -> Path:

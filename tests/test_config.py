@@ -12,11 +12,15 @@ from hivepilot.config import Settings
 
 
 class TestObsidianVaultConfig:
-    def test_obsidian_vault_default(self) -> None:
-        """obsidian_vault defaults to the real vault path."""
-        s = Settings()
-        expected = Path("/home/jeromesoyer/Documents/Github/jsoyer/obsidian-vault/Noxys")
-        assert s.obsidian_vault == expected
+    def test_obsidian_vault_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """obsidian_vault defaults to a relative 'obsidian-vault' path (deployment-agnostic)."""
+        # Clear any env override so we get the true default, and skip .env to
+        # avoid the deployment-specific HIVEPILOT_OBSIDIAN_VAULT value.
+        monkeypatch.delenv("HIVEPILOT_OBSIDIAN_VAULT", raising=False)
+        s = Settings(_env_file=None)
+        # Default is now a relative path so it works on any machine without the
+        # noxys-specific absolute path.  Operators override via HIVEPILOT_OBSIDIAN_VAULT.
+        assert s.obsidian_vault == Path("obsidian-vault")
 
     def test_obsidian_vault_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """HIVEPILOT_OBSIDIAN_VAULT env var overrides the default."""

@@ -16,30 +16,68 @@ Design:
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# Canonical source roots (absolute, never drift)
-# ---------------------------------------------------------------------------
+from pathlib import Path
 
-_NOXYS_ROOT = "/home/jeromesoyer/Documents/Github/noxys"
-_VAULT_SECURITY = "/home/jeromesoyer/Documents/Github/jsoyer/obsidian-vault/Noxys/08 - Security"
+from hivepilot.config import settings
 
 # ---------------------------------------------------------------------------
-# Noxys monorepo root rule files (all 6)
+# Config-derived source roots (never hardcoded)
+# ---------------------------------------------------------------------------
+# _NOXYS_ROOT is kept as a module-level variable for backward-compat: runners
+# import it directly as a string.  Derive from settings so any deployment can
+# override via HIVEPILOT_GOVERNANCE_REPO without touching this file.
 # ---------------------------------------------------------------------------
 
-NOXYS_CLAUDE_MD = f"{_NOXYS_ROOT}/CLAUDE.md"
-NOXYS_AGENTS_MD = f"{_NOXYS_ROOT}/AGENTS.md"
-NOXYS_CURSORRULES = f"{_NOXYS_ROOT}/.cursorrules"
-NOXYS_WINDSURFRULES = f"{_NOXYS_ROOT}/.windsurfrules"
-NOXYS_GEMINI_MD = f"{_NOXYS_ROOT}/GEMINI.md"
-NOXYS_AGENT_GOVERNANCE = f"{_NOXYS_ROOT}/AGENT-GOVERNANCE.md"
+_NOXYS_ROOT: str = settings.governance_repo or ""
+_VAULT_SECURITY: str = (
+    str(Path(str(settings.obsidian_vault)) / "08 - Security")
+    if settings.obsidian_vault and Path(str(settings.obsidian_vault)).is_absolute()
+    else ""
+)
+
+# ---------------------------------------------------------------------------
+# Config-derived helper functions
+# ---------------------------------------------------------------------------
+
+
+def governance_file_paths() -> list[str]:
+    """Return absolute paths to governance files, derived from settings.
+
+    Returns empty list if settings.governance_repo is None/empty.
+    """
+    if not settings.governance_repo:
+        return []
+    return [str(Path(settings.governance_repo) / fname) for fname in settings.governance_files]
+
+
+def vault_security_path() -> str | None:
+    """Return the security vault directory path from settings.obsidian_vault.
+
+    Returns None if obsidian_vault is not configured to an absolute path.
+    """
+    vault = settings.obsidian_vault
+    if vault and Path(str(vault)).is_absolute():
+        return str(Path(str(vault)) / "08 - Security")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Governance rule file paths (derived from _NOXYS_ROOT at import time)
+# ---------------------------------------------------------------------------
+
+NOXYS_CLAUDE_MD = f"{_NOXYS_ROOT}/CLAUDE.md" if _NOXYS_ROOT else ""
+NOXYS_AGENTS_MD = f"{_NOXYS_ROOT}/AGENTS.md" if _NOXYS_ROOT else ""
+NOXYS_CURSORRULES = f"{_NOXYS_ROOT}/.cursorrules" if _NOXYS_ROOT else ""
+NOXYS_WINDSURFRULES = f"{_NOXYS_ROOT}/.windsurfrules" if _NOXYS_ROOT else ""
+NOXYS_GEMINI_MD = f"{_NOXYS_ROOT}/GEMINI.md" if _NOXYS_ROOT else ""
+NOXYS_AGENT_GOVERNANCE = f"{_NOXYS_ROOT}/AGENT-GOVERNANCE.md" if _NOXYS_ROOT else ""
 
 # ---------------------------------------------------------------------------
 # Vault canonical security / git rules
 # ---------------------------------------------------------------------------
 
-VAULT_DETECTION_FABRIC = f"{_VAULT_SECURITY}/AGENT-DETECTION-FABRIC.md"
-VAULT_GIT_BRANCH_RULES = f"{_VAULT_SECURITY}/AGENT-GIT-BRANCH-RULES.md"
+VAULT_DETECTION_FABRIC = f"{_VAULT_SECURITY}/AGENT-DETECTION-FABRIC.md" if _VAULT_SECURITY else ""
+VAULT_GIT_BRANCH_RULES = f"{_VAULT_SECURITY}/AGENT-GIT-BRANCH-RULES.md" if _VAULT_SECURITY else ""
 
 # ---------------------------------------------------------------------------
 # Cross-cutting enforced rules (policy statements, not file paths)
@@ -60,34 +98,47 @@ CROSS_CUTTING_RULES: list[str] = [
 # Per-role rule source paths
 # ---------------------------------------------------------------------------
 # Order matters: roles read governance first, then security, then repo-specific rules.
+# Empty strings are filtered out at role-rules build time to avoid injecting blank paths.
 # ---------------------------------------------------------------------------
 
 _STRATEGY_ROLES_PATHS: list[str] = [
-    NOXYS_CLAUDE_MD,
-    NOXYS_AGENTS_MD,
-    NOXYS_AGENT_GOVERNANCE,
-    NOXYS_CURSORRULES,
-    NOXYS_WINDSURFRULES,
-    NOXYS_GEMINI_MD,
+    p
+    for p in [
+        NOXYS_CLAUDE_MD,
+        NOXYS_AGENTS_MD,
+        NOXYS_AGENT_GOVERNANCE,
+        NOXYS_CURSORRULES,
+        NOXYS_WINDSURFRULES,
+        NOXYS_GEMINI_MD,
+    ]
+    if p
 ]
 
 _CODING_ROLES_PATHS: list[str] = [
-    NOXYS_CLAUDE_MD,
-    NOXYS_AGENTS_MD,
-    NOXYS_AGENT_GOVERNANCE,
-    NOXYS_CURSORRULES,
-    NOXYS_WINDSURFRULES,
-    NOXYS_GEMINI_MD,
-    VAULT_GIT_BRANCH_RULES,
+    p
+    for p in [
+        NOXYS_CLAUDE_MD,
+        NOXYS_AGENTS_MD,
+        NOXYS_AGENT_GOVERNANCE,
+        NOXYS_CURSORRULES,
+        NOXYS_WINDSURFRULES,
+        NOXYS_GEMINI_MD,
+        VAULT_GIT_BRANCH_RULES,
+    ]
+    if p
 ]
 
 _AUTOMATION_ROLES_PATHS: list[str] = [
-    NOXYS_CLAUDE_MD,
-    NOXYS_AGENTS_MD,
-    NOXYS_AGENT_GOVERNANCE,
-    NOXYS_CURSORRULES,
-    NOXYS_WINDSURFRULES,
-    NOXYS_GEMINI_MD,
+    p
+    for p in [
+        NOXYS_CLAUDE_MD,
+        NOXYS_AGENTS_MD,
+        NOXYS_AGENT_GOVERNANCE,
+        NOXYS_CURSORRULES,
+        NOXYS_WINDSURFRULES,
+        NOXYS_GEMINI_MD,
+    ]
+    if p
 ]
 
 ROLE_RULES: dict[str, list[str]] = {
@@ -98,29 +149,29 @@ ROLE_RULES: dict[str, list[str]] = {
     ],
     "cto": [
         *_STRATEGY_ROLES_PATHS,
-        VAULT_GIT_BRANCH_RULES,
+        *([VAULT_GIT_BRANCH_RULES] if VAULT_GIT_BRANCH_RULES else []),
         *CROSS_CUTTING_RULES,
     ],
     "ciso": [
         *_STRATEGY_ROLES_PATHS,
-        VAULT_DETECTION_FABRIC,
-        VAULT_GIT_BRANCH_RULES,
+        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
+        *([VAULT_GIT_BRANCH_RULES] if VAULT_GIT_BRANCH_RULES else []),
         *CROSS_CUTTING_RULES,
     ],
     # --- coding tier (sonnet) -----------------------------------------------
     "developer": [
         *_CODING_ROLES_PATHS,
-        VAULT_DETECTION_FABRIC,
+        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
         *CROSS_CUTTING_RULES,
     ],
     "reviewer": [
         *_CODING_ROLES_PATHS,
-        VAULT_DETECTION_FABRIC,
+        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
         *CROSS_CUTTING_RULES,
     ],
     "qa": [
         *_CODING_ROLES_PATHS,
-        VAULT_DETECTION_FABRIC,
+        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
         *CROSS_CUTTING_RULES,
     ],
     # --- automation tier (haiku) --------------------------------------------
@@ -130,7 +181,7 @@ ROLE_RULES: dict[str, list[str]] = {
     ],
     "documentation": [
         *_AUTOMATION_ROLES_PATHS,
-        VAULT_DETECTION_FABRIC,
+        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
         *CROSS_CUTTING_RULES,
     ],
 }

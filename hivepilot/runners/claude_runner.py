@@ -4,8 +4,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hivepilot.agent_rules import _NOXYS_ROOT
-from hivepilot.config import Settings
+from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.services.profile_service import load_claude_profiles
@@ -139,7 +138,7 @@ class ClaudeRunner(BaseRunner):
         instructions = render_prompt_vars(
             instructions,
             target_repo=target_repo,
-            governance_repo=_NOXYS_ROOT,
+            governance_repo=settings.governance_repo or "",
             obsidian_vault=obsidian_vault,
         )
         return "\n".join(sections) + f"\n\nInstructions:\n{instructions}"
