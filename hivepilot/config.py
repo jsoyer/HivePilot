@@ -119,6 +119,16 @@ class Settings(BaseSettings):
     cache_backend: str = "sqlite"  # sqlite | redis (L3)
     redis_url: str | None = None  # required when cache_backend=redis (L3)
     worktree_isolation: bool = True  # run dev/role tasks inside a throwaway git worktree (env: HIVEPILOT_WORKTREE_ISOLATION)
+    # Sandbox mode for autonomous developer steps with elevated permission_mode.
+    # "bwrap"  — wrap the subprocess with bubblewrap FS confinement + env scrub
+    #             (best-effort: falls back to unsandboxed on any error).
+    # "none"   — no sandboxing (default; safe for CI environments where bwrap
+    #             is unavailable or unnecessary).
+    # Override via env HIVEPILOT_DEV_SANDBOX.
+    dev_sandbox: str = "none"
+    # Env var allowlist used when dev_sandbox="bwrap".  Mirrors the default
+    # from hivepilot.utils.sandbox.DEFAULT_ALLOWLIST; override to add extra keys.
+    sandbox_env_allowlist: list[str] = []  # empty = use DEFAULT_ALLOWLIST
     claude_max_concurrency: int = (
         1  # max concurrent claude steps (env: HIVEPILOT_CLAUDE_MAX_CONCURRENCY)
     )

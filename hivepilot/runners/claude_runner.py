@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,12 +9,78 @@ from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.services.profile_service import load_claude_profiles
-from hivepilot.utils.env import merge_environments
+from hivepilot.utils.env import gather_overrides, merge_environments
 from hivepilot.utils.logging import get_logger
 from hivepilot.utils.prompt_vars import render_prompt_vars
 from hivepilot.utils.remote import build_invocation
+from hivepilot.utils.sandbox import DEFAULT_ALLOWLIST, scrub_env, wrap_bwrap
 
 logger = get_logger(__name__)
+
+_ELEVATED_PERMISSION_MODES = frozenset({"bypassPermissions", "acceptEdits"})
+
+
+def _apply_sandbox(
+    argv: list[str],
+    run_env: dict[str, str] | None,
+    cwd: str | None,
+    *,
+    permission_mode: str | None,
+    definition_host: str | None,
+    settings_obj: Settings,
+    intentional_env: dict[str, str],
+) -> tuple[list[str], dict[str, str] | None]:
+    """Return (argv, env) with sandbox applied when appropriate.
+
+    Sandbox is applied when ALL of the following hold:
+    - ``definition_host`` is None (local run — SSH runs must not be double-wrapped)
+    - ``permission_mode`` is an elevated mode (bypassPermissions or acceptEdits)
+    - ``settings_obj.dev_sandbox == "bwrap"``
+
+    ``intentional_env`` must be the project/definition/secrets overlay ONLY —
+    do NOT pass the full ``merge_environments`` output (which includes os.environ)
+    or the scrub step will be undone.
+
+    On any error the original argv/env are returned unchanged and a warning is
+    logged so the developer run is never broken by sandboxing code.
+    """
+    if definition_host:
+        # Remote SSH run — bwrap cannot wrap an ssh process meaningfully.
+        return argv, run_env
+
+    if permission_mode not in _ELEVATED_PERMISSION_MODES:
+        return argv, run_env
+
+    sandbox_mode = getattr(settings_obj, "dev_sandbox", "none")
+    if sandbox_mode != "bwrap":
+        return argv, run_env
+
+    try:
+        # --- env scrub ---
+        # Start from a clean scrub of the host environment, then layer only the
+        # intentional project/role/secrets overrides on top.  intentional_env
+        # must NOT include os.environ (use gather_overrides, not merge_environments).
+        allowlist = getattr(settings_obj, "sandbox_env_allowlist", None) or DEFAULT_ALLOWLIST
+        base_env = scrub_env(os.environ.copy(), allowlist)
+        base_env.update(intentional_env)
+
+        # --- bwrap wrap ---
+        workdir = cwd or str(Path.cwd())
+        wrapped_argv = wrap_bwrap(argv, workdir=workdir)
+
+        logger.info(
+            "sandbox.applied",
+            permission_mode=permission_mode,
+            workdir=workdir,
+        )
+        return wrapped_argv, base_env
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "sandbox.error_fallback: sandboxing failed — running UNSANDBOXED. error=%s",
+            exc,
+        )
+        return argv, run_env
 
 
 @dataclass
@@ -58,6 +125,14 @@ class ClaudeRunner(BaseRunner):
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         return args, env
 
+    def _permission_mode(self, payload: RunnerPayload) -> str | None:
+        """Resolve the effective permission mode for *payload* (same logic as _build_invocation)."""
+        return (
+            payload.step.metadata.get("permission_mode")
+            or self.definition.options.get("permission_mode")
+            or self.settings.claude_permission_mode
+        )
+
     def run(self, payload: RunnerPayload) -> None:
         args, env = self._build_invocation(payload)
         argv, cwd, run_env = build_invocation(
@@ -66,6 +141,18 @@ class ClaudeRunner(BaseRunner):
             env,
             host=self.definition.host,
             ssh_options=self.settings.ssh_options or None,
+        )
+        # gather_overrides produces the project/definition/secrets overlay WITHOUT
+        # inheriting os.environ — safe to layer on top of the scrubbed base env.
+        env_overlay = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
+        argv, run_env = _apply_sandbox(
+            argv,
+            run_env,
+            cwd,
+            permission_mode=self._permission_mode(payload),
+            definition_host=self.definition.host,
+            settings_obj=self.settings,
+            intentional_env=env_overlay,
         )
         logger.info(
             "claude_runner.start",
@@ -86,6 +173,18 @@ class ClaudeRunner(BaseRunner):
             env,
             host=self.definition.host,
             ssh_options=self.settings.ssh_options or None,
+        )
+        # gather_overrides produces the project/definition/secrets overlay WITHOUT
+        # inheriting os.environ — safe to layer on top of the scrubbed base env.
+        env_overlay = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
+        argv, run_env = _apply_sandbox(
+            argv,
+            run_env,
+            cwd,
+            permission_mode=self._permission_mode(payload),
+            definition_host=self.definition.host,
+            settings_obj=self.settings,
+            intentional_env=env_overlay,
         )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         result = subprocess.run(
