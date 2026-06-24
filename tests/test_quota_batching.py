@@ -1,4 +1,5 @@
 """Tests for dev fan-out batching per quota window."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,7 @@ def test_batching_defers_remainder():
     defer_at = datetime.now(timezone.utc) + timedelta(minutes=1)
     with patch("hivepilot.services.retry_service.enqueue_deferred", fake_enqueue_deferred):
         from hivepilot.services.retry_service import enqueue_deferred
+
         for proj in remainder:
             enqueue_deferred(
                 task="dev",
@@ -46,6 +48,7 @@ def test_batching_defers_remainder():
 def test_dev_batch_size_config_default():
     """dev_batch_size defaults to 0 (unlimited)."""
     from hivepilot.config import Settings
+
     s = Settings()
     assert s.dev_batch_size == 0
 
@@ -53,6 +56,7 @@ def test_dev_batch_size_config_default():
 def test_quota_deferred_error_is_exception():
     """QuotaDeferredError is an Exception subclass."""
     from hivepilot.services.quota import QuotaDeferredError
+
     assert issubclass(QuotaDeferredError, Exception)
     exc = QuotaDeferredError("test", reset_at=None)
     assert exc.reset_at is None

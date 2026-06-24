@@ -1,4 +1,5 @@
 """Tests for hivepilot.services.scheduler_daemon.SchedulerDaemon."""
+
 from __future__ import annotations
 
 import json
@@ -89,9 +90,7 @@ class TestSchedulerDaemonDeferredProcessing:
         assert run_task_calls[0]["extra_prompt"] == "fix it"
 
         with sqlite3.connect(str(db)) as conn:
-            row = conn.execute(
-                "SELECT status FROM retry_queue WHERE id=?", (row_id,)
-            ).fetchone()
+            row = conn.execute("SELECT status FROM retry_queue WHERE id=?", (row_id,)).fetchone()
         assert row[0] == "done"
 
     def test_future_deferred_row_is_skipped(self, tmp_path, monkeypatch):
@@ -120,9 +119,7 @@ class TestSchedulerDaemonDeferredProcessing:
         assert len(run_task_calls) == 0
 
         with sqlite3.connect(str(db)) as conn:
-            row = conn.execute(
-                "SELECT status FROM retry_queue WHERE id=?", (row_id,)
-            ).fetchone()
+            row = conn.execute("SELECT status FROM retry_queue WHERE id=?", (row_id,)).fetchone()
         assert row[0] == "pending"
 
     def test_deferred_row_without_context_is_skipped(self, tmp_path, monkeypatch):
@@ -140,7 +137,17 @@ class TestSchedulerDaemonDeferredProcessing:
                 "INSERT INTO retry_queue "
                 "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at, context) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("nightly", "dev", json.dumps(["repo-y"]), "err", 1, 3, "pending", past.isoformat(), None),
+                (
+                    "nightly",
+                    "dev",
+                    json.dumps(["repo-y"]),
+                    "err",
+                    1,
+                    3,
+                    "pending",
+                    past.isoformat(),
+                    None,
+                ),
             )
             conn.commit()
 
@@ -170,9 +177,7 @@ class TestSchedulerDaemonDeferredProcessing:
         row_id = _insert_deferred_row(db, next_retry_at=past, ctx=ctx, attempt=0, max_attempts=3)
 
         mock_orch = MagicMock()
-        mock_orch.run_task.side_effect = Exception(
-            "session limit exceeded — resets 3:00pm (UTC)"
-        )
+        mock_orch.run_task.side_effect = Exception("session limit exceeded — resets 3:00pm (UTC)")
 
         with patch("hivepilot.services.scheduler_daemon.Orchestrator", return_value=mock_orch):
             from hivepilot.services.scheduler_daemon import SchedulerDaemon

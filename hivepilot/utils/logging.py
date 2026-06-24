@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import structlog
 
 from hivepilot.config import settings
-
 
 _configured = False
 

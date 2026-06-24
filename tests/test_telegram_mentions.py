@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-from hivepilot.services.telegram_bot import _parse_mention, _AGENT_REGISTRY, _ALIAS_TO_ROLE
+from hivepilot.services.telegram_bot import _ALIAS_TO_ROLE, _parse_mention
 
 
 # Helpers — build the resolution tables used by _parse_mention

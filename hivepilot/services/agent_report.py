@@ -232,7 +232,7 @@ def parse_agent_requests(text: str) -> list[tuple[str, str]]:
         # Accept both "request:" (lowercase field) and "REQUEST:" (uppercase)
         if not stripped.lower().startswith("request:"):
             continue
-        value = stripped[len("request:"):].strip()
+        value = stripped[len("request:") :].strip()
         if not value or value.lower() == "none":
             continue
         # Split on em-dash or double-dash

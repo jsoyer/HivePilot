@@ -32,7 +32,6 @@ def discover_local_projects(
                 dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             if ".git" in dirnames:
                 project_path = Path(current_root)
-                repo_name = project_path.name
                 projects.append(
                     ProjectConfig(
                         path=project_path,

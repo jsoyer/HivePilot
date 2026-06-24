@@ -94,7 +94,9 @@ class TestResolveRoleFromDisplay:
 class TestRebuttalFlowAccept:
     """When target replies ACCEPT, ⚖️ stream_resolved is called."""
 
-    def test_rebuttal_accept_emits_shield_then_scales(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_rebuttal_accept_emits_shield_then_scales(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         rebuttal_calls: list[tuple[str, str, str]] = []
         resolved_calls: list[tuple[str, str, str]] = []
         needs_human_calls: list[tuple[str, str, str]] = []
@@ -153,12 +155,15 @@ class TestRebuttalFlowAccept:
         with (
             patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
             patch("hivepilot.roles.resolve_host", return_value=None),
-            patch("hivepilot.roles.get_role", side_effect=lambda k: MagicMock(
-                permission_mode=None,
-                prompt_file=Path("/tmp/nonexistent.md"),
-                display_name="Aliénor" if k == "ceo" else "Victor",
-                title="CEO" if k == "ceo" else "Reviewer",
-            )),
+            patch(
+                "hivepilot.roles.get_role",
+                side_effect=lambda k: MagicMock(
+                    permission_mode=None,
+                    prompt_file=Path("/tmp/nonexistent.md"),
+                    display_name="Aliénor" if k == "ceo" else "Victor",
+                    title="CEO" if k == "ceo" else "Reviewer",
+                ),
+            ),
             patch("hivepilot.services.interaction_service.log_challenge_interaction"),
         ):
             orch._run_rebuttal_round(
@@ -203,15 +208,18 @@ class TestRebuttalFlowEscalation:
         needs_human_calls: list[tuple] = []
 
         monkeypatch.setattr(
-            ns, "stream_rebuttal",
+            ns,
+            "stream_rebuttal",
             lambda actor, target, point: rebuttal_calls.append((actor, target, point)),
         )
         monkeypatch.setattr(
-            ns, "stream_resolved",
+            ns,
+            "stream_resolved",
             lambda actor, target, resolution: resolved_calls.append((actor, target, resolution)),
         )
         monkeypatch.setattr(
-            ns, "stream_needs_human",
+            ns,
+            "stream_needs_human",
             lambda actor, target, point: needs_human_calls.append((actor, target, point)),
         )
 
@@ -223,11 +231,15 @@ class TestRebuttalFlowEscalation:
         ]
 
         plan_task = TaskConfig(
-            description="plan", role="ceo", engine="native",
+            description="plan",
+            role="ceo",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         review_task = TaskConfig(
-            description="review", role="reviewer", engine="native",
+            description="review",
+            role="reviewer",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         orch.tasks = MagicMock()
@@ -244,12 +256,15 @@ class TestRebuttalFlowEscalation:
         with (
             patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
             patch("hivepilot.roles.resolve_host", return_value=None),
-            patch("hivepilot.roles.get_role", side_effect=lambda k: MagicMock(
-                permission_mode=None,
-                prompt_file=Path("/tmp/nonexistent.md"),
-                display_name="Aliénor" if k == "ceo" else "Victor",
-                title="CEO" if k == "ceo" else "Reviewer",
-            )),
+            patch(
+                "hivepilot.roles.get_role",
+                side_effect=lambda k: MagicMock(
+                    permission_mode=None,
+                    prompt_file=Path("/tmp/nonexistent.md"),
+                    display_name="Aliénor" if k == "ceo" else "Victor",
+                    title="CEO" if k == "ceo" else "Reviewer",
+                ),
+            ),
             patch("hivepilot.services.interaction_service.log_challenge_interaction"),
         ):
             orch._run_rebuttal_round(
@@ -319,11 +334,15 @@ class TestConfigGates:
 
         # Wire tasks so validate_pipeline (called at runtime) can resolve stages
         plan_task = TaskConfig(
-            description="plan", role="ceo", engine="native",
+            description="plan",
+            role="ceo",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         review_task = TaskConfig(
-            description="review", role="reviewer", engine="native",
+            description="review",
+            role="reviewer",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         orch.tasks = MagicMock()
@@ -338,8 +357,11 @@ class TestConfigGates:
         def side_effect_run_task(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
-                return [MagicMock(project="p", success=True,
-                                  detail="status: PASS\nsummary:\n- CEO planned.")]
+                return [
+                    MagicMock(
+                        project="p", success=True, detail="status: PASS\nsummary:\n- CEO planned."
+                    )
+                ]
             return [MagicMock(project="p", success=True, detail=challenge_stage_detail)]
 
         with (
@@ -364,7 +386,9 @@ class TestConfigGates:
         # max_challenge_rounds=0 means no rebuttal even when ⚔️ fires
         assert "🛡️" not in icons
 
-    def test_enable_challenge_rounds_false_no_rebuttal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_enable_challenge_rounds_false_no_rebuttal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """enable_challenge_rounds=False → no 🛡️ emitted."""
         import hivepilot.orchestrator as _orch_mod
 
@@ -384,11 +408,15 @@ class TestConfigGates:
 
         # Wire tasks so validate_pipeline (called at runtime) can resolve stages
         plan_task = TaskConfig(
-            description="plan", role="ceo", engine="native",
+            description="plan",
+            role="ceo",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         review_task = TaskConfig(
-            description="review", role="reviewer", engine="native",
+            description="review",
+            role="reviewer",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         orch.tasks = MagicMock()
@@ -403,8 +431,11 @@ class TestConfigGates:
         def side_effect_run_task(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
-                return [MagicMock(project="p", success=True,
-                                  detail="status: PASS\nsummary:\n- CEO planned.")]
+                return [
+                    MagicMock(
+                        project="p", success=True, detail="status: PASS\nsummary:\n- CEO planned."
+                    )
+                ]
             return [MagicMock(project="p", success=True, detail=challenge_stage_detail)]
 
         with (
@@ -449,11 +480,15 @@ class TestEscalationContext:
         ]
 
         plan_task = TaskConfig(
-            description="plan", role="ceo", engine="native",
+            description="plan",
+            role="ceo",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         review_task = TaskConfig(
-            description="review", role="reviewer", engine="native",
+            description="review",
+            role="reviewer",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         orch.tasks = MagicMock()
@@ -470,12 +505,15 @@ class TestEscalationContext:
         with (
             patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
             patch("hivepilot.roles.resolve_host", return_value=None),
-            patch("hivepilot.roles.get_role", side_effect=lambda k: MagicMock(
-                permission_mode=None,
-                prompt_file=Path("/tmp/nonexistent.md"),
-                display_name="Aliénor" if k == "ceo" else "Victor",
-                title="CEO" if k == "ceo" else "Reviewer",
-            )),
+            patch(
+                "hivepilot.roles.get_role",
+                side_effect=lambda k: MagicMock(
+                    permission_mode=None,
+                    prompt_file=Path("/tmp/nonexistent.md"),
+                    display_name="Aliénor" if k == "ceo" else "Victor",
+                    title="CEO" if k == "ceo" else "Reviewer",
+                ),
+            ),
             patch("hivepilot.services.interaction_service.log_challenge_interaction"),
         ):
             orch._run_rebuttal_round(
@@ -494,7 +532,10 @@ class TestEscalationContext:
         resolution_chunks = [c for c in prior_chunks if "Challenge Resolution" in c]
         assert len(resolution_chunks) == 1
         assert "NEEDS_HUMAN" in resolution_chunks[0]
-        assert "Victor (Reviewer)" in resolution_chunks[0] or "challenge" in resolution_chunks[0].lower()
+        assert (
+            "Victor (Reviewer)" in resolution_chunks[0]
+            or "challenge" in resolution_chunks[0].lower()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -513,11 +554,15 @@ class TestSimulateMode:
         orch.registry = MagicMock()
 
         plan_task = TaskConfig(
-            description="plan", role="ceo", engine="native",
+            description="plan",
+            role="ceo",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         review_task = TaskConfig(
-            description="review", role="reviewer", engine="native",
+            description="review",
+            role="reviewer",
+            engine="native",
             steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
         )
         orch.tasks = MagicMock()
@@ -534,12 +579,15 @@ class TestSimulateMode:
         with (
             patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
             patch("hivepilot.roles.resolve_host", return_value=None),
-            patch("hivepilot.roles.get_role", side_effect=lambda k: MagicMock(
-                permission_mode=None,
-                prompt_file=Path("/tmp/nonexistent.md"),
-                display_name="Aliénor" if k == "ceo" else "Victor",
-                title="CEO" if k == "ceo" else "Reviewer",
-            )),
+            patch(
+                "hivepilot.roles.get_role",
+                side_effect=lambda k: MagicMock(
+                    permission_mode=None,
+                    prompt_file=Path("/tmp/nonexistent.md"),
+                    display_name="Aliénor" if k == "ceo" else "Victor",
+                    title="CEO" if k == "ceo" else "Reviewer",
+                ),
+            ),
             patch("hivepilot.services.interaction_service.log_challenge_interaction"),
         ):
             orch._run_rebuttal_round(
