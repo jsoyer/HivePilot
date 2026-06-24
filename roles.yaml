@@ -1,0 +1,147 @@
+# HivePilot agent role definitions.
+# Loaded at startup by hivepilot/roles.py; falls back to built-in _DEFAULT_ROLES on error.
+# prompt_file paths are relative to prompts/agents/.
+
+roles:
+  - name: ceo
+    display_name: "Aliénor"
+    title: "CEO"
+    prompt_file: "ceo.md"
+    model_profile: "architecture"
+    inputs:
+      - roadmap
+      - metrics
+      - customer_feedback
+    outputs:
+      - objectives
+      - priorities
+      - constraints
+    can_block: false
+    order: 1
+    runner: "opencode"
+    models:
+      - "opencode-go/qwen3.7-max"
+      - "opencode-go/kimi-k2.6"
+
+  - name: chief_of_staff
+    display_name: "Jules"
+    title: "Chief of Staff"
+    prompt_file: "chief_of_staff.md"
+    model_profile: "automation"
+    inputs:
+      - objectives
+      - constraints
+      - status_report
+    outputs:
+      - execution_plan
+      - blocker_report
+      - cycle_report
+    can_block: false
+    order: 2
+    runner: "cursor"
+
+  - name: cto
+    display_name: "Blaise"
+    title: "CTO"
+    prompt_file: "cto.md"
+    model_profile: "architecture"
+    inputs:
+      - execution_plan
+      - architecture_docs
+      - tech_debt_log
+    outputs:
+      - technical_spec
+      - adr
+      - rejection_notice
+    can_block: true
+    order: 3
+    runner: "opencode"
+    models:
+      - "opencode-go/kimi-k2.7-code"
+
+  - name: developer
+    display_name: "Gustave"
+    title: "Developer"
+    prompt_file: "developer.md"
+    model_profile: "coding"
+    inputs:
+      - technical_spec
+      - architecture_docs
+      - codebase_context
+    outputs:
+      - implementation
+      - test_suite
+      - implementation_notes
+    can_block: false
+    order: 4
+    runner: "claude"
+    permission_mode: "bypassPermissions"
+
+  - name: reviewer
+    display_name: "Victor"
+    title: "Reviewer"
+    prompt_file: "reviewer.md"
+    model_profile: "coding"
+    inputs:
+      - implementation
+      - technical_spec
+      - test_suite
+    outputs:
+      - review_report
+      - approval
+    can_block: true
+    order: 5
+    runner: "codex"
+    model: "gpt-5.5"
+
+  - name: ciso
+    display_name: "Hugo"
+    title: "CISO"
+    prompt_file: "ciso.md"
+    model_profile: "architecture"
+    inputs:
+      - implementation
+      - review_report
+      - security_policy
+    outputs:
+      - security_report
+      - clearance
+    can_block: true
+    order: 6
+    runner: "opencode"
+    models:
+      - "opencode-go/glm-5.2"
+
+  - name: qa
+    display_name: "Marie"
+    title: "QA"
+    prompt_file: "qa.md"
+    model_profile: "coding"
+    inputs:
+      - implementation
+      - technical_spec
+      - test_suite
+    outputs:
+      - qa_test_suite
+      - test_report
+      - edge_case_log
+    can_block: false
+    order: 7
+    runner: "cursor"
+
+  - name: documentation
+    display_name: "Théo"
+    title: "Documentation"
+    prompt_file: "documentation.md"
+    model_profile: "automation"
+    inputs:
+      - implementation
+      - adr
+      - existing_docs
+    outputs:
+      - updated_docs
+      - updated_adrs
+      - changelog_entry
+    can_block: false
+    order: 8
+    runner: "gemini"

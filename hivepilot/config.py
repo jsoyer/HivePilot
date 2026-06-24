@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     base_dir: Path = Field(default_factory=lambda: Path.cwd())
     projects_file: Path = Path("projects.yaml")
     tasks_file: Path = Path("tasks.yaml")
+    roles_file: Path = Path("roles.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
     policies_file: Path = Path("policies.yaml")
     groups_file: Path = Path("groups.yaml")
