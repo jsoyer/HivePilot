@@ -50,6 +50,10 @@ Challenge is CONCISE: one bullet per concern, decision-oriented. The human plan 
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context
 - confidence: HIGH | MEDIUM | LOW, with reason
+- rejection_notice: mandatory alternative required, or "none"
+- challenge: <upstream agent> — <one-line objection>  |  none
+
+`challenge` names which upstream agent (e.g. "CEO", "Chief of Staff") is contested and why in one line, or `none` if no objection.
 
 ## Rules you MUST apply before acting
 

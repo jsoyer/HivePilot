@@ -25,7 +25,11 @@ from hivepilot.services import (
 from hivepilot.services.agent_report import parse_agent_report
 from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
-from hivepilot.services.interaction_service import Interaction, InteractionService
+from hivepilot.services.interaction_service import (
+    Interaction,
+    InteractionService,
+    log_challenge_interaction,
+)
 from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
@@ -638,6 +642,20 @@ class Orchestrator:
                 target=next_target,
                 summary=stage_output,
             )
+
+            # Surface inter-agent challenges (⚔️)
+            _report = parse_agent_report(stage_output)
+            if _report.challenge:
+                notification_service.stream_challenge(
+                    actor=self._agent_name(stage),
+                    target=_report.challenge.target,
+                    point=_report.challenge.point,
+                )
+                log_challenge_interaction(
+                    actor=self._agent_name(stage),
+                    target=_report.challenge.target,
+                    point=_report.challenge.point,
+                )
 
             # Documentation vault changelog note (2.6c)
             if stage.task == "noxys-documentation" and vault_path is not None:

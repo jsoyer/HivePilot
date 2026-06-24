@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from hivepilot.services import state_service
 from hivepilot.services.obsidian_service import ObsidianService
+from hivepilot.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Domain model
@@ -215,6 +219,43 @@ class InteractionService:
             title=title,
             body=body,
             frontmatter_fields=frontmatter_fields,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def log_challenge_interaction(actor: str, target: str, point: str) -> None:
+    """Record a challenge interaction without requiring an InteractionService instance.
+
+    Best-effort — logs a warning and returns if state_service raises.
+
+    Parameters
+    ----------
+    actor:
+        The agent raising the challenge (e.g. ``"CTO"``).
+    target:
+        The upstream agent being challenged (e.g. ``"Chief of Staff"``).
+    point:
+        One-line objection or concern.
+    """
+    try:
+        timestamp = datetime.now(tz=timezone.utc).isoformat()
+        state_service.record_interaction(
+            actor=actor,
+            action="challenge",
+            target=target or None,
+            summary=point,
+            timestamp=timestamp,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "interaction.challenge_failed",
+            actor=actor,
+            target=target,
+            error=str(exc),
         )
 
 

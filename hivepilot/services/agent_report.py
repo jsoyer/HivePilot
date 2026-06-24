@@ -32,7 +32,17 @@ _KNOWN_FIELDS = {
     "next_handoff",
     "confidence",
     "links",
+    "challenge",
+    "rejection_notice",
 }
+
+
+@dataclass(frozen=True)
+class ChallengeInfo:
+    """Parsed challenge from an agent: who is challenged and why."""
+
+    target: str
+    point: str
 
 
 @dataclass
@@ -47,6 +57,7 @@ class AgentReport:
     confidence: str
     links: list[str]
     raw: str
+    challenge: ChallengeInfo | None = None
 
 
 def to_telegram_text(s: str) -> str:
@@ -123,7 +134,7 @@ def parse_agent_report(text: str) -> AgentReport:  # noqa: C901
 
     # --- Colon style: field_name: value (single line or multi-line block) ---
     colon_re = re.compile(
-        r"^(status|summary|decisions|blockers|next_handoff|confidence|links)[ \t]*:[ \t]*(.*)",
+        r"^(status|summary|decisions|blockers|next_handoff|confidence|links|challenge|rejection_notice)[ \t]*:[ \t]*(.*)",
         re.IGNORECASE | re.MULTILINE,
     )
     for m in colon_re.finditer(text):
@@ -165,6 +176,35 @@ def parse_agent_report(text: str) -> AgentReport:  # noqa: C901
         if stripped and stripped not in links:
             links.append(stripped)
 
+    # --- Parse challenge field ---
+    # Format: "challenge: <upstream agent> — <one-line objection>  |  none"
+    # Fallback: if challenge: absent, try rejection_notice: value as point
+    challenge: ChallengeInfo | None = None
+    challenge_raw = fields.get("challenge", "").strip()
+    _from_rejection_notice = False
+    if not challenge_raw:
+        # Fallback to rejection_notice when challenge field is absent
+        rejection = fields.get("rejection_notice", "").strip()
+        if rejection and rejection.lower() != "none":
+            challenge_raw = rejection
+            _from_rejection_notice = True
+    if challenge_raw and challenge_raw.lower() != "none":
+        # Try em-dash split first, then double-dash
+        if " — " in challenge_raw:
+            target_part, _, point_part = challenge_raw.partition(" — ")
+        elif " -- " in challenge_raw:
+            target_part, _, point_part = challenge_raw.partition(" -- ")
+        else:
+            target_part, point_part = "", challenge_raw
+        target_part = target_part.strip()
+        point_part = point_part.strip()
+        # When falling back from rejection_notice there is no target name in the
+        # value, so accept an empty target to preserve the information.
+        if point_part or (_from_rejection_notice and target_part):
+            effective_point = point_part if point_part else target_part
+            effective_target = target_part if point_part else ""
+            challenge = ChallengeInfo(target=effective_target, point=effective_point)
+
     return AgentReport(
         status=status,
         summary=summary,
@@ -174,4 +214,5 @@ def parse_agent_report(text: str) -> AgentReport:  # noqa: C901
         confidence=confidence,
         links=links,
         raw=text,
+        challenge=challenge,
     )

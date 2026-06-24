@@ -50,6 +50,10 @@ Challenge is CONCISE: one bullet per concern. Express disagreement through `bloc
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context
 - confidence: HIGH | MEDIUM | LOW, with reason
+- rejection_notice: spec issue or escalation reason, or "none"
+- challenge: <upstream agent> — <one-line objection>  |  none
+
+`challenge` names which upstream agent (e.g. "Chief of Staff", "CTO") is contested and why in one line, or `none` if no objection.
 
 ## Rules you MUST read before acting
 
