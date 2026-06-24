@@ -125,6 +125,9 @@ class Settings(BaseSettings):
         default=0,
         description="Max components per fan-out pass (0 = unlimited). env: HIVEPILOT_DEV_BATCH_SIZE",
     )
+    # Challenge rebuttal rounds (Part B)
+    enable_challenge_rounds: bool = True  # run bounded rebuttal when a stage issues a challenge
+    max_challenge_rounds: int = 1  # 1 = one rebuttal + one resolution check
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
