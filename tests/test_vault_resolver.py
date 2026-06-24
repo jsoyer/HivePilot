@@ -33,7 +33,9 @@ def _make_hvac_mock(secret_data: dict) -> types.ModuleType:
     """Build a minimal hvac stub that returns *secret_data* from KV v2."""
     hvac_mod = types.ModuleType("hvac")
     client_instance = MagicMock()
-    client_instance.secrets.kv.v2.read_secret_version.return_value = {"data": {"data": secret_data}}
+    client_instance.secrets.kv.v2.read_secret_version.return_value = {
+        "data": {"data": secret_data}
+    }
     hvac_mod.Client = MagicMock(return_value=client_instance)
     return hvac_mod
 
@@ -66,7 +68,9 @@ class TestFromVault:
             resolver = SecretResolver()
             resolver._from_vault({"path": "secret/data/myapp", "key": "password"})
 
-        hvac_stub.Client.assert_called_once_with(url="http://vault.local:8200", token="root-token")
+        hvac_stub.Client.assert_called_once_with(
+            url="http://vault.local:8200", token="root-token"
+        )
         client_instance = hvac_stub.Client.return_value
         client_instance.secrets.kv.v2.read_secret_version.assert_called_once_with(
             path="secret/data/myapp"
@@ -143,7 +147,9 @@ class TestFromVault:
 
 
 class TestFromSops:
-    def test_returns_correct_value_with_mocked_subprocess(self, tmp_path: Path) -> None:
+    def test_returns_correct_value_with_mocked_subprocess(
+        self, tmp_path: Path
+    ) -> None:
         """With sops binary mocked, _from_sops returns the correct decrypted value."""
         sops_file = tmp_path / "secrets.yaml"
         sops_file.write_text("placeholder", encoding="utf-8")
@@ -185,7 +191,9 @@ class TestFromSops:
             with pytest.raises(RuntimeError, match="decryption failed"):
                 resolver._from_sops({"file": str(sops_file), "key": "api_key"})
 
-    def test_raises_key_error_when_key_not_in_decrypted_output(self, tmp_path: Path) -> None:
+    def test_raises_key_error_when_key_not_in_decrypted_output(
+        self, tmp_path: Path
+    ) -> None:
         """Raises KeyError when the requested key is absent in decrypted content."""
         decrypted_yaml = yaml.safe_dump({"other_key": "some-value"})
 
