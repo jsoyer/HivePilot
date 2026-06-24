@@ -291,9 +291,7 @@ def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[st
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                db.ph(
-                    "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC LIMIT ?"
-                ),
+                db.ph("SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC LIMIT ?"),
                 (tenant, limit),
             ).fetchall()
         else:
@@ -354,9 +352,7 @@ def list_recent_interactions(limit: int = 50, run_id: int | None = None) -> list
     with db.connect() as conn:
         if run_id is not None:
             rows = conn.execute(
-                db.ph(
-                    "SELECT * FROM interactions WHERE run_id=? ORDER BY id DESC LIMIT ?"
-                ),
+                db.ph("SELECT * FROM interactions WHERE run_id=? ORDER BY id DESC LIMIT ?"),
                 (run_id, limit),
             ).fetchall()
         else:
@@ -431,9 +427,7 @@ def get_pending_approvals(tenant: str | None = None) -> list[dict[str, Any]]:
 def get_approval(run_id: int) -> dict[str, Any] | None:
     init_db()
     with db.connect() as conn:
-        row = conn.execute(
-            db.ph("SELECT * FROM approvals WHERE run_id=?"), (run_id,)
-        ).fetchone()
+        row = conn.execute(db.ph("SELECT * FROM approvals WHERE run_id=?"), (run_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -452,13 +446,21 @@ def update_approval(run_id: int, status: str, approver: str | None = None) -> No
         )
 
 
+def update_approval_metadata(run_id: int, metadata: dict[str, Any]) -> None:
+    """Update the metadata JSON blob for an existing approval row."""
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            db.ph("UPDATE approvals SET metadata=? WHERE run_id=?"),
+            (json.dumps(metadata), run_id),
+        )
+
+
 def store_token(entry) -> None:
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                "INSERT OR REPLACE INTO tokens (token, role, note, tenant) VALUES (?, ?, ?, ?)"
-            ),
+            db.ph("INSERT OR REPLACE INTO tokens (token, role, note, tenant) VALUES (?, ?, ?, ?)"),
             (entry.token, entry.role, entry.note, getattr(entry, "tenant", "default")),
         )
 
