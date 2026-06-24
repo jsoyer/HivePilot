@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
 from hivepilot.config import settings
+from hivepilot.services import db
 from hivepilot.utils.logging import get_logger
 
 try:
@@ -18,6 +18,7 @@ except ImportError:
     _METRICS_AVAILABLE = False
 
 logger = get_logger(__name__)
+# Keep DB_PATH as a module-level name: retry_service.py and tests reference it.
 DB_PATH = settings.resolve_path(settings.state_db)
 
 # ---------------------------------------------------------------------------
@@ -91,12 +92,12 @@ class RunStatus(str, Enum):
 
 
 def init_db() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
+    pk = db.autoincrement_pk()
+    with db.connect() as conn:
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {pk},
                 project TEXT,
                 task TEXT,
                 status TEXT,
@@ -107,9 +108,9 @@ def init_db() -> None:
             """
         )
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS steps (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {pk},
                 run_id INTEGER,
                 step TEXT,
                 status TEXT,
@@ -120,9 +121,9 @@ def init_db() -> None:
             """
         )
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS interactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {pk},
                 run_id INTEGER,
                 actor TEXT,
                 action TEXT,
@@ -167,18 +168,18 @@ def init_db() -> None:
             """
         )
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {pk},
                 token_hash TEXT, role TEXT, endpoint TEXT, method TEXT, result TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS retry_queue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {pk},
                 schedule_name TEXT, task TEXT, projects TEXT, error TEXT,
                 attempt INTEGER, max_attempts INTEGER, status TEXT DEFAULT 'pending',
                 next_retry_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -186,21 +187,16 @@ def init_db() -> None:
             """
         )
         # Idempotent migration: add context column if missing
-        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(retry_queue)")}
-        if "context" not in existing_cols:
+        if not db.column_exists(conn, "retry_queue", "context"):
             conn.execute("ALTER TABLE retry_queue ADD COLUMN context TEXT")
         # Idempotent multi-tenant migrations
-        runs_cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
-        if "tenant" not in runs_cols:
+        if not db.column_exists(conn, "runs", "tenant"):
             conn.execute("ALTER TABLE runs ADD COLUMN tenant TEXT DEFAULT 'default'")
-        approvals_cols = {row[1] for row in conn.execute("PRAGMA table_info(approvals)")}
-        if "tenant" not in approvals_cols:
+        if not db.column_exists(conn, "approvals", "tenant"):
             conn.execute("ALTER TABLE approvals ADD COLUMN tenant TEXT DEFAULT 'default'")
-        audit_cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)")}
-        if "tenant" not in audit_cols:
+        if not db.column_exists(conn, "audit_log", "tenant"):
             conn.execute("ALTER TABLE audit_log ADD COLUMN tenant TEXT DEFAULT 'default'")
-        tokens_cols = {row[1] for row in conn.execute("PRAGMA table_info(tokens)")}
-        if "tenant" not in tokens_cols:
+        if not db.column_exists(conn, "tokens", "tenant"):
             conn.execute("ALTER TABLE tokens ADD COLUMN tenant TEXT DEFAULT 'default'")
         conn.execute(
             """
@@ -213,30 +209,29 @@ def init_db() -> None:
             )
             """
         )
-        conn.commit()
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:
     """Record/refresh a worker's health (pull model: hub pinged its /health)."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            """
+            db.ph(
+                """
             INSERT INTO workers (name, url, status, detail, last_seen)
             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(name) DO UPDATE SET
                 url=excluded.url, status=excluded.status,
                 detail=excluded.detail, last_seen=CURRENT_TIMESTAMP
-            """,
+            """
+            ),
             (name, url, status, detail),
         )
-        conn.commit()
 
 
 def list_workers() -> list[dict[str, Any]]:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with db.connect() as conn:
         rows = conn.execute("SELECT * FROM workers ORDER BY name").fetchall()
     return [dict(row) for row in rows]
 
@@ -245,13 +240,12 @@ def record_run_start(
     project: str, task: str, status: str = "running", tenant: str = "default"
 ) -> int:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.execute(
+    with db.connect() as conn:
+        run_id = db.insert_returning_id(
+            conn,
             "INSERT INTO runs (project, task, status, tenant) VALUES (?, ?, ?, ?)",
             (project, task, status, tenant),
         )
-        conn.commit()
-        run_id = cursor.lastrowid
         logger.info(
             "state.run_start",
             run_id=run_id,
@@ -265,12 +259,11 @@ def record_run_start(
 
 def record_step(run_id: int, step: str, status: str, detail: str | None = None) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            "INSERT INTO steps (run_id, step, status, detail) VALUES (?, ?, ?, ?)",
+            db.ph("INSERT INTO steps (run_id, step, status, detail) VALUES (?, ?, ?, ?)"),
             (run_id, step, status, detail),
         )
-        conn.commit()
     if _METRICS_AVAILABLE and _metrics is not None:
         try:
             _metrics.steps_total.labels(status=status).inc()
@@ -280,12 +273,11 @@ def record_step(run_id: int, step: str, status: str, detail: str | None = None) 
 
 def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            "UPDATE runs SET status=?, detail=?, finished_at=CURRENT_TIMESTAMP WHERE id=?",
+            db.ph("UPDATE runs SET status=?, detail=?, finished_at=CURRENT_TIMESTAMP WHERE id=?"),
             (status, detail, run_id),
         )
-        conn.commit()
     logger.info("state.run_complete", run_id=run_id, status=status)
     if _METRICS_AVAILABLE and _metrics is not None:
         try:
@@ -296,26 +288,26 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
 
 def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[str, Any]]:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC LIMIT ?",
+                db.ph(
+                    "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC LIMIT ?"
+                ),
                 (tenant, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
+                db.ph("SELECT * FROM runs ORDER BY started_at DESC LIMIT ?"), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
 
 
 def get_steps_for_run(run_id: int) -> list[dict[str, Any]]:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with db.connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM steps WHERE run_id=? ORDER BY timestamp", (run_id,)
+            db.ph("SELECT * FROM steps WHERE run_id=? ORDER BY timestamp"), (run_id,)
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -330,8 +322,9 @@ def record_interaction(
     metadata: dict[str, Any] | None = None,
 ) -> int:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.execute(
+    with db.connect() as conn:
+        interaction_id = db.insert_returning_id(
+            conn,
             """
             INSERT INTO interactions (run_id, actor, action, target, summary, metadata, timestamp)
             VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
@@ -346,8 +339,6 @@ def record_interaction(
                 timestamp,
             ),
         )
-        conn.commit()
-        interaction_id = cursor.lastrowid
         logger.info(
             "state.interaction",
             interaction_id=interaction_id,
@@ -360,40 +351,44 @@ def record_interaction(
 
 def list_recent_interactions(limit: int = 50, run_id: int | None = None) -> list[dict[str, Any]]:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with db.connect() as conn:
         if run_id is not None:
             rows = conn.execute(
-                "SELECT * FROM interactions WHERE run_id=? ORDER BY id DESC LIMIT ?",
+                db.ph(
+                    "SELECT * FROM interactions WHERE run_id=? ORDER BY id DESC LIMIT ?"
+                ),
                 (run_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM interactions ORDER BY id DESC LIMIT ?", (limit,)
+                db.ph("SELECT * FROM interactions ORDER BY id DESC LIMIT ?"), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
 
 
 def get_schedule_last_run(name: str) -> datetime | None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("SELECT last_run FROM schedule_runs WHERE name=?", (name,)).fetchone()
-    if row and row[0]:
-        return datetime.fromisoformat(row[0])
+    with db.connect() as conn:
+        row = conn.execute(
+            db.ph("SELECT last_run FROM schedule_runs WHERE name=?"), (name,)
+        ).fetchone()
+    if row and row["last_run"]:
+        return datetime.fromisoformat(row["last_run"])
     return None
 
 
 def update_schedule_run(name: str) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            """
+            db.ph(
+                """
             INSERT INTO schedule_runs (name, last_run) VALUES (?, CURRENT_TIMESTAMP)
             ON CONFLICT(name) DO UPDATE SET last_run=CURRENT_TIMESTAMP
-            """,
+            """
+            ),
             (name,),
         )
-        conn.commit()
 
 
 def record_approval_request(
@@ -404,24 +399,26 @@ def record_approval_request(
     tenant: str = "default",
 ) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            """
+            db.ph(
+                """
             INSERT OR REPLACE INTO approvals (run_id, project, task, metadata, status, tenant)
             VALUES (?, ?, ?, ?, 'pending', ?)
-            """,
+            """
+            ),
             (run_id, project, task, json.dumps(metadata), tenant),
         )
-        conn.commit()
 
 
 def get_pending_approvals(tenant: str | None = None) -> list[dict[str, Any]]:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                "SELECT * FROM approvals WHERE status='pending' AND tenant=? ORDER BY requested_at",
+                db.ph(
+                    "SELECT * FROM approvals WHERE status='pending' AND tenant=? ORDER BY requested_at"
+                ),
                 (tenant,),
             ).fetchall()
         else:
@@ -433,58 +430,59 @@ def get_pending_approvals(tenant: str | None = None) -> list[dict[str, Any]]:
 
 def get_approval(run_id: int) -> dict[str, Any] | None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM approvals WHERE run_id=?", (run_id,)).fetchone()
+    with db.connect() as conn:
+        row = conn.execute(
+            db.ph("SELECT * FROM approvals WHERE run_id=?"), (run_id,)
+        ).fetchone()
     return dict(row) if row else None
 
 
 def update_approval(run_id: int, status: str, approver: str | None = None) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            """
+            db.ph(
+                """
             UPDATE approvals
             SET status=?, approved_by=?, approved_at=CURRENT_TIMESTAMP
             WHERE run_id=?
-            """,
+            """
+            ),
             (status, approver, run_id),
         )
-        conn.commit()
 
 
 def store_token(entry) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO tokens (token, role, note, tenant) VALUES (?, ?, ?, ?)",
+            db.ph(
+                "INSERT OR REPLACE INTO tokens (token, role, note, tenant) VALUES (?, ?, ?, ?)"
+            ),
             (entry.token, entry.role, entry.note, getattr(entry, "tenant", "default")),
         )
-        conn.commit()
 
 
 def delete_token(token: str) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM tokens WHERE token=?", (token,))
-        conn.commit()
+    with db.connect() as conn:
+        conn.execute(db.ph("DELETE FROM tokens WHERE token=?"), (token,))
 
 
 def get_token(token: str) -> dict[str, Any] | None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM tokens WHERE token=?", (token,)).fetchone()
+    with db.connect() as conn:
+        row = conn.execute(db.ph("SELECT * FROM tokens WHERE token=?"), (token,)).fetchone()
     return dict(row) if row else None
 
 
 def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
+    with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC", (tenant,)
+                db.ph("SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC"),
+                (tenant,),
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM runs ORDER BY started_at DESC").fetchall()
@@ -500,17 +498,19 @@ def record_audit(
     tenant: str = "default",
 ) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
-            "INSERT INTO audit_log (token_hash, role, endpoint, method, result, tenant) VALUES (?,?,?,?,?,?)",
+            db.ph(
+                "INSERT INTO audit_log (token_hash, role, endpoint, method, result, tenant) VALUES (?,?,?,?,?,?)"
+            ),
             (token_hash, role, endpoint, method, result, tenant),
         )
-        conn.commit()
 
 
 def list_audit_log(limit: int = 100) -> list[dict[str, Any]]:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    with db.connect() as conn:
+        rows = conn.execute(
+            db.ph("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?"), (limit,)
+        ).fetchall()
     return [dict(r) for r in rows]
