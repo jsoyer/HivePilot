@@ -250,10 +250,15 @@ class TestDocumentationVaultWrite:
     """Documentation stage triggers ObsidianService.write_note with correct args."""
 
     def test_write_note_called_for_doc_stage_with_vault(self, tmp_path: Path) -> None:
-        """When task == 'noxys-documentation' and vault_path exists, write_note is called."""
+        """When commits_vault is True and vault_path exists, write_note is called."""
         from hivepilot.orchestrator import RunResult
 
-        pipeline = _make_pipeline(("doc-stage", "noxys-documentation"))
+        pipeline = PipelineConfig(
+            description="test pipeline",
+            stages=[
+                PipelineStage(name="doc-stage", task="noxys-documentation", commits_vault=True)
+            ],
+        )
         orch = _make_orchestrator_with_pipeline(pipeline)
 
         mock_obs = MagicMock()
@@ -358,10 +363,15 @@ class TestDocumentationVaultWrite:
         mock_obs.write_note.assert_not_called()
 
     def test_write_note_not_called_when_vault_path_is_none(self) -> None:
-        """When vault_path is None (vault doesn't exist), write_note must not be called."""
+        """When commits_vault is True but vault_path is None (vault doesn't exist), write_note must not be called."""
         from hivepilot.orchestrator import RunResult
 
-        pipeline = _make_pipeline(("doc-stage", "noxys-documentation"))
+        pipeline = PipelineConfig(
+            description="test pipeline",
+            stages=[
+                PipelineStage(name="doc-stage", task="noxys-documentation", commits_vault=True)
+            ],
+        )
         orch = _make_orchestrator_with_pipeline(pipeline)
 
         mock_obs = MagicMock()
@@ -409,7 +419,12 @@ class TestDocumentationVaultWrite:
         """Frontmatter includes run_id and pipeline fields."""
         from hivepilot.orchestrator import RunResult
 
-        pipeline = _make_pipeline(("doc-stage", "noxys-documentation"))
+        pipeline = PipelineConfig(
+            description="test pipeline",
+            stages=[
+                PipelineStage(name="doc-stage", task="noxys-documentation", commits_vault=True)
+            ],
+        )
         orch = _make_orchestrator_with_pipeline(pipeline)
 
         mock_obs = MagicMock()

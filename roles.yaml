@@ -6,6 +6,7 @@ roles:
   - name: ceo
     display_name: "Aliénor"
     title: "CEO"
+    command_task: "noxys-ceo-intake"
     prompt_file: "ceo.md"
     model_profile: "architecture"
     inputs:
@@ -26,6 +27,7 @@ roles:
   - name: chief_of_staff
     display_name: "Jules"
     title: "Chief of Staff"
+    command_task: "noxys-cos-synthesis"
     prompt_file: "chief_of_staff.md"
     model_profile: "automation"
     inputs:
@@ -43,6 +45,7 @@ roles:
   - name: cto
     display_name: "Blaise"
     title: "CTO"
+    command_task: "noxys-cto-review"
     prompt_file: "cto.md"
     model_profile: "architecture"
     inputs:
@@ -62,6 +65,7 @@ roles:
   - name: developer
     display_name: "Gustave"
     title: "Developer"
+    command_task: "noxys-developer"
     prompt_file: "developer.md"
     model_profile: "coding"
     inputs:
@@ -80,6 +84,7 @@ roles:
   - name: reviewer
     display_name: "Victor"
     title: "Reviewer"
+    command_task: "noxys-reviewer"
     prompt_file: "reviewer.md"
     model_profile: "coding"
     inputs:
@@ -97,6 +102,7 @@ roles:
   - name: ciso
     display_name: "Hugo"
     title: "CISO"
+    command_task: "noxys-ciso"
     prompt_file: "ciso.md"
     model_profile: "architecture"
     inputs:
@@ -115,6 +121,7 @@ roles:
   - name: qa
     display_name: "Marie"
     title: "QA"
+    command_task: "noxys-qa"
     prompt_file: "qa.md"
     model_profile: "coding"
     inputs:
@@ -132,6 +139,7 @@ roles:
   - name: documentation
     display_name: "Théo"
     title: "Documentation"
+    command_task: "noxys-documentation"
     prompt_file: "documentation.md"
     model_profile: "automation"
     inputs:

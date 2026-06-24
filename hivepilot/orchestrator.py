@@ -756,7 +756,9 @@ class Orchestrator:
         )
 
         if simulate:
-            rebuttal_output = f"[simulated rebuttal from {target_agent_name}] DEFEND: My analysis stands."
+            rebuttal_output = (
+                f"[simulated rebuttal from {target_agent_name}] DEFEND: My analysis stands."
+            )
         else:
             rebuttal_output = self.registry.capture_definition(runner_def, payload)
 
@@ -1094,7 +1096,9 @@ class Orchestrator:
                         _rebuttal_policy = policy_service.get_policy(
                             project_names[0] if project_names else pipeline_name
                         )
-                        _rebuttal_project_name = project_names[0] if project_names else pipeline_name
+                        _rebuttal_project_name = (
+                            project_names[0] if project_names else pipeline_name
+                        )
                         self._run_rebuttal_round(
                             challenger_name=_challenger_name,
                             challenge_target=_challenge_target,
@@ -1129,7 +1133,7 @@ class Orchestrator:
                 )
 
             # Documentation vault changelog note (2.6c)
-            if stage.task == "noxys-documentation" and vault_path is not None:
+            if stage.commits_vault and vault_path is not None:
                 doc_svc = ObsidianService(vault_path, dry_run=dry_run)
                 doc_svc.write_note(
                     subpath=f"Docs/changelog-run-{run_id}.md",

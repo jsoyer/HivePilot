@@ -73,54 +73,45 @@ def _format_results(results) -> str:
 # Agent registry — source of truth for direct agent commands
 # ---------------------------------------------------------------------------
 
+
 # Each entry: role_key -> {task, display, aliases (ascii-lowercase only)}
-_AGENT_REGISTRY: dict[str, dict[str, Any]] = {
-    "ceo": {
-        "task": "noxys-ceo-intake",
-        "display": "Aliénor (CEO)",
-        "aliases": ["ceo", "alienor"],
-    },
-    "chief_of_staff": {
-        "task": "noxys-cos-synthesis",
-        "display": "Jules (Chief of Staff)",
-        "aliases": ["cos", "jules"],
-    },
-    "cto": {
-        "task": "noxys-cto-review",
-        "display": "Blaise (CTO)",
-        "aliases": ["cto", "blaise"],
-    },
-    "developer": {
-        "task": "noxys-developer",
-        "display": "Gustave (Developer)",
-        "aliases": ["dev", "developer", "gustave"],
-    },
-    "reviewer": {
-        "task": "noxys-reviewer",
-        "display": "Victor (Reviewer)",
-        "aliases": ["review", "reviewer", "victor"],
-    },
-    "ciso": {
-        "task": "noxys-ciso",
-        "display": "Hugo (CISO)",
-        "aliases": ["ciso", "hugo"],
-    },
-    "qa": {
-        "task": "noxys-qa",
-        "display": "Marie (QA)",
-        "aliases": ["qa", "marie"],
-    },
-    "documentation": {
-        "task": "noxys-documentation",
-        "display": "Théo (Documentation)",
-        "aliases": ["docs", "documentation", "theo"],
-    },
-    "auditor": {
-        "task": None,  # special — handled separately
-        "display": "Henri (Auditor)",
-        "aliases": ["audit", "henri"],
-    },
-}
+# Tasks are sourced from role.command_task so no noxys-* literals live in code.
+def _build_agent_registry() -> dict[str, dict[str, Any]]:
+    from hivepilot.roles import ROLES
+
+    _aliases_by_role: dict[str, list[str]] = {
+        "ceo": ["ceo", "alienor"],
+        "chief_of_staff": ["cos", "jules"],
+        "cto": ["cto", "blaise"],
+        "developer": ["dev", "developer", "gustave"],
+        "reviewer": ["review", "reviewer", "victor"],
+        "ciso": ["ciso", "hugo"],
+        "qa": ["qa", "marie"],
+        "documentation": ["docs", "documentation", "theo"],
+        "auditor": ["audit", "henri"],
+    }
+
+    registry: dict[str, dict[str, Any]] = {}
+    for role_key, aliases in _aliases_by_role.items():
+        role = ROLES.get(role_key)
+        if role is not None:
+            title = role.title
+            display_name = role.display_name or role.name
+            display = f"{display_name} ({title})"
+            task = role.command_task  # None for auditor
+        else:
+            # auditor or unknown — keep entry with no task
+            display = role_key.replace("_", " ").title()
+            task = None
+        registry[role_key] = {
+            "task": task,
+            "display": display,
+            "aliases": aliases,
+        }
+    return registry
+
+
+_AGENT_REGISTRY: dict[str, dict[str, Any]] = _build_agent_registry()
 
 # Build reverse lookup: normalised alias -> role_key
 _ALIAS_TO_ROLE: dict[str, str] = {}
@@ -389,7 +380,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
             None,
             lambda: _get_orch().run_pipeline(
                 project_names=[hub],
-                pipeline_name="noxys-v2",
+                pipeline_name=settings.default_pipeline,
                 extra_prompt=rest,
                 auto_git=True,
                 hub=hub,
@@ -402,7 +393,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
             None,
             lambda: _get_orch().run_pipeline(
                 project_names=[name],
-                pipeline_name="noxys-v2",
+                pipeline_name=settings.default_pipeline,
                 extra_prompt=rest,
                 auto_git=True,
             ),

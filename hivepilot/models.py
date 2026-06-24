@@ -96,6 +96,7 @@ class PipelineStage(BaseModel):
     name: str
     task: str
     pause_before: bool = False  # pause pipeline for human plan approval before this stage
+    commits_vault: bool = False  # stage triggers a vault changelog commit after execution
 
 
 class PipelineConfig(BaseModel):
