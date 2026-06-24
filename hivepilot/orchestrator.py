@@ -22,13 +22,14 @@ from hivepilot.services import (
     policy_service,
     state_service,
 )
-from hivepilot.services.agent_report import parse_agent_report
+from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
 from hivepilot.services.interaction_service import (
     Interaction,
     InteractionService,
     log_challenge_interaction,
+    log_request_interaction,
 )
 from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.services.pipeline_service import validate_pipeline
@@ -459,6 +460,186 @@ class Orchestrator:
                 return f"{role.display_name} ({role.title})"
         return stage.name
 
+    def _handle_agent_requests(
+        self,
+        *,
+        stage_output: str,
+        actor: str,
+        stage: "PipelineStage",
+        project_names: list[str],
+        policy: "policy_service.Policy | None",
+        budget: dict[str, int],
+        depth: int = 0,
+    ) -> str:
+        """Process ``REQUEST: <agent> — <question>`` lines from *stage_output*.
+
+        Guardrails (all enforced, highest-priority first):
+        - ``depth >= settings.max_request_depth`` → skip (depth cap)
+        - ``budget["remaining"] <= 0`` → skip (global budget exhausted)
+        - per-turn cap: honour at most ``settings.max_agent_requests`` requests
+        - anti-cycle guard: skip ``(requester, target)`` pairs seen in this turn
+        - unresolvable target → skip with a warning log
+        - on budget exhaustion or unresolved requests → append NEEDS_HUMAN note
+
+        Each honoured request:
+        1. Streams ❓ (requester → target — question)
+        2. Re-invokes target role via ``capture_definition`` (same pattern as rebuttal)
+        3. Streams ↩️ (target → requester — answer excerpt)
+        4. Logs request + answer interactions
+        5. Appends ``[ANSWER from <target>]: <answer>`` to the returned output
+
+        Never raises — errors are caught and logged.
+        """
+        from typing import cast
+
+        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.roles import get_role, resolve_host, resolve_runner
+        from hivepilot.runners.base import RunnerPayload
+
+        if depth >= settings.max_request_depth:
+            return stage_output
+        if budget["remaining"] <= 0:
+            return stage_output + "\n[NEEDS_HUMAN] Agent request budget exhausted for this run."
+
+        requests_found = parse_agent_requests(stage_output)
+        if not requests_found:
+            return stage_output
+
+        # Per-turn cap
+        requests_to_handle = requests_found[: settings.max_agent_requests]
+        unhandled_count = len(requests_found) - len(requests_to_handle)
+
+        # Anti-cycle guard: track (requester, target) pairs seen this turn
+        seen_pairs: set[tuple[str, str]] = set()
+
+        extra_lines: list[str] = []
+        for target_display, question in requests_to_handle:
+            if budget["remaining"] <= 0:
+                extra_lines.append("[NEEDS_HUMAN] Agent request budget exhausted mid-turn.")
+                break
+
+            # Anti-cycle check
+            pair = (actor, target_display)
+            if pair in seen_pairs:
+                logger.info(
+                    "agent_request.cycle_skipped",
+                    requester=actor,
+                    target=target_display,
+                )
+                continue
+            seen_pairs.add(pair)
+
+            # Resolve target role key
+            target_role_key = _resolve_role_from_display(target_display)
+            if target_role_key is None:
+                logger.info(
+                    "agent_request.target_unresolvable",
+                    requester=actor,
+                    target=target_display,
+                )
+                extra_lines.append(
+                    f"[NEEDS_HUMAN] Could not resolve agent '{target_display}' for request."
+                )
+                continue
+
+            # Stream the request
+            try:
+                notification_service.stream_agent_request(
+                    requester=actor,
+                    target=target_display,
+                    question=question,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("agent_request.stream_failed", error=str(exc))
+
+            # Log the request interaction
+            try:
+                log_request_interaction(actor=actor, target=target_display, question=question)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("agent_request.log_failed", error=str(exc))
+
+            # Re-invoke target role via capture_definition
+            answer = ""
+            try:
+                target_role = get_role(target_role_key)
+                runner_kind, role_model = resolve_runner(target_role_key, policy)
+                role_perm = target_role.permission_mode
+                role_options: dict[str, str] = {}
+                if role_perm:
+                    role_options["permission_mode"] = role_perm
+                req_runner_def = RunnerDefinition(
+                    name=f"request:{target_role_key}",
+                    kind=cast(RunnerKind, runner_kind),
+                    command=None,
+                    model=role_model,
+                    host=resolve_host(target_role_key, policy),
+                    options=role_options,
+                )
+                req_prompt_file = (
+                    str(target_role.prompt_file)
+                    if target_role.prompt_file and target_role.prompt_file.exists()
+                    else ""
+                )
+                req_step = TaskStep(
+                    name=f"request:{target_role_key}",
+                    runner=runner_kind,
+                    prompt_file=req_prompt_file,
+                )
+                request_prompt = (
+                    f"You are {target_display}. A colleague ({actor}) has a specific question.\n\n"
+                    f"QUESTION: {question}\n\n"
+                    "Give a concise, factual answer (under 200 words). "
+                    "Focus only on the question asked."
+                )
+                req_payload = RunnerPayload(
+                    project_name=project_names[0] if project_names else "unknown",
+                    project=None,
+                    task_name=f"request:{target_role_key}",
+                    step=req_step,
+                    metadata={"extra_prompt": request_prompt, "prior_context": ""},
+                    secrets={},
+                )
+                answer = self.registry.capture_definition(req_runner_def, req_payload)
+                budget["remaining"] -= 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "agent_request.invoke_failed",
+                    target_role=target_role_key,
+                    error=str(exc),
+                )
+                extra_lines.append(f"[NEEDS_HUMAN] Request to '{target_display}' failed: {exc}")
+                continue
+
+            # Stream the answer
+            try:
+                notification_service.stream_agent_answer(
+                    target=target_display,
+                    requester=actor,
+                    answer_excerpt=answer[:500],
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("agent_answer.stream_failed", error=str(exc))
+
+            # Log the answer interaction
+            try:
+                log_request_interaction(
+                    actor=target_display, target=actor, question=f"[ANSWER] {answer[:500]}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("agent_answer.log_failed", error=str(exc))
+
+            extra_lines.append(f"[ANSWER from {target_display}]: {answer}")
+
+        if unhandled_count > 0:
+            extra_lines.append(
+                f"[NEEDS_HUMAN] {unhandled_count} request(s) skipped due to per-turn cap "
+                f"(max_agent_requests={settings.max_agent_requests})."
+            )
+
+        if extra_lines:
+            return stage_output + "\n" + "\n".join(extra_lines)
+        return stage_output
+
     def _run_rebuttal_round(
         self,
         *,
@@ -736,6 +917,7 @@ class Orchestrator:
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
         prior_chunks: list[str] = []  # outputs of completed stages, fed to later agents
+        _request_budget: dict[str, int] = {"remaining": settings.max_requests_per_run}
         if seed_context:
             prior_chunks.append(seed_context)
         elif group_mode:
@@ -931,6 +1113,20 @@ class Orchestrator:
                             target=_challenge_target,
                             error=str(_rebuttal_exc),
                         )
+
+            # Tier-2: on-demand agent-to-agent requests (❓/↩️)
+            if settings.enable_agent_requests:
+                _req_policy = policy_service.get_policy(
+                    project_names[0] if project_names else pipeline_name
+                )
+                stage_output = self._handle_agent_requests(
+                    stage_output=stage_output,
+                    actor=self._agent_name(stage),
+                    stage=stage,
+                    project_names=list(project_names),
+                    policy=_req_policy,
+                    budget=_request_budget,
+                )
 
             # Documentation vault changelog note (2.6c)
             if stage.task == "noxys-documentation" and vault_path is not None:

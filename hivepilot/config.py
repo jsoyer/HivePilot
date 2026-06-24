@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     # Challenge rebuttal rounds (Part B)
     enable_challenge_rounds: bool = True  # run bounded rebuttal when a stage issues a challenge
     max_challenge_rounds: int = 1  # 1 = one rebuttal + one resolution check
+    # Tier-2: on-demand orchestrator-mediated agent requests
+    enable_agent_requests: bool = True
+    max_agent_requests: int = 3        # per stage turn (max REQUEST: lines honoured)
+    max_request_depth: int = 2         # recursion depth cap (requests from answers)
+    max_requests_per_run: int = 20     # global budget per pipeline run
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod

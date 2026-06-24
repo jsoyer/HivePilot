@@ -216,3 +216,35 @@ def parse_agent_report(text: str) -> AgentReport:  # noqa: C901
         raw=text,
         challenge=challenge,
     )
+
+
+def parse_agent_requests(text: str) -> list[tuple[str, str]]:
+    """Parse ``REQUEST: <agent> — <question>`` lines from agent output.
+
+    Returns a list of ``(target_agent, question)`` tuples.  Ignores malformed
+    lines (missing separator, empty question, or ``none`` placeholder).
+
+    Mirrors the tolerance of :func:`parse_agent_report` — never raises.
+    """
+    results: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        # Accept both "request:" (lowercase field) and "REQUEST:" (uppercase)
+        if not stripped.lower().startswith("request:"):
+            continue
+        value = stripped[len("request:"):].strip()
+        if not value or value.lower() == "none":
+            continue
+        # Split on em-dash or double-dash
+        if " — " in value:
+            target, _, question = value.partition(" — ")
+        elif " -- " in value:
+            target, _, question = value.partition(" -- ")
+        else:
+            # No separator — cannot determine target; skip
+            continue
+        target = target.strip()
+        question = question.strip()
+        if target and question:
+            results.append((target, question))
+    return results

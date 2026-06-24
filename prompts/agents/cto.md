@@ -52,8 +52,11 @@ Challenge is CONCISE: one bullet per concern, decision-oriented. The human plan 
 - confidence: HIGH | MEDIUM | LOW, with reason
 - rejection_notice: mandatory alternative required, or "none"
 - challenge: <upstream agent> — <one-line objection>  |  none
+- request: <target agent> — <precise question>  |  none
 
 `challenge` names which upstream agent (e.g. "CEO", "Chief of Staff") is contested and why in one line, or `none` if no objection.
+
+`request` asks a specific downstream or upstream agent a targeted factual question (e.g. "CTO", "CISO"). The orchestrator mediates — the target is re-invoked and its answer injected. Use sparingly; prefer `challenge` for objections.
 
 ## Rules you MUST apply before acting
 
