@@ -9,6 +9,14 @@ from typing import Any
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
 
+try:
+    from hivepilot.services import metrics as _metrics  # noqa: F401
+
+    _METRICS_AVAILABLE = True
+except ImportError:
+    _metrics = None  # type: ignore[assignment]
+    _METRICS_AVAILABLE = False
+
 logger = get_logger(__name__)
 DB_PATH = settings.resolve_path(settings.state_db)
 
@@ -241,6 +249,11 @@ def record_step(run_id: int, step: str, status: str, detail: str | None = None) 
             (run_id, step, status, detail),
         )
         conn.commit()
+    if _METRICS_AVAILABLE and _metrics is not None:
+        try:
+            _metrics.steps_total.labels(status=status).inc()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
@@ -252,6 +265,11 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
         )
         conn.commit()
     logger.info("state.run_complete", run_id=run_id, status=status)
+    if _METRICS_AVAILABLE and _metrics is not None:
+        try:
+            _metrics.runs_total.labels(status=status).inc()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def list_recent_runs(limit: int = 50) -> list[dict[str, Any]]:

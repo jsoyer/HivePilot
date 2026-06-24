@@ -12,6 +12,14 @@ import questionary
 
 from hivepilot.config import settings
 from hivepilot.models import PipelineStage, ProjectConfig, TaskConfig, TaskStep
+
+try:
+    from hivepilot.services import metrics as _metrics  # noqa: F401
+
+    _METRICS_AVAILABLE = True
+except ImportError:
+    _metrics = None  # type: ignore[assignment]
+    _METRICS_AVAILABLE = False
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager
 from hivepilot.registry import RunnerRegistry
@@ -1084,6 +1092,11 @@ class Orchestrator:
                     target=_challenge_target,
                     point=_challenge_point,
                 )
+                if _METRICS_AVAILABLE and _metrics is not None:
+                    try:
+                        _metrics.challenges_total.inc()
+                    except Exception:  # noqa: BLE001
+                        pass
                 log_challenge_interaction(
                     actor=_challenger_name,
                     target=_challenge_target,
@@ -1623,6 +1636,13 @@ class Orchestrator:
                                     to_runner=_next_kind,
                                     reset_at=str(_quota_err.reset_at),
                                 )
+                                if _METRICS_AVAILABLE and _metrics is not None:
+                                    try:
+                                        _metrics.quota_fallbacks_total.labels(
+                                            to_runner=_next_kind
+                                        ).inc()
+                                    except Exception:  # noqa: BLE001
+                                        pass
                                 _runner_def_to_try = RunnerDefinition(
                                     name=f"role:{task.role}:{_next_kind}",
                                     kind=cast(RunnerKind, _next_kind),

@@ -8,12 +8,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest
+from prometheus_client import generate_latest
 from pydantic import BaseModel, field_validator
 
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import chatops_service, state_service, token_service
+from hivepilot.services.metrics import registry, run_duration_seconds
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 
 app = FastAPI(
@@ -118,11 +119,6 @@ def _get_orchestrator() -> Orchestrator:
     return _orchestrator
 
 
-registry = CollectorRegistry()
-run_counter = Counter("hivepilot_runs_total", "Total runs", ["status"], registry=registry)
-run_duration = Histogram("hivepilot_run_duration_seconds", "Run duration", registry=registry)
-
-
 def require_role(required: str):
     async def dependency(request: Request, authorization: str = Header(None)):
         if not authorization or not authorization.startswith("Bearer "):
@@ -213,18 +209,52 @@ def health():
     return {"status": overall, "checks": checks}
 
 
+@v1.get("/healthz")
+@app.get("/healthz")
+def healthz():
+    """Liveness probe — alias for /health returning a minimal ok payload."""
+    return {"status": "ok"}
+
+
+@v1.get("/readyz")
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe: checks DB and config reachability."""
+    checks: dict[str, str] = {}
+
+    # Check (a): state DB reachable
+    try:
+        state_service.init_db()
+        checks["db"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["db"] = f"error: {exc}"
+
+    # Check (b): core config loads
+    try:
+        from hivepilot.services.project_service import load_projects
+
+        load_projects()
+        checks["config"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["config"] = f"error: {exc}"
+
+    failing = [k for k, v in checks.items() if v != "ok"]
+    if failing:
+        raise HTTPException(status_code=503, detail={"ready": False, "checks": checks})
+
+    return {"ready": True, "checks": checks}
+
+
 @v1.post("/run", dependencies=[Depends(require_role("run"))])
 @app.post("/run", dependencies=[Depends(require_role("run"))])
 def run_task(request: RunRequest):
-    with run_duration.time():
+    with run_duration_seconds.time():
         results = _get_orchestrator().run_task(
             project_names=request.projects,
             task_name=request.task,
             extra_prompt=request.extra_prompt,
             auto_git=request.auto_git,
         )
-    for result in results:
-        run_counter.labels(status="success" if result.success else "failure").inc()
     return {"results": [result.__dict__ for result in results]}
 
 
@@ -255,14 +285,13 @@ class ApprovalAction(BaseModel):
 @v1.post("/approvals/{run_id}", dependencies=[Depends(require_role("approve"))])
 @app.post("/approvals/{run_id}", dependencies=[Depends(require_role("approve"))])
 def handle_approval(run_id: int, action: ApprovalAction):
-    with run_duration.time():
+    with run_duration_seconds.time():
         result = _get_orchestrator().run_approved(
             run_id=run_id,
             approve=action.approve,
             approver=action.approver,
             reason=action.reason,
         )
-    run_counter.labels(status="success" if result.success else "failure").inc()
     return {"result": result.__dict__}
 
 
