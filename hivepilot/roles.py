@@ -18,11 +18,15 @@ Model profile assignments (all Claude for Phase 1):
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+import yaml
 from pydantic import BaseModel
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts" / "agents"
+
+log = logging.getLogger(__name__)
 
 
 class Role(BaseModel):
@@ -48,7 +52,7 @@ class Role(BaseModel):
     permission_mode: str | None = None
 
 
-ROLES: dict[str, Role] = {
+_DEFAULT_ROLES: dict[str, Role] = {
     "ceo": Role(
         name="ceo",
         display_name="Aliénor",
@@ -158,6 +162,59 @@ ROLES: dict[str, Role] = {
         runner="gemini",
     ),
 }
+
+
+def load_roles() -> dict[str, Role]:
+    """Load roles from the configured roles_file (roles.yaml).
+
+    Resolution order (via settings.resolve_config_path):
+      1. $XDG_CONFIG_HOME/hivepilot/roles.yaml
+      2. config_repo/roles.yaml
+      3. base_dir/roles.yaml  (cwd fallback — repo root in dev)
+
+    Each YAML entry's ``prompt_file`` is treated as a filename relative to
+    ``prompts/agents/`` — the loader prepends ``_PROMPTS_DIR`` before
+    constructing the Role, so resolved paths are identical to _DEFAULT_ROLES.
+
+    On FileNotFoundError or any parse / validation error, logs a warning and
+    returns _DEFAULT_ROLES so the application is never left without roles.
+    """
+    from hivepilot.config import settings  # local import to avoid circular at module load
+
+    roles_path = settings.resolve_config_path(settings.roles_file)
+    try:
+        raw = yaml.safe_load(roles_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        log.warning("roles.yaml not found at %s — using built-in defaults", roles_path)
+        return _DEFAULT_ROLES
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to read roles.yaml (%s) — using built-in defaults: %s", roles_path, exc)
+        return _DEFAULT_ROLES
+
+    try:
+        entries: list[dict] = raw["roles"]
+        result: dict[str, Role] = {}
+        for entry in entries:
+            entry = dict(entry)  # shallow copy so we don't mutate the parsed data
+            prompt_filename = entry.pop("prompt_file")
+            entry["prompt_file"] = _PROMPTS_DIR / prompt_filename
+            role = Role(**entry)
+            result[role.name] = role
+        return result
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to parse roles.yaml — using built-in defaults: %s", exc)
+        return _DEFAULT_ROLES
+
+
+def refresh_roles() -> None:
+    """Re-load roles from disk and update the module-level ROLES dict in-place."""
+    global ROLES  # noqa: PLW0603
+    ROLES = load_roles()
+
+
+# Module-level ROLES dict — sourced from roles.yaml at import time.
+# Falls back to _DEFAULT_ROLES if the file is missing or invalid.
+ROLES: dict[str, Role] = load_roles()
 
 
 def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, str | None]:
