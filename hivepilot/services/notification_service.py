@@ -29,6 +29,7 @@ _ICON_LABELS = {
     "⏸️": "approval needed",
     "💬": "proposal",
     "⚖️": "synthesis",
+    "⚔️": "challenge",
 }
 
 # Status badge mapping for the rich HTML card.
@@ -363,6 +364,22 @@ def stream_agent_turn(
         pass  # Telegram not set up — streaming is best-effort
     except Exception as exc:  # noqa: BLE001
         logger.warning("stream.failed", error=str(exc))
+
+
+def stream_challenge(actor: str, target: str, point: str) -> None:
+    """Stream a ⚔️ challenge turn: *actor* contests *target*'s output.
+
+    Mirrors :func:`stream_agent_turn` — best-effort, never raises.
+    """
+    try:
+        stream_agent_turn(
+            actor=actor,
+            target=target,
+            summary=point,
+            icon="⚔️",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.challenge_failed", actor=actor, target=target, error=str(exc))
 
 
 def send_approval_keyboard(

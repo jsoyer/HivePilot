@@ -61,6 +61,10 @@ Challenge is CONCISE: one bullet per conflict, decision-oriented. Express disagr
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context
 - confidence: HIGH | MEDIUM | LOW, with reason
+- rejection_notice: conflict or escalation reason, or "none"
+- challenge: <upstream agent> — <one-line objection>  |  none
+
+`challenge` names which upstream agent (e.g. "CEO", "CTO", "CISO") is contested and why in one line, or `none` if no objection.
 
 ## Rules you MUST read before acting
 

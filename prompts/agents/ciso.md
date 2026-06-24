@@ -49,6 +49,10 @@ Challenge is CONCISE: one bullet per concern, decision-oriented. Express disagre
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context
 - confidence: HIGH | MEDIUM | LOW, with reason
+- rejection_notice: clearance block reason with mandatory remediation steps, or "none"
+- challenge: <upstream agent> — <one-line objection>  |  none
+
+`challenge` names which upstream agent (e.g. "CEO", "CTO") is contested and why in one line, or `none` if no objection.
 
 A report without an explicit verdict is invalid.
 
