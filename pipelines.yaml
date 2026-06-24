@@ -23,6 +23,7 @@ pipelines:
         task: noxys-qa
       - name: Documentation
         task: noxys-documentation
+        commits_vault: true
       - name: Report
         task: noxys-cos-report
       - name: Approval
@@ -54,6 +55,7 @@ pipelines:
         task: noxys-qa
       - name: Documentation
         task: noxys-documentation
+        commits_vault: true
       - name: PR Approval
         task: noxys-cos-pr-approval
 

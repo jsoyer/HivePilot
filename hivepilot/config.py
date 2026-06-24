@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Default target (project or group) for direct agent orders when no @target is
     # given (Telegram /ask, /dev, … and @mention routing). Required by telegram_bot.
     default_target: str = "noxys"
+    # Default pipeline name used by @mention and /run commands. Deployment-specific;
+    # override via env HIVEPILOT_DEFAULT_PIPELINE.
+    default_pipeline: str = "noxys-v2"
     claude_command: str = "claude"
     # Permission mode passed to `claude --print` so the developer agent can edit
     # files autonomously in headless mode. Without it, claude blocks waiting for

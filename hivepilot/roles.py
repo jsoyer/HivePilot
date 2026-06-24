@@ -50,6 +50,9 @@ class Role(BaseModel):
     # write code AND run tests autonomously). Without it, `claude --print` blocks
     # on an interactive permission prompt it cannot show and the run hangs.
     permission_mode: str | None = None
+    # Task name that direct-agent commands (/ask <agent>, /dev, etc.) run for
+    # this role. None means the role has no direct-command task (e.g. auditor).
+    command_task: str | None = None
 
 
 _DEFAULT_ROLES: dict[str, Role] = {
@@ -65,6 +68,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         order=1,
         runner="opencode",
         models=["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"],
+        command_task="noxys-ceo-intake",
     ),
     "chief_of_staff": Role(
         name="chief_of_staff",
@@ -77,6 +81,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         can_block=False,
         order=2,
         runner="cursor",
+        command_task="noxys-cos-synthesis",
     ),
     "cto": Role(
         name="cto",
@@ -92,6 +97,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         # Single opencode model (claude brain removed to spare the claude quota the
         # developer stage needs). One model → runs single, no dual-model debate.
         models=["opencode-go/kimi-k2.7-code"],
+        command_task="noxys-cto-review",
     ),
     "developer": Role(
         name="developer",
@@ -108,6 +114,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         # (TDD) without confirmation prompts. The human plan checkpoint gates the
         # pipeline before this stage, and execution is scoped to the component repo.
         permission_mode="bypassPermissions",
+        command_task="noxys-developer",
     ),
     "reviewer": Role(
         name="reviewer",
@@ -121,6 +128,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         order=5,
         runner="codex",
         model="gpt-5.5",
+        command_task="noxys-reviewer",
     ),
     "ciso": Role(
         name="ciso",
@@ -136,6 +144,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         # Single opencode model (claude brain removed to spare the claude quota the
         # developer stage needs). One model → runs single, no dual-model debate.
         models=["opencode-go/glm-5.2"],
+        command_task="noxys-ciso",
     ),
     "qa": Role(
         name="qa",
@@ -148,6 +157,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         can_block=False,
         order=7,
         runner="cursor",
+        command_task="noxys-qa",
     ),
     "documentation": Role(
         name="documentation",
@@ -160,6 +170,7 @@ _DEFAULT_ROLES: dict[str, Role] = {
         can_block=False,
         order=8,
         runner="gemini",
+        command_task="noxys-documentation",
     ),
 }
 
