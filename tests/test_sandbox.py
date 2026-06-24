@@ -69,6 +69,31 @@ def test_scrub_env_empty_env() -> None:
     assert scrub_env({}) == {}
 
 
+def test_scrub_env_empty_allowlist_falls_back_to_default() -> None:
+    """An empty allowlist [] must fall back to DEFAULT_ALLOWLIST, not strip all env.
+
+    Regression test for the bug where ``if allowlist is None`` allowed an
+    explicit ``[]`` to be treated as "allow nothing", stripping PATH,
+    ANTHROPIC_API_KEY, and every other key from the subprocess environment.
+    """
+    from hivepilot.utils.sandbox import scrub_env
+
+    env = {
+        "PATH": "/x",
+        "ANTHROPIC_API_KEY": "k",
+        "SSH_AUTH_SOCK": "s",
+    }
+    result = scrub_env(env, allowlist=[])
+
+    assert "PATH" in result, "PATH must be kept when allowlist=[] falls back to DEFAULT_ALLOWLIST"
+    assert "ANTHROPIC_API_KEY" in result, (
+        "ANTHROPIC_API_KEY must be kept when allowlist=[] falls back to DEFAULT_ALLOWLIST"
+    )
+    assert "SSH_AUTH_SOCK" not in result, (
+        "SSH_AUTH_SOCK must still be dropped (not on DEFAULT_ALLOWLIST)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # wrap_bwrap tests
 # ---------------------------------------------------------------------------
