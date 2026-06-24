@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
 
+    # Database backend — None keeps SQLite at state_db (default); set to
+    # "postgresql://..." to switch to Postgres (requires psycopg[binary]).
+    # env: HIVEPILOT_DATABASE_URL
+    database_url: str | None = None
+
     # Token-saving caching (L1-L3)
     anthropic_prompt_cache: bool = True  # add cache_control to Anthropic system block (L1)
     prior_context_mode: str = "cap"  # full | synthesis | cap (L2)
