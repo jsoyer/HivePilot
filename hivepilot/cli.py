@@ -672,10 +672,6 @@ def schedule_run(
             typer.echo("  Failed — enqueued for retry")
 
 
-if __name__ == "__main__":
-    app()
-
-
 @approvals_app.command("list")
 def approvals_list(
     token: str | None = typer.Option(
@@ -1248,7 +1244,7 @@ def discord_notify(
         raise typer.Exit(1)
 
 
-@app.command("init")
+@app.command("init-template")
 def init_project(
     template: str = typer.Argument("minimal", help="Template name: minimal, blog, iac, security"),
     project_name: Optional[str] = typer.Option(None, "--name", "-n", help="Project name"),
@@ -1848,3 +1844,50 @@ def workers(
         return
     for w in rows:
         typer.echo(f"{w['status']:<11} {w['url']}  (seen {w.get('last_seen')})")
+
+
+@app.command("init")
+def init_config(
+    target_dir: Path = typer.Argument(Path("."), help="Directory to scaffold into"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing files"),
+) -> None:
+    """Scaffold a fresh generic HivePilot deployment config."""
+    from hivepilot.scaffold.templates import scaffold_config
+
+    try:
+        created = scaffold_config(target_dir, force=force)
+    except FileExistsError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    for path in created:
+        typer.echo(f"  created  {path.relative_to(target_dir.resolve())}")
+
+    typer.echo("")
+    typer.echo("Config scaffolded. Next steps:")
+    typer.echo("  1. Edit projects.yaml — add your real project names and paths.")
+    typer.echo("  2. Edit roles.yaml   — customise agent roles as needed.")
+    typer.echo("  3. Edit pipelines.yaml and tasks.yaml — wire up your workflow.")
+    typer.echo("  4. Copy .env.example to .env and fill in your credentials.")
+    typer.echo("  5. Run: hivepilot validate  — to check cross-references.")
+
+
+@app.command("validate")
+def validate(
+    config_dir: Path = typer.Option(Path("."), "--dir", "-d", help="Config directory to validate"),
+) -> None:
+    """Validate cross-references in a HivePilot config directory."""
+    from hivepilot.services.config_validation import validate_config
+
+    problems = validate_config(base_dir=config_dir)
+    if not problems:
+        typer.echo("OK")
+        return
+
+    for problem in problems:
+        typer.echo(f"  ERROR  {problem}", err=True)
+    raise typer.Exit(1)
+
+
+if __name__ == "__main__":
+    app()
