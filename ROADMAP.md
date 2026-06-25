@@ -20,6 +20,45 @@
 - Phase 23b -- Telegram Bot (dual-mode)
 - Phase 17d -- Linear Integration
 - Phase 17e -- Notion Integration
+- Clean Release / Config Split -- Engine generic, noxys config → `examples/noxys/`
+  - All noxys config YAMLs (`roles`, `projects`, `policies`, `groups`, `pipelines`, `tasks`,
+    `schedules`, `model_profiles`) and `prompts/` moved to `examples/noxys/`
+  - All service loaders fixed to use `resolve_config_path` (not raw `resolve_path`)
+  - `HIVEPILOT_CONFIG_REPO=examples/noxys` activates the noxys deployment
+
+---
+
+## Backlog (prioritised)
+
+### 1. Validate autonomous loop + finish SIEM ⭐
+All code is unit-tested but **never validated in a real run**. SIEM is barely started.
+`noxys-developer` runs = 3 success / 0 deferred / 13 failed (13 = old pre-auto-resume crash).
+
+- [ ] Re-run the SIEM fan-out with `HIVEPILOT_DEV_BATCH_SIZE=3` (quota-resilient)
+- [ ] Validate end-to-end: fallback claude→codex→cursor produces code; worktree isolation
+      keeps the real repo intact; topics per agent created; auto-resume resumes on reset
+- [ ] Reviewer (Victor) → open PRs → merge SIEM noxys-api (human merge)
+- [ ] Finish the ~12 remaining SIEM components
+- [ ] Purge/rerun the 13 `failed` runs
+
+### 2. Distribution — de-noxys-ify remaining hardcodes
+Config split done. Remaining hardcodes:
+
+- [ ] `_NOXYS_ROOT` hardcoded in `agent_rules.py` (used by 2 runners for `governance_repo`)
+      → move to a `governance_repo` setting in config
+- [ ] `obsidian_vault` default path hardcoded → config / onboarding
+- [ ] NOXYS_* constants and FR agent names → config templates (not engine code)
+- [ ] Packaging: `pip install hivepilot`, `hivepilot init` (scaffolds generic config), generic quickstart doc
+
+### 3. Hygiene
+- [ ] Add `.hivepilot-wt/` to `.gitignore` of component repos (disposable worktrees)
+- [ ] Sort branches `hivepilot/noxys-api` + `feat/siem-*` (merge or delete)
+- [ ] Purge stale `.claude/worktrees/agent-*` worktrees (Claude Code leftovers)
+
+### 4. Polish
+- [ ] Update docs: quota-resilience, worktree isolation, /ask + alias + @mentions, topics
+- [ ] Validate Henri (vibe/Mistral auditor) produces a useful audit in a real cycle
+- [ ] Confirm concise message rendering + clickable vault links on a real run
 
 ---
 

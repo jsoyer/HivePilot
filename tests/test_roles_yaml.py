@@ -3,8 +3,9 @@ Tests for YAML-backed role loading (roles.yaml → load_roles()).
 
 Covers:
 - load_roles() parses roles.yaml and produces roles matching _DEFAULT_ROLES
+  when HIVEPILOT_CONFIG_REPO=examples/noxys is active
 - Missing roles.yaml triggers graceful fallback to _DEFAULT_ROLES
-- prompt_file Path is resolved identically to the built-in defaults
+- prompt_file Path is resolved via resolve_config_path (not _PROMPTS_DIR)
 """
 
 from __future__ import annotations
@@ -13,13 +14,30 @@ from pathlib import Path
 from unittest.mock import patch
 
 
+def _mock_settings_for_noxys() -> object:
+    """Return a mock settings object that resolves config from examples/noxys/."""
+    from hivepilot.config import Settings
+
+    return Settings(config_repo=str(Path(__file__).parent.parent / "examples" / "noxys"))
+
+
 class TestLoadRolesFromYaml:
     """load_roles() with the real roles.yaml must match the built-in defaults."""
 
     def test_load_roles_from_yaml_matches_defaults(self):
+        from hivepilot import roles as roles_module
         from hivepilot.roles import _DEFAULT_ROLES, load_roles
 
-        loaded = load_roles()
+        noxys_settings = _mock_settings_for_noxys()
+        with patch.object(roles_module, "load_roles", wraps=load_roles):
+            import hivepilot.config as config_module
+
+            original_settings = config_module.settings
+            try:
+                config_module.settings = noxys_settings
+                loaded = load_roles()
+            finally:
+                config_module.settings = original_settings
 
         assert set(loaded.keys()) == set(_DEFAULT_ROLES.keys()), (
             f"Loaded role keys {set(loaded.keys())} != default keys {set(_DEFAULT_ROLES.keys())}"
@@ -47,13 +65,31 @@ class TestLoadRolesFromYaml:
     def test_load_roles_returns_eight_roles(self):
         from hivepilot.roles import load_roles
 
-        loaded = load_roles()
+        noxys_settings = _mock_settings_for_noxys()
+        import hivepilot.config as config_module
+
+        original_settings = config_module.settings
+        try:
+            config_module.settings = noxys_settings
+            loaded = load_roles()
+        finally:
+            config_module.settings = original_settings
+
         assert len(loaded) == 8
 
     def test_load_roles_inputs_outputs_match_defaults(self):
         from hivepilot.roles import _DEFAULT_ROLES, load_roles
 
-        loaded = load_roles()
+        noxys_settings = _mock_settings_for_noxys()
+        import hivepilot.config as config_module
+
+        original_settings = config_module.settings
+        try:
+            config_module.settings = noxys_settings
+            loaded = load_roles()
+        finally:
+            config_module.settings = original_settings
+
         for name, default_role in _DEFAULT_ROLES.items():
             loaded_role = loaded[name]
             assert loaded_role.inputs == default_role.inputs, f"{name}: inputs mismatch"
@@ -118,24 +154,42 @@ class TestAbsentFileFallback:
 
 
 class TestPromptFileResolution:
-    """Resolved prompt_file paths must be identical between YAML-loaded and defaults."""
+    """Resolved prompt_file paths must be under the config_repo prompts/agents/ dir."""
 
-    def test_prompt_file_resolves_identically(self):
-        from hivepilot.roles import _DEFAULT_ROLES, load_roles
+    def test_prompt_file_resolves_via_config_repo(self):
+        """YAML-loaded roles must resolve prompt_file via resolve_config_path (config_repo)."""
+        from hivepilot.roles import load_roles
 
-        loaded = load_roles()
-        for name, loaded_role in loaded.items():
-            default_role = _DEFAULT_ROLES[name]
-            assert loaded_role.prompt_file == default_role.prompt_file, (
-                f"Role '{name}': prompt_file mismatch.\n"
-                f"  loaded:  {loaded_role.prompt_file}\n"
-                f"  default: {default_role.prompt_file}"
+        noxys_settings = _mock_settings_for_noxys()
+        import hivepilot.config as config_module
+
+        original_settings = config_module.settings
+        try:
+            config_module.settings = noxys_settings
+            loaded = load_roles()
+        finally:
+            config_module.settings = original_settings
+
+        noxys_prompts_dir = Path(__file__).parent.parent / "examples" / "noxys" / "prompts" / "agents"
+        for name, role in loaded.items():
+            assert role.prompt_file.parent == noxys_prompts_dir, (
+                f"Role '{name}': prompt_file should be under examples/noxys/prompts/agents/, "
+                f"got {role.prompt_file}"
             )
 
     def test_prompt_files_are_absolute_paths(self):
         from hivepilot.roles import load_roles
 
-        loaded = load_roles()
+        noxys_settings = _mock_settings_for_noxys()
+        import hivepilot.config as config_module
+
+        original_settings = config_module.settings
+        try:
+            config_module.settings = noxys_settings
+            loaded = load_roles()
+        finally:
+            config_module.settings = original_settings
+
         for name, role in loaded.items():
             assert role.prompt_file.is_absolute(), (
                 f"Role '{name}': prompt_file should be absolute, got {role.prompt_file}"
@@ -144,7 +198,16 @@ class TestPromptFileResolution:
     def test_prompt_files_contain_agents_subdir(self):
         from hivepilot.roles import load_roles
 
-        loaded = load_roles()
+        noxys_settings = _mock_settings_for_noxys()
+        import hivepilot.config as config_module
+
+        original_settings = config_module.settings
+        try:
+            config_module.settings = noxys_settings
+            loaded = load_roles()
+        finally:
+            config_module.settings = original_settings
+
         for name, role in loaded.items():
             assert "agents" in role.prompt_file.parts, (
                 f"Role '{name}': prompt_file should be under prompts/agents/, "

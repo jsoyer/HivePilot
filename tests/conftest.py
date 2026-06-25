@@ -74,6 +74,28 @@ def _isolate_state_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _use_noxys_config_repo(monkeypatch):
+    """Point config_repo at examples/noxys/ for every test.
+
+    After the clean-release refactor, noxys config files (roles.yaml, tasks.yaml,
+    pipelines.yaml, …) live under examples/noxys/ rather than the repo root.
+    All service loaders call settings.resolve_config_path(), which checks
+    config_repo first.  Patching the config_repo field on the shared settings
+    singleton makes every loader find the files without per-test setup.
+
+    Tests that need a different config_repo (or no config at all) override this
+    via their own monkeypatch.setattr / patch.object calls, which take priority.
+    """
+    from pathlib import Path
+
+    import hivepilot.config as config_module
+
+    noxys_dir = str(Path(__file__).parent.parent / "examples" / "noxys")
+    monkeypatch.setattr(config_module.settings, "config_repo", noxys_dir)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_outbound_notifications(monkeypatch):
     """Tests must NEVER send real Slack/Discord/Telegram messages.
 

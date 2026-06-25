@@ -1,22 +1,41 @@
-# Noxys Deployment Example
+# Noxys Deployment Config
 
-The live Noxys deployment configuration lives at the **repository root** — not in this
-directory.  The following files are the real, actively-used config for the Noxys
-product:
+This directory contains the active HivePilot configuration for the **Noxys**
+deployment.  It is also the canonical reference example for a production
+HivePilot config.
 
 ```
-projects.yaml   — project definitions (noxys + all component repos)
-roles.yaml      — agent role definitions (CEO, CTO, developer, reviewer, …)
-policies.yaml   — per-project policy overrides
-groups.yaml     — component groups (noxys group → all noxys-* repos)
-pipelines.yaml  — pipeline definitions (company, noxys-v2, …)
-tasks.yaml      — task definitions wired to each pipeline stage
-prompts/        — agent prompt files
+projects.yaml       — project definitions (noxys + all component repos)
+roles.yaml          — agent role definitions (CEO, CTO, developer, reviewer, …)
+policies.yaml       — per-project policy overrides
+groups.yaml         — component groups (noxys group → all noxys-* repos)
+pipelines.yaml      — pipeline definitions (company, noxys-v2, …)
+tasks.yaml          — task definitions wired to each pipeline stage
+schedules.yaml      — scheduled pipeline runs
+model_profiles.yaml — Claude model profile overrides per role
+prompts/            — agent prompt files (prompts/agents/<role>.md)
 ```
 
-These files are the authoritative reference for a production HivePilot deployment.
-Do **not** move, copy, or modify them from this examples directory — edit them directly
-at the repo root.
+## Activating this config
+
+Point `HIVEPILOT_CONFIG_REPO` at this directory (relative to the repo root or
+absolute):
+
+```bash
+export HIVEPILOT_CONFIG_REPO=examples/noxys
+hivepilot run
+```
+
+Or add it to your `.env`:
+
+```
+HIVEPILOT_CONFIG_REPO=examples/noxys
+```
+
+HivePilot's config loader resolves files in this order:
+1. XDG config dir (`~/.config/hivepilot/`)
+2. `HIVEPILOT_CONFIG_REPO` directory (← this dir)
+3. Repo base dir fallback
 
 ## Starting a fresh deployment
 

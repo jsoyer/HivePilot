@@ -11,7 +11,7 @@ _cache: Dict[Path, dict[str, dict[str, Any]]] = {}
 
 
 def load_claude_profiles(path: Path | None = None) -> dict[str, dict[str, Any]]:
-    resolved = settings.resolve_path(path or settings.claude_profiles_file)
+    resolved = settings.resolve_config_path(path or settings.claude_profiles_file)
     if resolved in _cache:
         return _cache[resolved]
     if not resolved.exists():

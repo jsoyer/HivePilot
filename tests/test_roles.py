@@ -43,7 +43,7 @@ EXPECTED_ORDER = [
 
 
 def _valid_claude_profiles() -> set[str]:
-    cfg_path = REPO_ROOT / "model_profiles.yaml"
+    cfg_path = REPO_ROOT / "examples" / "noxys" / "model_profiles.yaml"
     data = yaml.safe_load(cfg_path.read_text())
     return set(data.get("claude_profiles", {}).keys())
 

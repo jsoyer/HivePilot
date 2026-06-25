@@ -456,7 +456,7 @@ def trigger_schedule(schedule_name: str, request: Request):
 
     from hivepilot.services import schedule_service
 
-    schedules = schedule_service.load_schedules(settings.resolve_path(settings.schedules_file))
+    schedules = schedule_service.load_schedules(settings.resolve_config_path(settings.schedules_file))
     entry = schedules.get(schedule_name)
     if entry is None:
         raise HTTPException(
