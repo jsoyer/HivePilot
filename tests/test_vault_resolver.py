@@ -34,7 +34,7 @@ def _make_hvac_mock(secret_data: dict) -> types.ModuleType:
     hvac_mod = types.ModuleType("hvac")
     client_instance = MagicMock()
     client_instance.secrets.kv.v2.read_secret_version.return_value = {"data": {"data": secret_data}}
-    hvac_mod.Client = MagicMock(return_value=client_instance)
+    hvac_mod.Client = MagicMock(return_value=client_instance)  # type: ignore[attr-defined]
     return hvac_mod
 
 
