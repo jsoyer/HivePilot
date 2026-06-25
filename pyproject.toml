@@ -129,6 +129,13 @@ no_strict_optional = true
 # Optional / untyped third-party libs (yaml without types-PyYAML, requests,
 # langchain, torch, …): don't fail the typecheck hook on missing stubs.
 disable_error_code = ["import-untyped"]
+# Prevent "Source file found twice under different module names" when running
+# mypy over both `hivepilot` and `tests` from the project root (no __init__.py
+# in tests/). explicit_package_bases tells mypy to resolve modules relative to
+# the roots listed in mypy_path rather than treating bare filenames as roots too.
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = "."
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "build", "dist"]
