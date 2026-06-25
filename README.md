@@ -54,17 +54,28 @@ hivepilot/
 │   ├── runners/            # Claude, shell, LangChain, Codex/Gemini/OpenCode/Ollama/OpenRouter
 │   ├── services/           # git_service, github_service, project_service, pipeline_service
 │   └── utils/              # io (runs/summary), logging (structlog), shell helpers
-├── prompts/
-├── projects.yaml
-├── tasks.yaml
-├── pipelines.yaml
-├── model_profiles.yaml     # Claude profile map (coding/architecture/automation)
+├── examples/
+│   └── noxys/              # Reference deployment config (roles, tasks, pipelines, prompts)
+│       ├── roles.yaml
+│       ├── projects.yaml
+│       ├── tasks.yaml
+│       ├── pipelines.yaml
+│       ├── model_profiles.yaml
+│       └── prompts/agents/ # Agent prompt files (ceo.md, developer.md, …)
 ├── .env.example
 ├── requirements.txt
 └── README.md
 ```
 
-Everything is configured via YAML (`projects`, `tasks`, `pipelines`, `model_profiles`). `.env` only tweaks global paths/commands.
+Everything is configured via YAML (`projects`, `tasks`, `pipelines`, `model_profiles`).
+Point `HIVEPILOT_CONFIG_REPO` at your config directory (or use `examples/noxys/` as a
+reference):
+
+```bash
+export HIVEPILOT_CONFIG_REPO=examples/noxys   # or an absolute path to your own config dir
+```
+
+`.env` only tweaks global paths/commands.
 
 ---
 

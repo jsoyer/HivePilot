@@ -37,7 +37,10 @@ def test_readyz_shape():
     resp = client.get("/readyz")
     assert resp.status_code in (200, 503)
     data = resp.json()
-    assert "checks" in data
+    # On 200 the response is {"ready": True, "checks": {...}}
+    # On 503 FastAPI wraps it: {"detail": {"ready": False, "checks": {...}}}
+    payload = data.get("detail", data)
+    assert "checks" in payload
 
 
 def test_metrics_content_type():

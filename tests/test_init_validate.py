@@ -81,11 +81,12 @@ REPO_ROOT = Path(__file__).parent.parent
 
 
 def test_validate_current_config_clean() -> None:
-    """validate_config on the live repo-root config should return no problems."""
+    """validate_config on the noxys example config should return no problems."""
     from hivepilot.services.config_validation import validate_config
 
-    problems = validate_config(base_dir=REPO_ROOT)
-    assert problems == [], "Unexpected problems in repo config:\n" + "\n".join(problems)
+    noxys_dir = REPO_ROOT / "examples" / "noxys"
+    problems = validate_config(base_dir=noxys_dir)
+    assert problems == [], "Unexpected problems in noxys config:\n" + "\n".join(problems)
 
 
 def test_validate_broken_config(tmp_path: Path) -> None:

@@ -24,7 +24,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts" / "agents"
+_PROMPTS_DIR = Path(__file__).parent.parent / "examples" / "noxys" / "prompts" / "agents"
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ def load_roles() -> dict[str, Role]:
         for entry in entries:
             entry = dict(entry)  # shallow copy so we don't mutate the parsed data
             prompt_filename = entry.pop("prompt_file")
-            entry["prompt_file"] = _PROMPTS_DIR / prompt_filename
+            entry["prompt_file"] = settings.resolve_config_path(Path("prompts") / "agents" / prompt_filename)
             role = Role(**entry)
             result[role.name] = role
         return result

@@ -21,9 +21,10 @@ import yaml
 # ---------------------------------------------------------------------------
 
 WORKTREE_ROOT = Path(__file__).parent.parent
-PIPELINES_YAML = WORKTREE_ROOT / "pipelines.yaml"
-TASKS_YAML = WORKTREE_ROOT / "tasks.yaml"
-PROMPTS_AGENTS_DIR = WORKTREE_ROOT / "prompts" / "agents"
+NOXYS_DIR = WORKTREE_ROOT / "examples" / "noxys"
+PIPELINES_YAML = NOXYS_DIR / "pipelines.yaml"
+TASKS_YAML = NOXYS_DIR / "tasks.yaml"
+PROMPTS_AGENTS_DIR = NOXYS_DIR / "prompts" / "agents"
 
 EXPECTED_STAGE_ORDER = [
     "CEO Intake",
@@ -127,7 +128,7 @@ class TestCompanyPipelineTasks:
             for step in task.get("steps", []):
                 pf = step.get("prompt_file")
                 if pf and pf.startswith("prompts/agents/"):
-                    full_path = WORKTREE_ROOT / pf
+                    full_path = NOXYS_DIR / pf
                     assert full_path.exists(), (
                         f"Prompt file '{pf}' referenced by task '{task_name}' "
                         f"does not exist at {full_path}"
