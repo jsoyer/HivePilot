@@ -17,7 +17,7 @@ class TestObsidianVaultConfig:
         # Clear any env override so we get the true default, and skip .env to
         # avoid the deployment-specific HIVEPILOT_OBSIDIAN_VAULT value.
         monkeypatch.delenv("HIVEPILOT_OBSIDIAN_VAULT", raising=False)
-        s = Settings(_env_file=None)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
         # Default is now a relative path so it works on any machine without the
         # noxys-specific absolute path.  Operators override via HIVEPILOT_OBSIDIAN_VAULT.
         assert s.obsidian_vault == Path("obsidian-vault")
