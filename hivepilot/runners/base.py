@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from hivepilot.config import Settings
+from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+
+
+@dataclass(slots=True)
+class RunnerPayload:
+    project_name: str
+    project: ProjectConfig
+    task_name: str
+    step: TaskStep
+    metadata: dict[str, Any]
+    secrets: dict[str, str] = field(default_factory=dict)
+
+
+class BaseRunner(Protocol):
+    definition: RunnerDefinition
+    settings: Settings
+
+    def __init__(self, definition: RunnerDefinition, settings: Settings) -> None: ...
+
+    def run(self, payload: RunnerPayload) -> None: ...

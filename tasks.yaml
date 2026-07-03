@@ -1,0 +1,462 @@
+runners:
+  claude-docs:
+    kind: claude
+    command: claude
+    options:
+      profile: automation
+  claude-security:
+    kind: claude
+    command: claude
+    options:
+      profile: architecture
+  claude-architect:
+    kind: claude
+    command: claude
+    options:
+      profile: architecture
+    append_prompt: "Highlight systemic architecture issues first."
+  claude-refactor:
+    kind: claude
+    command: claude
+    options:
+      profile: coding
+  validation-suite:
+    kind: shell
+    command: |
+      if [ -f package.json ]; then npm test || true; fi
+      if [ -f pyproject.toml ]; then pytest || true; fi
+  codex-default:
+    kind: codex
+    command: codex
+    options:
+      mode: cli
+      api_provider: openai
+      api_model: gpt-4o
+  gemini-cli:
+    kind: gemini
+    command: gemini
+    options:
+      mode: cli
+      api_provider: google
+      api_model: gemini-1.5-flash
+  opencode-fastfix:
+    kind: opencode
+    command: opencode
+  ollama-local:
+    kind: ollama
+    command: "ollama run codellama:latest"
+  openrouter-default:
+    kind: api
+    command: ""
+    options:
+      mode: api
+      api_provider: openrouter
+      api_model: openrouter/anthropic/claude-3.5-sonnet
+  container-validation:
+    kind: container
+    command: |
+      pip install -r requirements.txt && pytest
+    options:
+      image: python:3.11
+      volumes:
+        - ${PWD}:/workspace
+
+tasks:
+  docs:
+    description: Rewrite and normalize repository documentation.
+    engine: native
+    steps:
+      - name: rewrite docs
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: docs_rewrite.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+          knowledge_files: ["README.md", "docs/architecture.md"]
+        secrets:
+          OPENAI_API_KEY:
+            source: env
+            key: OPENAI_API_KEY
+    git:
+      commit: true
+      push: true
+      create_pr: true
+      commit_message: "docs: rewrite project documentation"
+      pr_title: "docs: rewrite project documentation"
+      pr_body_file: PR_BODY.md
+      branch_prefix: hivepilot
+
+  docs-langgraph:
+    description: Example docs workflow powered by LangGraph.
+    engine: langgraph
+    graph: workflows.langgraph_docs:build_graph
+    steps: []
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  docs-crewai:
+    description: Example docs workflow powered by CrewAI.
+    engine: crewai
+    crew: workflows.crewai_docs:build_crew
+    steps: []
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  pentest:
+    description: Run a security review and generate a markdown report.
+    steps:
+      - name: security review
+        runner: claude
+        runner_ref: claude-security
+        prompt_file: security_review.md
+        timeout_seconds: 5400
+        metadata:
+          claude_profile: architecture
+      - name: local validation
+        runner: shell
+        runner_ref: validation-suite
+        allow_failure: true
+    git:
+      commit: true
+      push: false
+      create_pr: false
+      commit_message: "security: add repository review report"
+      branch_prefix: hivepilot
+
+  arch:
+    description: Review the repository architecture and suggest improvements.
+    steps:
+      - name: architecture review
+        runner: claude
+        runner_ref: claude-architect
+        prompt_file: architecture_review.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+    git:
+      commit: false
+      push: false
+      create_pr: false
+      branch_prefix: hivepilot
+
+  refactor:
+    description: Refactor the codebase with a light validation pass.
+    steps:
+      - name: refactor
+        runner: claude
+        runner_ref: claude-refactor
+        prompt_file: refactor.md
+        timeout_seconds: 5400
+        metadata:
+          claude_profile: coding
+      - name: validation
+        runner: container
+        runner_ref: container-validation
+        allow_failure: true
+        timeout_seconds: 1800
+    git:
+      commit: true
+      push: false
+      create_pr: false
+      commit_message: "refactor: orchestrated cleanup"
+      branch_prefix: hivepilot
+
+  gh-repo-init-task:
+    description: Call hivepilot gh repo-init for the project.
+    steps:
+      - name: repo init
+        runner: shell
+        command: |
+          hivepilot gh repo-init {project_name} --set-remote --push
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  gh-issue-from-extra:
+    description: Create a GitHub issue using --extra-prompt as the title.
+    steps:
+      - name: create issue
+        runner: shell
+        command: |
+          hivepilot gh issue {project_name} "{extra_prompt}" --body "Issue created from automation for {project_name}"
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  gh-release-from-extra:
+    description: Create a GitHub release using --extra-prompt as the tag.
+    steps:
+      - name: create release
+        runner: shell
+        command: |
+          hivepilot gh release {project_name} {extra_prompt} --generate-notes
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  codex-audit:
+    description: Run Codex on architecture review prompt.
+    steps:
+      - name: codex review
+        runner: codex
+        runner_ref: codex-default
+        prompt_file: architecture_review.md
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  gemini-brief:
+    description: Use Gemini CLI to summarize repo.
+    steps:
+      - name: gemini summary
+        runner: gemini
+        runner_ref: gemini-cli
+        prompt_file: docs_rewrite.md
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  opencode-fix:
+    description: Run OpenCode CLI for refactor suggestions.
+    steps:
+      - name: opencode patch
+        runner: opencode
+        runner_ref: opencode-fastfix
+        prompt_file: refactor.md
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  ollama-scan:
+    description: Run local Ollama model for quick scan.
+    steps:
+      - name: ollama scan
+        runner: ollama
+        runner_ref: ollama-local
+        prompt_file: security_review.md
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  # ---------------------------------------------------------------------------
+  # Company pipeline tasks — one per role, two variants for CEO and CoS
+  # ---------------------------------------------------------------------------
+
+  ceo-intake:
+    role: ceo
+    description: CEO reviews roadmap, metrics, and customer feedback; sets objectives and priorities.
+    steps:
+      - name: ceo intake
+        runner: claude
+        runner_ref: claude-architect
+        prompt_file: prompts/agents/ceo.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  cos-plan:
+    role: chief_of_staff
+    description: Chief of Staff translates CEO objectives into an execution plan.
+    steps:
+      - name: chief of staff plan
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  cto-review:
+    role: cto
+    description: CTO reviews the execution plan and produces a technical spec or ADR.
+    steps:
+      - name: cto review
+        runner: claude
+        runner_ref: claude-architect
+        prompt_file: prompts/agents/cto.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+        knowledge_files:
+          - CLAUDE.md
+          - AGENTS.md
+          - AGENT-GOVERNANCE.md
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  developer:
+    role: developer
+    description: Developer implements the technical spec and produces code + tests.
+    steps:
+      - name: implementation
+        runner: claude
+        runner_ref: claude-refactor
+        prompt_file: prompts/agents/developer.md
+        timeout_seconds: 5400
+        metadata:
+          claude_profile: coding
+    git:
+      commit: true
+      push: true
+      create_pr: false
+      commit_message: "feat: company pipeline implementation"
+      branch_prefix: hivepilot
+
+  reviewer:
+    role: reviewer
+    description: Reviewer inspects the implementation against the spec and issues a review report.
+    steps:
+      - name: code review
+        runner: claude
+        runner_ref: claude-refactor
+        prompt_file: prompts/agents/reviewer.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: coding
+    git:
+      commit: false
+      push: false
+      create_pr: true
+      pr_title: "HivePilot: company pipeline implementation"
+      branch_prefix: hivepilot
+
+  ciso:
+    role: ciso
+    description: CISO performs a security review and grants or withholds clearance.
+    steps:
+      - name: security review
+        runner: claude
+        runner_ref: claude-security
+        prompt_file: prompts/agents/ciso.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+        knowledge_files:
+          - CLAUDE.md
+          - AGENTS.md
+          - AGENT-GOVERNANCE.md
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  qa:
+    role: qa
+    description: QA builds the test suite, runs edge-case analysis, and produces a test report.
+    steps:
+      - name: qa validation
+        runner: claude
+        runner_ref: claude-refactor
+        prompt_file: prompts/agents/qa.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: coding
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  documentation:
+    role: documentation
+    description: Documentation role updates docs, ADRs, and changelog.
+    steps:
+      - name: documentation update
+        runner: gemini
+        runner_ref: gemini-cli
+        prompt_file: prompts/agents/documentation.md
+        timeout_seconds: 3600
+    git:
+      commit: true
+      push: false
+      create_pr: false
+      commit_message: "docs: company pipeline documentation update"
+      branch_prefix: hivepilot
+
+  cos-report:
+    role: chief_of_staff
+    description: Chief of Staff compiles the cycle report for CEO review.
+    steps:
+      - name: cos cycle report
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  cos-synthesis:
+    role: chief_of_staff
+    description: Chief of Staff (CSO) concatenates the CEO direction, CTO architecture, and CISO security review, adjusts, and produces the consolidated proposal for human approval.
+    steps:
+      - name: plan synthesis
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+
+  cos-pr-approval:
+    role: chief_of_staff
+    description: Chief of Staff performs the final check after QA and documentation and approves or rejects the pull request.
+    steps:
+      - name: pr approval
+        runner: claude
+        runner_ref: claude-docs
+        prompt_file: prompts/agents/chief_of_staff.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: automation
+    git:
+      commit: false
+      push: false
+      create_pr: false
+      merge_pr: false
+      merge_method: squash
+      branch_prefix: hivepilot
+
+  ceo-approval:
+    role: ceo
+    description: CEO reviews the cycle report and grants final approval or sends back for revision.
+    steps:
+      - name: ceo approval
+        runner: claude
+        runner_ref: claude-architect
+        prompt_file: prompts/agents/ceo.md
+        timeout_seconds: 3600
+        metadata:
+          claude_profile: architecture
+    git:
+      commit: false
+      push: false
+      create_pr: false

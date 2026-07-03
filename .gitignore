@@ -1,0 +1,27 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+build/
+dist/
+htmlcov/
+coverage.*
+state.db
+!.env.example
+
+# local API token store (never commit)
+api_tokens.yaml
+
+# runtime artifacts & local state (machine-specific, never commit)
+runs/
+.hivepilot/
+.claude/worktrees/
+.claude/settings.local.json

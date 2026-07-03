@@ -1,0 +1,17 @@
+services:
+  hivepilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hivepilot:latest
+    working_dir: /workspace
+    env_file:
+      - .env
+    volumes:
+      - .:/workspace
+      - ${HOME}/.claude:/root/.claude:ro
+      - ${HOME}/.config/gh:/root/.config/gh
+      - ${HOME}/dev:/workspace/dev
+    stdin_open: true
+    tty: true
+    command: ["hivepilot", "doctor"]

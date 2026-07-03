@@ -1,0 +1,33 @@
+# Per-project policy overrides.
+# Besides allow_auto_git / require_approval / allow_containers, a project may
+# override the role->runner+model mapping (defaults live in hivepilot/roles.py):
+#   projects:
+#     <project>:
+#       allowed_runners: [opencode, claude]      # whitelist; resolved runner must be in it
+#       role_overrides:
+#         cto:  { model: glm }                    # keep runner, force EU-hosted model
+#         qa:   { runner: opencode, model: qwen } # change runner + model
+policies:
+  default:
+    allow_auto_git: true
+    # The default pipeline is gated by the plan CHECKPOINT (human approves the plan
+    # before Implementation), not per-task approval. Per-task approval is
+    # incompatible with the pipeline: a "pending approval" stage makes the
+    # pipeline fail-fast. Projects inherit this default so the post-checkpoint
+    # fan-out can run. Projects that want a hard per-run gate set
+    # require_approval: true.
+    require_approval: false
+    allow_containers: false
+  projects:
+    example-api:
+      allow_auto_git: true
+      require_approval: true
+      allow_containers: false
+    acme-api:
+      allow_auto_git: true       # developer stage may push + open a PR (human merges)
+      require_approval: false    # hub: the default pipeline uses the plan CHECKPOINT as the gate (see default)
+      allow_containers: false
+    acme-web:
+      allow_auto_git: true
+      require_approval: false    # default pipeline uses the plan CHECKPOINT as the gate, not per-task approval
+      allow_containers: false

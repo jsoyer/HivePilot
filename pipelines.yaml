@@ -1,0 +1,76 @@
+pipelines:
+  company:
+    description: >
+      Full company pipeline: CEO intake through Chief of Staff planning, CTO
+      technical review, Developer implementation, Reviewer code review, CISO
+      security clearance, QA validation, Documentation update, Chief of Staff
+      report, and final CEO approval.
+    stages:
+      - name: CEO Intake
+        task: ceo-intake
+      - name: Chief of Staff Plan
+        task: cos-plan
+      - name: CTO Review
+        task: cto-review
+      - name: Implementation
+        task: developer
+        pause_before: true   # human approves the plan before the developer codes
+      - name: Review
+        task: reviewer
+      - name: Security
+        task: ciso
+      - name: QA
+        task: qa
+      - name: Documentation
+        task: documentation
+        commits_vault: true
+      - name: Report
+        task: cos-report
+      - name: Approval
+        task: ceo-approval
+
+  default:
+    description: >
+      Reordered company cycle. Planning phase (CEO debate -> CTO architecture ->
+      CISO architecture security -> Chief of Staff synthesis) ends with a human
+      plan checkpoint; then development, review (opens PR), CISO code clearance,
+      QA, documentation, and a final Chief of Staff PR approval.
+    stages:
+      - name: CEO Intake
+        task: ceo-intake
+      - name: CTO Architecture
+        task: cto-review
+      - name: Security (architecture)
+        task: ciso
+      - name: Plan Synthesis
+        task: cos-synthesis
+      - name: Implementation
+        task: developer
+        pause_before: true
+      - name: Review
+        task: reviewer
+      - name: Security (code)
+        task: ciso
+      - name: QA
+        task: qa
+      - name: Documentation
+        task: documentation
+        commits_vault: true
+      - name: PR Approval
+        task: cos-pr-approval
+
+  pentest-fix-review:
+    description: Run a security review, refactor fixes, then refresh docs.
+    stages:
+      - name: pentest
+        task: pentest
+      - name: refactor follow-up
+        task: refactor
+      - name: docs summary
+        task: docs
+
+  gh-repo-init:
+    description: Ensure GitHub repository exists and push current branch.
+    stages:
+      - name: initialize repo
+        task: gh-repo-init-task

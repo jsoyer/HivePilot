@@ -1,0 +1,38 @@
+# HivePilot projects configuration.
+# Each key is a unique project name used throughout pipelines, groups, and policies.
+projects:
+  example-api:
+    path: ~/dev/example-api
+    description: Example API project.
+    claude_md: CLAUDE.md
+    default_branch: main
+    owner_repo: your-user/example-api
+    env:
+      PYTHONUNBUFFERED: "1"
+
+  example-site:
+    path: ~/dev/example-site
+    description: Example frontend project.
+    claude_md: CLAUDE.md
+    default_branch: main
+    owner_repo: your-user/example-site
+
+  acme-api:
+    path: ~/dev/acme-api
+    description: Acme — primary backend API; agent-driven development target.
+    default_branch: main
+    owner_repo: your-org/acme-api
+    env:
+      PYTHONUNBUFFERED: "1"
+
+  acme-web:
+    path: ~/dev/acme-web
+    description: Acme — customer-facing web frontend.
+    default_branch: main
+    owner_repo: your-org/acme-web
+
+  acme-worker:
+    path: ~/dev/acme-worker
+    description: Acme — background job worker service.
+    default_branch: main
+    owner_repo: your-org/acme-worker
