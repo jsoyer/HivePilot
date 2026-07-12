@@ -48,26 +48,26 @@ Provide the round-trip write + prospective-validate + TTY-aware prompt primitive
 
 ## Tasks
 
-- [ ] Add `ruamel.yaml` to `pyproject.toml` `[project].dependencies` and `requirements.txt` (pin a reasonable minimum, e.g. `ruamel.yaml>=0.18`).
-- [ ] Implement `load_roundtrip` / `dump_roundtrip` using `ruamel.yaml.YAML()` (typ default round-trip; `preserve_quotes=True`).
-- [ ] Implement `apply_and_validate`: deep-copy the loaded map, apply `mutate`, write the prospective YAML to a temp file inside the same base_dir, run `validate_config(base_dir=<temp base>)` (or validate the mutated in-memory structure through the existing loaders), compute a unified diff vs the original, then write to the real path ONLY if `errors == []` and `not dry_run`. Return `WriteResult`.
-- [ ] Implement `resolve_reference(kind, value)`: `role`→`value in load_roles()`, `project`→`value in load_projects()`, `task`→`value in load_tasks()`, `prompt_file`→file exists under the prompts dir. Read-only.
-- [ ] Implement `prompt_or_refuse(valid, label)`: if `sys.stdin.isatty()` use `questionary.select(label, choices=valid).ask()`; else return `None`. Import questionary lazily inside the TTY branch only.
-- [ ] Define `WriteResult` as a small immutable dataclass (`frozen=True`).
+- [x] Add `ruamel.yaml` to `pyproject.toml` `[project].dependencies` and `requirements.txt` (pin a reasonable minimum, e.g. `ruamel.yaml>=0.18`).
+- [x] Implement `load_roundtrip` / `dump_roundtrip` using `ruamel.yaml.YAML()` (typ default round-trip; `preserve_quotes=True`).
+- [x] Implement `apply_and_validate`: deep-copy the loaded map, apply `mutate`, write the prospective YAML to a temp file inside the same base_dir, run `validate_config(base_dir=<temp base>)` (or validate the mutated in-memory structure through the existing loaders), compute a unified diff vs the original, then write to the real path ONLY if `errors == []` and `not dry_run`. Return `WriteResult`.
+- [x] Implement `resolve_reference(kind, value)`: `role`→`value in load_roles()`, `project`→`value in load_projects()`, `task`→`value in load_tasks()`, `prompt_file`→file exists under the prompts dir. Read-only.
+- [x] Implement `prompt_or_refuse(valid, label)`: if `sys.stdin.isatty()` use `questionary.select(label, choices=valid).ask()`; else return `None`. Import questionary lazily inside the TTY branch only.
+- [x] Define `WriteResult` as a small immutable dataclass (`frozen=True`).
 
 ## Acceptance Criteria
 
-- [ ] Round-tripping a YAML file that contains comments and a specific key order preserves both; a targeted single-key change shows in a diff with no other lines changed.
-- [ ] `apply_and_validate` returns `written=False` and non-empty `errors` when the mutation introduces a `validate_config` error, and leaves the original file byte-identical.
-- [ ] `apply_and_validate(..., dry_run=True)` returns a non-empty `diff` and writes nothing.
-- [ ] `prompt_or_refuse` returns `None` under a stubbed non-TTY (`sys.stdin.isatty()` monkeypatched to `False`) and does NOT import/call questionary in that path.
-- [ ] No `yaml.safe_dump` appears in `config_writer.py`.
+- [x] Round-tripping a YAML file that contains comments and a specific key order preserves both; a targeted single-key change shows in a diff with no other lines changed.
+- [x] `apply_and_validate` returns `written=False` and non-empty `errors` when the mutation introduces a `validate_config` error, and leaves the original file byte-identical.
+- [x] `apply_and_validate(..., dry_run=True)` returns a non-empty `diff` and writes nothing.
+- [x] `prompt_or_refuse` returns `None` under a stubbed non-TTY (`sys.stdin.isatty()` monkeypatched to `False`) and does NOT import/call questionary in that path.
+- [x] No `yaml.safe_dump` appears in `config_writer.py`.
 
 ## Verification
 
-- [ ] `pytest tests/test_config_writer.py`
-- [ ] `mypy hivepilot/services/config_writer.py`
-- [ ] Lint passes (`ruff check hivepilot/services/config_writer.py`)
+- [x] `pytest tests/test_config_writer.py` — 15 passed / 0 failed (13 original + 2 hardening regression tests)
+- [x] `mypy hivepilot/services/config_writer.py` — 0 errors (full `mypy hivepilot`: 0 errors in 77 files)
+- [x] Lint passes (`ruff check .` full repo — 0 issues)
 
 ## Context
 
@@ -75,9 +75,18 @@ Provide the round-trip write + prospective-validate + TTY-aware prompt primitive
 
 ## Agent Notes (filled during execution)
 
-- Assigned to:
-- Started:
-- Completed:
+- Assigned to: sprint-executor (sonnet, isolation:worktree) — branch `worktree-agent-ab783804df4a2aa50`, merged to `jsoyer/ideas` at commit `29ecb05` (feat commit `f282ebb`); hardening follow-up `32c5a46`.
+- Started: 2026-07-12 (Batch 1, parallel with Sprint 4)
+- Completed: 2026-07-12
 - Decisions made:
+  - Prospective validation is implemented by copying the six required config files + `prompts/` into a scratch temp dir, overlaying the mutated file, then calling `validate_config(base_dir=scratch)`. Matches the spec's suggested approach.
+  - YAML dump indentation set to `mapping=2, sequence=4, offset=2` to match this repo's existing YAML convention (verified vs `roles.yaml`/`projects.yaml`); ruamel's library default (offset=0) would have reformatted every file on dump.
+  - `WriteResult.errors` kept as `list[str]` to honor the declared shared contract (a reviewer flagged the shallow mutability; kept the contract as documented since Sprints 2/3 consume `list[str]`).
 - Assumptions:
-- Issues found:
+  - `load_roundtrip` raises `FileNotFoundError` for a missing path (mirrors `open()`); `apply_and_validate` handles a missing target gracefully by starting from an empty `CommentedMap()`.
+- Issues found / hardening applied post-review (commit `32c5a46`):
+  - HIGH: original-file load in `apply_and_validate` could raise an uncaught ruamel `YAMLError` if the on-disk file was already malformed. Now wrapped in try/except → returns `WriteResult(errors=[...], written=False)` instead of crashing (per spec Context: surface parse errors, do not crash).
+  - MEDIUM: the write-gate was a no-op for files outside the 6 core config files (e.g. `model_profiles.yaml`, which Sprint 3 will edit) — invalid YAML would have been accepted. Now non-core files get a "mutated text parses cleanly" check before write. No file can be written with unparseable YAML.
+  - Two regression tests added: `test_apply_and_validate_malformed_original_file_returns_error_without_raising`, `test_apply_and_validate_non_core_file_rejects_invalid_mutated_content`.
+  - Env (outside repo, noted): sprint-executor fixed a cross-repo worktree `check-test-exists.sh` PROJECT_DIR misfire and a stale pydantic `.pyc` on the shared interpreter; `ruamel.yaml` was installed into the main-repo `.venv` for post-merge verification.
+  - Open follow-up (non-blocking, for a later batch): the Sprint 4 stray-file guard warns on every `load_claude_profiles` call (bypasses cache) — consider warn-once to avoid log spam.

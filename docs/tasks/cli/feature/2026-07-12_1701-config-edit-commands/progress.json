@@ -6,23 +6,23 @@
       "id": 1,
       "file": "sprints/01-config-writer-core.md",
       "title": "config-writer-core",
-      "status": "not_started",
+      "status": "complete",
       "depends_on": [],
       "batch": 1,
       "model": "sonnet",
-      "branch": null,
-      "merged": false
+      "branch": "worktree-agent-ab783804df4a2aa50",
+      "merged": true
     },
     {
       "id": 4,
       "file": "sprints/04-model-profiles-dedup.md",
       "title": "model-profiles-dedup",
-      "status": "not_started",
+      "status": "complete",
       "depends_on": [],
       "batch": 1,
       "model": "sonnet",
-      "branch": null,
-      "merged": false
+      "branch": "worktree-agent-a5496fca0e31c6aa6",
+      "merged": true
     },
     {
       "id": 2,
