@@ -173,6 +173,52 @@ def test_apply_and_validate_rejects_invalid_mutation_and_leaves_file_untouched(
     assert (tmp_path / "tasks.yaml").read_bytes() == original_bytes
 
 
+def test_apply_and_validate_malformed_original_file_returns_error_without_raising(
+    tmp_path: Path,
+) -> None:
+    """A pre-existing, already-corrupt on-disk file must surface as an error
+    entry (not crash the caller) — the original file is untouched."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "tasks.yaml").write_text("tasks:\n  - [unterminated\n")
+
+    def mutate(data):
+        return data
+
+    result = config_writer.apply_and_validate(
+        "tasks.yaml", mutate, dry_run=False, base_dir=tmp_path
+    )
+
+    assert result.written is False
+    assert result.errors
+    assert result.diff == ""
+
+
+def test_apply_and_validate_non_core_file_rejects_invalid_mutated_content(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Files outside the 6-file `validate_config` set (e.g. model_profiles.yaml)
+    still get a parse-check gate: invalid mutated YAML must not be written."""
+    _write_minimal_config(tmp_path)
+
+    def mutate(data):
+        data["default"] = "gpt"
+        return data
+
+    monkeypatch.setattr(
+        config_writer,
+        "_dump_roundtrip_to_string",
+        lambda data: "profiles: [unterminated\n",
+    )
+
+    result = config_writer.apply_and_validate(
+        "model_profiles.yaml", mutate, dry_run=False, base_dir=tmp_path
+    )
+
+    assert result.written is False
+    assert result.errors
+    assert not (tmp_path / "model_profiles.yaml").exists()
+
+
 def test_apply_and_validate_does_not_mutate_callers_loaded_map(tmp_path: Path) -> None:
     """The immutability rule: a failed validation must not leave the in-memory
     map (or the file) mutated for the caller."""

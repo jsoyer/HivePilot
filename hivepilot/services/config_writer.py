@@ -30,7 +30,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Callable, Literal
 
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML, YAMLError
 from ruamel.yaml.comments import CommentedMap
 
 from hivepilot.config import settings
@@ -111,6 +111,17 @@ def _validate_prospective(file: str, mutated_text: str, containing_dir: Path) ->
     """Run validate_config() against a scratch copy of containing_dir with
     *file* replaced by *mutated_text*, so a bad mutation is caught before it
     ever touches the real files."""
+    if file not in _REQUIRED_CONFIG_FILES:
+        # validate_config() only reads the 6 core config files, so a file
+        # outside that set (e.g. model_profiles.yaml) would otherwise never
+        # be parse-checked. At minimum, confirm the mutated text still
+        # parses as valid YAML before it is allowed through the write gate.
+        try:
+            _yaml().load(StringIO(mutated_text))
+        except YAMLError as exc:
+            return [f"Failed to parse mutated {file}: {exc}"]
+        return []
+
     with tempfile.TemporaryDirectory(prefix="hivepilot-config-writer-") as tmp:
         tmp_dir = Path(tmp)
         for name in _REQUIRED_CONFIG_FILES:
@@ -152,7 +163,14 @@ def apply_and_validate(
 
     if real_path.exists():
         original_text = real_path.read_text(encoding="utf-8")
-        original_map = load_roundtrip(real_path)
+        try:
+            original_map = load_roundtrip(real_path)
+        except YAMLError as exc:
+            # The file already on disk is corrupt — surface it as an error
+            # entry instead of letting the parse error crash the command.
+            return WriteResult(
+                diff="", errors=[f"Failed to parse {real_path}: {exc}"], written=False
+            )
     else:
         original_text = ""
         original_map = CommentedMap()
