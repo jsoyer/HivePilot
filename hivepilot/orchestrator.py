@@ -173,6 +173,53 @@ def _parse_components(text: str, valid: list[str]) -> list[str]:
     return found
 
 
+def _parse_output_sections(text: str, keys: list[str]) -> dict[str, str]:
+    """Extract per-key ``## <HEADER>`` sections from a stage's output text.
+
+    A *key* (e.g. ``"design_spec"``) matches a header (e.g. ``"## DESIGN_SPEC"``,
+    ``"## Design Spec"``, or ``"## design-spec"``) when, after upper-casing both
+    and collapsing runs of ``_``, ``-``, and whitespace to a single ``_``, they
+    are equal. A section's body is every line following its header up to the
+    next ``## `` header (matched or not) or the end of *text*, with
+    leading/trailing blank lines stripped.
+
+    Returns ``{key: section_body}`` only for keys whose section was found —
+    mirrors ``_parse_components``'s "empty when none found" style so callers
+    can fall back (here: the whole-blob coarse fallback in the stage loop,
+    see ``_stage_outputs_by_key``)."""
+    import re
+
+    def _normalize(header: str) -> str:
+        return re.sub(r"[\s_-]+", "_", header.strip()).upper()
+
+    key_by_norm = {_normalize(k): k for k in keys}
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        m = re.match(r"^##(?!#)\s+(.+?)\s*$", line)
+        if m:
+            current = key_by_norm.get(_normalize(m.group(1)))
+            if current is not None:
+                sections[current] = []
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return {key: "\n".join(lines).strip() for key, lines in sections.items()}
+
+
+def _stage_outputs_by_key(stage_output: str, keys: list[str]) -> dict[str, str]:
+    """Map a producing stage's declared output *keys* to content for the
+    run-scoped keyed store (PRD A2): section-extracted where a ``## <KEY>``
+    header is present in *stage_output*, else the whole *stage_output* blob
+    (coarse fallback) so every declared key always resolves to something.
+
+    Built but not consumed this sprint — see PRD A2 Sprint 1. Callers merging
+    this into a run-scoped dict across stages should let later stages
+    overwrite same-key entries from earlier stages (last producer wins)."""
+    sections = _parse_output_sections(stage_output, keys)
+    return {key: sections.get(key, stage_output) for key in keys}
+
+
 def _resolve_stage_target_components(
     stage: PipelineStage, group_tags: dict[str, list[str]]
 ) -> set[str]:
@@ -986,6 +1033,10 @@ class Orchestrator:
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
         prior_chunks: list[str] = []  # outputs of completed stages, fed to later agents
+        # PRD A2 Sprint 1: run-scoped keyed store (output-key -> content), populated
+        # alongside prior_chunks below via section-extraction with whole-blob coarse
+        # fallback. Built but NOT consumed anywhere yet — inert this sprint.
+        outputs_by_key: dict[str, str] = {}
         _request_budget: dict[str, int] = {"remaining": settings.max_requests_per_run}
         if seed_context:
             prior_chunks.append(seed_context)
@@ -1142,6 +1193,21 @@ class Orchestrator:
             stage_output = "\n".join(
                 r.detail or f"{r.project}: {'ok' if r.success else 'failed'}" for r in stage_results
             )
+
+            # PRD A2 Sprint 1: populate the run-scoped keyed store alongside
+            # prior_chunks. Same-key entries from a later stage overwrite earlier
+            # ones (last producer wins) — fine since the store isn't consumed yet.
+            # The prior_chunks/build_prior_context path immediately below is
+            # untouched, so behaviour stays byte-identical to pre-sprint.
+            from hivepilot.roles import ROLES
+
+            producing_task = self.tasks.tasks.get(stage.task)
+            producing_role = (
+                ROLES.get(producing_task.role) if producing_task and producing_task.role else None
+            )
+            if producing_role and producing_role.outputs:
+                outputs_by_key.update(_stage_outputs_by_key(stage_output, producing_role.outputs))
+
             prior_chunks.append(f"## {self._agent_name(stage)} ({stage.name})\n{stage_output}")
             write_stage_artifact(
                 vault_path=vault_path,
