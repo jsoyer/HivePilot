@@ -139,6 +139,7 @@ HIVEPILOT_ENV_FILE=/path/to/.env            # explicit .env override (optional)
 # --- Routing ---
 HIVEPILOT_DEFAULT_TARGET=acme              # default project/group for @mention and /ask
 HIVEPILOT_DEFAULT_PIPELINE=default          # default pipeline for @mention
+HIVEPILOT_CONTEXT_ROUTING_MODE=full         # full | keyed -- see "Context routing" below
 
 # --- Agent runner ---
 HIVEPILOT_CLAUDE_COMMAND=claude             # path/name of the claude binary
@@ -208,17 +209,108 @@ roles:
     model_profile: "coding"
     runner: "claude"
     permission_mode: "bypassPermissions"
+    inputs:                              # keys this role reads from prior stage output
+      - technical_spec
+      - architecture_docs
+      - codebase_context
+    outputs:                             # keys this role's output is filed under
+      - implementation
+      - test_suite
+      - implementation_notes
     can_block: false
     order: 4
 ```
 
+`inputs`/`outputs` are a role's declared data-flow contract: `outputs` names
+the keys a producing stage's output is filed under; `inputs` names the keys a
+consuming stage expects from earlier stages in the same pipeline run. They are
+always declared (every bundled role has both), but they only change runtime
+behaviour under `context_routing_mode="keyed"` -- see "Context routing"
+below. `config validate` (see "Validate config") cross-checks `inputs`
+against upstream `outputs` per pipeline and flags any that are never
+produced ("dangling inputs").
+
+`can_block: true/false` is **advisory only** -- it documents whether a role
+is expected to be able to halt a run (e.g. `cto`, `reviewer`, `ciso`), but it
+does not itself gate anything at runtime. The actual fail-fast/continue
+behaviour for a given stage is controlled by the stage-level
+`continue_on_failure` field in `pipelines.yaml` (see "Stage scoping" below),
+which supersedes `can_block` as the source of truth for whether a failing
+stage halts the pipeline.
+
 Per-project runner/model overrides live in `policies.yaml` under `role_overrides`.
+
+### Context routing (`context_routing_mode`)
+
+`HIVEPILOT_CONTEXT_ROUTING_MODE` (`full` | `keyed`, default `full`) controls how
+a stage's `prior_context` (the text handed to the next agent) is assembled from
+earlier stages' output, in `hivepilot/orchestrator.py`:
+
+- **`full` (default).** Byte-identical to pre-PRD-A2 behaviour: every stage
+  receives `build_prior_context()` over ALL prior stage output
+  (`prior_context_mode`: `full` | `synthesis` | `cap`), regardless of what
+  its role declares in `inputs`. `inputs`/`outputs` are populated into a
+  run-scoped keyed store either way, but that store is never read in this
+  mode.
+- **`keyed` (opt-in).** A stage whose role declares a non-empty `inputs` list
+  gets its `prior_context` assembled from ONLY those input keys, pulled from
+  the run-scoped keyed store populated by earlier stages' declared
+  `outputs`, joined as `## <KEY>` blocks (see below) and capped with the
+  same tail-truncation rule as `prior_context_mode="cap"`.
+
+**`## <KEY>` output-section convention.** A producing stage's raw agent
+output can opt into precise per-key extraction by emitting Markdown `##`
+headers matching its role's `outputs` keys, e.g. a role with
+`outputs: [technical_spec, adr]` writing:
+
+```markdown
+## TECHNICAL_SPEC
+... spec content ...
+
+## ADR
+... ADR content ...
+```
+
+Header matching is case-insensitive and normalizes `_`/`-`/whitespace runs
+to a single `_` (so `## Technical Spec`, `## technical-spec`, and
+`## TECHNICAL_SPEC` all match the `technical_spec` key).
+
+**Fallbacks (conservative by design):**
+- **Coarse / whole-blob fallback** — when a producing stage's output has no
+  matching `## <KEY>` section for one of its declared `outputs` keys, that
+  key is filed under the run-scoped store as the entire stage output blob
+  instead of a precise excerpt, so every declared output key always
+  resolves to *something*.
+- **Missing-key fallback** — in `keyed` mode, if a consuming stage's `inputs`
+  keys are ALL missing from the run-scoped store, routing a keyed slice
+  would produce an empty context (worse than no routing), so it falls back
+  to the full `build_prior_context()` result instead and logs a warning
+  naming the missing keys. If only SOME keys are missing, the keyed slice is
+  built from whichever keys ARE present (no fallback in that case — a
+  partial precise slice still beats the full context).
 
 ### Validate config
 
 ```bash
-hivepilot lint    # checks all YAML files for structural errors
+hivepilot lint             # checks all YAML files for structural errors
+hivepilot config validate  # cross-reference checks across projects/roles/tasks/pipelines/groups/policies
 ```
+
+`hivepilot config validate` includes a dangling-input check: for each
+pipeline, it walks stages in declared order accumulating the set of output
+keys produced so far, and flags any stage whose role `inputs` references a
+key not yet produced upstream in that pipeline. Severity depends on
+`context_routing_mode`:
+
+- **`full` (default)** — dangling inputs are common and mostly cosmetic
+  (e.g. `developer`'s `architecture_docs`/`codebase_context` are supplied
+  externally, not produced by any role) since `full` mode never actually
+  routes by key. They are emitted as a Python `UserWarning`, NOT added to
+  the command's problem list — `config validate` still exits `0`/`OK`.
+- **`keyed`** — the same dangling inputs become hard failures in the
+  returned problem list (`config validate` exits `1`), because in this mode
+  a dangling input means a stage silently degrades to the missing-key
+  fallback above instead of getting the data it expects.
 
 ---
 
