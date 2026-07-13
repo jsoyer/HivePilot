@@ -209,19 +209,21 @@ def test_metrics_exposes_challenges_total():
 
 def test_no_double_count_from_api():
     """api_service should not directly increment runs_total (only complete_run does)."""
-    with open(
-        "/home/jeromesoyer/Documents/Github/jsoyer/HivePilot/hivepilot/services/api_service.py"
-    ) as f:
-        source = f.read()
+    from pathlib import Path
+
+    from hivepilot.services import api_service
+
+    source = Path(api_service.__file__).read_text()
     assert "run_counter" not in source, "run_counter was not removed from api_service"
 
 
 def test_api_service_no_local_registry():
     """api_service must not define its own CollectorRegistry."""
-    with open(
-        "/home/jeromesoyer/Documents/Github/jsoyer/HivePilot/hivepilot/services/api_service.py"
-    ) as f:
-        source = f.read()
+    from pathlib import Path
+
+    from hivepilot.services import api_service
+
+    source = Path(api_service.__file__).read_text()
     assert "CollectorRegistry()" not in source, (
         "api_service still creates its own CollectorRegistry"
     )
