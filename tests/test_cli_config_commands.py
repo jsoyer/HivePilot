@@ -206,6 +206,32 @@ class TestProjectAdd:
         # Original entry untouched.
         assert "path: ~/dev/acme" in text
 
+    def test_add_warns_when_rerun_would_drop_previously_set_fields(self, config_dir: Path) -> None:
+        first = runner.invoke(
+            app, ["project", "add", "acme", "~/dev/acme", "--description", "Acme Corp"]
+        )
+        assert first.exit_code == 0, first.output
+
+        second = runner.invoke(app, ["project", "add", "acme", "~/dev/acme"])
+        assert second.exit_code == 0, second.output
+        assert "warning" in second.output.lower()
+        assert "description" in second.output.lower()
+        # Declarative replace is still by design -- the field IS cleared.
+        assert "description" not in (config_dir / "projects.yaml").read_text()
+
+    def test_add_dry_run_also_warns_about_dropped_fields(self, config_dir: Path) -> None:
+        first = runner.invoke(
+            app, ["project", "add", "acme", "~/dev/acme", "--description", "Acme Corp"]
+        )
+        assert first.exit_code == 0, first.output
+        before = (config_dir / "projects.yaml").read_bytes()
+
+        second = runner.invoke(app, ["project", "add", "acme", "~/dev/acme", "--dry-run"])
+        assert second.exit_code == 0, second.output
+        assert "warning" in second.output.lower()
+        assert "description" in second.output.lower()
+        assert (config_dir / "projects.yaml").read_bytes() == before
+
 
 class TestProjectRm:
     def test_rm_missing_name_lists_valid_names(self, config_dir: Path) -> None:
@@ -278,6 +304,38 @@ class TestTaskSetRole:
         before = (config_dir / "tasks.yaml").read_bytes()
         result = runner.invoke(app, ["task", "set-role", "dev-task", "reviewer", "--dry-run"])
         assert result.exit_code == 0, result.output
+        assert (config_dir / "tasks.yaml").read_bytes() == before
+
+    def test_task_missing_from_raw_map_exits_clean_no_traceback(
+        self, config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`load_tasks()` (pydantic-normalized) reports the task as present,
+        but the raw round-trip map used for the actual mutation does not
+        contain it (e.g. a numeric-looking task key that YAML parses as an
+        int while pydantic's `dict[str, TaskConfig]` coerces to a str key).
+        This must be a clean exit 1, never an uncaught KeyError."""
+        import hivepilot.services.project_service as project_service_module
+        from hivepilot.services.project_service import TasksFile
+
+        real_load_tasks = project_service_module.load_tasks
+
+        def fake_load_tasks(path=None):
+            result = real_load_tasks(path)
+            merged = dict(result.tasks)
+            merged["ghost-task"] = next(iter(result.tasks.values()))
+            return TasksFile(runners=result.runners, tasks=merged)
+
+        monkeypatch.setattr(project_service_module, "load_tasks", fake_load_tasks)
+        # cli.py imports `load_tasks` lazily inside the function, from this
+        # same module -- patching the module attribute is enough.
+
+        before = (config_dir / "tasks.yaml").read_bytes()
+        result = runner.invoke(app, ["task", "set-role", "ghost-task", "reviewer"])
+        assert result.exit_code == 1
+        assert "Traceback" not in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "ghost-task" in result.output
+        assert "dev-task" in result.output  # lists a valid (raw) task
         assert (config_dir / "tasks.yaml").read_bytes() == before
 
 
@@ -392,6 +450,41 @@ class TestRoleWire:
         assert text.startswith("# HivePilot role definitions\n")
         assert "- name: developer  # primary coder" in text
 
+    def test_models_field_comma_split_coercion(self, config_dir: Path) -> None:
+        result = runner.invoke(app, ["role", "wire", "developer", "models", "sonnet,opus"])
+        assert result.exit_code == 0, result.output
+        text = (config_dir / "roles.yaml").read_text()
+        assert "sonnet" in text and "opus" in text
+        assert validate_config(base_dir=config_dir) == []
+
+    def test_role_valid_per_load_roles_but_absent_from_raw_map_errors(
+        self, config_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`load_roles()` reports the role as valid (e.g. it was merged in
+        from somewhere `_load_raw_config_file` doesn't see), but no entry in
+        the raw roles.yaml list matches its name. `mutate()`'s for/break loop
+        then silently no-ops -- this must surface as an explicit error, never
+        a false "success" with nothing actually changed."""
+        import hivepilot.roles as roles_module
+
+        real_load_roles = roles_module.load_roles
+
+        def fake_load_roles():
+            roles = dict(real_load_roles())
+            ghost = next(iter(roles.values())).model_copy(update={"name": "ghost"})
+            roles["ghost"] = ghost
+            return roles
+
+        monkeypatch.setattr(roles_module, "load_roles", fake_load_roles)
+        # cli.py's role_wire imports `load_roles` lazily from this module.
+
+        before = (config_dir / "roles.yaml").read_bytes()
+        result = runner.invoke(app, ["role", "wire", "ghost", "order", "5"])
+        assert result.exit_code == 1
+        assert "ghost" in result.output
+        assert "developer" in result.output  # lists a valid (raw) role
+        assert (config_dir / "roles.yaml").read_bytes() == before
+
 
 # ---------------------------------------------------------------------------
 # Module hygiene: never bypass the round-trip writer
@@ -403,3 +496,18 @@ def test_no_safe_dump_used_in_cli_module() -> None:
 
     source = Path(cli_module.__file__).read_text(encoding="utf-8")
     assert "safe_dump" not in source
+
+
+def test_sprint3_config_commands_never_bypass_the_writer() -> None:
+    """Extra hardening: the project/task/role edit command bodies (Sprint 3)
+    must never call yaml.dump(...) directly, nor open a config path in write
+    mode -- every mutation must flow through
+    hivepilot.services.config_writer.apply_and_validate."""
+    import hivepilot.cli as cli_module
+
+    source = Path(cli_module.__file__).read_text(encoding="utf-8")
+    start = source.index("Guided config mutations (Sprint 3")
+    end = source.index('@telegram_app.command("start")')
+    region = source[start:end]
+    assert "yaml.dump(" not in region
+    assert "open(" not in region

@@ -1012,6 +1012,17 @@ def project_add(
         typer.echo(f"Project {name!r} already configured identically. No changes.")
         raise typer.Exit(0)
 
+    if existing is not None:
+        dropped_fields = sorted(key for key in existing if key not in candidate)
+        if dropped_fields:
+            typer.echo(
+                f"Warning: project {name!r} previously had "
+                f"{', '.join(dropped_fields)} set; this run omits the "
+                "corresponding flag(s), so they will be cleared "
+                "(declarative replace).",
+                err=True,
+            )
+
     def mutate(data):
         if "projects" not in data:
             data["projects"] = {}
@@ -1106,12 +1117,31 @@ def task_set_role(
         resolved_role = picked
 
     raw = _load_raw_config_file("tasks.yaml")
-    raw_task = (raw.get("tasks") or {}).get(task) or {}
+    raw_tasks = raw.get("tasks") or {}
+    if task not in raw_tasks:
+        # `tasks` (pydantic-normalized via load_tasks()) reported the task as
+        # present, but the raw round-trip map used for the actual mutation
+        # does not have it under this exact key (e.g. divergent config
+        # layering, or a numeric-looking key YAML parses as int while
+        # pydantic's dict[str, TaskConfig] coerces to str). Refuse cleanly
+        # instead of letting the mutate() below raise an uncaught KeyError.
+        typer.echo(f"Error: task {task!r} not found in the on-disk tasks.yaml.", err=True)
+        valid_raw_tasks = ", ".join(sorted(str(k) for k in raw_tasks)) or "(none configured)"
+        typer.echo(f"Valid tasks: {valid_raw_tasks}", err=True)
+        raise typer.Exit(1)
+
+    raw_task = raw_tasks[task]
     if raw_task.get("role") == resolved_role:
         typer.echo(f"Task {task!r} already bound to role {resolved_role!r}. No changes.")
         raise typer.Exit(0)
 
     def mutate(data):
+        if task not in data.get("tasks", {}):
+            # Defensive: apply_and_validate reloads its own copy of the raw
+            # map, so re-check membership here too rather than trust the
+            # pre-check above never goes stale.
+            typer.echo(f"Error: task {task!r} not found in the on-disk tasks.yaml.", err=True)
+            raise typer.Exit(1)
         data["tasks"][task]["role"] = resolved_role
         return data
 
@@ -1214,7 +1244,27 @@ def role_wire(
         (entry for entry in raw_roles if isinstance(entry, dict) and entry.get("name") == role),
         None,
     )
-    existing_value = None if raw_entry is None else raw_entry.get(field)
+    if raw_entry is None:
+        # `roles` (load_roles(), pydantic-normalized) reported the role as
+        # valid, but no entry in the raw roles.yaml list matches its name.
+        # Without this guard, mutate()'s for/break loop below would silently
+        # no-op (write the file back unchanged) while the command still
+        # echoed success. Refuse explicitly instead.
+        typer.echo(f"Error: role {role!r} not found in the on-disk roles.yaml.", err=True)
+        valid_raw_roles = (
+            ", ".join(
+                sorted(
+                    str(entry.get("name"))
+                    for entry in raw_roles
+                    if isinstance(entry, dict) and entry.get("name") is not None
+                )
+            )
+            or "(none configured)"
+        )
+        typer.echo(f"Valid roles: {valid_raw_roles}", err=True)
+        raise typer.Exit(1)
+
+    existing_value = raw_entry.get(field)
     if existing_value == coerced:
         typer.echo(f"Role {role!r} field {field!r} already set to {value!r}. No changes.")
         raise typer.Exit(0)
@@ -1224,6 +1274,12 @@ def role_wire(
             if isinstance(entry, dict) and entry.get("name") == role:
                 entry[field] = coerced
                 break
+        else:
+            # Defensive: apply_and_validate reloads its own copy of the raw
+            # map -- re-check membership rather than trust the pre-check
+            # above never goes stale, so this never silently no-ops either.
+            typer.echo(f"Error: role {role!r} not found in the on-disk roles.yaml.", err=True)
+            raise typer.Exit(1)
         return data
 
     result = apply_and_validate("roles.yaml", mutate, dry_run=dry_run, base_dir=None)
