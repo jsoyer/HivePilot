@@ -988,8 +988,7 @@ class TestContextRoutingFullModeUnchanged:
         from hivepilot.orchestrator import settings as orchestrator_settings
 
         assert orchestrator_settings.context_routing_mode == "full", (
-            "sanity check: this regression test is only meaningful against the "
-            "real default value"
+            "sanity check: this regression test is only meaningful against the real default value"
         )
         stage_a_output = (
             "## DESIGN_SPEC\ndesign body\n"
@@ -1013,8 +1012,7 @@ class TestContextRoutingFullModeUnchanged:
         )
         assert with_inputs is not None
         assert stage_a_output in with_inputs, (
-            "full mode must still carry the whole stage_output blob, not a "
-            "keyed subset"
+            "full mode must still carry the whole stage_output blob, not a keyed subset"
         )
 
 
@@ -1023,9 +1021,7 @@ class TestContextRoutingKeyedMode:
     consuming role's declared `inputs`, with a conservative fallback to full
     context when none of those keys are present in the store."""
 
-    def test_keyed_mode_routes_only_declared_inputs(
-        self, monkeypatch: Any
-    ) -> None:
+    def test_keyed_mode_routes_only_declared_inputs(self, monkeypatch: Any) -> None:
         from hivepilot.orchestrator import build_prior_context
         from hivepilot.orchestrator import settings as orchestrator_settings
 
@@ -1063,13 +1059,10 @@ class TestContextRoutingKeyedMode:
         )
         assert full_equivalent is not None
         assert len(keyed_context) < len(full_equivalent), (
-            "the assembled keyed context must be strictly shorter than the "
-            "full prior_chunks blob"
+            "the assembled keyed context must be strictly shorter than the full prior_chunks blob"
         )
 
-    def test_keyed_mode_all_keys_missing_falls_back_to_full_context(
-        self, monkeypatch: Any
-    ) -> None:
+    def test_keyed_mode_all_keys_missing_falls_back_to_full_context(self, monkeypatch: Any) -> None:
         """None of the consuming role's declared input keys are produced by
         stage-a (its outputs don't include them) -> the keyed slice would be
         empty, so routing must fall back to the full prior_chunks context and
@@ -1101,9 +1094,7 @@ class TestContextRoutingKeyedMode:
             "nonexistent_key_two",
         ]
 
-    def test_keyed_mode_empty_inputs_role_gets_full_context(
-        self, monkeypatch: Any
-    ) -> None:
+    def test_keyed_mode_empty_inputs_role_gets_full_context(self, monkeypatch: Any) -> None:
         """A consuming role with an EMPTY `inputs` list is not routable at
         all — even in keyed mode it must receive the full context, not an
         empty one."""
