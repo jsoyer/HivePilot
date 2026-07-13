@@ -17,12 +17,12 @@
       "id": 2,
       "file": "sprints/02-plugin-loading-both-mechanisms.md",
       "title": "Plugin loading — both mechanisms",
-      "status": "not_started",
+      "status": "complete",
       "depends_on": [1],
       "batch": 2,
       "model": "sonnet",
-      "branch": null,
-      "merged": false
+      "branch": "feature/plugin-system",
+      "merged": true
     },
     {
       "id": 3,

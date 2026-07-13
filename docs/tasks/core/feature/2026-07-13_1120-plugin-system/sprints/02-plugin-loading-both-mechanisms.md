@@ -147,9 +147,43 @@ Two important existing facts, verified by reading `tests/test_plugins.py`:
 
 ## Agent Notes (filled during execution)
 
-- Assigned to: [Agent ID / session]
-- Started: [timestamp]
-- Completed: [timestamp]
-- Decisions made: [list with reasoning]
-- Assumptions: [list with confidence level]
-- Issues found: [list]
+- Assigned to: sprint-executor (Sprint 2, direct-tree execution on feature/plugin-system)
+- Started: 2026-07-13
+- Completed: 2026-07-13
+- Decisions made:
+  - `import importlib.metadata as metadata` was placed at MODULE level (not inside
+    `load_entry_point_plugins()`) specifically so tests can monkeypatch
+    `hivepilot.plugins.metadata.entry_points` — a local/function-scoped import would
+    not bind `metadata` onto the module namespace and would be unpatchable that way.
+  - `RunnerRegistry` is imported lazily (inside the `PluginManager.__init__` loop,
+    only when a plugin actually declares `"runners"`) rather than at module top,
+    purely as a defensive/least-surprise choice — no circular import was found, but
+    this keeps `hivepilot/plugins.py` decoupled from the registry unless needed.
+  - Added an `autouse` `RUNNER_MAP` snapshot/restore fixture in the new test file
+    since `RUNNER_MAP` is process-global mutable state shared across the whole
+    pytest session — without it, kinds registered by these tests (including the
+    intentional `"claude"` collision test) would leak into other test modules.
+  - Confirmed via a dedicated sub-agent investigation that `tests/` has no
+    `__init__.py` by design (documented in pyproject.toml's mypy comment) but the
+    repo's editable install + running pytest from repo root puts the repo root on
+    `sys.path`, so `tests.fixtures.entry_point_plugin` resolves as a PEP 420
+    namespace-package dotted import with no extra sys.path manipulation needed in
+    the test file (an initial defensive `sys.path.insert` was added, then removed
+    after confirming it was unnecessary and it tripped an E402 lint hook).
+  - Added one extra test (`TestDeclaredNotifiersCollection`) beyond the spec's
+    (a)-(f) list to directly verify `"notifiers"` is popped before the generic
+    hook-accumulation loop and lands in `declared_notifiers`, not `.hooks`— this is
+    called out as a key correctness point in the spec and was cheap to cover.
+- Assumptions:
+  - HIGH confidence: `self.plugins` back-compat attribute should be the flat list
+    of all discovered callables (local + entry-point), regardless of whether their
+    `register()` call later succeeds — matches the spec's explicit recommendation
+    and confirmed via grep that nothing outside `plugins.py` reads `.plugins`
+    directly (only `orchestrator.py` holds a `PluginManager` instance and calls
+    `.run_hook()`).
+  - HIGH confidence: the explicit-`entry` branch of `load_plugins()` intentionally
+    keeps no `plugins_enabled` guard, per the spec's explicit instruction.
+- Issues found: none — `RunnerKindCollisionError` propagation, broken-plugin
+  isolation (import/exec, `.load()`, `register()`), and the `plugins_enabled=False`
+  short-circuit were all manually exercised via `.venv/bin/python -c` one-off
+  scripts (pytest itself is soft-blocked for sub-agents) and behaved as specified.
