@@ -1,0 +1,59 @@
+{
+  "prd": "stage-scoping-and-controls",
+  "prd_path": "docs/tasks/pipeline/feature/2026-07-12_1200-stage-scoping-and-controls/spec.md",
+  "program": "A1 of A1->B->A2 (blocker for PRD B: Noxys designer config)",
+  "created": "2026-07-12",
+  "status": "planned",
+  "build_candidate": "build-candidate/stage-scoping-and-controls",
+  "current_batch": 1,
+  "sprints": [
+    {
+      "id": 1,
+      "title": "Stage scoping + continue_on_failure + skip",
+      "spec": "sprints/01-stage-scoping.md",
+      "depends_on": [],
+      "batch": 1,
+      "model": "sonnet",
+      "parallel_with": [2],
+      "status": "pending",
+      "files_to_modify": [
+        "hivepilot/models.py",
+        "hivepilot/orchestrator.py",
+        "tests/test_pipeline_execution.py",
+        "tests/test_models.py",
+        "tests/test_component_selection.py"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Role.prompt_file resolution via config chain",
+      "spec": "sprints/02-role-prompt-resolution.md",
+      "depends_on": [],
+      "batch": 1,
+      "model": "sonnet",
+      "parallel_with": [1],
+      "status": "pending",
+      "files_to_modify": [
+        "hivepilot/roles.py",
+        "tests/test_roles.py"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Docs + groups.yaml example tags",
+      "spec": "sprints/03-docs.md",
+      "depends_on": [1, 2],
+      "batch": 2,
+      "model": "sonnet",
+      "parallel_with": [],
+      "status": "pending",
+      "files_to_modify": [
+        "docs/v4/RUNBOOK.md",
+        "docs/v4/USAGE.md",
+        "groups.yaml"
+      ]
+    }
+  ],
+  "acceptance_summary": "3 new PipelineStage fields + Group.tags, fail-closed tag validation, continue_on_failure activation, Role.prompt_file via config chain, docs. Full backward-compat. python -m pytest -q green.",
+  "verification_command": "cd /home/jeromesoyer/Documents/Github/jsoyer/HivePilot && python -m pytest -q"
+}
