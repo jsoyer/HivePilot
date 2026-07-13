@@ -109,6 +109,29 @@ fait) ou la note du run dans le vault Obsidian.
 > un vrai run. Pour ajouter un point de validation ailleurs, pose `pause_before: true`
 > sur l'étape voulue dans `pipelines.yaml`.
 
+## Cibler une étape sur un sous-ensemble (`only_components` / `only_tags`)
+
+Une étape de pipeline peut être **restreinte à un sous-ensemble** des composants
+touchés par le run, et peut aussi **désactiver le fail-fast**. Les trois champs
+sont optionnels : une étape qui n'en pose aucun se comporte comme avant.
+
+- `only_components: [nom, …]` — limite l'étape à ces composants (par nom).
+- `only_tags: [tag, …]` — limite l'étape via des tags, résolus par la map `tags`
+  du groupe dans `groups.yaml`.
+- `continue_on_failure: true` — une étape qui échoue **n'arrête pas** le run (le
+  fail-fast est neutralisé, le pipeline passe à l'étape suivante). Absent ou
+  `false` = comportement fail-fast actuel.
+
+**Skip :** l'ensemble cible = `only_components` ∪ (composants résolus depuis
+`only_tags`). L'étape est **sautée si et seulement si** cet ensemble est non vide
+**et disjoint** des composants réellement touchés par le run. Une étape sans
+aucun sélecteur tourne toujours. Une étape sautée n'appelle pas sa tâche, n'est
+pas comptée comme un échec, et laisse le contexte précédent intact.
+
+**Fail-closed :** un `only_tags` absent des `tags` du groupe lève une `ValueError`
+claire **d'entrée** (au chargement, avant toute étape) — un tag inconnu n'est
+jamais silencieusement sauté.
+
 
 ## Pipeline `default` (planification réordonnée + checkpoint)
 
@@ -211,6 +234,10 @@ modifie jamais un prompt lui-même — il propose, tu approuves**.
 Un **groupe** = un produit fait de plusieurs dépôts. `acme` regroupe ses 24
 composants (`acme-api`, `acme-web`, …), avec un `hub` (le dépôt où tournera la
 planif au niveau groupe, à partir de E2). Config : `groups.yaml`.
+
+Un groupe peut aussi définir des **`tags`** (`dict[str, list[str]]`, défaut `{}`)
+qui nomment un sous-ensemble de composants ; une étape de pipeline avec
+`only_tags` résout ses composants via cette map (cf. `only_tags` plus haut).
 
 - Lister : `hivepilot groups`
 - **Tâche unique fan-out** : `hivepilot run acme lint` → la tâche tourne sur tous

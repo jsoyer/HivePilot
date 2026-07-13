@@ -410,6 +410,10 @@ groups:
   acme:
     hub: acme
     components: [acme-api, acme-web, ...]
+    # tags: optional dict[str, list[str]] (default {}) — a named subset of the
+    # components above. Stage `only_tags` resolves through this map. Illustrative:
+    tags:
+      ui: [acme-web]        # real tag names/members owned by PRD B / Noxys config
 ```
 
 ### Plan checkpoint (CHECKPOINT / `pause_before`)
@@ -434,6 +438,45 @@ curl -X POST http://localhost:8045/approvals/<run_id> \
 **Approve via Telegram:**
 ```
 /approve <run_id>
+```
+
+### Stage scoping (`only_components` / `only_tags` / `continue_on_failure`)
+
+A pipeline stage can be restricted to a subset of the run's touched components,
+and can opt out of fail-fast. All three fields are optional and backward
+compatible — a stage that sets none of them behaves exactly as before.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `only_components` | `list[str] \| None` | `None` | Restrict the stage to these component names. |
+| `only_tags` | `list[str] \| None` | `None` | Restrict via tag names, resolved through the run's `Group.tags` (see Group mode). |
+| `continue_on_failure` | `bool` | `false` | When `true`, a failing stage does **not** halt the run — fail-fast is suppressed and the pipeline proceeds to the next stage. `false`/absent keeps the current fail-fast behaviour. |
+
+Two other per-stage flags predate scoping: `pause_before: bool` (human plan
+checkpoint, see above) and `commits_vault: bool` (default `false` — when `true`,
+the stage triggers a vault changelog commit after it executes).
+
+**Skip semantics.** The stage's *target set* is
+`set(only_components or [])` ∪ (the components resolved from `only_tags`).
+The stage is **skipped iff that target set is non-empty AND disjoint from the
+components the run actually touches** (`selected_components`). A stage with
+neither selector always runs. A skipped stage does not invoke its task, is not
+counted as a failure, and leaves prior context untouched.
+
+**Fail-closed.** An `only_tags` value that is not defined in the run's
+`Group.tags` raises a clear `ValueError` up front (at load/resolve time, before
+any stage runs) — an unknown tag is never silently skipped.
+
+```yaml
+# pipelines.yaml — scoped stage example
+stages:
+  - name: Frontend build
+    task: build-ui
+    only_tags: [ui]            # resolved through groups.yaml → Group.tags
+    continue_on_failure: true  # a build failure here won't abort the whole run
+  - name: API deploy
+    task: deploy-api
+    only_components: [acme-api]
 ```
 
 ### @mentions and aliases

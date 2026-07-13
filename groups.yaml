@@ -1,6 +1,11 @@
 # Component groups (a "project" in product terms, e.g. Acme, made of many repos).
 # A group expands to its component projects (each its own git repo). The `hub` is
 # the project where group-level planning runs (used from E2 onward).
+#
+# `tags` is an optional dict[str, list[str]] (default {}) mapping a tag name to a
+# subset of this group's components. A pipeline stage's `only_tags` resolves its
+# component names through this map (see docs/v4/RUNBOOK.md → Stage scoping). A tag
+# referenced by a stage but absent here fails the run up front (fail-closed).
 groups:
   acme:
     description: The Acme product — all components, each its own repo.
@@ -8,3 +13,7 @@ groups:
     components:
       - acme-web
       - acme-worker
+    # Illustrative only — real tag names/members are owned by PRD B / Noxys config.
+    # Every listed component must also appear under `components:` above.
+    tags:
+      ui: [acme-web]

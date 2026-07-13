@@ -20,9 +20,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from hivepilot.config import Settings
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts" / "agents"
 
@@ -175,6 +179,29 @@ _DEFAULT_ROLES: dict[str, Role] = {
 }
 
 
+def _resolve_prompt_path(prompt_filename: str, settings_obj: Settings) -> Path:
+    """Resolve a role's prompt file through the config chain, falling back to
+    the packaged prompts/agents/ copy.
+
+    Resolution order:
+      1. $XDG_CONFIG_HOME/hivepilot/prompts/agents/<prompt_filename>
+      2. config_repo/prompts/agents/<prompt_filename>
+      3. base_dir/prompts/agents/<prompt_filename>  (cwd fallback)
+      4. _PROMPTS_DIR / <prompt_filename>  (packaged copy — FINAL fallback)
+
+    ``settings_obj.resolve_config_path`` already implements tiers 1-3 (each
+    ``.exists()``-checked, tier 3 returned unconditionally as the chain's own
+    last resort). Here we additionally check ``.exists()`` on that result so a
+    non-existent tier-3 guess doesn't shadow the packaged copy that ships with
+    the app. Never raises — a missing file everywhere still yields a Path,
+    letting callers' existing ``.exists()`` / ``""`` guards handle it safely.
+    """
+    candidate = settings_obj.resolve_config_path(Path("prompts") / "agents" / prompt_filename)
+    if candidate.exists():
+        return candidate
+    return _PROMPTS_DIR / prompt_filename
+
+
 def load_roles() -> dict[str, Role]:
     """Load roles from the configured roles_file (roles.yaml).
 
@@ -184,8 +211,10 @@ def load_roles() -> dict[str, Role]:
       3. base_dir/roles.yaml  (cwd fallback — repo root in dev)
 
     Each YAML entry's ``prompt_file`` is treated as a filename relative to
-    ``prompts/agents/`` — the loader prepends ``_PROMPTS_DIR`` before
-    constructing the Role, so resolved paths are identical to _DEFAULT_ROLES.
+    ``prompts/agents/``. The loader resolves it through the same config chain
+    (see ``_resolve_prompt_path``) so a prompt override placed in the config
+    repo is picked up, falling back to ``_PROMPTS_DIR`` (identical to
+    _DEFAULT_ROLES) when no override exists.
 
     On FileNotFoundError or any parse / validation error, logs a warning and
     returns _DEFAULT_ROLES so the application is never left without roles.
@@ -208,7 +237,7 @@ def load_roles() -> dict[str, Role]:
         for entry in entries:
             entry = dict(entry)  # shallow copy so we don't mutate the parsed data
             prompt_filename = entry.pop("prompt_file")
-            entry["prompt_file"] = _PROMPTS_DIR / prompt_filename
+            entry["prompt_file"] = _resolve_prompt_path(prompt_filename, settings)
             role = Role(**entry)
             result[role.name] = role
         return result
