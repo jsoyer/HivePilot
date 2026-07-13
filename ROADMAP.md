@@ -20,6 +20,7 @@
 - Phase 23b -- Telegram Bot (dual-mode)
 - Phase 17d -- Linear Integration
 - Phase 17e -- Notion Integration
+- Plugin System (v1) -- Pluggable runners, notifiers & lifecycle hooks; both load mechanisms (local `plugins/*.py` + `hivepilot.plugins` entry points); fail-closed trust model; `hivepilot plugins list`; `docs/v4/PLUGINS.md` (PR #122)
 
 ---
 
@@ -412,3 +413,41 @@ The one engine addition that remains useful:
 - [x] Generic named webhook trigger: `POST /webhook/trigger/{schedule_name}` — fires a named
   schedule entry on demand, usable from any external tool (Zapier, n8n, mobile shortcut).
   Protected by Bearer token. Returns immediately, executes async.
+
+---
+
+## Phase 26 -- Plugin System v2 & Follow-ups
+
+> Deferred refinements after the Plugin System v1 ship (PR #122). None are bugs — v1 is
+> shipped, CI-green, and zero-regression. These were explicit v1 non-goals or documented
+> simplifications. See `docs/v4/PLUGINS.md` and the PRD at
+> `docs/tasks/core/feature/2026-07-13_1120-plugin-system/`.
+
+### 26a -- Loose ends from v1 (small)
+
+- [ ] **Resolve the `"api"` runner-kind orphan.** `"api"` is declared in `KNOWN_RUNNER_KINDS`
+  (and was in the old `RunnerKind` Literal) but has no `RUNNER_MAP` entry, so resolving
+  `kind: api` raises `KeyError`. Intentionally preserved as-is in v1 (Non-Goal). Decide:
+  either implement a real generic `api` runner, or drop `"api"` from `KNOWN_RUNNER_KINDS`
+  (careful: `_parse_brain` / `cli.py role set-field` currently treat it as a recognized prefix).
+- [ ] **Per-plugin attribution in `hivepilot plugins list`.** v1 ships a flat inventory:
+  a "Loaded Plugins" table (name/source/location) plus separate "Runner Kinds" / "Notifiers"
+  tables labelled built-in-vs-plugin by membership. v2 = join which specific plugin contributed
+  which runner kind / notifier name / hook, i.e. extend `PluginRecord` to carry its contributed
+  capabilities and render them per-plugin.
+- [ ] **Cosmetic: `plugins_entry` provenance label.** The explicit `plugins_entry` module-path
+  pin is tagged `source="local-file"` even though it's an arbitrary `module:attr` import (possibly
+  an installed package), not a `plugins/*.py` scan result. v1 kept it because the
+  `PluginRecord.source` contract only allows `local-file | entry-point | built-in`. v2 = add a
+  distinct `explicit-entry` source value (updates the shared contract in spec §12).
+
+### 26b -- Bigger v2 directions (explicitly excluded from v1)
+
+- [ ] **Marketplace / remote plugin discovery.** v1 trust model is local filesystem + installed
+  pip packages only — no network fetch of plugin code, ever (a named Danger in the PRD). A
+  registry service / remote discovery would need its own trust & signing story first.
+- [ ] **Sandboxing / capability-restriction.** v1 treats a plugin as trusted arbitrary Python,
+  exactly like any installed dependency (documented, not sandboxed). v2 could add subprocess
+  isolation / seccomp / capability limits for untrusted plugins.
+- [ ] **Hot-reload without restart.** v1 loads plugins once at `PluginManager()` construction
+  (process start / `Orchestrator._load()`). v2 = file-watching / live reload of `plugins/*.py`.
