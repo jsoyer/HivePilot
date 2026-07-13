@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     enable_textual_ui: bool = False
     output_format: str = "json"
     plugins_entry: str | None = None
+    plugins_enabled: bool = True  # master on/off switch for local-file + entry-point plugin loading
     discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
     api_host: str = "127.0.0.1"
     api_port: int = 8045

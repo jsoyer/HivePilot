@@ -25,3 +25,7 @@ runs/
 .hivepilot/
 .claude/worktrees/
 .claude/settings.local.json
+
+# Session learnings live in the private Obsidian vault, not in this public repo.
+# docs/session-learnings.md is a local symlink into the vault (see chore PR).
+docs/session-learnings.md
