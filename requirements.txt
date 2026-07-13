@@ -1,3 +1,14 @@
+# DEPRECATED — this file is NOT the source of truth for HivePilot dependencies.
+# It is kept only for legacy reference and is no longer installed by the
+# Dockerfile, CI, Makefile, or scripts/install.sh.
+#
+# The canonical install path is pyproject.toml's optional-dependency extras:
+#   pip install -e ".[dev,notifications]"   # local dev + tests
+#   pip install -e ".[notifications]"       # runtime (Docker image)
+#   pip install -e ".[full]"                # every integration extra
+#
+# See pyproject.toml [project.optional-dependencies] for the full extras list.
+
 typer>=0.16,<1.0
 rich>=13.7,<14.0
 pydantic>=2.8,<3.0

@@ -109,12 +109,22 @@ All paths are relative to `HIVEPILOT_BASE_DIR` (default: `cwd`). XDG override: f
 | `.env` | All secrets and deployment-specific settings (never commit) |
 | `api_tokens.yaml` | Hashed API tokens (written by `hivepilot tokens add`; never commit) |
 
-### Scaffold a new config directory
+### First-run setup: onboarding wizard & config scaffolding
+
+**Interactive onboarding wizard** (recommended — clone an existing config repo or scaffold fresh config):
 
 ```bash
-hivepilot init minimal --name my-project --dest ./config
+hivepilot init                    # Start interactive wizard
+hivepilot init --yes              # Non-interactive: scaffold minimal config locally
+hivepilot init --config-repo git@github.com:you/hivepilot-config.git  # Clone existing config
+```
+
+**Or scaffold from a template:**
+
+```bash
+hivepilot init-template minimal --name my-project --dest ./config
 # Templates: minimal, blog, iac, security
-hivepilot init --list   # list available templates
+hivepilot init-template --list   # list available templates
 ```
 
 ### Key `.env` settings

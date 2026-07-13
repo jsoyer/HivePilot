@@ -1,0 +1,38 @@
+# --- Version control ---
+.git
+.gitignore
+
+# --- Python virtual environments ---
+.venv
+venv
+
+# --- Secrets & local state (never leak into image layers) ---
+.env
+.env.*
+!.env.example
+state.db
+*.db
+
+# --- Runtime / local artifacts ---
+runs/
+.artifacts
+
+# --- Caches & build metadata ---
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.cache
+*.egg-info
+dist
+build
+htmlcov
+coverage.*
+
+# --- Claude / worktree tooling (host-only, not needed in image) ---
+.claude/worktrees
+
+# --- Editors / OS cruft ---
+.DS_Store
