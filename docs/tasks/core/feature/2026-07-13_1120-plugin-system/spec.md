@@ -138,8 +138,8 @@ N/A — no persistent schema. `PluginManager.loaded: list[PluginRecord]` and `RU
 
 ## 14. Open Questions
 
-- [ ] Should `settings.plugins_enabled=False` also suppress the *local-file* `plugins/*.py` scan, or only entry-points? Assumed: both — a single master switch, simplest mental model. Confirm during Sprint 2 review.
-- [ ] Should `hivepilot plugins list` also show *built-in* runners/notifiers (11+3), or only plugin-contributed ones? Assumed: show both, with a `source: built-in` marker, so the command is a complete inventory. Confirm during Sprint 4 review.
+- [x] Should `settings.plugins_enabled=False` also suppress the *local-file* `plugins/*.py` scan, or only entry-points? **Resolved (Sprint 2 + Phase 4 review):** it suppresses ALL three loading paths — the local-file scan, the entry-point scan, AND the explicit `plugins_entry` pin — so the switch is a true master kill-switch for investigating a suspect plugin regardless of how it was wired.
+- [x] Should `hivepilot plugins list` also show *built-in* runners/notifiers (11+3), or only plugin-contributed ones? **Resolved (Sprint 4):** it shows both, as a v1 **inventory** — a "Loaded Plugins" table (name/source/location per `PluginRecord`) plus separate "Runner Kinds" and "Notifiers" tables where each row is labelled `built-in` vs `plugin` by membership in `KNOWN_RUNNER_KINDS` / `KNOWN_NOTIFIER_NAMES`. Note: `PluginRecord.source` only ever takes `"local-file"` / `"entry-point"` (never `"built-in"` — built-ins are not plugins and get no `PluginRecord`); the `"built-in"` value listed for `source` in §12 describes the CLI's row label, not a `PluginRecord.source` value. Full per-plugin attribution (which plugin contributed which kind/name) is a deliberate v1 non-goal.
 
 ## 15. Uncertainty Policy
 

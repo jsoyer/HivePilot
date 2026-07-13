@@ -50,6 +50,10 @@ _TOPICS_REGISTRY_PATH = Path(".hivepilot/stream_topics.json")
 
 NOTIFIER_MAP: dict[str, Callable[[str], None]] = {}
 
+# Built-in notifier channels, for docs/help/inventory only (mirrors
+# KNOWN_RUNNER_KINDS) — NOT enforced at runtime; see NotifierRegistry.
+KNOWN_NOTIFIER_NAMES: tuple[str, ...] = ("slack", "discord", "telegram")
+
 
 class NotifierKindCollisionError(RuntimeError):
     pass

@@ -105,7 +105,10 @@ class PluginManager:
     def __init__(self) -> None:
         local = _scan_local_plugins()
         explicit_entry = settings.__dict__.get("plugins_entry")
-        if explicit_entry:
+        # The master switch disables ALL plugin loading, including the explicit
+        # `plugins_entry` pin — otherwise an operator could not silence a suspect
+        # plugin wired via that path (see config.py `plugins_enabled`).
+        if explicit_entry and settings.plugins_enabled:
             for fn in load_plugins(entry=explicit_entry):
                 local.append(
                     (
@@ -138,23 +141,47 @@ class PluginManager:
                 continue
 
             runners = hooks.pop("runners", None)
-            if runners:
-                from hivepilot.registry import RunnerRegistry
-
-                for kind, cls in runners.items():
-                    # RunnerKindCollisionError propagates uncaught — a kind
-                    # collision is a hard stop, unlike an isolated broken plugin.
-                    RunnerRegistry.register(kind, cls)
-
             notifiers = hooks.pop("notifiers", None)
-            if notifiers:
-                from hivepilot.services.notification_service import NotifierRegistry
+            if runners or notifiers:
+                from hivepilot.registry import (
+                    RUNNER_MAP,
+                    RunnerKindCollisionError,
+                    RunnerRegistry,
+                )
+                from hivepilot.services.notification_service import (
+                    NOTIFIER_MAP,
+                    NotifierKindCollisionError,
+                    NotifierRegistry,
+                )
 
-                self.declared_notifiers.update(notifiers)
-                for notifier_name, notifier_fn in notifiers.items():
-                    # NotifierKindCollisionError propagates uncaught — a kind
-                    # collision is a hard stop, unlike an isolated broken plugin.
-                    NotifierRegistry.register(notifier_name, notifier_fn)
+                # A kind/name collision is a hard stop and propagates uncaught
+                # (unlike an isolated broken plugin, which is logged and skipped).
+                # Register this one plugin's runners+notifiers atomically: if any
+                # entry collides, roll back the entries THIS plugin already added
+                # to the process-global maps before re-raising, so an aborted
+                # plugin never leaves orphaned, untracked registrations behind.
+                applied_runners: list[str] = []
+                applied_notifiers: list[str] = []
+                try:
+                    for kind, cls in (runners or {}).items():
+                        was_present = kind in RUNNER_MAP
+                        RunnerRegistry.register(kind, cls)
+                        if not was_present:
+                            applied_runners.append(kind)
+                    for notifier_name, notifier_fn in (notifiers or {}).items():
+                        was_present = notifier_name in NOTIFIER_MAP
+                        NotifierRegistry.register(notifier_name, notifier_fn)
+                        if not was_present:
+                            applied_notifiers.append(notifier_name)
+                except (RunnerKindCollisionError, NotifierKindCollisionError):
+                    for kind in applied_runners:
+                        RUNNER_MAP.pop(kind, None)
+                    for notifier_name in applied_notifiers:
+                        NOTIFIER_MAP.pop(notifier_name, None)
+                    raise
+
+                if notifiers:
+                    self.declared_notifiers.update(notifiers)
 
             for hook_name, hook_callable in hooks.items():
                 self.hooks.setdefault(hook_name, []).append(hook_callable)

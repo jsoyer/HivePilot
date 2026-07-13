@@ -23,8 +23,9 @@ from typing import Any, Callable
 import pytest
 
 from hivepilot import plugins as plugins_mod
+from hivepilot.models import RunnerDefinition
 from hivepilot.plugins import PLUGIN_ENTRY_POINT_GROUP, PluginManager, PluginRecord
-from hivepilot.registry import RUNNER_MAP, RunnerKindCollisionError
+from hivepilot.registry import RUNNER_MAP, RunnerKindCollisionError, RunnerRegistry
 from hivepilot.services.notification_service import NOTIFIER_MAP
 from tests.fixtures import entry_point_plugin as fixture_module
 
@@ -113,6 +114,30 @@ class TestLocalFilePluginRunnerRegistration:
         assert any(r.source == "local-file" and r.name == "local_fixture" for r in pm.loaded)
 
 
+class TestPluginRunnerResolvesAndExecutes:
+    def test_plugin_runner_resolves_instantiates_and_runs(self, tmp_path, monkeypatch) -> None:
+        # AC #4 (execution half): a plugin kind is not merely present in
+        # RUNNER_MAP — it resolves through RunnerRegistry.get_runner to an
+        # instance of the plugin's OWN class, and that instance's run() is
+        # invocable, i.e. the plugin runner actually executes.
+        _write_local_plugin(
+            tmp_path / "plugins",
+            "exec_fixture.py",
+            kind="exec-fixture",
+            class_name="ExecFixtureRunner",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        PluginManager()
+
+        registry = RunnerRegistry(
+            {"myrunner": RunnerDefinition(name="myrunner", kind="exec-fixture")}
+        )
+        runner = registry.get_runner("myrunner")
+        assert type(runner).__name__ == "ExecFixtureRunner"
+        assert runner.run(None) is None
+
+
 class TestEntryPointPluginRunnerRegistration:
     def test_entry_point_plugin_runner_is_resolvable(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
@@ -158,6 +183,46 @@ class TestKindCollision:
 
         with pytest.raises(RunnerKindCollisionError):
             PluginManager()
+
+    def test_collision_rolls_back_that_plugins_earlier_registrations(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # A single plugin declaring two runners where the SECOND collides with a
+        # built-in must not leave the FIRST orphaned in the process-global
+        # RUNNER_MAP: registration of one plugin's runners is atomic.
+        plugin_dir = tmp_path / "plugins"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "partial.py").write_text(
+            """
+class FreshRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+class CollidingRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    # 'fresh-kind' registers first, then 'claude' collides with the built-in.
+    return {"runners": {"fresh-kind": FreshRunner, "claude": CollidingRunner}}
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        with pytest.raises(RunnerKindCollisionError):
+            PluginManager()
+
+        # The earlier, non-colliding kind was rolled back — no orphaned entry.
+        assert "fresh-kind" not in RUNNER_MAP
 
 
 class TestBrokenPluginIsolation:

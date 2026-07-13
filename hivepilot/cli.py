@@ -2417,7 +2417,7 @@ def plugins_list() -> None:
 
     from hivepilot.models import KNOWN_RUNNER_KINDS
     from hivepilot.registry import RUNNER_MAP
-    from hivepilot.services.notification_service import NOTIFIER_MAP
+    from hivepilot.services.notification_service import KNOWN_NOTIFIER_NAMES, NOTIFIER_MAP
 
     orchestrator = Orchestrator()
     console = Console(width=200)
@@ -2440,12 +2440,11 @@ def plugins_list() -> None:
         runners_table.add_row(kind, source)
     console.print(runners_table)
 
-    builtin_notifiers = {"slack", "discord", "telegram"}
     notifiers_table = Table(title="Notifiers")
     notifiers_table.add_column("name")
     notifiers_table.add_column("source")
     for name in sorted(NOTIFIER_MAP):
-        source = "built-in" if name in builtin_notifiers else "plugin"
+        source = "built-in" if name in KNOWN_NOTIFIER_NAMES else "plugin"
         notifiers_table.add_row(name, source)
     console.print(notifiers_table)
 
