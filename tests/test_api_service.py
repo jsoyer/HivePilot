@@ -53,17 +53,19 @@ def test_metrics_content_type():
 
 def test_metrics_no_local_registry():
     """api_service must not define its own CollectorRegistry — uses shared one."""
-    with open(
-        "/home/jeromesoyer/Documents/Github/jsoyer/HivePilot/hivepilot/services/api_service.py"
-    ) as f:
-        source = f.read()
+    from pathlib import Path
+
+    from hivepilot.services import api_service
+
+    source = Path(api_service.__file__).read_text()
     assert "CollectorRegistry()" not in source
 
 
 def test_no_run_counter_in_api_service():
     """run_counter was removed; only complete_run increments runs_total."""
-    with open(
-        "/home/jeromesoyer/Documents/Github/jsoyer/HivePilot/hivepilot/services/api_service.py"
-    ) as f:
-        source = f.read()
+    from pathlib import Path
+
+    from hivepilot.services import api_service
+
+    source = Path(api_service.__file__).read_text()
     assert "run_counter" not in source
