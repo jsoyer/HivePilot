@@ -19,24 +19,29 @@ from hivepilot.runners.prompt_cli_runner import (
 )
 from hivepilot.runners.shell_runner import ShellRunner
 
-RUNNER_MAP: Dict[str, Type[BaseRunner]] = {
-    "claude": ClaudeRunner,
-    "shell": ShellRunner,
-    "langchain": LangChainRunner,
-    "internal": InternalRunner,
-    "codex": CodexRunner,
-    "gemini": GeminiRunner,
-    "opencode": OpenCodeRunner,
-    "ollama": OllamaRunner,
-    "container": ContainerRunner,
-    "cursor": CursorRunner,
-    "vibe": VibeRunner,
-}
+RUNNER_MAP: Dict[str, Type[BaseRunner]] = {}
+
+
+class RunnerKindCollisionError(RuntimeError):
+    pass
 
 
 class RunnerRegistry:
     def __init__(self, runner_defs: dict[str, RunnerDefinition]) -> None:
         self.runner_defs = runner_defs
+
+    @staticmethod
+    def register(kind: str, cls: type[BaseRunner], *, override: bool = False) -> None:
+        if kind in RUNNER_MAP and RUNNER_MAP[kind] is not cls and not override:
+            raise RunnerKindCollisionError(
+                f"Runner kind '{kind}' is already registered to {RUNNER_MAP[kind].__name__}; "
+                f"refusing to silently replace it with {cls.__name__}"
+            )
+        RUNNER_MAP[kind] = cls
+
+    @staticmethod
+    def known_kinds() -> frozenset[str]:
+        return frozenset(RUNNER_MAP)
 
     def get_runner(self, runner_name: str) -> BaseRunner:
         definition = self._definition_for(runner_name)
@@ -95,3 +100,20 @@ class RunnerRegistry:
         if capture is None:
             raise RuntimeError(f"Runner kind '{definition.kind}' does not support capture.")
         return capture(payload)
+
+
+_BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
+    "claude": ClaudeRunner,
+    "shell": ShellRunner,
+    "langchain": LangChainRunner,
+    "internal": InternalRunner,
+    "codex": CodexRunner,
+    "gemini": GeminiRunner,
+    "opencode": OpenCodeRunner,
+    "ollama": OllamaRunner,
+    "container": ContainerRunner,
+    "cursor": CursorRunner,
+    "vibe": VibeRunner,
+}
+for _kind, _cls in _BUILTIN_RUNNERS.items():
+    RunnerRegistry.register(_kind, _cls)

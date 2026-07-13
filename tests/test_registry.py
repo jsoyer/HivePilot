@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
-from hivepilot.registry import RUNNER_MAP
+from hivepilot.registry import RUNNER_MAP, RunnerRegistry
 from hivepilot.runners.prompt_cli_runner import VibeRunner
 
 
 def test_vibe_kind_is_registered() -> None:
     assert RUNNER_MAP.get("vibe") is VibeRunner
+
+
+def test_known_kinds_returns_frozenset_of_builtins() -> None:
+    builtins = {
+        "claude",
+        "shell",
+        "langchain",
+        "internal",
+        "codex",
+        "gemini",
+        "opencode",
+        "ollama",
+        "container",
+        "cursor",
+        "vibe",
+    }
+    known = RunnerRegistry.known_kinds()
+    assert isinstance(known, frozenset)
+    assert builtins <= known
 
 
 def test_capture_definition_routes_http_host_to_worker(monkeypatch) -> None:

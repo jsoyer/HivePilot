@@ -27,6 +27,12 @@ dependencies = [
 [project.scripts]
 hivepilot = "hivepilot.cli:app"
 
+# Third-party plugin packages declare, in their OWN pyproject.toml:
+# [project.entry-points."hivepilot.plugins"]
+# my_plugin = "my_package:register"
+# HivePilot's own pyproject.toml declares nothing here — it is not a plugin
+# of itself. See hivepilot/plugins.py::load_entry_point_plugins.
+
 [project.optional-dependencies]
 # Optional knowledge/RAG stack: enables embedding-based context in
 # knowledge_service (otherwise it falls back to a plain file read) and the

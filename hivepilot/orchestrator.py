@@ -144,16 +144,15 @@ def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
 
     ``"runner:model"`` (e.g. ``"claude:claude-sonnet-4-6"``) pins a runner for that
     brain; a bare model uses the role's default runner. Only a recognised
-    ``RunnerKind`` prefix is treated as a runner, so ``"opencode-go/kimi"`` and
+    runner-kind prefix is treated as a runner, so ``"opencode-go/kimi"`` and
     other slash-style ids stay plain models.
     """
-    from typing import get_args
-
-    from hivepilot.models import RunnerKind
+    from hivepilot.models import KNOWN_RUNNER_KINDS
+    from hivepilot.registry import RUNNER_MAP
 
     if ":" in entry:
         prefix, rest = entry.split(":", 1)
-        if prefix in set(get_args(RunnerKind)):
+        if prefix in (frozenset(RUNNER_MAP) | frozenset(KNOWN_RUNNER_KINDS)):
             return prefix, rest
     return default_runner, entry
 
@@ -1085,6 +1084,14 @@ class Orchestrator:
         notification_service.emit_event(
             "pipeline_start", run_id=run_id, pipeline=pipeline_name, projects=project_names
         )
+        try:
+            self.plugins.run_hook(
+                "on_pipeline_start", run_id=run_id, pipeline=pipeline_name, projects=project_names
+            )
+        except Exception as exc:  # noqa: BLE001 — a broken plugin hook must not kill a run
+            logger.warning(
+                "plugins.hook_failed", hook="on_pipeline_start", run_id=run_id, error=str(exc)
+            )
 
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
@@ -1420,12 +1427,28 @@ class Orchestrator:
                     remaining=[s.name for s in next_stages],
                 )
                 final_status = RunStatus.TEST_FAILURE
+                try:
+                    self.plugins.run_hook(
+                        "on_error", run_id=run_id, pipeline=pipeline_name, stage=stage.name
+                    )
+                except Exception as exc:  # noqa: BLE001 — a broken plugin hook must not kill a run
+                    logger.warning(
+                        "plugins.hook_failed", hook="on_error", run_id=run_id, error=str(exc)
+                    )
                 break
 
         state_service.complete_run(run_id, final_status.value)
         notification_service.emit_event(
             "complete", run_id=run_id, pipeline=pipeline_name, status=final_status.value
         )
+        try:
+            self.plugins.run_hook(
+                "on_pipeline_end", run_id=run_id, pipeline=pipeline_name, status=final_status.value
+            )
+        except Exception as exc:  # noqa: BLE001 — a broken plugin hook must not kill a run
+            logger.warning(
+                "plugins.hook_failed", hook="on_pipeline_end", run_id=run_id, error=str(exc)
+            )
 
         # Version the plan/ADR notes: commit+push the Obsidian vault (best-effort,
         # opt-in, only on a real write run).
