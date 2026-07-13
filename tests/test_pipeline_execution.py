@@ -14,7 +14,7 @@ Covers:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 # hivepilot.orchestrator is imported at module level so it is in sys.modules
@@ -490,20 +490,17 @@ class TestStageScoping:
         orch = _make_orchestrator_with_pipeline(pipeline)
         calls: list[str] = []
 
+        def _record(**kw: Any) -> list[RunResult]:
+            calls.append(kw["task_name"])
+            return [RunResult("proj", kw["task_name"], True)]
+
         with (
             patch("hivepilot.orchestrator.state_service.record_run_start", return_value=101),
             patch("hivepilot.orchestrator.state_service.complete_run"),
             patch("hivepilot.orchestrator.state_service.record_step"),
             patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
             patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
-            patch.object(
-                orch,
-                "run_task",
-                side_effect=lambda **kw: (
-                    (calls.append(kw["task_name"]) or None)
-                    or [RunResult("proj", kw["task_name"], True)]
-                ),
-            ),
+            patch.object(orch, "run_task", side_effect=_record),
         ):
             orch.run_pipeline(
                 project_names=["c1"],
@@ -529,20 +526,17 @@ class TestStageScoping:
         orch = _make_orchestrator_with_pipeline(pipeline)
         calls: list[str] = []
 
+        def _record(**kw: Any) -> list[RunResult]:
+            calls.append(kw["task_name"])
+            return [RunResult("proj", kw["task_name"], True)]
+
         with (
             patch("hivepilot.orchestrator.state_service.record_run_start", return_value=102),
             patch("hivepilot.orchestrator.state_service.complete_run"),
             patch("hivepilot.orchestrator.state_service.record_step"),
             patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
             patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
-            patch.object(
-                orch,
-                "run_task",
-                side_effect=lambda **kw: (
-                    (calls.append(kw["task_name"]) or None)
-                    or [RunResult("proj", kw["task_name"], True)]
-                ),
-            ),
+            patch.object(orch, "run_task", side_effect=_record),
         ):
             orch.run_pipeline(
                 project_names=["c1"],
@@ -572,20 +566,17 @@ class TestStageScoping:
             description="d", hub="hub", components=["web", "api"], tags={"frontend": ["web"]}
         )
 
+        def _record(**kw: Any) -> list[RunResult]:
+            calls.append(kw["task_name"])
+            return [RunResult("proj", kw["task_name"], True)]
+
         with (
             patch("hivepilot.orchestrator.state_service.record_run_start", return_value=103),
             patch("hivepilot.orchestrator.state_service.complete_run"),
             patch("hivepilot.orchestrator.state_service.record_step"),
             patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
             patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
-            patch.object(
-                orch,
-                "run_task",
-                side_effect=lambda **kw: (
-                    (calls.append(kw["task_name"]) or None)
-                    or [RunResult("proj", kw["task_name"], True)]
-                ),
-            ),
+            patch.object(orch, "run_task", side_effect=_record),
         ):
             orch.run_pipeline(
                 project_names=["web"],

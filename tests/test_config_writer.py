@@ -248,9 +248,9 @@ def test_resolve_reference_role(monkeypatch) -> None:
 
 
 def test_resolve_reference_project(monkeypatch) -> None:
-    from hivepilot.models import ProjectsFile
+    from hivepilot.models import ProjectConfig, ProjectsFile
 
-    fake = ProjectsFile(projects={"acme-api": {"path": "~/dev/acme-api"}})
+    fake = ProjectsFile(projects={"acme-api": ProjectConfig(path=Path("~/dev/acme-api"))})
     monkeypatch.setattr("hivepilot.services.project_service.load_projects", lambda path=None: fake)
     assert config_writer.resolve_reference("project", "acme-api") is True
     assert config_writer.resolve_reference("project", "missing") is False
