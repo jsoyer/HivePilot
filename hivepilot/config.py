@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -122,6 +123,19 @@ class Settings(BaseSettings):
     anthropic_prompt_cache: bool = True  # add cache_control to Anthropic system block (L1)
     prior_context_mode: str = "cap"  # full | synthesis | cap (L2)
     max_prior_context_chars: int = 8000  # max chars for cap mode (L2)
+    # PRD A2 Sprint 2: prior-context routing mode.
+    # "full"  (default) — today's behaviour: build_prior_context() over ALL
+    #          prior_chunks, for EVERY role, regardless of whether that role
+    #          declares `inputs` in roles.yaml. Byte-identical to pre-Sprint-2.
+    # "keyed" (opt-in)  — a stage whose role declares non-empty `inputs` gets
+    #          its prior context assembled from ONLY those input keys via the
+    #          Sprint-1 `outputs_by_key` run-scoped store, with a conservative
+    #          fallback to full context when none of the keys are present.
+    # Gating is on THIS flag ONLY, never on input-presence: roles.yaml already
+    # declares `inputs` cosmetically on every role, so gating on presence
+    # would silently regress every existing pipeline to a keyed subset.
+    # env: HIVEPILOT_CONTEXT_ROUTING_MODE
+    context_routing_mode: Literal["full", "keyed"] = "full"
     stage_cache_enabled: bool = False  # opt-in SQLite stage memoization (L3)
     cache_backend: str = "sqlite"  # sqlite | redis (L3)
     redis_url: str | None = None  # required when cache_backend=redis (L3)

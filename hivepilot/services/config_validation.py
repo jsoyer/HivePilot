@@ -7,6 +7,7 @@ strings; an empty list means the config is consistent.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -146,6 +147,61 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
             problems.append(
                 f"Policy entry for project '{project_key}' is not defined in projects.yaml"
             )
+
+    # -----------------------------------------------------------------------
+    # Check: dangling inputs (PRD A2 Sprint 3).
+    #
+    # Data-flow graph: pipeline stage -> task (tasks.yaml `role:`) -> role
+    # (roles.yaml `inputs`/`outputs`). Walk each pipeline's stages in
+    # declared order, accumulating the set of output keys produced so far;
+    # any stage whose role declares an `inputs` key that is not yet in that
+    # accumulated set is a "dangling input" -- nothing upstream in this
+    # pipeline produces it.
+    #
+    # Severity is intentionally NOT a flat hard-error like the checks above:
+    # existing roles.yaml declares `inputs` cosmetically on every role (e.g.
+    # `developer` lists `architecture_docs`/`codebase_context`, which no role
+    # `outputs`) purely as human-readable documentation of what a role reads.
+    # In `context_routing_mode="full"` (default) that's harmless -- the
+    # orchestrator still builds prior_context from ALL prior chunks, so a
+    # dangling input never changes behaviour -- and making it a hard
+    # `problems` entry would break `config validate` for every pre-existing
+    # config, including the bundled Noxys config. So:
+    #   - "full" (default): surfaced as a WARNING via `warnings.warn`, NOT
+    #     appended to `problems` -- `config validate` still exits 0/"OK".
+    #   - "keyed": appended to `problems` as a hard error, because
+    #     `_route_prior_context` (orchestrator.py) then actually narrows a
+    #     stage's prior context to just its declared input keys, so a
+    #     dangling input silently degrades that stage to the conservative
+    #     whole-blob fallback instead of the data it expects.
+    # This mirrors how the CLI's `config validate` command (hivepilot/cli.py)
+    # only inspects the returned `problems` list -- warnings never gate it.
+    # -----------------------------------------------------------------------
+    role_by_name: dict[str, dict[str, Any]] = {
+        r["name"]: r for r in (roles_data.get("roles") or []) if isinstance(r, dict) and "name" in r
+    }
+    keyed_mode = settings.context_routing_mode == "keyed"
+    for pipeline_name, pipeline in (pipelines_data.get("pipelines") or {}).items():
+        available_outputs: set[str] = set()
+        for stage in pipeline.get("stages") or []:
+            task_ref = stage.get("task")
+            task_def = (tasks_data.get("tasks") or {}).get(task_ref) if task_ref else None
+            role_ref = task_def.get("role") if isinstance(task_def, dict) else None
+            role_def = role_by_name.get(role_ref) if role_ref else None
+            if role_def is None:
+                continue
+            for input_key in role_def.get("inputs") or []:
+                if input_key not in available_outputs:
+                    message = (
+                        f"Pipeline '{pipeline_name}' stage '{stage.get('name', '?')}' "
+                        f"input '{input_key}' is not produced by any earlier stage's outputs "
+                        "(dangling input)"
+                    )
+                    if keyed_mode:
+                        problems.append(message)
+                    else:
+                        warnings.warn(f"[config validate] {message}", stacklevel=2)
+            available_outputs.update(role_def.get("outputs") or [])
 
     # -----------------------------------------------------------------------
     # Check: every pipeline stage's `only_tags` values are defined in at

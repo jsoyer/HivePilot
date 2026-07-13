@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 # before any patch("hivepilot.orchestrator.*") context managers are entered.
 # conftest.py has already stubbed langchain/boto3 before this import runs.
 import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch resolution
-from hivepilot.models import PipelineConfig, PipelineStage
+from hivepilot.models import PipelineConfig, PipelineStage, TaskConfig
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.services.state_service import RunStatus
 
@@ -700,3 +700,418 @@ class TestContinueOnFailure:
             mock_complete.call_args.kwargs.get("status") or (mock_complete.call_args.args[1])
         )
         assert actual_status == RunStatus.TEST_FAILURE.value
+
+
+# ---------------------------------------------------------------------------
+# PRD A2 Sprint 1 — keyed store (_parse_output_sections / _stage_outputs_by_key)
+# ---------------------------------------------------------------------------
+
+
+class TestParseOutputSections:
+    """`_parse_output_sections` extracts `## <HEADER>` sections keyed by the
+    normalized key they match; returns {} when nothing matches (mirrors
+    `_parse_components`'s empty-when-none-found style)."""
+
+    def test_extracts_matching_section_to_key(self) -> None:
+        from hivepilot.orchestrator import _parse_output_sections
+
+        text = "intro line\n## DESIGN_SPEC\nline one\nline two\n"
+        result = _parse_output_sections(text, ["design_spec"])
+        assert result == {"design_spec": "line one\nline two"}
+
+    def test_section_stops_at_next_header(self) -> None:
+        from hivepilot.orchestrator import _parse_output_sections
+
+        text = "## DESIGN_SPEC\nbody a\n## UI_REVIEW\nbody b\n"
+        result = _parse_output_sections(text, ["design_spec", "ui_review"])
+        assert result == {"design_spec": "body a", "ui_review": "body b"}
+
+    def test_key_with_no_matching_header_is_absent(self) -> None:
+        from hivepilot.orchestrator import _parse_output_sections
+
+        text = "## DESIGN_SPEC\nbody a\n"
+        result = _parse_output_sections(text, ["design_spec", "no_such_key"])
+        assert "no_such_key" not in result
+        assert result == {"design_spec": "body a"}
+
+    def test_no_headers_returns_empty_dict(self) -> None:
+        from hivepilot.orchestrator import _parse_output_sections
+
+        text = "just some plain prose, no headers at all"
+        assert _parse_output_sections(text, ["design_spec"]) == {}
+
+    def test_case_and_separator_insensitive_header_match(self) -> None:
+        """`design_spec` matches `## DESIGN_SPEC`, `## Design Spec`, and
+        `## design-spec` — key normalization treats `_`, `-`, and spaces as
+        equivalent, case-insensitively."""
+        from hivepilot.orchestrator import _parse_output_sections
+
+        for header in ("## DESIGN_SPEC", "## Design Spec", "## design-spec"):
+            text = f"{header}\ncontent here\n"
+            result = _parse_output_sections(text, ["design_spec"])
+            assert result == {"design_spec": "content here"}, f"failed for header: {header!r}"
+
+    def test_unrelated_subheader_does_not_match(self) -> None:
+        """`### ` (3 hashes) is not a `## ` section header — must not be
+        mistaken for a match, and must not swallow the enclosing section."""
+        from hivepilot.orchestrator import _parse_output_sections
+
+        text = "## DESIGN_SPEC\nbody\n### not a top section\nmore body\n"
+        result = _parse_output_sections(text, ["design_spec"])
+        assert result == {"design_spec": "body\n### not a top section\nmore body"}
+
+
+class TestStageOutputsByKey:
+    """`_stage_outputs_by_key` maps a role's declared output keys to content:
+    section-extracted where present, else the whole stage_output blob
+    (coarse fallback) — every declared key always resolves to something."""
+
+    def test_coarse_fallback_stores_whole_blob_for_key_with_no_section(self) -> None:
+        from hivepilot.orchestrator import _stage_outputs_by_key
+
+        stage_output = "general prose with no ## headers describing the work done"
+        result = _stage_outputs_by_key(stage_output, ["implementation"])
+        assert result == {"implementation": stage_output}
+
+    def test_multiple_outputs_no_sections_all_map_to_whole_blob(self) -> None:
+        """A role with 2 declared outputs and no matching sections in the
+        stage output maps the whole blob to each key."""
+        from hivepilot.orchestrator import _stage_outputs_by_key
+
+        stage_output = "plain implementation notes, no section headers"
+        result = _stage_outputs_by_key(stage_output, ["implementation", "implementation_notes"])
+        assert result == {
+            "implementation": stage_output,
+            "implementation_notes": stage_output,
+        }
+
+    def test_mixed_section_and_fallback_keys(self) -> None:
+        """One declared key has a matching section; the other falls back to
+        the whole blob."""
+        from hivepilot.orchestrator import _stage_outputs_by_key
+
+        stage_output = "## DESIGN_SPEC\nthe spec body\nintro\n## OTHER\nfiller"
+        result = _stage_outputs_by_key(stage_output, ["design_spec", "ui_review"])
+        assert result == {
+            "design_spec": "the spec body\nintro",
+            "ui_review": stage_output,
+        }
+
+
+class TestKeyedStoreInertThisSprint:
+    """The run-scoped keyed store is populated during run_pipeline but never
+    consumed — prior_chunks / build_prior_context stay byte-identical whether
+    or not the stage's role declares outputs (backward-compat guarantee)."""
+
+    def test_prior_context_unchanged_when_role_has_outputs(self) -> None:
+        """A 2-stage pipeline where stage-a's role declares outputs and emits
+        a `## DESIGN_SPEC` section: the store gets populated, but the second
+        stage's prior_context is built exactly as before (full stage_output
+        blob, untouched by the section extraction)."""
+        from hivepilot.models import PipelinesFile
+        from hivepilot.orchestrator import Orchestrator, RunResult
+        from hivepilot.roles import Role
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="stage-a", task="task-a"),
+                PipelineStage(name="stage-b", task="task-b"),
+            ],
+        )
+        pipelines_file = PipelinesFile(pipelines={"test-pipe": pipeline})
+
+        fake_role = Role(
+            name="designer",
+            title="Designer",
+            prompt_file=Path("prompts/agents/designer.md"),
+            model_profile="coding",
+            inputs=[],
+            outputs=["design_spec", "ui_review"],
+            can_block=False,
+            order=1,
+        )
+        tasks_obj = MagicMock(
+            tasks={
+                "task-a": TaskConfig(description="a", role="designer"),
+                "task-b": TaskConfig(description="b"),
+            },
+            runners={},
+        )
+
+        design_output = "## DESIGN_SPEC\nspec body\nmore spec body"
+
+        def fake_run_task(**kw):
+            if kw["task_name"] == "task-a":
+                return [RunResult("proj", "task-a", True, design_output)]
+            return [RunResult("proj", "task-b", True, "b output")]
+
+        with (
+            patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
+            patch("hivepilot.orchestrator.load_tasks", return_value=tasks_obj),
+            patch("hivepilot.orchestrator.load_pipelines", return_value=pipelines_file),
+            patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
+            patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        ):
+            orch = Orchestrator()
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=200),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch("hivepilot.roles.ROLES", {"designer": fake_role}),
+            patch.object(orch, "run_task", side_effect=fake_run_task) as mock_run_task,
+        ):
+            orch.run_pipeline(
+                project_names=["proj"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        # Two calls: stage-a (no prior context) then stage-b (fed stage-a's
+        # full, unextracted output via prior_chunks/build_prior_context).
+        assert mock_run_task.call_count == 2
+        second_call_kwargs = mock_run_task.call_args_list[1].kwargs
+        prior_context = second_call_kwargs["prior_context"] or ""
+        assert design_output in prior_context, (
+            "prior_context must still carry the FULL stage_output blob — the "
+            "keyed store's section extraction must not alter prior_chunks"
+        )
+
+
+# ---------------------------------------------------------------------------
+# PRD A2 Sprint 2 — context_routing_mode (_route_prior_context + wiring)
+# ---------------------------------------------------------------------------
+
+
+def _run_two_stage_keyed_pipeline(
+    *, developer_inputs: list[str], stage_a_output: str
+) -> tuple[str | None, MagicMock]:
+    """Build+run a 2-stage pipeline: stage-a (role="designer",
+    outputs=[design_spec, technical_spec]) -> stage-b (role="developer",
+    inputs=*developer_inputs*). Returns (stage-b's prior_context, the
+    run_task mock) so callers can assert on the routed value and/or the
+    call history.
+    """
+    from hivepilot.models import PipelinesFile
+    from hivepilot.orchestrator import Orchestrator, RunResult
+    from hivepilot.roles import Role
+
+    pipeline = PipelineConfig(
+        description="t",
+        stages=[
+            PipelineStage(name="stage-a", task="task-a"),
+            PipelineStage(name="stage-b", task="task-b"),
+        ],
+    )
+    pipelines_file = PipelinesFile(pipelines={"test-pipe": pipeline})
+
+    designer_role = Role(
+        name="designer",
+        title="Designer",
+        prompt_file=Path("prompts/agents/designer.md"),
+        model_profile="coding",
+        inputs=[],
+        outputs=["design_spec", "technical_spec"],
+        can_block=False,
+        order=1,
+    )
+    developer_role = Role(
+        name="developer",
+        title="Developer",
+        prompt_file=Path("prompts/agents/developer.md"),
+        model_profile="coding",
+        inputs=developer_inputs,
+        outputs=[],
+        can_block=False,
+        order=2,
+    )
+    tasks_obj = MagicMock(
+        tasks={
+            "task-a": TaskConfig(description="a", role="designer"),
+            "task-b": TaskConfig(description="b", role="developer"),
+        },
+        runners={},
+    )
+
+    def fake_run_task(**kw: object) -> list[Any]:
+        if kw["task_name"] == "task-a":
+            return [RunResult("proj", "task-a", True, stage_a_output)]
+        return [RunResult("proj", "task-b", True, "b output")]
+
+    with (
+        patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
+        patch("hivepilot.orchestrator.load_tasks", return_value=tasks_obj),
+        patch("hivepilot.orchestrator.load_pipelines", return_value=pipelines_file),
+        patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
+        patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
+        patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+    ):
+        orch = Orchestrator()
+
+    with (
+        patch("hivepilot.orchestrator.state_service.record_run_start", return_value=300),
+        patch("hivepilot.orchestrator.state_service.complete_run"),
+        patch("hivepilot.orchestrator.state_service.record_step"),
+        patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+        patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        patch(
+            "hivepilot.roles.ROLES",
+            {"designer": designer_role, "developer": developer_role},
+        ),
+        patch.object(orch, "run_task", side_effect=fake_run_task) as mock_run_task,
+    ):
+        orch.run_pipeline(
+            project_names=["proj"],
+            pipeline_name="test-pipe",
+            extra_prompt=None,
+            auto_git=False,
+            dry_run=True,
+        )
+
+    assert mock_run_task.call_count == 2
+    prior_context = mock_run_task.call_args_list[1].kwargs["prior_context"]
+    return prior_context, mock_run_task
+
+
+class TestContextRoutingFullModeUnchanged:
+    """`context_routing_mode` defaults to "full", which must be byte-identical
+    whether or not the CONSUMING role declares `inputs` — the backward-compat
+    trap: routing is gated on the flag alone, never on input-presence."""
+
+    def test_full_mode_byte_identical_regardless_of_declared_inputs(self) -> None:
+        from hivepilot.orchestrator import settings as orchestrator_settings
+
+        assert orchestrator_settings.context_routing_mode == "full", (
+            "sanity check: this regression test is only meaningful against the real default value"
+        )
+        stage_a_output = (
+            "## DESIGN_SPEC\ndesign body\n"
+            "## TECHNICAL_SPEC\ntech body\n"
+            "trailing prose outside any declared section"
+        )
+
+        with_inputs, _ = _run_two_stage_keyed_pipeline(
+            developer_inputs=["design_spec", "technical_spec"],
+            stage_a_output=stage_a_output,
+        )
+        without_inputs, _ = _run_two_stage_keyed_pipeline(
+            developer_inputs=[],
+            stage_a_output=stage_a_output,
+        )
+
+        assert with_inputs == without_inputs, (
+            "full mode must be byte-identical whether or not the consuming "
+            "role declares inputs — routing must gate on context_routing_mode "
+            "only, never on input-presence (PRD A2 backward-compat trap)"
+        )
+        assert with_inputs is not None
+        assert stage_a_output in with_inputs, (
+            "full mode must still carry the whole stage_output blob, not a keyed subset"
+        )
+
+
+class TestContextRoutingKeyedMode:
+    """`context_routing_mode="keyed"` routes prior_context from only the
+    consuming role's declared `inputs`, with a conservative fallback to full
+    context when none of those keys are present in the store."""
+
+    def test_keyed_mode_routes_only_declared_inputs(self, monkeypatch: Any) -> None:
+        from hivepilot.orchestrator import build_prior_context
+        from hivepilot.orchestrator import settings as orchestrator_settings
+
+        monkeypatch.setattr(orchestrator_settings, "context_routing_mode", "keyed")
+
+        stage_a_output = (
+            "intro prose that precedes any declared section and must never "
+            "leak into a keyed slice\n"
+            "## DESIGN_SPEC\ndesign body\n"
+            "## TECHNICAL_SPEC\ntech body\n"
+            "## OTHER\n"
+            "an unrelated section that is not one of the developer role's "
+            "declared inputs and must never leak into a keyed slice either"
+        )
+
+        keyed_context, _ = _run_two_stage_keyed_pipeline(
+            developer_inputs=["design_spec", "technical_spec"],
+            stage_a_output=stage_a_output,
+        )
+
+        assert keyed_context is not None
+        assert "design body" in keyed_context
+        assert "tech body" in keyed_context
+        assert "intro prose" not in keyed_context, (
+            "keyed context must contain ONLY the declared input keys' content"
+        )
+        assert "unrelated section" not in keyed_context, (
+            "keyed context must contain ONLY the declared input keys' content"
+        )
+
+        full_equivalent = build_prior_context(
+            [f"## Designer (stage-a)\n{stage_a_output}"],
+            mode=orchestrator_settings.prior_context_mode,
+            max_chars=orchestrator_settings.max_prior_context_chars,
+        )
+        assert full_equivalent is not None
+        assert len(keyed_context) < len(full_equivalent), (
+            "the assembled keyed context must be strictly shorter than the full prior_chunks blob"
+        )
+
+    def test_keyed_mode_all_keys_missing_falls_back_to_full_context(self, monkeypatch: Any) -> None:
+        """None of the consuming role's declared input keys are produced by
+        stage-a (its outputs don't include them) -> the keyed slice would be
+        empty, so routing must fall back to the full prior_chunks context and
+        log a warning naming the missing keys."""
+        from hivepilot.orchestrator import logger as orchestrator_logger
+        from hivepilot.orchestrator import settings as orchestrator_settings
+
+        monkeypatch.setattr(orchestrator_settings, "context_routing_mode", "keyed")
+
+        stage_a_output = "## DESIGN_SPEC\ndesign body\n## TECHNICAL_SPEC\ntech body\n"
+
+        with patch.object(orchestrator_logger, "warning") as mock_warning:
+            fallback_context, _ = _run_two_stage_keyed_pipeline(
+                developer_inputs=["nonexistent_key_one", "nonexistent_key_two"],
+                stage_a_output=stage_a_output,
+            )
+
+        assert fallback_context is not None
+        assert fallback_context != "", "conservative fallback must never yield empty context"
+        assert stage_a_output in fallback_context, (
+            "all-missing fallback must carry the FULL prior_chunks blob"
+        )
+
+        mock_warning.assert_called_once()
+        warning_call = mock_warning.call_args
+        assert warning_call.args[0] == "pipeline.keyed_context_fallback"
+        assert warning_call.kwargs["missing_keys"] == [
+            "nonexistent_key_one",
+            "nonexistent_key_two",
+        ]
+
+    def test_keyed_mode_empty_inputs_role_gets_full_context(self, monkeypatch: Any) -> None:
+        """A consuming role with an EMPTY `inputs` list is not routable at
+        all — even in keyed mode it must receive the full context, not an
+        empty one."""
+        from hivepilot.orchestrator import settings as orchestrator_settings
+
+        monkeypatch.setattr(orchestrator_settings, "context_routing_mode", "keyed")
+
+        stage_a_output = "## DESIGN_SPEC\ndesign body\n## TECHNICAL_SPEC\ntech body\n"
+
+        context, _ = _run_two_stage_keyed_pipeline(
+            developer_inputs=[],
+            stage_a_output=stage_a_output,
+        )
+
+        assert context is not None
+        assert context != ""
+        assert stage_a_output in context, (
+            "role with empty inputs must fall through to the full prior_chunks "
+            "context, not an empty string"
+        )

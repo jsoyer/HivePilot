@@ -132,6 +132,61 @@ pas comptée comme un échec, et laisse le contexte précédent intact.
 claire **d'entrée** (au chargement, avant toute étape) — un tag inconnu n'est
 jamais silencieusement sauté.
 
+## Routage du contexte inter-étapes (`inputs`/`outputs`, `context_routing_mode`)
+
+Chaque rôle (`roles.yaml`) déclare `inputs` (les clés qu'il attend des étapes
+précédentes) et `outputs` (les clés sous lesquelles sa sortie est rangée), ex.
+`developer` : `inputs: [technical_spec, architecture_docs, codebase_context]`,
+`outputs: [implementation, test_suite, implementation_notes]`.
+
+`HIVEPILOT_CONTEXT_ROUTING_MODE` (`.env`, `full` | `keyed`, défaut `full`)
+contrôle comment le `prior_context` (le texte transmis à l'étape suivante)
+est construit :
+
+- **`full` (défaut)** — comportement historique, inchangé : chaque étape
+  reçoit le contexte agrégé de **toutes** les étapes précédentes
+  (`HIVEPILOT_PRIOR_CONTEXT_MODE=full|synthesis|cap`). Les `inputs`/`outputs`
+  déclarés n'ont **aucun effet** sur le contexte transmis dans ce mode.
+- **`keyed` (opt-in)** — une étape dont le rôle déclare des `inputs` non-vides
+  reçoit un contexte assemblé **seulement** à partir de ces clés, extraites
+  de la sortie des étapes qui les produisent (`outputs`).
+
+**Convention de section `## <CLÉ>`.** Une étape qui produit une sortie peut
+découper précisément ses `outputs` en émettant des titres Markdown `##`
+correspondant à chaque clé (insensible à la casse, `_`/`-`/espaces
+normalisés), ex. pour `outputs: [technical_spec, adr]` :
+
+```markdown
+## TECHNICAL_SPEC
+... contenu ...
+
+## ADR
+... contenu ...
+```
+
+**Fallbacks (toujours conservateurs — jamais de contexte vide silencieux) :**
+- **Pas de section `## <CLÉ>` trouvée** → toute la sortie brute de l'étape
+  est utilisée comme valeur de cette clé (fallback "whole-blob").
+- **En mode `keyed`, toutes les clés `inputs` d'une étape sont absentes** du
+  store → bascule automatique sur le contexte complet (`full`), avec un
+  warning loggé listant les clés manquantes. Si seulement **certaines**
+  clés manquent, le contexte `keyed` est construit avec celles présentes
+  (pas de fallback dans ce cas).
+
+**`can_block` est indicatif seulement.** Ce champ de `roles.yaml` documente
+qu'un rôle est *censé* pouvoir bloquer un run (ex. `cto`, `reviewer`,
+`ciso`), mais ne contrôle rien au runtime. Le comportement réel
+(fail-fast ou non) est piloté par `continue_on_failure` **au niveau de
+l'étape** dans `pipelines.yaml` (voir "Cibler une étape" ci-dessus), qui
+prime sur `can_block`.
+
+**Validation.** `hivepilot config validate` détecte les *dangling inputs*
+(une clé `inputs` qu'aucune étape précédente du même pipeline ne produit
+dans ses `outputs`) : simple **warning** en mode `full` (n'échoue pas la
+validation — beaucoup de rôles ont des `inputs` "cosmétiques" fournis en
+externe), mais **erreur bloquante** en mode `keyed` (une clé manquante y
+dégrade réellement le contexte transmis).
+
 
 ## Pipeline `default` (planification réordonnée + checkpoint)
 

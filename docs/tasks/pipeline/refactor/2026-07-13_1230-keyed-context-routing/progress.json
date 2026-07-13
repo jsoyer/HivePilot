@@ -1,0 +1,60 @@
+{
+  "prd": "keyed-context-routing",
+  "prd_path": "docs/tasks/pipeline/refactor/2026-07-13_1230-keyed-context-routing/spec.md",
+  "program": "A2 of A1->B->A2 (A1 and B merged; A2 is the structural data-flow refactor)",
+  "created": "2026-07-13",
+  "status": "complete",
+  "build_candidate": "build-candidate/keyed-context-routing",
+  "current_batch": 3,
+  "top_constraint": "Backward-compat: default context_routing_mode=full must behave byte-identically for every existing pipeline. Opt-in is the explicit mode flag ONLY, never input-presence (existing roles declare inputs cosmetically).",
+  "sprints": [
+    {
+      "id": 1,
+      "title": "Keyed store + section extraction",
+      "spec": "sprints/01-keyed-store.md",
+      "depends_on": [],
+      "batch": 1,
+      "model": "sonnet",
+      "parallel_with": [],
+      "status": "complete",
+      "files_to_modify": [
+        "hivepilot/orchestrator.py",
+        "tests/test_pipeline_execution.py"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Routing + context_routing_mode opt-in",
+      "spec": "sprints/02-routing.md",
+      "depends_on": [1],
+      "batch": 2,
+      "model": "sonnet",
+      "parallel_with": [],
+      "status": "complete",
+      "files_to_modify": [
+        "hivepilot/config.py",
+        "hivepilot/orchestrator.py",
+        "tests/test_pipeline_execution.py",
+        "tests/test_config.py"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Dangling-input validation + docs",
+      "spec": "sprints/03-validation-docs.md",
+      "depends_on": [1, 2],
+      "batch": 3,
+      "model": "sonnet",
+      "parallel_with": [],
+      "status": "complete",
+      "files_to_modify": [
+        "hivepilot/services/config_validation.py",
+        "tests/test_config_validation.py",
+        "docs/v4/RUNBOOK.md",
+        "docs/v4/USAGE.md"
+      ]
+    }
+  ],
+  "acceptance_summary": "Keyed store (## KEY sections + coarse fallback), context_routing_mode=full|keyed opt-in (default full, byte-identical), role-scoped input routing with conservative fallback, dangling-input validation (warn/keyed-error), docs. Full suite green; ruff+mypy clean.",
+  "verification_command": "cd /home/jeromesoyer/Documents/Github/jsoyer/HivePilot && python -m pytest -q"
+}
