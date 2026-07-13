@@ -39,12 +39,12 @@
       "id": 4,
       "file": "sprints/04-hooks-trust-model-cli-docs.md",
       "title": "Hooks, trust model, CLI & docs",
-      "status": "not_started",
+      "status": "complete",
       "depends_on": [2],
       "batch": 3,
       "model": "sonnet",
-      "branch": null,
-      "merged": false
+      "branch": "feature/plugin-system",
+      "merged": true
     }
   ]
 }

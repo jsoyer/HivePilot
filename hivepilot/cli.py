@@ -57,6 +57,8 @@ notion_app = typer.Typer(help="Notion integration")
 app.add_typer(notion_app, name="notion")
 obsidian_app = typer.Typer(help="Obsidian vault integration")
 app.add_typer(obsidian_app, name="obsidian")
+plugins_app = typer.Typer(help="Inspect loaded plugins")
+app.add_typer(plugins_app, name="plugins")
 logger = get_logger(__name__)
 
 
@@ -2399,6 +2401,53 @@ def validate(
     for problem in problems:
         typer.echo(f"  ERROR  {problem}", err=True)
     raise typer.Exit(1)
+
+
+@plugins_app.command("list")
+def plugins_list() -> None:
+    """List loaded plugins and the runner kinds / notifiers currently registered.
+
+    v1 simplification: this is an inventory (what's loaded, from where) plus a
+    separate list of what runner kinds / notifier names are currently
+    registered (built-in vs. plugin-contributed, inferred by membership) — not
+    a full join between the two. See docs/v4/PLUGINS.md.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.models import KNOWN_RUNNER_KINDS
+    from hivepilot.registry import RUNNER_MAP
+    from hivepilot.services.notification_service import NOTIFIER_MAP
+
+    orchestrator = Orchestrator()
+    console = Console(width=200)
+
+    plugins_table = Table(title="Loaded Plugins")
+    plugins_table.add_column("name")
+    plugins_table.add_column("source")
+    plugins_table.add_column("location")
+    for record in orchestrator.plugins.loaded:
+        plugins_table.add_row(record.name, record.source, record.location)
+    if not orchestrator.plugins.loaded:
+        plugins_table.add_row("-", "-", "-")
+    console.print(plugins_table)
+
+    runners_table = Table(title="Runner Kinds")
+    runners_table.add_column("kind")
+    runners_table.add_column("source")
+    for kind in sorted(RUNNER_MAP):
+        source = "built-in" if kind in KNOWN_RUNNER_KINDS else "plugin"
+        runners_table.add_row(kind, source)
+    console.print(runners_table)
+
+    builtin_notifiers = {"slack", "discord", "telegram"}
+    notifiers_table = Table(title="Notifiers")
+    notifiers_table.add_column("name")
+    notifiers_table.add_column("source")
+    for name in sorted(NOTIFIER_MAP):
+        source = "built-in" if name in builtin_notifiers else "plugin"
+        notifiers_table.add_row(name, source)
+    console.print(notifiers_table)
 
 
 if __name__ == "__main__":
