@@ -186,7 +186,7 @@ def run(
         simulate=simulate,
     )
     for result in results:
-        status = "✅" if result.success else "❌"
+        status = "⏭️" if getattr(result, "skipped", False) else ("✅" if result.success else "❌")
         typer.echo(f"{status} {result.project} -> {result.target}")
         if result.detail:
             typer.echo(f"   {result.detail}")
@@ -230,6 +230,7 @@ def run_pipeline(
             simulate=simulate,
             hub=hub,
             components=grp.components,
+            group_tags=grp.tags,
         )
     else:
         target_projects = _resolve_projects(project, projects, all_projects)
@@ -243,7 +244,7 @@ def run_pipeline(
             simulate=simulate,
         )
     for result in results:
-        status = "✅" if result.success else "❌"
+        status = "⏭️" if getattr(result, "skipped", False) else ("✅" if result.success else "❌")
         typer.echo(f"{status} {result.project} -> {result.target}")
 
 

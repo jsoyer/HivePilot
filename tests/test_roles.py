@@ -193,3 +193,98 @@ class TestRoleModel:
         from hivepilot.roles import Role
 
         assert issubclass(Role, BaseModel)
+
+
+class TestPromptFileResolution:
+    """Sprint 2 — prompt_file resolves via Settings.resolve_config_path (XDG ->
+    config_repo -> base_dir/cwd), falling back to the package-bundled
+    prompts/agents/ copy when no override is present anywhere in the chain."""
+
+    def test_config_repo_override_wins_over_package_copy(self, tmp_path: Path) -> None:
+        """A prompt file placed at <config_repo>/prompts/agents/<role>.md is
+        resolved instead of the package-bundled copy."""
+        from hivepilot.config import Settings
+        from hivepilot.roles import _PROMPTS_DIR, _resolve_prompt_path
+
+        config_repo = tmp_path / "config-repo"
+        override_dir = config_repo / "prompts" / "agents"
+        override_dir.mkdir(parents=True)
+        override_file = override_dir / "ceo.md"
+        override_file.write_text("# CEO override prompt\n", encoding="utf-8")
+
+        cfg = Settings(_env_file=None, config_repo=str(config_repo))  # type: ignore[call-arg]
+
+        resolved = _resolve_prompt_path("ceo.md", cfg)
+
+        assert resolved == override_file
+        assert resolved.exists()
+        assert resolved != _PROMPTS_DIR / "ceo.md"
+
+    def test_no_override_falls_back_to_package_copy(self, tmp_path: Path) -> None:
+        """With no XDG override and no config_repo override, resolution falls
+        back cleanly to the package-bundled prompts/agents/ copy, which still
+        exists."""
+        from hivepilot.config import Settings
+        from hivepilot.roles import _PROMPTS_DIR, _resolve_prompt_path
+
+        # An empty config_repo dir (no prompts/agents/ceo.md inside it) and no
+        # XDG override — resolve_config_path's XDG/config_repo tiers both miss.
+        empty_config_repo = tmp_path / "empty-config-repo"
+        empty_config_repo.mkdir()
+        cfg = Settings(_env_file=None, config_repo=str(empty_config_repo))  # type: ignore[call-arg]
+
+        resolved = _resolve_prompt_path("ceo.md", cfg)
+
+        assert resolved == _PROMPTS_DIR / "ceo.md"
+        assert resolved.exists()
+
+    def test_missing_override_and_missing_package_file_yields_nonexistent_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A prompt filename that exists nowhere in the chain (not in
+        config_repo, not bundled in the package) resolves to a Path that does
+        not exist — preserving the `.exists()` -> "" safety guard used by
+        consumers (never a crash)."""
+        from hivepilot.config import Settings
+        from hivepilot.roles import _resolve_prompt_path
+
+        empty_config_repo = tmp_path / "empty-config-repo"
+        empty_config_repo.mkdir()
+        cfg = Settings(_env_file=None, config_repo=str(empty_config_repo))  # type: ignore[call-arg]
+
+        resolved = _resolve_prompt_path("does_not_exist_anywhere.md", cfg)
+
+        assert not resolved.exists()
+        # Mirrors the guarded pattern used at the orchestrator call sites.
+        safe_value = str(resolved) if resolved and resolved.exists() else ""
+        assert safe_value == ""
+
+    def test_load_roles_uses_config_repo_override(self, tmp_path: Path, monkeypatch) -> None:
+        """End-to-end: load_roles() resolves each role's prompt_file through
+        the config chain, picking up a config_repo override for one role while
+        the rest still resolve to their package-bundled copies.
+
+        load_roles() reads the module-level `settings` singleton (constructed
+        once at import time), so the override must be applied to that same
+        instance's attributes rather than via env vars (which only affect
+        Settings() construction, which already happened).
+        """
+        from hivepilot import config as config_module
+        from hivepilot import roles as roles_module
+        from hivepilot.roles import _PROMPTS_DIR
+
+        config_repo = tmp_path / "config-repo"
+        override_dir = config_repo / "prompts" / "agents"
+        override_dir.mkdir(parents=True)
+        override_file = override_dir / "developer.md"
+        override_file.write_text("# Developer override prompt\n", encoding="utf-8")
+
+        monkeypatch.setattr(config_module.settings, "config_repo", str(config_repo))
+
+        result = roles_module.load_roles()
+
+        assert result["developer"].prompt_file == override_file
+        assert result["developer"].prompt_file.exists()
+        # An un-overridden role still falls back to its package-bundled copy.
+        assert result["ceo"].prompt_file == _PROMPTS_DIR / "ceo.md"
+        assert result["ceo"].prompt_file.exists()

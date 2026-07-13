@@ -216,6 +216,9 @@ class RunResult:
     target: str
     success: bool
     detail: str | None = None
+    # Stage scoping (PRD A1): True when this result represents a stage skipped
+    # by only_components/only_tags — never a failure, task was not invoked.
+    skipped: bool = False
 
 
 class Orchestrator:
@@ -886,11 +889,24 @@ class Orchestrator:
         hub: str | None = None,
         components: list[str] | None = None,
         seed_context: str | None = None,
+        group_tags: dict[str, list[str]] | None = None,
     ) -> list[RunResult]:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
         pipeline = self.pipelines.pipelines[pipeline_name]
         validate_pipeline(pipeline, self.tasks)
+
+        # Stage scoping (PRD A1): fail-closed validation of only_tags against the
+        # run's group tags — earliest point holding both stages and group tags.
+        # An unknown tag is a config error, not a silent skip.
+        resolved_group_tags: dict[str, list[str]] = group_tags or {}
+        for _stage in pipeline.stages:
+            for _tag in _stage.only_tags or []:
+                if _tag not in resolved_group_tags:
+                    raise ValueError(
+                        f"Unknown tag '{_tag}' in stage '{_stage.name}': "
+                        "not present in this run's group tags"
+                    )
 
         project_names = list(project_names)
 
@@ -1012,6 +1028,33 @@ class Orchestrator:
                 )
                 state_service.complete_run(run_id, RunStatus.PAUSED.value)
                 return results
+
+            # Stage scoping skip (PRD A1 — frozen contract): a stage with either
+            # selector set is skipped when its target component set is non-empty
+            # and disjoint from the currently selected components. Task is not
+            # invoked, it is not counted as a failure, prior_chunks is untouched,
+            # and the run continues to the next stage.
+            _scope_target: set[str] = set(stage.only_components or [])
+            for _tag in stage.only_tags or []:
+                _scope_target |= set(resolved_group_tags.get(_tag, []))
+            if _scope_target and _scope_target.isdisjoint(selected_components):
+                logger.info(
+                    "pipeline.stage_skipped",
+                    pipeline=pipeline_name,
+                    stage=stage.name,
+                    target=sorted(_scope_target),
+                    selected_components=selected_components,
+                )
+                results.append(
+                    RunResult(
+                        project_names[0] if project_names else pipeline_name,
+                        f"{pipeline_name}:{stage.name}",
+                        True,
+                        "skipped: no selected component matches only_components/only_tags",
+                        skipped=True,
+                    )
+                )
+                continue
 
             if group_mode:
                 is_hub_stage = bool(stage_idx < pause_index and hub)
@@ -1181,7 +1224,7 @@ class Orchestrator:
                     )
 
             stage_failed = any(not r.success for r in stage_results)
-            if stage_failed and not getattr(stage, "continue_on_failure", False):
+            if stage_failed and not stage.continue_on_failure:
                 logger.warning(
                     "pipeline.fail_fast",
                     pipeline=pipeline_name,
@@ -1190,6 +1233,15 @@ class Orchestrator:
                 )
                 final_status = RunStatus.TEST_FAILURE
                 break
+            elif stage_failed and stage.continue_on_failure:
+                # A real failure was suppressed by continue_on_failure. Never let this
+                # pass silently — a masked security/review gate is a stated danger (PRD A1 §2).
+                logger.warning(
+                    "pipeline.failure_suppressed",
+                    pipeline=pipeline_name,
+                    stage=stage.name,
+                    detail="continue_on_failure=true; run continues despite stage failure",
+                )
 
         state_service.complete_run(run_id, final_status.value)
         notification_service.emit_event(

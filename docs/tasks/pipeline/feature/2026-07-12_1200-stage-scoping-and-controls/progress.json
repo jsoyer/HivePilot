@@ -3,9 +3,9 @@
   "prd_path": "docs/tasks/pipeline/feature/2026-07-12_1200-stage-scoping-and-controls/spec.md",
   "program": "A1 of A1->B->A2 (blocker for PRD B: Noxys designer config)",
   "created": "2026-07-12",
-  "status": "planned",
+  "status": "in_progress",
   "build_candidate": "build-candidate/stage-scoping-and-controls",
-  "current_batch": 1,
+  "current_batch": 2,
   "sprints": [
     {
       "id": 1,
@@ -15,10 +15,12 @@
       "batch": 1,
       "model": "sonnet",
       "parallel_with": [2],
-      "status": "pending",
+      "status": "complete",
+      "notes": "Done. Added group_tags param to run_pipeline + wired cli.py (group mode) so only_tags resolves at runtime. Skip = RunResult(success=True, skipped=True), continue guards it. Added pipeline.failure_suppressed warning (danger §2). CLI shows skip marker. 21 tests. Files also touched: hivepilot/cli.py (in-scope wiring).",
       "files_to_modify": [
         "hivepilot/models.py",
         "hivepilot/orchestrator.py",
+        "hivepilot/cli.py",
         "tests/test_pipeline_execution.py",
         "tests/test_models.py",
         "tests/test_component_selection.py"
@@ -32,7 +34,8 @@
       "batch": 1,
       "model": "sonnet",
       "parallel_with": [1],
-      "status": "pending",
+      "status": "complete",
+      "notes": "Done. _resolve_prompt_path() resolves via settings.resolve_config_path(prompts/agents/<name>) with package _PROMPTS_DIR as final fallback; .exists()/'' safety at call sites intact. 4 tests. Note: load_roles reads module-level settings singleton — tests monkeypatch settings.config_repo directly.",
       "files_to_modify": [
         "hivepilot/roles.py",
         "tests/test_roles.py"
