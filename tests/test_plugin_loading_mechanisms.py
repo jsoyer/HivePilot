@@ -25,18 +25,24 @@ import pytest
 from hivepilot import plugins as plugins_mod
 from hivepilot.plugins import PLUGIN_ENTRY_POINT_GROUP, PluginManager, PluginRecord
 from hivepilot.registry import RUNNER_MAP, RunnerKindCollisionError
+from hivepilot.services.notification_service import NOTIFIER_MAP
 from tests.fixtures import entry_point_plugin as fixture_module
 
 
 @pytest.fixture(autouse=True)
 def _restore_runner_map():
-    """RUNNER_MAP is process-global mutable state — snapshot/restore around
-    every test in this module so runner kinds registered here never leak into
-    other test modules sharing the pytest session."""
-    snapshot = dict(RUNNER_MAP)
+    """RUNNER_MAP and NOTIFIER_MAP are process-global mutable state —
+    snapshot/restore around every test in this module so runner kinds and
+    notifier names registered here (a plugin's declared notifiers are wired
+    into NOTIFIER_MAP by PluginManager) never leak into other test modules
+    sharing the pytest session."""
+    runner_snapshot = dict(RUNNER_MAP)
+    notifier_snapshot = dict(NOTIFIER_MAP)
     yield
     RUNNER_MAP.clear()
-    RUNNER_MAP.update(snapshot)
+    RUNNER_MAP.update(runner_snapshot)
+    NOTIFIER_MAP.clear()
+    NOTIFIER_MAP.update(notifier_snapshot)
 
 
 def _write_local_plugin(

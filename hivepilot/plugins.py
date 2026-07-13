@@ -148,7 +148,13 @@ class PluginManager:
 
             notifiers = hooks.pop("notifiers", None)
             if notifiers:
+                from hivepilot.services.notification_service import NotifierRegistry
+
                 self.declared_notifiers.update(notifiers)
+                for notifier_name, notifier_fn in notifiers.items():
+                    # NotifierKindCollisionError propagates uncaught — a kind
+                    # collision is a hard stop, unlike an isolated broken plugin.
+                    NotifierRegistry.register(notifier_name, notifier_fn)
 
             for hook_name, hook_callable in hooks.items():
                 self.hooks.setdefault(hook_name, []).append(hook_callable)

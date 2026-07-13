@@ -6,7 +6,7 @@ import os
 import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -48,18 +48,38 @@ _STATUS_BADGES = {
 # Path for persisting agent_key -> message_thread_id across runs.
 _TOPICS_REGISTRY_PATH = Path(".hivepilot/stream_topics.json")
 
+NOTIFIER_MAP: dict[str, Callable[[str], None]] = {}
+
+
+class NotifierKindCollisionError(RuntimeError):
+    pass
+
+
+class NotifierRegistry:
+    @staticmethod
+    def register(name: str, fn: Callable[[str], None], *, override: bool = False) -> None:
+        if name in NOTIFIER_MAP and NOTIFIER_MAP[name] is not fn and not override:
+            raise NotifierKindCollisionError(
+                f"Notifier '{name}' is already registered to {NOTIFIER_MAP[name].__name__}; "
+                f"refusing to silently replace it"
+            )
+        NOTIFIER_MAP[name] = fn
+
+    @staticmethod
+    def known_names() -> frozenset[str]:
+        return frozenset(NOTIFIER_MAP)
+
 
 def send_notification(message: str, channels: Iterable[str] | None = None) -> None:
     channels = list(channels) if channels else ["slack", "discord", "telegram"]
     for channel in channels:
         channel = channel.lower()
+        fn = NOTIFIER_MAP.get(channel)
+        if fn is None:
+            logger.warning("notification.unknown_channel", channel=channel)
+            continue
         try:
-            if channel == "slack":
-                _send_slack(message)
-            elif channel == "discord":
-                _send_discord(message)
-            elif channel == "telegram":
-                _send_telegram(message)
+            fn(message)
         except _NotConfigured:
             pass  # silently skip unconfigured channels
         except Exception as exc:  # noqa: BLE001
@@ -85,6 +105,11 @@ def emit_event(event: str, **fields: Any) -> None:
 
 class _NotConfigured(Exception):
     """Raised when a notification channel has no credentials configured."""
+
+
+# Public alias — the same class, importable by plugin notifiers as
+# `from hivepilot.services.notification_service import NotConfigured`.
+NotConfigured = _NotConfigured
 
 
 def _send_slack(message: str) -> None:
@@ -122,6 +147,11 @@ def _send_telegram(
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
     requests.post(url, json=payload, timeout=5)
+
+
+NotifierRegistry.register("slack", _send_slack)
+NotifierRegistry.register("discord", _send_discord)
+NotifierRegistry.register("telegram", _send_telegram)
 
 
 def _load_topics() -> dict[str, int]:

@@ -28,12 +28,12 @@
       "id": 3,
       "file": "sprints/03-pluggable-notifiers.md",
       "title": "Pluggable notifiers",
-      "status": "not_started",
+      "status": "complete",
       "depends_on": [2],
       "batch": 3,
       "model": "sonnet",
-      "branch": null,
-      "merged": false
+      "branch": "feature/plugin-system",
+      "merged": true
     },
     {
       "id": 4,
