@@ -109,10 +109,10 @@ All three new calls must be wrapped in `try/except Exception` (log, do not raise
 ## Verification
 
 - [x] Build passes: `python -c "import hivepilot.orchestrator, hivepilot.cli"`
-- [ ] Lint passes: `ruff check hivepilot/orchestrator.py hivepilot/cli.py tests/test_plugin_hooks_lifecycle.py tests/test_cli_plugins_list.py`
-- [ ] Type-check passes: `mypy hivepilot/orchestrator.py hivepilot/cli.py`
-- [ ] Sprint-specific tests pass: `pytest tests/test_plugin_hooks_lifecycle.py tests/test_cli_plugins_list.py -q`
-- [ ] No regression: `pytest -q` (full suite) shows zero new failures
+- [x] Lint passes: `ruff check hivepilot/orchestrator.py hivepilot/cli.py tests/test_plugin_hooks_lifecycle.py tests/test_cli_plugins_list.py`
+- [x] Type-check passes: `mypy hivepilot/orchestrator.py hivepilot/cli.py`
+- [x] Sprint-specific tests pass: `pytest tests/test_plugin_hooks_lifecycle.py tests/test_cli_plugins_list.py -q`
+- [x] No regression: `pytest -q` (full suite) shows zero new failures
 
 > **Note:** Dev server smoke test and content verification are handled by the orchestrator after merge — do not run in the sprint-executor. Sprint-executors do static verification only.
 
