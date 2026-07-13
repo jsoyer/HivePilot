@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 import typer
+
+if TYPE_CHECKING:
+    from hivepilot.services import init_service
 
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
@@ -1847,30 +1850,124 @@ def workers(
         typer.echo(f"{w['status']:<11} {w['url']}  (seen {w.get('last_seen')})")
 
 
-@app.command("init")
-def init_config(
-    target_dir: Path = typer.Argument(Path("."), help="Directory to scaffold into"),
-    force: bool = typer.Option(False, "--force", help="Overwrite existing files"),
-) -> None:
-    """Scaffold a fresh generic HivePilot deployment config."""
-    from hivepilot.scaffold.templates import scaffold_config
+def _print_init_outcome(outcome: init_service.InitOutcome) -> None:
+    if outcome.mode == "clone":
+        if outcome.synced_files:
+            typer.echo(f"Synced {len(outcome.synced_files)} file(s):")
+            for f in outcome.synced_files:
+                typer.echo(f"  {f}")
+        else:
+            typer.echo("Config repo already up to date.")
+        if outcome.target != settings.xdg_config_home:
+            typer.echo(
+                "Note: `config sync` always targets the XDG config dir "
+                f"({settings.xdg_config_home}); --path only controls where .env is written."
+            )
+    else:
+        for result in outcome.scaffold_results:
+            typer.echo(f"  {result.action:<11} {result.path}")
 
-    try:
-        created = scaffold_config(target_dir, force=force)
-    except FileExistsError as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1) from exc
-
-    for path in created:
-        typer.echo(f"  created  {path.relative_to(target_dir.resolve())}")
+    if outcome.env_result:
+        typer.echo(f"  {outcome.env_result.action:<11} {outcome.env_result.path}")
 
     typer.echo("")
-    typer.echo("Config scaffolded. Next steps:")
-    typer.echo("  1. Edit projects.yaml — add your real project names and paths.")
-    typer.echo("  2. Edit roles.yaml   — customise agent roles as needed.")
-    typer.echo("  3. Edit pipelines.yaml and tasks.yaml — wire up your workflow.")
-    typer.echo("  4. Copy .env.example to .env and fill in your credentials.")
-    typer.echo("  5. Run: hivepilot validate  — to check cross-references.")
+    typer.echo("Validation:")
+    for v in outcome.validation:
+        status = "OK" if v.ok else "FAILED"
+        line = f"  [{status:<6}] {v.name}"
+        if not v.ok and v.detail:
+            line += f" -- {v.detail}"
+        typer.echo(line)
+
+    typer.echo("")
+    typer.echo("Next steps:")
+    typer.echo(
+        f"  1. Edit {outcome.target / '.env'} — fill in secrets (e.g. HIVEPILOT_TELEGRAM_BOT_TOKEN)."
+    )
+    typer.echo("  2. Run: hivepilot doctor")
+
+
+@app.command("init")
+def init_config(
+    config_repo: Optional[str] = typer.Option(
+        None,
+        "--config-repo",
+        help="Git URL or local path to an existing HivePilot config repo. "
+        "Forces CLONE mode non-interactively.",
+    ),
+    path: Optional[Path] = typer.Option(
+        None,
+        "--path",
+        help="Target config directory (default: the resolved XDG config dir, "
+        "e.g. ~/.config/hivepilot).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Non-interactive: never prompt. Without --config-repo, scaffolds with defaults.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite existing config files instead of skipping them."
+    ),
+) -> None:
+    """Onboarding wizard: get a fresh HivePilot install to a working config.
+
+    Two modes:
+
+    \b
+    - CLONE mode: you already have a HivePilot config repo. Pass --config-repo
+      (or answer "yes" when prompted interactively) and the repo is synced in
+      via the existing `hivepilot config sync` logic.
+    - SCAFFOLD mode: no existing repo. Minimal valid placeholder config files
+      are written locally so `hivepilot validate` / `hivepilot doctor` have
+      something to check.
+
+    Non-interactive shells (no TTY) without --yes and without --config-repo
+    default to SCAFFOLD mode with defaults -- the least surprising choice for
+    first-run automation -- rather than blocking on a prompt nobody can
+    answer. Pass --yes explicitly to make that choice unambiguous, or
+    --config-repo to clone instead.
+    """
+    from hivepilot.services import init_service
+
+    target = init_service.resolve_target_dir(path)
+    typer.echo(f"Target config directory: {target}")
+
+    interactive = init_service.is_interactive_tty() and not yes and not config_repo
+
+    if interactive:
+        import questionary
+
+        has_repo = questionary.confirm(
+            "Do you already have a HivePilot config repo?", default=False
+        ).ask()
+        if has_repo:
+            config_repo = (
+                config_repo or questionary.text("Config repo git URL or local path:").ask()
+            )
+            if not config_repo:
+                typer.echo("No repo provided -- aborting.", err=True)
+                raise typer.Exit(1)
+
+    auto_copy_env = True
+    if interactive and not config_repo:
+        example_only = (target / ".env.example").exists() and not (target / ".env").exists()
+        if example_only:
+            import questionary
+
+            auto_copy_env = bool(
+                questionary.confirm("Copy .env.example to .env?", default=True).ask()
+            )
+
+    outcome = init_service.run_init(
+        config_repo=config_repo,
+        path=path,
+        force=force,
+        auto_copy_env=auto_copy_env,
+    )
+
+    _print_init_outcome(outcome)
 
 
 @app.command("validate")
