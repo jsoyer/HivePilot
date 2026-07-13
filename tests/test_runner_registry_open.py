@@ -12,22 +12,33 @@ import pytest
 
 from hivepilot.orchestrator import _parse_brain
 from hivepilot.registry import RUNNER_MAP, RunnerKindCollisionError, RunnerRegistry
-from hivepilot.runners.base import BaseRunner
 
 
-class _DummyRunnerA(BaseRunner):
-    def run(self, payload):  # type: ignore[override]
+# Plain concrete classes that structurally satisfy the BaseRunner Protocol
+# (do NOT subclass it — subclassing a Protocol makes the class abstract to
+# mypy, which then rejects passing it where a concrete type[BaseRunner] is
+# expected). These are only ever registered, never instantiated, here.
+class _DummyRunnerA:
+    def __init__(self, definition, settings) -> None:
+        self.definition = definition
+        self.settings = settings
+
+    def run(self, payload) -> None:
         raise NotImplementedError
 
-    def capture(self, payload):  # type: ignore[override]
+    def capture(self, payload) -> str:
         raise NotImplementedError
 
 
-class _DummyRunnerB(BaseRunner):
-    def run(self, payload):  # type: ignore[override]
+class _DummyRunnerB:
+    def __init__(self, definition, settings) -> None:
+        self.definition = definition
+        self.settings = settings
+
+    def run(self, payload) -> None:
         raise NotImplementedError
 
-    def capture(self, payload):  # type: ignore[override]
+    def capture(self, payload) -> str:
         raise NotImplementedError
 
 

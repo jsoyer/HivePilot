@@ -135,7 +135,7 @@ class TestPluginRunnerResolvesAndExecutes:
         )
         runner = registry.get_runner("myrunner")
         assert type(runner).__name__ == "ExecFixtureRunner"
-        assert runner.run(None) is None
+        runner.run(None)  # plugin runner executes without raising
 
 
 class TestEntryPointPluginRunnerRegistration:
