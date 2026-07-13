@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import questionary
 
@@ -46,6 +47,9 @@ from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.services.state_service import RunStatus
 from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from hivepilot.roles import Role
 
 logger = get_logger(__name__)
 
@@ -302,6 +306,58 @@ def build_prior_context(
         return joined
     # mode == "full"
     return joined
+
+
+def _route_prior_context(
+    *,
+    role: "Role | None",
+    prior_chunks: list[str],
+    outputs_by_key: dict[str, str],
+    routing_mode: str,
+    prior_context_mode: str,
+    max_chars: int,
+    stage_name: str,
+) -> str | None:
+    """Compute the prior_context string for the stage about to run (PRD A2 Sprint 2).
+
+    Routing is gated ONLY on ``routing_mode == "keyed"`` — NEVER on whether
+    *role* declares ``inputs``. ``roles.yaml`` already declares ``inputs`` on
+    EVERY role (cosmetically), so gating on presence-of-inputs instead of the
+    explicit flag would silently regress every existing pipeline to a keyed
+    subset. In ``full`` mode (default) this always falls through to
+    ``build_prior_context(prior_chunks, ...)`` — byte-identical to
+    pre-Sprint-2 behaviour for every role, regardless of its declared inputs.
+
+    In ``keyed`` mode, a role with non-empty ``inputs`` gets its context
+    assembled from ONLY the declared input keys present in *outputs_by_key*
+    (Sprint 1's run-scoped store), joined as ``## <KEY>`` blocks and capped
+    with the same tail-truncation rule as ``build_prior_context``'s "cap" mode.
+
+    Conservative fallback rule:
+    - ALL declared input keys missing from the store -> the keyed slice would
+      be empty, which is worse than no routing at all, so fall back to the
+      full ``build_prior_context(prior_chunks, ...)`` and log a warning naming
+      the missing keys.
+    - SOME (not all) declared input keys present -> use exactly what's
+      present; a non-empty keyed subset is still more precise than the full
+      context, so no fallback in that case.
+    - Role has no declared ``inputs`` (empty list) -> not routable at all;
+      falls through to the full context, same as ``full`` mode.
+    """
+    if routing_mode == "keyed" and role is not None and role.inputs:
+        present = {k: outputs_by_key[k] for k in role.inputs if k in outputs_by_key}
+        if present:
+            joined = "\n\n".join(f"## {k.upper()}\n{v}" for k, v in present.items())
+            if len(joined) > max_chars:
+                return "\u2026[earlier context truncated]\u2026\n\n" + joined[-max_chars:]
+            return joined
+        missing = [k for k in role.inputs if k not in outputs_by_key]
+        logger.warning(
+            "pipeline.keyed_context_fallback",
+            stage=stage_name,
+            missing_keys=missing,
+        )
+    return build_prior_context(prior_chunks, mode=prior_context_mode, max_chars=max_chars)
 
 
 @dataclass
@@ -1168,6 +1224,16 @@ class Orchestrator:
             else:
                 targets = project_names
                 stage_auto_git = auto_git
+            # PRD A2 Sprint 2: resolve the CONSUMING stage's role (the stage
+            # about to run) to decide whether prior_context is routed from the
+            # keyed store or built the classic way. Gated on
+            # settings.context_routing_mode only — see _route_prior_context.
+            from hivepilot.roles import ROLES
+
+            consuming_task = self.tasks.tasks.get(stage.task)
+            consuming_role = (
+                ROLES.get(consuming_task.role) if consuming_task and consuming_task.role else None
+            )
             stage_results = self.run_task(
                 project_names=targets,
                 task_name=stage.task,
@@ -1176,10 +1242,14 @@ class Orchestrator:
                 concurrency=concurrency,
                 simulate=simulate,
                 dry_run=dry_run,
-                prior_context=build_prior_context(
-                    prior_chunks,
-                    mode=settings.prior_context_mode,
+                prior_context=_route_prior_context(
+                    role=consuming_role,
+                    prior_chunks=prior_chunks,
+                    outputs_by_key=outputs_by_key,
+                    routing_mode=settings.context_routing_mode,
+                    prior_context_mode=settings.prior_context_mode,
                     max_chars=settings.max_prior_context_chars,
+                    stage_name=stage.name,
                 ),
             )
             results.extend(
@@ -1194,11 +1264,13 @@ class Orchestrator:
                 r.detail or f"{r.project}: {'ok' if r.success else 'failed'}" for r in stage_results
             )
 
-            # PRD A2 Sprint 1: populate the run-scoped keyed store alongside
+            # PRD A2 Sprint 1/2: populate the run-scoped keyed store alongside
             # prior_chunks. Same-key entries from a later stage overwrite earlier
-            # ones (last producer wins) — fine since the store isn't consumed yet.
-            # The prior_chunks/build_prior_context path immediately below is
-            # untouched, so behaviour stays byte-identical to pre-sprint.
+            # ones (last producer wins). Consumed by _route_prior_context above
+            # for the NEXT stage's turn, but ONLY in context_routing_mode="keyed"
+            # (Sprint 2) — in "full" mode (default) this dict is populated but
+            # never read, so the prior_chunks/build_prior_context path remains
+            # byte-identical to pre-Sprint-2 behaviour.
             from hivepilot.roles import ROLES
 
             producing_task = self.tasks.tasks.get(stage.task)

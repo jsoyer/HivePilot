@@ -48,3 +48,30 @@ def test_numeric_notification_chat_id(monkeypatch) -> None:
     monkeypatch.setenv("HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID", "12345")
     s = Settings()
     assert s.telegram_notification_chat_id == 12345
+
+
+# ---------------------------------------------------------------------------
+# PRD A2 Sprint 2 — context_routing_mode
+# ---------------------------------------------------------------------------
+
+
+class TestContextRoutingMode:
+    """`context_routing_mode` defaults to "full" (today's behaviour for all
+    roles) and is env-overridable to "keyed" (opt-in)."""
+
+    def test_default_is_full(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CONTEXT_ROUTING_MODE", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.context_routing_mode == "full"
+
+    def test_env_override_keyed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CONTEXT_ROUTING_MODE", "keyed")
+        s = Settings()
+        assert s.context_routing_mode == "keyed"
+
+    def test_invalid_value_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only "full" | "keyed" are valid — anything else must fail pydantic
+        validation (Literal-typed field), not silently coerce."""
+        monkeypatch.setenv("HIVEPILOT_CONTEXT_ROUTING_MODE", "bogus")
+        with pytest.raises(Exception):  # pydantic ValidationError
+            Settings()

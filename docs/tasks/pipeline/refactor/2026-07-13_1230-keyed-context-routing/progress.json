@@ -3,9 +3,9 @@
   "prd_path": "docs/tasks/pipeline/refactor/2026-07-13_1230-keyed-context-routing/spec.md",
   "program": "A2 of A1->B->A2 (A1 and B merged; A2 is the structural data-flow refactor)",
   "created": "2026-07-13",
-  "status": "planned",
+  "status": "in_progress",
   "build_candidate": "build-candidate/keyed-context-routing",
-  "current_batch": 1,
+  "current_batch": 2,
   "top_constraint": "Backward-compat: default context_routing_mode=full must behave byte-identically for every existing pipeline. Opt-in is the explicit mode flag ONLY, never input-presence (existing roles declare inputs cosmetically).",
   "sprints": [
     {
@@ -16,7 +16,7 @@
       "batch": 1,
       "model": "sonnet",
       "parallel_with": [],
-      "status": "pending",
+      "status": "complete",
       "files_to_modify": [
         "hivepilot/orchestrator.py",
         "tests/test_pipeline_execution.py"

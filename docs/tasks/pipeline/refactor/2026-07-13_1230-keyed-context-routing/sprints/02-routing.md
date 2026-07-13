@@ -42,18 +42,78 @@ files_to_modify:
 
 ## Tasks
 
-- [ ] Add `Settings.context_routing_mode: Literal["full", "keyed"] = "full"` in `config.py` (env-overridable, mypy/pydantic-clean).
-- [ ] At `orchestrator.py:1128`, branch the prior_context computation: if `settings.context_routing_mode == "keyed"` AND the consuming stage's role has non-empty `inputs` → assemble prior_context from `{k: outputs_by_key[k] for k in role.inputs if k in outputs_by_key}` (join with `## <KEY>` headers for readability; apply the same `max_chars` cap). Otherwise → today's `build_prior_context(prior_chunks, ...)` unchanged.
-- [ ] Conservative runtime fallback: in keyed mode, if NONE of the role's input keys are present in the store (would yield empty context), fall back to full `build_prior_context(prior_chunks, ...)` and log a warning naming the missing keys. (Decide: partial-present = use what's present; all-missing = full fallback. Document.)
-- [ ] Tests: (a) `full` mode → prior_context byte-identical to pre-change for a multi-stage pipeline (regression); (b) keyed mode → a stage with `inputs:[design_spec, technical_spec]` receives ONLY those, and its assembled context is strictly smaller than full prior_chunks; (c) missing-key → full fallback + log; (d) role with empty inputs in keyed mode → full context.
+- [x] Add `Settings.context_routing_mode: Literal["full", "keyed"] = "full"` in `config.py` (env-overridable, mypy/pydantic-clean).
+- [x] At `orchestrator.py:1128`, branch the prior_context computation: if `settings.context_routing_mode == "keyed"` AND the consuming stage's role has non-empty `inputs` → assemble prior_context from `{k: outputs_by_key[k] for k in role.inputs if k in outputs_by_key}` (join with `## <KEY>` headers for readability; apply the same `max_chars` cap). Otherwise → today's `build_prior_context(prior_chunks, ...)` unchanged.
+- [x] Conservative runtime fallback: in keyed mode, if NONE of the role's input keys are present in the store (would yield empty context), fall back to full `build_prior_context(prior_chunks, ...)` and log a warning naming the missing keys. (Decide: partial-present = use what's present; all-missing = full fallback. Document.)
+- [x] Tests: (a) `full` mode → prior_context byte-identical to pre-change for a multi-stage pipeline (regression); (b) keyed mode → a stage with `inputs:[design_spec, technical_spec]` receives ONLY those, and its assembled context is strictly smaller than full prior_chunks; (c) missing-key → full fallback + log; (d) role with empty inputs in keyed mode → full context.
 
 ## Acceptance Criteria
 
-- [ ] `context_routing_mode` defaults `full`; full mode unchanged for all roles (regardless of declared inputs).
-- [ ] Keyed mode routes only declared inputs; conservative fallback never yields empty context.
+- [x] `context_routing_mode` defaults `full`; full mode unchanged for all roles (regardless of declared inputs).
+- [x] Keyed mode routes only declared inputs; conservative fallback never yields empty context.
 
 ## Verification
 
-- [ ] `cd /home/jeromesoyer/Documents/Github/jsoyer/HivePilot && python -m pytest -q tests/test_pipeline_execution.py tests/test_config.py`
-- [ ] `python -c "from hivepilot.config import Settings; assert Settings().context_routing_mode=='full'"`
-- [ ] Full suite green; ruff + mypy clean on changed files.
+- [x] `cd /home/jeromesoyer/Documents/Github/jsoyer/HivePilot && python -m pytest -q tests/test_pipeline_execution.py tests/test_config.py`
+- [x] `python -c "from hivepilot.config import Settings; assert Settings().context_routing_mode=='full'"`
+- [x] Full suite green; ruff + mypy clean on changed files.
+
+## Agent Notes
+
+**Decisions made:**
+- `_route_prior_context()` (new module-level helper in `orchestrator.py`, placed
+  directly after `build_prior_context`) centralizes the routing decision so the
+  call site in `run_pipeline` stays a single expression. Gate is
+  `routing_mode == "keyed" and role is not None and role.inputs` — matches the
+  spec's explicit instruction that gating must be on the flag only, never on
+  input-presence alone (the flag check is evaluated first / short-circuits, so
+  in `full` mode `role.inputs` is never even inspected).
+- Conservative fallback rule implemented exactly as specified: partial-present
+  (>=1 of the declared keys found) → use only what's present, no fallback.
+  All-missing → fall back to `build_prior_context(prior_chunks, ...)` and
+  `logger.warning("pipeline.keyed_context_fallback", stage=..., missing_keys=...)`.
+  Role with empty `inputs` list also falls through to full context (same
+  code path as `full` mode, since `role.inputs` is falsy).
+- Keyed slice formatting: `"## <KEY_UPPER>\n<content>"` blocks joined with
+  `"\n\n"`, same tail-truncation cap (`…[earlier context truncated]…` prefix)
+  as `build_prior_context`'s `"cap"` mode, reusing `settings.max_prior_context_chars`.
+- Consuming role lookup added right before the `run_task` call, reusing the
+  exact `self.tasks.tasks.get(stage.task).role -> ROLES.get(role)` pattern
+  Sprint 1 used for the *producing* role after the call — same `stage.task`
+  value, just resolved earlier in the loop for the "about to run" stage.
+  Local `from hivepilot.roles import ROLES` import kept (not hoisted to module
+  level) to match Sprint 1's existing style and stay patchable the same way
+  in tests (`patch("hivepilot.roles.ROLES", {...})`).
+- Updated the Sprint-1 comment above the `outputs_by_key` population block —
+  it previously said "isn't consumed yet" / "byte-identical to pre-sprint",
+  which is now stale since Sprint 2 consumes it in keyed mode. Reworded to
+  clarify the store is consumed only when `context_routing_mode="keyed"`.
+
+**Assumptions:**
+- 🟢 HIGH — `settings` is a single module-level singleton (`hivepilot.config.settings`)
+  imported by reference into `orchestrator.py`; tests monkeypatch attributes on
+  it directly (`monkeypatch.setattr(orchestrator_settings, "context_routing_mode", "keyed")`)
+  for auto-revert, following no prior in-file precedent but standard pytest
+  practice.
+- 🟢 HIGH — `structlog`'s bound logger object (`hivepilot.orchestrator.logger`)
+  supports `patch.object(logger, "warning")` for assertion in tests; verified
+  by running the fallback test, which passed.
+- 🟡 MEDIUM — Chose to key-slice-format headers as `## <KEY_UPPER>` (e.g.
+  `## DESIGN_SPEC`) to mirror the existing `_parse_output_sections` header
+  convention, though the spec only said "join with `## <KEY>` headers for
+  readability" without specifying case. Not consumer-visible in a
+  machine-parseable way (it's prose fed to an LLM), so low risk either way.
+
+**Issues found:** none outside sprint scope. No files needed changes outside
+the declared boundaries (`hivepilot/config.py`, `hivepilot/orchestrator.py`,
+`tests/test_pipeline_execution.py`, `tests/test_config.py`).
+
+**Anti-Goodhart check:** Tests assert on the actual *content* of the routed
+string (substring checks for `"design body"` present, `"trailing"`/`"intro
+prose"`/`"unrelated section"` absent, length comparisons), not just that a
+call happened or that some non-None value was returned. The full-mode
+regression test runs the real pipeline twice with differing `role.inputs`
+and asserts byte-equality — this is the strongest test against the
+backward-compat trap because it can't be gamed by hardcoding an expected
+string; it fails if routing ever keys off `role.inputs` presence instead of
+the mode flag.
