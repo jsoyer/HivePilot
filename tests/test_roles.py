@@ -193,3 +193,56 @@ class TestRoleModel:
         from hivepilot.roles import Role
 
         assert issubclass(Role, BaseModel)
+
+
+class TestPromptFileConfigResolution:
+    """Sprint 2 (PRD A1): Role.prompt_file resolves through
+    Settings.resolve_config_path (XDG -> config_repo -> cwd), with the package
+    prompts/agents/ copy preserved as the final fallback."""
+
+    def test_config_repo_override_wins_over_package_copy(self, tmp_path, monkeypatch):
+        from hivepilot.config import settings
+        from hivepilot.roles import load_roles
+
+        # Isolate from any real machine XDG override.
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg_unused"))
+
+        override_dir = tmp_path / "config_repo" / "prompts" / "agents"
+        override_dir.mkdir(parents=True)
+        override_file = override_dir / "ceo.md"
+        override_file.write_text("# override CEO prompt for config-repo test\n")
+        monkeypatch.setattr(settings, "config_repo", str(tmp_path / "config_repo"))
+
+        roles = load_roles()
+
+        assert roles["ceo"].prompt_file == override_file
+        assert (
+            roles["ceo"].prompt_file.read_text()
+            == "# override CEO prompt for config-repo test\n"
+        )
+
+    def test_missing_override_falls_back_to_package_copy(self, tmp_path, monkeypatch):
+        import shutil
+
+        from hivepilot.config import settings
+        from hivepilot.roles import _PROMPTS_DIR, load_roles
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg_unused"))
+
+        # roles.yaml is discoverable via config_repo (tier 2), but that config
+        # repo has no prompts/agents/ dir at all, and base_dir (tier 3) points
+        # at an empty directory too -- so all three chain tiers miss the
+        # prompt file. Only the hardcoded package _PROMPTS_DIR can save us.
+        config_repo_dir = tmp_path / "config_repo"
+        config_repo_dir.mkdir()
+        shutil.copy(REPO_ROOT / "roles.yaml", config_repo_dir / "roles.yaml")
+        monkeypatch.setattr(settings, "config_repo", str(config_repo_dir))
+
+        empty_base_dir = tmp_path / "empty_base_dir"
+        empty_base_dir.mkdir()
+        monkeypatch.setattr(settings, "base_dir", empty_base_dir)
+
+        roles = load_roles()
+
+        assert roles["ceo"].prompt_file == _PROMPTS_DIR / "ceo.md"
+        assert roles["ceo"].prompt_file.exists()

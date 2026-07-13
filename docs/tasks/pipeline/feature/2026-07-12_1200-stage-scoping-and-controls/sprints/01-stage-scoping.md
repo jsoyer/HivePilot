@@ -44,20 +44,31 @@ files_to_modify:
 
 ## Tasks
 
-- [ ] Add the four fields above (`PipelineStage` ×3, `Group` ×1) with the exact names/defaults.
-- [ ] In the stage loop, before running a stage's task, compute the target component set and skip per the contract. Represent the skip at stage level (a `skipped` flag on the stage result, or a sentinel) — decide the representation but honour the contract (neither success nor failure; `prior_chunks` untouched).
-- [ ] Fail-closed validation: an `only_tags` value not present in the run's `Group.tags` raises a clear error (ValueError with the offending tag) at the earliest point holding both stages and group tags. Do NOT silently skip on unknown tag.
-- [ ] Now that the field exists, keep/simplify the `getattr(stage, "continue_on_failure", False)` at :1184 (can become `stage.continue_on_failure`). Confirm fail-fast is preserved when the flag is false/absent.
-- [ ] Tests in `tests/test_pipeline_execution.py` (and `test_component_selection.py` as fitting): skip-excludes, no-skip-matches, no-selector-always-runs, `only_components` match, `only_tags` match, union-of-both, undefined-tag-raises, `continue_on_failure=true` suppresses break, `continue_on_failure=false/absent` preserves fail-fast, skipped-stage-not-in-prior_chunks.
-- [ ] Model tests in `tests/test_models.py`: defaults are `None/None/False/{}`.
+- [x] Add the four fields above (`PipelineStage` ×3, `Group` ×1) with the exact names/defaults.
+- [x] In the stage loop, before running a stage's task, compute the target component set and skip per the contract. Represent the skip at stage level (a `skipped` flag on the stage result, or a sentinel) — decide the representation but honour the contract (neither success nor failure; `prior_chunks` untouched).
+- [x] Fail-closed validation: an `only_tags` value not present in the run's `Group.tags` raises a clear error (ValueError with the offending tag) at the earliest point holding both stages and group tags. Do NOT silently skip on unknown tag.
+- [x] Now that the field exists, keep/simplify the `getattr(stage, "continue_on_failure", False)` at :1184 (can become `stage.continue_on_failure`). Confirm fail-fast is preserved when the flag is false/absent.
+- [x] Tests in `tests/test_pipeline_execution.py` (and `test_component_selection.py` as fitting): skip-excludes, no-skip-matches, no-selector-always-runs, `only_components` match, `only_tags` match, union-of-both, undefined-tag-raises, `continue_on_failure=true` suppresses break, `continue_on_failure=false/absent` preserves fail-fast, skipped-stage-not-in-prior_chunks.
+- [x] Model tests in `tests/test_models.py`: defaults are `None/None/False/{}`.
 
 ## Acceptance Criteria
 
-- [ ] All PRD §6 criteria except the two `Role.prompt_file` ones (Sprint 2) and the docs one (Sprint 3).
-- [ ] Backward-compat: existing pipeline tests unchanged and green.
+- [x] All PRD §6 criteria except the two `Role.prompt_file` ones (Sprint 2) and the docs one (Sprint 3).
+- [x] Backward-compat: existing pipeline tests unchanged and green.
 
 ## Verification
 
-- [ ] `cd /home/jeromesoyer/Documents/Github/jsoyer/HivePilot && python -m pytest -q tests/test_pipeline_execution.py tests/test_models.py tests/test_component_selection.py tests/test_company_pipeline.py`
-- [ ] `python -c "from hivepilot.models import PipelineStage, Group; s=PipelineStage(name='x',task='t'); assert s.only_components is None and s.only_tags is None and s.continue_on_failure is False; g=Group(description='d',hub='h',components=[]); assert g.tags=={}"`
-- [ ] Full suite green: `python -m pytest -q`
+- [x] `cd /home/jeromesoyer/Documents/Github/jsoyer/HivePilot && python -m pytest -q tests/test_pipeline_execution.py tests/test_models.py tests/test_component_selection.py tests/test_company_pipeline.py`
+- [x] `python -c "from hivepilot.models import PipelineStage, Group; s=PipelineStage(name='x',task='t'); assert s.only_components is None and s.only_tags is None and s.continue_on_failure is False; g=Group(description='d',hub='h',components=[]); assert g.tags=={}"`
+- [x] Full suite green: `python -m pytest -q`
+
+## Orchestrator Integration Note (Batch 1 merge)
+
+- Sprint 1 added a `group_tags` kwarg to `Orchestrator.run_pipeline()` but `cli.py` was outside
+  its file boundaries, leaving `only_tags` non-functional end-to-end (a group-mode run would hit
+  the fail-closed validator and raise, since `group_tags` defaulted to `{}`).
+- **Integration fix applied by the orchestrator (Team Lead):** `hivepilot/cli.py` group-mode
+  `run_pipeline(...)` call now passes `group_tags=grp.tags`. The non-group call is unchanged
+  (no group → `group_tags` correctly defaults to `{}`). This wires the feature through to the CLI
+  so PRD B can actually consume `only_tags`. Verified: full suite 777 passed, 0 new failures,
+  ruff + mypy clean on models.py/orchestrator.py/roles.py/cli.py.

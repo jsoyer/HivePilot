@@ -184,8 +184,12 @@ def load_roles() -> dict[str, Role]:
       3. base_dir/roles.yaml  (cwd fallback — repo root in dev)
 
     Each YAML entry's ``prompt_file`` is treated as a filename relative to
-    ``prompts/agents/`` — the loader prepends ``_PROMPTS_DIR`` before
-    constructing the Role, so resolved paths are identical to _DEFAULT_ROLES.
+    ``prompts/agents/``. It is resolved through the same XDG -> config_repo ->
+    cwd chain as other config files (settings.resolve_config_path), so a
+    prompt override placed in the config repo is picked up ahead of the
+    package copy. If the chain finds nothing, the package copy under
+    ``_PROMPTS_DIR`` is used as the final fallback (identical to the previous
+    hardcoded behaviour and to _DEFAULT_ROLES).
 
     On FileNotFoundError or any parse / validation error, logs a warning and
     returns _DEFAULT_ROLES so the application is never left without roles.
@@ -208,7 +212,15 @@ def load_roles() -> dict[str, Role]:
         for entry in entries:
             entry = dict(entry)  # shallow copy so we don't mutate the parsed data
             prompt_filename = entry.pop("prompt_file")
-            entry["prompt_file"] = _PROMPTS_DIR / prompt_filename
+            # Sprint 2 (PRD A1): resolve through the same XDG -> config_repo -> cwd
+            # chain used for other config files, so a prompt override placed in the
+            # config repo takes precedence. The package copy under _PROMPTS_DIR
+            # remains the final fallback if the chain finds nothing (e.g. running
+            # from a cwd/base_dir unrelated to the package install location).
+            resolved = settings.resolve_config_path(Path("prompts") / "agents" / prompt_filename)
+            if not resolved.exists():
+                resolved = _PROMPTS_DIR / prompt_filename
+            entry["prompt_file"] = resolved
             role = Role(**entry)
             result[role.name] = role
         return result

@@ -230,6 +230,7 @@ def run_pipeline(
             simulate=simulate,
             hub=hub,
             components=grp.components,
+            group_tags=grp.tags,
         )
     else:
         target_projects = _resolve_projects(project, projects, all_projects)

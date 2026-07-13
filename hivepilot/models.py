@@ -97,6 +97,10 @@ class PipelineStage(BaseModel):
     task: str
     pause_before: bool = False  # pause pipeline for human plan approval before this stage
     commits_vault: bool = False  # stage triggers a vault changelog commit after execution
+    # PRD A1 — stage scoping & controls (additive, backward-compatible).
+    only_components: list[str] | None = None  # run this stage only for these components
+    only_tags: list[str] | None = None  # run this stage only for components under these tags
+    continue_on_failure: bool = False  # don't fail-fast the pipeline if this stage fails
 
 
 class PipelineConfig(BaseModel):
@@ -114,6 +118,7 @@ class Group(BaseModel):
     description: str | None = None
     hub: str | None = None  # project where group-level planning runs (from E2)
     components: list[str] = Field(default_factory=list)
+    tags: dict[str, list[str]] = Field(default_factory=dict)  # tag -> component names
 
 
 class GroupsFile(BaseModel):

@@ -173,6 +173,32 @@ def _parse_components(text: str, valid: list[str]) -> list[str]:
     return found
 
 
+def _validate_stage_tags(
+    stages: list[PipelineStage], group_tags: dict[str, list[str]]
+) -> None:
+    """Fail-closed: every `PipelineStage.only_tags` entry must exist in the run's
+    `Group.tags` map. Raises ValueError naming the offending tag rather than
+    silently skipping a stage that references an undefined tag."""
+    for stage in stages:
+        for tag in stage.only_tags or []:
+            if tag not in group_tags:
+                raise ValueError(
+                    f"Pipeline stage '{stage.name}' references undefined only_tags "
+                    f"entry '{tag}' (not present in this run's Group.tags)"
+                )
+
+
+def _stage_scope_target(
+    stage: PipelineStage, group_tags: dict[str, list[str]]
+) -> set[str]:
+    """Union of components named directly via `only_components` and components
+    reachable via `only_tags` (resolved through *group_tags*, tag -> components)."""
+    target = set(stage.only_components or [])
+    for tag in stage.only_tags or []:
+        target |= set(group_tags.get(tag, []))
+    return target
+
+
 def build_prior_context(
     prior_chunks: list[str],
     mode: str,
@@ -216,6 +242,10 @@ class RunResult:
     target: str
     success: bool
     detail: str | None = None
+    # PRD A1 — additive: True when a stage was skipped by only_components/only_tags
+    # scoping rather than actually invoked. Neither a pass nor a failure signal;
+    # consumers should check this flag before interpreting `success`.
+    skipped: bool = False
 
 
 class Orchestrator:
@@ -886,11 +916,15 @@ class Orchestrator:
         hub: str | None = None,
         components: list[str] | None = None,
         seed_context: str | None = None,
+        group_tags: dict[str, list[str]] | None = None,
     ) -> list[RunResult]:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
         pipeline = self.pipelines.pipelines[pipeline_name]
         validate_pipeline(pipeline, self.tasks)
+        group_tags = group_tags or {}
+        # Fail-closed: validate only_tags references before anything runs.
+        _validate_stage_tags(pipeline.stages, group_tags)
 
         project_names = list(project_names)
 
@@ -1012,6 +1046,32 @@ class Orchestrator:
                 )
                 state_service.complete_run(run_id, RunStatus.PAUSED.value)
                 return results
+
+            # Stage scoping (only_components / only_tags): skip this stage entirely
+            # when it declares a target scope that doesn't intersect the currently
+            # selected components. A skipped stage is neither a success nor a
+            # failure — its task is never invoked, prior_chunks is untouched, and
+            # the run continues to the next stage.
+            stage_scope_target = _stage_scope_target(stage, group_tags)
+            if stage_scope_target and stage_scope_target.isdisjoint(selected_components):
+                logger.info(
+                    "pipeline.stage_skipped",
+                    pipeline=pipeline_name,
+                    stage=stage.name,
+                    only_components=stage.only_components,
+                    only_tags=stage.only_tags,
+                    selected_components=selected_components,
+                )
+                results.append(
+                    RunResult(
+                        project="",
+                        target=f"{pipeline_name}:{stage.name}",
+                        success=True,
+                        detail="skipped: no selected component matches only_components/only_tags",
+                        skipped=True,
+                    )
+                )
+                continue
 
             if group_mode:
                 is_hub_stage = bool(stage_idx < pause_index and hub)
@@ -1181,7 +1241,7 @@ class Orchestrator:
                     )
 
             stage_failed = any(not r.success for r in stage_results)
-            if stage_failed and not getattr(stage, "continue_on_failure", False):
+            if stage_failed and not stage.continue_on_failure:
                 logger.warning(
                     "pipeline.fail_fast",
                     pipeline=pipeline_name,

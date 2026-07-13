@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # hivepilot.orchestrator is imported at module level so it is in sys.modules
 # before any patch("hivepilot.orchestrator.*") context managers are entered.
 # conftest.py has already stubbed langchain/boto3 before this import runs.
@@ -37,6 +39,12 @@ def _make_pipeline(*stage_names: str) -> PipelineConfig:
     """Build a PipelineConfig with the given stage names (task = stage name)."""
     stages = [PipelineStage(name=n, task=n) for n in stage_names]
     return PipelineConfig(description="test pipeline", stages=stages)
+
+
+def _make_pipeline_with_stages(*stages: PipelineStage) -> PipelineConfig:
+    """Build a PipelineConfig from pre-built PipelineStage instances (so callers
+    can set only_components/only_tags/continue_on_failure directly)."""
+    return PipelineConfig(description="test pipeline", stages=list(stages))
 
 
 def _make_orchestrator_with_pipeline(pipeline: PipelineConfig) -> "Orchestrator":  # noqa: F821
@@ -363,3 +371,320 @@ class TestCLIDryRun:
             assert actual_dry is True, (
                 f"Expected dry_run=True (default), got: {actual_dry} in call {c}"
             )
+
+
+# ---------------------------------------------------------------------------
+# PRD A1 / Sprint 1 — stage scoping (only_components / only_tags) +
+# continue_on_failure
+# ---------------------------------------------------------------------------
+
+
+class TestStageScoping:
+    """only_components / only_tags gate whether a stage's task is invoked.
+
+    Skip semantics (frozen contract): target = union of only_components and the
+    components reachable via only_tags (through Group.tags). A stage is skipped
+    iff target is non-empty AND disjoint from the selected components. A
+    skipped stage never invokes its task, is not counted as a failure, and
+    leaves prior_chunks untouched.
+    """
+
+    @staticmethod
+    def _run(
+        orch: "Orchestrator",  # noqa: F821
+        *,
+        run_task_side_effect,
+        components: list[str],
+        group_tags: dict[str, list[str]] | None = None,
+        run_id: int = 200,
+    ) -> None:
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.record_run_start", return_value=run_id
+            ),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=run_task_side_effect),
+        ):
+            orch.run_pipeline(
+                project_names=["hub"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+                simulate=True,
+                hub="hub",
+                components=components,
+                group_tags=group_tags,
+            )
+
+    def test_skip_excludes_stage_when_target_disjoint(self) -> None:
+        """only_components disjoint from the selected components -> stage skipped."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="only-b", task="only-b", only_components=["comp-b"]),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        calls: list[str] = []
+
+        def _run_task(**kw):
+            calls.append(kw["task_name"])
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        self._run(orch, run_task_side_effect=_run_task, components=["comp-a"])
+
+        assert calls == [], f"skipped stage's task must not be invoked, got calls={calls}"
+
+    def test_no_skip_when_only_components_matches(self) -> None:
+        """only_components intersects the selected components -> stage runs."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="only-a", task="only-a", only_components=["comp-a"]),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        calls: list[str] = []
+
+        def _run_task(**kw):
+            calls.append(kw["task_name"])
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        self._run(orch, run_task_side_effect=_run_task, components=["comp-a"])
+
+        assert calls == ["only-a"]
+
+    def test_no_selector_always_runs(self) -> None:
+        """A stage with neither only_components nor only_tags always runs."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="plain", task="plain"),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        calls: list[str] = []
+
+        def _run_task(**kw):
+            calls.append(kw["task_name"])
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        self._run(orch, run_task_side_effect=_run_task, components=["comp-zzz"])
+
+        assert calls == ["plain"]
+
+    def test_only_tags_match_runs_stage(self) -> None:
+        """only_tags resolves through Group.tags; matching selected component runs."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="backend-only", task="backend-only", only_tags=["backend"]),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        calls: list[str] = []
+
+        def _run_task(**kw):
+            calls.append(kw["task_name"])
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        self._run(
+            orch,
+            run_task_side_effect=_run_task,
+            components=["comp-a"],
+            group_tags={"backend": ["comp-a", "comp-b"]},
+        )
+
+        assert calls == ["backend-only"]
+
+    def test_union_of_only_components_and_only_tags(self) -> None:
+        """target = only_components UNION components-from-only_tags; either can match."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(
+                name="union-stage",
+                task="union-stage",
+                only_components=["comp-x"],
+                only_tags=["grp1"],
+            ),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        calls: list[str] = []
+
+        def _run_task(**kw):
+            calls.append(kw["task_name"])
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        # comp-y is only reachable via the only_tags branch (not only_components),
+        # proving the union (not intersection) is being evaluated.
+        self._run(
+            orch,
+            run_task_side_effect=_run_task,
+            components=["comp-y"],
+            group_tags={"grp1": ["comp-y"]},
+        )
+
+        assert calls == ["union-stage"]
+
+    def test_undefined_tag_raises(self) -> None:
+        """An only_tags value absent from the run's Group.tags fails closed."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="ghost-tag", task="ghost-tag", only_tags=["ghost"]),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        def _run_task(**kw):
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        with pytest.raises(ValueError, match="ghost"):
+            self._run(
+                orch,
+                run_task_side_effect=_run_task,
+                components=["comp-a"],
+                group_tags={"backend": ["comp-a"]},
+            )
+
+    def test_continue_on_failure_true_suppresses_break(self) -> None:
+        """continue_on_failure=True on a failing stage must not fail-fast the run."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="stage-a", task="stage-a", continue_on_failure=True),
+            PipelineStage(name="stage-b", task="stage-b"),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        calls: list[str] = []
+
+        def _run_task(**kw):
+            calls.append(kw["task_name"])
+            if kw["task_name"] == "stage-a":
+                return [RunResult(kw["project_names"][0], kw["task_name"], False, "boom")]
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=201),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=_run_task),
+        ):
+            orch.run_pipeline(
+                project_names=["proj"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert calls == ["stage-a", "stage-b"], (
+            f"stage-b must still run when stage-a has continue_on_failure=True: {calls}"
+        )
+        actual_status = mock_complete.call_args.kwargs.get("status") or (
+            mock_complete.call_args.args[1] if len(mock_complete.call_args.args) >= 2 else None
+        )
+        assert actual_status == RunStatus.COMPLETE.value, (
+            f"continue_on_failure=True must not flip final status to TEST_FAILURE, "
+            f"got: {actual_status}"
+        )
+
+    def test_continue_on_failure_absent_preserves_fail_fast(self) -> None:
+        """continue_on_failure defaulted (False/absent) must still fail-fast."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="stage-a", task="stage-a"),
+            PipelineStage(name="stage-b", task="stage-b"),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        calls: list[str] = []
+
+        def _run_task(**kw):
+            calls.append(kw["task_name"])
+            if kw["task_name"] == "stage-a":
+                return [RunResult(kw["project_names"][0], kw["task_name"], False, "boom")]
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=202),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=_run_task),
+        ):
+            orch.run_pipeline(
+                project_names=["proj"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert calls == ["stage-a"], f"stage-b must not run after fail-fast: {calls}"
+        actual_status = mock_complete.call_args.kwargs.get("status") or (
+            mock_complete.call_args.args[1] if len(mock_complete.call_args.args) >= 2 else None
+        )
+        assert actual_status == RunStatus.TEST_FAILURE.value
+
+    def test_skipped_stage_not_in_prior_chunks(self) -> None:
+        """A skipped stage's output must not leak into prior_chunks for later stages."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="skip-me", task="skip-me", only_components=["comp-b"]),
+            PipelineStage(name="run-me", task="run-me"),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        captured_prior_context: dict[str, str | None] = {}
+
+        def _run_task(**kw):
+            if kw["task_name"] == "run-me":
+                captured_prior_context["run-me"] = kw.get("prior_context")
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        self._run(orch, run_task_side_effect=_run_task, components=["comp-a"])
+
+        prior_context = captured_prior_context.get("run-me") or ""
+        assert "skip-me" not in prior_context, (
+            f"skipped stage must not appear in downstream prior_chunks: {prior_context!r}"
+        )
+
+    def test_skipped_stage_result_flag(self) -> None:
+        """A skipped stage is represented at stage level via RunResult.skipped=True,
+        and its success flag never counts as a failure for downstream fail-fast."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline_with_stages(
+            PipelineStage(name="skip-me", task="skip-me", only_components=["comp-b"]),
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        def _run_task(**kw):
+            return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=203),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=_run_task),
+        ):
+            results = orch.run_pipeline(
+                project_names=["hub"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+                simulate=True,
+                hub="hub",
+                components=["comp-a"],
+            )
+
+        assert len(results) == 1
+        assert results[0].skipped is True
+        assert results[0].success is True  # not counted as a failure
