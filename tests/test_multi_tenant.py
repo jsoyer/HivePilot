@@ -79,9 +79,7 @@ class TestTokenTenant:
         match = next(e for e in loaded if e.token == entry.token)
         assert match.tenant == "beta"
 
-    def test_legacy_entry_without_tenant_defaults_to_default(
-        self, tmp_tokens_file: Path
-    ) -> None:
+    def test_legacy_entry_without_tenant_defaults_to_default(self, tmp_tokens_file: Path) -> None:
         """Legacy YAML entries without a 'tenant' key load as 'default'."""
         data = {
             "tokens": [

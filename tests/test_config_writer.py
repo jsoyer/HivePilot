@@ -73,11 +73,7 @@ class _FakeQuestionary:
 def test_roundtrip_preserves_comments_and_key_order_with_targeted_diff(tmp_path: Path) -> None:
     original = tmp_path / "roles.yaml"
     original.write_text(
-        "# top comment\n"
-        "roles:\n"
-        "  - name: ceo  # inline comment\n"
-        "    title: CEO\n"
-        "    order: 1\n"
+        "# top comment\nroles:\n  - name: ceo  # inline comment\n    title: CEO\n    order: 1\n"
     )
 
     data = config_writer.load_roundtrip(original)
@@ -255,9 +251,7 @@ def test_resolve_reference_project(monkeypatch) -> None:
     from hivepilot.models import ProjectsFile
 
     fake = ProjectsFile(projects={"acme-api": {"path": "~/dev/acme-api"}})
-    monkeypatch.setattr(
-        "hivepilot.services.project_service.load_projects", lambda path=None: fake
-    )
+    monkeypatch.setattr("hivepilot.services.project_service.load_projects", lambda path=None: fake)
     assert config_writer.resolve_reference("project", "acme-api") is True
     assert config_writer.resolve_reference("project", "missing") is False
 
