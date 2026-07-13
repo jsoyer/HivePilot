@@ -3,9 +3,9 @@
   "prd_path": "docs/tasks/pipeline/feature/2026-07-12_1200-stage-scoping-and-controls/spec.md",
   "program": "A1 of A1->B->A2 (blocker for PRD B: Noxys designer config)",
   "created": "2026-07-12",
-  "status": "planned",
+  "status": "complete",
   "build_candidate": "build-candidate/stage-scoping-and-controls",
-  "current_batch": 1,
+  "current_batch": 2,
   "sprints": [
     {
       "id": 1,
@@ -15,7 +15,9 @@
       "batch": 1,
       "model": "sonnet",
       "parallel_with": [2],
-      "status": "pending",
+      "status": "completed",
+      "branch": "worktree-agent-ad8f4d96b557a5627",
+      "merged": true,
       "files_to_modify": [
         "hivepilot/models.py",
         "hivepilot/orchestrator.py",
@@ -32,7 +34,9 @@
       "batch": 1,
       "model": "sonnet",
       "parallel_with": [1],
-      "status": "pending",
+      "status": "completed",
+      "branch": "worktree-agent-a017aa99c08b7b4d5",
+      "merged": true,
       "files_to_modify": [
         "hivepilot/roles.py",
         "tests/test_roles.py"
@@ -46,7 +50,8 @@
       "batch": 2,
       "model": "sonnet",
       "parallel_with": [],
-      "status": "pending",
+      "status": "completed",
+      "merged": true,
       "files_to_modify": [
         "docs/v4/RUNBOOK.md",
         "docs/v4/USAGE.md",

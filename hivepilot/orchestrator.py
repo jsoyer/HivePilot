@@ -11,7 +11,7 @@ from pathlib import Path
 import questionary
 
 from hivepilot.config import settings
-from hivepilot.models import PipelineStage, ProjectConfig, TaskConfig, TaskStep
+from hivepilot.models import Group, PipelineStage, ProjectConfig, TaskConfig, TaskStep
 
 try:
     from hivepilot.services import metrics as _metrics  # noqa: F401
@@ -173,6 +173,53 @@ def _parse_components(text: str, valid: list[str]) -> list[str]:
     return found
 
 
+def _resolve_stage_target_components(
+    stage: PipelineStage, group_tags: dict[str, list[str]]
+) -> set[str]:
+    """Union of a stage's ``only_components`` and the components tagged by any
+    of its ``only_tags`` (resolved against *group_tags*, tag -> component names).
+
+    Returns an empty set when the stage declares neither selector.
+    """
+    target = set(stage.only_components or [])
+    for tag in stage.only_tags or []:
+        target |= set(group_tags.get(tag, []))
+    return target
+
+
+def _validate_stage_tags(stages: list[PipelineStage], group_tags: dict[str, list[str]]) -> None:
+    """Fail-closed guard: every ``only_tags`` value referenced by any stage must
+    be defined in the run's ``Group.tags``.
+
+    Raises ``ValueError`` naming the offending tag on the first mismatch found.
+    Called once, up front (before any stage executes), so a mistyped or
+    undefined tag on e.g. a review/security stage can never be silently
+    bypassed by that stage instead running unscoped or being skipped.
+    """
+    for stage in stages:
+        for tag in stage.only_tags or []:
+            if tag not in group_tags:
+                raise ValueError(
+                    f"Pipeline stage '{stage.name}' references undefined tag "
+                    f"'{tag}' (not present in this run's Group.tags)"
+                )
+
+
+def _stage_should_skip(
+    stage: PipelineStage,
+    group_tags: dict[str, list[str]],
+    selected_components: list[str],
+) -> bool:
+    """A stage is skipped iff its scoping target (``only_components`` union
+    ``only_tags``-resolved components) is non-empty AND disjoint from the
+    components selected for this run. A stage with neither selector set
+    always runs (target is empty -> never skipped)."""
+    target = _resolve_stage_target_components(stage, group_tags)
+    if not target:
+        return False
+    return target.isdisjoint(selected_components)
+
+
 def build_prior_context(
     prior_chunks: list[str],
     mode: str,
@@ -216,6 +263,9 @@ class RunResult:
     target: str
     success: bool
     detail: str | None = None
+    # True for a stage skipped via only_components/only_tags scoping — distinct
+    # from both success and failure in the run record (PRD A1 §6).
+    skipped: bool = False
 
 
 class Orchestrator:
@@ -886,11 +936,20 @@ class Orchestrator:
         hub: str | None = None,
         components: list[str] | None = None,
         seed_context: str | None = None,
+        group: Group | None = None,
     ) -> list[RunResult]:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
         pipeline = self.pipelines.pipelines[pipeline_name]
         validate_pipeline(pipeline, self.tasks)
+
+        # Stage scoping (PRD A1): resolve the run's tag -> component map and
+        # fail closed, up front, before any stage executes, if a stage
+        # references a tag that isn't defined for this run's group. Applies
+        # even when no `group` was passed (group_tags == {}): a stage that
+        # declares `only_tags` without a group is an undefined-tag error too.
+        group_tags: dict[str, list[str]] = group.tags if group is not None else {}
+        _validate_stage_tags(pipeline.stages, group_tags)
 
         project_names = list(project_names)
 
@@ -947,6 +1006,40 @@ class Orchestrator:
                 picked = _parse_components("\n\n".join(prior_chunks), components or [])
                 if picked:
                     selected_components = picked
+
+            # Stage scoping (PRD A1): skip this stage entirely when it declares
+            # only_components/only_tags and that target is disjoint from the
+            # components selected for this run. The stage's task is never
+            # invoked, `prior_chunks`/artifacts/interaction-log are left
+            # untouched (early continue), and the run carries on. A single
+            # RunResult with skipped=True is appended so the skip is
+            # distinguishable in the run record from both success and
+            # failure (success=True, skipped=True — never counted as a
+            # failure, never confused with a real completed stage).
+            if _stage_should_skip(stage, group_tags, selected_components):
+                target_components = sorted(_resolve_stage_target_components(stage, group_tags))
+                logger.info(
+                    "pipeline.stage_skipped",
+                    pipeline=pipeline_name,
+                    stage=stage.name,
+                    only_components=stage.only_components,
+                    only_tags=stage.only_tags,
+                    selected_components=selected_components,
+                )
+                results.append(
+                    RunResult(
+                        project=", ".join(selected_components)
+                        or (project_names[0] if project_names else pipeline_name),
+                        target=f"{pipeline_name}:{stage.name}",
+                        success=True,
+                        detail=(
+                            f"skipped: scoped to {target_components}, disjoint from "
+                            f"selected components {selected_components}"
+                        ),
+                        skipped=True,
+                    )
+                )
+                continue
 
             # Plan checkpoint: pause for human approval before this stage.
             # Skipped under --simulate, consistent with simulate bypassing approvals.
@@ -1181,7 +1274,7 @@ class Orchestrator:
                     )
 
             stage_failed = any(not r.success for r in stage_results)
-            if stage_failed and not getattr(stage, "continue_on_failure", False):
+            if stage_failed and not stage.continue_on_failure:
                 logger.warning(
                     "pipeline.fail_fast",
                     pipeline=pipeline_name,
