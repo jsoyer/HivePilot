@@ -1871,7 +1871,10 @@ def _print_init_outcome(outcome: init_service.InitOutcome) -> None:
         typer.echo(f"  {outcome.env_result.action:<11} {outcome.env_result.path}")
 
     typer.echo("")
-    typer.echo("Validation:")
+    if outcome.validated_target != outcome.target:
+        typer.echo(f"Validation (against {outcome.validated_target}):")
+    else:
+        typer.echo("Validation:")
     for v in outcome.validation:
         status = "OK" if v.ok else "FAILED"
         line = f"  [{status:<6}] {v.name}"

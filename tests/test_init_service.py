@@ -108,6 +108,25 @@ def test_scaffold_writes_valid_yaml_for_every_config_model(tmp_path: Path) -> No
         assert yaml.safe_load(path.read_text(encoding="utf-8")) is not None
 
 
+def test_scaffold_plain_yaml_surfaces_pass_their_real_loaders(tmp_path: Path) -> None:
+    """The 4 plain-YAML surfaces that have a cheap, override-able runtime
+    loader must parse through that REAL loader, not just yaml.safe_load —
+    catching structurally-wrong-but-parseable YAML that safe_load can't.
+    `roles.yaml` has no such loader (see `_plain_yaml_loaders` docstring) so
+    it is intentionally excluded here."""
+    from hivepilot.services.policy_service import load_policies
+    from hivepilot.services.profile_service import load_claude_profiles
+    from hivepilot.services.schedule_service import load_schedules
+    from hivepilot.services.token_service import load_tokens
+
+    init_service.scaffold_local(tmp_path, force=False)
+
+    assert load_policies(tmp_path / "policies.yaml") is not None
+    assert load_claude_profiles(tmp_path / "model_profiles.yaml")["coding"]["model"] == "sonnet"
+    assert load_schedules(tmp_path / "schedules.yaml") == {}
+    assert load_tokens(tmp_path / "api_tokens.yaml") == []
+
+
 def test_scaffold_produces_cross_reference_clean_config(tmp_path: Path) -> None:
     """The scaffolded config should have zero cross-reference problems under
     the existing `validate_config` engine (the same one `hivepilot validate`
@@ -198,6 +217,24 @@ def test_seed_env_with_config_repo_creates_and_updates(tmp_path: Path) -> None:
     assert "HIVEPILOT_CONFIG_REPO=old" not in text2
 
 
+def test_seed_env_with_config_repo_rejects_newline(tmp_path: Path) -> None:
+    """MEDIUM-1 regression: a repo value containing a newline must be
+    rejected outright -- writing it unsanitized would inject a second
+    `KEY=value` line into `.env` (env-injection)."""
+    with pytest.raises(ValueError):
+        init_service.seed_env_with_config_repo(
+            tmp_path, "git@example.com:org/config.git\nHIVEPILOT_EVIL=1"
+        )
+    # No side effects: rejected before any file/dir was touched.
+    assert not (tmp_path / ".env").exists()
+
+
+def test_seed_env_with_config_repo_rejects_carriage_return(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        init_service.seed_env_with_config_repo(tmp_path, "git@example.com:org/config.git\r\n")
+    assert not (tmp_path / ".env").exists()
+
+
 # ---------------------------------------------------------------------------
 # Clone mode — never hits the network
 # ---------------------------------------------------------------------------
@@ -208,6 +245,7 @@ def test_clone_mode_delegates_to_existing_sync(
 ) -> None:
     from hivepilot.services import config_service
 
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-home"))
     calls: dict[str, bool] = {}
 
     def fake_sync() -> list[str]:
@@ -232,10 +270,48 @@ def test_clone_mode_reports_up_to_date_when_sync_returns_empty(
 ) -> None:
     from hivepilot.services import config_service
 
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-home"))
     monkeypatch.setattr(config_service, "sync", lambda: [])
 
     outcome = init_service.run_init(config_repo="/local/config-repo", path=tmp_path, force=False)
     assert outcome.synced_files == []
+
+
+def test_clone_mode_validates_xdg_dir_sync_actually_writes_to_not_custom_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HIGH-1 regression: config_service.sync() only ever writes into the XDG
+    config dir, never into an arbitrary `--path`. `run_init` must validate
+    (and report) that XDG dir, not the unrelated custom `path` -- otherwise a
+    successful clone is reported as "file not found" for every surface."""
+    from hivepilot.services import config_service
+
+    custom_path = tmp_path / "custom-path"
+    fake_xdg_home = tmp_path / "fake-xdg-config"
+    fake_xdg = fake_xdg_home / "hivepilot"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_xdg_home))
+
+    def fake_sync() -> list[str]:
+        # Simulate config_service.sync() copying the cloned config into the
+        # XDG config dir (the real sync()'s actual behavior).
+        init_service.scaffold_local(fake_xdg, force=False)
+        return ["projects.yaml"]
+
+    monkeypatch.setattr(config_service, "sync", fake_sync)
+
+    outcome = init_service.run_init(
+        config_repo="git@example.com:org/config.git", path=custom_path, force=False
+    )
+
+    assert outcome.mode == "clone"
+    # `target`/.env is still the custom --path -- clone mode only seeds .env
+    # there, it never claims config files live there.
+    assert outcome.target == custom_path.resolve()
+    # Validation must have run against the XDG dir sync() actually wrote to.
+    assert outcome.validated_target == fake_xdg.resolve()
+    assert all(r.ok for r in outcome.validation), outcome.validation
+    env_text = (custom_path / ".env").read_text(encoding="utf-8")
+    assert "HIVEPILOT_CONFIG_REPO=git@example.com:org/config.git" in env_text
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +330,23 @@ def test_validate_target_reports_ok_after_scaffold(tmp_path: Path) -> None:
     results = init_service.validate_target(tmp_path)
     failed = [r for r in results if not r.ok]
     assert failed == [], f"Unexpected validation failures: {failed}"
+
+
+def test_validate_target_catches_structural_error_via_real_loader(tmp_path: Path) -> None:
+    """schedules.yaml missing the required `task` key is valid YAML (would
+    pass a plain `yaml.safe_load`) but must FAIL through the real
+    `load_schedules()` loader, which requires `task` on every entry."""
+    init_service.scaffold_local(tmp_path, force=False)
+    (tmp_path / "schedules.yaml").write_text(
+        'schedules:\n  broken:\n    projects: ["acme"]\n', encoding="utf-8"
+    )
+
+    # Confirms the premise: plain YAML parsing alone sees nothing wrong.
+    assert yaml.safe_load((tmp_path / "schedules.yaml").read_text(encoding="utf-8")) is not None
+
+    results = init_service.validate_target(tmp_path)
+    schedules_result = next(r for r in results if r.name == "schedules.yaml")
+    assert schedules_result.ok is False
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +409,7 @@ def test_cli_init_clone_mode_via_flag_no_network(
 ) -> None:
     from hivepilot.services import config_service
 
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-home"))
     monkeypatch.setattr(config_service, "sync", lambda: ["projects.yaml"])
 
     runner = CliRunner()
@@ -327,3 +421,40 @@ def test_cli_init_clone_mode_via_flag_no_network(
     assert result.exit_code == 0, result.output
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "HIVEPILOT_CONFIG_REPO=git@example.com:org/config.git" in env_text
+
+
+def test_cli_init_bare_non_tty_never_prompts_and_scaffolds_with_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HIGH-2 regression: a bare `hivepilot init` (no --yes, no
+    --config-repo) in a non-TTY shell must deterministically take the
+    documented SCAFFOLD-with-defaults path -- never reach a questionary
+    prompt, which would hang forever with nobody able to answer it.
+    Typer's CliRunner wires a non-interactive stdin, so this exercises the
+    real non-TTY code path with zero prior coverage."""
+    import questionary
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("questionary must not be invoked in a non-TTY shell")
+
+    monkeypatch.setattr(questionary, "confirm", _boom)
+    monkeypatch.setattr(questionary, "text", _boom)
+    # Belt-and-suspenders: guarantee the non-TTY branch is taken regardless
+    # of how this environment's CliRunner happens to wire stdin.
+    monkeypatch.setattr(init_service, "is_interactive_tty", lambda: False)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--path", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "projects.yaml").exists()
+    assert (tmp_path / ".env").exists()
+
+
+def test_is_interactive_tty_false_for_cli_runners_non_tty_stdin() -> None:
+    """Sanity check for the belt-and-suspenders monkeypatch above: confirm
+    CliRunner's stdin really is non-TTY on its own, i.e. the guard in
+    `init_config` is not merely coincidentally satisfied by a monkeypatch."""
+    runner = CliRunner()
+    with runner.isolation():
+        assert init_service.is_interactive_tty() is False

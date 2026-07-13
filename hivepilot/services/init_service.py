@@ -110,6 +110,11 @@ class InitOutcome:
     env_result: FileResult | None
     synced_files: list[str]
     validation: list[ValidationResult]
+    # Directory `validation` was actually run against. Equal to `target` in
+    # SCAFFOLD mode; in CLONE mode this is the XDG config dir (where
+    # config_service.sync() actually writes), which may differ from `target`
+    # when a custom --path was given (see `run_init`).
+    validated_target: Path
 
 
 def resolve_target_dir(path: Path | None) -> Path:
@@ -178,7 +183,16 @@ def seed_env_with_config_repo(target: Path, repo: str) -> FileResult:
 
     Only that single line is added/updated — the rest of an existing .env's
     content is preserved untouched (the file itself is never wiped).
+
+    Raises ValueError if *repo* contains a newline/carriage-return: a git URL
+    or local path never legitimately needs one, and writing it unsanitized
+    would inject extra ``KEY=value`` lines into ``.env``.
     """
+    if "\n" in repo or "\r" in repo:
+        raise ValueError(
+            "config repo value must not contain newlines/carriage returns "
+            f"(got {repo!r}) -- refusing to write a malformed .env entry"
+        )
     target.mkdir(parents=True, exist_ok=True)
     env_path = target / ".env"
     example_path = target / ".env.example"
@@ -236,6 +250,34 @@ def _model_loaders() -> dict[str, Callable[[Path], object]]:
     }
 
 
+def _plain_yaml_loaders() -> dict[str, Callable[[Path], object]]:
+    """Lazily import the cheap, side-effect-free runtime loaders that exist
+    for a subset of ``_PLAIN_YAML_FILES``.
+
+    Each of these accepts a *path* override and (per pathlib's ``/`` operator
+    treating an absolute right-hand side as an absolute result) resolves to
+    exactly that path regardless of the live XDG/config-repo chain, so they
+    validate the actual scaffolded/synced file rather than whatever the
+    process's real settings happen to point at.
+
+    ``roles.yaml`` has no such override-able loader --
+    ``hivepilot.roles.load_roles()`` takes no path argument and always
+    resolves through the live settings chain, so it cannot be pointed at an
+    arbitrary target directory here — it stays on ``yaml.safe_load`` below.
+    """
+    from hivepilot.services.policy_service import load_policies
+    from hivepilot.services.profile_service import load_claude_profiles
+    from hivepilot.services.schedule_service import load_schedules
+    from hivepilot.services.token_service import load_tokens
+
+    return {
+        "policies.yaml": load_policies,
+        "model_profiles.yaml": load_claude_profiles,
+        "schedules.yaml": load_schedules,
+        "api_tokens.yaml": load_tokens,
+    }
+
+
 def validate_target(target: Path) -> list[ValidationResult]:
     """Attempt to load every config file in *target* through its existing
     loader/model. Never crashes on a single bad file — every failure is
@@ -254,15 +296,20 @@ def validate_target(target: Path) -> list[ValidationResult]:
         except Exception as exc:  # noqa: BLE001 — collect, never crash the wizard
             results.append(ValidationResult(name, False, str(exc)))
 
+    plain_yaml_loaders = _plain_yaml_loaders()
     for name in _PLAIN_YAML_FILES:
         file_path = target / name
         if not file_path.exists():
             results.append(ValidationResult(name, False, "file not found"))
             continue
+        plain_loader = plain_yaml_loaders.get(name)
         try:
-            yaml.safe_load(file_path.read_text(encoding="utf-8"))
+            if plain_loader is not None:
+                plain_loader(file_path)
+            else:
+                yaml.safe_load(file_path.read_text(encoding="utf-8"))
             results.append(ValidationResult(name, True))
-        except yaml.YAMLError as exc:
+        except Exception as exc:  # noqa: BLE001 — collect, never crash the wizard
             results.append(ValidationResult(name, False, str(exc)))
 
     try:
@@ -302,11 +349,17 @@ def run_init(
         assert config_repo is not None  # narrowed by `mode` above
         env_result = seed_env_with_config_repo(target, config_repo)
         synced_files = run_clone_sync(config_repo)
+        # config_service.sync() always copies into the XDG config dir
+        # (settings.xdg_config_home), never into an arbitrary `--path` --
+        # validate the directory sync ACTUALLY wrote to, not `target` (which,
+        # in clone mode, only controls where .env is seeded).
+        validation_target = resolve_target_dir(None)
     else:
         scaffold_results = scaffold_local(target, force=force)
         env_result = ensure_env_from_example(target, auto_copy=auto_copy_env)
+        validation_target = target
 
-    validation = validate_target(target)
+    validation = validate_target(validation_target)
 
     return InitOutcome(
         mode=mode,
@@ -315,4 +368,5 @@ def run_init(
         env_result=env_result,
         synced_files=synced_files,
         validation=validation,
+        validated_target=validation_target,
     )
