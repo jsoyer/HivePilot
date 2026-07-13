@@ -5,7 +5,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-RunnerKind = Literal[
+RunnerKind = str
+
+# Built-in kinds, for docs/help/typing only — NOT enforced at runtime; see RunnerRegistry.
+KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "claude",
     "shell",
     "langchain",
@@ -18,7 +21,7 @@ RunnerKind = Literal[
     "container",
     "cursor",
     "vibe",
-]
+)
 
 
 class RunnerDefinition(BaseModel):

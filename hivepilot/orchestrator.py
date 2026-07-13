@@ -144,16 +144,15 @@ def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
 
     ``"runner:model"`` (e.g. ``"claude:claude-sonnet-4-6"``) pins a runner for that
     brain; a bare model uses the role's default runner. Only a recognised
-    ``RunnerKind`` prefix is treated as a runner, so ``"opencode-go/kimi"`` and
+    runner-kind prefix is treated as a runner, so ``"opencode-go/kimi"`` and
     other slash-style ids stay plain models.
     """
-    from typing import get_args
-
-    from hivepilot.models import RunnerKind
+    from hivepilot.models import KNOWN_RUNNER_KINDS
+    from hivepilot.registry import RUNNER_MAP
 
     if ":" in entry:
         prefix, rest = entry.split(":", 1)
-        if prefix in set(get_args(RunnerKind)):
+        if prefix in (frozenset(RUNNER_MAP) | frozenset(KNOWN_RUNNER_KINDS)):
             return prefix, rest
     return default_runner, entry
 

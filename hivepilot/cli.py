@@ -1181,9 +1181,8 @@ def role_wire(
     registries (prompts/agents/, RunnerKind, model_profiles.yaml). Any
     coercion, enum, or reference failure exits 1 and writes nothing.
     """
-    from typing import get_args
-
-    from hivepilot.models import RunnerKind
+    from hivepilot.models import KNOWN_RUNNER_KINDS
+    from hivepilot.registry import RUNNER_MAP
     from hivepilot.roles import Role, load_roles
     from hivepilot.services.config_writer import apply_and_validate, resolve_reference
     from hivepilot.services.profile_service import load_claude_profiles
@@ -1224,7 +1223,7 @@ def role_wire(
         raise typer.Exit(1)
 
     if field == "runner":
-        valid_runners = get_args(RunnerKind)
+        valid_runners = sorted(frozenset(RUNNER_MAP) | frozenset(KNOWN_RUNNER_KINDS))
         if coerced not in valid_runners:
             typer.echo(f"Error: unknown runner kind {value!r}.", err=True)
             typer.echo(f"Valid runner kinds: {', '.join(valid_runners)}", err=True)

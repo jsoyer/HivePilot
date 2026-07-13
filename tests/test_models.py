@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from hivepilot.models import Group, PipelineStage, RunnerDefinition, RunnerKind
 
@@ -22,9 +21,18 @@ def test_runner_definition_known_kinds(kind: RunnerKind) -> None:
     assert RunnerDefinition(kind=kind).kind == kind
 
 
-def test_runner_definition_rejects_unknown_kind() -> None:
-    with pytest.raises(ValidationError):
-        RunnerDefinition(kind="does-not-exist")  # type: ignore[arg-type]
+def test_runner_definition_accepts_unknown_kind_but_registry_rejects_it() -> None:
+    # Intentional PRD-driven contract change (Plugin System PRD, Sprint 1):
+    # RunnerKind widened from Literal[...] to str, so pydantic no longer
+    # rejects unknown kind strings at construction time; rejection now
+    # happens at resolution time, in the registry.
+    definition = RunnerDefinition(kind="does-not-exist")
+    assert definition.kind == "does-not-exist"
+
+    from hivepilot.registry import RunnerRegistry
+
+    with pytest.raises(KeyError):
+        RunnerRegistry({}).get_runner("does-not-exist")
 
 
 # ---------------------------------------------------------------------------
