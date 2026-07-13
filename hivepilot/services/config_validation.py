@@ -147,4 +147,27 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
                 f"Policy entry for project '{project_key}' is not defined in projects.yaml"
             )
 
+    # -----------------------------------------------------------------------
+    # Check: every pipeline stage's `only_tags` values are defined in at
+    # least one group's tags (groups.yaml).  There is no statically-bound
+    # group per pipeline, so "defined in at least one group" is the correct
+    # static rule here; the runtime fail-closed check in orchestrator.py
+    # (`_validate_stage_tags`) enforces per-run group membership.
+    # -----------------------------------------------------------------------
+    all_group_tags: set[str] = set()
+    for group_def in (groups_data.get("groups") or {}).values():
+        if not isinstance(group_def, dict):
+            continue
+        all_group_tags.update((group_def.get("tags") or {}).keys())
+
+    for pipeline_name, pipeline in (pipelines_data.get("pipelines") or {}).items():
+        for stage in pipeline.get("stages") or []:
+            for tag in stage.get("only_tags") or []:
+                if tag not in all_group_tags:
+                    problems.append(
+                        f"Pipeline '{pipeline_name}' stage '{stage.get('name', '?')}' "
+                        f"references only_tags '{tag}' not defined in any group's "
+                        f"tags (groups.yaml)"
+                    )
+
     return problems
