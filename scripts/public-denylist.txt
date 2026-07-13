@@ -1,0 +1,37 @@
+# Public-safe denylist
+#
+# Structural (non-sensitive) regex patterns that indicate un-genericized
+# internal/org-specific content leaking into this PUBLIC repo's shipped
+# example/default prompts. One pattern per line, `#` starts a comment,
+# blank lines are ignored. Patterns are compiled case-insensitively.
+#
+# IMPORTANT: do NOT add real personal names here — this file is committed
+# to a public repo, and enumerating names would re-leak them. Personal-name
+# patterns (or any other sensitive-but-structural pattern maintainers don't
+# want in a public file) belong in a PRIVATE, uncommitted file referenced
+# via the PUBLIC_DENYLIST_EXTRA environment variable, e.g.:
+#
+#   PUBLIC_DENYLIST_EXTRA=~/.hivepilot-private/denylist.txt \
+#     python scripts/check_public_safe.py
+#
+# That file is never committed to this repo.
+
+# Internal AGENT-* doc/process names (AGENT-DETECTION-FABRIC, AGENT-GOVERNANCE, ...)
+# (removed over-broad AGENT-* rule: it flagged the generic {TARGET_REPO}/AGENT-GOVERNANCE.md, a governance file like AGENTS.md)
+AGENT-DETECTION-FABRIC          # internal detection-fabric system name
+
+# Internal MCP code-navigation tool name
+code-review-graph
+
+# Internal tooling reference (Obsidian vault CLI wrapper)
+obsidian CLI
+
+# Internal CLI wrapper used to proxy other tools
+rtk proxy
+
+# Org-codename segment in vault paths, e.g. {OBSIDIAN_VAULT}/Acme/...
+\{OBSIDIAN_VAULT\}/[A-Z][A-Za-z]+/
+
+# Internal policy stance references
+European-sovereign
+EU-hosted infrastructure

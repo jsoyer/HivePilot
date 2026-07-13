@@ -33,8 +33,7 @@ Parallel final stage: Documentation runs after CISO clearance, alongside QA.
 ## Vault access (optional — you are the ONLY agent allowed to read it)
 Before handing the plan to the Developer, you MAY (optional, not required) consult the
 Obsidian vault to ground the plan in existing ADRs / decisions / docs. You are the only
-role permitted to READ the vault. Use **rtk** + the **obsidian CLI** (`obs`) — e.g.
-`rtk proxy obs <query>` — or read under `{OBSIDIAN_VAULT}`. Keep it light: fold only the
+role permitted to READ the vault. Use your available vault-query tooling, or read under `{OBSIDIAN_VAULT}`. Keep it light: fold only the
 few relevant findings into the plan / `next_handoff` context — never dump raw vault
 content. Skip it entirely when the brief + CTO/CISO outputs already suffice.
 
@@ -83,7 +82,7 @@ Canonical sources — read by path, do not copy content:
 Cross-cutting enforced rules (apply to every role):
 
 1. All artifacts must be written in English (no other language).
-2. When code navigation is required, use code-review-graph MCP before Grep/Glob/Read.
-3. Before modifying files, run AGENT-DETECTION-FABRIC checks when available; if unavailable, report the limitation.
-4. European-sovereign-first: prefer EU-hosted infrastructure and EU-governed data.
+2. When code navigation is required, use available code-navigation tooling before falling back to plain search.
+3. Before modifying files, run any available pre-modification safety checks; if unavailable, report the limitation.
+4. Follow your organization's data-residency and infrastructure policies where applicable.
 5. Privacy-by-design: do not expose raw prompt content in public artifacts or logs. Internal references may summarize prompt intent without quoting sensitive content.

@@ -94,9 +94,7 @@ def _write_config(
     (base_dir / "policies.yaml").write_text(yaml.dump({"policies": {}}))
     (base_dir / "groups.yaml").write_text(yaml.dump({"groups": {}}))
     (base_dir / "tasks.yaml").write_text(yaml.dump({"tasks": tasks}))
-    (base_dir / "pipelines.yaml").write_text(
-        yaml.dump({"pipelines": {"demo": {"stages": stages}}})
-    )
+    (base_dir / "pipelines.yaml").write_text(yaml.dump({"pipelines": {"demo": {"stages": stages}}}))
 
 
 def test_dangling_input_warns_in_full_mode_but_does_not_fail_validate(
@@ -221,3 +219,69 @@ def test_existing_noxys_style_cosmetic_dangling_inputs_still_pass_in_full_mode(
         problems = config_validation.validate_config(base_dir=tmp_path)
 
     assert problems == [], f"Cosmetic dangling inputs must not fail full-mode validate: {problems}"
+
+
+def test_only_tags_defined_in_a_group_produces_no_problem(tmp_path: Path) -> None:
+    """A pipeline stage's only_tags value that IS defined in some group's
+    tags must not be flagged."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "tasks.yaml").write_text(
+        yaml.dump({"tasks": {"build": {"description": "build it"}}})
+    )
+    (tmp_path / "pipelines.yaml").write_text(
+        yaml.dump(
+            {
+                "pipelines": {
+                    "default": {
+                        "description": "default pipeline",
+                        "stages": [{"name": "build", "task": "build", "only_tags": ["ui"]}],
+                    }
+                }
+            }
+        )
+    )
+    (tmp_path / "groups.yaml").write_text(
+        yaml.dump({"groups": {"acme": {"tags": {"ui": ["acme-web"]}}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    assert not any("only_tags" in p for p in problems), f"Unexpected problems: {problems}"
+
+
+def test_only_tags_not_defined_in_any_group_is_flagged(tmp_path: Path) -> None:
+    """A pipeline stage's only_tags value that is NOT defined in any group's
+    tags must be reported as a static config problem (catches a typo like
+    'only_tags: [uii]' at validate time instead of at run time)."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "tasks.yaml").write_text(
+        yaml.dump({"tasks": {"build": {"description": "build it"}}})
+    )
+    (tmp_path / "pipelines.yaml").write_text(
+        yaml.dump(
+            {
+                "pipelines": {
+                    "default": {
+                        "description": "default pipeline",
+                        "stages": [{"name": "build", "task": "build", "only_tags": ["nope"]}],
+                    }
+                }
+            }
+        )
+    )
+    (tmp_path / "groups.yaml").write_text(
+        yaml.dump({"groups": {"acme": {"tags": {"ui": ["acme-web"]}}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "nope" in p]
+    assert matching, f"Expected a problem mentioning 'nope', got: {problems}"
+    assert "default" in matching[0]
+    assert "build" in matching[0]
