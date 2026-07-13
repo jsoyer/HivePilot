@@ -288,8 +288,7 @@ async def _cmd_ask(update: Any, context: Any) -> None:
     args = context.args or []
     if not args:
         await update.message.reply_text(
-            "Usage: /ask <agent> [@target] <order…>\n"
-            "Example: /ask gustave @acme-api add unit tests"
+            "Usage: /ask <agent> [@target] <order…>\nExample: /ask gustave @acme-api add unit tests"
         )
         return
 
