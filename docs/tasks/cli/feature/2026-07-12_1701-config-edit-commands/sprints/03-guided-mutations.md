@@ -46,7 +46,7 @@ Add the validated, idempotent, dry-run-able edit commands: `project add/rm`, `ta
 - [ ] `project add <name> <path>`: idempotent (existing identical entry = no-op message), `--dry-run`, round-trip write to `projects.yaml`.
 - [ ] `project rm <name>`: remove entry; missing name → exit 1 with valid names; `--dry-run`.
 - [ ] `task set-role <task> <role>`: if `role` not in `load_roles()`, at TTY call `prompt_or_refuse(valid_roles, ...)` to pick; in non-TTY exit 1 + print valid roles. On valid role, write via `apply_and_validate`.
-- [ ] `role wire <role> <field> <value>`: allow only reference-bearing fields (`prompt_file`, `runner`, `model` — the documented allowlist); validate the referenced target exists via `resolve_reference`; non-allowlisted field → exit 1 with guidance.
+- [ ] `role wire <role> <field> <value>`: accept **ANY** field of the `Role` model (decision 2026-07-13: full-field editing, not an allowlist). Coerce `<value>` to the field's declared type: str fields as-is; `order` → int; `can_block` → bool; `models`/`inputs`/`outputs` → list[str] (comma-split); `permission_mode` → validate against the allowed enum values. For reference-bearing fields (`prompt_file`, `runner`, `model`, `model_profile`) additionally verify the target exists via `resolve_reference`. Unknown field name → exit 1 listing valid `Role` fields; a value that fails type-coercion or enum/reference validation → exit 1 with guidance and writes nothing.
 - [ ] Shared options across commands: `--dry-run` and `--no-input` (force non-interactive refuse even at TTY). Exit codes: 0 = written/no-op, 1 = refused/invalid.
 - [ ] For a task/role that does not exist as the *subject* of the command (e.g. `set-role` on an unknown task), exit 1 with valid subjects.
 
@@ -57,7 +57,7 @@ Add the validated, idempotent, dry-run-able edit commands: `project add/rm`, `ta
 - [ ] Re-running any command with identical args is a no-op (idempotent) and exits 0.
 - [ ] `--dry-run` prints a diff and writes nothing.
 - [ ] Comments and key order in the edited YAML are preserved after a real write.
-- [ ] `role wire` refuses a non-allowlisted field with a clear message.
+- [ ] `role wire` accepts any valid `Role` field, coerces the value to the field's type, and rejects (exit 1, no write) an unknown field name, a value that won't coerce, an invalid `permission_mode` enum, or a dangling reference.
 
 ## Verification
 

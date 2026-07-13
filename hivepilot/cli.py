@@ -881,6 +881,55 @@ def config_log(
     typer.echo(config_service.get_log(n=n))
 
 
+@config_app.command("get")
+def config_get(
+    key: str = typer.Argument(..., help="Settings field name (see `config list` for options)"),
+) -> None:
+    """Print a resolved setting's value, source file, and XDG rank.
+
+    Secret-typed fields (tokens, passwords, API keys, ...) always render as
+    REDACTED, never the raw value.
+    """
+    from hivepilot.services.config_provenance import all_keys, resolve_with_provenance
+
+    try:
+        prov = resolve_with_provenance(key)
+    except KeyError:
+        valid = ", ".join(sorted(all_keys()))
+        typer.echo(f"Error: unknown key {key!r}.", err=True)
+        typer.echo(f"Valid keys: {valid}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"{key} = {prov.value}")
+    typer.echo(f"source: {prov.source_path if prov.source_path else '(default/env)'}")
+    typer.echo(f"xdg_rank: {prov.xdg_rank}")
+
+
+@config_app.command("list")
+def config_list() -> None:
+    """Show every resolved Settings field with its value, source, and XDG rank.
+
+    Secret-typed fields always render as REDACTED, never the raw value.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.services.config_provenance import all_keys, resolve_with_provenance
+
+    table = Table(title="HivePilot Config")
+    table.add_column("key")
+    table.add_column("value")
+    table.add_column("source")
+    table.add_column("rank")
+
+    for key in all_keys():
+        prov = resolve_with_provenance(key)
+        source = str(prov.source_path) if prov.source_path else "-"
+        table.add_row(key, str(prov.value), source, str(prov.xdg_rank))
+
+    Console(width=200).print(table)
+
+
 @telegram_app.command("start")
 def telegram_start(
     mode: str = typer.Option("polling", "--mode", "-m", help="polling or webhook"),
