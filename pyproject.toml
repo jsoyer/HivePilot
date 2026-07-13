@@ -123,7 +123,7 @@ select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 ignore_missing_imports = true
 no_strict_optional = true
 # Optional / untyped third-party libs (yaml without types-PyYAML, requests,
