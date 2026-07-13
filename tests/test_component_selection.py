@@ -4,8 +4,81 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hivepilot.models import PipelineConfig, PipelinesFile, PipelineStage
-from hivepilot.orchestrator import _parse_components
+from hivepilot.orchestrator import (
+    _parse_components,
+    _resolve_stage_target_components,
+    _stage_should_skip,
+    _validate_stage_tags,
+)
+
+# ---------------------------------------------------------------------------
+# PRD A1 — stage scoping: pure helper functions
+# ---------------------------------------------------------------------------
+
+
+class TestResolveStageTargetComponents:
+    def test_only_components_alone(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_components=["c1", "c2"])
+        assert _resolve_stage_target_components(stage, {}) == {"c1", "c2"}
+
+    def test_only_tags_match_resolves_via_group_tags(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_tags=["frontend"])
+        group_tags = {"frontend": ["web", "ui"]}
+        assert _resolve_stage_target_components(stage, group_tags) == {"web", "ui"}
+
+    def test_union_of_both_only_components_and_only_tags(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_components=["c1"], only_tags=["frontend"])
+        group_tags = {"frontend": ["web"]}
+        assert _resolve_stage_target_components(stage, group_tags) == {"c1", "web"}
+
+    def test_neither_selector_returns_empty_set(self) -> None:
+        stage = PipelineStage(name="s", task="t")
+        assert _resolve_stage_target_components(stage, {}) == set()
+
+
+class TestValidateStageTags:
+    def test_undefined_tag_raises_value_error_naming_the_tag(self) -> None:
+        """Fail-closed: an only_tags value absent from Group.tags must raise,
+        naming the offending tag — a review/security stage must never be
+        silently bypassed by a typo'd or missing tag."""
+        stage = PipelineStage(name="security-review", task="review", only_tags=["security"])
+        with pytest.raises(ValueError, match="security"):
+            _validate_stage_tags([stage], {})
+
+    def test_defined_tag_does_not_raise(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_tags=["frontend"])
+        _validate_stage_tags([stage], {"frontend": ["web"]})  # must not raise
+
+    def test_stage_without_only_tags_never_raises(self) -> None:
+        stage = PipelineStage(name="s", task="t")
+        _validate_stage_tags([stage], {})  # must not raise
+
+
+class TestStageShouldSkip:
+    def test_no_selector_always_runs(self) -> None:
+        stage = PipelineStage(name="s", task="t")
+        assert _stage_should_skip(stage, {}, ["c1"]) is False
+
+    def test_skip_excludes_stage_when_target_disjoint_from_selected(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_components=["c9"])
+        assert _stage_should_skip(stage, {}, ["c1", "c2"]) is True
+
+    def test_no_skip_when_only_components_matches_selected(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_components=["c1", "c9"])
+        assert _stage_should_skip(stage, {}, ["c1", "c2"]) is False
+
+    def test_no_skip_when_only_tags_matches_selected(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_tags=["frontend"])
+        group_tags = {"frontend": ["web"]}
+        assert _stage_should_skip(stage, group_tags, ["web", "api"]) is False
+
+    def test_skip_when_only_tags_does_not_match_selected(self) -> None:
+        stage = PipelineStage(name="s", task="t", only_tags=["frontend"])
+        group_tags = {"frontend": ["web"]}
+        assert _stage_should_skip(stage, group_tags, ["api"]) is True
 
 
 def test_parse_components_extracts_and_intersects() -> None:

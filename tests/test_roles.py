@@ -166,6 +166,91 @@ class TestGetRole:
             assert role.name == name
 
 
+class TestPromptFileConfigChainResolution:
+    """Role.prompt_file must resolve through Settings.resolve_config_path() so a
+    prompt override placed in the config repo is picked up, with the packaged
+    prompts/agents/ copy as the final fallback (Sprint 2)."""
+
+    def test_config_repo_override_wins_over_package_copy(self, tmp_path, monkeypatch):
+        # Isolate from any real ~/.config/hivepilot on the host machine.
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        from hivepilot.config import Settings
+        from hivepilot.roles import _PROMPTS_DIR, _resolve_prompt_path
+
+        config_repo = tmp_path / "config_repo"
+        agents_dir = config_repo / "prompts" / "agents"
+        agents_dir.mkdir(parents=True)
+        override_file = agents_dir / "ceo.md"
+        override_file.write_text("# Overridden CEO prompt\n", encoding="utf-8")
+
+        test_settings = Settings(config_repo=str(config_repo), base_dir=tmp_path)
+        resolved = _resolve_prompt_path("ceo.md", test_settings)
+
+        assert resolved == override_file, (
+            f"Expected config-repo override {override_file}, got {resolved}"
+        )
+        assert resolved != _PROMPTS_DIR / "ceo.md"
+        assert resolved.read_text(encoding="utf-8") == "# Overridden CEO prompt\n"
+
+    def test_missing_override_falls_back_to_package_copy(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        from hivepilot.config import Settings
+        from hivepilot.roles import _PROMPTS_DIR, _resolve_prompt_path
+
+        # config_repo exists locally but has no prompts/agents/ceo.md override.
+        config_repo = tmp_path / "config_repo"
+        config_repo.mkdir()
+
+        test_settings = Settings(config_repo=str(config_repo), base_dir=tmp_path)
+        resolved = _resolve_prompt_path("ceo.md", test_settings)
+
+        assert resolved == _PROMPTS_DIR / "ceo.md", (
+            "Missing config-repo override must fall back to the packaged copy"
+        )
+        assert resolved.exists()
+
+    def test_missing_override_and_missing_package_copy_never_crashes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        from hivepilot.config import Settings
+        from hivepilot.roles import _resolve_prompt_path
+
+        test_settings = Settings(config_repo=None, base_dir=tmp_path)
+        resolved = _resolve_prompt_path("does-not-exist-anywhere.md", test_settings)
+
+        # Never raises; callers guard with `.exists()` -> "" at the call sites.
+        assert isinstance(resolved, Path)
+        assert not resolved.exists()
+
+    def test_load_roles_uses_config_chain_for_prompt_file(self, tmp_path, monkeypatch):
+        """load_roles() itself must route prompt_file resolution through the
+        config chain (not just the standalone helper)."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        import hivepilot.config as config_module
+        from hivepilot.roles import load_roles
+
+        config_repo = tmp_path / "config_repo"
+        agents_dir = config_repo / "prompts" / "agents"
+        agents_dir.mkdir(parents=True)
+        override_file = agents_dir / "ceo.md"
+        override_file.write_text("# Overridden CEO prompt\n", encoding="utf-8")
+
+        # roles_file resolves to the real repo roles.yaml (base_dir = repo root).
+        test_settings = config_module.Settings(config_repo=str(config_repo), base_dir=REPO_ROOT)
+
+        original_settings = config_module.settings
+        try:
+            config_module.settings = test_settings
+            loaded = load_roles()
+        finally:
+            config_module.settings = original_settings
+
+        assert loaded["ceo"].prompt_file == override_file
+
+
 class TestRoleModel:
     """Role Pydantic model must have all required fields."""
 

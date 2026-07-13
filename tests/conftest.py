@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 from unittest.mock import MagicMock
 
 
@@ -60,6 +61,51 @@ for _mod_name in _LANGCHAIN_MODULES:
 # ---------------------------------------------------------------------------
 
 import pytest  # noqa: E402  (must come after sys.modules stubs are installed)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_config_resolution(tmp_path_factory):
+    """Prevent a developer's machine-global config from shadowing the repo config.
+
+    `Settings.resolve_config_path()` (hivepilot/config.py) resolves config files
+    in this priority order:
+        1. $XDG_CONFIG_HOME/hivepilot/<file>  (or ~/.config/hivepilot/<file>)
+        2. config_repo/<file>                 (shared config, local path)
+        3. base_dir/<file>                    (repo-root fallback)
+    On a dev machine, a stale ~/.config/hivepilot/{pipelines,groups,tasks}.yaml
+    silently wins step 1 and makes tests read the wrong config instead of the
+    repo's own fixtures — CI has no such directory so this only bites locally.
+
+    Fix: point XDG_CONFIG_HOME at an empty, session-scoped tmp dir so step 1
+    never finds anything, and unset/reset config_repo + base_dir on the
+    already-constructed `settings` singleton (its values were captured at
+    import time via pydantic-settings' env parsing, so a later env var change
+    alone would not affect it) so resolution always falls through to
+    base_dir/<file> = the repo root. Test isolation only — production XDG-first
+    behavior in hivepilot/config.py is intentional and left untouched.
+    """
+    mp = pytest.MonkeyPatch()
+
+    # Step 1: make the XDG branch miss for every test, regardless of what the
+    # developer running the suite actually has in ~/.config/hivepilot.
+    empty_xdg = tmp_path_factory.mktemp("hivepilot-xdg")
+    mp.setenv("XDG_CONFIG_HOME", str(empty_xdg))
+    # Belt-and-suspenders: clear the env var too, in case any code path
+    # constructs a fresh Settings() during the test run.
+    mp.delenv("HIVEPILOT_CONFIG_REPO", raising=False)
+
+    # Steps 2 & 3: patch the already-constructed singleton directly, since its
+    # attributes were resolved from the environment at import time.
+    from hivepilot.config import settings
+
+    mp.setattr(settings, "config_repo", None, raising=False)
+    mp.setattr(settings, "base_dir", _REPO_ROOT, raising=False)
+
+    yield
+
+    mp.undo()
 
 
 @pytest.fixture(autouse=True)
