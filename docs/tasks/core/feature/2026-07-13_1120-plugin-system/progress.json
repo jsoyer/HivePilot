@@ -1,0 +1,50 @@
+{
+  "prd": "spec.md",
+  "created": "2026-07-13T11:20:00Z",
+  "sprints": [
+    {
+      "id": 1,
+      "file": "sprints/01-open-runner-registry.md",
+      "title": "Open the runner registry (foundation)",
+      "status": "not_started",
+      "depends_on": [],
+      "batch": 1,
+      "model": "sonnet",
+      "branch": null,
+      "merged": false
+    },
+    {
+      "id": 2,
+      "file": "sprints/02-plugin-loading-both-mechanisms.md",
+      "title": "Plugin loading — both mechanisms",
+      "status": "not_started",
+      "depends_on": [1],
+      "batch": 2,
+      "model": "sonnet",
+      "branch": null,
+      "merged": false
+    },
+    {
+      "id": 3,
+      "file": "sprints/03-pluggable-notifiers.md",
+      "title": "Pluggable notifiers",
+      "status": "not_started",
+      "depends_on": [2],
+      "batch": 3,
+      "model": "sonnet",
+      "branch": null,
+      "merged": false
+    },
+    {
+      "id": 4,
+      "file": "sprints/04-hooks-trust-model-cli-docs.md",
+      "title": "Hooks, trust model, CLI & docs",
+      "status": "not_started",
+      "depends_on": [2],
+      "batch": 3,
+      "model": "sonnet",
+      "branch": null,
+      "merged": false
+    }
+  ]
+}
