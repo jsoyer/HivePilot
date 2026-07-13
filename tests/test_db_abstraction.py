@@ -1,4 +1,5 @@
 """Tests for hivepilot.services.db abstraction layer."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -34,9 +35,7 @@ class TestPh:
 
     def test_postgres_translates(self, monkeypatch):
         monkeypatch.setattr(db.settings, "database_url", "postgresql://x/y")
-        assert (
-            db.ph("SELECT * WHERE id = ? AND x = ?") == "SELECT * WHERE id = %s AND x = %s"
-        )
+        assert db.ph("SELECT * WHERE id = ? AND x = ?") == "SELECT * WHERE id = %s AND x = %s"
 
 
 class TestAutoincrementPk:
@@ -141,9 +140,7 @@ class TestInsertReturningId:
         monkeypatch.setattr(db, "_sqlite_path", lambda: tmp_path / "test.db")
 
         with db.connect() as conn:
-            conn.execute(
-                "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)"
-            )
+            conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
 
         with db.connect() as conn:
             row_id = db.insert_returning_id(
@@ -167,9 +164,7 @@ class TestInsertReturningId:
         monkeypatch.setattr(db, "_sqlite_path", lambda: tmp_path / "test.db")
 
         with db.connect() as conn:
-            conn.execute(
-                "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)"
-            )
+            conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
             id1 = db.insert_returning_id(conn, "INSERT INTO items (name) VALUES (?)", ("a",))
             id2 = db.insert_returning_id(conn, "INSERT INTO items (name) VALUES (?)", ("b",))
             assert id2 == id1 + 1

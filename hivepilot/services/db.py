@@ -54,10 +54,7 @@ def column_exists(conn: Any, table: str, col: str) -> bool:
     """
     if is_postgres():
         cur = conn.execute(
-            ph(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = ? AND column_name = ?"
-            ),
+            ph("SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?"),
             (table, col),
         )
         return cur.fetchone() is not None

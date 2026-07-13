@@ -90,9 +90,7 @@ def test_stray_config_copy_triggers_guard_warning_and_is_ignored(
     ), "expected a guard warning about the stray config/model_profiles.yaml copy"
 
 
-def test_no_stray_copy_emits_no_guard_warning(
-    tmp_path: Path, monkeypatch, caplog
-) -> None:
+def test_no_stray_copy_emits_no_guard_warning(tmp_path: Path, monkeypatch, caplog) -> None:
     """No warning should be emitted when there is no stray copy to ignore."""
     root_file = tmp_path / "model_profiles.yaml"
     root_file.write_text(
