@@ -69,3 +69,69 @@ def test_default_base_dir_uses_resolve_config_path(monkeypatch, tmp_path: Path) 
 
     assert "prompts" in calls, "resolve_config_path('prompts') was never called"
     assert problems == [], f"Unexpected problems: {problems}"
+
+
+def test_only_tags_defined_in_a_group_produces_no_problem(tmp_path: Path) -> None:
+    """A pipeline stage's only_tags value that IS defined in some group's
+    tags must not be flagged."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "tasks.yaml").write_text(
+        yaml.dump({"tasks": {"build": {"description": "build it"}}})
+    )
+    (tmp_path / "pipelines.yaml").write_text(
+        yaml.dump(
+            {
+                "pipelines": {
+                    "default": {
+                        "description": "default pipeline",
+                        "stages": [{"name": "build", "task": "build", "only_tags": ["ui"]}],
+                    }
+                }
+            }
+        )
+    )
+    (tmp_path / "groups.yaml").write_text(
+        yaml.dump({"groups": {"acme": {"tags": {"ui": ["acme-web"]}}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    assert not any("only_tags" in p for p in problems), f"Unexpected problems: {problems}"
+
+
+def test_only_tags_not_defined_in_any_group_is_flagged(tmp_path: Path) -> None:
+    """A pipeline stage's only_tags value that is NOT defined in any group's
+    tags must be reported as a static config problem (catches a typo like
+    'only_tags: [uii]' at validate time instead of at run time)."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "tasks.yaml").write_text(
+        yaml.dump({"tasks": {"build": {"description": "build it"}}})
+    )
+    (tmp_path / "pipelines.yaml").write_text(
+        yaml.dump(
+            {
+                "pipelines": {
+                    "default": {
+                        "description": "default pipeline",
+                        "stages": [{"name": "build", "task": "build", "only_tags": ["nope"]}],
+                    }
+                }
+            }
+        )
+    )
+    (tmp_path / "groups.yaml").write_text(
+        yaml.dump({"groups": {"acme": {"tags": {"ui": ["acme-web"]}}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "nope" in p]
+    assert matching, f"Expected a problem mentioning 'nope', got: {problems}"
+    assert "default" in matching[0]
+    assert "build" in matching[0]
