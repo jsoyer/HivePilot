@@ -68,7 +68,7 @@ in ONE response.
 Cross-cutting enforced rules (apply to every role):
 
 1. All artifacts must be written in English (no other language).
-2. When code navigation is required, use code-review-graph MCP before Grep/Glob/Read.
-3. Before modifying files, run AGENT-DETECTION-FABRIC checks when available; if unavailable, report the limitation.
-4. European-sovereign-first: prefer EU-hosted infrastructure and EU-governed data.
+2. When code navigation is required, use available code-navigation tooling before falling back to plain search.
+3. Before modifying files, run any available pre-modification safety checks; if unavailable, report the limitation.
+4. Follow your organization's data-residency and infrastructure policies where applicable.
 5. Privacy-by-design: do not expose raw prompt content in public artifacts or logs. Internal references may summarize prompt intent without quoting sensitive content.
