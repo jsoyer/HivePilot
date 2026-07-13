@@ -35,6 +35,12 @@ tokens_app = typer.Typer(help="Manage API tokens")
 app.add_typer(tokens_app, name="tokens")
 config_app = typer.Typer(help="Config repo sync")
 app.add_typer(config_app, name="config")
+project_app = typer.Typer(help="Manage projects.yaml entries")
+app.add_typer(project_app, name="project")
+task_app = typer.Typer(help="Manage tasks.yaml entries")
+app.add_typer(task_app, name="task")
+role_app = typer.Typer(help="Manage roles.yaml entries")
+app.add_typer(role_app, name="role")
 telegram_app = typer.Typer(help="Telegram bot")
 app.add_typer(telegram_app, name="telegram")
 caddy_app = typer.Typer(help="Caddy reverse proxy management")
@@ -928,6 +934,307 @@ def config_list() -> None:
         table.add_row(key, str(prov.value), source, str(prov.xdg_rank))
 
     Console(width=200).print(table)
+
+
+# ---------------------------------------------------------------------------
+# Guided config mutations (Sprint 3 of config-edit-commands): project/task/
+# role edit commands. Every write goes through
+# hivepilot.services.config_writer.apply_and_validate so a mutation that
+# would introduce a validate_config() problem is refused and nothing is
+# written (dry_run also always leaves the file untouched).
+# ---------------------------------------------------------------------------
+
+
+def _load_raw_config_file(filename: str):
+    """Load *filename* through the same real-path resolution
+    ``apply_and_validate`` uses (XDG -> config_repo -> base_dir), returning
+    the raw round-trip map. Idempotency checks compare against this raw,
+    on-disk representation -- not the pydantic-normalized model, which
+    expands paths / applies field defaults and would give false negatives."""
+    from ruamel.yaml.comments import CommentedMap
+
+    from hivepilot.services.config_writer import load_roundtrip
+
+    real_path = settings.resolve_config_path(filename)
+    try:
+        return load_roundtrip(real_path)
+    except FileNotFoundError:
+        return CommentedMap()
+
+
+_TRUE_STRINGS = frozenset({"true", "1", "yes"})
+_FALSE_STRINGS = frozenset({"false", "0", "no"})
+
+
+def _coerce_bool(raw: str) -> bool:
+    lowered = raw.strip().lower()
+    if lowered in _TRUE_STRINGS:
+        return True
+    if lowered in _FALSE_STRINGS:
+        return False
+    raise ValueError(f"expected one of true/false/1/0/yes/no, got {raw!r}")
+
+
+@project_app.command("add")
+def project_add(
+    name: str = typer.Argument(..., help="Project key"),
+    path: str = typer.Argument(..., help="Filesystem path to the project"),
+    description: str | None = typer.Option(None, "--description", help="Human description"),
+    claude_md: str | None = typer.Option(None, "--claude-md", help="Path to project CLAUDE.md"),
+    default_branch: str = typer.Option("main", "--default-branch", help="Default git branch"),
+    owner_repo: str | None = typer.Option(None, "--owner-repo", help="GitHub owner/repo"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print diff, write nothing"),
+    no_input: bool = typer.Option(
+        False, "--no-input", help="Never prompt interactively (kept for option parity)"
+    ),
+) -> None:
+    """Add (or fully replace) a projects.yaml entry.
+
+    The passed flags describe the *whole* desired entry (declarative, not a
+    merge) -- re-running with identical arguments is a no-op. Only writes
+    when the prospective projects.yaml still validates clean.
+    """
+    from hivepilot.services.config_writer import apply_and_validate
+
+    candidate: dict[str, object] = {"path": path}
+    if description is not None:
+        candidate["description"] = description
+    if claude_md is not None:
+        candidate["claude_md"] = claude_md
+    if default_branch != "main":
+        candidate["default_branch"] = default_branch
+    if owner_repo is not None:
+        candidate["owner_repo"] = owner_repo
+
+    raw = _load_raw_config_file("projects.yaml")
+    existing = (raw.get("projects") or {}).get(name)
+    if existing is not None and dict(existing) == candidate:
+        typer.echo(f"Project {name!r} already configured identically. No changes.")
+        raise typer.Exit(0)
+
+    def mutate(data):
+        if "projects" not in data:
+            data["projects"] = {}
+        data["projects"][name] = candidate
+        return data
+
+    result = apply_and_validate("projects.yaml", mutate, dry_run=dry_run, base_dir=None)
+    if result.errors:
+        for error in result.errors:
+            typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1)
+    if dry_run:
+        typer.echo(result.diff or "No changes.")
+        raise typer.Exit(0)
+    typer.echo(f"Project {name!r} written to projects.yaml.")
+
+
+@project_app.command("rm")
+def project_rm(
+    name: str = typer.Argument(..., help="Project key to remove"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print diff, write nothing"),
+    no_input: bool = typer.Option(
+        False, "--no-input", help="Never prompt interactively (kept for option parity)"
+    ),
+) -> None:
+    """Remove a projects.yaml entry."""
+    from hivepilot.services.config_writer import apply_and_validate
+    from hivepilot.services.project_service import load_projects
+
+    projects = load_projects().projects
+    if name not in projects:
+        typer.echo(f"Error: unknown project {name!r}.", err=True)
+        valid = ", ".join(sorted(projects)) or "(none configured)"
+        typer.echo(f"Valid projects: {valid}", err=True)
+        raise typer.Exit(1)
+
+    def mutate(data):
+        if "projects" in data and name in data["projects"]:
+            del data["projects"][name]
+        return data
+
+    result = apply_and_validate("projects.yaml", mutate, dry_run=dry_run, base_dir=None)
+    if result.errors:
+        for error in result.errors:
+            typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1)
+    if dry_run:
+        typer.echo(result.diff or "No changes.")
+        raise typer.Exit(0)
+    typer.echo(f"Project {name!r} removed from projects.yaml.")
+
+
+@task_app.command("set-role")
+def task_set_role(
+    task: str = typer.Argument(..., help="Task key"),
+    role: str = typer.Argument(..., help="Role name to bind"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print diff, write nothing"),
+    no_input: bool = typer.Option(
+        False, "--no-input", help="Force the non-interactive refuse path even at a TTY"
+    ),
+) -> None:
+    """Bind a tasks.yaml entry's `role` field to a valid role name.
+
+    If *role* is unknown: at a TTY (and without --no-input) an interactive
+    picker offers the valid roles; headlessly (or with --no-input) the
+    command refuses and lists the valid roles instead of writing anything.
+    """
+    from hivepilot.roles import load_roles
+    from hivepilot.services.config_writer import apply_and_validate, prompt_or_refuse
+    from hivepilot.services.project_service import load_tasks
+
+    tasks = load_tasks().tasks
+    if task not in tasks:
+        typer.echo(f"Error: unknown task {task!r}.", err=True)
+        valid_tasks = ", ".join(sorted(tasks)) or "(none configured)"
+        typer.echo(f"Valid tasks: {valid_tasks}", err=True)
+        raise typer.Exit(1)
+
+    valid_roles = sorted(load_roles())
+    resolved_role = role
+    if role not in valid_roles:
+        picked = (
+            None
+            if no_input
+            else prompt_or_refuse(valid_roles, f"Unknown role {role!r} -- pick one:")
+        )
+        if picked is None:
+            typer.echo(f"Error: unknown role {role!r}.", err=True)
+            valid = ", ".join(valid_roles) or "(none configured)"
+            typer.echo(f"Valid roles: {valid}", err=True)
+            raise typer.Exit(1)
+        resolved_role = picked
+
+    raw = _load_raw_config_file("tasks.yaml")
+    raw_task = (raw.get("tasks") or {}).get(task) or {}
+    if raw_task.get("role") == resolved_role:
+        typer.echo(f"Task {task!r} already bound to role {resolved_role!r}. No changes.")
+        raise typer.Exit(0)
+
+    def mutate(data):
+        data["tasks"][task]["role"] = resolved_role
+        return data
+
+    result = apply_and_validate("tasks.yaml", mutate, dry_run=dry_run, base_dir=None)
+    if result.errors:
+        for error in result.errors:
+            typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1)
+    if dry_run:
+        typer.echo(result.diff or "No changes.")
+        raise typer.Exit(0)
+    typer.echo(f"Task {task!r} bound to role {resolved_role!r}.")
+
+
+_ROLE_INT_FIELDS = frozenset({"order"})
+_ROLE_BOOL_FIELDS = frozenset({"can_block"})
+_ROLE_LIST_FIELDS = frozenset({"models", "inputs", "outputs"})
+_ROLE_PERMISSION_MODES = frozenset({"acceptEdits", "bypassPermissions", "plan", "default"})
+
+
+@role_app.command("wire")
+def role_wire(
+    role: str = typer.Argument(..., help="Role name"),
+    field: str = typer.Argument(..., help="Role field to set (see the `Role` model)"),
+    value: str = typer.Argument(..., help="New value for the field"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print diff, write nothing"),
+    no_input: bool = typer.Option(
+        False, "--no-input", help="Never prompt interactively (kept for option parity)"
+    ),
+) -> None:
+    """Set any field on a roles.yaml entry.
+
+    *value* is coerced to the field's declared type (int for `order`, bool
+    for `can_block`, comma-split list for `models`/`inputs`/`outputs`, plain
+    str otherwise). `permission_mode` is checked against its allowed enum;
+    `prompt_file`/`runner`/`model_profile` are checked against their real
+    registries (prompts/agents/, RunnerKind, model_profiles.yaml). Any
+    coercion, enum, or reference failure exits 1 and writes nothing.
+    """
+    from typing import get_args
+
+    from hivepilot.models import RunnerKind
+    from hivepilot.roles import Role, load_roles
+    from hivepilot.services.config_writer import apply_and_validate, resolve_reference
+    from hivepilot.services.profile_service import load_claude_profiles
+
+    roles = load_roles()
+    if role not in roles:
+        typer.echo(f"Error: unknown role {role!r}.", err=True)
+        typer.echo(f"Valid roles: {', '.join(sorted(roles))}", err=True)
+        raise typer.Exit(1)
+
+    valid_fields = sorted(Role.model_fields)
+    if field not in valid_fields:
+        typer.echo(f"Error: unknown role field {field!r}.", err=True)
+        typer.echo(f"Valid fields: {', '.join(valid_fields)}", err=True)
+        raise typer.Exit(1)
+
+    coerced: object
+    try:
+        if field in _ROLE_INT_FIELDS:
+            coerced = int(value)
+        elif field in _ROLE_BOOL_FIELDS:
+            coerced = _coerce_bool(value)
+        elif field in _ROLE_LIST_FIELDS:
+            coerced = [item.strip() for item in value.split(",") if item.strip()]
+        else:
+            coerced = value
+    except ValueError as exc:
+        typer.echo(f"Error: invalid value {value!r} for field {field!r}: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if field == "permission_mode" and coerced not in _ROLE_PERMISSION_MODES:
+        typer.echo(f"Error: invalid permission_mode {value!r}.", err=True)
+        typer.echo(f"Valid values: {', '.join(sorted(_ROLE_PERMISSION_MODES))}", err=True)
+        raise typer.Exit(1)
+
+    if field == "prompt_file" and not resolve_reference("prompt_file", str(coerced)):
+        typer.echo(f"Error: prompt_file {value!r} not found under prompts/agents/.", err=True)
+        raise typer.Exit(1)
+
+    if field == "runner":
+        valid_runners = get_args(RunnerKind)
+        if coerced not in valid_runners:
+            typer.echo(f"Error: unknown runner kind {value!r}.", err=True)
+            typer.echo(f"Valid runner kinds: {', '.join(valid_runners)}", err=True)
+            raise typer.Exit(1)
+
+    if field == "model_profile":
+        valid_profiles = sorted(load_claude_profiles())
+        if coerced not in valid_profiles:
+            typer.echo(f"Error: unknown model_profile {value!r}.", err=True)
+            valid = ", ".join(valid_profiles) or "(none configured)"
+            typer.echo(f"Valid model_profiles: {valid}", err=True)
+            raise typer.Exit(1)
+
+    raw = _load_raw_config_file("roles.yaml")
+    raw_roles = raw.get("roles") or []
+    raw_entry = next(
+        (entry for entry in raw_roles if isinstance(entry, dict) and entry.get("name") == role),
+        None,
+    )
+    existing_value = None if raw_entry is None else raw_entry.get(field)
+    if existing_value == coerced:
+        typer.echo(f"Role {role!r} field {field!r} already set to {value!r}. No changes.")
+        raise typer.Exit(0)
+
+    def mutate(data):
+        for entry in data.get("roles", []):
+            if isinstance(entry, dict) and entry.get("name") == role:
+                entry[field] = coerced
+                break
+        return data
+
+    result = apply_and_validate("roles.yaml", mutate, dry_run=dry_run, base_dir=None)
+    if result.errors:
+        for error in result.errors:
+            typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1)
+    if dry_run:
+        typer.echo(result.diff or "No changes.")
+        raise typer.Exit(0)
+    typer.echo(f"Role {role!r} field {field!r} set to {value!r}.")
 
 
 @telegram_app.command("start")
