@@ -62,7 +62,17 @@ for _mod_name in _LANGCHAIN_MODULES:
 
 import pytest  # noqa: E402  (must come after sys.modules stubs are installed)
 
+from hivepilot.registry import RUNNER_MAP  # noqa: E402
+from hivepilot.services.notification_service import NOTIFIER_MAP  # noqa: E402
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Pristine, built-ins-only snapshot — captured at conftest import time, before
+# any test (or test-triggered production code path) has run. Used by
+# `_isolate_runner_and_notifier_maps` below to reset process-global plugin
+# registration state after every test.
+_RUNNER_MAP_BASELINE = dict(RUNNER_MAP)
+_NOTIFIER_MAP_BASELINE = dict(NOTIFIER_MAP)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -117,6 +127,37 @@ def _isolate_state_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(state_service, "DB_PATH", tmp_path / "test_state.db")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runner_and_notifier_maps():
+    """`RUNNER_MAP` / `NOTIFIER_MAP` (`hivepilot.registry` /
+    `hivepilot.services.notification_service`) are process-global mutable
+    dicts, populated with built-ins at import time and then mutated by any
+    REAL (unmocked) `PluginManager()` construction — including indirectly,
+    e.g. `hivepilot.services.api_service._get_orchestrator()`'s cached
+    singleton, which lazily constructs a real `Orchestrator` (and therefore a
+    real `PluginManager` that scans the actual `plugins/` directory) the
+    first time any test exercises an API endpoint.
+
+    Without this, the first test in the session to trigger a real plugin
+    scan permanently registers that plugin's runner/notifier kinds; every
+    later unmocked `PluginManager()` construction elsewhere in the suite then
+    re-execs the same local plugin file (a fresh, distinct class object per
+    load, since local-file plugins are loaded via
+    `importlib.util.spec_from_file_location` rather than a cached import) and
+    collides with itself via `RunnerRegistry.register`'s
+    same-kind-different-object guard.
+
+    Restoring to the pristine, built-ins-only baseline (captured at conftest
+    import time, before any test runs) after every test guarantees each test
+    starts from the same clean slate regardless of run order.
+    """
+    yield
+    RUNNER_MAP.clear()
+    RUNNER_MAP.update(_RUNNER_MAP_BASELINE)
+    NOTIFIER_MAP.clear()
+    NOTIFIER_MAP.update(_NOTIFIER_MAP_BASELINE)
 
 
 @pytest.fixture(autouse=True)
