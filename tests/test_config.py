@@ -130,3 +130,28 @@ class TestMem0Enabled:
         monkeypatch.delenv("HIVEPILOT_MEM0_CONFIG", raising=False)
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         assert s.mem0_config is None
+
+
+# ---------------------------------------------------------------------------
+# Plugin enable/disable — plugins_disabled (Sprint 5)
+# ---------------------------------------------------------------------------
+
+
+class TestPluginsDisabled:
+    """`plugins_disabled` defaults to an empty list (no plugin skipped) and
+    is env-overridable — complements `plugins_enabled`'s master switch with
+    a per-plugin skip list."""
+
+    def test_default_is_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_PLUGINS_DISABLED", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.plugins_disabled == []
+
+    def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_PLUGINS_DISABLED", '["rtk", "obsidian"]')
+        s = Settings()
+        assert s.plugins_disabled == ["rtk", "obsidian"]
+
+    def test_is_list_of_str_type(self) -> None:
+        s = Settings()
+        assert isinstance(s.plugins_disabled, list)

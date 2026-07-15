@@ -1,8 +1,11 @@
 """Tests for hivepilot.ui.plugin_manager — skipped when textual is not installed.
 
-v1 is READ-ONLY: browse + inspect loaded plugins, no enable/disable. Mirrors
-`tests/test_dashboard.py`'s `pytest.importorskip("textual.app")` pattern since
-`textual` is an optional dep (extras `dashboard`/`full`).
+v1 (Phase 26a) was READ-ONLY: browse + inspect loaded plugins, no
+enable/disable. Sprint 5 (Phase 26b) adds a `space` toggle that flips a
+plugin's presence in `plugins_disabled` and persists it — the browse/inspect
+behavior itself is otherwise untouched. Mirrors `tests/test_dashboard.py`'s
+`pytest.importorskip("textual.app")` pattern since `textual` is an optional
+dep (extras `dashboard`/`full`).
 """
 
 from __future__ import annotations
@@ -35,9 +38,10 @@ def test_plugin_rows_attributes_local_file_runner_by_module_hint() -> None:
     rows = plugin_rows([record], {"rtk": runner_cls}, {}, {})
 
     assert len(rows) == 1
-    name, source, type_label, detail = rows[0]
+    name, source, status, type_label, detail = rows[0]
     assert name == "rtk"
     assert source == "local-file"
+    assert status == "enabled"
     assert "runner" in type_label
     assert "rtk" in detail
 
@@ -51,7 +55,7 @@ def test_plugin_rows_attributes_notifier_and_hook_by_module_hint() -> None:
 
     rows = plugin_rows([record], {}, {"obsidian": notifier_fn}, {"on_pipeline_end": [hook_fn]})
 
-    name, source, type_label, detail = rows[0]
+    name, source, status, type_label, detail = rows[0]
     assert "notifier" in type_label
     assert "hook" in type_label
     assert "obsidian" in detail
@@ -67,7 +71,7 @@ def test_plugin_rows_falls_back_to_unknown_when_attribution_unavailable() -> Non
 
     rows = plugin_rows([record], {}, {}, {})
 
-    name, source, type_label, detail = rows[0]
+    name, source, status, type_label, detail = rows[0]
     assert type_label == "unknown (see aggregate)"
 
 
@@ -157,3 +161,89 @@ def test_plugins_tui_launches_app_when_enabled(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — enable/disable toggle (`space`)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_action_toggle_disables_highlighted_plugin_and_persists(monkeypatch) -> None:
+    from hivepilot.config import settings
+    from hivepilot.ui import plugin_manager as pm_mod
+
+    monkeypatch.setattr(settings, "plugins_disabled", [], raising=False)
+    persist_mock = MagicMock()
+    monkeypatch.setattr(pm_mod, "persist_plugins_disabled", persist_mock)
+
+    record = PluginRecord(name="rtk", source="local-file", location="/repo/plugins/rtk.py")
+    app = PluginManagerApp(loaded=[record], runner_map={}, notifier_map={}, hooks={})
+
+    async with app.run_test() as pilot:
+        await pilot.press("space")
+
+        assert "rtk" in settings.plugins_disabled
+        persist_mock.assert_called_once_with(["rtk"])
+        # Status cell reflects the change immediately.
+        row = app.plugins_table.get_row_at(0)
+        assert row[2] == "disabled"
+        assert "next start" in str(app.details.renderable)
+
+
+@pytest.mark.asyncio
+async def test_action_toggle_re_enables_a_disabled_plugin(monkeypatch) -> None:
+    from hivepilot.config import settings
+    from hivepilot.ui import plugin_manager as pm_mod
+
+    monkeypatch.setattr(settings, "plugins_disabled", ["rtk"], raising=False)
+    persist_mock = MagicMock()
+    monkeypatch.setattr(pm_mod, "persist_plugins_disabled", persist_mock)
+
+    record = PluginRecord(name="rtk", source="local-file", location="/repo/plugins/rtk.py")
+    app = PluginManagerApp(loaded=[record], runner_map={}, notifier_map={}, hooks={})
+
+    async with app.run_test() as pilot:
+        await pilot.press("space")
+
+        assert "rtk" not in settings.plugins_disabled
+        persist_mock.assert_called_once_with([])
+        row = app.plugins_table.get_row_at(0)
+        assert row[2] == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_action_toggle_noop_when_no_plugins_loaded(monkeypatch) -> None:
+    from hivepilot.ui import plugin_manager as pm_mod
+
+    persist_mock = MagicMock()
+    monkeypatch.setattr(pm_mod, "persist_plugins_disabled", persist_mock)
+
+    app = PluginManagerApp(loaded=[], runner_map={}, notifier_map={}, hooks={})
+
+    async with app.run_test() as pilot:
+        await pilot.press("space")
+
+        persist_mock.assert_not_called()
+
+
+def test_persist_plugins_disabled_upserts_env_file(tmp_path) -> None:
+    """The persist writer upserts HIVEPILOT_PLUGINS_DISABLED into the .env
+    file Settings reads — preserving unrelated lines verbatim."""
+    from hivepilot.ui.plugin_manager import persist_plugins_disabled
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("HIVEPILOT_OTHER=keep-me\n", encoding="utf-8")
+
+    persist_plugins_disabled(["rtk", "obsidian"], env_path=env_path)
+
+    content = env_path.read_text(encoding="utf-8")
+    assert "HIVEPILOT_OTHER=keep-me" in content
+    # persist_plugins_disabled sorts before writing (deterministic diffs).
+    assert 'HIVEPILOT_PLUGINS_DISABLED=["obsidian", "rtk"]' in content
+
+    # A second call replaces the existing line rather than duplicating it.
+    persist_plugins_disabled(["rtk"], env_path=env_path)
+    content = env_path.read_text(encoding="utf-8")
+    assert content.count("HIVEPILOT_PLUGINS_DISABLED=") == 1
+    assert 'HIVEPILOT_PLUGINS_DISABLED=["rtk"]' in content

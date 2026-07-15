@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     output_format: str = "json"
     plugins_entry: str | None = None
     plugins_enabled: bool = True  # master on/off switch for local-file + entry-point plugin loading
+    # Names of plugins to skip loading even when discovered (local-file stem
+    # or entry-point name) — complements plugins_enabled above, which is an
+    # all-or-nothing master switch: this is a per-plugin skip list. Toggled
+    # by the TUI plugin manager's `space` binding (hivepilot/ui/plugin_manager.py),
+    # which persists changes to .env; effective on next start only (plugins
+    # load once at PluginManager construction, no live reload).
+    # env: HIVEPILOT_PLUGINS_DISABLED
+    plugins_disabled: list[str] = Field(default_factory=list)
     discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
     api_host: str = "127.0.0.1"
     api_port: int = 8045

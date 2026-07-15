@@ -36,6 +36,13 @@ def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
         for file in sorted(plugin_dir.glob("*.py")):
             if file.stem.startswith("_"):
                 continue
+            if file.stem in settings.plugins_disabled:
+                # Skip BEFORE the module is even exec'd (and therefore before
+                # register() could ever be invoked) — a disabled plugin
+                # contributes no runners/notifiers/hooks and has no side
+                # effects from its own module body either.
+                logger.info("plugins.skipped_disabled", name=file.stem, source="local-file")
+                continue
             # Load by file path so it works regardless of cwd / sys.path
             # (the installed `hivepilot` binary and the Telegram bot don't have
             # the project root on sys.path → `import plugins.x` would fail).
@@ -90,6 +97,11 @@ def load_entry_point_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
         return found
 
     for ep in eps:
+        if ep.name in settings.plugins_disabled:
+            # Skip BEFORE ep.load() (and therefore before register() could
+            # ever be invoked) — mirrors the local-file skip point above.
+            logger.info("plugins.skipped_disabled", name=ep.name, source="entry-point")
+            continue
         try:
             fn = ep.load()
         except Exception as exc:  # noqa: BLE001 — one broken plugin must not skip the rest
