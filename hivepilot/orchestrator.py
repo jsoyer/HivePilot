@@ -1537,7 +1537,11 @@ class Orchestrator:
                 final_status = RunStatus.TEST_FAILURE
                 try:
                     self.plugins.run_hook(
-                        "on_error", run_id=run_id, pipeline=pipeline_name, stage=stage.name
+                        "on_error",
+                        run_id=run_id,
+                        pipeline=pipeline_name,
+                        stage=stage.name,
+                        dry_run=dry_run,
                     )
                 except Exception as exc:  # noqa: BLE001 — a broken plugin hook must not kill a run
                     logger.warning(
@@ -1551,7 +1555,11 @@ class Orchestrator:
         )
         try:
             self.plugins.run_hook(
-                "on_pipeline_end", run_id=run_id, pipeline=pipeline_name, status=final_status.value
+                "on_pipeline_end",
+                run_id=run_id,
+                pipeline=pipeline_name,
+                status=final_status.value,
+                dry_run=dry_run,
             )
         except Exception as exc:  # noqa: BLE001 — a broken plugin hook must not kill a run
             logger.warning(
@@ -2061,7 +2069,9 @@ class Orchestrator:
                     secrets=secrets,
                 )
                 try:
-                    self.plugins.run_hook("before_step", payload=payload)
+                    self.plugins.run_hook(
+                        "before_step", payload=payload, dry_run=dry_run, role=task.role
+                    )
                     if task.role:
                         from typing import cast
 
@@ -2164,7 +2174,13 @@ class Orchestrator:
                         outputs.append(self._capture_or_execute(runner_key, payload))
                     if run_id:
                         state_service.record_step(run_id, step.name, "success")
-                    self.plugins.run_hook("after_step", payload=payload)
+                    self.plugins.run_hook(
+                        "after_step",
+                        payload=payload,
+                        dry_run=dry_run,
+                        role=task.role,
+                        output=outputs[-1] if outputs else None,
+                    )
                 except Exception as exc:
                     if run_id:
                         state_service.record_step(run_id, step.name, "failed", str(exc))

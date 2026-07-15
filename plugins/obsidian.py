@@ -17,9 +17,14 @@ has no side effects.
 Contract:
 - Notifier: raises `NotConfigured` (the standard "skip silently" signal, see
   `hivepilot.services.notification_service`) when the vault isn't configured
-  or doesn't exist on disk.
+  or doesn't exist on disk. Does NOT honor `dry_run` — see the "Known
+  limitation" note in `notify()`'s docstring.
 - Hooks: never raise. A broken/misconfigured vault is a silent no-op — a
-  hook must never crash a pipeline run.
+  hook must never crash a pipeline run. `on_pipeline_end` / `on_error` honor
+  the run's `dry_run` flag (threaded in via `run_hook(..., dry_run=...)` by
+  `Orchestrator.run_pipeline` — `hivepilot/orchestrator.py`): a dry-run
+  pipeline builds `ObsidianService(vault, dry_run=True)`, which plans the
+  run-report write but never touches the vault.
 
 Deliberately NOT a `@dataclass`: local-file plugins are loaded via
 `importlib.util.spec_from_file_location()` / `exec_module()`
@@ -66,6 +71,25 @@ def notify(message: str) -> None:
 
     Raises `NotConfigured` (the notifier "skip silently" contract) when the
     vault isn't configured or doesn't exist on disk.
+
+    **Known limitation — does NOT honor `dry_run`.** Unlike `on_pipeline_end`
+    / `on_error`, this notifier always writes for real
+    (`ObsidianService(vault, dry_run=False)`). The notifier contract
+    (`NOTIFIER_MAP: dict[str, Callable[[str], None]]`,
+    `hivepilot/services/notification_service.py`) is a bare
+    `Callable[[str], None]` shared by every notifier (built-in
+    slack/discord/telegram + any plugin's) — there is no per-call `dry_run`
+    parameter to thread through without changing that shared contract for
+    all of them, which is out of scope for this kwarg-threading change (see
+    the hook-context-enrichment investigation). In practice this is low-risk
+    today: no call site in this repo passes `channels=["obsidian", ...]` to
+    `notification_service.send_notification()` (the default channel list is
+    `["slack", "discord", "telegram"]`), so `notify()` is only reachable via
+    a caller that explicitly opts in to the "obsidian" channel — a case this
+    codebase doesn't exercise. Left undone, not silently — a future revision
+    could widen the notifier `Callable` to `Callable[[str], None] |
+    Callable[[str, bool], None]` (or add an optional `dry_run` kwarg) if a
+    real dry-run-aware notifier caller emerges.
     """
     vault = _resolve_vault()
     if vault is None:
@@ -78,6 +102,14 @@ def notify(message: str) -> None:
 
 def on_pipeline_end(**kwargs: Any) -> None:
     """Append a structured run-report block for a finished pipeline run.
+
+    Honors the run's ``dry_run`` flag (``Orchestrator.run_pipeline`` passes
+    it through ``run_hook("on_pipeline_end", ..., dry_run=...)``): a dry-run
+    pipeline builds an ``ObsidianService(vault, dry_run=True)``, which plans
+    the write but never touches the vault (see
+    ``hivepilot/services/obsidian_service.py::_write_or_plan``). Absent the
+    kwarg (older caller / direct test invocation), defaults to ``False`` —
+    a real write, preserving prior behavior.
 
     Never raises — a broken hook must never crash a run. Silent no-op when
     the vault isn't configured or doesn't exist.
@@ -92,7 +124,7 @@ def on_pipeline_end(**kwargs: Any) -> None:
             f"- pipeline: {kwargs.get('pipeline')}\n"
             f"- status: {kwargs.get('status')}\n"
         )
-        svc = ObsidianService(vault, dry_run=False)
+        svc = ObsidianService(vault, dry_run=bool(kwargs.get("dry_run", False)))
         svc.append_daily(entry)
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
         logger.warning("plugin.obsidian.on_pipeline_end_failed", error=str(exc))
@@ -100,6 +132,9 @@ def on_pipeline_end(**kwargs: Any) -> None:
 
 def on_error(**kwargs: Any) -> None:
     """Append a structured failure-report block for a failed pipeline stage.
+
+    Honors the run's ``dry_run`` flag the same way ``on_pipeline_end`` does
+    — see that function's docstring.
 
     Never raises — a broken hook must never crash a run. Silent no-op when
     the vault isn't configured or doesn't exist.
@@ -114,7 +149,7 @@ def on_error(**kwargs: Any) -> None:
             f"- pipeline: {kwargs.get('pipeline')}\n"
             f"- stage: {kwargs.get('stage')}\n"
         )
-        svc = ObsidianService(vault, dry_run=False)
+        svc = ObsidianService(vault, dry_run=bool(kwargs.get("dry_run", False)))
         svc.append_daily(entry)
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
         logger.warning("plugin.obsidian.on_error_failed", error=str(exc))

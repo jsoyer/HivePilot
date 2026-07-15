@@ -438,6 +438,137 @@ class TestStorePersistsAvailableContent:
         assert not mock_client.add.called
 
 
+class TestStorePersistsRealOutput:
+    """`store()` (`after_step`) now persists the step's real `output` when
+    the caller supplies it (threaded in by `Orchestrator._execute_task` —
+    hook-context-enrichment), in addition to the existing input-context
+    fallback (`extra_prompt` / `prior_context`)."""
+
+    def test_store_with_output_kwarg_persists_it(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path)
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, output="the agent's real result")
+
+        assert mock_client.add.called
+        stored_text = mock_client.add.call_args.args[0]
+        assert "the agent's real result" in stored_text
+
+    def test_store_with_output_and_extra_prompt_persists_both(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path, extra_prompt="original ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, output="real outcome")
+
+        stored_text = mock_client.add.call_args.args[0]
+        assert "original ask" in stored_text
+        assert "real outcome" in stored_text
+
+    def test_store_without_output_kwarg_falls_back_as_before(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path, extra_prompt="original ask", prior_context="upstream output")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)
+
+        stored_text = mock_client.add.call_args.args[0]
+        assert "original ask" in stored_text
+        assert "upstream output" in stored_text
+        assert "output:" not in stored_text
+
+    def test_store_non_string_output_is_ignored(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path, extra_prompt="original ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, output=None)
+
+        stored_text = mock_client.add.call_args.args[0]
+        assert "output:" not in stored_text
+
+
+class TestMemoryKeyIncludesRole:
+    """`_memory_key` (and therefore `recall`/`store`) include `role` in the
+    mem0 `user_id` key when the caller supplies it (threaded in by
+    `Orchestrator._execute_task` — hook-context-enrichment), falling back to
+    the original `project:task` key when absent."""
+
+    def test_memory_key_with_role(self, mem0_module: ModuleType, tmp_path: Path) -> None:
+        payload = _payload(tmp_path)
+        assert mem0_module._memory_key(payload, "developer") == "proj:t:developer"
+
+    def test_memory_key_without_role_falls_back(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path)
+        assert mem0_module._memory_key(payload, None) == "proj:t"
+        assert mem0_module._memory_key(payload) == "proj:t"
+
+    def test_recall_uses_role_in_search_user_id(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path)
+        mock_client = MagicMock()
+        mock_client.search.return_value = []
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.recall(payload=payload, role="developer")
+
+        assert mock_client.search.call_args.kwargs["user_id"] == "proj:t:developer"
+
+    def test_store_uses_role_in_add_user_id(self, mem0_module: ModuleType, tmp_path: Path) -> None:
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, role="developer")
+
+        assert mock_client.add.call_args.kwargs["user_id"] == "proj:t:developer"
+
+    def test_recall_and_store_use_matching_key_when_role_supplied(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """Recall/store must agree on the same key so stored memories are
+        actually found again on a later recall — the whole point of keying
+        by role."""
+        payload = _payload(tmp_path, extra_prompt="ask")
+        recall_client = MagicMock()
+        recall_client.search.return_value = []
+        with patch.object(mem0_module, "_get_client", return_value=recall_client):
+            mem0_module.recall(payload=payload, role="developer")
+
+        store_client = MagicMock()
+        with patch.object(mem0_module, "_get_client", return_value=store_client):
+            mem0_module.store(payload=payload, role="developer")
+
+        assert (
+            recall_client.search.call_args.kwargs["user_id"]
+            == store_client.add.call_args.kwargs["user_id"]
+        )
+
+    def test_recall_without_role_kwarg_falls_back_as_before(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path)
+        mock_client = MagicMock()
+        mock_client.search.return_value = []
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.recall(payload=payload)
+
+        assert mock_client.search.call_args.kwargs["user_id"] == "proj:t"
+
+
 class TestStoreInternalErrorIsSwallowed:
     def test_add_raising_does_not_propagate(self, mem0_module: ModuleType, tmp_path: Path) -> None:
         payload = _payload(tmp_path, prior_context="something salient")

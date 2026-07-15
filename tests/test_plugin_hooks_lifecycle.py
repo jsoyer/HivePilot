@@ -12,6 +12,7 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import ANY, MagicMock, patch
 
@@ -24,6 +25,8 @@ from hivepilot.services.state_service import RunStatus
 
 if TYPE_CHECKING:
     from hivepilot.orchestrator import Orchestrator
+
+_TMP_PROJECT_PATH = Path("/tmp/p")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -129,6 +132,10 @@ class TestPipelineStartEndHooksFireOnSuccess:
         assert end_recorder.calls[0]["run_id"] == 11
         assert end_recorder.calls[0]["pipeline"] == "test-pipe"
         assert end_recorder.calls[0]["status"] == RunStatus.COMPLETE.value
+        # hook-context-enrichment: on_pipeline_end now carries the run's
+        # dry_run flag so a dry-run pipeline's plugins (e.g. obsidian) can
+        # skip real writes.
+        assert end_recorder.calls[0]["dry_run"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +190,8 @@ class TestOnErrorHookFiresOnFailFast:
         assert error_recorder.calls[0]["run_id"] == 22
         assert error_recorder.calls[0]["pipeline"] == "test-pipe"
         assert error_recorder.calls[0]["stage"] == "stage-a"
+        # hook-context-enrichment: on_error now carries the run's dry_run flag.
+        assert error_recorder.calls[0]["dry_run"] is True
 
         assert len(end_recorder.calls) == 1, end_recorder.calls
         assert end_recorder.calls[0]["status"] == RunStatus.TEST_FAILURE.value
@@ -234,3 +243,103 @@ class TestBrokenHookDoesNotCrashPipeline:
         mock_logger.warning.assert_any_call(
             "plugins.hook_failed", hook="on_pipeline_start", run_id=33, error=ANY
         )
+
+
+# ---------------------------------------------------------------------------
+# hook-context-enrichment — before_step / after_step now carry dry_run,
+# role, and (after_step only) the step's real output.
+# ---------------------------------------------------------------------------
+
+
+class TestBeforeAfterStepHooksCarryEnrichedContext:
+    """`Orchestrator._execute_task` threads `dry_run`/`role` into
+    `before_step` and additionally `output` into `after_step` — a recording
+    hook confirms the exact kwargs reaching both fire sites."""
+
+    def _run_execute_task(
+        self,
+        *,
+        role: str | None,
+        dry_run: bool,
+        before_recorder: _Recorder,
+        after_recorder: _Recorder,
+        simulate: bool = False,
+    ) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        pm = _bare_plugin_manager()
+        pm.hooks["before_step"] = [before_recorder]
+        pm.hooks["after_step"] = [after_recorder]
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline("x"), plugin_manager=pm)
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "the agent's real output"
+
+        task = TaskConfig(
+            description="t",
+            role=role,
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=_TMP_PROJECT_PATH)
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+                dry_run=dry_run,
+                simulate=simulate,
+            )
+
+    def test_before_step_receives_dry_run_and_role(self) -> None:
+        before_recorder = _Recorder()
+        after_recorder = _Recorder()
+
+        self._run_execute_task(
+            role="reviewer",
+            dry_run=True,
+            before_recorder=before_recorder,
+            after_recorder=after_recorder,
+        )
+
+        assert len(before_recorder.calls) == 1, before_recorder.calls
+        assert before_recorder.calls[0]["dry_run"] is True
+        assert before_recorder.calls[0]["role"] == "reviewer"
+
+    def test_after_step_receives_dry_run_role_and_output(self) -> None:
+        before_recorder = _Recorder()
+        after_recorder = _Recorder()
+
+        self._run_execute_task(
+            role="reviewer",
+            dry_run=False,
+            before_recorder=before_recorder,
+            after_recorder=after_recorder,
+        )
+
+        assert len(after_recorder.calls) == 1, after_recorder.calls
+        assert after_recorder.calls[0]["dry_run"] is False
+        assert after_recorder.calls[0]["role"] == "reviewer"
+        assert after_recorder.calls[0]["output"] == "the agent's real output"
+
+    def test_before_step_role_is_none_for_non_role_task(self) -> None:
+        before_recorder = _Recorder()
+        after_recorder = _Recorder()
+
+        self._run_execute_task(
+            role=None,
+            dry_run=True,
+            before_recorder=before_recorder,
+            after_recorder=after_recorder,
+            simulate=True,
+        )
+
+        assert before_recorder.calls[0]["role"] is None
+        assert after_recorder.calls[0]["output"] == "[simulated claude]"

@@ -29,23 +29,21 @@ wires TWO lifecycle hooks instead of one:
    remembered", whereas ``prior_context`` is reserved for actual upstream
    stage output.
 
-2. **Store data availability — the crux, same shape as headroom's Step 0.**
-   ``after_step`` is called (``self.plugins.run_hook("after_step",
-   payload=payload)``) with the exact SAME ``payload`` object passed to
-   ``before_step``. Critically, the runner's return value (the step's real
-   output) is appended to a local ``outputs`` list INSIDE
-   ``_execute_task`` and is never attached to ``payload`` or threaded into
-   the ``after_step`` call's kwargs — so ``store()`` has NO access to what
-   the agent actually produced. ``on_pipeline_end`` is even sparser
-   (``run_id``/``pipeline``/``status`` only, no per-step data at all), so
-   it isn't a viable alternative either. Given this, ``store()`` persists
-   what IS reachable: task/step identity plus the step's INPUT context
-   (``extra_prompt`` / ``prior_context``) — a directional placeholder for
-   "what this task was about", not the outcome. This is a real, documented
-   limitation, not a fabricated one. **Follow-up:** thread the runner's
-   captured text into ``after_step(output=...)`` kwargs so a future
-   revision of this hook can store actual results — tracked, not done
-   here (out of this plugin's file boundaries).
+2. **Store data availability — RESOLVED (hook-context-enrichment).**
+   Originally, the runner's return value (the step's real output) was
+   appended to a local ``outputs`` list INSIDE ``_execute_task`` and never
+   attached to ``payload`` or threaded into the ``after_step`` call's
+   kwargs, so ``store()`` had no access to what the agent actually
+   produced. ``Orchestrator._execute_task`` now threads it through:
+   ``self.plugins.run_hook("after_step", payload=payload, dry_run=dry_run,
+   role=task.role, output=outputs[-1] if outputs else None)`` — the SAME
+   value just appended to ``outputs`` for this step, passed straight into
+   the hook call that follows it. ``store()`` reads ``kwargs.get("output")``
+   and persists it (labeled ``output: ...``) IN ADDITION to task/step
+   identity and the step's INPUT context (``extra_prompt`` /
+   ``prior_context``) — output captures what happened, extra_prompt/
+   prior_context capture what was asked for; both are kept as
+   complementary, not mutually exclusive.
 
    A related wrinkle: because ``recall`` mutates ``extra_prompt`` in place
    (appending a "Relevant memories:" block), a naive ``store()`` reading
@@ -76,15 +74,18 @@ on every step of a multi-step task. The ``_mem0_recalled`` sentinel is set
 after the first search call for a given ``metadata`` dict (regardless of
 whether any memories were found), and subsequent calls short-circuit.
 
-**Recall key.** ``RunnerPayload`` (``hivepilot/runners/base.py``) carries
-``project_name`` and ``task_name`` but NOT the task's ``role`` — ``role``
-lives on ``TaskConfig`` (``hivepilot/models.py``), one level up in
-``Orchestrator._execute_task``, and is never threaded onto the payload.
-Recall/store are therefore keyed by ``f"{project_name}:{task_name}"``
-(mem0's ``user_id``) rather than project/task/role as originally
-envisioned — role isn't reachable from a lifecycle hook today. Threading
-``task.role`` onto ``RunnerPayload`` is a natural follow-up if
-role-scoped memory is wanted later.
+**Recall key — RESOLVED (hook-context-enrichment).** ``RunnerPayload``
+(``hivepilot/runners/base.py``) still doesn't carry the task's ``role`` —
+``role`` lives on ``TaskConfig`` (``hivepilot/models.py``), one level up in
+``Orchestrator._execute_task``. Rather than widen the shared
+``RunnerPayload`` dataclass (a contract every runner depends on) just for
+this plugin, ``role`` is threaded straight into the hook call instead:
+``run_hook("before_step"/"after_step", ..., role=task.role)``. ``recall``/
+``store`` both read ``kwargs.get("role")`` and pass it into ``_memory_key``,
+which appends it to the key (``f"{project}:{task}:{role}"``) when present,
+falling back to the original ``f"{project}:{task}"`` shape when absent (a
+non-role task, or a direct call that doesn't supply ``role``) — so existing
+memories keyed the old way keep matching for non-role tasks.
 
 **Opt-in (dormant by default):** gated on ``settings.mem0_enabled``
 (``hivepilot/config.py``, default ``False``, env ``HIVEPILOT_MEM0_ENABLED``)
@@ -193,14 +194,21 @@ def _get_client() -> Any | None:
         return None
 
 
-def _memory_key(payload: Any) -> str:
+def _memory_key(payload: Any, role: str | None = None) -> str:
     """Best-effort identity key for this task, used as mem0's `user_id`.
 
-    Keyed by project + task only — `role` isn't reachable from a
-    `RunnerPayload`; see the "Recall key" note in the module docstring.
+    Keyed by project + task, plus `role` when reachable (threaded in via
+    `run_hook(..., role=task.role)` by `Orchestrator._execute_task` —
+    `hivepilot/orchestrator.py`; `RunnerPayload` itself still doesn't carry
+    `role` — see the "Recall key" note in the module docstring). Falls back
+    to the project:task key when `role` is `None`/absent, exactly as before
+    — a caller that doesn't pass `role` (e.g. a direct test invocation, or a
+    non-role task) sees unchanged keying.
     """
     project = getattr(payload, "project_name", None) or "unknown"
     task = getattr(payload, "task_name", None) or "unknown"
+    if role:
+        return f"{project}:{task}:{role}"
     return f"{project}:{task}"
 
 
@@ -235,11 +243,13 @@ def _extract_memory_texts(results: Any) -> list[str]:
 def recall(**kwargs: Any) -> None:
     """Search mem0 for relevant memories and inject them into `extra_prompt`.
 
-    No-op when `settings.mem0_enabled` is False (the default — dormant/
-    opt-in), when no client can be built (library absent / unconfigured),
-    when no `payload` kwarg is supplied, or when this `metadata` dict was
-    already recalled for (idempotency guard — see module docstring). Never
-    raises.
+    Keyed by `project:task[:role]` via `_memory_key` — `role` is included
+    when the caller supplies it (`run_hook("before_step", ..., role=...)`),
+    the SAME keying `store` uses, so recall/store stay matched. No-op when
+    `settings.mem0_enabled` is False (the default — dormant/opt-in), when no
+    client can be built (library absent / unconfigured), when no `payload`
+    kwarg is supplied, or when this `metadata` dict was already recalled for
+    (idempotency guard — see module docstring). Never raises.
     """
     try:
         from hivepilot.config import settings
@@ -266,7 +276,8 @@ def recall(**kwargs: Any) -> None:
         original_extra_prompt = metadata.get(_RECALL_FIELD)
         metadata[_ORIGINAL_EXTRA_PROMPT_KEY] = original_extra_prompt
 
-        key = _memory_key(payload)
+        role = kwargs.get("role")
+        key = _memory_key(payload, role)
         step = getattr(payload, "step", None)
         step_name = getattr(step, "name", None) or ""
         query = f"{payload.task_name} {step_name}".strip() or key
@@ -293,11 +304,16 @@ def recall(**kwargs: Any) -> None:
 def store(**kwargs: Any) -> None:
     """Persist the available salient content for this step to mem0.
 
-    Cannot access the step's actual OUTPUT (see the "Store data
-    availability" note in the module docstring) — persists task/step
-    identity plus the reachable input context (`extra_prompt` /
-    `prior_context`). A no-op when there's no client, no `payload`, or no
-    salient content beyond bare task identity. Never raises.
+    Persists task/step identity, the step's real `output` when the caller
+    supplies it (`Orchestrator._execute_task` threads the runner's captured
+    return value into `run_hook("after_step", ..., output=...)` — see the
+    "Store data availability" note in the module docstring, now resolved),
+    plus the reachable input context (`extra_prompt` / `prior_context`) as
+    complementary "what this task was about" data. Keyed by
+    `project:task[:role]` — `role` is included when the caller supplies it
+    (see `_memory_key`'s docstring / the "Recall key" note). A no-op when
+    there's no client, no `payload`, or no salient content beyond bare task
+    identity. Never raises.
     """
     try:
         from hivepilot.config import settings
@@ -317,9 +333,21 @@ def store(**kwargs: Any) -> None:
 
         step = getattr(payload, "step", None)
         step_name = getattr(step, "name", None) or "step"
-        key = _memory_key(payload)
+        role = kwargs.get("role")
+        key = _memory_key(payload, role)
 
         content_parts = [f"Task: {payload.task_name} / Step: {step_name}"]
+
+        # The step's real output (threaded in via `run_hook("after_step",
+        # ..., output=outputs[-1])` by `Orchestrator._execute_task` —
+        # `hivepilot/orchestrator.py`) is the actual outcome, and takes
+        # priority when present. Kept in ADDITION to (not instead of) the
+        # input-context fields below: `extra_prompt`/`prior_context` capture
+        # what the task was ASKED to do, `output` captures what actually
+        # happened — both are salient, complementary content to persist.
+        output_val = kwargs.get("output")
+        if isinstance(output_val, str) and output_val:
+            content_parts.append(f"output: {output_val}")
 
         # Prefer the pre-recall snapshot (avoids re-persisting mem0's own
         # recalled-memories block); fall back to the live field when recall
