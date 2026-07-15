@@ -35,6 +35,7 @@ from typing import Any
 
 from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
+from hivepilot.plugins import HealthStatus
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.templates import render_template
 from hivepilot.utils.env import merge_environments
@@ -100,5 +101,15 @@ class RtkRunner:
         return render_template(template, context)
 
 
+def health(**kwargs: Any) -> HealthStatus:
+    """`ok` when `rtk` is on PATH; `degraded` when it isn't — `RtkRunner.run`
+    already falls back to raw (unwrapped) command execution in that case, so
+    a missing `rtk` binary degrades token savings rather than breaking runs.
+    """
+    if shutil.which("rtk"):
+        return HealthStatus("ok", "rtk on PATH")
+    return HealthStatus("degraded", "rtk not on PATH — falls back to raw execution")
+
+
 def register() -> dict[str, Any]:
-    return {"runners": {"rtk": RtkRunner}}
+    return {"runners": {"rtk": RtkRunner}, "health": {"rtk": health}}

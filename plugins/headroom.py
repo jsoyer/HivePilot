@@ -72,6 +72,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from hivepilot.plugins import HealthStatus
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -167,5 +168,22 @@ def before_step(**kwargs: Any) -> None:
         logger.warning("plugin.headroom.before_step_failed", error=str(exc))
 
 
+def health(**kwargs: Any) -> HealthStatus:
+    """`error` when `headroom-ai` isn't importable (`compress is None`);
+    otherwise `ok`/`degraded` reflecting `settings.headroom_enabled` — ships
+    dormant by default, so "installed but disabled" is the common, expected
+    steady state, not a failure. No values in the detail — presence/config
+    booleans only.
+    """
+    if compress is None:
+        return HealthStatus("error", "headroom-ai not installed")
+
+    from hivepilot.config import settings
+
+    if not settings.headroom_enabled:
+        return HealthStatus("degraded", "installed but disabled (headroom_enabled=False)")
+    return HealthStatus("ok", "installed and enabled")
+
+
 def register() -> dict[str, Any]:
-    return {"before_step": before_step}
+    return {"before_step": before_step, "health": {"headroom": health}}

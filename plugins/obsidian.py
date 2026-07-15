@@ -42,11 +42,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from hivepilot.plugins import HealthStatus
 from hivepilot.services.notification_service import NotConfigured
 from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# `settings.obsidian_vault` (hivepilot/config.py) is a non-Optional `Path`
+# field defaulting to `Path("obsidian-vault")` rather than `None` — there is
+# no clean "unset" sentinel on the field itself. `health()` below treats a
+# vault still equal to this field default (and absent on disk) as "unset /
+# not configured" (degraded), distinct from an operator-set path that simply
+# doesn't exist on disk (error). Read once, lazily, from the `Settings`
+# class's own field metadata rather than hardcoded here, so it can never
+# drift from the real default.
+from hivepilot.config import Settings  # noqa: E402
+
+_DEFAULT_OBSIDIAN_VAULT = Settings.model_fields["obsidian_vault"].default
 
 
 def _resolve_vault() -> Path | None:
@@ -155,9 +168,28 @@ def on_error(**kwargs: Any) -> None:
         logger.warning("plugin.obsidian.on_error_failed", error=str(exc))
 
 
+def health(**kwargs: Any) -> HealthStatus:
+    """`ok` when `settings.obsidian_vault` is set (differs from the field
+    default) AND exists on disk; `error` when it's set but the path is
+    missing; `degraded` ("not configured") when it's still the field
+    default — see the `_DEFAULT_OBSIDIAN_VAULT` note above. Only the
+    boolean/existence is reported, never the path's contents.
+    """
+    from hivepilot.config import settings
+
+    vault = settings.obsidian_vault
+    path = Path(vault).expanduser()
+    if path.exists():
+        return HealthStatus("ok", "vault configured and present")
+    if path == _DEFAULT_OBSIDIAN_VAULT:
+        return HealthStatus("degraded", "not configured")
+    return HealthStatus("error", "obsidian_vault configured but path does not exist")
+
+
 def register() -> dict[str, Any]:
     return {
         "notifiers": {"obsidian": notify},
         "on_pipeline_end": on_pipeline_end,
         "on_error": on_error,
+        "health": {"obsidian": health},
     }

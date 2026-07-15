@@ -192,6 +192,88 @@ class TestRegister:
         assert hooks["before_step"] is mem0_module.recall
         assert hooks["after_step"] is mem0_module.store
 
+    def test_register_exposes_health_check(self, mem0_module: ModuleType) -> None:
+        hooks = mem0_module.register()
+        assert "health" in hooks
+        assert hooks["health"]["mem0"] is mem0_module.health
+
+
+class TestHealth:
+    """Sprint 2 (plugin-health): `health()` reflects lib-importable +
+    `mem0_enabled` + client-buildable — never a secret/token value in the
+    detail (Phase 19 discipline), only presence/mode booleans."""
+
+    def test_error_when_lib_missing(self, mem0_module: ModuleType) -> None:
+        with (
+            patch.object(mem0_module, "Memory", None),
+            patch.object(mem0_module, "MemoryClient", None),
+        ):
+            result = mem0_module.health()
+        assert result.status == "error"
+        assert "not installed" in result.detail
+
+    def test_degraded_when_installed_but_disabled(
+        self, mem0_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "mem0_enabled", False, raising=False)
+        with patch.object(mem0_module, "Memory", MagicMock()):
+            result = mem0_module.health()
+        assert result.status == "degraded"
+        assert "disabled" in result.detail
+
+    def test_error_when_enabled_but_client_unbuildable(
+        self, mem0_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+        with patch.object(mem0_module, "_get_client", return_value=None):
+            result = mem0_module.health()
+        assert result.status == "error"
+
+    def test_ok_hosted_mode_when_api_key_set(
+        self, mem0_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+        monkeypatch.setattr(settings, "mem0_api_key", "mk-super-secret-token", raising=False)
+        mock_client = MagicMock()
+        with (
+            patch.object(mem0_module, "Memory", MagicMock()),
+            patch.object(mem0_module, "_get_client", return_value=mock_client),
+        ):
+            result = mem0_module.health()
+        assert result.status == "ok"
+        assert "mk-super-secret-token" not in result.detail
+
+    def test_ok_self_host_mode_when_no_api_key(
+        self, mem0_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+        monkeypatch.setattr(settings, "mem0_api_key", None, raising=False)
+        mock_client = MagicMock()
+        with (
+            patch.object(mem0_module, "Memory", MagicMock()),
+            patch.object(mem0_module, "_get_client", return_value=mock_client),
+        ):
+            result = mem0_module.health()
+        assert result.status == "ok"
+        assert "self-host" in result.detail
+
+    def test_never_leaks_api_key_across_all_health_paths(
+        self, mem0_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No health detail, across any status, ever contains the configured
+        mem0 API key/token — even when it's set (Phase 19 no-leak discipline)."""
+        secret_token = "mk-this-must-never-appear-anywhere"
+        monkeypatch.setattr(settings, "mem0_api_key", secret_token, raising=False)
+
+        for enabled in (True, False):
+            monkeypatch.setattr(settings, "mem0_enabled", enabled, raising=False)
+            with (
+                patch.object(mem0_module, "Memory", MagicMock()),
+                patch.object(mem0_module, "_get_client", return_value=MagicMock()),
+            ):
+                result = mem0_module.health()
+            assert secret_token not in result.detail
+
 
 class TestRecallInjectsMemories:
     def test_recall_injects_into_extra_prompt_in_place(

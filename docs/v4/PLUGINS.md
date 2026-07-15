@@ -57,6 +57,7 @@ A plugin is a module exposing a zero-arg `register()` function that returns a
 | `runners` | `dict[str, type[BaseRunner]]` | registered into `RUNNER_MAP` |
 | `notifiers` | `dict[str, Callable[[str], None]]` | registered into `NOTIFIER_MAP` |
 | `secrets` | `dict[str, SecretsBackend]` | registered into `SECRETS_MAP` |
+| `health` | `dict[str, Callable[..., HealthStatus \| dict]]` | registered into `PluginManager.health` — see "Health checks" below |
 | `before_step` | `Callable[..., None]` | hook, fired before each step |
 | `after_step` | `Callable[..., None]` | hook, fired after each step |
 | `on_pipeline_start` | `Callable[..., None]` | hook, fired once when `run_pipeline` starts |
@@ -65,9 +66,9 @@ A plugin is a module exposing a zero-arg `register()` function that returns a
 
 Any key not in this table is still accepted and stored under
 `PluginManager.hooks[key]` — forward-compatible, never an error. Only
-`runners`/`notifiers`/`secrets` are eagerly popped out and routed to their own
-registries; everything else accumulates as a list of hook callables, exactly
-like `before_step`/`after_step` do today.
+`runners`/`notifiers`/`secrets`/`health` are eagerly popped out and routed to
+their own collections; everything else accumulates as a list of hook
+callables, exactly like `before_step`/`after_step` do today.
 
 Hooks are called with keyword arguments only — write `**kwargs` or name the
 ones you use:
@@ -141,6 +142,73 @@ Same fail-closed trust model as runners/notifiers — a `secrets` name that
 collides with an already-registered backend (built-in or another plugin's)
 aborts the load (`SecretsBackendCollisionError`), rolling back this plugin's
 other contributions; see "Collision & error handling" below.
+
+### Health checks
+
+A plugin may optionally expose a **health check** — a zero/kwarg-only
+callable that reports whether the thing it wraps (an external binary, a
+library, a configured backend) is actually usable right now, surfaced by
+`hivepilot plugins list` / `hivepilot plugins health` / the TUI (the
+`store ok / mem0 ok / headroom ok` pattern):
+
+```python
+# plugins/bedrock_runner.py (continued from the runner example above)
+from hivepilot.plugins import HealthStatus
+
+
+def health(**kwargs):
+    import boto3
+
+    try:
+        boto3.client("bedrock")
+    except Exception as exc:
+        return HealthStatus("error", f"boto3 client failed: {exc}")
+    return HealthStatus("ok", "bedrock client reachable")
+
+
+def register():
+    return {"runners": {"bedrock": BedrockRunner}, "health": {"bedrock": health}}
+```
+
+`register()["health"]` is `dict[str, Callable[..., HealthStatus | dict]]` —
+name -> health-check callable. The callable must be **keyword-tolerant**
+(accept `**kwargs`, even if unused today — future callers may pass context)
+and return one of:
+
+- a `HealthStatus` — `from hivepilot.plugins import HealthStatus`, a
+  `NamedTuple` with `status: Literal["ok", "degraded", "error"]` and
+  `detail: str`; or
+- a plain `{"status": ..., "detail": ...}` dict, the no-import fallback for a
+  plugin that would rather not depend on `hivepilot.plugins`'s import
+  surface.
+
+Both shapes are accepted and normalized by the collector. Any other return
+value (wrong type, an invalid `status`) normalizes to
+`HealthStatus("error", "invalid health check result...")` rather than
+crashing anything downstream.
+
+**Never-raise.** Running a health check (`PluginManager.run_health_check` /
+`check_all()`) never propagates an exception — a raising callable is caught
+and reported as `HealthStatus("error", "<ExceptionType>: <short message>")`.
+The same guarantee every other plugin hook in this repo has: a broken health
+check cannot crash `plugins list`, `plugins health`, or the TUI.
+
+**No secrets in a health detail.** A health check's `detail` string must
+**never** contain a secret/token value (the same Phase 19 no-leak discipline
+used for resolved `${secret:NAME}` values) — report presence/config booleans
+and names only (e.g. `"hosted mode configured"`, not the API key itself).
+See the `mem0` example below.
+
+**Collision & routing.** `health` names are collected into
+`PluginManager.health` (an instance dict — no process-global map, health is
+scoped to the manager exactly like `PluginManager.hooks` is) the same way
+runners/notifiers/secrets are: a name that collides with an already-
+registered health check (built-in or another plugin's) is a hard stop
+(`HealthNameCollisionError`), rolling back this plugin's other contributions
+atomically — see "Collision & error handling" below.
+
+A plugin without a `health` key simply doesn't appear in the health surface
+— fully backward-compatible with every plugin shipped before this feature.
 
 ### Hook example
 
@@ -221,6 +289,11 @@ steps:
 Any step assigned to a runner of kind `rtk` gets its command proxied through
 `rtk` automatically, with the same-directory graceful fallback described
 above.
+
+**Health check** — `register()["health"]["rtk"]` reports `ok` when
+`shutil.which("rtk")` finds the binary, `degraded` ("rtk not on PATH — falls
+back to raw execution") otherwise; never `error` (a missing `rtk` binary is
+graceful degradation, not a failure — see above).
 
 ### Example: the `herdr` runner (`plugins/herdr.py`)
 
@@ -383,6 +456,11 @@ pip install "headroom-ai[all]"
 pip install "headroom-ai[all]"
 ```
 
+**Health check** — `register()["health"]["headroom"]` reports `error` when
+`headroom-ai` isn't importable, `degraded` ("installed but disabled") when
+importable but `headroom_enabled` is `False` (the default, dormant steady
+state), `ok` when importable and enabled.
+
 ### Example: the `mem0` plugin (`plugins/mem0.py`)
 
 Ships in this repo as a reference plugin that gives agents persistent
@@ -530,6 +608,15 @@ HIVEPILOT_MEM0_API_KEY=your-mem0-api-key
 pip install mem0ai
 ```
 
+**Health check** — `register()["health"]["mem0"]` reports `error` when
+`mem0ai` isn't importable, `degraded` ("installed but disabled") when
+importable but `mem0_enabled` is `False`, `error` when enabled but
+`_get_client()` can't build a client, otherwise `ok` with a `detail` of
+`"hosted mode configured"` or `"self-host"` — **never** the API key/token
+itself (see "Health checks" above and the data-egress warning above — the
+same no-leak discipline applies to health details as to everything else this
+plugin sends off-machine).
+
 ### Example: the `obsidian` plugin (`plugins/obsidian.py`)
 
 Ships in this repo as a reference plugin that is BOTH a notifier and a pair
@@ -580,6 +667,12 @@ from hivepilot.services.notification_service import send_notification
 
 send_notification("Deploy finished", channels=["obsidian"])
 ```
+
+**Health check** — `register()["health"]["obsidian"]` reports `ok` when
+`settings.obsidian_vault` is set (differs from its field default,
+`Path("obsidian-vault")`) AND exists on disk; `error` when it's set but the
+path is missing; `degraded` ("not configured") when it's still the field
+default. Only the path's existence is reported, never its contents.
 
 ### Example: the `infisical` secrets provider (`plugins/infisical.py`)
 
@@ -737,17 +830,19 @@ discovered automatically at process start — no config change needed.
 
 ## Collision & error handling
 
-- **Kind/name collision** — if a plugin declares a `runners`, `notifiers`, or
-  `secrets` key whose name is already registered to a *different*
-  implementation, that raises (`RunnerKindCollisionError` /
-  `NotifierKindCollisionError` / `SecretsBackendCollisionError`) and
-  **aborts loading**. This is a hard stop by design: silently shadowing a
-  built-in (e.g. redefining `claude`, or a secrets backend named `vault`) is
-  never the right default. Registration of a single plugin's
-  runners+notifiers+secrets is atomic: if any entry collides, every entry
-  that plugin already added to the process-global maps in this same load is
-  rolled back before the error propagates — an aborted plugin never leaves
-  orphaned, partially-applied registrations behind.
+- **Kind/name collision** — if a plugin declares a `runners`, `notifiers`,
+  `secrets`, or `health` key whose name is already registered to a
+  *different* implementation, that raises (`RunnerKindCollisionError` /
+  `NotifierKindCollisionError` / `SecretsBackendCollisionError` /
+  `HealthNameCollisionError`) and **aborts loading**. This is a hard stop by
+  design: silently shadowing a built-in (e.g. redefining `claude`, or a
+  secrets backend named `vault`) — or silently shadowing another plugin's
+  health check — is never the right default. Registration of a single
+  plugin's runners+notifiers+secrets+health is atomic: if any entry
+  collides, every entry that plugin already added (to the process-global
+  maps, or to `PluginManager.health`) in this same load is rolled back
+  before the error propagates — an aborted plugin never leaves orphaned,
+  partially-applied registrations behind.
 - **Broken plugin** — any other failure (import error, exception inside
   `register()`, a bad entry point) is logged
   (`plugins.load_failed` / `plugins.register_failed` /
@@ -763,7 +858,7 @@ discovered automatically at process start — no config change needed.
 hivepilot plugins list
 ```
 
-Prints four tables:
+Prints five tables:
 
 - **Loaded Plugins** — every successfully-loaded `PluginRecord`: `name`,
   `source` (`local-file` | `entry-point`), `location`.
@@ -774,12 +869,29 @@ Prints four tables:
 - **Secrets Backends** — every backend currently in `SECRETS_MAP`, labeled
   `built-in` or `plugin` by membership in `KNOWN_SECRET_BACKENDS`
   (`{env, file, vault, sops}`).
+- **Health** — every registered health check name -> a colored status badge
+  (green `ok` / yellow `degraded` / red `error`) + its one-line `detail`,
+  sourced from `PluginManager.check_all()` (never-raise — see "Health
+  checks" above). Empty (no plugin declares `health`) shows a `-` placeholder
+  row, same convention as an empty **Loaded Plugins** table.
 
 This is a v1 inventory, not a full join — it does not attribute which
 specific runner kind or notifier came from which loaded plugin beyond what a
 `PluginRecord` itself records. If a plugin contributes a runner kind or hook
 and it doesn't show up as expected, check the process log for
 `plugins.load_failed` / `plugins.register_failed` first.
+
+### `plugins health`
+
+```bash
+hivepilot plugins health
+```
+
+Prints only the Health table (same data/format as the one in `plugins list`)
+and, unlike `plugins list` (which always exits `0`), **exits non-zero if any
+check reports `error`** — a focused command for monitoring/CI use, e.g. a
+periodic job that pages when a configured backend (mem0, a secrets provider,
+obsidian) stops being reachable.
 
 ### TUI plugin manager
 
@@ -796,6 +908,13 @@ Attribution is derived by matching each contributed runner/notifier/hook's
 best-effort, same v1 limitation as `plugins list` (see "Inspecting loaded
 plugins" above and roadmap Phase 26a): when attribution can't be derived,
 the row shows `unknown (see aggregate)` instead of guessing.
+
+**Health (Sprint 2 of the plugin-health spec)** — the details pane also
+shows a `Health: <status> — <detail>` line for the highlighted plugin, when a
+health check is registered under the SAME name as the plugin (the convention
+the example plugins below follow, e.g. `rtk`'s health check is named `rtk`).
+Sourced from the same `PluginManager.check_all()` used by `plugins list` /
+`plugins health` — read-only, no toggle here.
 
 **Enable/disable (`space`, Phase 26b)** — pressing `space` on the
 highlighted plugin flips its presence in `plugins_disabled` and persists the

@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.metadata as metadata
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
@@ -18,6 +18,65 @@ class PluginRecord:
     name: str
     source: str
     location: str
+
+
+# Valid `HealthStatus.status` values a health check may report.
+HEALTH_STATUSES = ("ok", "degraded", "error")
+
+
+class HealthStatus(NamedTuple):
+    """Small typed result a plugin's `health` callable returns.
+
+    Importable by plugins the same way they already import other hivepilot
+    symbols (`from hivepilot.plugins import HealthStatus`). `status` must be
+    one of `HEALTH_STATUSES`; `detail` is a one-line, human-readable string
+    that must NEVER contain a secret/token value (Phase 19 discipline) —
+    presence/config booleans and names only.
+    """
+
+    status: str
+    detail: str
+
+
+class HealthNameCollisionError(RuntimeError):
+    """Raised when two plugins declare a `health` check under the same name.
+
+    Mirrors `RunnerKindCollisionError` / `NotifierKindCollisionError` /
+    `SecretsBackendCollisionError` (`hivepilot/registry.py` /
+    `hivepilot/services/notification_service.py`) — a hard stop, not a
+    silent last-wins overwrite, so a plugin can never shadow another
+    plugin's health check unnoticed.
+    """
+
+
+def _normalize_health_result(result: Any) -> HealthStatus:
+    """Coerce a health callable's return value into a `HealthStatus`.
+
+    Accepts a `HealthStatus` instance, any duck-typed object exposing
+    `.status`/`.detail` attributes (e.g. a plugin's own locally-defined
+    namedtuple/dataclass with the same shape), or a plain
+    `{"status": ..., "detail": ...}` dict (the documented no-import
+    fallback). Anything else, or an invalid `status` value, normalizes to
+    `HealthStatus("error", ...)` describing the problem — this function
+    itself never raises.
+    """
+    if isinstance(result, HealthStatus):
+        return result
+
+    status: Any = None
+    detail: Any = None
+    if isinstance(result, dict):
+        status = result.get("status")
+        detail = result.get("detail")
+    elif hasattr(result, "status") and hasattr(result, "detail"):
+        status = result.status
+        detail = result.detail
+    else:
+        return HealthStatus("error", f"invalid health check result type: {type(result).__name__}")
+
+    if status not in HEALTH_STATUSES:
+        return HealthStatus("error", f"invalid health status: {status!r}")
+    return HealthStatus(status, str(detail) if detail is not None else "")
 
 
 def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
@@ -151,6 +210,11 @@ class PluginManager:
         self.loaded: list[PluginRecord] = []
         self.hooks: dict[str, list[Any]] = {"before_step": [], "after_step": []}
         self.declared_notifiers: dict[str, Callable[[str], None]] = {}
+        # name -> health-check callable, collected the same way as
+        # runners/notifiers/secrets (popped out of a plugin's declared
+        # hooks). Per-manager instance dict — no process-global map needed,
+        # health is scoped to this PluginManager the same way `self.hooks` is.
+        self.health: dict[str, Callable[..., Any]] = {}
         # Back-compat: flat list of discovered callables (mirrors the pre-Sprint-2
         # `load_plugins()`-derived attribute), regardless of whether calling
         # `register()` on them below succeeds.
@@ -171,7 +235,8 @@ class PluginManager:
             runners = hooks.pop("runners", None)
             notifiers = hooks.pop("notifiers", None)
             secrets = hooks.pop("secrets", None)
-            if runners or notifiers or secrets:
+            health = hooks.pop("health", None)
+            if runners or notifiers or secrets or health:
                 from hivepilot.registry import (
                     RUNNER_MAP,
                     SECRETS_MAP,
@@ -188,13 +253,15 @@ class PluginManager:
 
                 # A kind/name collision is a hard stop and propagates uncaught
                 # (unlike an isolated broken plugin, which is logged and skipped).
-                # Register this one plugin's runners+notifiers+secrets atomically:
-                # if any entry collides, roll back the entries THIS plugin already
-                # added to the process-global maps before re-raising, so an aborted
+                # Register this one plugin's runners+notifiers+secrets+health
+                # atomically: if any entry collides, roll back the entries THIS
+                # plugin already added (to the process-global maps, or to this
+                # instance's `self.health`) before re-raising, so an aborted
                 # plugin never leaves orphaned, untracked registrations behind.
                 applied_runners: list[str] = []
                 applied_notifiers: list[str] = []
                 applied_secrets: list[str] = []
+                applied_health: list[str] = []
                 try:
                     for kind, cls in (runners or {}).items():
                         was_present = kind in RUNNER_MAP
@@ -211,10 +278,19 @@ class PluginManager:
                         SecretsRegistry.register(secret_name, secret_backend)
                         if not was_present:
                             applied_secrets.append(secret_name)
+                    for health_name, health_fn in (health or {}).items():
+                        if health_name in self.health:
+                            raise HealthNameCollisionError(
+                                f"health check '{health_name}' is already registered; "
+                                "refusing to silently replace it"
+                            )
+                        self.health[health_name] = health_fn
+                        applied_health.append(health_name)
                 except (
                     RunnerKindCollisionError,
                     NotifierKindCollisionError,
                     SecretsBackendCollisionError,
+                    HealthNameCollisionError,
                 ):
                     for kind in applied_runners:
                         RUNNER_MAP.pop(kind, None)
@@ -222,6 +298,8 @@ class PluginManager:
                         NOTIFIER_MAP.pop(notifier_name, None)
                     for secret_name in applied_secrets:
                         SECRETS_MAP.pop(secret_name, None)
+                    for health_name in applied_health:
+                        self.health.pop(health_name, None)
                     raise
 
                 if notifiers:
@@ -235,3 +313,25 @@ class PluginManager:
     def run_hook(self, hook_name: str, **kwargs: Any) -> None:
         for hook in self.hooks.get(hook_name, []):
             hook(**kwargs)
+
+    def run_health_check(self, name: str) -> HealthStatus:
+        """Run a single named health check. Never raises: an exception
+        raised by the callable itself is caught here and reported as
+        `HealthStatus("error", "<ExceptionType>: <short msg>")` — the same
+        never-crash guarantee every other plugin hook in this repo has.
+        """
+        fn = self.health.get(name)
+        if fn is None:
+            return HealthStatus("error", f"no health check registered for {name!r}")
+        try:
+            result = fn()
+        except Exception as exc:  # noqa: BLE001 — a health check must never crash
+            logger.warning("plugins.health_check_failed", name=name, error=str(exc))
+            return HealthStatus("error", f"{type(exc).__name__}: {exc}")
+        return _normalize_health_result(result)
+
+    def check_all(self) -> dict[str, HealthStatus]:
+        """Run every registered health check. Never raises (see
+        `run_health_check`) — safe to call unconditionally from `plugins
+        list` / `plugins health` / the TUI."""
+        return {name: self.run_health_check(name) for name in self.health}
