@@ -123,6 +123,40 @@ async def test_app_details_update_on_enter() -> None:
 
 
 @pytest.mark.asyncio
+async def test_app_details_surfaces_health_status() -> None:
+    """Sprint 2 (plugin-health): the details pane shows the selected plugin's
+    health status/detail when a health check is registered under the SAME
+    name as the plugin (the convention the example plugins follow)."""
+    from hivepilot.plugins import HealthStatus
+
+    record = PluginRecord(name="rtk", source="local-file", location="/repo/plugins/rtk.py")
+    app = PluginManagerApp(
+        loaded=[record],
+        runner_map={},
+        notifier_map={},
+        hooks={},
+        health={"rtk": HealthStatus("degraded", "rtk not on PATH")},
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        rendered = str(app.details.renderable)
+        assert "Health:" in rendered
+        assert "degraded" in rendered
+        assert "rtk not on PATH" in rendered
+
+
+@pytest.mark.asyncio
+async def test_app_details_no_health_line_when_no_check_registered() -> None:
+    record = PluginRecord(name="sample", source="local-file", location="/repo/plugins/sample.py")
+    app = PluginManagerApp(loaded=[record], runner_map={}, notifier_map={}, hooks={}, health={})
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        assert "Health:" not in str(app.details.renderable)
+
+
+@pytest.mark.asyncio
 async def test_app_details_default_message_when_no_plugins() -> None:
     app = PluginManagerApp(loaded=[], runner_map={}, notifier_map={}, hooks={})
 

@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, Optional, cast
 import typer
 
 if TYPE_CHECKING:
+    from rich.console import Console
+
+    from hivepilot.plugins import HealthStatus, PluginManager
     from hivepilot.services import init_service
 
 from hivepilot.config import settings
@@ -2418,6 +2421,39 @@ def validate(
     raise typer.Exit(1)
 
 
+def _health_badge(status: str) -> str:
+    """Rich-markup-colored badge for a `HealthStatus.status` value — green
+    ok / yellow degraded / red error, falling back to plain text for any
+    unrecognized value (defensive; `_normalize_health_result` never actually
+    produces one)."""
+    color = {"ok": "green", "degraded": "yellow", "error": "red"}.get(status)
+    return f"[{color}]{status}[/{color}]" if color else status
+
+
+def _print_health_table(
+    console: Console, plugins: PluginManager, *, title: str = "Health"
+) -> dict[str, HealthStatus]:
+    """Render the plugin Health table (name / status badge / detail) by
+    running every registered health check via `PluginManager.check_all()`
+    (never-raise). Returns the raw `{name: HealthStatus}` results so callers
+    (e.g. `plugins health`'s exit-code logic) don't need to re-run checks."""
+    from rich.table import Table
+
+    health_table = Table(title=title)
+    health_table.add_column("name")
+    health_table.add_column("status")
+    health_table.add_column("detail")
+
+    results = plugins.check_all()
+    for name in sorted(results):
+        status, detail = results[name]
+        health_table.add_row(name, _health_badge(status), detail)
+    if not results:
+        health_table.add_row("-", "-", "-")
+    console.print(health_table)
+    return results
+
+
 @plugins_app.command("list")
 def plugins_list() -> None:
     """List loaded plugins and the runner kinds / notifiers / secrets backends
@@ -2471,6 +2507,24 @@ def plugins_list() -> None:
         source = "built-in" if name in KNOWN_SECRET_BACKENDS else "plugin"
         secrets_table.add_row(name, source)
     console.print(secrets_table)
+
+    _print_health_table(console, orchestrator.plugins)
+
+
+@plugins_app.command("health")
+def plugins_health() -> None:
+    """Print only the plugin Health table and exit non-zero if any check
+    reports `error` — useful for monitoring/CI, unlike `plugins list` (which
+    always exits 0)."""
+    from rich.console import Console
+
+    orchestrator = Orchestrator()
+    console = Console(width=200)
+
+    results = _print_health_table(console, orchestrator.plugins, title="Plugin Health")
+
+    if any(status == "error" for status, _detail in results.values()):
+        raise typer.Exit(1)
 
 
 @plugins_app.command("tui")

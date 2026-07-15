@@ -19,9 +19,108 @@ from typer.testing import CliRunner
 
 from hivepilot.cli import app
 from hivepilot.models import KNOWN_RUNNER_KINDS
-from hivepilot.plugins import PluginRecord
+from hivepilot.plugins import HealthStatus, PluginRecord
 from hivepilot.registry import KNOWN_SECRET_BACKENDS, RUNNER_MAP, SECRETS_MAP, SecretsRegistry
 from hivepilot.services.notification_service import NOTIFIER_MAP
+
+
+class TestPluginsListHealthTable:
+    """Sprint 2 (plugin-health): `plugins list` gains a Health table, sourced
+    from `PluginManager.check_all()` (never-raise — see `hivepilot/plugins.py`).
+    """
+
+    def test_plugins_list_renders_health_table(self, monkeypatch) -> None:
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = []
+        mock_orch.plugins.check_all.return_value = {
+            "rtk": HealthStatus("ok", "rtk on PATH"),
+            "obsidian": HealthStatus("degraded", "not configured"),
+        }
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "rtk" in result.output
+        assert "ok" in result.output
+        assert "rtk on PATH" in result.output
+        assert "obsidian" in result.output
+        assert "degraded" in result.output
+        assert "not configured" in result.output
+
+    def test_plugins_list_health_table_placeholder_when_no_checks(self, monkeypatch) -> None:
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = []
+        mock_orch.plugins.check_all.return_value = {}
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "Health" in result.output
+
+
+class TestPluginsHealthCommand:
+    """`hivepilot plugins health` — focused health-only command with a
+    monitoring-friendly non-zero exit code when any check reports `error`."""
+
+    def test_exits_zero_when_all_ok(self, monkeypatch) -> None:
+        mock_orch = MagicMock()
+        mock_orch.plugins.check_all.return_value = {
+            "rtk": HealthStatus("ok", "rtk on PATH"),
+        }
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "health"])
+
+        assert result.exit_code == 0, result.output
+        assert "rtk" in result.output
+
+    def test_exits_nonzero_when_any_check_errors(self, monkeypatch) -> None:
+        mock_orch = MagicMock()
+        mock_orch.plugins.check_all.return_value = {
+            "rtk": HealthStatus("ok", "rtk on PATH"),
+            "mem0": HealthStatus("error", "lib missing"),
+        }
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "health"])
+
+        assert result.exit_code != 0
+        assert "mem0" in result.output
+        assert "lib missing" in result.output
+
+    def test_exits_zero_when_no_checks_registered(self, monkeypatch) -> None:
+        mock_orch = MagicMock()
+        mock_orch.plugins.check_all.return_value = {}
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "health"])
+
+        assert result.exit_code == 0, result.output
+
+    def test_exits_zero_when_only_degraded(self, monkeypatch) -> None:
+        """`degraded` is a warning, not a failure — only `error` triggers a
+        non-zero exit (see `test_exits_nonzero_when_any_check_errors` above
+        for the contrasting case)."""
+        mock_orch = MagicMock()
+        mock_orch.plugins.check_all.return_value = {
+            "rtk": HealthStatus("ok", "rtk on PATH"),
+            "obsidian": HealthStatus("degraded", "not configured"),
+        }
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "health"])
+
+        assert result.exit_code == 0, result.output
+        assert "obsidian" in result.output
+        assert "degraded" in result.output
 
 
 def test_plugins_list_exits_zero_and_lists_builtins(monkeypatch) -> None:

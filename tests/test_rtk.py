@@ -72,6 +72,36 @@ class TestRegister:
     def test_rtk_kind_does_not_collide_with_a_built_in(self) -> None:
         assert "rtk" not in KNOWN_RUNNER_KINDS
 
+    def test_register_exposes_health_check(self, rtk_module: ModuleType) -> None:
+        hooks = rtk_module.register()
+        assert "health" in hooks
+        assert "rtk" in hooks["health"]
+        assert hooks["health"]["rtk"] is rtk_module.health
+
+
+class TestHealth:
+    """Sprint 2 (plugin-health): `health()` reflects `shutil.which("rtk")`."""
+
+    def test_ok_when_rtk_on_path(self, rtk_module: ModuleType) -> None:
+        with patch.object(rtk_module.shutil, "which", return_value="/usr/local/bin/rtk"):
+            result = rtk_module.health()
+        assert result.status == "ok"
+
+    def test_degraded_when_rtk_not_on_path(self, rtk_module: ModuleType) -> None:
+        with patch.object(rtk_module.shutil, "which", return_value=None):
+            result = rtk_module.health()
+        assert result.status == "degraded"
+        assert "not on PATH" in result.detail
+        assert "raw execution" in result.detail
+
+    def test_health_is_keyword_tolerant(self, rtk_module: ModuleType) -> None:
+        """health(**kwargs) must accept (and ignore) arbitrary kwargs — the
+        collector (`PluginManager.run_health_check`) calls it with none, but
+        the contract is keyword-tolerant per the plugin-health spec."""
+        with patch.object(rtk_module.shutil, "which", return_value=None):
+            result = rtk_module.health(project="anything")
+        assert result.status == "degraded"
+
 
 class TestRunWrapsWithRtkProxy:
     def test_run_invokes_rtk_proxy_when_rtk_on_path(

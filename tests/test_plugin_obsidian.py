@@ -85,6 +85,55 @@ class TestRegister:
     def test_obsidian_name_does_not_collide_with_known_notifiers(self) -> None:
         assert "obsidian" not in KNOWN_NOTIFIER_NAMES
 
+    def test_register_exposes_health_check(self, obsidian_module: ModuleType) -> None:
+        hooks = obsidian_module.register()
+        assert "health" in hooks
+        assert hooks["health"]["obsidian"] is obsidian_module.health
+
+
+class TestHealth:
+    """Sprint 2 (plugin-health): `health()` reflects `settings.obsidian_vault`
+    presence + on-disk existence. `settings.obsidian_vault` is a non-Optional
+    `Path` field defaulting to `Path("obsidian-vault")`
+    (`hivepilot/config.py`) rather than `None` — "unset" is therefore
+    detected against that field default, matching the plugin's own
+    `_DEFAULT_OBSIDIAN_VAULT` sentinel."""
+
+    def test_ok_when_vault_configured_and_exists(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault = _make_vault(tmp_path)
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", vault, raising=False)
+
+        result = obsidian_module.health()
+
+        assert result.status == "ok"
+
+    def test_error_when_vault_configured_but_missing(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        missing = tmp_path / "NotThere"
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", missing, raising=False)
+
+        result = obsidian_module.health()
+
+        assert result.status == "error"
+
+    def test_degraded_when_vault_unset_default(
+        self, obsidian_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            config_mod.settings,
+            "obsidian_vault",
+            obsidian_module._DEFAULT_OBSIDIAN_VAULT,
+            raising=False,
+        )
+
+        result = obsidian_module.health()
+
+        assert result.status == "degraded"
+        assert "not configured" in result.detail
+
 
 class TestNotify:
     def test_notify_appends_to_daily_journal(

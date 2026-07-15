@@ -230,13 +230,28 @@ class PluginManagerApp(App):
         runner_map: dict[str, Any] | None = None,
         notifier_map: dict[str, Any] | None = None,
         hooks: dict[str, list[Any]] | None = None,
+        health: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self._loaded = loaded
         self._runner_map = runner_map
         self._notifier_map = notifier_map
         self._hooks = hooks
+        # Injectable for testing, same shape as the other four — a mapping of
+        # health-check name -> HealthStatus(-like), as returned by
+        # `PluginManager.check_all()`. When omitted (real usage), resolved
+        # from a fresh `Orchestrator()` in `_load_data`, same as the rest.
+        self._health_override = health
         self._rows: list[tuple[str, str, str, str, str]] = []
+        # name -> HealthStatus(-like), resolved by the most recent
+        # `refresh_plugins()` call — surfaced in the details pane (see
+        # `show_details`) by matching a row's plugin name against this dict.
+        # Example plugins register their health check under the SAME name as
+        # the plugin file stem (== PluginRecord.name for local-file plugins),
+        # so a direct name lookup is the right join key here — same
+        # attribution limitation `plugin_capabilities` documents elsewhere in
+        # this module (best-effort, not a guaranteed join).
+        self._health: dict[str, Any] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -270,22 +285,32 @@ class PluginManagerApp(App):
 
     def _load_data(
         self,
-    ) -> tuple[list[PluginRecord], dict[str, Any], dict[str, Any], dict[str, list[Any]]]:
+    ) -> tuple[
+        list[PluginRecord], dict[str, Any], dict[str, Any], dict[str, list[Any]], dict[str, Any]
+    ]:
         if self._loaded is not None:
             return (
                 self._loaded,
                 self._runner_map or {},
                 self._notifier_map or {},
                 self._hooks or {},
+                self._health_override or {},
             )
         from hivepilot.registry import RUNNER_MAP
         from hivepilot.services.notification_service import NOTIFIER_MAP
 
         orchestrator = Orchestrator()
-        return orchestrator.plugins.loaded, RUNNER_MAP, NOTIFIER_MAP, orchestrator.plugins.hooks
+        return (
+            orchestrator.plugins.loaded,
+            RUNNER_MAP,
+            NOTIFIER_MAP,
+            orchestrator.plugins.hooks,
+            orchestrator.plugins.check_all(),
+        )
 
     def refresh_plugins(self) -> None:
-        loaded, runner_map, notifier_map, hooks = self._load_data()
+        loaded, runner_map, notifier_map, hooks, health = self._load_data()
+        self._health = health
         self._rows = plugin_rows(loaded, runner_map, notifier_map, hooks)
         self.plugins_table.clear()
         for name, source, status, type_label, detail in self._rows:
@@ -308,7 +333,11 @@ class PluginManagerApp(App):
             self.details.update("No plugins loaded.")
             return
         name, source, status, type_label, detail = self._rows[row_index]
-        self.details.update(f"{name} ({source}, {status}) — {type_label}\n{detail}")
+        text = f"{name} ({source}, {status}) — {type_label}\n{detail}"
+        health = self._health.get(name)
+        if health is not None:
+            text += f"\nHealth: {health.status} — {health.detail}"
+        self.details.update(text)
 
     def toggle_selected(self) -> None:
         """Flip the highlighted plugin's presence in `settings.plugins_disabled`,

@@ -182,6 +182,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from hivepilot.plugins import HealthStatus
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -471,5 +472,30 @@ def store(**kwargs: Any) -> None:
         logger.warning("plugin.mem0.store_failed", error=str(exc))
 
 
+def health(**kwargs: Any) -> HealthStatus:
+    """`error` when `mem0ai` isn't importable; `degraded` when installed but
+    `mem0_enabled` is False (the default — dormant); otherwise `ok`/`error`
+    depending on whether `_get_client()` can actually build a client.
+
+    **No secret/token value in any branch's detail** (Phase 19 discipline):
+    only presence/mode booleans — "hosted mode configured" / "self-host" /
+    "disabled" / "lib missing" — never `settings.mem0_api_key` itself.
+    """
+    if Memory is None and MemoryClient is None:
+        return HealthStatus("error", "mem0ai not installed")
+
+    from hivepilot.config import settings
+
+    if not settings.mem0_enabled:
+        return HealthStatus("degraded", "installed but disabled (mem0_enabled=False)")
+
+    client = _get_client()
+    if client is None:
+        return HealthStatus("error", "mem0_enabled but client could not be built")
+
+    mode = "hosted mode configured" if settings.mem0_api_key else "self-host"
+    return HealthStatus("ok", mode)
+
+
 def register() -> dict[str, Any]:
-    return {"before_step": recall, "after_step": store}
+    return {"before_step": recall, "after_step": store, "health": {"mem0": health}}

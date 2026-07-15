@@ -99,6 +99,41 @@ class TestRegister:
         hooks = headroom_module.register()
         assert hooks["before_step"] is headroom_module.before_step
 
+    def test_register_exposes_health_check(self, headroom_module: ModuleType) -> None:
+        hooks = headroom_module.register()
+        assert "health" in hooks
+        assert hooks["health"]["headroom"] is headroom_module.health
+
+
+class TestHealth:
+    """Sprint 2 (plugin-health): `health()` reflects lib-importable +
+    `settings.headroom_enabled`. Note: the module-level `_headroom_enabled_by_
+    default` autouse fixture sets `headroom_enabled=True` for every test in
+    this file except `TestHeadroomEnabledGate` — these tests override it
+    explicitly per-case, same pattern that class already uses."""
+
+    def test_error_when_lib_missing(self, headroom_module: ModuleType) -> None:
+        with patch.object(headroom_module, "compress", None):
+            result = headroom_module.health()
+        assert result.status == "error"
+
+    def test_degraded_when_installed_but_disabled(
+        self, headroom_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "headroom_enabled", False, raising=False)
+        with patch.object(headroom_module, "compress", MagicMock()):
+            result = headroom_module.health()
+        assert result.status == "degraded"
+        assert "disabled" in result.detail
+
+    def test_ok_when_installed_and_enabled(
+        self, headroom_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "headroom_enabled", True, raising=False)
+        with patch.object(headroom_module, "compress", MagicMock()):
+            result = headroom_module.health()
+        assert result.status == "ok"
+
 
 class TestBeforeStepCompressesInPlace:
     def test_compresses_prior_context_and_logs_ratio(
