@@ -2449,5 +2449,22 @@ def plugins_list() -> None:
     console.print(notifiers_table)
 
 
+@plugins_app.command("tui")
+def plugins_tui() -> None:
+    """Interactive (read-only) Textual browser/inspector for loaded plugins.
+
+    v1 is browse + inspect only — no enable/disable (see docs/v4/PLUGINS.md).
+    """
+    if not settings.enable_textual_ui:
+        typer.echo("Enable HIVEPILOT_ENABLE_TEXTUAL_UI to launch the plugin manager TUI.")
+        raise typer.Exit(1)
+    try:
+        from hivepilot.ui.plugin_manager import PluginManagerApp
+    except ImportError as exc:  # pragma: no cover
+        raise typer.BadParameter("textual not installed. run `pip install textual`.") from exc
+
+    PluginManagerApp().run()
+
+
 if __name__ == "__main__":
     app()
