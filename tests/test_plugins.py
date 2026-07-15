@@ -194,6 +194,72 @@ class TestPluginHealthSurface:
         with pytest.raises(HealthNameCollisionError):
             plugins_mod.PluginManager()
 
+    def test_mixed_type_collision_rolls_back_runner_and_notifier_when_health_collides(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Cross-type atomicity when `health` is the failing member: plugin A
+        registers `health` name 'dup' first; plugin B declares a runner AND a
+        notifier AND a colliding `health` name 'dup' — the whole plugin B
+        contribution (runner + notifier) must be rolled back, not just the
+        health entry. Mirrors
+        `tests/test_secrets_plugin.py::test_collision_rolls_back_plugins_other_contributions`,
+        but with `health` (not `secrets`) as the colliding type.
+        """
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.plugins import HealthNameCollisionError
+        from hivepilot.registry import RUNNER_MAP
+        from hivepilot.services.notification_service import NOTIFIER_MAP
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        # 'a_' sorts before 'b_' — _scan_local_plugins loads via
+        # sorted(plugin_dir.glob("*.py")), so plugin A's 'dup' health check
+        # registers successfully before plugin B is even attempted.
+        (pdir / "a_owner.py").write_text(
+            "def check(**kwargs):\n    return {'status': 'ok', 'detail': 'a'}\n"
+            "def register():\n    return {'health': {'dup': check}}\n",
+            encoding="utf-8",
+        )
+        (pdir / "b_mixed.py").write_text(
+            """
+class BRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def _b_notifier(msg):
+    return None
+
+
+def _b_health(**kwargs):
+    return {'status': 'ok', 'detail': 'b'}
+
+
+def register():
+    # 'b-kind' runner and 'b-notif' notifier register first, then the
+    # 'dup' health name collides with plugin A's already-registered one.
+    return {
+        "runners": {"b-kind": BRunner},
+        "notifiers": {"b-notif": _b_notifier},
+        "health": {"dup": _b_health},
+    }
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        with pytest.raises(HealthNameCollisionError):
+            plugins_mod.PluginManager()
+
+        # Plugin B's runner and notifier — registered BEFORE the colliding
+        # health entry within the same plugin's atomic block — were rolled
+        # back, not left orphaned in the process-global maps.
+        assert "b-kind" not in RUNNER_MAP
+        assert "b-notif" not in NOTIFIER_MAP
+
     def test_collision_rolls_back_that_plugins_earlier_health_registrations(
         self, tmp_path, monkeypatch
     ) -> None:

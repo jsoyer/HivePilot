@@ -261,7 +261,10 @@ class TestHealth:
         self, mem0_module: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No health detail, across any status, ever contains the configured
-        mem0 API key/token — even when it's set (Phase 19 no-leak discipline)."""
+        mem0 API key/token — even when it's set (Phase 19 no-leak discipline).
+        Covers the `ok`/`degraded` branches (lib present, client buildable) —
+        see `test_never_leaks_api_key_in_error_branches` below for the two
+        `error` branches (lib missing / client unbuildable)."""
         secret_token = "mk-this-must-never-appear-anywhere"
         monkeypatch.setattr(settings, "mem0_api_key", secret_token, raising=False)
 
@@ -273,6 +276,35 @@ class TestHealth:
             ):
                 result = mem0_module.health()
             assert secret_token not in result.detail
+
+    def test_never_leaks_api_key_in_error_branches(
+        self, mem0_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sibling of `test_never_leaks_api_key_across_all_health_paths`,
+        covering the two `error` branches specifically — a raising/degraded
+        path is exactly where a careless implementation might dump the
+        exception/config context (and, with it, a secret) into `detail`."""
+        secret_token = "mk-this-must-never-appear-anywhere-either"
+        monkeypatch.setattr(settings, "mem0_api_key", secret_token, raising=False)
+        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+
+        # error branch: lib missing (Memory and MemoryClient both None).
+        with (
+            patch.object(mem0_module, "Memory", None),
+            patch.object(mem0_module, "MemoryClient", None),
+        ):
+            result = mem0_module.health()
+        assert result.status == "error"
+        assert secret_token not in result.detail
+
+        # error branch: lib present + enabled, but the client can't be built.
+        with (
+            patch.object(mem0_module, "Memory", MagicMock()),
+            patch.object(mem0_module, "_get_client", return_value=None),
+        ):
+            result = mem0_module.health()
+        assert result.status == "error"
+        assert secret_token not in result.detail
 
 
 class TestRecallInjectsMemories:

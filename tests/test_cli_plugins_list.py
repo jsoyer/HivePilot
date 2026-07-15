@@ -104,6 +104,24 @@ class TestPluginsHealthCommand:
 
         assert result.exit_code == 0, result.output
 
+    def test_exits_zero_when_only_degraded(self, monkeypatch) -> None:
+        """`degraded` is a warning, not a failure — only `error` triggers a
+        non-zero exit (see `test_exits_nonzero_when_any_check_errors` above
+        for the contrasting case)."""
+        mock_orch = MagicMock()
+        mock_orch.plugins.check_all.return_value = {
+            "rtk": HealthStatus("ok", "rtk on PATH"),
+            "obsidian": HealthStatus("degraded", "not configured"),
+        }
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "health"])
+
+        assert result.exit_code == 0, result.output
+        assert "obsidian" in result.output
+        assert "degraded" in result.output
+
 
 def test_plugins_list_exits_zero_and_lists_builtins(monkeypatch) -> None:
     """With no plugins loaded, `plugins list` still exits 0 and lists every
