@@ -209,6 +209,13 @@ Configuration and failure behavior:
   no-ops — a hook must never crash a run.
 - `obsidian` does not collide with the built-in notifier channels
   (`KNOWN_NOTIFIER_NAMES = ("slack", "discord", "telegram")`).
+- **Known limitation — dry-run:** the notifier and hooks write to the vault
+  for real even when a pipeline runs in `--dry-run`/`--simulate` mode. Unlike
+  the in-orchestrator vault writers (`ObsidianService`/`InteractionService`,
+  which receive the run's `dry_run` flag), the notifier and lifecycle-hook
+  contracts do not currently pass `dry_run` to handlers, so a plugin has no
+  signal to honor it. Treat obsidian journaling as always-on. Threading
+  `dry_run` through `send_notification` / `run_hook` is a tracked follow-up.
 
 ```yaml
 # .env / environment

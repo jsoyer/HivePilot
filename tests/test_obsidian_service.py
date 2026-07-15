@@ -473,9 +473,10 @@ class TestAppendDaily:
         content = (vault / _HIVEPILOT_SUBTREE / "Runs" / f"{today}.md").read_text(encoding="utf-8")
         assert "First entry" in content
         assert "Second entry" in content
-        # Frontmatter block appears exactly once — second append did not
-        # re-write the whole file with a new frontmatter block.
-        assert content.count("---\n") == 2 or content.startswith("---")
+        # Frontmatter block appears exactly once (open + close = two `---`
+        # lines) — second append did not re-write the file with a fresh
+        # frontmatter block.
+        assert content.count("---\n") == 2
 
     def test_append_daily_respects_subfolder(self, tmp_path: Path) -> None:
         vault = _make_full_vault(tmp_path)
