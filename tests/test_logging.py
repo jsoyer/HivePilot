@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from hivepilot.services import config_provenance
@@ -9,7 +11,7 @@ from hivepilot.utils import logging as hp_logging
 
 
 @pytest.fixture(autouse=True)
-def _clean() -> None:
+def _clean() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()

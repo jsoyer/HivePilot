@@ -7,6 +7,8 @@ toggle, and never raise — Telegram being unconfigured is a silent no-op.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from hivepilot.services import config_provenance
@@ -14,7 +16,7 @@ from hivepilot.services import notification_service as ns
 
 
 @pytest.fixture(autouse=True)
-def _clean_secret_registry() -> None:
+def _clean_secret_registry() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()

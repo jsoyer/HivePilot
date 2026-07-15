@@ -4,6 +4,7 @@ the dry_run preview dict)."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from hivepilot.services import config_provenance
 
 
 @pytest.fixture(autouse=True)
-def _clean() -> None:
+def _clean() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()

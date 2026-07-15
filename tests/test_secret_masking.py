@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 
 import pytest
 import structlog
@@ -19,7 +20,7 @@ MARKER = "SUPERSECRET-MARKER-7f3a9c1e-DO-NOT-LEAK"
 
 
 @pytest.fixture(autouse=True)
-def _clean_registry() -> None:
+def _clean_registry() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()

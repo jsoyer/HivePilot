@@ -9,6 +9,7 @@ own dedicated file: tests/test_secret_masking.py.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 
 import pytest
 
@@ -16,7 +17,7 @@ from hivepilot.services import config_provenance, secret_refs
 
 
 @pytest.fixture(autouse=True)
-def _clear_masks() -> None:
+def _clear_masks() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()
