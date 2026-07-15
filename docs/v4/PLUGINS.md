@@ -56,6 +56,7 @@ A plugin is a module exposing a zero-arg `register()` function that returns a
 |---|---|---|
 | `runners` | `dict[str, type[BaseRunner]]` | registered into `RUNNER_MAP` |
 | `notifiers` | `dict[str, Callable[[str], None]]` | registered into `NOTIFIER_MAP` |
+| `secrets` | `dict[str, SecretsBackend]` | registered into `SECRETS_MAP` |
 | `before_step` | `Callable[..., None]` | hook, fired before each step |
 | `after_step` | `Callable[..., None]` | hook, fired after each step |
 | `on_pipeline_start` | `Callable[..., None]` | hook, fired once when `run_pipeline` starts |
@@ -64,7 +65,7 @@ A plugin is a module exposing a zero-arg `register()` function that returns a
 
 Any key not in this table is still accepted and stored under
 `PluginManager.hooks[key]` — forward-compatible, never an error. Only
-`runners`/`notifiers` are eagerly popped out and routed to their own
+`runners`/`notifiers`/`secrets` are eagerly popped out and routed to their own
 registries; everything else accumulates as a list of hook callables, exactly
 like `before_step`/`after_step` do today.
 
@@ -114,6 +115,32 @@ def register():
 Raise `hivepilot.services.notification_service.NotConfigured` from a notifier
 to signal "not configured, skip silently" — the same contract a built-in
 channel (Slack/Discord/Telegram) uses.
+
+### Secrets backend example
+
+Unlike `runners` (a `dict[str, type[BaseRunner]]` — classes) and `notifiers`
+(a `dict[str, Callable]` — plain functions), `secrets` values are backend
+**instances**, matching how `SECRETS_MAP: dict[str, SecretsBackend]`
+(`hivepilot/registry.py`) stores the built-in `env`/`file`/`vault`/`sops`
+backends — construct the instance yourself in `register()`:
+
+```python
+# plugins/infisical_secrets.py
+class InfisicalSecretsBackend:
+    def resolve(self, ref, settings):
+        ...  # look up ref.spec (e.g. project/environment/path/key) and return the secret value
+
+
+def register():
+    return {"secrets": {"infisical": InfisicalSecretsBackend()}}
+```
+
+A secrets backend must satisfy the `SecretsBackend` protocol
+(`hivepilot/registry.py`): `resolve(ref: SecretRef, settings: Settings) -> str`.
+Same fail-closed trust model as runners/notifiers — a `secrets` name that
+collides with an already-registered backend (built-in or another plugin's)
+aborts the load (`SecretsBackendCollisionError`), rolling back this plugin's
+other contributions; see "Collision & error handling" below.
 
 ### Hook example
 
@@ -458,11 +485,17 @@ discovered automatically at process start — no config change needed.
 
 ## Collision & error handling
 
-- **Kind/name collision** — if a plugin declares a `runners` or `notifiers`
-  key whose name is already registered to a *different* implementation, that
-  raises (`RunnerKindCollisionError` / `NotifierKindCollisionError`) and
+- **Kind/name collision** — if a plugin declares a `runners`, `notifiers`, or
+  `secrets` key whose name is already registered to a *different*
+  implementation, that raises (`RunnerKindCollisionError` /
+  `NotifierKindCollisionError` / `SecretsBackendCollisionError`) and
   **aborts loading**. This is a hard stop by design: silently shadowing a
-  built-in (e.g. redefining `claude`) is never the right default.
+  built-in (e.g. redefining `claude`, or a secrets backend named `vault`) is
+  never the right default. Registration of a single plugin's
+  runners+notifiers+secrets is atomic: if any entry collides, every entry
+  that plugin already added to the process-global maps in this same load is
+  rolled back before the error propagates — an aborted plugin never leaves
+  orphaned, partially-applied registrations behind.
 - **Broken plugin** — any other failure (import error, exception inside
   `register()`, a bad entry point) is logged
   (`plugins.load_failed` / `plugins.register_failed` /
@@ -478,7 +511,7 @@ discovered automatically at process start — no config change needed.
 hivepilot plugins list
 ```
 
-Prints three tables:
+Prints four tables:
 
 - **Loaded Plugins** — every successfully-loaded `PluginRecord`: `name`,
   `source` (`local-file` | `entry-point`), `location`.
@@ -486,6 +519,9 @@ Prints three tables:
   `built-in` or `plugin` by membership in `KNOWN_RUNNER_KINDS`.
 - **Notifiers** — every notifier currently in `NOTIFIER_MAP`, labeled
   `built-in` or `plugin` by membership in `{slack, discord, telegram}`.
+- **Secrets Backends** — every backend currently in `SECRETS_MAP`, labeled
+  `built-in` or `plugin` by membership in `KNOWN_SECRET_BACKENDS`
+  (`{env, file, vault, sops}`).
 
 This is a v1 inventory, not a full join — it does not attribute which
 specific runner kind or notifier came from which loaded plugin beyond what a

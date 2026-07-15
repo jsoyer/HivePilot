@@ -2405,18 +2405,19 @@ def validate(
 
 @plugins_app.command("list")
 def plugins_list() -> None:
-    """List loaded plugins and the runner kinds / notifiers currently registered.
+    """List loaded plugins and the runner kinds / notifiers / secrets backends
+    currently registered.
 
     v1 simplification: this is an inventory (what's loaded, from where) plus a
-    separate list of what runner kinds / notifier names are currently
-    registered (built-in vs. plugin-contributed, inferred by membership) — not
-    a full join between the two. See docs/v4/PLUGINS.md.
+    separate list of what runner kinds / notifier names / secrets backends are
+    currently registered (built-in vs. plugin-contributed, inferred by
+    membership) — not a full join between the two. See docs/v4/PLUGINS.md.
     """
     from rich.console import Console
     from rich.table import Table
 
     from hivepilot.models import KNOWN_RUNNER_KINDS
-    from hivepilot.registry import RUNNER_MAP
+    from hivepilot.registry import KNOWN_SECRET_BACKENDS, RUNNER_MAP, SECRETS_MAP
     from hivepilot.services.notification_service import KNOWN_NOTIFIER_NAMES, NOTIFIER_MAP
 
     orchestrator = Orchestrator()
@@ -2447,6 +2448,14 @@ def plugins_list() -> None:
         source = "built-in" if name in KNOWN_NOTIFIER_NAMES else "plugin"
         notifiers_table.add_row(name, source)
     console.print(notifiers_table)
+
+    secrets_table = Table(title="Secrets Backends")
+    secrets_table.add_column("name")
+    secrets_table.add_column("source")
+    for name in sorted(SECRETS_MAP):
+        source = "built-in" if name in KNOWN_SECRET_BACKENDS else "plugin"
+        secrets_table.add_row(name, source)
+    console.print(secrets_table)
 
 
 @plugins_app.command("tui")
