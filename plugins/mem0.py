@@ -108,6 +108,49 @@ Imported lazily so the plugin loads fine (and no-ops) when the library
 isn't present; see ``plugins/rtk.py`` / ``plugins/headroom.py`` for the same
 "external tool optional, graceful no-op" pattern.
 
+**PROVENANCE metadata (Sprint 1 of the mem0-typed-and-plugin-health spec).**
+``store()`` now passes a structured ``metadata`` dict to ``client.add(...)``
+(mem0's ``add()`` accepts per-memory ``metadata`` on both the hosted
+``MemoryClient`` and self-host ``Memory`` clients) so persisted memories are
+typed/filterable — inspired by a memory-dashboard view. Built by
+``_provenance_metadata()``: **real values only, no fabrication** — a key is
+included ONLY when a real value is reachable, never as a ``None``/placeholder
+stand-in.
+
+- ``source``: always ``"hivepilot"``.
+- ``project`` / ``task``: always present (``RunnerPayload.project_name`` /
+  ``task_name`` are required fields).
+- ``role``: included when the caller supplies it (``run_hook(..., role=
+  task.role)``, threaded by ``Orchestrator._execute_task`` since #139);
+  omitted otherwise.
+- ``step``: included when ``payload.step.name`` is set (``RunnerPayload``
+  always carries a ``step``, so this is effectively always present); reads
+  straight off the payload already on hand — no orchestrator change needed.
+- ``run_id``: **omitted.** ``Orchestrator._execute_task`` does NOT thread
+  ``run_id`` into the ``after_step`` ``run_hook(...)`` call today (only
+  ``payload``/``dry_run``/``role``/``output`` are — see the "Store data
+  availability" note above); rather than force an orchestrator signature
+  change for this sprint, ``run_id`` is left out and noted here as a
+  follow-up for whenever it IS threaded through.
+- ``category``: optional, read from ``payload.step.metadata.get(
+  "memory_category")`` when a caller sets it on the step config; defaults to
+  ``"run"`` otherwise. Never invented beyond that one explicit config knob.
+- ``ts``: a UTC ISO-8601 timestamp (``datetime.now(timezone.utc).isoformat()``),
+  generated at store time — genuinely available, not fabricated.
+- ``confidence``: **deliberately NOT included.** A memory-dashboard view
+  might show a confidence score, but HivePilot has no real signal to back
+  one — inventing a number here would be exactly the kind of fabricated
+  metadata this feature is trying to avoid. Add it later only if/when a
+  genuine source for it exists (e.g. a role's self-assessment, a reviewer
+  score).
+
+This metadata is attached to the SAME ``client.add(...)`` call ``store()``
+already makes (still skipped when there's no salient content beyond bare
+task identity — see below) — no new mem0 calls, no new egress beyond what
+was already being sent (the metadata dict is small and is sent alongside the
+existing content string). In hosted mode this metadata ALSO leaves the
+machine — see the data-egress warning below, extended to cover it.
+
 **Complementarity with headroom:** headroom *compresses* context already on
 the payload; mem0 *enriches* it with recalled memory. If both are enabled,
 mem0's ``recall`` should run before headroom's compression pass so the
@@ -136,6 +179,7 @@ entirely.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from hivepilot.utils.logging import get_logger
@@ -167,6 +211,14 @@ _SENTINEL_KEY = "_mem0_recalled"
 _ORIGINAL_EXTRA_PROMPT_KEY = "_mem0_original_extra_prompt"
 
 _MAX_MEMORIES = 5
+
+# Optional per-step config knob (`TaskStep.metadata["memory_category"]`) a
+# task author can set to categorize the memories `store` persists for that
+# step — see `_provenance_metadata`'s docstring. Falls back to
+# `_DEFAULT_MEMORY_CATEGORY` when unset; never invented beyond this one
+# explicit config field.
+_MEMORY_CATEGORY_KEY = "memory_category"
+_DEFAULT_MEMORY_CATEGORY = "run"
 
 
 def _get_client() -> Any | None:
@@ -210,6 +262,47 @@ def _memory_key(payload: Any, role: str | None = None) -> str:
     if role:
         return f"{project}:{task}:{role}"
     return f"{project}:{task}"
+
+
+def _provenance_metadata(payload: Any, role: str | None = None) -> dict[str, Any]:
+    """Build the structured PROVENANCE `metadata` dict passed to `client.add(
+    ..., metadata=...)` — see the "PROVENANCE metadata" note in the module
+    docstring for the full rationale.
+
+    Real values only, no fabrication: a key is included ONLY when a real
+    value is reachable off `payload`/`role` — never as a `None`/placeholder
+    stand-in. `confidence` is deliberately never included (no genuine signal
+    exists for it yet).
+    """
+    metadata: dict[str, Any] = {
+        "source": "hivepilot",
+        "project": payload.project_name,
+        "task": payload.task_name,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    if role:
+        metadata["role"] = role
+
+    step = getattr(payload, "step", None)
+    step_name = getattr(step, "name", None)
+    if step_name:
+        metadata["step"] = step_name
+
+    step_metadata = getattr(step, "metadata", None)
+    category = None
+    if isinstance(step_metadata, dict):
+        category = step_metadata.get(_MEMORY_CATEGORY_KEY)
+    metadata["category"] = (
+        category if isinstance(category, str) and category else _DEFAULT_MEMORY_CATEGORY
+    )
+
+    # `run_id` is NOT threaded into the `after_step` `run_hook(...)` call by
+    # `Orchestrator._execute_task` today (only `payload`/`dry_run`/`role`/
+    # `output` are) — deliberately omitted rather than forcing an
+    # orchestrator signature change for this sprint. Follow-up: thread
+    # `run_id` through once it's cheaply available there.
+
+    return metadata
 
 
 def _extract_memory_texts(results: Any) -> list[str]:
@@ -311,7 +404,10 @@ def store(**kwargs: Any) -> None:
     plus the reachable input context (`extra_prompt` / `prior_context`) as
     complementary "what this task was about" data. Keyed by
     `project:task[:role]` — `role` is included when the caller supplies it
-    (see `_memory_key`'s docstring / the "Recall key" note). A no-op when
+    (see `_memory_key`'s docstring / the "Recall key" note). Every persisted
+    memory also carries a structured PROVENANCE `metadata` dict (see
+    `_provenance_metadata` / the "PROVENANCE metadata" note in the module
+    docstring) — real values only, no fabricated `confidence`. A no-op when
     there's no client, no `payload`, or no salient content beyond bare task
     identity. Never raises.
     """
@@ -368,8 +464,9 @@ def store(**kwargs: Any) -> None:
             return
 
         content = "\n".join(content_parts)
-        client.add(content, user_id=key)
-        logger.info("plugin.mem0.stored", key=key, step=step_name)
+        provenance = _provenance_metadata(payload, role)
+        client.add(content, user_id=key, metadata=provenance)
+        logger.info("plugin.mem0.stored", key=key, step=step_name, category=provenance["category"])
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
         logger.warning("plugin.mem0.store_failed", error=str(exc))
 

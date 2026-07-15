@@ -432,6 +432,30 @@ specifically; the stage-cache-hit and non-native-engine (`langgraph`/
 that loop, so `recall`/`store` don't fire for those — a pre-existing gap,
 unrelated to this change.
 
+**Typed PROVENANCE metadata (Sprint 1 of the mem0-typed-and-plugin-health
+spec).** `store` attaches a structured `metadata` dict to `client.add(...)`
+(mem0's `add()` accepts per-memory `metadata` on both the hosted
+`MemoryClient` and self-host `Memory` clients), so persisted memories are
+typed/filterable — inspired by a memory-dashboard view. Built by
+`_provenance_metadata()` in `plugins/mem0.py`, **real values only, no
+fabrication:**
+
+| Key          | Source                                                        | Included when                          |
+| ------------ | -------------------------------------------------------------- | --------------------------------------- |
+| `source`     | always `"hivepilot"`                                          | always                                  |
+| `project`    | `payload.project_name`                                         | always                                  |
+| `task`       | `payload.task_name`                                            | always                                  |
+| `role`       | the `role` kwarg (threaded by `Orchestrator._execute_task`)    | when supplied                           |
+| `step`       | `payload.step.name`                                            | when set (effectively always)           |
+| `category`   | `payload.step.metadata.get("memory_category")`                 | always — defaults to `"run"`            |
+| `ts`         | `datetime.now(timezone.utc).isoformat()` at store time         | always                                  |
+| `run_id`     | —                                                               | **never** — not threaded into the `after_step` `run_hook(...)` call today; omitted rather than forcing an orchestrator signature change this sprint (follow-up) |
+| `confidence` | —                                                               | **never** — no genuine signal exists for it; deliberately not fabricated |
+
+This is the same `client.add(...)` call `store` already makes (still skipped
+entirely when there's no salient content beyond bare task identity) — no new
+mem0 calls, just a richer payload on the existing one.
+
 **Recall/store keying.** `RunnerPayload` still doesn't carry the task's
 `role` (`role` lives on `TaskConfig`, one level above `RunnerPayload` in
 `Orchestrator._execute_task`) — rather than widen that shared dataclass,
@@ -480,7 +504,12 @@ mirrors `headroom_enabled`'s opt-in pattern. Two backends are supported:
 > **off-machine to mem0.ai's servers**, verbatim and un-redacted. `output`
 > is the agent's actual generated result for the step and is *more* likely
 > than `extra_prompt`/`prior_context` to contain secrets or sensitive
-> content. Do NOT enable hosted mode on projects where step output may
+> content. **The structured PROVENANCE `metadata` dict (`source`/`project`/
+> `task`/`role`/`step`/`category`/`ts` — see above) is sent alongside it on
+> the same `client.add(...)` call** — lower-risk than `output` (it's
+> identity/timing data, not agent-generated content), but it IS still
+> off-machine data about your project/task names and role. Do NOT enable
+> hosted mode on projects where step output OR project/task naming may
 > contain secrets or confidential data — use the self-host `Memory()`
 > backend (leave `mem0_api_key` unset) instead. Self-host keeps everything
 > local.
