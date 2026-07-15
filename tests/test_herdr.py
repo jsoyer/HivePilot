@@ -128,7 +128,7 @@ class TestCaptureDrivesFullCliSequence:
                 return _ok_result(stdout="pane output text")
             raise AssertionError(f"unexpected argv: {argv}")
 
-        custom_settings = Settings(
+        custom_settings = Settings(  # type: ignore[call-arg]
             _env_file=None,
             herdr_wait_timeout_ms=45_000,
             herdr_read_lines=77,
@@ -204,7 +204,7 @@ class TestCaptureDrivesFullCliSequence:
                 return _split_result(pane_id)
             return _ok_result()
 
-        custom_settings = Settings(
+        custom_settings = Settings(  # type: ignore[call-arg]
             _env_file=None,
             herdr_wait_timeout_ms=12_345,
             herdr_read_lines=42,
