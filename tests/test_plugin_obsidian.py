@@ -214,6 +214,74 @@ class TestLifecycleHooks:
         assert mock_logger.warning.called
 
 
+class TestLifecycleHooksHonorDryRun:
+    """`on_pipeline_end` / `on_error` now honor a `dry_run=True` kwarg
+    (threaded in by `Orchestrator.run_pipeline` — hook-context-enrichment):
+    a dry-run pipeline must NOT write a real run-report note into the
+    vault."""
+
+    def test_on_pipeline_end_dry_run_true_does_not_write_vault(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault = _make_vault(tmp_path)
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", vault, raising=False)
+
+        obsidian_module.on_pipeline_end(
+            run_id=42, pipeline="default", status="complete", dry_run=True
+        )
+
+        journal = _today_journal(vault)
+        assert not journal.exists()
+
+    def test_on_pipeline_end_dry_run_false_writes_vault(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault = _make_vault(tmp_path)
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", vault, raising=False)
+
+        obsidian_module.on_pipeline_end(
+            run_id=42, pipeline="default", status="complete", dry_run=False
+        )
+
+        content = _today_journal(vault).read_text(encoding="utf-8")
+        assert "42" in content
+
+    def test_on_pipeline_end_absent_dry_run_kwarg_writes_vault(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Backward-compat: a caller that doesn't pass `dry_run` at all
+        (older behavior / direct invocation) still writes for real."""
+        vault = _make_vault(tmp_path)
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", vault, raising=False)
+
+        obsidian_module.on_pipeline_end(run_id=42, pipeline="default", status="complete")
+
+        content = _today_journal(vault).read_text(encoding="utf-8")
+        assert "42" in content
+
+    def test_on_error_dry_run_true_does_not_write_vault(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault = _make_vault(tmp_path)
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", vault, raising=False)
+
+        obsidian_module.on_error(run_id=7, pipeline="default", stage="Build", dry_run=True)
+
+        journal = _today_journal(vault)
+        assert not journal.exists()
+
+    def test_on_error_dry_run_false_writes_vault(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault = _make_vault(tmp_path)
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", vault, raising=False)
+
+        obsidian_module.on_error(run_id=7, pipeline="default", stage="Build", dry_run=False)
+
+        content = _today_journal(vault).read_text(encoding="utf-8")
+        assert "Build" in content
+
+
 class TestPluginManagerDiscoversObsidian:
     @pytest.fixture(autouse=True)
     def _restore_notifier_map(self):
