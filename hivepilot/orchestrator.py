@@ -335,24 +335,34 @@ def _route_prior_context(
     ``build_prior_context(prior_chunks, ...)`` — byte-identical to
     pre-Sprint-2 behaviour for every role, regardless of its declared inputs.
 
-    In ``keyed`` mode, a role with non-empty ``inputs`` gets its context
-    assembled from ONLY the declared input keys present in *outputs_by_key*
-    (Sprint 1's run-scoped store), joined as ``## <KEY>`` blocks and capped
-    with the same tail-truncation rule as ``build_prior_context``'s "cap" mode.
+    In ``keyed`` mode, a role with non-empty ``inputs`` and/or
+    ``optional_inputs`` gets its context assembled from ONLY the declared
+    input keys present in *outputs_by_key* (Sprint 1's run-scoped store),
+    joined as ``## <KEY>`` blocks and capped with the same tail-truncation
+    rule as ``build_prior_context``'s "cap" mode. ``optional_inputs`` keys are
+    routed in when present but never count toward the "missing" fallback
+    check below -- they document keys a role may consume when an upstream
+    stage happens to produce them (e.g. a role shared across pipelines,
+    only some of which run the producing stage), so their absence is
+    expected and must not trigger the conservative full-context fallback.
 
     Conservative fallback rule:
-    - ALL declared input keys missing from the store -> the keyed slice would
-      be empty, which is worse than no routing at all, so fall back to the
-      full ``build_prior_context(prior_chunks, ...)`` and log a warning naming
-      the missing keys.
-    - SOME (not all) declared input keys present -> use exactly what's
-      present; a non-empty keyed subset is still more precise than the full
-      context, so no fallback in that case.
-    - Role has no declared ``inputs`` (empty list) -> not routable at all;
-      falls through to the full context, same as ``full`` mode.
+    - ALL declared REQUIRED input keys missing from the store -> the keyed
+      slice would be empty (or optional-only), which is worse than no
+      routing at all, so fall back to the full
+      ``build_prior_context(prior_chunks, ...)`` and log a warning naming
+      the missing required keys.
+    - SOME (not all) declared required input keys present, or any optional
+      input keys present -> use exactly what's present; a non-empty keyed
+      subset is still more precise than the full context, so no fallback in
+      that case.
+    - Role has no declared ``inputs`` and no ``optional_inputs`` (both empty)
+      -> not routable at all; falls through to the full context, same as
+      ``full`` mode.
     """
-    if routing_mode == "keyed" and role is not None and role.inputs:
-        present = {k: outputs_by_key[k] for k in role.inputs if k in outputs_by_key}
+    if routing_mode == "keyed" and role is not None and (role.inputs or role.optional_inputs):
+        keys = list(role.inputs) + [k for k in role.optional_inputs if k not in role.inputs]
+        present = {k: outputs_by_key[k] for k in keys if k in outputs_by_key}
         if present:
             joined = "\n\n".join(f"## {k.upper()}\n{v}" for k, v in present.items())
             if len(joined) > max_chars:

@@ -173,6 +173,15 @@ normalisés), ex. pour `outputs: [technical_spec, adr]` :
   clés manquent, le contexte `keyed` est construit avec celles présentes
   (pas de fallback dans ce cas).
 
+**Entrées optionnelles (`optional_inputs`).** Un rôle peut aussi déclarer
+`optional_inputs: [clé, ...]` — une liste **séparée** de `inputs` (pas un
+sous-ensemble marqué). En mode `keyed`, ces clés sont routées comme
+`inputs` quand une étape en amont les produit, mais ne sont **jamais**
+considérées comme manquantes (ni pour le fallback, ni pour la validation
+ci-dessous) si aucune étape ne les produit dans ce pipeline. Cas d'usage :
+un rôle partagé entre plusieurs pipelines qui ne consomme une clé (ex.
+`design_spec`) que lorsqu'une étape de design en amont existe.
+
 **`can_block` est indicatif seulement.** Ce champ de `roles.yaml` documente
 qu'un rôle est *censé* pouvoir bloquer un run (ex. `cto`, `reviewer`,
 `ciso`), mais ne contrôle rien au runtime. Le comportement réel
@@ -185,7 +194,8 @@ prime sur `can_block`.
 dans ses `outputs`) : simple **warning** en mode `full` (n'échoue pas la
 validation — beaucoup de rôles ont des `inputs` "cosmétiques" fournis en
 externe), mais **erreur bloquante** en mode `keyed` (une clé manquante y
-dégrade réellement le contexte transmis).
+dégrade réellement le contexte transmis). Les clés `optional_inputs` d'un
+rôle sont exemptées de ce contrôle dans les deux modes.
 
 
 ## Pipeline `default` (planification réordonnée + checkpoint)

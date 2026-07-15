@@ -177,6 +177,74 @@ def test_dangling_input_is_hard_error_in_keyed_mode(tmp_path: Path, monkeypatch)
     )
 
 
+def test_optional_input_not_flagged_as_dangling_in_keyed_mode(tmp_path: Path, monkeypatch) -> None:
+    """A role's `optional_inputs` key that no earlier stage produces must
+    NOT be flagged as a dangling input in keyed mode -- unlike a genuinely
+    dangling REQUIRED `inputs` key, which must still error (regression
+    guard for the existing hard-error behavior)."""
+    roles = [
+        {"name": "role_a", "inputs": [], "outputs": ["out1"]},
+        {
+            "name": "role_b",
+            "inputs": ["out1"],
+            "optional_inputs": ["design_spec"],
+            "outputs": ["out2"],
+        },
+        {
+            "name": "role_c",
+            "inputs": ["out2", "dangling_required"],
+            "outputs": [],
+        },
+    ]
+    tasks = {
+        "task-a": {"role": "role_a"},
+        "task-b": {"role": "role_b"},
+        "task-c": {"role": "role_c"},
+    }
+    stages = [
+        {"name": "Stage A", "task": "task-a"},
+        {"name": "Stage B", "task": "task-b"},
+        {"name": "Stage C", "task": "task-c"},
+    ]
+    _write_config(tmp_path, roles=roles, tasks=tasks, stages=stages)
+
+    monkeypatch.setattr(config_validation.settings, "context_routing_mode", "keyed")
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    assert not any("design_spec" in p for p in problems), (
+        f"optional_inputs key must never be flagged as dangling, got: {problems}"
+    )
+    assert any("dangling_required" in p and "dangling input" in p for p in problems), (
+        f"A genuinely dangling REQUIRED input must still error, got: {problems}"
+    )
+
+
+def test_optional_input_also_in_inputs_is_treated_as_optional(tmp_path: Path, monkeypatch) -> None:
+    """A key listed in BOTH `inputs` and `optional_inputs` is treated as
+    optional -- not produced by any earlier stage, but no dangling-input
+    problem in keyed mode."""
+    roles = [
+        {
+            "name": "role_a",
+            "inputs": ["shared_key"],
+            "optional_inputs": ["shared_key"],
+            "outputs": [],
+        },
+    ]
+    tasks = {"task-a": {"role": "role_a"}}
+    stages = [{"name": "Stage A", "task": "task-a"}]
+    _write_config(tmp_path, roles=roles, tasks=tasks, stages=stages)
+
+    monkeypatch.setattr(config_validation.settings, "context_routing_mode", "keyed")
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    assert not any("shared_key" in p for p in problems), (
+        f"A key in both inputs and optional_inputs must not dangle, got: {problems}"
+    )
+
+
 def test_existing_noxys_style_cosmetic_dangling_inputs_still_pass_in_full_mode(
     tmp_path: Path,
 ) -> None:

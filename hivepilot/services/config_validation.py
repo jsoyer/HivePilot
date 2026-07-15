@@ -190,7 +190,10 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
             role_def = role_by_name.get(role_ref) if role_ref else None
             if role_def is None:
                 continue
+            optional_inputs = set(role_def.get("optional_inputs") or [])
             for input_key in role_def.get("inputs") or []:
+                if input_key in optional_inputs:
+                    continue
                 if input_key not in available_outputs:
                     message = (
                         f"Pipeline '{pipeline_name}' stage '{stage.get('name', '?')}' "

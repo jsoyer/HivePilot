@@ -1160,7 +1160,7 @@ def task_set_role(
 
 _ROLE_INT_FIELDS = frozenset({"order"})
 _ROLE_BOOL_FIELDS = frozenset({"can_block"})
-_ROLE_LIST_FIELDS = frozenset({"models", "inputs", "outputs"})
+_ROLE_LIST_FIELDS = frozenset({"models", "inputs", "outputs", "optional_inputs"})
 _ROLE_PERMISSION_MODES = frozenset({"acceptEdits", "bypassPermissions", "plan", "default"})
 
 
@@ -1177,11 +1177,12 @@ def role_wire(
     """Set any field on a roles.yaml entry.
 
     *value* is coerced to the field's declared type (int for `order`, bool
-    for `can_block`, comma-split list for `models`/`inputs`/`outputs`, plain
-    str otherwise). `permission_mode` is checked against its allowed enum;
-    `prompt_file`/`runner`/`model_profile` are checked against their real
-    registries (prompts/agents/, RunnerKind, model_profiles.yaml). Any
-    coercion, enum, or reference failure exits 1 and writes nothing.
+    for `can_block`, comma-split list for `models`/`inputs`/`outputs`/
+    `optional_inputs`, plain str otherwise). `permission_mode` is checked
+    against its allowed enum; `prompt_file`/`runner`/`model_profile` are
+    checked against their real registries (prompts/agents/, RunnerKind,
+    model_profiles.yaml). Any coercion, enum, or reference failure exits 1
+    and writes nothing.
     """
     from hivepilot.registry import RUNNER_MAP
     from hivepilot.roles import Role, load_roles
