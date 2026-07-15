@@ -712,6 +712,24 @@ class TestStoreProvenanceMetadata:
 
         assert mock_logger.warning.called
 
+    def test_store_provenance_metadata_never_contains_content_keys(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """Defense-in-depth: the provenance `metadata` dict must never carry
+        memory CONTENT keys (`output`/`extra_prompt`/`prior_context` — those
+        belong exclusively in the `content` string built from
+        `content_parts`). Structurally impossible today (`_provenance_metadata`
+        never reads those fields), but this guards against a future refactor
+        that accidentally merges the content dict and the provenance dict."""
+        payload = _payload(tmp_path, extra_prompt="original ask", prior_context="upstream")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, role="developer", output="the agent's real result")
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert not ({"output", "extra_prompt", "prior_context"} & set(metadata.keys()))
+
 
 class TestStoreInternalErrorIsSwallowed:
     def test_add_raising_does_not_propagate(self, mem0_module: ModuleType, tmp_path: Path) -> None:
