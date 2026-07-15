@@ -115,7 +115,12 @@ class RunDashboard(App):
             self.interactions_table.add_row(*row)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:  # type: ignore[override]
-        if event.table.id != "runs":
+        # `event.data_table` (not `.table`) is the actual attribute on
+        # textual's DataTable.RowHighlighted message — the old `.table` name
+        # raised AttributeError on every row highlight (i.e. whenever
+        # refresh_runs() found any run), crashing the dashboard on real use.
+        # Fixed identically in hivepilot/ui/plugin_manager.py.
+        if event.data_table.id != "runs":
             return
         row = event.row_key
         try:

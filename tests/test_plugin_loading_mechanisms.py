@@ -309,6 +309,59 @@ class TestPerPluginDisabled:
         assert not any(r.name == "rtk" for r in pm.loaded)
         assert any(r.name == "other" for r in pm.loaded)
 
+    def test_explicit_plugins_entry_in_disabled_list_by_full_string_is_not_loaded(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A THIRD load path — `settings.plugins_entry` (a single pinned
+        plugin loaded via `load_plugins(entry=...)` in `PluginManager.__init__`,
+        distinct from the local-file scan / entry-point discovery covered
+        above) must also honor `plugins_disabled`. `PluginRecord.name` for
+        this path is the full `explicit_entry` string (what the TUI shows
+        and would toggle) — disabling by that exact string must skip it."""
+        entry = "tests.fixtures.entry_point_plugin:register"
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_entry", entry, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_disabled", [entry], raising=False)
+
+        pm = PluginManager()
+
+        assert "fixture-kind" not in RUNNER_MAP
+        assert pm.loaded == []
+
+    def test_explicit_plugins_entry_in_disabled_list_by_module_name_is_not_loaded(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """An operator setting `plugins_disabled` directly via config/env
+        would naturally use the short module-name portion (before the `:`
+        attribute separator), matching the short names the other two paths'
+        `plugins_disabled` entries use (e.g. "rtk", not a full module:attr
+        string) — accept that form too."""
+        entry = "tests.fixtures.entry_point_plugin:register"
+        module_name = "tests.fixtures.entry_point_plugin"
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_entry", entry, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_disabled", [module_name], raising=False)
+
+        pm = PluginManager()
+
+        assert "fixture-kind" not in RUNNER_MAP
+        assert pm.loaded == []
+
+    def test_explicit_plugins_entry_not_in_disabled_list_still_loads(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Regression guard: the new gate must not accidentally skip an
+        explicit `plugins_entry` plugin that is NOT disabled."""
+        entry = "tests.fixtures.entry_point_plugin:register"
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_entry", entry, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_disabled", [], raising=False)
+
+        pm = PluginManager()
+
+        assert "fixture-kind" in RUNNER_MAP
+        assert any(r.name == entry and r.source == "local-file" for r in pm.loaded)
+
     def test_entry_point_plugin_in_disabled_list_is_not_loaded(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
         monkeypatch.setattr(plugins_mod.settings, "plugins_disabled", ["fixture-ep"], raising=False)

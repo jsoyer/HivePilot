@@ -247,3 +247,32 @@ def test_persist_plugins_disabled_upserts_env_file(tmp_path) -> None:
     content = env_path.read_text(encoding="utf-8")
     assert content.count("HIVEPILOT_PLUGINS_DISABLED=") == 1
     assert 'HIVEPILOT_PLUGINS_DISABLED=["rtk"]' in content
+
+
+class TestPersistPluginsDisabledRoundTrips:
+    """Prove the persisted format is actually CONSUMABLE by Settings, not
+    merely well-formed JSON — i.e. python-dotenv + pydantic-settings really
+    deserialize the unquoted-JSON `.env` line back into `plugins_disabled`.
+    A merely-well-formed-JSON assertion (as in the test above) would pass
+    even if Settings couldn't parse it back (e.g. if dotenv quoting stripped
+    or mangled the value) — this is the behavioral check."""
+
+    def test_single_entry_round_trips_through_settings(self, tmp_path) -> None:
+        from hivepilot.config import Settings
+        from hivepilot.ui.plugin_manager import persist_plugins_disabled
+
+        env_path = tmp_path / ".env"
+        persist_plugins_disabled(["rtk"], env_path=env_path)
+
+        s = Settings(_env_file=str(env_path))  # type: ignore[call-arg]
+        assert s.plugins_disabled == ["rtk"]
+
+    def test_two_entries_round_trip_through_settings(self, tmp_path) -> None:
+        from hivepilot.config import Settings
+        from hivepilot.ui.plugin_manager import persist_plugins_disabled
+
+        env_path = tmp_path / ".env"
+        persist_plugins_disabled(["rtk", "obsidian"], env_path=env_path)
+
+        s = Settings(_env_file=str(env_path))  # type: ignore[call-arg]
+        assert s.plugins_disabled == ["obsidian", "rtk"]

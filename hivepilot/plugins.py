@@ -121,15 +121,31 @@ class PluginManager:
         # `plugins_entry` pin — otherwise an operator could not silence a suspect
         # plugin wired via that path (see config.py `plugins_enabled`).
         if explicit_entry and settings.plugins_enabled:
-            for fn in load_plugins(entry=explicit_entry):
-                local.append(
-                    (
-                        fn,
-                        PluginRecord(
-                            name=explicit_entry, source="local-file", location=explicit_entry
-                        ),
+            # A THIRD load path (alongside `_scan_local_plugins` and
+            # `load_entry_point_plugins` above) — must honor `plugins_disabled`
+            # too. This plugin's `PluginRecord.name` (what the TUI shows and
+            # would toggle) is the full `explicit_entry` string (see
+            # PluginRecord() below); an operator setting `plugins_disabled`
+            # directly via config/env would more naturally use just the
+            # module-name portion (before the `:register`-style attribute
+            # separator), matching the short names the other two paths use —
+            # accept either form.
+            explicit_module_name = explicit_entry.split(":", 1)[0]
+            if (
+                explicit_entry in settings.plugins_disabled
+                or explicit_module_name in settings.plugins_disabled
+            ):
+                logger.info("plugins.skipped_disabled", name=explicit_entry, source="local-file")
+            else:
+                for fn in load_plugins(entry=explicit_entry):
+                    local.append(
+                        (
+                            fn,
+                            PluginRecord(
+                                name=explicit_entry, source="local-file", location=explicit_entry
+                            ),
+                        )
                     )
-                )
         entry_point = load_entry_point_plugins()
 
         self.loaded: list[PluginRecord] = []

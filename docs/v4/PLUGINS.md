@@ -31,12 +31,21 @@ Set to `False` to disable both discovery mechanisms; built-ins are unaffected.
 
 Per-plugin switch: `settings.plugins_disabled: list[str] = []`
 (`hivepilot/config.py`, env `HIVEPILOT_PLUGINS_DISABLED`) — names of
-individual plugins (local-file stem or entry-point name) to skip, even when
-`plugins_enabled` is `True`. Checked in both discovery paths, before a
-plugin's module is loaded or its `register()` is invoked — a disabled
-plugin contributes no runners/notifiers/hooks and has no import-time side
-effects either. See "TUI plugin manager" below for the interactive `space`
-toggle.
+individual plugins to skip, even when `plugins_enabled` is `True`. Checked in
+**all three load paths**, before a plugin's module is loaded or its
+`register()` is invoked — a disabled plugin contributes no
+runners/notifiers/hooks and has no import-time side effects either:
+
+- local-file scan — matched by file stem (e.g. `rtk` for `plugins/rtk.py`)
+- entry-point discovery — matched by entry-point name
+- the explicit `plugins_entry` pin (a single plugin loaded directly via
+  `HIVEPILOT_PLUGINS_ENTRY`/`settings.plugins_entry`, bypassing discovery) —
+  matched by either the full `plugins_entry` string (what the TUI shows/
+  toggles for this plugin) or just its module-name portion before the `:`
+  attribute separator (the short form an operator would more naturally use
+  when setting `plugins_disabled` directly via config/env)
+
+See "TUI plugin manager" below for the interactive `space` toggle.
 
 ## Authoring a plugin
 

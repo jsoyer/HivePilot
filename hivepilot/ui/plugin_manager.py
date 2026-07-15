@@ -169,6 +169,9 @@ def persist_plugins_disabled(disabled: list[str], *, env_path: Path | None = Non
     if env_path is None:
         from hivepilot.config import Settings
 
+        # Settings.model_config["env_file"] is resolved once, at class
+        # definition/import time (see hivepilot.config._resolve_env_file) —
+        # it will NOT reflect a HIVEPILOT_ENV_FILE change made after startup.
         env_path = Path(str(Settings.model_config.get("env_file") or ".env"))
 
     line = f"{_ENV_KEY}={json.dumps(sorted(disabled))}"
