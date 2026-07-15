@@ -11,7 +11,7 @@
 - One task per subagent for focused execution
 
 ### 3. Self-Improvement Loop
-- After ANY correction from the user: update `tasks/lessons.md` with the pattern
+- After ANY correction from the user: update `…/obsidian-vault/Jsoyer/Projects/HivePilot/session-learnings.md` with the pattern
 - Write rules for yourself that prevent the same mistake
 - Ruthlessly iterate on these lessons until mistake rate drops
 - Review lessons at session start for relevant project
@@ -36,12 +36,18 @@
 
 ## Task Management
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
+Planning & knowledge docs live in the **Jsoyer Obsidian vault**, NOT in the repo.
+Routing rule (repos under `~/Documents/Github/jsoyer/` → vault Jsoyer): for HivePilot the
+project folder is `~/Documents/Github/jsoyer/obsidian-vault/Jsoyer/Projects/HivePilot/`.
+Plans go in its `Plans/` subfolder; lessons/learnings in `session-learnings.md`.
+Vault repo = `github.com/jsoyer/obsidian-vault`, branch `main` (main-direct: push direct, no PR).
+
+1. **Plan First**: Write plan to `…/Projects/HivePilot/Plans/<name>.md` (Obsidian note, frontmatter + checkable items)
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+5. **Document Results**: Add a review section to the plan note
+6. **Capture Lessons**: Update `…/Projects/HivePilot/session-learnings.md` after corrections
 
 ## Core Principles
 
