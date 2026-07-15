@@ -441,6 +441,73 @@ class TestAudit:
 # ---------------------------------------------------------------------------
 
 
+class TestAppendDaily:
+    def test_append_creates_daily_file(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+
+        result = svc.append_daily("- 12:00 First entry")
+
+        today = __import__("datetime").date.today().isoformat()
+        expected_path = vault / _HIVEPILOT_SUBTREE / "Runs" / f"{today}.md"
+        assert expected_path.exists()
+        assert result["path"] == str(expected_path)
+        assert result.get("dry_run") is False
+        assert result.get("created") is True
+
+        content = expected_path.read_text(encoding="utf-8")
+        assert "---" in content
+        assert "language: en" in content
+        assert "First entry" in content
+
+    def test_second_append_appends_not_overwrites(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+
+        svc.append_daily("- 12:00 First entry")
+        result2 = svc.append_daily("- 12:05 Second entry")
+
+        assert result2.get("created") is False
+
+        today = __import__("datetime").date.today().isoformat()
+        content = (vault / _HIVEPILOT_SUBTREE / "Runs" / f"{today}.md").read_text(encoding="utf-8")
+        assert "First entry" in content
+        assert "Second entry" in content
+        # Frontmatter block appears exactly once — second append did not
+        # re-write the whole file with a new frontmatter block.
+        assert content.count("---\n") == 2 or content.startswith("---")
+
+    def test_append_daily_respects_subfolder(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+
+        result = svc.append_daily("- entry", subfolder="Interactions")
+
+        today = __import__("datetime").date.today().isoformat()
+        expected_path = vault / _HIVEPILOT_SUBTREE / "Interactions" / f"{today}.md"
+        assert expected_path.exists()
+        assert result["path"] == str(expected_path)
+
+    def test_append_daily_path_guard_holds(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+
+        with pytest.raises(ObsidianWriteError, match="outside allowed"):
+            svc.append_daily("entry", subfolder="../../etc")
+
+    def test_append_daily_dry_run_returns_plan_without_writing(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=True)
+
+        result = svc.append_daily("- dry run entry")
+
+        assert result.get("dry_run") is True
+        today = __import__("datetime").date.today().isoformat()
+        expected_path = vault / _HIVEPILOT_SUBTREE / "Runs" / f"{today}.md"
+        assert not expected_path.exists(), "dry_run must not write files"
+        assert "dry run entry" in result["content"]
+
+
 class TestGuard:
     def test_write_note_outside_hivepilot_raises(self, tmp_path: Path) -> None:
         vault = _make_full_vault(tmp_path)

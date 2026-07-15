@@ -245,6 +245,63 @@ class ObsidianService:
 
         return self._emit(target, content)
 
+    def append_daily(self, entry: str, subfolder: str = "Runs") -> dict[str, Any]:
+        """Append an already-rendered markdown entry to today's daily journal note.
+
+        Targets ``<HIVEPILOT_SUBTREE>/<subfolder>/<YYYY-MM-DD>.md``. Creates the
+        file (with frontmatter) on the first append of the day; subsequent
+        calls append to the existing body without disturbing the original
+        frontmatter block.
+
+        Parameters
+        ----------
+        entry:
+            Already-rendered markdown text for this entry (the caller is
+            responsible for timestamping the entry itself).
+        subfolder:
+            Subfolder relative to ``12 - HivePilot/``, defaults to ``"Runs"``.
+
+        Returns
+        -------
+        dict with keys ``path`` (str), ``content`` (str, full file content
+        after the append), ``dry_run`` (bool), ``created`` (bool — ``True``
+        when this call creates a brand-new daily file).
+
+        Raises
+        ------
+        ObsidianWriteError
+            If the resolved path escapes the ``12 - HivePilot/`` subtree.
+        """
+        allowed_root = (self._vault / HIVEPILOT_SUBTREE).resolve()
+        today = datetime.date.today().isoformat()
+        subpath = f"{subfolder}/{today}.md"
+        target = _resolve_safe(allowed_root, subpath, context="append_daily")
+
+        entry_block = entry if entry.endswith("\n") else f"{entry}\n"
+
+        existing_content: str | None = (
+            target.read_text(encoding="utf-8") if target.exists() else None
+        )
+
+        if existing_content is None:
+            frontmatter_fields: dict[str, Any] = {
+                "title": today,
+                "type": "run-log",
+                "status": "active",
+                "created": today,
+                "agent": "hivepilot",
+            }
+            frontmatter = self.render_frontmatter(frontmatter_fields)
+            content = f"{frontmatter}\n\n{entry_block}"
+            created = True
+        else:
+            content = f"{existing_content.rstrip()}\n\n{entry_block}"
+            created = False
+
+        result = self._emit(target, content)
+        result["created"] = created
+        return result
+
     def write_adr(
         self,
         title: str,
