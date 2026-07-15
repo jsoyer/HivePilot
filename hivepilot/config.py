@@ -119,6 +119,25 @@ class Settings(BaseSettings):
     worker_port: int = 8900  # default port for `hivepilot worker`
     vault_addr: str | None = None  # HashiCorp Vault address (env: HIVEPILOT_VAULT_ADDR)
     vault_token: str | None = None  # HashiCorp Vault token (env: HIVEPILOT_VAULT_TOKEN)
+    # ---- Infisical secrets provider (plugins/infisical.py) ----
+    # Config for the first-party `infisical` secrets-backend plugin (Infisical
+    # is an open-source, self-hostable config/value store — https://infisical.com).
+    # All optional; when a required value is missing the plugin's resolve()
+    # raises a clear error naming ONLY the secret + provider (never the fetched
+    # value) so the `closed` fail-mode aborts. A ref.spec may override
+    # environment / path / workspace per-secret.
+    # Self-host base URL (e.g. https://infisical.example.com). Unset -> the
+    # Infisical SDK default (hosted app.infisical.com). env: HIVEPILOT_INFISICAL_URL
+    infisical_url: str | None = None
+    # Access token / machine-identity token used to authenticate the SDK client.
+    # env: HIVEPILOT_INFISICAL_TOKEN
+    infisical_token: str | None = None
+    # Project / workspace id the secret lives in (a ref.spec `workspace_id` /
+    # `project_id` overrides this per-secret). env: HIVEPILOT_INFISICAL_WORKSPACE_ID
+    infisical_workspace_id: str | None = None
+    # Environment slug (e.g. "dev" / "prod"); a ref.spec `environment` overrides
+    # this per-secret. env: HIVEPILOT_INFISICAL_ENVIRONMENT
+    infisical_environment: str | None = None
     worker_retries: int = 2  # retry attempts on transient worker dispatch failures (W3)
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)

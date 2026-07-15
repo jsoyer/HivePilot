@@ -462,6 +462,60 @@ from hivepilot.services.notification_service import send_notification
 send_notification("Deploy finished", channels=["obsidian"])
 ```
 
+### Example: the `infisical` secrets provider (`plugins/infisical.py`)
+
+A first-party **secrets provider** plugin — it dogfoods the third plugin
+provider type (`secrets`, alongside `runners`/`notifiers`). It fetches a named
+value from [Infisical](https://infisical.com) (an open-source, self-hostable
+config/value store) so pipeline configs can reference stored values instead of
+inlining them. `register()` returns
+`{"secrets": {"infisical": InfisicalBackend()}}`, which is loaded into
+`SECRETS_MAP` under the fail-closed trust model (a name colliding with a
+built-in — or another plugin's — backend aborts the load).
+
+The Infisical Python SDK (`pip install infisicalsdk`) is **not** a hivepilot
+dependency — it's imported lazily. If the SDK isn't installed, required config
+is missing, or the client errors, `resolve()` raises a clear error naming
+**only** the secret key + provider (`infisical`) — never the fetched value —
+so a stage with `on_error: closed` aborts rather than proceeding with a
+half-resolved config.
+
+Configure via `HIVEPILOT_INFISICAL_*` — self-host is supported by setting
+`HIVEPILOT_INFISICAL_URL` to your instance's base URL (leave it unset to use
+the hosted Infisical default):
+
+```bash
+# .env / environment
+HIVEPILOT_INFISICAL_URL=https://infisical.example.com   # omit for hosted app.infisical.com
+HIVEPILOT_INFISICAL_TOKEN=st.xxxxx                        # access / machine-identity token
+HIVEPILOT_INFISICAL_WORKSPACE_ID=6410...                 # project (workspace) id
+HIVEPILOT_INFISICAL_ENVIRONMENT=dev                       # environment slug
+```
+
+Reference a stored value from a config via `${secret:NAME}`, where `NAME`'s
+spec declares `source: infisical`. The spec's `key` names the Infisical secret
+to fetch; `environment`, `path`, and `workspace_id` are optional per-secret
+overrides of the `HIVEPILOT_INFISICAL_*` defaults:
+
+```yaml
+# secrets.yaml (or the `secrets:` block of a project config)
+secrets:
+  DATABASE_URL:
+    source: infisical
+    key: DATABASE_URL          # the Infisical secret name to fetch
+  STRIPE_KEY:
+    source: infisical
+    key: STRIPE_SECRET_KEY
+    environment: prod          # override HIVEPILOT_INFISICAL_ENVIRONMENT
+    path: /billing             # override the default "/" secret path
+```
+
+```yaml
+# ... elsewhere in a config, the resolved value is referenced by name:
+env:
+  DATABASE_URL: ${secret:DATABASE_URL}
+```
+
 ## Packaging
 
 ### Local file
