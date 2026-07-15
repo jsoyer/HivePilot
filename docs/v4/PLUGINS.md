@@ -369,3 +369,25 @@ specific runner kind or notifier came from which loaded plugin beyond what a
 `PluginRecord` itself records. If a plugin contributes a runner kind or hook
 and it doesn't show up as expected, check the process log for
 `plugins.load_failed` / `plugins.register_failed` first.
+
+### TUI plugin manager
+
+```bash
+HIVEPILOT_ENABLE_TEXTUAL_UI=1 hivepilot plugins tui
+```
+
+An interactive, read-only browser/inspector over the same data as
+`plugins list` — a **Loaded Plugins** table (name / source / type(s) /
+detail), with `Enter` showing the selected plugin's best-effort runner
+kinds, notifier names, and hook names in a details pane (`r` refreshes,
+`q` quits). Attribution is derived by matching each contributed
+runner/notifier/hook's `__module__` against a hint built from the plugin's
+own source/location — best-effort, same v1 limitation as `plugins list`
+(see "Inspecting loaded plugins" above and roadmap Phase 26a): when
+attribution can't be derived, the row shows `unknown (see aggregate)`
+instead of guessing.
+
+**v1 is browse + inspect only** — no enable/disable (a later sprint).
+Requires the `dashboard`/`full` extra (`pip install "hivepilot[dashboard]"`
+— ships `textual`); without it, and without the env var set, the command
+prints a message and exits instead of crashing.
