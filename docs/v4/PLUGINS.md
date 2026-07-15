@@ -177,6 +177,57 @@ Any step assigned to a runner of kind `rtk` gets its command proxied through
 `rtk` automatically, with the same-directory graceful fallback described
 above.
 
+### Example: the `obsidian` plugin (`plugins/obsidian.py`)
+
+Ships in this repo as a reference plugin that is BOTH a notifier and a pair
+of lifecycle hooks — logging pipeline activity into the Obsidian vault. Both
+surfaces append to the SAME daily journal note:
+
+```
+12 - HivePilot/Runs/YYYY-MM-DD.md
+```
+
+- Notifier `obsidian`: every `send_notification(message, channels=["obsidian"])`
+  call (or a channel list that includes `"obsidian"`) appends a timestamped
+  line for `message` to today's journal.
+- Hooks `on_pipeline_end` / `on_error`: append a structured run-report block
+  (`run_id`, `pipeline`, `status` or `stage`, and a UTC timestamp) to the same
+  journal.
+
+It targets `settings.obsidian_vault` (`hivepilot/config.py`), resolved lazily
+inside each function — no vault path is cached at import time. All file I/O
+goes through `hivepilot.services.obsidian_service.ObsidianService` (the same
+path-guard + frontmatter discipline used by every other vault writer in
+`hivepilot`, including the new `append_daily()` method it adds — never a raw
+`open().write()`).
+
+Configuration and failure behavior:
+
+- If `settings.obsidian_vault` is unset or the path doesn't exist on disk,
+  the notifier raises `NotConfigured` (skipped silently by
+  `send_notification`, the standard contract) and the hooks are silent
+  no-ops — a hook must never crash a run.
+- `obsidian` does not collide with the built-in notifier channels
+  (`KNOWN_NOTIFIER_NAMES = ("slack", "discord", "telegram")`).
+- **Known limitation — dry-run:** the notifier and hooks write to the vault
+  for real even when a pipeline runs in `--dry-run`/`--simulate` mode. Unlike
+  the in-orchestrator vault writers (`ObsidianService`/`InteractionService`,
+  which receive the run's `dry_run` flag), the notifier and lifecycle-hook
+  contracts do not currently pass `dry_run` to handlers, so a plugin has no
+  signal to honor it. Treat obsidian journaling as always-on. Threading
+  `dry_run` through `send_notification` / `run_hook` is a tracked follow-up.
+
+```yaml
+# .env / environment
+HIVEPILOT_OBSIDIAN_VAULT=/path/to/your/Vault
+```
+
+```python
+from hivepilot.services.notification_service import send_notification
+
+send_notification("Deploy finished", channels=["obsidian"])
+```
+
 ## Packaging
 
 ### Local file
