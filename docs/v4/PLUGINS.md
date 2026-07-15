@@ -29,6 +29,24 @@ plugin runner/notifier executes with the same process environment and
 Master switch: `settings.plugins_enabled: bool = True` (`hivepilot/config.py`).
 Set to `False` to disable both discovery mechanisms; built-ins are unaffected.
 
+Per-plugin switch: `settings.plugins_disabled: list[str] = []`
+(`hivepilot/config.py`, env `HIVEPILOT_PLUGINS_DISABLED`) — names of
+individual plugins to skip, even when `plugins_enabled` is `True`. Checked in
+**all three load paths**, before a plugin's module is loaded or its
+`register()` is invoked — a disabled plugin contributes no
+runners/notifiers/hooks and has no import-time side effects either:
+
+- local-file scan — matched by file stem (e.g. `rtk` for `plugins/rtk.py`)
+- entry-point discovery — matched by entry-point name
+- the explicit `plugins_entry` pin (a single plugin loaded directly via
+  `HIVEPILOT_PLUGINS_ENTRY`/`settings.plugins_entry`, bypassing discovery) —
+  matched by either the full `plugins_entry` string (what the TUI shows/
+  toggles for this plugin) or just its module-name portion before the `:`
+  attribute separator (the short form an operator would more naturally use
+  when setting `plugins_disabled` directly via config/env)
+
+See "TUI plugin manager" below for the interactive `space` toggle.
+
 ## Authoring a plugin
 
 A plugin is a module exposing a zero-arg `register()` function that returns a
@@ -481,18 +499,33 @@ and it doesn't show up as expected, check the process log for
 HIVEPILOT_ENABLE_TEXTUAL_UI=1 hivepilot plugins tui
 ```
 
-An interactive, read-only browser/inspector over the same data as
-`plugins list` — a **Loaded Plugins** table (name / source / type(s) /
-detail), with `Enter` showing the selected plugin's best-effort runner
-kinds, notifier names, and hook names in a details pane (`r` refreshes,
-`q` quits). Attribution is derived by matching each contributed
-runner/notifier/hook's `__module__` against a hint built from the plugin's
-own source/location — best-effort, same v1 limitation as `plugins list`
-(see "Inspecting loaded plugins" above and roadmap Phase 26a): when
-attribution can't be derived, the row shows `unknown (see aggregate)`
-instead of guessing.
+An interactive browser/inspector over the same data as `plugins list` — a
+**Loaded Plugins** table (name / source / status / type(s) / detail), with
+`Enter` showing the selected plugin's best-effort runner kinds, notifier
+names, and hook names in a details pane (`r` refreshes, `q` quits).
+Attribution is derived by matching each contributed runner/notifier/hook's
+`__module__` against a hint built from the plugin's own source/location —
+best-effort, same v1 limitation as `plugins list` (see "Inspecting loaded
+plugins" above and roadmap Phase 26a): when attribution can't be derived,
+the row shows `unknown (see aggregate)` instead of guessing.
 
-**v1 is browse + inspect only** — no enable/disable (a later sprint).
+**Enable/disable (`space`, Phase 26b)** — pressing `space` on the
+highlighted plugin flips its presence in `plugins_disabled` and persists the
+change to the `.env` file `Settings` reads from (upserting the
+`HIVEPILOT_PLUGINS_DISABLED` line; every other line is left untouched). The
+row's **Status** column updates immediately to reflect the change. The
+change is **effective on next start only** — `PluginManager` scans and
+registers plugins once, at construction, so live hot-reload of a running
+process is out of scope (see roadmap Phase 26b follow-ups). Because a
+disabled plugin is skipped before it is even loaded, a plugin you disable
+disappears from this table's "loaded" list after restart — re-enable it via
+`plugins_disabled` directly (config/env) or by editing `.env`.
+
+`plugins_disabled` can also be set directly via config or environment —
+`HIVEPILOT_PLUGINS_DISABLED='["rtk", "obsidian"]'` — without going through
+the TUI at all; it complements `plugins_enabled` (the master on/off switch
+for ALL plugin loading) with a per-plugin skip list.
+
 Requires the `dashboard`/`full` extra (`pip install "hivepilot[dashboard]"`
 — ships `textual`); without it, and without the env var set, the command
 prints a message and exits instead of crashing.

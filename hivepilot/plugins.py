@@ -36,6 +36,13 @@ def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
         for file in sorted(plugin_dir.glob("*.py")):
             if file.stem.startswith("_"):
                 continue
+            if file.stem in settings.plugins_disabled:
+                # Skip BEFORE the module is even exec'd (and therefore before
+                # register() could ever be invoked) — a disabled plugin
+                # contributes no runners/notifiers/hooks and has no side
+                # effects from its own module body either.
+                logger.info("plugins.skipped_disabled", name=file.stem, source="local-file")
+                continue
             # Load by file path so it works regardless of cwd / sys.path
             # (the installed `hivepilot` binary and the Telegram bot don't have
             # the project root on sys.path → `import plugins.x` would fail).
@@ -90,6 +97,11 @@ def load_entry_point_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
         return found
 
     for ep in eps:
+        if ep.name in settings.plugins_disabled:
+            # Skip BEFORE ep.load() (and therefore before register() could
+            # ever be invoked) — mirrors the local-file skip point above.
+            logger.info("plugins.skipped_disabled", name=ep.name, source="entry-point")
+            continue
         try:
             fn = ep.load()
         except Exception as exc:  # noqa: BLE001 — one broken plugin must not skip the rest
@@ -109,15 +121,31 @@ class PluginManager:
         # `plugins_entry` pin — otherwise an operator could not silence a suspect
         # plugin wired via that path (see config.py `plugins_enabled`).
         if explicit_entry and settings.plugins_enabled:
-            for fn in load_plugins(entry=explicit_entry):
-                local.append(
-                    (
-                        fn,
-                        PluginRecord(
-                            name=explicit_entry, source="local-file", location=explicit_entry
-                        ),
+            # A THIRD load path (alongside `_scan_local_plugins` and
+            # `load_entry_point_plugins` above) — must honor `plugins_disabled`
+            # too. This plugin's `PluginRecord.name` (what the TUI shows and
+            # would toggle) is the full `explicit_entry` string (see
+            # PluginRecord() below); an operator setting `plugins_disabled`
+            # directly via config/env would more naturally use just the
+            # module-name portion (before the `:register`-style attribute
+            # separator), matching the short names the other two paths use —
+            # accept either form.
+            explicit_module_name = explicit_entry.split(":", 1)[0]
+            if (
+                explicit_entry in settings.plugins_disabled
+                or explicit_module_name in settings.plugins_disabled
+            ):
+                logger.info("plugins.skipped_disabled", name=explicit_entry, source="local-file")
+            else:
+                for fn in load_plugins(entry=explicit_entry):
+                    local.append(
+                        (
+                            fn,
+                            PluginRecord(
+                                name=explicit_entry, source="local-file", location=explicit_entry
+                            ),
+                        )
                     )
-                )
         entry_point = load_entry_point_plugins()
 
         self.loaded: list[PluginRecord] = []
