@@ -222,6 +222,83 @@ Any step assigned to a runner of kind `rtk` gets its command proxied through
 `rtk` automatically, with the same-directory graceful fallback described
 above.
 
+### Example: the `herdr` runner (`plugins/herdr.py`)
+
+Ships in this repo as a reference runner plugin (not a built-in — it's a
+local-file plugin, same trust tier as anything else in `plugins/`). It
+executes each pipeline step **inside a dedicated pane** of
+[`herdr`](https://github.com/ogulcancelik/herdr) — a terminal multiplexer
+built for coding agents (workspaces -> tabs -> panes, agent-status
+detection, opaque hierarchy ids) — giving you live parallel-pane visibility
+of a running pipeline while letting HivePilot drive herdr's CLI.
+
+`HerdrRunner` renders the step's `command` (or the runner definition's
+`command`) template exactly like the built-in `shell` runner, then:
+
+- If `herdr` is found on `PATH` (`shutil.which("herdr")`), it drives the CLI:
+  1. `herdr pane split --current --direction <herdr_split_direction> --no-focus`
+     — the returned pane id is **parsed from the JSON stdout**, never
+     hand-built (hierarchy ids are opaque per herdr's own docs).
+  2. `herdr pane run <pane-id> "<rendered command>"`.
+  3. `herdr wait agent-status <pane-id> --status idle --timeout <herdr_wait_timeout_ms>`
+     — any non-`idle` outcome (blocked, unknown, or a timeout) is treated as
+     a step **failure**, fail-closed; it never silently succeeds.
+  4. `herdr pane read <pane-id> --source recent-unwrapped --lines <herdr_read_lines>`
+     — the pane's captured output becomes the step's result (surfaced in the
+     interaction log / live stream, same as the built-in `claude` runner's
+     captured stdout).
+- If `herdr` is **not** installed, it logs an INFO message
+  (`herdr_runner.herdr_not_found`) and falls back to running
+  `bash -lc "<rendered command>"` directly — the step still executes, it
+  just doesn't get a dedicated pane. A step never fails just because
+  `herdr` isn't on the host.
+
+**Env / secrets into the pane:** `herdr pane run` executes in the pane's own
+shell, which does not automatically inherit the runner's env overlay
+(`project.env` + runner `env` + resolved secrets). Instead of putting values
+on the command line (which would leak into `ps`/`/proc/<pid>/cmdline` for
+the lifetime of the `herdr` CLI invocation), the overlay is written to a
+private (mode `0600`) temp file as `export KEY=value` lines, and the pane
+command is prefixed with `set -a; source <path>; set +a; ` — only the file
+*path*, never a secret value, ever appears on an argv. The file is deleted
+immediately after the step completes.
+
+**Already inside herdr (`HERDR_ENV=1`):** this runner does not special-case
+running from inside a herdr-managed pane — it always splits a fresh pane per
+step, keeping each step's output cleanly isolated for `pane read` to capture
+accurately.
+
+Config (env `HIVEPILOT_HERDR_*`, all optional):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `herdr_wait_timeout_ms` | `300000` | Timeout for `wait agent-status --status idle` (5 min) |
+| `herdr_read_lines` | `200` | Lines captured by `pane read --lines` |
+| `herdr_split_direction` | `"right"` | Direction passed to `pane split --direction` |
+
+Point a role or runner definition at it the same way you'd point at any
+other kind — set `kind: herdr` on a `RunnerDefinition` and give the step
+(or the runner definition) a `command`:
+
+```yaml
+# roles.yaml
+runners:
+  parallel-tests:
+    kind: herdr
+    command: "pytest -q"
+```
+
+```yaml
+# tasks.yaml
+steps:
+  - name: run-tests
+    runner: parallel-tests
+```
+
+Any step assigned to a runner of kind `herdr` gets its command executed in a
+dedicated herdr pane automatically, with the same-directory graceful
+fallback described above.
+
 ### Example: the `headroom` plugin (`plugins/headroom.py`)
 
 Ships in this repo as a reference `before_step` hook plugin that compresses a
