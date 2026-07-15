@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from hivepilot.services.artifact_service import ArtifactManager
 
 
 @pytest.fixture(autouse=True)
-def _clean_secret_registry() -> None:
+def _clean_secret_registry() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()

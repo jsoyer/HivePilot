@@ -3,6 +3,7 @@ writing the run summary artifact to disk."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from hivepilot.utils.io import write_summary
 
 
 @pytest.fixture(autouse=True)
-def _clean() -> None:
+def _clean() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()

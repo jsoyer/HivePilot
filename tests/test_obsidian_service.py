@@ -6,6 +6,7 @@ All tests use tmp_path (pytest) — NEVER write to the real vault.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from hivepilot.services.obsidian_service import ObsidianService, ObsidianWriteEr
 
 
 @pytest.fixture(autouse=True)
-def _clean_secret_registry() -> None:
+def _clean_secret_registry() -> Iterator[None]:
     config_provenance.clear_secret_values()
     yield
     config_provenance.clear_secret_values()
