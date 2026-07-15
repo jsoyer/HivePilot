@@ -16,6 +16,13 @@ class ArtifactManager:
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     def write_file(self, name: str, content: str) -> Path:
+        # Choke point: covers write_json too (it delegates here with an
+        # already-serialized string, e.g. results.json), so a resolved
+        # ${secret:NAME} value embedded anywhere in `content` is redacted
+        # before it's written to a run artifact.
+        from hivepilot.services.config_provenance import redact_text
+
+        content = redact_text(content)
         path = self.artifacts_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")

@@ -21,6 +21,7 @@ from hivepilot.services.config_provenance import (
     clear_secret_values,
     is_secret_field,
     redact_text,
+    redact_value,
     register_secret_value,
     registered_secret_values,
     resolve_with_provenance,
@@ -202,3 +203,43 @@ class TestSecretValueRegistry:
         out = redact_text("secretvalue-extended")
         # The longer value wins; no partial 'secretvalue' left dangling text.
         assert out == REDACTED
+
+
+class TestRedactValueRecursive:
+    """redact_value must recurse into dict/list/tuple values (used by artifact
+    writers and the logging processor to catch secrets nested inside a kwarg's
+    payload, not just top-level string fields)."""
+
+    def setup_method(self) -> None:
+        clear_secret_values()
+
+    def teardown_method(self) -> None:
+        clear_secret_values()
+
+    def test_redacts_nested_dict_string(self) -> None:
+        register_secret_value("nested-secret-value")
+        payload = {"outer": {"inner": "nested-secret-value", "safe": "ok"}}
+        out = redact_value(payload)
+        assert out == {"outer": {"inner": REDACTED, "safe": "ok"}}
+
+    def test_redacts_nested_list_and_tuple(self) -> None:
+        register_secret_value("list-secret-value")
+        payload = {"items": ["list-secret-value", ("also", "list-secret-value")]}
+        out = redact_value(payload)
+        assert out == {"items": [REDACTED, ("also", REDACTED)]}
+
+    def test_non_container_scalars_pass_through(self) -> None:
+        assert redact_value(3) == 3
+        assert redact_value(True) is True
+        assert redact_value(None) is None
+
+    def test_top_level_string_is_redacted(self) -> None:
+        register_secret_value("top-level-secret")
+        assert redact_value("top-level-secret") == REDACTED
+
+    def test_original_container_not_mutated(self) -> None:
+        register_secret_value("immut-secret-value")
+        payload = {"a": ["immut-secret-value"]}
+        redact_value(payload)
+        # redact_value must return a NEW structure, not mutate the input.
+        assert payload == {"a": ["immut-secret-value"]}

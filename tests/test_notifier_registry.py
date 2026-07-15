@@ -22,6 +22,7 @@ import pytest
 
 from hivepilot import plugins as plugins_mod
 from hivepilot.plugins import PluginManager
+from hivepilot.services import config_provenance
 from hivepilot.services import notification_service as notif_mod
 from hivepilot.services.notification_service import (
     NOTIFIER_MAP,
@@ -65,6 +66,25 @@ class TestRegisterAndDispatch:
         send_notification("hi", channels=["my-channel"])
 
         assert calls == ["hi"]
+
+    def test_message_redacts_registered_secret_before_dispatch(self) -> None:
+        """A resolved ${secret:NAME} value echoed into a failure message must
+        never reach an outbound notifier channel."""
+        config_provenance.clear_secret_values()
+        marker = "NOTIF-MARKER-do-not-leak"
+        config_provenance.register_secret_value(marker)
+        calls: list[str] = []
+
+        def _custom(message: str) -> None:
+            calls.append(message)
+
+        NotifierRegistry.register("my-channel-2", _custom)
+        try:
+            send_notification(f"run failed ({marker})", channels=["my-channel-2"])
+            assert calls == [f"run failed ({config_provenance.REDACTED})"]
+            assert marker not in calls[0]
+        finally:
+            config_provenance.clear_secret_values()
 
 
 class TestKindCollision:

@@ -72,6 +72,13 @@ def write_stage_artifact(
     except ImportError:
         return None
 
+    # Choke point: `output` is a stage's aggregated agent output and can echo
+    # a resolved ${secret:NAME} value. Redact before it reaches the vault note
+    # body — including the dry_run preview dict, which callers may surface.
+    from hivepilot.services.config_provenance import redact_text
+
+    output = redact_text(output)
+
     today = datetime.date.today().isoformat()
     slug = _slugify(stage_name)
     subpath = f"{_RUNS_SUBFOLDER}/{today}-run{run_id}-{slug}.md"

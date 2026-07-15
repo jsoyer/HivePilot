@@ -75,6 +75,12 @@ class NotifierRegistry:
 
 
 def send_notification(message: str, channels: Iterable[str] | None = None) -> None:
+    # Choke point: `message` frequently embeds `str(exc)` (e.g. a run-failure
+    # notification), which can echo a resolved ${secret:NAME} value an agent
+    # printed. Redact before it goes out to any outbound channel.
+    from hivepilot.services.config_provenance import redact_text
+
+    message = redact_text(message)
     channels = list(channels) if channels else ["slack", "discord", "telegram"]
     for channel in channels:
         channel = channel.lower()

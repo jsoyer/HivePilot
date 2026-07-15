@@ -48,6 +48,12 @@ def build_context(project_path: Path, files: Iterable[Path]) -> str:
 
 
 def append_feedback(project_path: Path, task_name: str, summary: str) -> None:
+    # Choke point: `summary` is `f"{target} -> ... ({result.detail or ...})"`
+    # built from a task run's own result detail, which can echo a resolved
+    # ${secret:NAME} value. Redact before it's appended to the vault feedback log.
+    from hivepilot.services.config_provenance import redact_text
+
+    summary = redact_text(summary)
     log_path = FEEDBACK_DIR / f"{project_path.name}.jsonl"
     entry = {
         "task": task_name,

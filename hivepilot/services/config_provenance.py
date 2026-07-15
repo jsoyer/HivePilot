@@ -120,9 +120,50 @@ def all_keys(cfg: Settings | None = None) -> list[str]:
 # REDACTED). Resolved `${secret:NAME}` reference values, by contrast, are
 # dynamic strings whose names are not known ahead of time — so they are masked
 # by VALUE: every value handed to `register_secret_value` is replaced with the
-# SAME `REDACTED` sentinel wherever it later appears in rendered output (logs,
-# provenance, serialized state). Keeping this in `config_provenance` means the
-# whole codebase shares one masking vocabulary and one redaction entry point.
+# SAME `REDACTED` sentinel wherever `redact_text`/`redact_value` is applied.
+# Keeping this in `config_provenance` means the whole codebase shares one
+# masking vocabulary and one redaction entry point.
+#
+# What is actually protected, concretely:
+#   * The structlog processor (hivepilot.utils.logging) redacts every log
+#     event field, recursively (see `redact_value`).
+#   * The chosen persistent/outbound-sink choke points redact before writing:
+#       - state_service.record_step / complete_run (the `detail` string) and
+#         record_interaction (the `summary` string) — SQLite `steps.detail`,
+#         `runs.detail`, `interactions.summary`.
+#       - utils.io.write_summary (the whole `summary` dict, recursively) and
+#         services.artifact_service.ArtifactManager.write_file/write_json
+#         (covers the run's summary.json/results.json artifacts).
+#       - hivepilot.pipelines.write_stage_artifact (the vault `output` note).
+#       - services.notification_service.send_notification (outbound Slack/
+#         Discord/Telegram messages).
+#       - services.knowledge_service.append_feedback (the vault feedback log).
+#   * `payload.secrets` itself (the runner-env mapping holding resolved
+#     plaintext) is protected structurally, not by redaction: it is never
+#     serialized into run state or artifacts (state_service only persists
+#     `metadata`/`detail`/`summary` strings; RunnerPayload is not JSON-dumped
+#     anywhere) — so there is nothing to redact there in the first place.
+#
+# Registry lifecycle (bounding, not indefinite growth): `_SECRET_VALUES` is
+# process-global, so Orchestrator clears it via `clear_secret_values()` once a
+# top-level `run_task`/`run_pipeline` call fully completes (`finally`, after
+# every sink for that run has already redacted against it) — see
+# `Orchestrator._enter_run_scope`/`_exit_run_scope`. This keeps the registry
+# scoped to in-flight runs rather than accumulating for the process lifetime.
+#
+# Known limitations (by design — see also `_MIN_MASKABLE_LEN` below):
+#   * Substring replacement: if a secret value happens to equal a common
+#     word/substring, redaction will blank that substring everywhere else in
+#     the same text too. This is a COSMETIC over-redaction risk, not a
+#     security one — prefer long, high-entropy secret values in practice.
+#   * Values shorter than `_MIN_MASKABLE_LEN` are never registered/redacted.
+#   * Ephemeral inter-agent payloads (the debate request/rebuttal/resolution/
+#     challenge turns in Orchestrator — see the `secrets={}` RunnerPayload
+#     constructions) do not resolve `${secret:NAME}` references at all: the
+#     literal reference string passes through unresolved. This is NOT a
+#     leak — no secret value is ever produced or registered on that path —
+#     it is simply an unresolved reference in a payload that was never wired
+#     to a secrets catalog.
 # ---------------------------------------------------------------------------
 
 # Values shorter than this are never registered: a 1-3 char "secret" would mask
@@ -167,6 +208,29 @@ def redact_text(text: str) -> str:
         if secret and secret in text:
             text = text.replace(secret, REDACTED)
     return text
+
+
+def redact_value(value: Any) -> Any:
+    """Recursively redact registered secret values found anywhere inside
+    *value*.
+
+    Strings are passed through `redact_text`. `dict`/`list`/`tuple` are
+    walked recursively and a NEW container is returned (the input is never
+    mutated). Every other type (int, bool, None, ...) is returned unchanged.
+
+    Used by writers that persist/emit a whole structure (log event kwargs,
+    JSON artifacts) rather than a single string, so a secret nested inside a
+    dict or list value can't slip past `redact_text` alone.
+    """
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, dict):
+        return {key: redact_value(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_value(item) for item in value)
+    return value
 
 
 def registered_secret_values() -> frozenset[str]:

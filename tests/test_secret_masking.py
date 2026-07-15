@@ -73,29 +73,51 @@ def test_resolved_ref_value_absent_from_logs(
     assert callable(config_provenance_redactor)
 
 
-def test_resolved_ref_value_absent_from_serialized_state(
-    monkeypatch: pytest.MonkeyPatch,
+def test_resolved_ref_value_absent_from_persisted_state_and_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    """A resolved secret must not survive into serialized run state. We prove it
-    two ways: (1) run-state serialization only ever sees `metadata`, never the
-    resolved secrets mapping; (2) even if a caller redacts a blob before writing
-    it, the marker is gone."""
+    """BEHAVIOR-TRUE regression test for the masking-coverage gap (code review
+    finding #1): drive a marker-bearing failure detail THROUGH the REAL
+    state_service persistence path and THROUGH the REAL artifact-write path
+    (utils.io.write_summary), then assert the marker never reaches the
+    stored/rendered output.
+
+    This exercises the exact threat model: an agent echoes a resolved
+    ${secret:NAME} value into `str(exc)` / a stage summary, which then flows
+    into `state_service.complete_run(..., detail=...)` and `write_summary`.
+    Without the `redact_text`/`redact_value` choke points added to those two
+    functions, this test FAILS (the marker would land verbatim in the SQLite
+    `runs.detail` column and in the summary.json artifact on disk).
+    """
+    from hivepilot.services import state_service
+    from hivepilot.utils.io import write_summary
+
     monkeypatch.setenv("HP_MASK_STORE", MARKER)
     catalog = {"tok": {"source": "env", "key": "HP_MASK_STORE"}}
     resolved = secret_refs.resolve_secret_refs(
         {"API_KEY": "${secret:tok}"}, catalog=catalog, fail_mode="closed"
     )
+    assert resolved == {"API_KEY": MARKER}  # the runner env DOES get the real value
+    assert MARKER in config_provenance.registered_secret_values()
 
-    # (1) The metadata dict that state_service serializes never carries secrets.
-    metadata = {"extra_prompt": "do the thing", "prior_context": ""}
-    serialized_state = json.dumps(metadata)
-    assert MARKER not in serialized_state
+    # --- (1) State DB sink: an agent "echoes" the resolved secret into a
+    # failure detail, exactly as `str(exc)` would in Orchestrator.run_task. ---
+    run_id = state_service.record_run_start("proj", "task", status="running")
+    state_service.complete_run(run_id, "failed", f"runner exited: {MARKER}")
+    row = next(r for r in state_service.list_recent_runs(limit=10) if r["id"] == run_id)
+    assert MARKER not in (row["detail"] or "")
+    assert config_provenance.REDACTED in (row["detail"] or "")
 
-    # (2) Any string surface routed through redact_text loses the marker, even
-    #     though the live env value still holds it for the runner.
-    blob = json.dumps({"env": resolved, "log": f"used {MARKER}"})
-    assert MARKER in blob  # sanity: the raw blob DID contain it
-    assert MARKER not in config_provenance.redact_text(blob)
+    # --- (2) Artifact sink: the run summary written to disk. ---
+    summary = {"task": "task", "results": [{"detail": f"echoed {MARKER}"}]}
+    write_summary(tmp_path, summary)
+    written = (tmp_path / "summary.json").read_text(encoding="utf-8")
+    assert MARKER not in written
+    assert config_provenance.REDACTED in written
+
+    # Sanity: the source dict itself (in-memory) is unredacted — proves the
+    # assertions above are testing REAL redaction, not an accidental no-op.
+    assert MARKER in json.dumps(summary)
 
 
 def test_caplog_never_sees_marker_via_stdlib_bridge(

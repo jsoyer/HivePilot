@@ -827,3 +827,111 @@ class TestResolveSecretsReferences:
         )
         # project=None (legacy call shape) still works.
         assert orch._resolve_secrets(step) == {"T": "d"}
+
+
+# ---------------------------------------------------------------------------
+# Resolved-secrets registry scoping (code review finding #2): the registry
+# must be cleared once a run_task/run_pipeline call FULLY completes, but NOT
+# prematurely when run_task is called as a NESTED stage of run_pipeline
+# (pipeline-level sinks like write_stage_artifact/record_interaction execute
+# AFTER the nested run_task call returns but BEFORE run_pipeline itself does).
+# ---------------------------------------------------------------------------
+
+
+class TestSecretRegistryRunScope:
+    def _orch(self):
+        return _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+
+    def _clean(self):
+        from hivepilot.services import config_provenance
+
+        config_provenance.clear_secret_values()
+        return config_provenance
+
+    def test_balanced_enter_exit_clears_registry(self) -> None:
+        cp = self._clean()
+        orch = self._orch()
+        cp.register_secret_value("scope-test-secret-one")
+        orch._enter_run_scope()
+        assert "scope-test-secret-one" in cp.registered_secret_values()
+        orch._exit_run_scope()
+        assert cp.registered_secret_values() == frozenset()
+
+    def test_nested_scope_does_not_clear_until_outermost_exits(self) -> None:
+        """Simulates run_pipeline (outer) calling run_task (inner) once per
+        stage: entering twice then exiting once must NOT clear — the registry
+        must still be available for the outer call's own post-stage sinks."""
+        cp = self._clean()
+        orch = self._orch()
+        cp.register_secret_value("nested-scope-secret")
+
+        orch._enter_run_scope()  # simulates run_pipeline entry
+        orch._enter_run_scope()  # simulates nested run_task entry
+        orch._exit_run_scope()  # simulates nested run_task returning
+        assert "nested-scope-secret" in cp.registered_secret_values(), (
+            "registry must survive the INNER call's exit — outer sinks still need it"
+        )
+        orch._exit_run_scope()  # simulates run_pipeline itself returning
+        assert cp.registered_secret_values() == frozenset()
+
+    def test_run_task_wrapper_clears_after_body_completes(self, monkeypatch) -> None:
+        cp = self._clean()
+        orch = self._orch()
+
+        def _fake_body(**kwargs):
+            cp.register_secret_value("body-registered-secret")
+            return []
+
+        monkeypatch.setattr(orch, "_run_task_body", _fake_body)
+        orch.run_task(project_names=[], task_name="x", extra_prompt=None, auto_git=False)
+        assert cp.registered_secret_values() == frozenset()
+
+    def test_run_task_wrapper_clears_on_exception(self, monkeypatch) -> None:
+        import pytest
+
+        cp = self._clean()
+        orch = self._orch()
+
+        def _fake_body(**kwargs):
+            cp.register_secret_value("body-registered-secret-2")
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(orch, "_run_task_body", _fake_body)
+        with pytest.raises(RuntimeError):
+            orch.run_task(project_names=[], task_name="x", extra_prompt=None, auto_git=False)
+        assert cp.registered_secret_values() == frozenset()
+
+    def test_run_pipeline_wrapper_clears_after_nested_run_task_call(self, monkeypatch) -> None:
+        """The realistic nesting case: _run_pipeline_body internally calls the
+        PUBLIC self.run_task(...) once (as it does per-stage). The registry
+        must still hold the secret registered inside run_task's body when
+        _run_pipeline_body's own post-stage code runs — proving nested calls
+        don't clear prematurely — and only clears once run_pipeline itself
+        returns."""
+        cp = self._clean()
+        orch = self._orch()
+        seen_after_nested_call: set[str] = set()
+
+        def _fake_pipeline_body(**kwargs):
+            orch.run_task(project_names=[], task_name="x", extra_prompt=None, auto_git=False)
+            # Pipeline-level sink work happens HERE, after run_task returns.
+            seen_after_nested_call.update(cp.registered_secret_values())
+            return []
+
+        def _fake_task_body(**kwargs):
+            cp.register_secret_value("pipeline-nested-secret")
+            return []
+
+        monkeypatch.setattr(orch, "_run_pipeline_body", _fake_pipeline_body)
+        monkeypatch.setattr(orch, "_run_task_body", _fake_task_body)
+
+        orch.run_pipeline(
+            project_names=[], pipeline_name="test-pipe", extra_prompt=None, auto_git=False
+        )
+        assert "pipeline-nested-secret" in seen_after_nested_call, (
+            "run_task's nested exit must NOT clear the registry before "
+            "run_pipeline's own post-stage sinks run"
+        )
+        assert cp.registered_secret_values() == frozenset(), (
+            "the registry must be cleared once the OUTERMOST run_pipeline call returns"
+        )

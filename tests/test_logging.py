@@ -31,3 +31,17 @@ def test_processor_leaves_non_strings_and_clean_strings() -> None:
     assert out["count"] == 3
     assert out["flag"] is True
     assert out["text"] == "nothing secret"
+
+
+def test_processor_redacts_secret_nested_inside_dict_field() -> None:
+    """A secret embedded inside a nested dict/list kwarg (not a top-level
+    string) must still be redacted — proves the processor recurses."""
+    marker = "NESTED-MARKER-abc123-LONG-ENOUGH"
+    config_provenance.register_secret_value(marker)
+    event = {
+        "event": "runner.env",
+        "payload": {"env": {"API_KEY": marker}, "extra": [marker, "clean"]},
+    }
+    out = hp_logging._redact_secret_values(None, "info", event)
+    assert out["payload"]["env"]["API_KEY"] == config_provenance.REDACTED
+    assert out["payload"]["extra"] == [config_provenance.REDACTED, "clean"]
