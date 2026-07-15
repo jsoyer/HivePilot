@@ -9,7 +9,15 @@ from __future__ import annotations
 
 import pytest
 
+from hivepilot.services import config_provenance
 from hivepilot.services import notification_service as ns
+
+
+@pytest.fixture(autouse=True)
+def _clean_secret_registry() -> None:
+    config_provenance.clear_secret_values()
+    yield
+    config_provenance.clear_secret_values()
 
 
 @pytest.fixture
@@ -87,6 +95,17 @@ def test_collapses_whitespace_and_newlines(captured: list[str]) -> None:
 def test_minimal_call_actor_only(captured: list[str]) -> None:
     ns.stream_agent_turn(actor="Diderot")
     assert "Diderot" in captured[0]
+
+
+def test_stream_redacts_registered_secret_in_summary(captured: list[str]) -> None:
+    """A resolved ${secret:NAME} value echoed into a stage's agent output must
+    never reach the Telegram live-stream — same leak class as send_notification."""
+    marker = "STREAM-MARKER-do-not-leak"
+    config_provenance.register_secret_value(marker)
+    ns.stream_agent_turn(actor="Aliénor", summary=f"deployed with {marker}")
+    assert len(captured) == 1
+    assert marker not in captured[0]
+    assert config_provenance.REDACTED in captured[0]
 
 
 def test_emit_event_posts_payload(monkeypatch: pytest.MonkeyPatch) -> None:

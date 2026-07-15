@@ -1806,6 +1806,38 @@ class Orchestrator:
         simulate: bool = False,
         prior_context: str | None = None,
     ) -> dict | None:
+        """Public entry point. Delegates to `_run_debate_body` inside a
+        run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
+        secrets masking registry is cleared once this debate call completes.
+        Standalone debates are triggered repeatedly via ChatOps in the daemon
+        (see cli.py), so — same as run_task/run_pipeline — this call must not
+        leak resolved secret values into the registry across invocations. When
+        nested inside a role-driven `run_task` call, the shared depth counter
+        means this inner scope's exit does NOT clear prematurely — the outer
+        run_task's own sinks still see the registry populated."""
+        self._enter_run_scope()
+        try:
+            return self._run_debate_body(
+                project_name=project_name,
+                role_name=role_name,
+                topic=topic,
+                dry_run=dry_run,
+                simulate=simulate,
+                prior_context=prior_context,
+            )
+        finally:
+            self._exit_run_scope()
+
+    def _run_debate_body(
+        self,
+        *,
+        project_name: str,
+        role_name: str,
+        topic: str,
+        dry_run: bool = True,
+        simulate: bool = False,
+        prior_context: str | None = None,
+    ) -> dict | None:
         """Run a dual-model debate for *role_name*: capture each model's position,
         synthesize via DebateService, and write an ADR. Returns the ADR emit dict."""
         from typing import cast

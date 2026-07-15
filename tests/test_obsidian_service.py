@@ -10,7 +10,16 @@ from pathlib import Path
 
 import pytest
 
+from hivepilot.services import config_provenance
 from hivepilot.services.obsidian_service import ObsidianService, ObsidianWriteError
+
+
+@pytest.fixture(autouse=True)
+def _clean_secret_registry() -> None:
+    config_provenance.clear_secret_values()
+    yield
+    config_provenance.clear_secret_values()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -268,6 +277,45 @@ class TestWriteNote:
         assert "language: en" in content
         assert "# Report" in content
         assert "Content here." in content
+
+    def test_write_note_redacts_registered_secret_in_body(self, tmp_path: Path) -> None:
+        """A resolved ${secret:NAME} value echoed into a note body — e.g. the
+        commits_vault documentation changelog note built directly from
+        stage_output — must never reach the file written to the vault."""
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+        marker = "OBSIDIAN-MARKER-do-not-leak"
+        config_provenance.register_secret_value(marker)
+
+        result = svc.write_note(
+            subpath="Docs/changelog-run-1.md",
+            title="Documentation update",
+            body=f"echoed {marker}",
+            frontmatter_fields={"type": "documentation"},
+        )
+
+        file_path = vault / _HIVEPILOT_SUBTREE / "Docs" / "changelog-run-1.md"
+        written = file_path.read_text(encoding="utf-8")
+        assert marker not in written
+        assert config_provenance.REDACTED in written
+        assert marker not in result["content"]
+        assert config_provenance.REDACTED in result["content"]
+
+    def test_write_note_dry_run_preview_also_redacted(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=True)
+        marker = "OBSIDIAN-DRYRUN-MARKER-do-not-leak"
+        config_provenance.register_secret_value(marker)
+
+        result = svc.write_note(
+            subpath="Docs/preview.md",
+            title="Preview",
+            body=f"echoed {marker}",
+            frontmatter_fields={"type": "documentation"},
+        )
+
+        assert marker not in result["content"]
+        assert config_provenance.REDACTED in result["content"]
 
     def test_write_note_creates_parent_dirs(self, tmp_path: Path) -> None:
         vault = _make_full_vault(tmp_path)

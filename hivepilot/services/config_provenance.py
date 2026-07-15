@@ -134,9 +134,20 @@ def all_keys(cfg: Settings | None = None) -> list[str]:
 #       - utils.io.write_summary (the whole `summary` dict, recursively) and
 #         services.artifact_service.ArtifactManager.write_file/write_json
 #         (covers the run's summary.json/results.json artifacts).
-#       - hivepilot.pipelines.write_stage_artifact (the vault `output` note).
+#       - services.obsidian_service.ObsidianService._emit (the fully-rendered
+#         note content, for EVERY vault write — write_note/append_daily/
+#         write_adr and any direct caller, e.g. the commits_vault
+#         documentation changelog note built straight from `stage_output`).
+#         hivepilot.pipelines.write_stage_artifact also redacts its `output`
+#         before calling write_note — harmless double coverage (idempotent).
 #       - services.notification_service.send_notification (outbound Slack/
-#         Discord/Telegram messages).
+#         Discord/Telegram messages), stream_agent_turn (the live Telegram
+#         agent-turn stream — covers stream_challenge/stream_rebuttal/
+#         stream_resolved/stream_needs_human/stream_agent_request/
+#         stream_agent_answer, which all funnel through it), and
+#         send_approval_keyboard (the `details` checkpoint-approval DM, often
+#         built from `prior_chunks` agent output via
+#         Orchestrator._build_checkpoint_details).
 #       - services.knowledge_service.append_feedback (the vault feedback log).
 #   * `payload.secrets` itself (the runner-env mapping holding resolved
 #     plaintext) is protected structurally, not by redaction: it is never
@@ -146,10 +157,14 @@ def all_keys(cfg: Settings | None = None) -> list[str]:
 #
 # Registry lifecycle (bounding, not indefinite growth): `_SECRET_VALUES` is
 # process-global, so Orchestrator clears it via `clear_secret_values()` once a
-# top-level `run_task`/`run_pipeline` call fully completes (`finally`, after
-# every sink for that run has already redacted against it) — see
-# `Orchestrator._enter_run_scope`/`_exit_run_scope`. This keeps the registry
-# scoped to in-flight runs rather than accumulating for the process lifetime.
+# top-level `run_task`/`run_pipeline`/`run_debate` call fully completes
+# (`finally`, after every sink for that run has already redacted against it)
+# — see `Orchestrator._enter_run_scope`/`_exit_run_scope`. All three public
+# entry points share the same reentrancy-safe depth counter, so a `run_debate`
+# nested inside a role-driven `run_task` (or a standalone debate triggered
+# repeatedly via ChatOps in the daemon) never clears prematurely nor leaks
+# across separate invocations. This keeps the registry scoped to in-flight
+# runs rather than accumulating for the process lifetime.
 #
 # Known limitations (by design — see also `_MIN_MASKABLE_LEN` below):
 #   * Substring replacement: if a secret value happens to equal a common

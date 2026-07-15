@@ -935,3 +935,49 @@ class TestSecretRegistryRunScope:
         assert cp.registered_secret_values() == frozenset(), (
             "the registry must be cleared once the OUTERMOST run_pipeline call returns"
         )
+
+    def test_run_debate_wrapper_clears_after_body_completes(self, monkeypatch) -> None:
+        """Standalone run_debate (e.g. triggered repeatedly via ChatOps) must
+        clear the registry on its own exit, same as run_task/run_pipeline."""
+        cp = self._clean()
+        orch = self._orch()
+
+        def _fake_debate_body(**kwargs):
+            cp.register_secret_value("debate-registered-secret")
+            return {"adr": "stub"}
+
+        monkeypatch.setattr(orch, "_run_debate_body", _fake_debate_body)
+        orch.run_debate(project_name="p", role_name="cto", topic="t")
+        assert cp.registered_secret_values() == frozenset()
+
+    def test_run_debate_nested_inside_run_task_does_not_clear_prematurely(
+        self, monkeypatch
+    ) -> None:
+        """A role-driven run_task that internally triggers run_debate (as
+        _execute_task does for dual-model roles) must not have its own
+        post-debate sinks see an emptied registry — the shared depth counter
+        must treat run_debate as just another nested scope."""
+        cp = self._clean()
+        orch = self._orch()
+        seen_after_nested_debate: set[str] = set()
+
+        def _fake_task_body(**kwargs):
+            orch.run_debate(project_name="p", role_name="cto", topic="t")
+            seen_after_nested_debate.update(cp.registered_secret_values())
+            return []
+
+        def _fake_debate_body(**kwargs):
+            cp.register_secret_value("task-nested-debate-secret")
+            return {"adr": "stub"}
+
+        monkeypatch.setattr(orch, "_run_task_body", _fake_task_body)
+        monkeypatch.setattr(orch, "_run_debate_body", _fake_debate_body)
+
+        orch.run_task(project_names=[], task_name="x", extra_prompt=None, auto_git=False)
+        assert "task-nested-debate-secret" in seen_after_nested_debate, (
+            "run_debate's nested exit must NOT clear the registry before "
+            "the enclosing run_task's own sinks run"
+        )
+        assert cp.registered_secret_values() == frozenset(), (
+            "the registry must be cleared once the OUTERMOST run_task call returns"
+        )
