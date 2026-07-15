@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -144,6 +144,21 @@ class Settings(BaseSettings):
     # mirrors context_routing_mode's opt-in-only gating above.
     # env: HIVEPILOT_HEADROOM_ENABLED
     headroom_enabled: bool = False
+    # Opt-in gate for the `mem0` before_step/after_step plugin (plugins/mem0.py):
+    # persistent cross-run agent memory (recall before a step, store after)
+    # via the optional `mem0ai` library. Defaults False — ships dormant even
+    # when the plugin file is present and the library is installed; mirrors
+    # headroom_enabled's opt-in-only gating above.
+    # env: HIVEPILOT_MEM0_ENABLED
+    mem0_enabled: bool = False
+    # Hosted mem0 API key (https://mem0.ai). When set, plugins/mem0.py uses
+    # `mem0.MemoryClient(api_key=...)`. Leave unset to use the self-host
+    # `mem0.Memory()` path instead. env: HIVEPILOT_MEM0_API_KEY
+    mem0_api_key: str | None = None
+    # Optional self-host mem0 config dict, passed to `Memory.from_config()`
+    # (vector store / embedder / llm overrides). Only used when mem0_api_key
+    # is unset. env: HIVEPILOT_MEM0_CONFIG (JSON string)
+    mem0_config: dict[str, Any] | None = None
     stage_cache_enabled: bool = False  # opt-in SQLite stage memoization (L3)
     cache_backend: str = "sqlite"  # sqlite | redis (L3)
     redis_url: str | None = None  # required when cache_backend=redis (L3)

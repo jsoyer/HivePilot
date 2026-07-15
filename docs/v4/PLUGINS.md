@@ -261,6 +261,103 @@ pip install "headroom-ai[all]"
 pip install "headroom-ai[all]"
 ```
 
+### Example: the `mem0` plugin (`plugins/mem0.py`)
+
+Ships in this repo as a reference plugin that gives agents persistent
+cross-run memory, using [mem0](https://github.com/mem0ai/mem0)
+(`pip install mem0ai` — NOT a hivepilot dependency, and not installed by
+this plugin). Unlike `headroom` and `rtk` above (each a single hook), this
+plugin wires TWO lifecycle hooks:
+
+- `before_step` (**recall**): searches mem0 for memories relevant to the
+  current project/task and injects them into
+  `payload.metadata["extra_prompt"]` — the same field
+  `ClaudeRunner._build_prompt` (`hivepilot/runners/claude_runner.py`) reads
+  verbatim into the rendered prompt ("Extra instructions from user: ..."),
+  on the SAME `RunnerPayload` object the orchestrator hands straight
+  through to the runner with no copy in between (exactly headroom's
+  mechanism — see above).
+- `after_step` (**store**): persists the available salient content for
+  that step back to mem0.
+
+**Complementarity with `headroom`:** headroom *compresses* context already
+on the payload; mem0 *enriches* it with recalled memory — opposite
+directions, same payload. If both plugins are enabled, `recall` should
+run **before** headroom's compression pass, so injected memories are
+subject to the same compression as the rest of the prompt rather than
+bypassing it. Local-file plugins are discovered in
+`sorted(plugin_dir.glob("*.py"))` order
+(`hivepilot.plugins._scan_local_plugins`) and hooks run in that discovery
+order — `"headroom.py"` sorts BEFORE `"mem0.py"` alphabetically, so **as
+shipped, hook ordering is the wrong way round**: headroom compresses first,
+then mem0 injects fresh, uncompressed memories afterward. Operators running
+both plugins together and wanting recall-before-compress should rename
+files to control `sorted()` order (e.g. `a_mem0.py` / `b_headroom.py`).
+
+**Known limitation — `store` cannot see step output.** `after_step` is
+called with the exact same `payload` object passed to `before_step`; the
+runner's return value (the step's actual output) is appended to a local
+`outputs` list inside `Orchestrator._execute_task` and is never attached to
+`payload` or threaded into the `after_step` call. `on_pipeline_end` is even
+sparser (`run_id`/`pipeline`/`status` only — no per-step data at all). So
+`store()` cannot persist what the agent actually produced; it persists
+task/step identity plus the step's *input* context (`extra_prompt` /
+`prior_context`) instead — a directional placeholder, not the real outcome.
+Threading the runner's captured text into `after_step(output=...)` kwargs
+is a tracked follow-up, not implemented here.
+
+**Recall/store keying.** `RunnerPayload` carries `project_name` and
+`task_name` but not the task's `role` (`role` lives on `TaskConfig`, one
+level above `RunnerPayload` in `Orchestrator._execute_task`, and is never
+threaded onto the payload) — recall and store are keyed by
+`f"{project_name}:{task_name}"` (mem0's `user_id`) rather than
+project/task/role.
+
+**Avoiding a recall/store feedback loop.** Because `recall` mutates
+`extra_prompt` in place (appending a "Relevant memories:" block), `store`
+reading the current `extra_prompt` would re-persist mem0's own recalled
+memories back into mem0. `recall` snapshots the pre-mutation value under a
+private key (`_mem0_original_extra_prompt`) the first time it runs for a
+shared `metadata` dict; `store` prefers that snapshot when present.
+
+**Idempotency — shared `metadata` dict:** same problem headroom solves,
+same mechanism — `Orchestrator._execute_task` builds ONE `metadata` dict
+per task and reuses it by reference across every step's `RunnerPayload`.
+A private sentinel key (`_mem0_recalled`) is set on the shared dict after
+the first `search()` call for it (regardless of whether any memories were
+found); subsequent `before_step` calls for that dict skip straight
+through. Neither private key (`_mem0_recalled`,
+`_mem0_original_extra_prompt`) is ever rendered into a prompt — every
+runner that reads prompt-relevant fields reads specific keys
+(`extra_prompt`, `prior_context`), never iterating or serializing the
+whole dict.
+
+**Opt-in — dormant by default:** gated on `settings.mem0_enabled`
+(`hivepilot/config.py`, default `False`, env `HIVEPILOT_MEM0_ENABLED`) —
+mirrors `headroom_enabled`'s opt-in pattern. Two backends are supported:
+
+- **Self-host:** leave `mem0_api_key` unset — uses `mem0.Memory()`,
+  optionally customized via `mem0_config` (a dict passed to
+  `Memory.from_config()`).
+- **Hosted (mem0.ai):** set `settings.mem0_api_key` — uses
+  `mem0.MemoryClient(api_key=...)`.
+
+mem0's exact constructor/`search()`/`add()` signatures are not pinned by
+this optional integration (`mem0ai` is never installed by this plugin) —
+if the real API differs, the outer `try/except` in every function degrades
+to a logged no-op, same as every other hook in this repo.
+
+```yaml
+# .env / environment
+HIVEPILOT_MEM0_ENABLED=true
+# Self-host (default) — no key needed. Hosted mem0.ai:
+HIVEPILOT_MEM0_API_KEY=your-mem0-api-key
+```
+
+```bash
+pip install mem0ai
+```
+
 ### Example: the `obsidian` plugin (`plugins/obsidian.py`)
 
 Ships in this repo as a reference plugin that is BOTH a notifier and a pair
