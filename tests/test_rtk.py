@@ -128,7 +128,10 @@ class TestFallbackWithoutRtkOnPath:
         assert args == ["bash", "-lc", "echo proj"]
         assert "rtk" not in args
 
-    def test_fallback_logs_a_warning(self, rtk_module: ModuleType, tmp_path: Path) -> None:
+    def test_fallback_logs_at_info(self, rtk_module: ModuleType, tmp_path: Path) -> None:
+        # Missing rtk is expected graceful degradation, not a problem, so it
+        # logs at INFO (not WARNING) to avoid flooding logs on every step in
+        # environments that intentionally run without rtk installed.
         runner = rtk_module.RtkRunner(RunnerDefinition(name="rtk", kind="rtk"), settings)
         with (
             patch.object(rtk_module.shutil, "which", return_value=None),
@@ -137,7 +140,8 @@ class TestFallbackWithoutRtkOnPath:
         ):
             runner.run(_payload(tmp_path))
 
-        assert mock_logger.warning.called
+        assert mock_logger.info.called
+        assert not mock_logger.warning.called
 
 
 class TestPluginManagerDiscoversRtk:

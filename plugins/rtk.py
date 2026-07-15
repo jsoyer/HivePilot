@@ -66,7 +66,7 @@ class RtkRunner:
             )
         else:
             argv = ["bash", "-lc", command_str]
-            logger.warning(
+            logger.info(
                 "rtk_runner.rtk_not_found",
                 project=payload.project_name,
                 step=payload.step.name,
