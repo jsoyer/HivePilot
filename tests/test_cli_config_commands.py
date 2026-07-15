@@ -429,6 +429,53 @@ class TestRoleWire:
         result = runner.invoke(app, ["role", "wire", "developer", "runner", "not-a-runner"])
         assert result.exit_code == 1
 
+    def test_runner_orphan_api_kind_rejected(self, config_dir: Path) -> None:
+        """Roadmap Phase 26a: `"api"` is advertised nowhere but was
+        previously accepted by `role wire` (validated against
+        KNOWN_RUNNER_KINDS, not the live registry). It must now be
+        rejected, same as any other unregistered kind."""
+        before = (config_dir / "roles.yaml").read_bytes()
+        result = runner.invoke(app, ["role", "wire", "developer", "runner", "api"])
+        assert result.exit_code == 1
+        assert (config_dir / "roles.yaml").read_bytes() == before
+
+    def test_runner_plugin_registered_kind_accepted(self, config_dir: Path) -> None:
+        """Behavior-true regression test: `role wire` must discover plugins
+        itself (via a real `PluginManager()` construction) BEFORE validating
+        `runner` — a kind contributed by a genuine, on-disk local-file
+        plugin (discovered through the real `plugins/` directory scan, not a
+        manual `RunnerRegistry.register()` shortcut) must be accepted,
+        exactly as a fresh `hivepilot role wire` CLI invocation would see
+        it. `config_dir` already points `settings.base_dir` at this
+        tmp_path, so writing a real plugin file under `plugins/` here is
+        genuine on-disk discovery, not a pre-registration shortcut."""
+        from hivepilot.registry import RUNNER_MAP
+
+        plugin_dir = config_dir / "plugins"
+        plugin_dir.mkdir()
+        (plugin_dir / "role_wire_fixture.py").write_text(
+            """
+class RoleWireFixtureRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    return {"runners": {"dummy-plugin-runner": RoleWireFixtureRunner}}
+""",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["role", "wire", "developer", "runner", "dummy-plugin-runner"])
+
+        assert result.exit_code == 0, result.output
+        assert "runner: dummy-plugin-runner" in (config_dir / "roles.yaml").read_text()
+        # Sanity: the plugin was genuinely discovered (not pre-registered by the test).
+        assert "dummy-plugin-runner" in RUNNER_MAP
+
     def test_model_profile_valid_value(self, config_dir: Path) -> None:
         result = runner.invoke(app, ["role", "wire", "developer", "model_profile", "architecture"])
         assert result.exit_code == 0, result.output

@@ -4,7 +4,25 @@ from __future__ import annotations
 
 import pytest
 
-from hivepilot.models import Group, PipelineStage, RunnerDefinition, RunnerKind
+from hivepilot.models import KNOWN_RUNNER_KINDS, Group, PipelineStage, RunnerDefinition, RunnerKind
+
+
+def test_known_runner_kinds_all_have_runner_map_entries() -> None:
+    """Every kind advertised in KNOWN_RUNNER_KINDS must be a real,
+    registered runner — no advertised-but-unregistered orphans (the "api"
+    bug fixed in roadmap Phase 26a). Prevents this class of regression."""
+    from hivepilot.registry import RUNNER_MAP
+
+    for kind in KNOWN_RUNNER_KINDS:
+        assert kind in RUNNER_MAP, (
+            f"{kind!r} is advertised in KNOWN_RUNNER_KINDS but has no RUNNER_MAP entry"
+        )
+
+
+def test_api_is_no_longer_a_known_runner_kind() -> None:
+    """The "api" runner kind was a pure orphan (name only, never backed by a
+    runner class) — it must not be re-advertised as valid."""
+    assert "api" not in KNOWN_RUNNER_KINDS
 
 
 def test_runner_definition_accepts_cursor_kind() -> None:
@@ -33,6 +51,30 @@ def test_runner_definition_accepts_unknown_kind_but_registry_rejects_it() -> Non
 
     with pytest.raises(KeyError):
         RunnerRegistry({}).get_runner("does-not-exist")
+
+
+def test_registry_execute_definition_rejects_orphan_api_kind_with_clear_error() -> None:
+    """Roadmap Phase 26a: a resolved `RunnerDefinition(kind="api")` — the
+    shape produced when a role/task is wired to the historical `"api"`
+    orphan kind and routed through `execute_definition`/`capture_definition`
+    (the real-world path via `resolve_runner()` -> `RunnerDefinition` ->
+    registry) — used to raise a bare `KeyError`. It must now raise a clear,
+    descriptive error naming the unknown kind and listing the currently
+    available kinds."""
+    from unittest.mock import MagicMock
+
+    from hivepilot.registry import RUNNER_MAP, RunnerRegistry
+
+    definition = RunnerDefinition(kind="api")
+
+    with pytest.raises(KeyError) as exc_info:
+        RunnerRegistry({}).execute_definition(definition, MagicMock())
+
+    message = str(exc_info.value)
+    assert "api" in message
+    assert "Unknown runner kind" in message
+    for builtin in sorted(RUNNER_MAP):
+        assert builtin in message
 
 
 # ---------------------------------------------------------------------------

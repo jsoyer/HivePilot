@@ -27,6 +27,22 @@ class RunnerKindCollisionError(RuntimeError):
     pass
 
 
+def resolve_runner_class(kind: str) -> Type[BaseRunner]:
+    """Look up the runner class registered for *kind* in ``RUNNER_MAP``.
+
+    Raises a clear, descriptive ``KeyError`` naming the unknown kind and the
+    currently available registered kinds, instead of the bare ``KeyError``
+    callers would otherwise hit on an unguarded ``RUNNER_MAP[kind]``. This
+    closes the whole class of "advertised-but-unregistered kind" crash (e.g.
+    the historical ``"api"`` orphan — see roadmap Phase 26a) for every
+    caller that resolves a kind through this helper.
+    """
+    runner_cls = RUNNER_MAP.get(kind)
+    if runner_cls is None:
+        raise KeyError(f"Unknown runner kind {kind!r}; available: {sorted(RUNNER_MAP)}")
+    return runner_cls
+
+
 class RunnerRegistry:
     def __init__(self, runner_defs: dict[str, RunnerDefinition]) -> None:
         self.runner_defs = runner_defs
@@ -46,9 +62,7 @@ class RunnerRegistry:
 
     def get_runner(self, runner_name: str) -> BaseRunner:
         definition = self._definition_for(runner_name)
-        runner_cls = RUNNER_MAP.get(definition.kind)
-        if not runner_cls:
-            raise KeyError(f"No runner implementation for kind '{definition.kind}'")
+        runner_cls = resolve_runner_class(definition.kind)
         return runner_cls(definition, settings)
 
     def _definition_for(self, name: str) -> RunnerDefinition:
@@ -78,9 +92,7 @@ class RunnerRegistry:
                 if not settings.worker_fallback_local:
                     raise
                 definition = definition.model_copy(update={"host": None})  # W3: run locally
-        runner_cls = RUNNER_MAP.get(definition.kind)
-        if not runner_cls:
-            raise KeyError(f"No runner implementation for kind '{definition.kind}'")
+        runner_cls = resolve_runner_class(definition.kind)
         runner_cls(definition, settings).run(payload)
 
     def capture_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> str:
@@ -93,9 +105,7 @@ class RunnerRegistry:
                 if not settings.worker_fallback_local:
                     raise
                 definition = definition.model_copy(update={"host": None})  # W3: run locally
-        runner_cls = RUNNER_MAP.get(definition.kind)
-        if not runner_cls:
-            raise KeyError(f"No runner implementation for kind '{definition.kind}'")
+        runner_cls = resolve_runner_class(definition.kind)
         runner = runner_cls(definition, settings)
         capture = getattr(runner, "capture", None)
         if capture is None:

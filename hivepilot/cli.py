@@ -1183,7 +1183,6 @@ def role_wire(
     registries (prompts/agents/, RunnerKind, model_profiles.yaml). Any
     coercion, enum, or reference failure exits 1 and writes nothing.
     """
-    from hivepilot.models import KNOWN_RUNNER_KINDS
     from hivepilot.registry import RUNNER_MAP
     from hivepilot.roles import Role, load_roles
     from hivepilot.services.config_writer import apply_and_validate, resolve_reference
@@ -1225,7 +1224,22 @@ def role_wire(
         raise typer.Exit(1)
 
     if field == "runner":
-        valid_runners = sorted(frozenset(RUNNER_MAP) | frozenset(KNOWN_RUNNER_KINDS))
+        # Validate against the ACTUAL live registry (RUNNER_MAP), not the
+        # static KNOWN_RUNNER_KINDS tuple — so plugin-contributed runner
+        # kinds are accepted and advertised-but-unregistered orphan names
+        # (e.g. the historical "api" kind; see roadmap Phase 26a) are
+        # rejected consistently with resolve-time behavior. RUNNER_MAP only
+        # holds the 11 builtins until a PluginManager has run (it's what
+        # registers plugin runner kinds into RUNNER_MAP) — construct one
+        # first so a genuinely plugin-contributed kind is actually seen
+        # here, not just by callers that happen to build an Orchestrator
+        # first. PluginManager itself is fail-isolated (a broken plugin is
+        # logged and skipped, never raised) and honors
+        # settings.plugins_enabled internally.
+        from hivepilot.plugins import PluginManager
+
+        PluginManager()
+        valid_runners = sorted(RUNNER_MAP)
         if coerced not in valid_runners:
             typer.echo(f"Error: unknown runner kind {value!r}.", err=True)
             typer.echo(f"Valid runner kinds: {', '.join(valid_runners)}", err=True)
@@ -1730,7 +1744,7 @@ def init_project(
 
 def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu") -> None:
     from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
-    from hivepilot.registry import RUNNER_MAP
+    from hivepilot.registry import resolve_runner_class
     from hivepilot.runners.base import RunnerPayload
 
     projects = load_projects()
@@ -1748,7 +1762,7 @@ def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu"
         metadata={},
     )
 
-    runner_cls = RUNNER_MAP[kind]
+    runner_cls = resolve_runner_class(kind)
     runner = runner_cls(definition=definition, settings=settings)
     runner.run(payload)
 
