@@ -1228,7 +1228,17 @@ def role_wire(
         # static KNOWN_RUNNER_KINDS tuple — so plugin-contributed runner
         # kinds are accepted and advertised-but-unregistered orphan names
         # (e.g. the historical "api" kind; see roadmap Phase 26a) are
-        # rejected consistently with resolve-time behavior.
+        # rejected consistently with resolve-time behavior. RUNNER_MAP only
+        # holds the 11 builtins until a PluginManager has run (it's what
+        # registers plugin runner kinds into RUNNER_MAP) — construct one
+        # first so a genuinely plugin-contributed kind is actually seen
+        # here, not just by callers that happen to build an Orchestrator
+        # first. PluginManager itself is fail-isolated (a broken plugin is
+        # logged and skipped, never raised) and honors
+        # settings.plugins_enabled internally.
+        from hivepilot.plugins import PluginManager
+
+        PluginManager()
         valid_runners = sorted(RUNNER_MAP)
         if coerced not in valid_runners:
             typer.echo(f"Error: unknown runner kind {value!r}.", err=True)

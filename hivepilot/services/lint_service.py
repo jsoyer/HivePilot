@@ -16,6 +16,20 @@ class LintError(RuntimeError):
 
 
 def lint_configuration() -> List[str]:
+    # RUNNER_MAP only holds the 11 builtins until a PluginManager has run
+    # (it's what registers plugin runner kinds into RUNNER_MAP) — construct
+    # one here, once per lint invocation, before `_lint_task` validates any
+    # step's runner kind, so genuinely plugin-contributed kinds are seen and
+    # not flagged as unknown. PluginManager is fail-isolated (a broken
+    # plugin is logged and skipped, never raised) and honors
+    # settings.plugins_enabled internally. Constructed once (not per-task):
+    # local-file plugins are re-exec'd on every PluginManager() construction,
+    # producing a fresh class object each time, which would collide with
+    # itself in RUNNER_MAP if called more than once per process.
+    from hivepilot.plugins import PluginManager
+
+    PluginManager()
+
     projects = load_projects()
     tasks = load_tasks()
     pipelines = load_pipelines()

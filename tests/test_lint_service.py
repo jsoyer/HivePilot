@@ -11,9 +11,13 @@ kind, including plugin-contributed ones.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from hivepilot.models import TaskConfig, TaskStep
-from hivepilot.registry import RUNNER_MAP, RunnerRegistry
-from hivepilot.services.lint_service import _lint_task
+from hivepilot.registry import RUNNER_MAP
+from hivepilot.services.lint_service import _lint_task, lint_configuration
 
 
 def test_lint_task_flags_unregistered_api_runner() -> None:
@@ -37,23 +41,58 @@ def test_lint_task_accepts_every_registered_runner_kind() -> None:
         assert _lint_task("t", task) == [], f"builtin runner kind {kind!r} should lint clean"
 
 
-def test_lint_task_accepts_plugin_registered_kind() -> None:
-    """A kind registered at runtime (e.g. by a plugin) is treated as valid,
-    since lint now checks the live registry instead of a static set."""
+def test_lint_configuration_accepts_real_on_disk_plugin_runner_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Behavior-true regression test: `lint_configuration()` must discover
+    plugins itself (via a real `PluginManager()` construction) BEFORE
+    validating runner kinds — a kind contributed by a genuine, on-disk
+    local-file plugin (discovered through the real `plugins/` directory
+    scan, not a manual `RunnerRegistry.register()` shortcut) must lint
+    clean, exactly as a fresh `hivepilot lint` CLI invocation would see it."""
+    from hivepilot.config import settings
 
-    class _DummyRunner:
-        def __init__(self, definition, settings) -> None:
-            pass
+    xdg_empty = tmp_path / "xdg-empty"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_empty))
+    monkeypatch.setattr(settings, "base_dir", tmp_path, raising=False)
+    monkeypatch.setattr(settings, "config_repo", None, raising=False)
 
-        def run(self, payload) -> None:
-            raise NotImplementedError
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "lint_fixture.py").write_text(
+        """
+class LintFixtureRunner:
+    def __init__(self, definition, settings):
+        pass
 
-    RunnerRegistry.register("dummy-lint-kind", _DummyRunner)
-    try:
-        task = TaskConfig(description="d", steps=[TaskStep(name="s1", runner="dummy-lint-kind")])
-        assert _lint_task("t", task) == []
-    finally:
-        RUNNER_MAP.pop("dummy-lint-kind", None)
+    def run(self, payload):
+        return None
+
+
+def register():
+    return {"runners": {"lint-fixture-kind": LintFixtureRunner}}
+""",
+        encoding="utf-8",
+    )
+
+    (tmp_path / "projects.yaml").write_text("projects: {}\n", encoding="utf-8")
+    (tmp_path / "pipelines.yaml").write_text("pipelines: {}\n", encoding="utf-8")
+    (tmp_path / "tasks.yaml").write_text(
+        "runners: {}\n"
+        "tasks:\n"
+        "  plugin-task:\n"
+        "    description: uses a plugin runner\n"
+        "    steps:\n"
+        "      - name: s1\n"
+        "        runner: lint-fixture-kind\n",
+        encoding="utf-8",
+    )
+
+    errors = lint_configuration()
+
+    assert errors == [], f"plugin-contributed runner kind should lint clean, got: {errors}"
+    # Sanity: the plugin was genuinely discovered (not pre-registered by the test).
+    assert "lint-fixture-kind" in RUNNER_MAP
 
 
 def test_lint_task_still_allows_runner_ref_without_direct_kind_match() -> None:
