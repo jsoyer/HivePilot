@@ -484,6 +484,12 @@ Configure via `HIVEPILOT_INFISICAL_*` — self-host is supported by setting
 `HIVEPILOT_INFISICAL_URL` to your instance's base URL (leave it unset to use
 the hosted Infisical default):
 
+> **Caveat:** the SDK surface this plugin targets (`InfisicalSDKClient`,
+> `client.secrets.get_secret_by_name(...)`, `.secretValue`) is an assumption,
+> not verified against a pinned SDK version (`infisicalsdk` is never
+> installed by this plugin) — confirm it matches your installed
+> `infisicalsdk` version before relying on this provider in production.
+
 ```bash
 # .env / environment
 HIVEPILOT_INFISICAL_URL=https://infisical.example.com   # omit for hosted app.infisical.com

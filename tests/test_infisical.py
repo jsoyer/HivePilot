@@ -231,7 +231,10 @@ class TestResolveFailClosed:
     def test_client_error_raises_without_leaking_value(self, infisical_module: ModuleType) -> None:
         """If the SDK itself raises — and even if the exception message
         embeds the secret value — the re-raised error must NOT propagate that
-        value (name + provider only)."""
+        value (name + provider only). Also proves the leaked exception is
+        fully severed (`from None`): a naive caller walking
+        `__cause__`/`__context__` cannot resurface the original, value-bearing
+        exception either."""
         backend = infisical_module.InfisicalBackend()
         client = MagicMock()
         client.secrets.get_secret_by_name.side_effect = RuntimeError(
@@ -247,6 +250,11 @@ class TestResolveFailClosed:
         assert "DATABASE_URL" in msg
         assert "infisical" in msg
         assert _FAKE_VALUE not in msg
+        # `raise ... from None` sets __cause__ to None and __suppress_context__
+        # to True — a caller inspecting the exception chain (not just the
+        # message string) can't resurface the original value-bearing error.
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
 
     def test_no_value_returned_raises_without_leaking(self, infisical_module: ModuleType) -> None:
         backend = infisical_module.InfisicalBackend()
@@ -262,6 +270,48 @@ class TestResolveFailClosed:
         msg = str(excinfo.value)
         assert "DATABASE_URL" in msg
         assert "infisical" in msg
+
+    def test_empty_string_value_raises_fail_closed_not_returned(
+        self, infisical_module: ModuleType
+    ) -> None:
+        """An empty `.secretValue` is a `str` (passes an `is None` check) but
+        is never a legitimate secret — must raise (fail-closed), mirroring
+        `EnvSecretsBackend`'s `if not value: raise`, NOT be silently returned
+        as a resolved empty secret."""
+        backend = infisical_module.InfisicalBackend()
+        client_cls = MagicMock(return_value=_mock_client_returning(""))
+
+        with patch.object(infisical_module, "InfisicalSDKClient", client_cls):
+            with pytest.raises(RuntimeError) as excinfo:
+                backend.resolve(_ref(key="DATABASE_URL"), settings)
+
+        msg = str(excinfo.value)
+        assert "DATABASE_URL" in msg
+        assert "infisical" in msg
+
+    def test_client_construction_error_raises_without_leaking_token_or_value(
+        self, infisical_module: ModuleType
+    ) -> None:
+        """Modern SDK clients often authenticate at construction time. If
+        constructing the client itself raises with a message embedding the
+        token AND a value, the re-raised error must contain NEITHER — proving
+        client construction sits INSIDE the same redaction boundary as the
+        fetch call, not before it."""
+        backend = infisical_module.InfisicalBackend()
+        client_cls = MagicMock(
+            side_effect=RuntimeError(f"auth failed for token=tok-123 value={_FAKE_VALUE}")
+        )
+
+        with patch.object(infisical_module, "InfisicalSDKClient", client_cls):
+            with pytest.raises(RuntimeError) as excinfo:
+                backend.resolve(_ref(key="DATABASE_URL"), settings)
+
+        msg = str(excinfo.value)
+        assert "DATABASE_URL" in msg
+        assert "infisical" in msg
+        assert "tok-123" not in msg
+        assert _FAKE_VALUE not in msg
+        assert excinfo.value.__cause__ is None
 
 
 class TestPluginManagerRegistersInfisical:

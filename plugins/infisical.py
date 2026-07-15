@@ -150,9 +150,9 @@ class InfisicalBackend:
                 f"{', '.join(missing)} (or the matching ref.spec override)"
             )
 
-        client = self._build_client(settings, token)
         return self._fetch(
-            client,
+            settings,
+            token=token,
             key=key,
             workspace_id=workspace_id,
             environment=environment,
@@ -168,14 +168,21 @@ class InfisicalBackend:
 
     def _fetch(
         self,
-        client: Any,
+        settings: Settings,
         *,
+        token: str,
         key: str,
         workspace_id: str,
         environment: str,
         secret_path: str,
     ) -> str:
+        # Client construction is INSIDE this try too: modern SDK clients often
+        # authenticate at construction time, and a construction failure can
+        # embed the token (or, in principle, a value) in its message -- the
+        # exact leak this redact-and-reraise boundary exists to prevent. Never
+        # let `_build_client` run outside this guard.
         try:
+            client = self._build_client(settings, token)
             secret = client.secrets.get_secret_by_name(
                 secret_name=key,
                 project_id=workspace_id,
@@ -184,8 +191,10 @@ class InfisicalBackend:
             )
         except Exception as exc:
             # Re-raise with the reference identity + provider ONLY. `from None`
-            # + no str(exc) guarantees neither the fetched value nor a raw
-            # upstream message (which could echo the value) leaks.
+            # + no str(exc) guarantees neither the token, the fetched value,
+            # nor a raw upstream message (which could echo either) leaks --
+            # and severs `__context__` so a caller logging `exc.__cause__` /
+            # walking the exception chain can't resurface the original error.
             logger.warning(
                 "plugin.infisical.fetch_failed",
                 provider=_PROVIDER,
@@ -197,7 +206,10 @@ class InfisicalBackend:
             ) from None
 
         value = _extract_secret_value(secret)
-        if value is None:
+        if not value:
+            # Fail-closed on an empty/whitespace value too (mirrors
+            # EnvSecretsBackend's `if not value: raise`) -- an empty string is
+            # a truthy `is not None` check but is never a legitimate secret.
             raise RuntimeError(f"{_PROVIDER} returned no usable value for secret {key!r}")
         return value
 
