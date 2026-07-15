@@ -199,7 +199,8 @@ class Settings(BaseSettings):
     mem0_enabled: bool = False
     # Hosted mem0 API key (https://mem0.ai). When set, plugins/mem0.py uses
     # `mem0.MemoryClient(api_key=...)`. WARNING: hosted mode sends
-    # extra_prompt/prior_context (incl. any upstream agent output, which may
+    # extra_prompt, prior_context, AND the step's output (the agent's actual
+    # generated result — more likely than extra_prompt/prior_context to
     # contain secrets) off-machine to mem0.ai — do NOT use it for sensitive
     # projects; leave unset to keep everything local via `mem0.Memory()`.
     # env: HIVEPILOT_MEM0_API_KEY

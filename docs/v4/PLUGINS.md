@@ -339,24 +339,33 @@ then mem0 injects fresh, uncompressed memories afterward. Operators running
 both plugins together and wanting recall-before-compress should rename
 files to control `sorted()` order (e.g. `a_mem0.py` / `b_headroom.py`).
 
-**Known limitation — `store` cannot see step output.** `after_step` is
-called with the exact same `payload` object passed to `before_step`; the
-runner's return value (the step's actual output) is appended to a local
-`outputs` list inside `Orchestrator._execute_task` and is never attached to
-`payload` or threaded into the `after_step` call. `on_pipeline_end` is even
-sparser (`run_id`/`pipeline`/`status` only — no per-step data at all). So
-`store()` cannot persist what the agent actually produced; it persists
-task/step identity plus the step's *input* context (`extra_prompt` /
-`prior_context`) instead — a directional placeholder, not the real outcome.
-Threading the runner's captured text into `after_step(output=...)` kwargs
-is a tracked follow-up, not implemented here.
+**`store` persists the step's real output.** `Orchestrator._execute_task`
+threads the runner's captured return value into the `after_step` call —
+`self.plugins.run_hook("after_step", payload=payload, dry_run=dry_run,
+role=task.role, output=outputs[-1] if outputs else None)` — the same value
+just appended to its local `outputs` list for that step. `store()` reads
+`kwargs.get("output")` and persists it (labeled `output: ...`) **in
+addition to** task/step identity and the step's *input* context
+(`extra_prompt` / `prior_context`): `extra_prompt`/`prior_context` capture
+what the task was asked to do, `output` captures what actually happened —
+both are kept as complementary, not mutually exclusive. Note this applies
+to the `before_step`/`after_step` fire site inside the per-step loop
+specifically; the stage-cache-hit and non-native-engine (`langgraph`/
+`crewai`) paths in `Orchestrator._execute_task` return early and don't run
+that loop, so `recall`/`store` don't fire for those — a pre-existing gap,
+unrelated to this change.
 
-**Recall/store keying.** `RunnerPayload` carries `project_name` and
-`task_name` but not the task's `role` (`role` lives on `TaskConfig`, one
-level above `RunnerPayload` in `Orchestrator._execute_task`, and is never
-threaded onto the payload) — recall and store are keyed by
-`f"{project_name}:{task_name}"` (mem0's `user_id`) rather than
-project/task/role.
+**Recall/store keying.** `RunnerPayload` still doesn't carry the task's
+`role` (`role` lives on `TaskConfig`, one level above `RunnerPayload` in
+`Orchestrator._execute_task`) — rather than widen that shared dataclass,
+`role` is threaded straight into the hook call instead: `run_hook(
+"before_step"/"after_step", ..., role=task.role)`. `recall`/`store` both
+read `kwargs.get("role")` and key memories by
+`f"{project_name}:{task_name}:{role}"` (mem0's `user_id`) when `role` is
+supplied, falling back to `f"{project_name}:{task_name}"` when it isn't (a
+non-role task, or a caller that doesn't pass `role`) — so both functions
+stay keyed the same way and previously-stored memories for non-role tasks
+keep matching.
 
 **Avoiding a recall/store feedback loop.** Because `recall` mutates
 `extra_prompt` in place (appending a "Relevant memories:" block), `store`
@@ -388,12 +397,16 @@ mirrors `headroom_enabled`'s opt-in pattern. Two backends are supported:
   `mem0.MemoryClient(api_key=...)`.
 
 > ⚠️ **Data egress (hosted mode).** In hosted mode, `store` sends
-> `extra_prompt` and `prior_context` — including whatever content upstream
-> agent steps produced (file contents, config dumps, or secrets an agent
-> echoed) — **off-machine to mem0.ai's servers**, verbatim and un-redacted.
-> Do NOT enable hosted mode on projects where step output may contain
-> secrets or confidential data — use the self-host `Memory()` backend
-> (leave `mem0_api_key` unset) instead. Self-host keeps everything local.
+> `extra_prompt`, `prior_context`, **and the step's `output`** — including
+> whatever content upstream agent steps produced or the agent itself just
+> generated (file contents, config dumps, or secrets an agent echoed) —
+> **off-machine to mem0.ai's servers**, verbatim and un-redacted. `output`
+> is the agent's actual generated result for the step and is *more* likely
+> than `extra_prompt`/`prior_context` to contain secrets or sensitive
+> content. Do NOT enable hosted mode on projects where step output may
+> contain secrets or confidential data — use the self-host `Memory()`
+> backend (leave `mem0_api_key` unset) instead. Self-host keeps everything
+> local.
 
 mem0's exact constructor/`search()`/`add()` signatures are not pinned by
 this optional integration (`mem0ai` is never installed by this plugin) —
