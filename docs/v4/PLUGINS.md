@@ -342,6 +342,14 @@ mirrors `headroom_enabled`'s opt-in pattern. Two backends are supported:
 - **Hosted (mem0.ai):** set `settings.mem0_api_key` — uses
   `mem0.MemoryClient(api_key=...)`.
 
+> ⚠️ **Data egress (hosted mode).** In hosted mode, `store` sends
+> `extra_prompt` and `prior_context` — including whatever content upstream
+> agent steps produced (file contents, config dumps, or secrets an agent
+> echoed) — **off-machine to mem0.ai's servers**, verbatim and un-redacted.
+> Do NOT enable hosted mode on projects where step output may contain
+> secrets or confidential data — use the self-host `Memory()` backend
+> (leave `mem0_api_key` unset) instead. Self-host keeps everything local.
+
 mem0's exact constructor/`search()`/`add()` signatures are not pinned by
 this optional integration (`mem0ai` is never installed by this plugin) —
 if the real API differs, the outer `try/except` in every function degrades

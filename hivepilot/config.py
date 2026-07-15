@@ -152,8 +152,11 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_MEM0_ENABLED
     mem0_enabled: bool = False
     # Hosted mem0 API key (https://mem0.ai). When set, plugins/mem0.py uses
-    # `mem0.MemoryClient(api_key=...)`. Leave unset to use the self-host
-    # `mem0.Memory()` path instead. env: HIVEPILOT_MEM0_API_KEY
+    # `mem0.MemoryClient(api_key=...)`. WARNING: hosted mode sends
+    # extra_prompt/prior_context (incl. any upstream agent output, which may
+    # contain secrets) off-machine to mem0.ai — do NOT use it for sensitive
+    # projects; leave unset to keep everything local via `mem0.Memory()`.
+    # env: HIVEPILOT_MEM0_API_KEY
     mem0_api_key: str | None = None
     # Optional self-host mem0 config dict, passed to `Memory.from_config()`
     # (vector store / embedder / llm overrides). Only used when mem0_api_key
