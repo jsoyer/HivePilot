@@ -14,7 +14,10 @@ Flow when `herdr` is on PATH (`run()`/`capture()`):
        — hierarchy ids are opaque per the herdr SKILL.md).
     2. `herdr pane run <pane-id> <wrapped-command>` — a single argv element,
        no `shell=True` (same injection posture as `ShellRunner`'s
-       `["bash", "-lc", command_str]`).
+       `["bash", "-lc", command_str]`). The wrapped command always `cd`s
+       into `payload.project.path` FIRST, matching the `cwd=` the raw
+       fallback path passes to `subprocess.run` — a step must run in the
+       same directory whether or not `herdr` happens to be on PATH.
     3. `herdr wait agent-status <pane-id> --status idle --timeout <ms>`.
     4. `herdr pane read <pane-id> --source recent-unwrapped --lines <n>` —
        the pane's captured output IS the step's result.
@@ -52,7 +55,11 @@ the file *path* (never a value) ever appears on any argv. The file is
 removed immediately after the pane finishes the step (in a `finally`), and
 is scoped to ONLY the intentional overlay (`gather_overrides`, NOT the full
 `os.environ`) so nothing beyond what the step actually needs is written to
-disk. This does not defeat the Phase 19 masking layer
+disk. Every KEY (not just each value) is validated against `_ENV_KEY_RE`
+before anything is written — keys come from operator config, not untrusted
+input, but an unvalidated key could still inject directly into the
+`export <key>=...` line regardless of how well the value is quoted. This
+does not defeat the Phase 19 masking layer
 (`config_provenance.redact_text`): every resolved secret value is already
 registered for masking by the orchestrator before this runner ever sees it
 (`orchestrator._resolve_secrets` -> `register_secret_value`), and the pane's
@@ -89,6 +96,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -105,6 +113,7 @@ from hivepilot.utils.logging import get_logger
 logger = get_logger(__name__)
 
 _PANE_ID_KEYS = ("id", "pane_id", "paneId")
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class HerdrRunner:
@@ -166,7 +175,10 @@ class HerdrRunner:
         pane_id = self._split_pane(payload)
         env_file = self._write_env_file(payload)
         try:
-            wrapped_cmd = f"set -a; source {shlex.quote(env_file)}; set +a; {command_str}"
+            project_path = shlex.quote(str(payload.project.path))
+            wrapped_cmd = (
+                f"cd {project_path}; set -a; source {shlex.quote(env_file)}; set +a; {command_str}"
+            )
             self._pane_run(payload, pane_id, wrapped_cmd)
             self._wait_idle(payload, pane_id)
             output = self._pane_read(payload, pane_id)
@@ -292,8 +304,25 @@ class HerdrRunner:
         """Write the step's env/secrets overlay to a private (0600) temp file
         as `export KEY=value` lines. Only the *path* to this file is ever
         embedded in a command sent to `herdr pane run` — never a value —
-        see the "Env/secrets -> pane" note in the module docstring."""
+        see the "Env/secrets -> pane" note in the module docstring.
+
+        Keys come from operator config (project.env / definition.env /
+        payload.secrets), not untrusted input, but are validated against
+        `_ENV_KEY_RE` anyway before anything is written: an unvalidated key
+        (e.g. `X;evil`) would inject directly into the `export <key>=...`
+        line regardless of how well the VALUE is `shlex.quote`d. Fail
+        closed — refuse to write ANY of the overlay rather than silently
+        drop the offending var and risk a step running with a missing
+        secret it doesn't notice."""
         overlay = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
+        for key in overlay:
+            if not _ENV_KEY_RE.match(key):
+                raise RuntimeError(
+                    f"herdr runner step '{payload.step.name}': refusing to write "
+                    f"env var with invalid name {key!r} to the pane env file "
+                    f"(must match {_ENV_KEY_RE.pattern!r}) — fail-closed against "
+                    f"injection via the sourced env file"
+                )
         fd, path = tempfile.mkstemp(prefix="hivepilot-herdr-env-", suffix=".sh")
         os.chmod(path, 0o600)
         try:

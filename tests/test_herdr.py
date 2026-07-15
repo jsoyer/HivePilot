@@ -22,8 +22,17 @@ Covers:
     (fail-closed), never a raw `json.JSONDecodeError`/`KeyError` leak.
 (f) Env/secrets reach the pane command via a private (0600) temp env file
     that the pane `source`s — the secret VALUE never appears on any
-    `subprocess.run` argv (only the env file *path* does).
-(g) Loading via the real `PluginManager` local-file discovery mechanism
+    `subprocess.run` argv (only the env file *path* does), and the file's
+    permissions are actually 0600 while it exists.
+(g) The wrapped pane command `cd`s into `payload.project.path` FIRST, so
+    pane mode matches the raw-fallback path's `cwd=` behavior.
+(h) A value containing shell metacharacters (quotes, spaces, newline,
+    `$()`, backticks) round-trips EXACTLY through a real `source` of the
+    generated env file, with no command execution / injection.
+(i) An env/secret KEY that doesn't match `^[A-Za-z_][A-Za-z0-9_]*$` is
+    rejected with a clear, fail-closed error instead of being written
+    verbatim into the sourced file.
+(j) Loading via the real `PluginManager` local-file discovery mechanism
     registers `herdr` into `hivepilot.registry.RUNNER_MAP` (mirrors
     `tests/test_rtk.py`; relies on the conftest autouse `RUNNER_MAP` reset).
 """
@@ -32,7 +41,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shlex
+import subprocess
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
@@ -150,6 +162,35 @@ class TestCaptureDrivesFullCliSequence:
 
         assert read_argv[:3] == ["herdr", "pane", "read"]
         assert read_argv[3] == pane_id
+
+    def test_wrapped_command_cds_into_project_path(
+        self, herdr_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """Pane mode must match the fallback path (which passes
+        `cwd=str(payload.project.path)`) — the wrapped command sent to
+        `herdr pane run` must `cd` into the component's project path FIRST,
+        so relative-path/git steps behave identically whether or not herdr
+        is installed."""
+        pane_id = "w1:p4"
+        captured: dict[str, str] = {}
+
+        def fake_run(argv: list[str], **kwargs: object) -> MagicMock:
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return _split_result(pane_id)
+            if argv[:3] == ["herdr", "pane", "run"]:
+                captured["wrapped_cmd"] = argv[-1]
+                return _ok_result()
+            return _ok_result()
+
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        with (
+            patch.object(herdr_module.shutil, "which", return_value="/usr/local/bin/herdr"),
+            patch.object(herdr_module.subprocess, "run", side_effect=fake_run),
+        ):
+            runner.capture(_payload(tmp_path))
+
+        expected_prefix = f"cd {shlex.quote(str(tmp_path))}; "
+        assert captured["wrapped_cmd"].startswith(expected_prefix)
 
     def test_timeout_and_read_lines_come_from_config(
         self, herdr_module: ModuleType, tmp_path: Path
@@ -324,6 +365,10 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
                 env_file_path = match.group(1).strip("'\"")
                 env_file_snapshot["content"] = Path(env_file_path).read_text()
                 env_file_snapshot["path"] = env_file_path
+                # Assert 0600 perms WHILE the file still exists — asserting
+                # only after cleanup would prove nothing about the
+                # permissions it actually had while live.
+                env_file_snapshot["mode"] = oct(os.stat(env_file_path).st_mode & 0o777)
                 return _ok_result()
             if argv[:3] == ["herdr", "wait", "agent-status"]:
                 return _ok_result()
@@ -343,12 +388,14 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
         assert "MY_SECRET" in env_file_snapshot["content"]
         assert secret_value in env_file_snapshot["content"]
 
+        # ...must be private (owner read/write only) while it exists...
+        assert env_file_snapshot["mode"] == "0o600"
+
         # ...and must NEVER appear on any subprocess.run argv (ps-visible).
         flattened_argv = [token for call in calls for token in call]
         assert not any(secret_value in token for token in flattened_argv)
 
-        # The env file itself must be private (owner read/write only).
-        # (File is removed by the runner after use — assert cleanup happened.)
+        # The env file itself is removed by the runner after use.
         assert not Path(env_file_snapshot["path"]).exists()
 
     def test_project_env_also_reaches_pane_via_env_file(
@@ -376,6 +423,97 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
             runner.capture(_payload(tmp_path, project_env={"PROJECT_FLAG": "on"}))
 
         assert "PROJECT_FLAG" in env_file_snapshot["content"]
+
+
+class TestEnvFileValueEscaping:
+    """Highest-risk spot per code review: `_write_env_file` shell-quotes
+    every value via `shlex.quote`. These tests don't just check the file's
+    *text* — they actually `source` the generated file in a real, unmocked
+    `bash` subprocess, proving no shell injection is possible through a
+    crafted value."""
+
+    def test_nasty_value_round_trips_through_real_source_without_injection(
+        self, herdr_module: ModuleType, tmp_path: Path
+    ) -> None:
+        # Single quote, space, embedded newline, command substitution,
+        # and backticks — a value engineered to break naive quoting.
+        nasty_value = "a'b c\n$(touch PWNED)`touch PWNED2`"
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        payload = _payload(tmp_path, secrets={"NASTY_VAR": nasty_value})
+
+        env_file_path = runner._write_env_file(payload)
+        try:
+            result = subprocess.run(
+                ["bash", "-c", f'source {shlex.quote(env_file_path)}; printf %s "$NASTY_VAR"'],
+                cwd=str(tmp_path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            # The value must round-trip EXACTLY — no interpretation lost or
+            # (worse) added.
+            assert result.stdout == nasty_value
+            # And no command embedded in the value may have actually run.
+            assert not (tmp_path / "PWNED").exists()
+            assert not (tmp_path / "PWNED2").exists()
+            assert not (Path.cwd() / "PWNED").exists()
+            assert not (Path.cwd() / "PWNED2").exists()
+        finally:
+            runner._cleanup_env_file(env_file_path)
+
+    def test_value_with_dollar_and_backslash_round_trips(
+        self, herdr_module: ModuleType, tmp_path: Path
+    ) -> None:
+        nasty_value = "price: $5 \\ literal-backslash \\n not-a-newline"
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        payload = _payload(tmp_path, project_env={"DOLLAR_VAR": nasty_value})
+
+        env_file_path = runner._write_env_file(payload)
+        try:
+            result = subprocess.run(
+                ["bash", "-c", f'source {shlex.quote(env_file_path)}; printf %s "$DOLLAR_VAR"'],
+                cwd=str(tmp_path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            assert result.stdout == nasty_value
+        finally:
+            runner._cleanup_env_file(env_file_path)
+
+
+class TestEnvKeyValidation:
+    """Keys come from operator config (project.env / definition.env /
+    payload.secrets) — lower risk than values, but an unvalidated key like
+    `X;evil` would inject directly into the sourced `export <key>=...`
+    line regardless of value-quoting."""
+
+    def test_invalid_env_key_raises_clear_fail_closed_error(
+        self, herdr_module: ModuleType, tmp_path: Path
+    ) -> None:
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        payload = _payload(tmp_path, secrets={"X;evil": "value"})
+
+        with pytest.raises(RuntimeError, match="X;evil"):
+            runner._write_env_file(payload)
+
+    def test_key_with_space_is_rejected(self, herdr_module: ModuleType, tmp_path: Path) -> None:
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        payload = _payload(tmp_path, project_env={"BAD KEY": "value"})
+
+        with pytest.raises(RuntimeError):
+            runner._write_env_file(payload)
+
+    def test_valid_env_keys_are_written(self, herdr_module: ModuleType, tmp_path: Path) -> None:
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        payload = _payload(tmp_path, secrets={"_VALID_KEY_1": "value"})
+
+        path = runner._write_env_file(payload)
+        try:
+            content = Path(path).read_text()
+            assert "_VALID_KEY_1" in content
+        finally:
+            runner._cleanup_env_file(path)
 
 
 class TestPluginManagerDiscoversHerdr:
