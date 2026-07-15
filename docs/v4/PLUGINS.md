@@ -522,6 +522,79 @@ env:
   DATABASE_URL: ${secret:DATABASE_URL}
 ```
 
+### Example: the `onepassword` secrets provider (`plugins/onepassword.py`)
+
+A first-party **secrets provider** plugin (a structural sibling of the
+`infisical` one above). It fetches a named value from
+[1Password](https://1password.com) via a **1Password Connect** endpoint
+(self-hostable) so pipeline configs can reference stored values instead of
+inlining them. `register()` returns
+`{"secrets": {"onepassword": OnePasswordBackend()}}`, which is loaded into
+`SECRETS_MAP` under the fail-closed trust model (a name colliding with a
+built-in — or another plugin's — backend aborts the load).
+
+The 1Password Connect SDK (`pip install onepasswordconnectsdk`) is **not** a
+hivepilot dependency — it's imported lazily. If the SDK isn't installed,
+required config is missing, the client errors, or no usable value is found,
+`resolve()` raises a clear error naming **only** the reference identity
+(`op://vault/item/field`) + provider (`onepassword`) — never the token or the
+fetched value — so a stage with `on_error: closed` aborts rather than
+proceeding with a half-resolved config.
+
+**Credential modes.** Both authenticate against a Connect API base URL
+(`HIVEPILOT_OP_CONNECT_HOST`, self-hostable):
+
+- **Connect** — `HIVEPILOT_OP_CONNECT_HOST` + `HIVEPILOT_OP_CONNECT_TOKEN`.
+- **service-account** — `HIVEPILOT_OP_SERVICE_ACCOUNT_TOKEN`, presented to the
+  same Connect endpoint (used only when no Connect token is set).
+
+> **Caveat:** the SDK surface this plugin targets
+> (`onepasswordconnectsdk.client.new_client(url, token)`,
+> `client.get_item(item, vault)`, an item's `.fields[*].label` / `.id` /
+> `.value`) is verified against `onepasswordconnectsdk` 2.1.0 — confirm it
+> matches your installed version before relying on this provider in production.
+> A hosted service account that does **not** front a Connect server would
+> instead need the separate `onepassword` SDK (out of scope here).
+
+```bash
+# .env / environment
+HIVEPILOT_OP_CONNECT_HOST=https://op-connect.example.com   # Connect API base URL
+HIVEPILOT_OP_CONNECT_TOKEN=eyJhbGci...                      # Connect token
+# ...or, instead of the Connect token, a service-account token:
+HIVEPILOT_OP_SERVICE_ACCOUNT_TOKEN=ops_eyJ...              # service-account token
+```
+
+Reference a stored value from a config via `${secret:NAME}`, where `NAME`'s
+spec declares `source: onepassword`. Address the value either with a full
+`op://vault/item/field` reference **or** with discrete `vault` / `item` /
+`field` keys (all three required):
+
+> **Only 3-segment references are supported.** A section-qualified reference
+> (`op://vault/item/section/field`) is **rejected** (fail-closed), not
+> collapsed to `op://vault/item/field` by dropping the section — silently
+> dropping the section could match the wrong field if two sections share a
+> field label. If an item legitimately has two fields with the same label,
+> the **first match wins**.
+
+```yaml
+# secrets.yaml (or the `secrets:` block of a project config)
+secrets:
+  DATABASE_URL:
+    source: onepassword
+    ref: op://Prod/database/connection-string   # full op:// reference
+  STRIPE_KEY:
+    source: onepassword
+    vault: Prod                                  # ...or discrete vault/item/field
+    item: stripe
+    field: secret-key
+```
+
+```yaml
+# ... elsewhere in a config, the resolved value is referenced by name:
+env:
+  DATABASE_URL: ${secret:DATABASE_URL}
+```
+
 ## Packaging
 
 ### Local file

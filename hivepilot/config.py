@@ -138,6 +138,25 @@ class Settings(BaseSettings):
     # Environment slug (e.g. "dev" / "prod"); a ref.spec `environment` overrides
     # this per-secret. env: HIVEPILOT_INFISICAL_ENVIRONMENT
     infisical_environment: str | None = None
+    # ---- 1Password secrets provider (plugins/onepassword.py) ----
+    # Config for the first-party `onepassword` secrets-backend plugin. It talks
+    # to a 1Password Connect endpoint (self-hostable) via the
+    # `onepasswordconnectsdk` package (imported lazily; never installed by the
+    # plugin). All optional; when the required token/host is missing — or the
+    # SDK / client / value is unavailable — the plugin's resolve() raises a
+    # clear error naming ONLY the reference identity (op://vault/item/field) +
+    # provider (never the token or fetched value) so the `closed` fail-mode
+    # aborts. A ref.spec supplies vault/item/field (or a full `op://` ref).
+    # 1Password Connect API base URL (e.g. https://op-connect.example.com).
+    # Required for both credential modes below. env: HIVEPILOT_OP_CONNECT_HOST
+    op_connect_host: str | None = None
+    # 1Password Connect token used to authenticate the SDK client (Connect
+    # credential mode). env: HIVEPILOT_OP_CONNECT_TOKEN
+    op_connect_token: str | None = None
+    # 1Password service-account token — an alternative credential presented to
+    # the same Connect endpoint (service-account credential mode). Used only
+    # when no Connect token is set. env: HIVEPILOT_OP_SERVICE_ACCOUNT_TOKEN
+    op_service_account_token: str | None = None
     worker_retries: int = 2  # retry attempts on transient worker dispatch failures (W3)
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
