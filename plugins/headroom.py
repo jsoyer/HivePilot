@@ -24,6 +24,29 @@ routing alternative for it. ``extra_prompt`` (the user's free-text
 instructions for the run) is compressed too when present, since it flows
 into the very same prompt.
 
+**Idempotency (shared ``metadata`` dict):** ``Orchestrator._execute_task``
+builds ONE ``metadata`` dict per *task* (``hivepilot/orchestrator.py``,
+``metadata = {"extra_prompt": ..., "prior_context": ...}``) and reuses
+that SAME dict object, by reference, for every step's ``RunnerPayload`` in
+``task.steps``. Compressing on every ``before_step`` call would therefore
+re-compress already-compressed text on step 2 onward — lossy-on-lossy,
+degrading unbounded across a multi-step task. A private sentinel key
+(``_headroom_compressed``) is set on the shared ``metadata`` dict after the
+first successful pass; subsequent calls for the same dict short-circuit
+before touching ``compress`` again. The sentinel is safe to leave on
+``metadata``: every runner that reads prompt-relevant fields off it
+(``ClaudeRunner._build_prompt`` / the prompt-cli runner) reads specific
+keys (``extra_prompt``, ``prior_context``) rather than iterating or
+serializing the whole dict, so the sentinel never reaches a rendered
+prompt.
+
+**Opt-in (dormant by default):** gated on ``settings.headroom_enabled``
+(``hivepilot/config.py``, default ``False``, env
+``HIVEPILOT_HEADROOM_ENABLED``) — mirrors PRD A2's
+``context_routing_mode`` opt-in pattern. The plugin ships dormant even
+when this file is present and ``headroom-ai`` is installed; an operator
+must explicitly flip the flag.
+
 Uses `headroom <https://github.com/headroomlabs-ai/headroom>`_
 (``pip install "headroom-ai[all]"``) — NOT a hivepilot dependency, and
 deliberately not installed by this plugin. Imported lazily so the plugin
@@ -64,16 +87,30 @@ except ImportError:  # headroom-ai is optional — never installed by this plugi
 # then extra_prompt.
 _COMPRESSIBLE_METADATA_KEYS = ("prior_context", "extra_prompt")
 
+# Private marker set on a task's shared `metadata` dict once `before_step`
+# has run for it — see the "Idempotency" note in the module docstring.
+# `_`-prefixed so it reads as private; never consumed by any runner (they
+# read specific keys off `metadata`, never iterate/dump the whole dict —
+# see TestSentinelKeyNeverRenderedIntoPrompt in tests/test_headroom.py).
+_SENTINEL_KEY = "_headroom_compressed"
+
 
 def before_step(**kwargs: Any) -> None:
     """Compress the reachable prompt/context field(s) on ``payload`` in place.
 
-    No-op when ``headroom`` isn't installed (``compress is None``), when no
-    ``payload`` kwarg is supplied, or when there's nothing compressible on
-    it. Never raises — a broken/misbehaving compression call must not crash
-    a pipeline step, the same guarantee every other hook in this repo has.
+    No-op when ``settings.headroom_enabled`` is False (the default —
+    dormant/opt-in), when ``headroom`` isn't installed (``compress is
+    None``), when no ``payload`` kwarg is supplied, when there's nothing
+    compressible on it, or when this ``metadata`` dict was already
+    compressed (idempotency guard — see the module docstring). Never
+    raises — a broken/misbehaving compression call must not crash a
+    pipeline step, the same guarantee every other hook in this repo has.
     """
     try:
+        from hivepilot.config import settings
+
+        if not settings.headroom_enabled:
+            return
         if compress is None:
             return
         payload = kwargs.get("payload")
@@ -82,12 +119,17 @@ def before_step(**kwargs: Any) -> None:
         metadata = getattr(payload, "metadata", None)
         if not isinstance(metadata, dict):
             return
+        if metadata.get(_SENTINEL_KEY):
+            # Already compressed for this shared metadata dict (same task,
+            # a later step) — skip to avoid lossy-on-lossy re-compression.
+            return
 
         model_hint = None
         step = getattr(payload, "step", None)
         if step is not None:
             model_hint = (getattr(step, "metadata", None) or {}).get("model")
 
+        attempted_any = False
         for key in _COMPRESSIBLE_METADATA_KEYS:
             original = metadata.get(key)
             if not original or not isinstance(original, str):
@@ -95,10 +137,19 @@ def before_step(**kwargs: Any) -> None:
             compressed = compress(original, model=model_hint)
             if not compressed or not isinstance(compressed, str):
                 continue
+            attempted_any = True
             chars_before = len(original)
             chars_after = len(compressed)
+            if chars_after >= chars_before:
+                logger.info(
+                    "plugin.headroom.skipped_non_shrinking",
+                    field=key,
+                    chars_before=chars_before,
+                    chars_after=chars_after,
+                )
+                continue
             metadata[key] = compressed
-            ratio = round(chars_after / chars_before, 3) if chars_before else 1.0
+            ratio = round(chars_after / chars_before, 3)
             logger.info(
                 "plugin.headroom.compressed",
                 field=key,
@@ -106,6 +157,12 @@ def before_step(**kwargs: Any) -> None:
                 chars_after=chars_after,
                 ratio=ratio,
             )
+
+        # Only mark this metadata dict as "done" when we actually attempted a
+        # compression pass — an empty/no-compressible-fields payload leaves
+        # no sentinel behind (nothing to guard against re-running).
+        if attempted_any:
+            metadata[_SENTINEL_KEY] = True
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
         logger.warning("plugin.headroom.before_step_failed", error=str(exc))
 

@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     # would silently regress every existing pipeline to a keyed subset.
     # env: HIVEPILOT_CONTEXT_ROUTING_MODE
     context_routing_mode: Literal["full", "keyed"] = "full"
+    # Opt-in gate for the `headroom` before_step plugin (plugins/headroom.py):
+    # lossy compression of shared pipeline context (prior_context/extra_prompt)
+    # via the optional `headroom-ai` library. Defaults False — ships dormant
+    # even when the plugin file is present and the library is installed;
+    # mirrors context_routing_mode's opt-in-only gating above.
+    # env: HIVEPILOT_HEADROOM_ENABLED
+    headroom_enabled: bool = False
     stage_cache_enabled: bool = False  # opt-in SQLite stage memoization (L3)
     cache_backend: str = "sqlite"  # sqlite | redis (L3)
     redis_url: str | None = None  # required when cache_backend=redis (L3)
