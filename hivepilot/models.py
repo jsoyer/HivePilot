@@ -8,6 +8,16 @@ from pydantic import BaseModel, Field, model_validator
 RunnerKind = str
 
 # Built-in kinds, for docs/help/typing only — NOT enforced at runtime; see RunnerRegistry.
+#
+# NOTE: this tuple must stay a subset of the *actually registered* kinds in
+# hivepilot.registry.RUNNER_MAP (verified by
+# tests/test_models.py::test_known_runner_kinds_all_have_runner_map_entries).
+# Do NOT add a kind here unless a runner class is registered for it — an
+# advertised-but-unregistered kind is exactly the "api" orphan bug fixed in
+# roadmap Phase 26a (a config with that kind used to raise a bare KeyError
+# at resolve time). CLI/orchestrator validation intentionally checks the
+# live registry (RUNNER_MAP / RunnerRegistry.known_kinds()), not this tuple,
+# so it also accepts plugin-contributed kinds that aren't listed here.
 KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "claude",
     "shell",
@@ -17,7 +27,6 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "gemini",
     "opencode",
     "ollama",
-    "api",
     "container",
     "cursor",
     "vibe",

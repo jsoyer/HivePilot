@@ -103,11 +103,13 @@ def test_parse_brain_claude_prefix_still_resolves() -> None:
     )
 
 
-def test_parse_brain_api_prefix_still_recognised_pre_existing_quirk() -> None:
-    """`"api"` has no RUNNER_MAP entry but is still a KNOWN_RUNNER_KINDS
-    member, so it is still treated as a recognised runner prefix — an
-    unchanged pre-existing quirk, not something this sprint fixes."""
-    assert _parse_brain("api:some-model", "shell") == ("api", "some-model")
+def test_parse_brain_api_prefix_no_longer_recognised() -> None:
+    """Roadmap Phase 26a: `_parse_brain` now checks the live registry
+    (`RUNNER_MAP`) instead of the static `KNOWN_RUNNER_KINDS` tuple, so the
+    historical `"api"` orphan (no RUNNER_MAP entry) is no longer treated as
+    a recognised runner prefix — it falls back to the default runner, like
+    any other unrecognised prefix."""
+    assert _parse_brain("api:some-model", "shell") == ("shell", "api:some-model")
 
 
 def test_parse_brain_unrecognised_prefix_falls_back_to_default() -> None:

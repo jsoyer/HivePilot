@@ -429,6 +429,40 @@ class TestRoleWire:
         result = runner.invoke(app, ["role", "wire", "developer", "runner", "not-a-runner"])
         assert result.exit_code == 1
 
+    def test_runner_orphan_api_kind_rejected(self, config_dir: Path) -> None:
+        """Roadmap Phase 26a: `"api"` is advertised nowhere but was
+        previously accepted by `role wire` (validated against
+        KNOWN_RUNNER_KINDS, not the live registry). It must now be
+        rejected, same as any other unregistered kind."""
+        before = (config_dir / "roles.yaml").read_bytes()
+        result = runner.invoke(app, ["role", "wire", "developer", "runner", "api"])
+        assert result.exit_code == 1
+        assert (config_dir / "roles.yaml").read_bytes() == before
+
+    def test_runner_plugin_registered_kind_accepted(self, config_dir: Path) -> None:
+        """A runner kind registered at runtime (e.g. by a plugin) is
+        accepted by `role wire`, since validation now checks the live
+        registry (RUNNER_MAP) instead of the static KNOWN_RUNNER_KINDS
+        tuple."""
+        from hivepilot.registry import RUNNER_MAP, RunnerRegistry
+
+        class _DummyPluginRunner:
+            def __init__(self, definition, settings) -> None:
+                pass
+
+            def run(self, payload) -> None:
+                raise NotImplementedError
+
+        RunnerRegistry.register("dummy-plugin-runner", _DummyPluginRunner)
+        try:
+            result = runner.invoke(
+                app, ["role", "wire", "developer", "runner", "dummy-plugin-runner"]
+            )
+            assert result.exit_code == 0, result.output
+            assert "runner: dummy-plugin-runner" in (config_dir / "roles.yaml").read_text()
+        finally:
+            RUNNER_MAP.pop("dummy-plugin-runner", None)
+
     def test_model_profile_valid_value(self, config_dir: Path) -> None:
         result = runner.invoke(app, ["role", "wire", "developer", "model_profile", "architecture"])
         assert result.exit_code == 0, result.output

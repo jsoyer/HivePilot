@@ -149,13 +149,18 @@ def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
     brain; a bare model uses the role's default runner. Only a recognised
     runner-kind prefix is treated as a runner, so ``"opencode-go/kimi"`` and
     other slash-style ids stay plain models.
+
+    Checked against the *live* registry (``RUNNER_MAP``) rather than the
+    static ``KNOWN_RUNNER_KINDS`` tuple — so plugin-contributed runner kinds
+    are recognised as prefixes, and advertised-but-unregistered orphan kinds
+    (e.g. the historical ``"api"`` kind; see roadmap Phase 26a) are not,
+    consistent with how the registry resolves kinds at execution time.
     """
-    from hivepilot.models import KNOWN_RUNNER_KINDS
     from hivepilot.registry import RUNNER_MAP
 
     if ":" in entry:
         prefix, rest = entry.split(":", 1)
-        if prefix in (frozenset(RUNNER_MAP) | frozenset(KNOWN_RUNNER_KINDS)):
+        if prefix in RUNNER_MAP:
             return prefix, rest
     return default_runner, entry
 
