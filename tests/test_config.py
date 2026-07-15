@@ -75,3 +75,23 @@ class TestContextRoutingMode:
         monkeypatch.setenv("HIVEPILOT_CONTEXT_ROUTING_MODE", "bogus")
         with pytest.raises(Exception):  # pydantic ValidationError
             Settings()
+
+
+# ---------------------------------------------------------------------------
+# headroom plugin — headroom_enabled
+# ---------------------------------------------------------------------------
+
+
+class TestHeadroomEnabled:
+    """`headroom_enabled` defaults to False (ships dormant, mirrors
+    `context_routing_mode`'s opt-in gating) and is env-overridable."""
+
+    def test_default_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_HEADROOM_ENABLED", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.headroom_enabled is False
+
+    def test_env_override_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_HEADROOM_ENABLED", "true")
+        s = Settings()
+        assert s.headroom_enabled is True

@@ -177,6 +177,90 @@ Any step assigned to a runner of kind `rtk` gets its command proxied through
 `rtk` automatically, with the same-directory graceful fallback described
 above.
 
+### Example: the `headroom` plugin (`plugins/headroom.py`)
+
+Ships in this repo as a reference `before_step` hook plugin that compresses a
+step's prompt/context **before** the step runs, using
+[headroom](https://github.com/headroomlabs-ai/headroom)
+(`pip install "headroom-ai[all]"` — NOT a hivepilot dependency, and not
+installed by this plugin).
+
+**Complementarity with `rtk`:** the two token-saving plugins target opposite
+ends of a step. `rtk` (above) compresses **command output** tokens —
+whatever a shell command prints, before it reaches the agent as tool
+output. `headroom` compresses **agent input/context** tokens — the
+prompt the agent is about to receive, before the runner sends it to the
+model. They compose cleanly: a step can use both without conflict.
+
+**What it does:** `before_step` receives the same `RunnerPayload` object
+(`payload=payload`) that the orchestrator subsequently hands to the runner
+with no copy in between (`Orchestrator._execute_task`,
+`hivepilot/orchestrator.py`), so an in-place edit to
+`payload.metadata` here is picked up by the runner's prompt builder — e.g.
+`ClaudeRunner._build_prompt` (`hivepilot/runners/claude_runner.py`) reads
+`payload.metadata["extra_prompt"]` and `payload.metadata["prior_context"]`
+straight off that same object. `headroom.compress(...)` is run against
+`prior_context` (the accumulated output of every upstream stage in a
+multi-stage pipeline — usually the largest chunk of a step's prompt, and
+the same context PRD A2's keyed routing targets) and `extra_prompt` (the
+run's free-text user instructions), whichever are present as non-empty
+strings, and the compressed result replaces the field in place — but only
+when it's actually shorter (a `compress()` result that isn't smaller than
+the original is discarded, original kept). Each compression logs a
+`plugin.headroom.compressed` event with `chars_before`/`chars_after`/`ratio`.
+
+An optional model hint is passed through: if the step declares
+`metadata.model` (`step.metadata["model"]` — the same per-step model
+override `ClaudeRunner._resolve_model` reads), it's forwarded as
+`compress(text, model=step.metadata["model"])` so headroom can tune its
+compression to the target model's tokenizer/context window. Omitted
+(`model=None`) when the step doesn't set it.
+
+**Opt-in — dormant by default:** gated on `settings.headroom_enabled`
+(`hivepilot/config.py`, default `False`, env `HIVEPILOT_HEADROOM_ENABLED`)
+— mirrors PRD A2's `context_routing_mode` opt-in pattern. The plugin ships
+dormant even when this file is present and `headroom-ai` is installed; an
+operator must explicitly set `HIVEPILOT_HEADROOM_ENABLED=true` to activate
+it.
+
+**Idempotency — shared `metadata` dict:** `Orchestrator._execute_task`
+builds ONE `metadata` dict per *task* and reuses that same dict object, by
+reference, across every step's `RunnerPayload` in a multi-step task.
+Compressing unconditionally on every `before_step` call would re-compress
+already-compressed text from step 2 onward — lossy-on-lossy, degrading
+without bound. A private sentinel key (`_headroom_compressed`) is set on
+the shared `metadata` dict the first time compression runs for it;
+subsequent `before_step` calls for that same dict see the sentinel and
+skip straight through. The sentinel is safe to leave on `metadata` — every
+runner that reads prompt-relevant fields off it reads specific keys
+(`extra_prompt`, `prior_context`) rather than iterating or serializing the
+whole dict, so it never reaches a rendered prompt.
+
+**Lazy import / no-op behavior:**
+
+- `settings.headroom_enabled` is `False` (the default) → silent no-op.
+- `headroom` isn't installed → `before_step` is a silent no-op (the import
+  is wrapped in `try/except ImportError`, no crash at plugin load time).
+- No `payload` kwarg, no compressible field present/non-empty on
+  `payload.metadata`, or the shared `metadata` dict was already compressed
+  → silent no-op.
+- Any internal error (including a raising `compress()` call) is caught,
+  logged (`plugin.headroom.before_step_failed`), and never propagates — a
+  hook must never crash a pipeline step.
+
+```yaml
+# .env / environment
+HIVEPILOT_HEADROOM_ENABLED=true
+```
+
+```bash
+pip install "headroom-ai[all]"
+```
+
+```bash
+pip install "headroom-ai[all]"
+```
+
 ### Example: the `obsidian` plugin (`plugins/obsidian.py`)
 
 Ships in this repo as a reference plugin that is BOTH a notifier and a pair
