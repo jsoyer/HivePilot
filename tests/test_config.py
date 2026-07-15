@@ -95,3 +95,38 @@ class TestHeadroomEnabled:
         monkeypatch.setenv("HIVEPILOT_HEADROOM_ENABLED", "true")
         s = Settings()
         assert s.headroom_enabled is True
+
+
+# ---------------------------------------------------------------------------
+# mem0 plugin — mem0_enabled
+# ---------------------------------------------------------------------------
+
+
+class TestMem0Enabled:
+    """`mem0_enabled` defaults to False (ships dormant, mirrors
+    `headroom_enabled`'s opt-in gating) and is env-overridable."""
+
+    def test_default_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_MEM0_ENABLED", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.mem0_enabled is False
+
+    def test_env_override_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_MEM0_ENABLED", "true")
+        s = Settings()
+        assert s.mem0_enabled is True
+
+    def test_api_key_defaults_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_MEM0_API_KEY", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.mem0_api_key is None
+
+    def test_api_key_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_MEM0_API_KEY", "mk-test-123")
+        s = Settings()
+        assert s.mem0_api_key == "mk-test-123"
+
+    def test_config_defaults_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_MEM0_CONFIG", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.mem0_config is None
