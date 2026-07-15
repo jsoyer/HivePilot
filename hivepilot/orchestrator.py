@@ -33,6 +33,7 @@ from hivepilot.services import (
 )
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
+from hivepilot.services.config_provenance import register_secret_value
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
 from hivepilot.services.interaction_service import (
     Interaction,
@@ -43,6 +44,7 @@ from hivepilot.services.interaction_service import (
 from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
+from hivepilot.services.secret_refs import resolve_secret_refs
 from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.services.state_service import RunStatus
 from hivepilot.utils.io import create_run_directory, write_summary
@@ -1742,7 +1744,7 @@ class Orchestrator:
                 # inject it as extra_prompt so each brain actually sees it (otherwise
                 # e.g. the CEO gets no brief and correctly returns NEEDS_HUMAN).
                 metadata={"extra_prompt": topic, "prior_context": prior_context or ""},
-                secrets=self._resolve_secrets(step),
+                secrets=self._resolve_secrets(step, project, policy),
             )
             if simulate:
                 output = f"[simulated {brain_model} position on: {topic}]"
@@ -1837,7 +1839,7 @@ class Orchestrator:
                 task_name=task_name,
                 step=placeholder_step,
                 metadata=metadata,
-                secrets=self._resolve_secrets(placeholder_step),
+                secrets=self._resolve_secrets(placeholder_step, project, policy),
             )
             try:
                 if simulate:
@@ -1911,7 +1913,7 @@ class Orchestrator:
 
             outputs: list[str] = []
             for step in task.steps:
-                secrets = self._resolve_secrets(step)
+                secrets = self._resolve_secrets(step, _exec_project, policy)
                 payload = RunnerPayload(
                     project_name=_exec_project.path.name,
                     project=_exec_project,
@@ -2094,10 +2096,48 @@ class Orchestrator:
             raise ValueError(f"Unknown project: {name}")
         return self.projects.projects[name]
 
-    def _resolve_secrets(self, step: TaskStep) -> dict[str, str]:
-        if not step.secrets:
-            return {}
-        return secret_resolver.resolve(step.secrets)
+    def _resolve_secrets(
+        self,
+        step: TaskStep,
+        project: ProjectConfig | None = None,
+        policy: policy_service.Policy | None = None,
+    ) -> dict[str, str]:
+        """Resolve this step's secrets into a ``name -> value`` mapping for the
+        runner environment.
+
+        Two forms are combined:
+          * the direct ``step.secrets`` form (``{ENV_NAME: {source, key}}``),
+            resolved through the existing ``secret_resolver``;
+          * ``${secret:NAME}`` references embedded in ``project.env`` values,
+            resolved LAZILY here against the project ``secrets:`` catalog. The
+            resolved value overrides the raw ``project.env`` entry (payload
+            secrets win in ``merge_environments``).
+
+        Every resolved value is registered for masking so it can never appear
+        verbatim in logs / provenance / serialized state.
+        """
+        resolved: dict[str, str] = {}
+        if step.secrets:
+            resolved.update(secret_resolver.resolve(step.secrets))
+
+        # Scan project.env for ${secret:NAME} references whenever env is present
+        # (not gated on a non-empty catalog: a reference against an EMPTY catalog
+        # is an unresolved reference and must abort in closed mode).
+        if project is not None and project.env:
+            fail_mode = policy.secrets_fail_mode if policy is not None else "closed"
+            resolved.update(
+                resolve_secret_refs(
+                    project.env,
+                    catalog=project.secrets,
+                    fail_mode=fail_mode,
+                )
+            )
+
+        # Register direct-form values too: the reference path registers inside
+        # resolve_secret_refs, but direct-form secrets must be masked as well.
+        for value in resolved.values():
+            register_secret_value(value)
+        return resolved
 
     def _collect_artifacts(
         self,

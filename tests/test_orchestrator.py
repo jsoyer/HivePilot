@@ -649,7 +649,7 @@ class TestDebate:
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
         orch.registry = MagicMock()
         monkeypatch.setattr(orch, "_project", lambda name: ProjectConfig(path=Path("/tmp/p")))
-        monkeypatch.setattr(orch, "_resolve_secrets", lambda step: {})
+        monkeypatch.setattr(orch, "_resolve_secrets", lambda *a, **k: {})
 
         captured: dict = {}
 
@@ -741,3 +741,89 @@ class TestDebateAutoTrigger:
                 simulate=True,
             )
         mock_debate.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ${secret:NAME} reference resolution at the step-assembly site
+# (Orchestrator._resolve_secrets)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSecretsReferences:
+    def _orch(self):
+        return _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+
+    def test_direct_form_still_resolves(self, monkeypatch) -> None:
+        from hivepilot.models import ProjectConfig, TaskStep
+
+        monkeypatch.setenv("HP_DIRECT_STORE", "direct-secret")
+        orch = self._orch()
+        step = TaskStep(
+            name="s",
+            runner="claude",
+            secrets={"TOKEN": {"source": "env", "key": "HP_DIRECT_STORE"}},
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        out = orch._resolve_secrets(step, project, None)
+        assert out == {"TOKEN": "direct-secret"}
+
+    def test_reference_reaches_payload_secrets(self, monkeypatch) -> None:
+        from hivepilot.models import ProjectConfig, TaskStep
+
+        monkeypatch.setenv("HP_REF_STORE", "ref-secret-value")
+        orch = self._orch()
+        step = TaskStep(name="s", runner="claude")
+        project = ProjectConfig(
+            path=Path("/tmp/p"),
+            env={"API_KEY": "${secret:openai}"},
+            secrets={"openai": {"source": "env", "key": "HP_REF_STORE"}},
+        )
+        out = orch._resolve_secrets(step, project, None)
+        assert out["API_KEY"] == "ref-secret-value"
+
+    def test_pwd_style_token_left_untouched(self) -> None:
+        from hivepilot.models import ProjectConfig, TaskStep
+
+        orch = self._orch()
+        step = TaskStep(name="s", runner="claude")
+        # ${PWD} is NOT a secret ref: it must be ignored (no catalog lookup,
+        # no error) and produce no payload.secrets entry.
+        project = ProjectConfig(
+            path=Path("/tmp/p"),
+            env={"VOL": "${PWD}:/workspace"},
+            secrets={"openai": {"source": "env", "key": "IRRELEVANT"}},
+        )
+        out = orch._resolve_secrets(step, project, None)
+        assert "VOL" not in out
+
+    def test_closed_mode_missing_reference_aborts(self) -> None:
+        import pytest
+
+        from hivepilot.models import ProjectConfig, TaskStep
+        from hivepilot.services import policy_service
+        from hivepilot.services.secret_refs import SecretReferenceError
+
+        orch = self._orch()
+        step = TaskStep(name="s", runner="claude")
+        project = ProjectConfig(
+            path=Path("/tmp/p"),
+            env={"API_KEY": "${secret:absent}"},
+            secrets={},
+        )
+        policy = policy_service.Policy(secrets_fail_mode="closed")
+        with pytest.raises(SecretReferenceError) as exc:
+            orch._resolve_secrets(step, project, policy)
+        assert "absent" in str(exc.value)
+
+    def test_no_project_falls_back_to_direct_only(self, monkeypatch) -> None:
+        from hivepilot.models import TaskStep
+
+        monkeypatch.setenv("HP_DIRECT_STORE", "d")
+        orch = self._orch()
+        step = TaskStep(
+            name="s",
+            runner="claude",
+            secrets={"T": {"source": "env", "key": "HP_DIRECT_STORE"}},
+        )
+        # project=None (legacy call shape) still works.
+        assert orch._resolve_secrets(step) == {"T": "d"}

@@ -13,6 +13,7 @@ This module never mutates `hivepilot.config` state; it only reads from the
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -110,3 +111,71 @@ def all_keys(cfg: Settings | None = None) -> list[str]:
     """All valid `Settings` field names, in declaration order."""
     settings_obj = cfg if cfg is not None else _default_settings
     return list(type(settings_obj).model_fields.keys())
+
+
+# ---------------------------------------------------------------------------
+# Value-based masking registry.
+#
+# `resolve_with_provenance` masks secret-typed *config fields* by NAME (→
+# REDACTED). Resolved `${secret:NAME}` reference values, by contrast, are
+# dynamic strings whose names are not known ahead of time — so they are masked
+# by VALUE: every value handed to `register_secret_value` is replaced with the
+# SAME `REDACTED` sentinel wherever it later appears in rendered output (logs,
+# provenance, serialized state). Keeping this in `config_provenance` means the
+# whole codebase shares one masking vocabulary and one redaction entry point.
+# ---------------------------------------------------------------------------
+
+# Values shorter than this are never registered: a 1-3 char "secret" would mask
+# far too much unrelated text (e.g. masking the string "on" out of every log
+# line). Real credentials comfortably exceed this; the marker strings used by
+# the masking tests are long and unique.
+_MIN_MASKABLE_LEN = 4
+
+_secret_values_lock = threading.Lock()
+_SECRET_VALUES: set[str] = set()
+
+
+def register_secret_value(value: str) -> None:
+    """Register a resolved secret *value* so it is redacted from later output.
+
+    No-op for empty/whitespace-only or very short values (see
+    `_MIN_MASKABLE_LEN`). Idempotent and thread-safe.
+    """
+    if not isinstance(value, str):
+        return
+    stripped = value.strip()
+    if len(stripped) < _MIN_MASKABLE_LEN:
+        return
+    with _secret_values_lock:
+        _SECRET_VALUES.add(value)
+
+
+def redact_text(text: str) -> str:
+    """Replace every registered secret value in *text* with `REDACTED`.
+
+    Fast-paths to the input when nothing is registered. Longer values are
+    substituted first so an overlapping shorter value can't partially unmask a
+    longer one.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    with _secret_values_lock:
+        if not _SECRET_VALUES:
+            return text
+        values = sorted(_SECRET_VALUES, key=len, reverse=True)
+    for secret in values:
+        if secret and secret in text:
+            text = text.replace(secret, REDACTED)
+    return text
+
+
+def registered_secret_values() -> frozenset[str]:
+    """Snapshot of currently-registered secret values (for tests/introspection)."""
+    with _secret_values_lock:
+        return frozenset(_SECRET_VALUES)
+
+
+def clear_secret_values() -> None:
+    """Drop all registered secret values (test hygiene / process reset)."""
+    with _secret_values_lock:
+        _SECRET_VALUES.clear()

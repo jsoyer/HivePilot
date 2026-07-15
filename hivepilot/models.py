@@ -88,6 +88,10 @@ class ProjectConfig(BaseModel):
     default_branch: str = "main"
     owner_repo: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    # Named secret catalog: NAME -> {source, ...} spec (same shape the
+    # SecretResolver consumes). Referenced from `env` values via the
+    # ${secret:NAME} syntax and resolved lazily at step-assembly time.
+    secrets: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def expand_path(self) -> ProjectConfig:
