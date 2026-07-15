@@ -161,6 +161,25 @@ class Settings(BaseSettings):
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
 
+    # ---- herdr runner plugin (plugins/herdr.py) ----
+    # Config for the first-party `herdr` runner plugin: executes each step
+    # inside a dedicated herdr (terminal multiplexer for coding agents) pane
+    # via `herdr pane split` -> `pane run` -> `wait agent-status` -> `pane
+    # read`, giving live parallel-pane visibility. All optional; the plugin
+    # degrades gracefully to raw command execution when `herdr` isn't on
+    # PATH regardless of these values.
+    # Timeout (ms) for `herdr wait agent-status --status idle`; a pane that
+    # doesn't reach idle within this window is treated as a step failure
+    # (fail-closed — blocked/unknown/timeout are never silently success).
+    # env: HIVEPILOT_HERDR_WAIT_TIMEOUT_MS
+    herdr_wait_timeout_ms: int = 300000
+    # Lines of scrollback to capture via `herdr pane read --lines`.
+    # env: HIVEPILOT_HERDR_READ_LINES
+    herdr_read_lines: int = 200
+    # Direction passed to `herdr pane split --direction`.
+    # env: HIVEPILOT_HERDR_SPLIT_DIRECTION
+    herdr_split_direction: str = "right"
+
     # Database backend — None keeps SQLite at state_db (default); set to
     # "postgresql://..." to switch to Postgres (requires psycopg[binary]).
     # env: HIVEPILOT_DATABASE_URL
