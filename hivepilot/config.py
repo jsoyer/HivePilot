@@ -218,10 +218,13 @@ class Settings(BaseSettings):
     mem0_enabled: bool = False
     # Hosted mem0 API key (https://mem0.ai). When set, plugins/mem0.py uses
     # `mem0.MemoryClient(api_key=...)`. WARNING: hosted mode sends
-    # extra_prompt, prior_context, AND the step's output (the agent's actual
+    # extra_prompt, prior_context, the step's output (the agent's actual
     # generated result — more likely than extra_prompt/prior_context to
-    # contain secrets) off-machine to mem0.ai — do NOT use it for sensitive
-    # projects; leave unset to keep everything local via `mem0.Memory()`.
+    # contain secrets), AND the structured PROVENANCE metadata `store()`
+    # attaches to every memory (source/project/task/role/step/category/ts —
+    # see the "PROVENANCE metadata" note in plugins/mem0.py) off-machine to
+    # mem0.ai — do NOT use it for sensitive projects; leave unset to keep
+    # everything local via `mem0.Memory()`.
     # env: HIVEPILOT_MEM0_API_KEY
     mem0_api_key: str | None = None
     # Optional self-host mem0 config dict, passed to `Memory.from_config()`

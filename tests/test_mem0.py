@@ -569,6 +569,150 @@ class TestMemoryKeyIncludesRole:
         assert mock_client.search.call_args.kwargs["user_id"] == "proj:t"
 
 
+class TestStoreProvenanceMetadata:
+    """`store()` (Sprint 1 of the mem0-typed-and-plugin-health spec) attaches
+    a structured PROVENANCE `metadata` dict to `client.add(...)` — real
+    values only, no fabrication. See `plugins/mem0.py::_provenance_metadata`
+    for the exact rules on which keys are included vs. omitted."""
+
+    def test_store_passes_provenance_metadata_to_add(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, role="developer")
+
+        assert mock_client.add.called
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert metadata["source"] == "hivepilot"
+        assert metadata["project"] == "proj"
+        assert metadata["task"] == "t"
+        assert metadata["role"] == "developer"
+        assert isinstance(metadata["ts"], str) and metadata["ts"]
+
+    def test_store_ts_is_a_valid_iso8601_utc_timestamp(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        from datetime import datetime
+
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        parsed = datetime.fromisoformat(metadata["ts"])
+        assert parsed.tzinfo is not None
+
+    def test_store_omits_role_when_not_supplied(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert "role" not in metadata
+
+    def test_store_never_fabricates_confidence(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, role="developer", output="result")
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert "confidence" not in metadata
+
+    def test_store_omits_run_id_when_not_threaded(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """`run_id` isn't threaded into the `after_step` `run_hook(...)` call
+        by `Orchestrator._execute_task` today (only `payload`/`dry_run`/
+        `role`/`output` are) — a real, unavailable value must be OMITTED,
+        never sent as `None`."""
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, run_id=42)  # even if a caller passes it
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert "run_id" not in metadata
+
+    def test_store_includes_step_name_when_present(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert metadata["step"] == "s"
+
+    def test_store_category_defaults_to_run(self, mem0_module: ModuleType, tmp_path: Path) -> None:
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert metadata["category"] == "run"
+
+    def test_store_category_from_step_metadata_when_set(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        payload = RunnerPayload(
+            project_name="proj",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="claude", metadata={"memory_category": "incident"}),
+            metadata={"extra_prompt": "ask"},
+            secrets={},
+        )
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert metadata["category"] == "incident"
+
+    def test_store_provenance_metadata_gate_and_never_raise_still_hold(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The new `metadata` kwarg doesn't disturb the opt-in gate or the
+        never-raise contract."""
+        monkeypatch.setattr(settings, "mem0_enabled", False, raising=False)
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)  # must not raise
+
+        assert not mock_client.add.called
+
+        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+        mock_client.add.side_effect = RuntimeError("boom")
+        with (
+            patch.object(mem0_module, "_get_client", return_value=mock_client),
+            patch.object(mem0_module, "logger", MagicMock()) as mock_logger,
+        ):
+            mem0_module.store(payload=payload)  # must not raise
+
+        assert mock_logger.warning.called
+
+
 class TestStoreInternalErrorIsSwallowed:
     def test_add_raising_does_not_propagate(self, mem0_module: ModuleType, tmp_path: Path) -> None:
         payload = _payload(tmp_path, prior_context="something salient")
