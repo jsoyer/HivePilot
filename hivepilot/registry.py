@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict, Type, cast
+from dataclasses import dataclass
+from typing import Any, Dict, Protocol, Type, cast
 
-from hivepilot.config import settings
+from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition, RunnerKind
 from hivepilot.runners.base import BaseRunner, RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
@@ -117,3 +118,54 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
 }
 for _kind, _cls in _BUILTIN_RUNNERS.items():
     RunnerRegistry.register(_kind, _cls)
+
+
+# ---------------------------------------------------------------------------
+# SecretsRegistry — mirrors RunnerRegistry above, but for secrets backends
+# (Phase 19 Sprint 1). Concrete builtin backend implementations live in
+# hivepilot.services.secrets_service (which imports SecretsRegistry from this
+# module and performs its own `_BUILTIN_SECRETS` registration loop there) so
+# that this module never has to import hivepilot.services.secrets_service —
+# avoiding a circular import while keeping the registration mechanism
+# co-located with RunnerRegistry.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SecretRef:
+    """A parsed secret spec: which backend resolves it, and its raw spec dict."""
+
+    source: str
+    spec: Dict[str, Any]
+
+
+class SecretsBackend(Protocol):
+    """Structural interface for a secrets backend (env/file/vault/sops/...)."""
+
+    def resolve(self, ref: SecretRef, settings: Settings) -> str: ...
+
+
+SECRETS_MAP: Dict[str, SecretsBackend] = {}
+
+
+class SecretsBackendCollisionError(RuntimeError):
+    pass
+
+
+class SecretsRegistry:
+    @staticmethod
+    def register(name: str, backend: SecretsBackend, *, override: bool = False) -> None:
+        if name in SECRETS_MAP and SECRETS_MAP[name] is not backend and not override:
+            raise SecretsBackendCollisionError(
+                f"Secrets backend '{name}' is already registered to "
+                f"{type(SECRETS_MAP[name]).__name__}; refusing to silently "
+                f"replace it with {type(backend).__name__}"
+            )
+        SECRETS_MAP[name] = backend
+
+    @staticmethod
+    def known_kinds() -> frozenset[str]:
+        return frozenset(SECRETS_MAP)
+
+
+KNOWN_SECRET_BACKENDS: tuple[str, ...] = ("env", "file", "vault", "sops")

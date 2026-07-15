@@ -62,7 +62,15 @@ for _mod_name in _LANGCHAIN_MODULES:
 
 import pytest  # noqa: E402  (must come after sys.modules stubs are installed)
 
-from hivepilot.registry import RUNNER_MAP  # noqa: E402
+# Unlike RUNNER_MAP/NOTIFIER_MAP (populated at import time by their own
+# owning modules, hivepilot.registry / hivepilot.services.notification_service
+# respectively), SECRETS_MAP's builtins are registered by a `_BUILTIN_SECRETS`
+# loop that lives in hivepilot.services.secrets_service (kept there instead of
+# hivepilot.registry to avoid a circular import — see registry.py's
+# SecretsRegistry comment). Import it explicitly so SECRETS_MAP is already
+# populated with builtins before we snapshot the baseline below.
+import hivepilot.services.secrets_service  # noqa: E402,F401
+from hivepilot.registry import RUNNER_MAP, SECRETS_MAP  # noqa: E402
 from hivepilot.services.notification_service import NOTIFIER_MAP  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +81,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # registration state after every test.
 _RUNNER_MAP_BASELINE = dict(RUNNER_MAP)
 _NOTIFIER_MAP_BASELINE = dict(NOTIFIER_MAP)
+_SECRETS_MAP_BASELINE = dict(SECRETS_MAP)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -131,7 +140,7 @@ def _isolate_state_db(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_runner_and_notifier_maps():
-    """`RUNNER_MAP` / `NOTIFIER_MAP` (`hivepilot.registry` /
+    """`RUNNER_MAP` / `NOTIFIER_MAP` / `SECRETS_MAP` (`hivepilot.registry` /
     `hivepilot.services.notification_service`) are process-global mutable
     dicts, populated with built-ins at import time and then mutated by any
     REAL (unmocked) `PluginManager()` construction — including indirectly,
@@ -149,6 +158,12 @@ def _isolate_runner_and_notifier_maps():
     collides with itself via `RunnerRegistry.register`'s
     same-kind-different-object guard.
 
+    `SECRETS_MAP` is the same kind of process-global mutable dict (populated
+    with builtins at import time by `hivepilot.services.secrets_service`) and
+    is included here for the same reason: a test or plugin that registers a
+    custom secrets backend and forgets manual cleanup would otherwise
+    order-dependently corrupt it for every later test.
+
     Restoring to the pristine, built-ins-only baseline (captured at conftest
     import time, before any test runs) after every test guarantees each test
     starts from the same clean slate regardless of run order.
@@ -158,6 +173,8 @@ def _isolate_runner_and_notifier_maps():
     RUNNER_MAP.update(_RUNNER_MAP_BASELINE)
     NOTIFIER_MAP.clear()
     NOTIFIER_MAP.update(_NOTIFIER_MAP_BASELINE)
+    SECRETS_MAP.clear()
+    SECRETS_MAP.update(_SECRETS_MAP_BASELINE)
 
 
 @pytest.fixture(autouse=True)
