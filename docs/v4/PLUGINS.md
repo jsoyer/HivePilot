@@ -569,6 +569,13 @@ spec declares `source: onepassword`. Address the value either with a full
 `op://vault/item/field` reference **or** with discrete `vault` / `item` /
 `field` keys (all three required):
 
+> **Only 3-segment references are supported.** A section-qualified reference
+> (`op://vault/item/section/field`) is **rejected** (fail-closed), not
+> collapsed to `op://vault/item/field` by dropping the section — silently
+> dropping the section could match the wrong field if two sections share a
+> field label. If an item legitimately has two fields with the same label,
+> the **first match wins**.
+
 ```yaml
 # secrets.yaml (or the `secrets:` block of a project config)
 secrets:

@@ -297,6 +297,25 @@ class TestResolveFailClosed:
         assert "onepassword" in msg
         assert "op://Prod/db/password" in msg
 
+    def test_section_qualified_ref_raises_fail_closed_not_collapsed(
+        self, op_module: ModuleType
+    ) -> None:
+        """A 4+ segment `op://vault/item/section/field` ref must be REJECTED,
+        not silently collapsed to `(vault, item, field)` by dropping the
+        section — collapsing would let field-by-label/id matching (which scans
+        ALL fields regardless of section) silently fetch the wrong secret when
+        two sections share a field label. No fetch is attempted."""
+        backend = op_module.OnePasswordBackend()
+        new_client = MagicMock(return_value=_mock_client_returning(_FAKE_VALUE))
+
+        with patch.object(op_module, "new_client", new_client):
+            with pytest.raises(RuntimeError) as excinfo:
+                backend.resolve(_ref(ref="op://Prod/db/section/password"), settings)
+
+        msg = str(excinfo.value)
+        assert "onepassword" in msg
+        assert not new_client.return_value.get_item.called
+
     def test_client_error_raises_without_leaking_value(self, op_module: ModuleType) -> None:
         """If the SDK itself raises — even if the exception message embeds the
         secret value — the re-raised error must NOT propagate that value (ref +
@@ -375,6 +394,7 @@ class TestResolveFailClosed:
         assert _FAKE_TOKEN not in msg
         assert _FAKE_VALUE not in msg
         assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
 
 
 class TestPluginManagerRegistersOnePassword:

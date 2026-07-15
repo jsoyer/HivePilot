@@ -102,14 +102,19 @@ def _parse_ref(ref: SecretRef) -> tuple[str, str, str]:
                 f"{_PROVIDER} secret 'ref' must be an 'op://vault/item/field' reference"
             )
         parts = [p for p in full[len("op://") :].split("/") if p]
-        # Section-qualified refs (op://vault/item/section/field) collapse to the
-        # last segment as the field; the first two are always vault + item.
-        if len(parts) < 3:
+        # Only exactly 3 segments (vault/item/field) are accepted. A
+        # section-qualified ref (op://vault/item/section/field) is REJECTED
+        # rather than silently collapsed to its last segment: collapsing would
+        # let `_extract_field_value`'s label/id match (which scans ALL fields
+        # regardless of section) silently fetch the wrong secret when two
+        # sections share a field label -- the one path that would otherwise
+        # violate this plugin's fail-closed posture.
+        if len(parts) != 3:
             raise RuntimeError(
-                f"{_PROVIDER} secret ref {full!r} must name a vault, item and field "
-                "(op://vault/item/field)"
+                f"{_PROVIDER} secret ref {full!r} must be exactly "
+                "'op://vault/item/field' (section-qualified refs are not supported)"
             )
-        return parts[0], parts[1], parts[-1]
+        return parts[0], parts[1], parts[2]
 
     vault = ref.spec.get("vault")
     item = ref.spec.get("item")
