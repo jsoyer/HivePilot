@@ -42,6 +42,12 @@ class Role(BaseModel):
     model_profile: str
     inputs: list[str]
     outputs: list[str]
+    # Keys routed into a stage's context when an upstream stage produced them,
+    # but NEVER flagged as a "dangling input" by validate_config when no
+    # upstream stage produces them (unlike `inputs`). Use case: a role shared
+    # across pipelines that consumes a key only some pipelines' stages produce
+    # (e.g. `design_spec` from a UI-only designer stage).
+    optional_inputs: list[str] = []
     can_block: bool
     order: int
     # Sprint 2.1: runner + model binding (additive, defaulted — no existing tests broken)

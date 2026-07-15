@@ -289,6 +289,21 @@ to a single `_` (so `## Technical Spec`, `## technical-spec`, and
   built from whichever keys ARE present (no fallback in that case — a
   partial precise slice still beats the full context).
 
+**Optional keyed inputs (`optional_inputs`).** A role may also declare
+`optional_inputs: [key, ...]` — a SEPARATE list from `inputs`, not a marker
+subset of it. In `keyed` mode, `optional_inputs` keys are routed into the
+stage's context exactly like `inputs` keys when an upstream stage produced
+them (the routing set is `inputs + optional_inputs`, deduplicated,
+present-only), but they are **never** treated as "missing" for the
+missing-key fallback above, and `config validate` (below) never flags them
+as dangling even when no stage in a given pipeline produces them. Use case:
+a role shared across multiple pipelines that consumes a key only some of
+those pipelines' stages produce — e.g. a `design_spec` key emitted only by
+a UI-focused designer stage that some pipelines skip. Declaring that key as
+`optional_inputs` (rather than `inputs`) lets the role pick it up where
+available without dangling in every pipeline that doesn't run the
+producing stage.
+
 ### Validate config
 
 ```bash
@@ -311,6 +326,11 @@ key not yet produced upstream in that pipeline. Severity depends on
   returned problem list (`config validate` exits `1`), because in this mode
   a dangling input means a stage silently degrades to the missing-key
   fallback above instead of getting the data it expects.
+
+A role's `optional_inputs` keys are exempt from this check in both modes —
+they are never flagged as dangling, since their whole purpose is to be
+absent in pipelines that don't run the producing stage (see "Context
+routing" above).
 
 ---
 

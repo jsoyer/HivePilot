@@ -1115,3 +1115,75 @@ class TestContextRoutingKeyedMode:
             "role with empty inputs must fall through to the full prior_chunks "
             "context, not an empty string"
         )
+
+
+class TestRoutePriorContextOptionalInputs:
+    """`_route_prior_context` merges a role's `optional_inputs` into the
+    keyed routing set alongside `inputs`: routed in when present, but never
+    treated as "missing" for the conservative full-context fallback."""
+
+    def test_route_prior_context_includes_optional_when_present(self) -> None:
+        from hivepilot.orchestrator import _route_prior_context
+        from hivepilot.orchestrator import settings as orchestrator_settings
+        from hivepilot.roles import Role
+
+        role = Role(
+            name="developer",
+            title="Developer",
+            prompt_file=Path("prompts/agents/developer.md"),
+            model_profile="coding",
+            inputs=["a"],
+            optional_inputs=["b"],
+            outputs=[],
+            can_block=False,
+            order=1,
+        )
+
+        result = _route_prior_context(
+            role=role,
+            prior_chunks=["irrelevant fallback chunk"],
+            outputs_by_key={"a": "A", "b": "B"},
+            routing_mode="keyed",
+            prior_context_mode=orchestrator_settings.prior_context_mode,
+            max_chars=orchestrator_settings.max_prior_context_chars,
+            stage_name="stage-b",
+        )
+
+        assert result is not None
+        assert "## A\nA" in result
+        assert "## B\nB" in result
+
+    def test_route_prior_context_omits_optional_when_absent(self) -> None:
+        from hivepilot.orchestrator import _route_prior_context
+        from hivepilot.orchestrator import settings as orchestrator_settings
+        from hivepilot.roles import Role
+
+        role = Role(
+            name="developer",
+            title="Developer",
+            prompt_file=Path("prompts/agents/developer.md"),
+            model_profile="coding",
+            inputs=["a"],
+            outputs=[],
+            can_block=False,
+            order=1,
+            optional_inputs=["b"],
+        )
+
+        result = _route_prior_context(
+            role=role,
+            prior_chunks=["irrelevant fallback chunk"],
+            outputs_by_key={"a": "A"},
+            routing_mode="keyed",
+            prior_context_mode=orchestrator_settings.prior_context_mode,
+            max_chars=orchestrator_settings.max_prior_context_chars,
+            stage_name="stage-b",
+        )
+
+        assert result is not None
+        assert "## A\nA" in result
+        assert "## B" not in result
+        assert "irrelevant fallback chunk" not in result, (
+            "must return the keyed join, not fall back to build_prior_context "
+            "output — the required key 'a' IS present, so no fallback should occur"
+        )
