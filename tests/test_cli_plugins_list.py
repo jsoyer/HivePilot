@@ -20,13 +20,13 @@ from typer.testing import CliRunner
 from hivepilot.cli import app
 from hivepilot.models import KNOWN_RUNNER_KINDS
 from hivepilot.plugins import PluginRecord
-from hivepilot.registry import RUNNER_MAP
+from hivepilot.registry import KNOWN_SECRET_BACKENDS, RUNNER_MAP, SECRETS_MAP, SecretsRegistry
 from hivepilot.services.notification_service import NOTIFIER_MAP
 
 
 def test_plugins_list_exits_zero_and_lists_builtins(monkeypatch) -> None:
     """With no plugins loaded, `plugins list` still exits 0 and lists every
-    built-in runner kind and notifier currently registered."""
+    built-in runner kind, notifier, and secrets backend currently registered."""
     mock_orch = MagicMock()
     mock_orch.plugins.loaded = []
 
@@ -43,6 +43,35 @@ def test_plugins_list_exits_zero_and_lists_builtins(monkeypatch) -> None:
 
     for name in NOTIFIER_MAP:
         assert name in result.output, f"notifier {name!r} missing from output"
+
+    for name in SECRETS_MAP:
+        assert name in KNOWN_SECRET_BACKENDS  # sanity: every registered backend is builtin here
+        assert name in result.output, f"secrets backend {name!r} missing from output"
+
+
+def test_plugins_list_secrets_table_includes_plugin_backend(monkeypatch) -> None:
+    """A plugin-contributed secrets backend (not one of the four builtins)
+    shows up in the Secrets Backends table, distinct from the builtins."""
+
+    class _PluginBackend:
+        def resolve(self, ref, settings):  # noqa: ANN001
+            return "plugin-value"
+
+    SecretsRegistry.register("my-plugin-backend", _PluginBackend())
+    try:
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = []
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "my-plugin-backend" in result.output
+        for name in KNOWN_SECRET_BACKENDS:
+            assert name in result.output
+    finally:
+        SECRETS_MAP.pop("my-plugin-backend", None)
 
 
 def test_plugins_list_includes_loaded_plugin_record(monkeypatch) -> None:

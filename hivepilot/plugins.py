@@ -170,11 +170,15 @@ class PluginManager:
 
             runners = hooks.pop("runners", None)
             notifiers = hooks.pop("notifiers", None)
-            if runners or notifiers:
+            secrets = hooks.pop("secrets", None)
+            if runners or notifiers or secrets:
                 from hivepilot.registry import (
                     RUNNER_MAP,
+                    SECRETS_MAP,
                     RunnerKindCollisionError,
                     RunnerRegistry,
+                    SecretsBackendCollisionError,
+                    SecretsRegistry,
                 )
                 from hivepilot.services.notification_service import (
                     NOTIFIER_MAP,
@@ -184,12 +188,13 @@ class PluginManager:
 
                 # A kind/name collision is a hard stop and propagates uncaught
                 # (unlike an isolated broken plugin, which is logged and skipped).
-                # Register this one plugin's runners+notifiers atomically: if any
-                # entry collides, roll back the entries THIS plugin already added
-                # to the process-global maps before re-raising, so an aborted
+                # Register this one plugin's runners+notifiers+secrets atomically:
+                # if any entry collides, roll back the entries THIS plugin already
+                # added to the process-global maps before re-raising, so an aborted
                 # plugin never leaves orphaned, untracked registrations behind.
                 applied_runners: list[str] = []
                 applied_notifiers: list[str] = []
+                applied_secrets: list[str] = []
                 try:
                     for kind, cls in (runners or {}).items():
                         was_present = kind in RUNNER_MAP
@@ -201,11 +206,22 @@ class PluginManager:
                         NotifierRegistry.register(notifier_name, notifier_fn)
                         if not was_present:
                             applied_notifiers.append(notifier_name)
-                except (RunnerKindCollisionError, NotifierKindCollisionError):
+                    for secret_name, secret_backend in (secrets or {}).items():
+                        was_present = secret_name in SECRETS_MAP
+                        SecretsRegistry.register(secret_name, secret_backend)
+                        if not was_present:
+                            applied_secrets.append(secret_name)
+                except (
+                    RunnerKindCollisionError,
+                    NotifierKindCollisionError,
+                    SecretsBackendCollisionError,
+                ):
                     for kind in applied_runners:
                         RUNNER_MAP.pop(kind, None)
                     for notifier_name in applied_notifiers:
                         NOTIFIER_MAP.pop(notifier_name, None)
+                    for secret_name in applied_secrets:
+                        SECRETS_MAP.pop(secret_name, None)
                     raise
 
                 if notifiers:
