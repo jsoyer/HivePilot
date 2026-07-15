@@ -67,25 +67,21 @@ def test_register_different_backend_without_override_raises_collision() -> None:
 
 
 def test_register_different_backend_with_override_replaces_it() -> None:
-    original = SECRETS_MAP["env"]
-    try:
-        fake = FakeBackend()
-        SecretsRegistry.register("env", fake, override=True)
-        assert SECRETS_MAP["env"] is fake
-    finally:
-        SecretsRegistry.register("env", original, override=True)
-    assert SECRETS_MAP["env"] is original
+    # No manual try/finally cleanup needed: the autouse
+    # `_isolate_runner_and_notifier_maps` fixture in tests/conftest.py
+    # restores SECRETS_MAP to its builtins-only baseline after every test.
+    fake = FakeBackend()
+    SecretsRegistry.register("env", fake, override=True)
+    assert SECRETS_MAP["env"] is fake
 
 
 def test_custom_backend_registers_and_resolves_via_registry() -> None:
-    try:
-        SecretsRegistry.register("custom_test_backend", OtherFakeBackend())
-        backend = SECRETS_MAP["custom_test_backend"]
-        result = backend.resolve(SecretRef(source="custom_test_backend", spec={}), settings=None)
-        assert result == "other-value"
-        assert "custom_test_backend" in SecretsRegistry.known_kinds()
-    finally:
-        SECRETS_MAP.pop("custom_test_backend", None)
+    # No manual cleanup needed — see comment above.
+    SecretsRegistry.register("custom_test_backend", OtherFakeBackend())
+    backend = SECRETS_MAP["custom_test_backend"]
+    result = backend.resolve(SecretRef(source="custom_test_backend", spec={}), settings=None)
+    assert result == "other-value"
+    assert "custom_test_backend" in SecretsRegistry.known_kinds()
 
 
 def test_resolve_dispatches_env_through_registry(monkeypatch: pytest.MonkeyPatch) -> None:

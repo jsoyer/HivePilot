@@ -120,6 +120,10 @@ _BUILTIN_SECRETS: Dict[str, Any] = {
 }
 for _name, _backend in _BUILTIN_SECRETS.items():
     SecretsRegistry.register(_name, _backend)
+assert set(_BUILTIN_SECRETS) == set(KNOWN_SECRET_BACKENDS), (
+    "hivepilot.services.secrets_service._BUILTIN_SECRETS and "
+    "hivepilot.registry.KNOWN_SECRET_BACKENDS have drifted out of sync"
+)
 
 
 class SecretResolver:
