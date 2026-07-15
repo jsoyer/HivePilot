@@ -3,10 +3,31 @@ from __future__ import annotations
 import logging
 
 import structlog
+from structlog.typing import EventDict, WrappedLogger
 
 from hivepilot.config import settings
 
 _configured = False
+
+
+def _redact_secret_values(
+    _logger: WrappedLogger, _method_name: str, event_dict: EventDict
+) -> EventDict:
+    """structlog processor: redact any registered secret value from every
+    field of the event before it is rendered, RECURSIVELY (a secret nested
+    inside a list/dict/tuple kwarg is redacted too, not just top-level
+    strings).
+
+    Ensures resolved ``${secret:NAME}`` values (and direct-form secrets) never
+    appear verbatim in log output. Imported lazily to avoid an import cycle at
+    module-load time (config_provenance imports settings, which imports logging
+    indirectly in some paths).
+    """
+    from hivepilot.services.config_provenance import redact_value
+
+    for key, value in list(event_dict.items()):
+        event_dict[key] = redact_value(value)
+    return event_dict
 
 
 def configure_logging() -> None:
@@ -25,6 +46,7 @@ def configure_logging() -> None:
     structlog.configure(
         processors=[
             structlog.processors.TimeStamper(fmt="ISO"),
+            _redact_secret_values,
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

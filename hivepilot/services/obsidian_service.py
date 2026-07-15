@@ -370,7 +370,18 @@ class ObsidianService:
     # ------------------------------------------------------------------
 
     def _emit(self, target: Path, content: str) -> dict[str, Any]:
-        """Write content to target (or skip if dry_run)."""
+        """Write content to target (or skip if dry_run).
+
+        Choke point: `content` is the fully-rendered note (frontmatter + body)
+        for EVERY vault write — write_note, append_daily, write_adr, and any
+        direct caller. Bodies frequently carry agent stage output, which can
+        echo a resolved ${secret:NAME} value, so redact here once rather than
+        at each individual call site (idempotent — a no-op if already
+        redacted upstream, e.g. by pipelines.write_stage_artifact).
+        """
+        from hivepilot.services.config_provenance import redact_text
+
+        content = redact_text(content)
         if self._dry_run:
             return {"path": str(target), "content": content, "dry_run": True}
 

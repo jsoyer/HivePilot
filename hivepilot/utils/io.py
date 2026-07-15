@@ -16,6 +16,12 @@ def create_run_directory() -> Path:
 
 
 def write_summary(run_dir: Path, summary: dict[str, Any]) -> None:
+    # Choke point: `summary` (task/run summary written to disk) can carry a
+    # resolved ${secret:NAME} value inside `results[].detail` if an agent
+    # echoed it. Redact recursively before serializing to the artifact file.
+    from hivepilot.services.config_provenance import redact_value
+
+    summary = redact_value(summary)
     path = run_dir / f"summary.{settings.output_format}"
     if settings.output_format == "json":
         path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

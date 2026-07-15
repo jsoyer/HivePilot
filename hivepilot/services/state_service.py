@@ -259,6 +259,12 @@ def record_run_start(
 
 def record_step(run_id: int, step: str, status: str, detail: str | None = None) -> None:
     init_db()
+    # Choke point: `detail` often carries `str(exc)` from a failed step, which
+    # may echo a resolved ${secret:NAME} value an agent printed. Redact before
+    # it's persisted to SQLite.
+    from hivepilot.services.config_provenance import redact_text
+
+    detail = redact_text(detail) if detail is not None else detail
     with db.connect() as conn:
         conn.execute(
             db.ph("INSERT INTO steps (run_id, step, status, detail) VALUES (?, ?, ?, ?)"),
@@ -273,6 +279,10 @@ def record_step(run_id: int, step: str, status: str, detail: str | None = None) 
 
 def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
     init_db()
+    # Choke point: same rationale as record_step — `detail` may carry `str(exc)`.
+    from hivepilot.services.config_provenance import redact_text
+
+    detail = redact_text(detail) if detail is not None else detail
     with db.connect() as conn:
         conn.execute(
             db.ph("UPDATE runs SET status=?, detail=?, finished_at=CURRENT_TIMESTAMP WHERE id=?"),
@@ -320,6 +330,12 @@ def record_interaction(
     metadata: dict[str, Any] | None = None,
 ) -> int:
     init_db()
+    # Choke point: `summary` is often a stage's aggregated agent output
+    # (Orchestrator.run_pipeline's `stage_output`), which can echo a resolved
+    # ${secret:NAME} value. Redact before it's persisted to SQLite.
+    from hivepilot.services.config_provenance import redact_text
+
+    summary = redact_text(summary)
     with db.connect() as conn:
         interaction_id = db.insert_returning_id(
             conn,

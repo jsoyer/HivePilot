@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from hivepilot.services import config_provenance
 from hivepilot.services import knowledge_service as ks
 
 
@@ -61,3 +62,21 @@ def test_append_feedback_then_included_in_context(tmp_path: Path, monkeypatch) -
     ctx = ks.build_context(tmp_path, [Path("README.md")])
     assert "Recent AI feedback" in ctx
     assert "did a thing" in ctx
+
+
+def test_append_feedback_redacts_registered_secret(tmp_path: Path, monkeypatch) -> None:
+    """A resolved ${secret:NAME} value echoed into a task's result detail must
+    never reach the vault feedback log on disk."""
+    fb = tmp_path / "fb"
+    fb.mkdir()
+    monkeypatch.setattr(ks, "FEEDBACK_DIR", fb)
+    marker = "FEEDBACK-MARKER-do-not-leak"
+    config_provenance.clear_secret_values()
+    config_provenance.register_secret_value(marker)
+    try:
+        ks.append_feedback(tmp_path, "task-x", f"p -> success ({marker})")
+        written = (fb / f"{tmp_path.name}.jsonl").read_text(encoding="utf-8")
+        assert marker not in written
+        assert config_provenance.REDACTED in written
+    finally:
+        config_provenance.clear_secret_values()

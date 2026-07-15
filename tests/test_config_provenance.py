@@ -15,9 +15,15 @@ import pytest
 
 from hivepilot.config import Settings
 from hivepilot.services.config_provenance import (
+    REDACTED,
     Provenance,
     all_keys,
+    clear_secret_values,
     is_secret_field,
+    redact_text,
+    redact_value,
+    register_secret_value,
+    registered_secret_values,
     resolve_with_provenance,
 )
 
@@ -163,3 +169,77 @@ class TestAllKeys:
     def test_all_keys_is_non_empty_list(self) -> None:
         assert isinstance(all_keys(), list)
         assert len(all_keys()) > 0
+
+
+class TestSecretValueRegistry:
+    def setup_method(self) -> None:
+        clear_secret_values()
+
+    def teardown_method(self) -> None:
+        clear_secret_values()
+
+    def test_register_then_redact(self) -> None:
+        register_secret_value("a-long-secret-value")
+        assert redact_text("x a-long-secret-value y") == f"x {REDACTED} y"
+
+    def test_registered_values_snapshot(self) -> None:
+        register_secret_value("another-long-secret")
+        assert "another-long-secret" in registered_secret_values()
+
+    def test_short_values_ignored(self) -> None:
+        register_secret_value("ab")
+        assert registered_secret_values() == frozenset()
+
+    def test_non_string_ignored(self) -> None:
+        register_secret_value(None)  # type: ignore[arg-type]
+        assert registered_secret_values() == frozenset()
+
+    def test_redact_noop_without_registration(self) -> None:
+        assert redact_text("nothing to hide") == "nothing to hide"
+
+    def test_longer_value_redacted_before_shorter_overlap(self) -> None:
+        register_secret_value("secretvalue")
+        register_secret_value("secretvalue-extended")
+        out = redact_text("secretvalue-extended")
+        # The longer value wins; no partial 'secretvalue' left dangling text.
+        assert out == REDACTED
+
+
+class TestRedactValueRecursive:
+    """redact_value must recurse into dict/list/tuple values (used by artifact
+    writers and the logging processor to catch secrets nested inside a kwarg's
+    payload, not just top-level string fields)."""
+
+    def setup_method(self) -> None:
+        clear_secret_values()
+
+    def teardown_method(self) -> None:
+        clear_secret_values()
+
+    def test_redacts_nested_dict_string(self) -> None:
+        register_secret_value("nested-secret-value")
+        payload = {"outer": {"inner": "nested-secret-value", "safe": "ok"}}
+        out = redact_value(payload)
+        assert out == {"outer": {"inner": REDACTED, "safe": "ok"}}
+
+    def test_redacts_nested_list_and_tuple(self) -> None:
+        register_secret_value("list-secret-value")
+        payload = {"items": ["list-secret-value", ("also", "list-secret-value")]}
+        out = redact_value(payload)
+        assert out == {"items": [REDACTED, ("also", REDACTED)]}
+
+    def test_non_container_scalars_pass_through(self) -> None:
+        assert redact_value(3) == 3
+        assert redact_value(True) is True
+        assert redact_value(None) is None
+
+    def test_top_level_string_is_redacted(self) -> None:
+        register_secret_value("top-level-secret")
+        assert redact_value("top-level-secret") == REDACTED
+
+    def test_original_container_not_mutated(self) -> None:
+        register_secret_value("immut-secret-value")
+        payload = {"a": ["immut-secret-value"]}
+        redact_value(payload)
+        # redact_value must return a NEW structure, not mutate the input.
+        assert payload == {"a": ["immut-secret-value"]}

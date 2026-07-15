@@ -18,6 +18,11 @@ class Policy:
     allow_containers: bool = True
     role_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
     allowed_runners: list[str] | None = None
+    # Behaviour when a ${secret:NAME} reference cannot be resolved:
+    #   "closed"   — abort the step/run (default, fail-safe).
+    #   "fallback" — try env/file providers keyed by NAME, else abort.
+    # Any value other than "fallback" is treated as "closed".
+    secrets_fail_mode: str = "closed"
 
 
 def _load_yaml(path: Path) -> dict:
@@ -60,6 +65,7 @@ def get_policy(project_name: str) -> Policy:
         allow_containers=rules.get("allow_containers", True),
         role_overrides=rules.get("role_overrides", {}) or {},
         allowed_runners=rules.get("allowed_runners"),
+        secrets_fail_mode=rules.get("secrets_fail_mode", "closed"),
     )
 
 

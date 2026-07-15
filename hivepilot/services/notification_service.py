@@ -75,6 +75,12 @@ class NotifierRegistry:
 
 
 def send_notification(message: str, channels: Iterable[str] | None = None) -> None:
+    # Choke point: `message` frequently embeds `str(exc)` (e.g. a run-failure
+    # notification), which can echo a resolved ${secret:NAME} value an agent
+    # printed. Redact before it goes out to any outbound channel.
+    from hivepilot.services.config_provenance import redact_text
+
+    message = redact_text(message)
     channels = list(channels) if channels else ["slack", "discord", "telegram"]
     for channel in channels:
         channel = channel.lower()
@@ -342,6 +348,14 @@ def stream_agent_turn(
     if not settings.telegram_stream_live:
         return
 
+    # Choke point: `summary` is a stage/turn's agent output and can echo a
+    # resolved ${secret:NAME} value. Redact before it flows into either the
+    # rich HTML card or the plain-text fallback below — same leak class as
+    # send_notification, same one-line fix.
+    from hivepilot.services.config_provenance import redact_text
+
+    summary = redact_text(summary) if summary is not None else summary
+
     message_thread_id: int | None = None
     if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
         agent_key = _resolve_agent_key(actor)
@@ -473,6 +487,13 @@ def send_approval_keyboard(
     run_id: int, project: str, task: str, details: str | None = None
 ) -> None:
     """Send an approval request with inline Approve/Deny buttons via Telegram and Slack."""
+    # Choke point: `details` (checkpoint approval card) is frequently built
+    # from `prior_chunks` — accumulated agent stage output — via
+    # Orchestrator._build_checkpoint_details, so it can echo a resolved
+    # ${secret:NAME} value. Redact before it reaches the Telegram DM.
+    from hivepilot.services.config_provenance import redact_text
+
+    details = redact_text(details) if details is not None else details
     try:
         from hivepilot.services.telegram_bot import notify_approval_required
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import subprocess
+import threading
 from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from hivepilot.services import (
 )
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
+from hivepilot.services.config_provenance import register_secret_value
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
 from hivepilot.services.interaction_service import (
     Interaction,
@@ -43,6 +45,7 @@ from hivepilot.services.interaction_service import (
 from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
+from hivepilot.services.secret_refs import resolve_secret_refs
 from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.services.state_service import RunStatus
 from hivepilot.utils.io import create_run_directory, write_summary
@@ -373,6 +376,17 @@ class RunResult:
 class Orchestrator:
     def __init__(self) -> None:
         self._load()
+        # Reentrancy guard for the resolved-secrets masking registry
+        # (config_provenance._SECRET_VALUES): run_pipeline calls run_task once
+        # per stage, so a naive "clear on run_task exit" would empty the
+        # registry BEFORE run_pipeline's own post-stage sinks (write_stage_
+        # artifact, record_interaction, stream_agent_turn) run — defeating
+        # their redaction. Tracking scope depth means the registry is only
+        # cleared when the OUTERMOST run_task/run_pipeline call exits, after
+        # every sink for that run (nested or not) has already redacted
+        # against it. See _enter_run_scope / _exit_run_scope.
+        self._run_scope_lock = threading.Lock()
+        self._run_scope_depth = 0
 
     def _load(self) -> None:
         self.projects = load_projects()
@@ -384,7 +398,54 @@ class Orchestrator:
     def refresh(self) -> None:
         self._load()
 
+    def _enter_run_scope(self) -> None:
+        with self._run_scope_lock:
+            self._run_scope_depth += 1
+
+    def _exit_run_scope(self) -> None:
+        """Exit a run_task/run_pipeline scope; clear the resolved-secrets
+        registry only when the outermost scope exits (depth back to 0)."""
+        with self._run_scope_lock:
+            self._run_scope_depth = max(0, self._run_scope_depth - 1)
+            should_clear = self._run_scope_depth == 0
+        if should_clear:
+            from hivepilot.services.config_provenance import clear_secret_values
+
+            clear_secret_values()
+
     def run_task(
+        self,
+        *,
+        project_names: Iterable[str],
+        task_name: str,
+        extra_prompt: str | None,
+        auto_git: bool,
+        concurrency: int | None = None,
+        simulate: bool = False,
+        dry_run: bool = True,
+        prior_context: str | None = None,
+    ) -> list[RunResult]:
+        """Public entry point. Delegates to `_run_task_body` inside a run-scope
+        (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-secrets
+        masking registry is cleared once this run — including any pipeline
+        stages nested inside it when called from `run_pipeline` — is fully
+        complete and every sink has already redacted against it."""
+        self._enter_run_scope()
+        try:
+            return self._run_task_body(
+                project_names=project_names,
+                task_name=task_name,
+                extra_prompt=extra_prompt,
+                auto_git=auto_git,
+                concurrency=concurrency,
+                simulate=simulate,
+                dry_run=dry_run,
+                prior_context=prior_context,
+            )
+        finally:
+            self._exit_run_scope()
+
+    def _run_task_body(
         self,
         *,
         project_names: Iterable[str],
@@ -1024,6 +1085,48 @@ class Orchestrator:
         prior_chunks.append(f"## Challenge Resolution\n{resolution_note}")
 
     def run_pipeline(
+        self,
+        *,
+        project_names: Iterable[str],
+        pipeline_name: str,
+        extra_prompt: str | None,
+        auto_git: bool,
+        concurrency: int | None = None,
+        dry_run: bool = True,
+        simulate: bool = False,
+        start_index: int = 0,
+        run_id: int | None = None,
+        hub: str | None = None,
+        components: list[str] | None = None,
+        seed_context: str | None = None,
+        group: Group | None = None,
+    ) -> list[RunResult]:
+        """Public entry point. Delegates to `_run_pipeline_body` inside a
+        run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
+        secrets masking registry is cleared once the WHOLE pipeline run —
+        including every nested `run_task` call it makes per stage — is fully
+        complete and every sink has already redacted against it."""
+        self._enter_run_scope()
+        try:
+            return self._run_pipeline_body(
+                project_names=project_names,
+                pipeline_name=pipeline_name,
+                extra_prompt=extra_prompt,
+                auto_git=auto_git,
+                concurrency=concurrency,
+                dry_run=dry_run,
+                simulate=simulate,
+                start_index=start_index,
+                run_id=run_id,
+                hub=hub,
+                components=components,
+                seed_context=seed_context,
+                group=group,
+            )
+        finally:
+            self._exit_run_scope()
+
+    def _run_pipeline_body(
         self,
         *,
         project_names: Iterable[str],
@@ -1703,6 +1806,38 @@ class Orchestrator:
         simulate: bool = False,
         prior_context: str | None = None,
     ) -> dict | None:
+        """Public entry point. Delegates to `_run_debate_body` inside a
+        run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
+        secrets masking registry is cleared once this debate call completes.
+        Standalone debates are triggered repeatedly via ChatOps in the daemon
+        (see cli.py), so — same as run_task/run_pipeline — this call must not
+        leak resolved secret values into the registry across invocations. When
+        nested inside a role-driven `run_task` call, the shared depth counter
+        means this inner scope's exit does NOT clear prematurely — the outer
+        run_task's own sinks still see the registry populated."""
+        self._enter_run_scope()
+        try:
+            return self._run_debate_body(
+                project_name=project_name,
+                role_name=role_name,
+                topic=topic,
+                dry_run=dry_run,
+                simulate=simulate,
+                prior_context=prior_context,
+            )
+        finally:
+            self._exit_run_scope()
+
+    def _run_debate_body(
+        self,
+        *,
+        project_name: str,
+        role_name: str,
+        topic: str,
+        dry_run: bool = True,
+        simulate: bool = False,
+        prior_context: str | None = None,
+    ) -> dict | None:
         """Run a dual-model debate for *role_name*: capture each model's position,
         synthesize via DebateService, and write an ADR. Returns the ADR emit dict."""
         from typing import cast
@@ -1742,7 +1877,7 @@ class Orchestrator:
                 # inject it as extra_prompt so each brain actually sees it (otherwise
                 # e.g. the CEO gets no brief and correctly returns NEEDS_HUMAN).
                 metadata={"extra_prompt": topic, "prior_context": prior_context or ""},
-                secrets=self._resolve_secrets(step),
+                secrets=self._resolve_secrets(step, project, policy),
             )
             if simulate:
                 output = f"[simulated {brain_model} position on: {topic}]"
@@ -1837,7 +1972,7 @@ class Orchestrator:
                 task_name=task_name,
                 step=placeholder_step,
                 metadata=metadata,
-                secrets=self._resolve_secrets(placeholder_step),
+                secrets=self._resolve_secrets(placeholder_step, project, policy),
             )
             try:
                 if simulate:
@@ -1911,7 +2046,7 @@ class Orchestrator:
 
             outputs: list[str] = []
             for step in task.steps:
-                secrets = self._resolve_secrets(step)
+                secrets = self._resolve_secrets(step, _exec_project, policy)
                 payload = RunnerPayload(
                     project_name=_exec_project.path.name,
                     project=_exec_project,
@@ -2094,10 +2229,48 @@ class Orchestrator:
             raise ValueError(f"Unknown project: {name}")
         return self.projects.projects[name]
 
-    def _resolve_secrets(self, step: TaskStep) -> dict[str, str]:
-        if not step.secrets:
-            return {}
-        return secret_resolver.resolve(step.secrets)
+    def _resolve_secrets(
+        self,
+        step: TaskStep,
+        project: ProjectConfig | None = None,
+        policy: policy_service.Policy | None = None,
+    ) -> dict[str, str]:
+        """Resolve this step's secrets into a ``name -> value`` mapping for the
+        runner environment.
+
+        Two forms are combined:
+          * the direct ``step.secrets`` form (``{ENV_NAME: {source, key}}``),
+            resolved through the existing ``secret_resolver``;
+          * ``${secret:NAME}`` references embedded in ``project.env`` values,
+            resolved LAZILY here against the project ``secrets:`` catalog. The
+            resolved value overrides the raw ``project.env`` entry (payload
+            secrets win in ``merge_environments``).
+
+        Every resolved value is registered for masking so it can never appear
+        verbatim in logs / provenance / serialized state.
+        """
+        resolved: dict[str, str] = {}
+        if step.secrets:
+            resolved.update(secret_resolver.resolve(step.secrets))
+
+        # Scan project.env for ${secret:NAME} references whenever env is present
+        # (not gated on a non-empty catalog: a reference against an EMPTY catalog
+        # is an unresolved reference and must abort in closed mode).
+        if project is not None and project.env:
+            fail_mode = policy.secrets_fail_mode if policy is not None else "closed"
+            resolved.update(
+                resolve_secret_refs(
+                    project.env,
+                    catalog=project.secrets,
+                    fail_mode=fail_mode,
+                )
+            )
+
+        # Register direct-form values too: the reference path registers inside
+        # resolve_secret_refs, but direct-form secrets must be masked as well.
+        for value in resolved.values():
+            register_secret_value(value)
+        return resolved
 
     def _collect_artifacts(
         self,
