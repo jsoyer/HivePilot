@@ -134,6 +134,49 @@ A hook that raises is caught, logged (`plugins.hook_failed`), and never
 propagates — it cannot crash a live pipeline run, the same guarantee a broken
 vault-commit or auditor-observe call already has.
 
+### Example: the `rtk` runner (`plugins/rtk.py`)
+
+Ships in this repo as a reference runner plugin (not a built-in — it's a
+local-file plugin, same trust tier as anything else in `plugins/`). It wraps
+whatever command a shell-generic step would normally run with
+[`rtk proxy`](https://github.com/rtkdev/rtk) — an external CLI that filters
+noisy command output before it reaches the agent, cutting token usage on
+command-heavy steps (test runs, linters, `git status`, etc.).
+
+`RtkRunner` renders the step's `command` (or the runner definition's
+`command`) template exactly like the built-in `shell` runner, then:
+
+- If `rtk` is found on `PATH` (`shutil.which("rtk")`), it runs
+  `rtk proxy bash -lc "<rendered command>"`.
+- If `rtk` is **not** installed, it logs a warning
+  (`rtk_runner.rtk_not_found`) and falls back to running
+  `bash -lc "<rendered command>"` directly — the step still executes, it
+  just doesn't get the token-saving filtering. A step never fails just
+  because `rtk` isn't on the host.
+
+Point a role or runner definition at it the same way you'd point at any
+other kind — set `kind: rtk` on a `RunnerDefinition` (e.g. in `roles.yaml` /
+`tasks.yaml`) and give the step (or the runner definition) a `command`:
+
+```yaml
+# roles.yaml
+runners:
+  fast-tests:
+    kind: rtk
+    command: "pytest -q"
+```
+
+```yaml
+# tasks.yaml
+steps:
+  - name: run-tests
+    runner: fast-tests
+```
+
+Any step assigned to a runner of kind `rtk` gets its command proxied through
+`rtk` automatically, with the same-directory graceful fallback described
+above.
+
 ## Packaging
 
 ### Local file

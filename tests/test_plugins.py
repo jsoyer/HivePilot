@@ -22,7 +22,14 @@ for _mod in _STUBS:
 
 
 class TestPluginManagerHooksAnnotation:
-    """Verify PluginManager.hooks has the correct type annotation."""
+    """Verify PluginManager.hooks has the correct type annotation.
+
+    Each test below calls the real, unmocked `PluginManager()`, which scans
+    the actual `plugins/` directory (cwd) and registers any local plugin's
+    declared runners into the process-global `RUNNER_MAP` — isolated across
+    the whole suite by the session-wide `_isolate_runner_and_notifier_maps`
+    autouse fixture in `tests/conftest.py`.
+    """
 
     def test_plugin_manager_importable(self) -> None:
         """hivepilot.plugins imports without error."""
