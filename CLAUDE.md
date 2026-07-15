@@ -11,7 +11,7 @@
 - One task per subagent for focused execution
 
 ### 3. Self-Improvement Loop
-- After ANY correction from the user: update `…/obsidian-vault/Jsoyer/Projects/HivePilot/session-learnings.md` with the pattern
+- After ANY correction from the user: record the pattern in the private knowledge base (kept outside this repo)
 - Write rules for yourself that prevent the same mistake
 - Ruthlessly iterate on these lessons until mistake rate drops
 - Review lessons at session start for relevant project
@@ -36,18 +36,17 @@
 
 ## Task Management
 
-Planning & knowledge docs live in the **Jsoyer Obsidian vault**, NOT in the repo.
-Routing rule (repos under `~/Documents/Github/jsoyer/` → vault Jsoyer): for HivePilot the
-project folder is `~/Documents/Github/jsoyer/obsidian-vault/Jsoyer/Projects/HivePilot/`.
-Plans go in its `Plans/` subfolder; lessons/learnings in `session-learnings.md`.
-Vault repo = `github.com/jsoyer/obsidian-vault`, branch `main` (main-direct: push direct, no PR).
+Planning & working docs (plans, lessons, roadmap) are kept in a **private knowledge base
+outside this repository** — they are NOT committed here. This repo holds only user-facing
+docs (README, USAGE, PLUGINS, deployment example). Do not add internal planning, roadmap,
+or lessons files to the repo; the maintainer's local/global config points to where they live.
 
-1. **Plan First**: Write plan to `…/Projects/HivePilot/Plans/<name>.md` (Obsidian note, frontmatter + checkable items)
+1. **Plan First**: Write the plan as a note in the private knowledge base (checkable items)
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
 5. **Document Results**: Add a review section to the plan note
-6. **Capture Lessons**: Update `…/Projects/HivePilot/session-learnings.md` after corrections
+6. **Capture Lessons**: Record lessons in the private knowledge base after corrections
 
 ## Core Principles
 
