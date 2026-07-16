@@ -905,10 +905,13 @@ class Orchestrator:
                     # Phase 10c: a raised runner/step error can itself echo
                     # captured output (e.g. "non-zero exit: <stdout>") — mask
                     # registered secrets here too, same choke-point rationale
-                    # as the success-path `detail` above.
-                    results.append(
-                        RunResult(project.path.name, task_name, False, redact_text(str(exc)))
-                    )
+                    # as the success-path `detail` above. Compute this ONCE
+                    # and reuse it for every downstream sink in this block
+                    # (RunResult, Notion, Linear) — they all receive the same
+                    # exception message, so a single redaction point avoids a
+                    # raw `str(exc)` slipping through to any one of them.
+                    exc_text = redact_text(str(exc))
+                    results.append(RunResult(project.path.name, task_name, False, exc_text))
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "failed", str(exc))
                     notification_service.send_notification(
@@ -918,14 +921,16 @@ class Orchestrator:
                         from hivepilot.services.notion_service import on_run_complete
 
                         on_run_complete(
-                            notion_page_ids.get(project.path.name), status="failed", detail=str(exc)
+                            notion_page_ids.get(project.path.name),
+                            status="failed",
+                            detail=exc_text,
                         )
                     except Exception:  # noqa: BLE001
                         pass
                     try:
                         from hivepilot.services.linear_service import on_run_failure
 
-                        on_run_failure(project=project.path.name, task=task_name, error=str(exc))
+                        on_run_failure(project=project.path.name, task=task_name, error=exc_text)
                     except Exception:  # noqa: BLE001
                         pass
         summary = {

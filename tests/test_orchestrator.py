@@ -1460,6 +1460,80 @@ class TestRunResultDetailRedaction:
         )
         assert cp.REDACTED in (results[0].detail or "")
 
+    def test_run_task_redacts_registered_secret_sent_to_notion_and_linear(self, tmp_path) -> None:
+        """A step raises an exception whose message embeds a REGISTERED
+        secret. The `_run_task_body` failure `except` block also forwards
+        that message to `notion_service.on_run_complete` (Notion page PATCH)
+        and `linear_service.on_run_failure` (Linear issue creation) — both
+        external network sinks that do NOT self-redact. Both must receive
+        the already-redacted text, never the raw exception string."""
+        from hivepilot.models import TaskConfig, TaskStep
+        from hivepilot.services.policy_service import Policy
+
+        cp = self._clean_registry()
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        orch = self._orch_with_project_and_task(task)
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.capture.side_effect = RuntimeError(f"non-zero exit, stdout was: {self.MARKER}")
+        orch.registry.get_runner.return_value = fake_runner
+
+        cp.register_secret_value(self.MARKER)
+        try:
+            with (
+                patch.object(orch, "_resolve_secrets", return_value={}),
+                patch(
+                    "hivepilot.orchestrator.policy_service.enforce_policy",
+                    return_value=Policy(),
+                ),
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+                patch("hivepilot.orchestrator.state_service.complete_run"),
+                patch("hivepilot.orchestrator.state_service.record_step"),
+                patch("hivepilot.orchestrator.notification_service.send_notification"),
+                patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+                patch(
+                    "hivepilot.services.notion_service.on_run_start",
+                    return_value="notion-page-123",
+                ) as mock_on_run_start,
+                patch("hivepilot.services.notion_service.on_run_complete") as mock_on_run_complete,
+                patch("hivepilot.services.linear_service.on_run_failure") as mock_on_run_failure,
+            ):
+                results = orch.run_task(
+                    project_names=["proj"],
+                    task_name="x",
+                    extra_prompt=None,
+                    auto_git=False,
+                )
+        finally:
+            cp.clear_secret_values()
+
+        assert mock_on_run_start.called
+        assert len(results) == 1
+        assert results[0].success is False
+        assert self.MARKER not in (results[0].detail or "")
+
+        # Notion: `detail=` kwarg must be redacted, never the raw exception text.
+        assert mock_on_run_complete.called, "on_run_complete was not called on failure"
+        notion_kwargs = mock_on_run_complete.call_args.kwargs
+        assert self.MARKER not in notion_kwargs.get("detail", ""), (
+            "the secret leaked verbatim into the Notion page update"
+        )
+        assert cp.REDACTED in notion_kwargs.get("detail", "")
+
+        # Linear: `error=` kwarg must be redacted, never the raw exception text.
+        assert mock_on_run_failure.called, "on_run_failure was not called on failure"
+        linear_kwargs = mock_on_run_failure.call_args.kwargs
+        assert self.MARKER not in linear_kwargs.get("error", ""), (
+            "the secret leaked verbatim into the Linear issue"
+        )
+        assert cp.REDACTED in linear_kwargs.get("error", "")
+
     def test_run_task_leaves_non_secret_detail_unchanged(self, tmp_path) -> None:
         """No secret registered -> `redact_text` is a no-op — the raw runner
         output passes through the choke point untouched (proves the fix

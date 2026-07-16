@@ -4,10 +4,13 @@ Plan/preview output is intentionally NOT captured or returned by these
 runners — it can echo secret var values (``TF_VAR_*``, Pulumi stack config),
 and the ``RunResult.detail`` path it would otherwise flow through (CLI
 stdout, the ``/v1/run`` API body, Slack/Discord/Telegram notifications) is
-not redacted. ``run()`` always executes with ``capture_output=False`` so
-output streams live to the parent's stdout instead. A safe plan-SUMMARY
-capture (counts only, no diff body) is deferred to the Mirador panel sprint
-(A3).
+not reliably redacted for unregistered TF_VAR_*-style values: the Phase 10c
+choke point (`redact_text`) only masks values that were explicitly
+registered via ``${secret:}`` resolution, and TF_VAR_*/Pulumi stack config
+values never go through that registration path. ``run()`` always executes
+with ``capture_output=False`` so output streams live to the parent's stdout
+instead. A safe plan-SUMMARY capture (counts only, no diff body) is deferred
+to the Mirador panel sprint (A3).
 """
 
 from __future__ import annotations
