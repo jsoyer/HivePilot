@@ -103,13 +103,86 @@ def _ref(**spec: object) -> SecretRef:
 class TestRegister:
     def test_register_exposes_onepassword_secrets_backend(self, op_module: ModuleType) -> None:
         hooks = op_module.register()
-        assert set(hooks) == {"secrets"}
+        assert set(hooks) == {"secrets", "health"}
         backends = hooks["secrets"]
         assert set(backends) == {"onepassword"}
         backend = backends["onepassword"]
         # Structurally satisfies the SecretsBackend protocol.
         assert callable(getattr(backend, "resolve", None))
         assert backend.name == "onepassword"
+
+    def test_register_exposes_health_check(self, op_module: ModuleType) -> None:
+        hooks = op_module.register()
+        assert "health" in hooks
+        assert "onepassword" in hooks["health"]
+        assert hooks["health"]["onepassword"] is op_module.health
+
+
+class TestHealth:
+    """Plugin-health surface: `health()` reports CONFIGURATION status only —
+    never the token value or a resolved secret (Phase 19 discipline).
+    `error` if the SDK is missing, `degraded` if unconfigured, `ok` when both
+    the SDK is importable and a Connect host + a token are present."""
+
+    def test_error_when_sdk_missing(self, op_module: ModuleType) -> None:
+        with patch.object(op_module, "new_client", None):
+            result = op_module.health()
+        assert result.status == "error"
+        assert "onepasswordconnectsdk" in result.detail
+
+    def test_ok_when_sdk_and_config_present(self, op_module: ModuleType) -> None:
+        # Autouse `_op_settings` provides a fully-configured Connect baseline.
+        with patch.object(op_module, "new_client", MagicMock()):
+            result = op_module.health()
+        assert result.status == "ok"
+
+    def test_ok_with_service_account_token(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok", raising=False)
+        with patch.object(op_module, "new_client", MagicMock()):
+            result = op_module.health()
+        assert result.status == "ok"
+
+    def test_degraded_when_unconfigured(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", None, raising=False)
+        with patch.object(op_module, "new_client", MagicMock()):
+            result = op_module.health()
+        assert result.status == "degraded"
+        assert "not configured" in result.detail
+
+    def test_health_never_leaks_token_value(self, op_module: ModuleType) -> None:
+        """The token value must NEVER appear in the health detail — only
+        presence booleans / mode names (Phase 19 no-secret discipline).
+        `_op_settings` sets `op_connect_token=_FAKE_TOKEN`."""
+        with patch.object(op_module, "new_client", MagicMock()):
+            result = op_module.health()
+        assert _FAKE_TOKEN not in result.detail
+        assert "https://op-connect.example.com" not in result.detail
+
+    def test_health_is_keyword_tolerant(self, op_module: ModuleType) -> None:
+        with patch.object(op_module, "new_client", MagicMock()):
+            result = op_module.health(project="anything")
+        assert result.status in {"ok", "degraded", "error"}
+
+    def test_health_never_raises_returns_error_type_name(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Boom:
+            @property
+            def op_connect_host(self) -> str:
+                raise RuntimeError("boom-secret")
+
+        monkeypatch.setattr("hivepilot.config.settings", _Boom())
+        with patch.object(op_module, "new_client", MagicMock()):
+            result = op_module.health()
+        assert result.status == "error"
+        assert result.detail == "RuntimeError"
+        assert "boom-secret" not in result.detail
 
     def test_backend_is_not_a_dataclass(self, op_module: ModuleType) -> None:
         import dataclasses

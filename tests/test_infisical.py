@@ -93,13 +93,80 @@ def _ref(**spec: object) -> SecretRef:
 class TestRegister:
     def test_register_exposes_infisical_secrets_backend(self, infisical_module: ModuleType) -> None:
         hooks = infisical_module.register()
-        assert set(hooks) == {"secrets"}
+        assert set(hooks) == {"secrets", "health"}
         backends = hooks["secrets"]
         assert set(backends) == {"infisical"}
         backend = backends["infisical"]
         # Structurally satisfies the SecretsBackend protocol.
         assert callable(getattr(backend, "resolve", None))
         assert backend.name == "infisical"
+
+    def test_register_exposes_health_check(self, infisical_module: ModuleType) -> None:
+        hooks = infisical_module.register()
+        assert "health" in hooks
+        assert "infisical" in hooks["health"]
+        assert hooks["health"]["infisical"] is infisical_module.health
+
+
+class TestHealth:
+    """Plugin-health surface: `health()` reports CONFIGURATION status only —
+    never the token/endpoint value or a resolved secret (Phase 19 discipline).
+    `error` if the SDK is missing, `degraded` if unconfigured, `ok` when both
+    the SDK is importable and the required config is present."""
+
+    def test_error_when_sdk_missing(self, infisical_module: ModuleType) -> None:
+        with patch.object(infisical_module, "InfisicalSDKClient", None):
+            result = infisical_module.health()
+        assert result.status == "error"
+        assert "infisicalsdk" in result.detail
+
+    def test_ok_when_sdk_and_config_present(self, infisical_module: ModuleType) -> None:
+        # Autouse `_infisical_settings` provides a fully-configured baseline.
+        with patch.object(infisical_module, "InfisicalSDKClient", MagicMock()):
+            result = infisical_module.health()
+        assert result.status == "ok"
+
+    def test_degraded_when_unconfigured(
+        self, infisical_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "infisical_token", None, raising=False)
+        with patch.object(infisical_module, "InfisicalSDKClient", MagicMock()):
+            result = infisical_module.health()
+        assert result.status == "degraded"
+        assert "not configured" in result.detail
+
+    def test_health_never_leaks_token_value(
+        self, infisical_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The token value must NEVER appear in the health detail — only
+        presence booleans / mode names (Phase 19 no-secret discipline)."""
+        monkeypatch.setattr(settings, "infisical_token", _FAKE_VALUE, raising=False)
+        with patch.object(infisical_module, "InfisicalSDKClient", MagicMock()):
+            result = infisical_module.health()
+        assert _FAKE_VALUE not in result.detail
+        assert "https://infisical.example.com" not in result.detail
+
+    def test_health_is_keyword_tolerant(self, infisical_module: ModuleType) -> None:
+        with patch.object(infisical_module, "InfisicalSDKClient", MagicMock()):
+            result = infisical_module.health(project="anything")
+        assert result.status in {"ok", "degraded", "error"}
+
+    def test_health_never_raises_returns_error_type_name(
+        self, infisical_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Force an internal failure while reading config to prove the guard
+        # returns the exception TYPE name, never a message.
+        class _Boom:
+            @property
+            def infisical_token(self) -> str:
+                raise RuntimeError("boom-secret")
+
+        monkeypatch.setattr("hivepilot.config.settings", _Boom())
+        with patch.object(infisical_module, "InfisicalSDKClient", MagicMock()):
+            result = infisical_module.health()
+        assert result.status == "error"
+        assert result.detail == "RuntimeError"
+        assert "boom-secret" not in result.detail
 
 
 class TestResolveHappyPath:

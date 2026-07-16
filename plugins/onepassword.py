@@ -72,6 +72,7 @@ from __future__ import annotations
 from typing import Any
 
 from hivepilot.config import Settings
+from hivepilot.plugins import HealthStatus
 from hivepilot.registry import SecretRef
 from hivepilot.utils.logging import get_logger
 
@@ -253,5 +254,35 @@ class OnePasswordBackend:
         return value
 
 
+def health(**kwargs: Any) -> HealthStatus:
+    """Report 1Password Connect CONFIGURATION status only — NEVER a token
+    value and NEVER a resolved secret (Phase 19 discipline; mirrors
+    `plugins/mem0.py`'s `health()`):
+
+    - `error` when the `onepasswordconnectsdk` package isn't importable.
+    - `degraded` ("not configured") when the required connection config
+      (Connect host + a Connect or service-account token) is incomplete.
+    - `ok` ("configured") when the SDK is importable AND that config is present.
+
+    The detail carries presence booleans / mode names only — never the token,
+    the Connect host URL, or a fetched value. Never raises: any internal error
+    is reported as the exception TYPE name only (never a message), matching
+    `PluginManager.run_health_check`.
+    """
+    try:
+        if new_client is None:
+            return HealthStatus("error", "onepasswordconnectsdk not installed")
+
+        from hivepilot.config import settings
+
+        host = settings.op_connect_host
+        token = settings.op_connect_token or settings.op_service_account_token
+        if host and token:
+            return HealthStatus("ok", "configured")
+        return HealthStatus("degraded", "not configured")
+    except Exception as exc:  # noqa: BLE001 — a health check must never crash
+        return HealthStatus("error", type(exc).__name__)
+
+
 def register() -> dict[str, Any]:
-    return {"secrets": {_PROVIDER: OnePasswordBackend()}}
+    return {"secrets": {_PROVIDER: OnePasswordBackend()}, "health": {_PROVIDER: health}}

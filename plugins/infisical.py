@@ -66,6 +66,7 @@ from __future__ import annotations
 from typing import Any
 
 from hivepilot.config import Settings
+from hivepilot.plugins import HealthStatus
 from hivepilot.registry import SecretRef
 from hivepilot.utils.logging import get_logger
 
@@ -214,5 +215,38 @@ class InfisicalBackend:
         return value
 
 
+def health(**kwargs: Any) -> HealthStatus:
+    """Report Infisical CONFIGURATION status only — NEVER a token/endpoint
+    value and NEVER a resolved secret (Phase 19 discipline; mirrors
+    `plugins/mem0.py`'s `health()`):
+
+    - `error` when the `infisicalsdk` package isn't importable (lib missing).
+    - `degraded` ("not configured") when the required connection config
+      (token + workspace id + environment) is incomplete.
+    - `ok` ("configured") when the SDK is importable AND that config is present.
+
+    The detail carries presence booleans / mode names only — never the token,
+    URL, workspace id, or a fetched value. Never raises: any internal error is
+    reported as the exception TYPE name only (never a message), matching
+    `PluginManager.run_health_check`.
+    """
+    try:
+        if InfisicalSDKClient is None:
+            return HealthStatus("error", "infisicalsdk not installed")
+
+        from hivepilot.config import settings
+
+        configured = bool(
+            settings.infisical_token
+            and settings.infisical_workspace_id
+            and settings.infisical_environment
+        )
+        if configured:
+            return HealthStatus("ok", "configured")
+        return HealthStatus("degraded", "not configured")
+    except Exception as exc:  # noqa: BLE001 — a health check must never crash
+        return HealthStatus("error", type(exc).__name__)
+
+
 def register() -> dict[str, Any]:
-    return {"secrets": {_PROVIDER: InfisicalBackend()}}
+    return {"secrets": {_PROVIDER: InfisicalBackend()}, "health": {_PROVIDER: health}}

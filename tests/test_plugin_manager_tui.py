@@ -62,6 +62,49 @@ def test_plugin_rows_attributes_notifier_and_hook_by_module_hint() -> None:
     assert "on_pipeline_end" in detail
 
 
+def test_plugin_rows_attributes_secrets_backend_by_module_hint() -> None:
+    """A secrets-backend plugin (infisical / onepassword) must show 'secrets'
+    in the Type column — previously it fell through to 'unknown (see
+    aggregate)' because plugin_capabilities never cross-referenced SECRETS_MAP.
+    The backend is registered as an INSTANCE, so its module is read off its
+    class (same as the CLI `plugins list` cross-reference)."""
+
+    class _Backend:
+        pass
+
+    _Backend.__module__ = "hivepilot_plugin_infisical"
+    backend = _Backend()
+
+    record = PluginRecord(
+        name="infisical", source="local-file", location="/repo/plugins/infisical.py"
+    )
+
+    rows = plugin_rows([record], {}, {}, {}, secrets_map={"infisical": backend})
+
+    name, source, status, type_label, detail = rows[0]
+    assert "secrets" in type_label
+    assert type_label != "unknown (see aggregate)"
+    assert "infisical" in detail
+
+
+def test_plugin_rows_attributes_panel_by_module_hint() -> None:
+    """A panel-contributing plugin (e.g. sample's `sample_stats` panel) must
+    show 'panel' in the Type column — previously 'unknown (see aggregate)'
+    because plugin_capabilities never cross-referenced the panels registry.
+    The panel is matched by its `fetch` callable's module."""
+    fetch = _module_tagged("fetch", "hivepilot_plugin_sample")
+    panel_spec = {"name": "sample_stats", "title": "Sample", "fetch": fetch, "min_role": "read"}
+
+    record = PluginRecord(name="sample", source="local-file", location="/repo/plugins/sample.py")
+
+    rows = plugin_rows([record], {}, {}, {}, panels={"sample_stats": panel_spec})
+
+    name, source, status, type_label, detail = rows[0]
+    assert "panel" in type_label
+    assert type_label != "unknown (see aggregate)"
+    assert "sample_stats" in detail
+
+
 def test_plugin_rows_falls_back_to_unknown_when_attribution_unavailable() -> None:
     """If per-plugin attribution can't be derived, show the (noted) fallback —
     matches the roadmap Phase 26a limitation documented in docs/v4/PLUGINS.md."""
@@ -154,6 +197,52 @@ async def test_app_details_no_health_line_when_no_check_registered() -> None:
     async with app.run_test() as pilot:
         await pilot.press("enter")
         assert "Health:" not in str(app.details.renderable)
+
+
+@pytest.mark.asyncio
+async def test_app_surfaces_secrets_type_for_injected_secrets_plugin() -> None:
+    """End-to-end through the App: an injected secrets-backend plugin shows
+    'secrets' in its Type column instead of 'unknown (see aggregate)'."""
+
+    class _Backend:
+        pass
+
+    _Backend.__module__ = "hivepilot_plugin_onepassword"
+
+    record = PluginRecord(
+        name="onepassword", source="local-file", location="/repo/plugins/onepassword.py"
+    )
+    app = PluginManagerApp(
+        loaded=[record],
+        runner_map={},
+        notifier_map={},
+        hooks={},
+        secrets_map={"onepassword": _Backend()},
+    )
+
+    async with app.run_test():
+        row = app.plugins_table.get_row_at(0)
+        assert "secrets" in row[3]
+        assert row[3] != "unknown (see aggregate)"
+
+
+@pytest.mark.asyncio
+async def test_app_surfaces_panel_type_for_injected_panel_plugin() -> None:
+    """End-to-end through the App: an injected panel-contributing plugin shows
+    'panel' in its Type column instead of 'unknown (see aggregate)'."""
+    fetch = _module_tagged("fetch", "hivepilot_plugin_sample")
+    record = PluginRecord(name="sample", source="local-file", location="/repo/plugins/sample.py")
+    app = PluginManagerApp(
+        loaded=[record],
+        runner_map={},
+        notifier_map={},
+        hooks={},
+        panels={"sample_stats": {"name": "sample_stats", "title": "S", "fetch": fetch}},
+    )
+
+    async with app.run_test():
+        row = app.plugins_table.get_row_at(0)
+        assert "panel" in row[3]
 
 
 @pytest.mark.asyncio

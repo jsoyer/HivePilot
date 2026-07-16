@@ -36,7 +36,19 @@ _STATUS_COLUMN_INDEX = 2
 
 _ENV_KEY = "HIVEPILOT_PLUGINS_DISABLED"
 
-_CAPABILITY_LABELS = {"runners": "runner", "notifiers": "notifier", "hooks": "hook"}
+# Kept in the display order the Type/Detail columns render capabilities in.
+# `secrets` / `panels` were added when the secrets-backend and Mirador-panel
+# plugin types landed — this Textual screen originally only knew runners/
+# notifiers/hooks, so a secrets-backend plugin (infisical/onepassword) or a
+# panel-contributing plugin (sample) rendered as "unknown (see aggregate)".
+_CAPABILITY_KINDS = ("runners", "notifiers", "hooks", "secrets", "panels")
+_CAPABILITY_LABELS = {
+    "runners": "runner",
+    "notifiers": "notifier",
+    "hooks": "hook",
+    "secrets": "secrets",
+    "panels": "panel",
+}
 
 
 def _plugin_module_hint(record: PluginRecord) -> str | None:
@@ -73,17 +85,25 @@ def plugin_capabilities(
     runner_map: dict[str, Any],
     notifier_map: dict[str, Any],
     hooks: dict[str, list[Any]],
+    secrets_map: dict[str, Any] | None = None,
+    panels: dict[str, Any] | None = None,
 ) -> dict[str, list[str]]:
     """Best-effort cross-reference of a plugin record against the process-global
-    RUNNER_MAP / NOTIFIER_MAP / PluginManager.hooks, by matching `__module__`
-    against the hint derived from the plugin's own source/location.
+    RUNNER_MAP / NOTIFIER_MAP / SECRETS_MAP / PluginManager.hooks / .panels, by
+    matching `__module__` against the hint derived from the plugin's own
+    source/location.
+
+    Secrets backends are registered as INSTANCES, so their module is read off
+    the instance's class (`instance.__module__` resolves to the class attr) —
+    the same cross-reference the CLI `plugins list` performs against SECRETS_MAP.
+    Panels are matched by their `fetch` callable's module.
 
     Per-plugin attribution isn't tracked anywhere upstream (`plugins list`
     documents this same v1 limitation — it's not a full join either); when the
     hint can't be derived, or nothing matches, every list comes back empty and
     the caller should show the "unknown (see aggregate)" fallback.
     """
-    caps: dict[str, list[str]] = {"runners": [], "notifiers": [], "hooks": []}
+    caps: dict[str, list[str]] = {kind: [] for kind in _CAPABILITY_KINDS}
     hint = _plugin_module_hint(record)
     if not hint:
         return caps
@@ -97,26 +117,26 @@ def plugin_capabilities(
     for hook_name, callables in hooks.items():
         if any(_module_matches(fn, hint) for fn in callables):
             caps["hooks"].append(hook_name)
+    for secret_name, backend in (secrets_map or {}).items():
+        if _module_matches(backend, hint):
+            caps["secrets"].append(secret_name)
+    for panel_name, spec in (panels or {}).items():
+        fetch = spec.get("fetch") if isinstance(spec, dict) else None
+        if fetch is not None and _module_matches(fetch, hint):
+            caps["panels"].append(panel_name)
 
-    caps["runners"].sort()
-    caps["notifiers"].sort()
-    caps["hooks"].sort()
+    for kind in _CAPABILITY_KINDS:
+        caps[kind].sort()
     return caps
 
 
 def _format_type_label(caps: dict[str, list[str]]) -> str:
-    labels = [_CAPABILITY_LABELS[key] for key in ("runners", "notifiers", "hooks") if caps[key]]
+    labels = [_CAPABILITY_LABELS[key] for key in _CAPABILITY_KINDS if caps.get(key)]
     return ", ".join(labels) if labels else "unknown (see aggregate)"
 
 
 def _format_detail(caps: dict[str, list[str]]) -> str:
-    parts = []
-    if caps["runners"]:
-        parts.append("runners=" + ",".join(caps["runners"]))
-    if caps["notifiers"]:
-        parts.append("notifiers=" + ",".join(caps["notifiers"]))
-    if caps["hooks"]:
-        parts.append("hooks=" + ",".join(caps["hooks"]))
+    parts = [f"{kind}=" + ",".join(caps[kind]) for kind in _CAPABILITY_KINDS if caps.get(kind)]
     return "; ".join(parts) if parts else "no attributable capabilities (see aggregate detail)"
 
 
@@ -126,6 +146,8 @@ def plugin_rows(
     notifier_map: dict[str, Any],
     hooks: dict[str, list[Any]],
     disabled: set[str] | None = None,
+    secrets_map: dict[str, Any] | None = None,
+    panels: dict[str, Any] | None = None,
 ) -> list[tuple[str, str, str, str, str]]:
     """Build (name, source, status, type(s), detail) rows for the Loaded
     Plugins table.
@@ -136,11 +158,18 @@ def plugin_rows(
     contains plugins `PluginManager` actually loaded (i.e. NOT already in
     `settings.plugins_disabled` at construction time), so every row defaults
     to "enabled" unless explicitly marked otherwise via `disabled`.
+
+    `secrets_map` / `panels` are cross-referenced the same way runners/
+    notifiers/hooks are (see `plugin_capabilities`) so secrets-backend and
+    panel-contributing plugins render a real Type/Detail instead of the
+    "unknown (see aggregate)" fallback.
     """
     disabled = disabled or set()
     rows: list[tuple[str, str, str, str, str]] = []
     for record in loaded:
-        caps = plugin_capabilities(record, runner_map, notifier_map, hooks)
+        caps = plugin_capabilities(
+            record, runner_map, notifier_map, hooks, secrets_map=secrets_map, panels=panels
+        )
         status = "disabled" if record.name in disabled else "enabled"
         rows.append(
             (record.name, record.source, status, _format_type_label(caps), _format_detail(caps))
@@ -231,12 +260,21 @@ class PluginManagerApp(App):
         notifier_map: dict[str, Any] | None = None,
         hooks: dict[str, list[Any]] | None = None,
         health: dict[str, Any] | None = None,
+        secrets_map: dict[str, Any] | None = None,
+        panels: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self._loaded = loaded
         self._runner_map = runner_map
         self._notifier_map = notifier_map
         self._hooks = hooks
+        # Injectable for testing, same shape as the other maps. When omitted
+        # (real usage), resolved from a fresh `Orchestrator()` in `_load_data`
+        # (SECRETS_MAP / orchestrator.plugins.panels), same as the rest — so
+        # secrets-backend and panel plugins get a real Type/Detail instead of
+        # "unknown (see aggregate)".
+        self._secrets_map = secrets_map
+        self._panels = panels
         # Injectable for testing, same shape as the other four — a mapping of
         # health-check name -> HealthStatus(-like), as returned by
         # `PluginManager.check_all()`. When omitted (real usage), resolved
@@ -286,7 +324,13 @@ class PluginManagerApp(App):
     def _load_data(
         self,
     ) -> tuple[
-        list[PluginRecord], dict[str, Any], dict[str, Any], dict[str, list[Any]], dict[str, Any]
+        list[PluginRecord],
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, list[Any]],
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
     ]:
         if self._loaded is not None:
             return (
@@ -295,8 +339,10 @@ class PluginManagerApp(App):
                 self._notifier_map or {},
                 self._hooks or {},
                 self._health_override or {},
+                self._secrets_map or {},
+                self._panels or {},
             )
-        from hivepilot.registry import RUNNER_MAP
+        from hivepilot.registry import RUNNER_MAP, SECRETS_MAP
         from hivepilot.services.notification_service import NOTIFIER_MAP
 
         orchestrator = Orchestrator()
@@ -306,12 +352,16 @@ class PluginManagerApp(App):
             NOTIFIER_MAP,
             orchestrator.plugins.hooks,
             orchestrator.plugins.check_all(),
+            SECRETS_MAP,
+            orchestrator.plugins.panels,
         )
 
     def refresh_plugins(self) -> None:
-        loaded, runner_map, notifier_map, hooks, health = self._load_data()
+        loaded, runner_map, notifier_map, hooks, health, secrets_map, panels = self._load_data()
         self._health = health
-        self._rows = plugin_rows(loaded, runner_map, notifier_map, hooks)
+        self._rows = plugin_rows(
+            loaded, runner_map, notifier_map, hooks, secrets_map=secrets_map, panels=panels
+        )
         self.plugins_table.clear()
         for name, source, status, type_label, detail in self._rows:
             self.plugins_table.add_row(name, source, status, type_label, detail)

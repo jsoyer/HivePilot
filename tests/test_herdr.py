@@ -108,6 +108,45 @@ class TestRegister:
     def test_herdr_kind_does_not_collide_with_a_built_in(self) -> None:
         assert "herdr" not in KNOWN_RUNNER_KINDS
 
+    def test_register_exposes_health_check(self, herdr_module: ModuleType) -> None:
+        hooks = herdr_module.register()
+        assert "health" in hooks
+        assert "herdr" in hooks["health"]
+        assert hooks["health"]["herdr"] is herdr_module.health
+
+
+class TestHealth:
+    """Plugin-health surface: `health()` reflects `shutil.which("herdr")` —
+    `ok` on PATH, `degraded` otherwise (HerdrRunner falls back to raw shell)."""
+
+    def test_ok_when_herdr_on_path(self, herdr_module: ModuleType) -> None:
+        with patch.object(herdr_module.shutil, "which", return_value="/usr/local/bin/herdr"):
+            result = herdr_module.health()
+        assert result.status == "ok"
+        assert "herdr" in result.detail
+
+    def test_degraded_when_herdr_not_on_path(self, herdr_module: ModuleType) -> None:
+        with patch.object(herdr_module.shutil, "which", return_value=None):
+            result = herdr_module.health()
+        assert result.status == "degraded"
+        assert "not on PATH" in result.detail
+        assert "raw shell" in result.detail
+
+    def test_health_is_keyword_tolerant(self, herdr_module: ModuleType) -> None:
+        """health(**kwargs) must accept (and ignore) arbitrary kwargs — the
+        collector (`PluginManager.run_health_check`) calls it with none."""
+        with patch.object(herdr_module.shutil, "which", return_value=None):
+            result = herdr_module.health(project="anything", step="x")
+        assert result.status == "degraded"
+
+    def test_health_never_raises_returns_error_type_name(self, herdr_module: ModuleType) -> None:
+        with patch.object(herdr_module.shutil, "which", side_effect=RuntimeError("boom")):
+            result = herdr_module.health()
+        assert result.status == "error"
+        # Only the exception TYPE name, never the message ("boom").
+        assert result.detail == "RuntimeError"
+        assert "boom" not in result.detail
+
 
 class TestCaptureDrivesFullCliSequence:
     def test_split_run_wait_read_in_order_with_parsed_pane_id(
