@@ -246,6 +246,10 @@ def _register_handlers(bolt_app) -> None:
     @bolt_app.action({"action_id": "^(approve|deny)_\\d+$"})
     def handle_approval_action(ack, action, body, respond):
         ack()
+        channel_id = ((body or {}).get("channel") or {}).get("id", "")
+        if not _is_allowed(channel_id):
+            respond("Unauthorized channel.")
+            return
         action_id = action.get("action_id", "")
         try:
             verb, raw_id = action_id.rsplit("_", 1)
