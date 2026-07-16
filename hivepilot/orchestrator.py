@@ -20,6 +20,7 @@ from hivepilot.models import (
     RunnerDefinition,
     TaskConfig,
     TaskStep,
+    resolve_mode,
 )
 
 try:
@@ -38,7 +39,12 @@ from hivepilot.observability.tracing import (
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager
 from hivepilot.registry import RunnerRegistry
-from hivepilot.runners.base import RunnerPayload, UsageInfo, pop_last_usage
+from hivepilot.runners.base import (
+    RunnerPayload,
+    UsageInfo,
+    pop_last_usage,
+    validate_runner_mode,
+)
 from hivepilot.services import (
     knowledge_service,
     notification_service,
@@ -296,6 +302,21 @@ def _runner_for_stage(stage: PipelineStage) -> str:
     runners.
     """
     return "claude"
+
+
+def _resolve_effective_mode(step: TaskStep, stage_mode: str | None) -> str:
+    """Resolve the pipeline/stage-driven execution mode for a step.
+
+    Precedence: an explicit per-step ``metadata['mode']`` wins over the
+    pipeline/stage-resolved ``stage_mode`` (from ``resolve_mode``), which falls
+    back to ``"cli"``. The orchestrator deliberately does NOT consult the runner
+    definition's ``options['mode']`` here: that channel is the runner's OWN
+    fallback (``step.metadata > options > "cli"`` inside each runner), so a
+    plain ``run_task`` (``stage_mode`` None, no step-metadata mode) resolves to
+    ``"cli"`` and the orchestrator injects nothing — leaving the runner's
+    existing ``options['mode']`` behaviour byte-identical.
+    """
+    return (step.metadata.get("mode") or stage_mode or "cli").lower()
 
 
 def _resolve_step_provider_model(
@@ -664,12 +685,18 @@ class Orchestrator:
         simulate: bool = False,
         dry_run: bool = True,
         prior_context: str | None = None,
+        mode: str = "cli",
     ) -> list[RunResult]:
         """Public entry point. Delegates to `_run_task_body` inside a run-scope
         (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-secrets
         masking registry is cleared once this run — including any pipeline
         stages nested inside it when called from `run_pipeline` — is fully
-        complete and every sink has already redacted against it."""
+        complete and every sink has already redacted against it.
+
+        ``mode`` is the pipeline/stage-resolved execution mode (see
+        ``resolve_mode``); it is injected into each step's runner dispatch and
+        validated against the runner's ``supported_modes``. Defaults to
+        ``"cli"`` for a plain task run, keeping existing behaviour unchanged."""
         self._enter_run_scope()
         try:
             return self._run_task_body(
@@ -681,6 +708,7 @@ class Orchestrator:
                 simulate=simulate,
                 dry_run=dry_run,
                 prior_context=prior_context,
+                mode=mode,
             )
         finally:
             self._exit_run_scope()
@@ -696,6 +724,7 @@ class Orchestrator:
         simulate: bool = False,
         dry_run: bool = True,
         prior_context: str | None = None,
+        mode: str = "cli",
     ) -> list[RunResult]:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
@@ -816,6 +845,7 @@ class Orchestrator:
                     simulate=simulate,
                     dry_run=dry_run,
                     prior_context=prior_context,
+                    mode=mode,
                 ): project
                 for project in immediate_projects
             }
@@ -1698,6 +1728,9 @@ class Orchestrator:
                 concurrency=concurrency,
                 simulate=simulate,
                 dry_run=dry_run,
+                # Resolve the stage's execution mode (stage over pipeline over
+                # "cli" default) and propagate it into every step's dispatch.
+                mode=resolve_mode(pipeline, stage),
                 prior_context=_route_prior_context(
                     role=consuming_role,
                     prior_chunks=prior_chunks,
@@ -2338,6 +2371,7 @@ class Orchestrator:
         resume_from_step: int = 0,
         resume_outputs: list[str] | None = None,
         approved_step_index: int | None = None,
+        mode: str = "cli",
     ) -> str | None:
         """Thin OpenTelemetry-tracing wrapper around `_execute_task_body`.
 
@@ -2383,6 +2417,7 @@ class Orchestrator:
                     resume_from_step=resume_from_step,
                     resume_outputs=resume_outputs,
                     approved_step_index=approved_step_index,
+                    mode=mode,
                 )
             except StepApprovalPending:
                 _task_span.set_attribute("hivepilot.task.status", "paused")
@@ -2413,6 +2448,7 @@ class Orchestrator:
         resume_from_step: int = 0,
         resume_outputs: list[str] | None = None,
         approved_step_index: int | None = None,
+        mode: str = "cli",
     ) -> str | None:
         """Execute *task*'s steps for *project*.
 
@@ -2599,6 +2635,29 @@ class Orchestrator:
                             runner_def = self.registry._definition_for(runner_key)
                         _used_runner_def = runner_def
                         _step_span.set_attribute("hivepilot.step.runner_kind", str(runner_def.kind))
+                        # Resolve the effective execution mode for this step and
+                        # validate it against the runner's declared capabilities
+                        # BEFORE any dispatch, so a mode:api step on a cli-only
+                        # runner fails closed here — no subprocess, no HTTP call.
+                        # Only inject when a non-cli mode is actually in effect,
+                        # keeping the default (cli) path byte-identical: the
+                        # runner would compute the same value from step.metadata/
+                        # options anyway, and we never write a redundant "cli".
+                        _effective_mode = _resolve_effective_mode(step, mode)
+                        if _effective_mode != "cli":
+                            from hivepilot.registry import resolve_runner_class
+
+                            _runner_cls = resolve_runner_class(runner_def.kind)
+                            validate_runner_mode(
+                                str(runner_def.kind),
+                                getattr(_runner_cls, "supported_modes", frozenset({"cli"})),
+                                _effective_mode,
+                            )
+                            if step.metadata.get("mode") != _effective_mode:
+                                step = step.model_copy(
+                                    update={"metadata": {**step.metadata, "mode": _effective_mode}}
+                                )
+                                payload.step = step
                         if (
                             runner_def.kind == "container"
                             and policy

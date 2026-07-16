@@ -5,10 +5,14 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, ClassVar
+
+import requests
 
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import BaseRunner, RunnerPayload, UsageInfo, set_last_usage
+from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.utils.env import gather_overrides, merge_environments
 from hivepilot.utils.logging import get_logger
@@ -19,6 +23,11 @@ from hivepilot.utils.sandbox import DEFAULT_ALLOWLIST, scrub_env, wrap_bwrap
 logger = get_logger(__name__)
 
 _ELEVATED_PERMISSION_MODES = frozenset({"bypassPermissions", "acceptEdits"})
+
+# Default response cap for the Anthropic Messages API path (mode: api). Mirrors
+# the conservative default the prompt-cli runner uses; API mode is primarily
+# used for short capture/debate turns, not long headless coding sessions.
+_ANTHROPIC_API_MAX_TOKENS = 4096
 
 
 def _insert_output_format_json(argv: list[str]) -> list[str]:
@@ -144,10 +153,17 @@ class ClaudeRunner(BaseRunner):
     settings: Settings
     profiles: dict[str, dict[str, str]] = field(default_factory=load_claude_profiles)
 
-    def _build_invocation(self, payload: RunnerPayload) -> tuple[list[str], dict[str, str]]:
-        command = self.definition.command or self.settings.claude_command
-        if not command:
-            raise ValueError("Claude command not configured.")
+    # Agent runner: honours both the CLI binary (default) and the Anthropic
+    # Messages API (mode: api → `_run_api`). See BaseRunner.supported_modes.
+    supported_modes: ClassVar[frozenset[str]] = frozenset({"cli", "api"})
+
+    def _assemble_prompt(self, payload: RunnerPayload) -> str:
+        """Load the step's prompt file and build the full agent prompt.
+
+        Extracted from ``_build_invocation`` so the API path (``_run_api``)
+        sends the SAME assembled prompt the CLI path would — one source of
+        truth for prompt construction across both execution modes.
+        """
         prompt_file = payload.step.prompt_file
         if not prompt_file:
             raise ValueError(
@@ -158,7 +174,24 @@ class ClaudeRunner(BaseRunner):
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
         knowledge_context = self._build_knowledge_context(payload)
-        prompt = self._build_prompt(payload, prompt_text, knowledge_context)
+        return self._build_prompt(payload, prompt_text, knowledge_context)
+
+    def _mode(self, payload: RunnerPayload) -> str:
+        """Resolve the effective execution mode for *payload*.
+
+        Same resolution channel the orchestrator writes into and the
+        prompt-cli runner already consults: step metadata wins over the runner
+        definition's options, falling back to ``"cli"``.
+        """
+        return (
+            payload.step.metadata.get("mode") or self.definition.options.get("mode") or "cli"
+        ).lower()
+
+    def _build_invocation(self, payload: RunnerPayload) -> tuple[list[str], dict[str, str]]:
+        command = self.definition.command or self.settings.claude_command
+        if not command:
+            raise ValueError("Claude command not configured.")
+        prompt = self._assemble_prompt(payload)
         args = [command, "--print"]
         model = self._resolve_model(payload)
         if model:
@@ -189,6 +222,12 @@ class ClaudeRunner(BaseRunner):
         )
 
     def run(self, payload: RunnerPayload) -> None:
+        # mode: api routes through the Anthropic Messages API instead of the
+        # CLI binary. The default (cli) path below is byte-identical to before.
+        if self._mode(payload) == "api":
+            env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
+            self._run_api(payload, env)
+            return
         args, env = self._build_invocation(payload)
         argv, cwd, run_env = build_invocation(
             args,
@@ -225,6 +264,12 @@ class ClaudeRunner(BaseRunner):
         # code path below either overwrites this with fresh usage (well-formed
         # JSON) or must leave it None (flag off / any degradation path).
         set_last_usage(None)
+        # mode: api routes through the Anthropic Messages API (which reports
+        # usage in the SAME response, so no second --output-format json call is
+        # needed). The stale-usage clear above applies to both branches.
+        if self._mode(payload) == "api":
+            env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
+            return self._run_api(payload, env)
         args, env = self._build_invocation(payload)
         argv, cwd, run_env = build_invocation(
             args,
@@ -306,6 +351,149 @@ class ClaudeRunner(BaseRunner):
             err = (result.stderr or result.stdout or "").strip()[-2000:]
             raise RuntimeError(f"claude exited {result.returncode}: {err}")
         return result.stdout
+
+    # ── mode: api (Anthropic Messages API) ────────────────────────────────────
+
+    def _run_api(self, payload: RunnerPayload, env: dict[str, str]) -> str:
+        """Execute this step against the Anthropic Messages API and return the
+        assistant's reply text (the same ``str`` shape ``capture()``'s CLI path
+        returns), stashing usage via ``set_last_usage`` for the orchestrator to
+        pop right after.
+
+        SECURITY (fail closed + mask at the runner):
+        - The API key is read ONLY from the resolved ``env`` (populated from
+          ``${secret:ANTHROPIC_API_KEY}`` upstream). A missing key raises a
+          clear error and performs NO request — never falls back to an empty
+          key that would hit the API.
+        - The key travels only in the ``x-api-key`` header, never in argv (there
+          is no subprocess here), an exception message, or a log line.
+        - The resolved key is registered with ``register_secret_value`` and the
+          returned text is passed through ``redact_text`` AT the runner, so the
+          key can never surface in ``RunResult.detail`` even if the provider
+          reflected it back — this does not rely on any downstream sink.
+        """
+        prompt = self._assemble_prompt(payload)
+        model = self._resolve_model(payload)
+        if not model:
+            raise RuntimeError(
+                "Claude API mode requires a model (set the runner model, step "
+                "metadata 'model', a profile, or settings.default_model)."
+            )
+        api_key = env.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is not set — refusing to run claude in API "
+                "mode without a key (fail closed)."
+            )
+        # Register the resolved key so it is redacted everywhere downstream, and
+        # so the redact_text call on the returned text below actually masks it.
+        register_secret_value(api_key)
+
+        headers: dict[str, str] = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        # Split stable system (cacheable) + volatile user trigger, mirroring
+        # PromptCliRunner._run_api. _assemble_prompt already orders the prompt
+        # stable→volatile, so the whole thing is safe to cache as the system block.
+        if self.settings.anthropic_prompt_cache:
+            headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+            api_payload: dict[str, Any] = {
+                "model": model,
+                "max_tokens": _ANTHROPIC_API_MAX_TOKENS,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                "messages": [{"role": "user", "content": "Execute the instructions above."}],
+            }
+        else:
+            api_payload = {
+                "model": model,
+                "max_tokens": _ANTHROPIC_API_MAX_TOKENS,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+        timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
+        result = self._post_json(
+            url="https://api.anthropic.com/v1/messages",
+            headers=headers,
+            payload=api_payload,
+            timeout=timeout,
+        )
+        text = self._extract_api_text(result)
+        usage = self._extract_api_usage(result)
+        if usage is not None:
+            set_last_usage(usage)
+        # Mask AT the runner — RunResult.detail is known-unredacted at the
+        # choke point, so never depend on a downstream sink to catch the key.
+        return redact_text(text)
+
+    def _post_json(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        # Log metadata only — never the response body (it can reflect the
+        # prompt / knowledge context) and never the headers (they carry the key).
+        logger.info("claude_runner.api_request", url=url, model=payload.get("model"))
+        response = requests.post(url, json=payload, headers=headers, timeout=timeout or 60)
+        if not response.ok:
+            # response.text can echo request content but NOT the key (the key is
+            # a header, not in the body); still, keep it bounded.
+            raise RuntimeError(
+                f"Anthropic API request failed: {response.status_code} "
+                f"{redact_text((response.text or '')[-2000:])}"
+            )
+        result = response.json()
+        logger.info(
+            "claude_runner.api_response",
+            status_code=response.status_code,
+            bytes=len(response.content),
+        )
+        return result if isinstance(result, dict) else {}
+
+    def _extract_api_text(self, result: Any) -> str:
+        """Extract the assistant reply text from an Anthropic Messages response.
+
+        Defensive: never raises — an unexpected shape yields "" rather than
+        crashing the step (the HTTP call already succeeded by the time this runs).
+        """
+        if not isinstance(result, dict):
+            return ""
+        blocks = result.get("content")
+        if not isinstance(blocks, list):
+            return ""
+        return "".join(
+            b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+        )
+
+    def _extract_api_usage(self, result: Any) -> UsageInfo | None:
+        """Build a ``UsageInfo`` from an Anthropic response's ``usage`` block,
+        or ``None`` when absent. Never invents values; ``cost_usd`` stays None
+        (Anthropic doesn't report cost in the response body — a price-map can
+        estimate it downstream from tokens+model)."""
+        if not isinstance(result, dict):
+            return None
+        usage = result.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        if input_tokens is None and output_tokens is None:
+            return None
+        model = result.get("model")
+        return UsageInfo(
+            input_tokens=input_tokens if isinstance(input_tokens, int) else None,
+            output_tokens=output_tokens if isinstance(output_tokens, int) else None,
+            cost_usd=None,
+            model=model if isinstance(model, str) else None,
+        )
 
     def _build_prompt(
         self, payload: RunnerPayload, instructions: str, knowledge_context: str | None

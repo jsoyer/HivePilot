@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 from hivepilot.config import Settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
@@ -18,13 +18,47 @@ class RunnerPayload:
     secrets: dict[str, str] = field(default_factory=dict)
 
 
+class RunnerModeUnsupportedError(RuntimeError):
+    """A resolved pipeline/stage execution mode is not supported by the runner
+    it would dispatch to (e.g. ``mode: api`` on a cli-only, non-agent runner).
+
+    Raised by ``validate_runner_mode`` at config-validation / dispatch time —
+    BEFORE any subprocess or HTTP call — so an unsupported (kind, mode)
+    combination fails closed rather than silently degrading to the wrong path.
+    """
+
+
 class BaseRunner(Protocol):
     definition: RunnerDefinition
     settings: Settings
 
+    # Capability contract (Sprint 1, runner-defaults-plugins-mode PRD): the set
+    # of execution modes a runner class can actually honour. Non-agent runners
+    # only ever shell out, so the default is cli-only; API-capable agent
+    # runners (claude / prompt-cli) override this to ``{"cli", "api"}``. The
+    # orchestrator validates the resolved mode against this set before dispatch
+    # (see ``validate_runner_mode``). Declared as ``ClassVar`` so ``@dataclass``
+    # runner subclasses do NOT treat it as an instance field.
+    supported_modes: ClassVar[frozenset[str]] = frozenset({"cli"})
+
     def __init__(self, definition: RunnerDefinition, settings: Settings) -> None: ...
 
     def run(self, payload: RunnerPayload) -> None: ...
+
+
+def validate_runner_mode(kind: str, supported_modes: frozenset[str], mode: str) -> None:
+    """Fail closed when *mode* is not in *supported_modes* for runner *kind*.
+
+    Called by the orchestrator once the effective mode is resolved and the
+    concrete runner class is known, BEFORE the step actually runs — so a
+    ``mode: api`` step targeting a cli-only runner never spawns a subprocess or
+    issues an HTTP request. The message names the kind, the offending mode, and
+    the supported set so the operator can fix the config immediately.
+    """
+    if mode not in supported_modes:
+        raise RunnerModeUnsupportedError(
+            f"'{kind}' does not support mode '{mode}' (supported: {sorted(supported_modes)})"
+        )
 
 
 @dataclass(frozen=True, slots=True)

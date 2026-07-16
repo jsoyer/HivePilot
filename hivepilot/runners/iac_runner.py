@@ -43,6 +43,10 @@ class _TfBaseRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
     _binary: str = "tofu"
+    # cli-only: IaC runners only ever shell out (terraform/tofu). A resolved
+    # mode:api fails closed at orchestrator validation. Inherited by
+    # OpenTofuRunner / TerraformRunner (BaseRunner.supported_modes).
+    supported_modes = frozenset({"cli"})
 
     def run(self, payload: RunnerPayload) -> None:
         self._execute(payload)
@@ -212,6 +216,9 @@ class TerraformRunner(_TfBaseRunner):
 class PulumiRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
+    # cli-only: non-agent IaC runner; a resolved mode:api fails closed at
+    # orchestrator validation (BaseRunner.supported_modes).
+    supported_modes = frozenset({"cli"})
 
     def run(self, payload: RunnerPayload) -> None:
         self._execute(payload)

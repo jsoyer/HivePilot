@@ -51,6 +51,9 @@ _KNOWN_ROLLOUT_SUBS = frozenset({"status", "history", "pause", "resume", "restar
 class KubectlRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
+    # cli-only: non-agent runner; a resolved mode:api fails closed at
+    # orchestrator validation (BaseRunner.supported_modes).
+    supported_modes = frozenset({"cli"})
 
     def run(self, payload: RunnerPayload) -> None:
         self._execute(payload)
