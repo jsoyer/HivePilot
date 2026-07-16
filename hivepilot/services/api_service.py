@@ -366,6 +366,55 @@ def _csv_response(rows: list[dict[str, Any]], fieldnames: list[str]) -> Response
     return Response(content=buf.getvalue(), media_type="text/csv")
 
 
+def _pdf_safe(value: Any) -> str:
+    """Render an analytics cell as plain text for the PDF table. PDFs don't
+    execute cell content as formulas the way spreadsheets do, so — unlike
+    `_csv_safe` — no formula-prefix escaping is needed here; this only
+    normalizes `None` the same way `csv.DictWriter` would (empty string).
+    """
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) -> Response:
+    """Render `rows`/`columns` (the same shape `_csv_response` consumes) as a
+    simple tabular PDF. fpdf2 is an OPTIONAL extra (`pip install
+    hivepilot[pdf]`) — lazy-imported here so the core API never depends on
+    it. If it's missing, fail gracefully with a clear message instead of a
+    500/traceback.
+    """
+    try:
+        from fpdf import FPDF
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="PDF export requires the 'pdf' extra: pip install hivepilot[pdf]",
+        ) from exc
+
+    pdf = FPDF(orientation="L")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=14)
+    pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", size=9)
+    with pdf.table() as table:
+        header_row = table.row()
+        for column in columns:
+            header_row.cell(column)
+        for row in rows:
+            data_row = table.row()
+            for column in columns:
+                data_row.cell(_pdf_safe(row.get(column)))
+    pdf_bytes = bytes(pdf.output())
+    filename = title.lower().replace(" ", "_").replace("/", "_") + ".pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 _SUMMARY_CSV_FIELDS = ["scope", "key", "total", "succeeded", "failed", "skipped", "other"]
 _TRENDS_CSV_FIELDS = ["bucket", "total", "succeeded", "failed", "skipped", "other"]
 _DURATIONS_CSV_FIELDS = ["scope", "key", "count", "min", "max", "avg", "p50", "p95", "p99"]
@@ -395,7 +444,7 @@ def analytics_summary(
     data = analytics_service.run_summary(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task
     )
-    if format == "csv":
+    if format in ("csv", "pdf"):
         rows: list[dict[str, Any]] = [
             {"scope": "overall", "key": "", "total": data["total"], **data["outcomes"]}
         ]
@@ -403,7 +452,9 @@ def analytics_summary(
             rows.append({"scope": "project", "key": key, "total": val["total"], **val["outcomes"]})
         for key, val in data["by_task"].items():
             rows.append({"scope": "task", "key": key, "total": val["total"], **val["outcomes"]})
-        return _csv_response(rows, _SUMMARY_CSV_FIELDS)
+        if format == "csv":
+            return _csv_response(rows, _SUMMARY_CSV_FIELDS)
+        return _pdf_response(rows, "Analytics Summary", _SUMMARY_CSV_FIELDS)
     return data
 
 
@@ -422,12 +473,14 @@ def analytics_trends(
     data = analytics_service.run_trends(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task, bucket=bucket
     )
-    if format == "csv":
+    if format in ("csv", "pdf"):
         rows = [
             {"bucket": row["bucket"], "total": row["total"], **row["outcomes"]}
             for row in data["series"]
         ]
-        return _csv_response(rows, _TRENDS_CSV_FIELDS)
+        if format == "csv":
+            return _csv_response(rows, _TRENDS_CSV_FIELDS)
+        return _pdf_response(rows, "Analytics Trends", _TRENDS_CSV_FIELDS)
     return data
 
 
@@ -443,13 +496,15 @@ def analytics_durations(
     data = analytics_service.run_durations(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task
     )
-    if format == "csv":
+    if format in ("csv", "pdf"):
         rows = [{"scope": "overall", "key": "", **data["overall"]}]
         for key, stats in data["by_project"].items():
             rows.append({"scope": "project", "key": key, **stats})
         for key, stats in data["by_task"].items():
             rows.append({"scope": "task", "key": key, **stats})
-        return _csv_response(rows, _DURATIONS_CSV_FIELDS)
+        if format == "csv":
+            return _csv_response(rows, _DURATIONS_CSV_FIELDS)
+        return _pdf_response(rows, "Analytics Durations", _DURATIONS_CSV_FIELDS)
     return data
 
 
@@ -468,6 +523,8 @@ def analytics_step_failures(
     )
     if format == "csv":
         return _csv_response(hotspots, _HOTSPOTS_CSV_FIELDS)
+    if format == "pdf":
+        return _pdf_response(hotspots, "Step Failure Hotspots", _HOTSPOTS_CSV_FIELDS)
     return {"hotspots": hotspots}
 
 
@@ -485,6 +542,8 @@ def analytics_approval_latency(
     )
     if format == "csv":
         return _csv_response([data], _APPROVAL_LATENCY_CSV_FIELDS)
+    if format == "pdf":
+        return _pdf_response([data], "Approval Latency", _APPROVAL_LATENCY_CSV_FIELDS)
     return data
 
 
@@ -508,7 +567,7 @@ def analytics_providers(
     by_model = analytics_service.steps_by_model(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task
     )
-    if format == "csv":
+    if format in ("csv", "pdf"):
         rows: list[dict[str, Any]] = [
             {"scope": "provider", "key": row["provider"], "total": row["total"], **row["outcomes"]}
             for row in by_provider
@@ -516,7 +575,9 @@ def analytics_providers(
             {"scope": "model", "key": row["model"], "total": row["total"], **row["outcomes"]}
             for row in by_model
         ]
-        return _csv_response(rows, _PROVIDERS_CSV_FIELDS)
+        if format == "csv":
+            return _csv_response(rows, _PROVIDERS_CSV_FIELDS)
+        return _pdf_response(rows, "Analytics Providers", _PROVIDERS_CSV_FIELDS)
     return {"by_provider": by_provider, "by_model": by_model}
 
 
@@ -539,7 +600,7 @@ def analytics_cost(
     data = analytics_service.cost_summary(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task
     )
-    if format == "csv":
+    if format in ("csv", "pdf"):
         rows: list[dict[str, Any]] = [{"scope": "overall", "key": "", **data["overall"]}]
         rows += [
             {
@@ -557,7 +618,9 @@ def analytics_cost(
             }
             for row in data["by_model"]
         ]
-        return _csv_response(rows, _COST_CSV_FIELDS)
+        if format == "csv":
+            return _csv_response(rows, _COST_CSV_FIELDS)
+        return _pdf_response(rows, "Analytics Cost", _COST_CSV_FIELDS)
     return data
 
 

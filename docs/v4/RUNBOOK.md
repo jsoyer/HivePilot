@@ -850,7 +850,9 @@ Registered both unversioned (`GET /analytics/...`) and under `/v1`, matching eve
 
 **Common query params:** `days` (default 30, relative window) and optional `project`/`task` filters. All endpoints are read-only — they never mutate run state.
 
-**CSV export:** append `?format=csv` to any endpoint for a `text/csv` response instead of JSON (e.g. `GET /v1/analytics/durations?format=csv`). **PDF export is out of scope for Phase 24a** (heavy dependency) — deferred to a future phase.
+**CSV export:** append `?format=csv` to any endpoint for a `text/csv` response instead of JSON (e.g. `GET /v1/analytics/durations?format=csv`).
+
+**PDF export (Phase 24 follow-up):** append `?format=pdf` to any analytics endpoint for an `application/pdf` response (a title + a table of the same rows/columns the CSV export uses), e.g. `GET /v1/analytics/durations?format=pdf`. Requires the **optional** `pdf` extra — `pip install hivepilot[pdf]` (pulls in `fpdf2`; not part of the core `api` extra or install). Without it installed, `?format=pdf` returns `501` with `"PDF export requires the 'pdf' extra: pip install hivepilot[pdf]"` — never a 500. Same auth/tenant scoping as JSON/CSV — the PDF path renders the identical tenant-scoped query result, just as a different content type.
 
 **Canonical outcome mapping** (single source of truth: `hivepilot.services.analytics_service.canonical_outcome`, shared by the Textual dashboard):
 
