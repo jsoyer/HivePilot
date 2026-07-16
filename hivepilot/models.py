@@ -70,7 +70,9 @@ class GitActions(BaseModel):
     commit: bool = False
     push: bool = False
     create_pr: bool = False
+    draft: bool = False  # open create_pr's PR as a draft (gh pr create --draft)
     merge_pr: bool = False  # Jules' autonomous final approval: merge the branch's PR
+    promote_pr: bool = False  # release gate: mark an existing draft PR ready for review
     merge_method: str = "merge"  # merge | squash | rebase
     commit_message: str | None = None
     pr_title: str | None = None

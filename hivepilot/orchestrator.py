@@ -2210,6 +2210,9 @@ class Orchestrator:
                     project_name=project.path.name,  # real component name → correct branch name
                     project=_exec_project,  # worktree path → git ops run in the worktree
                     git=task.git,
+                    # gate promote_pr/merge_pr on THIS stage's own verdict — see
+                    # git_service._agent_verdict_blocked for why this is required.
+                    task_result=task_result,
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)

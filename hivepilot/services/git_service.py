@@ -141,11 +141,74 @@ def commit_vault(
     return True
 
 
+# Known blocking verdicts (uppercased). A ``can_block`` role that stops the
+# release gate reports one of these as its ``status:``. Everything else --
+# PASS, APPROVE, APPROVED, CLEARED, ADVISORY, OK, and absent/empty/unparseable
+# output -- means "proceed", so promote/merge run. NEEDS_HUMAN is blocking: it
+# defers to a human, so the PR must stay a draft until that human acts.
+_BLOCKING_VERDICTS: frozenset[str] = frozenset(
+    {
+        "BLOCK",
+        "BLOCKED",
+        "REJECT",
+        "REJECTED",
+        "REQUEST_CHANGES",
+        "CHANGES_REQUESTED",
+        "NEEDS_HUMAN",
+        "FAIL",
+        "FAILED",
+        "DENY",
+        "DENIED",
+    }
+)
+
+
+def _agent_verdict_blocked(task_result: str | None) -> bool:
+    """True iff *task_result*'s parsed ``status:`` is an explicit blocking verdict.
+
+    CORRECTNESS GATE (draft-PR-then-promote): a ``can_block`` role (reviewer,
+    cto, ciso, qa, developer, release_manager -- see ``prompts/agents/*.md``)
+    reports a free-text ``status:`` verdict in its stage output. Investigation
+    for this feature found that **nothing upstream of ``perform_git_actions``
+    turns that verdict into a hard stop**: ``orchestrator.py``'s pipeline stage
+    loop does call ``parse_agent_report(stage_output)`` (near the
+    ``_execute_task`` call site), but only to detect ``.challenge`` for the
+    agent-to-agent challenge feature -- it never reads ``.status``.
+    ``RunResult.success`` (which DOES gate ``stage_failed``/pipeline fail-fast)
+    reflects only whether the runner raised an exception, never the agent's
+    semantic judgement. ``role.can_block`` itself is descriptive metadata only
+    (CLI/scaffold display) and is not read anywhere in the orchestrator's
+    execution path. So a release-gate stage that free-text BLOCKS would, without
+    this gate, still have its PR promoted/merged.
+
+    The agent status vocabulary is HETEROGENEOUS: the release gate approves with
+    ``status: APPROVE``, code roles pass with ``PASS``, security clears with
+    ``CLEARED``, advisory roles emit ``ADVISORY`` -- all of which mean "proceed".
+    A PASS-only whitelist would therefore wrongly block the release gate on its
+    own approval. So we use a BLOCKING-VERDICT BLACKLIST (``_BLOCKING_VERDICTS``)
+    instead: block only on a known explicit stop verdict; treat every other
+    value -- including all the "proceed" synonyms and absent/empty/unparseable
+    output -- as non-blocking. Most tasks are not ``can_block`` roles and emit no
+    structured status, so they keep working unchanged.
+
+    Evaluated on the CURRENT stage's own ``task_result`` (the text
+    ``_execute_task`` just produced for THIS stage, passed in before this call),
+    using the same tolerant parser the orchestrator already uses.
+    """
+    if not task_result:
+        return False
+    from hivepilot.services.agent_report import parse_agent_report
+
+    status = parse_agent_report(task_result).status.strip().upper()
+    return status in _BLOCKING_VERDICTS
+
+
 def perform_git_actions(
     *,
     project_name: str,
     project: ProjectConfig,
     git: GitActions,
+    task_result: str | None = None,
 ) -> None:
     repo = ensure_repo(project.path)
     branch = f"{git.branch_prefix}/{project_name}"
@@ -162,8 +225,21 @@ def perform_git_actions(
             push(project.path, "origin", branch)
     if git.create_pr:
         create_pr(project=project, branch=branch, git=git)
+    # Promote-to-ready and merge are release-gate actions -- gate them on the
+    # stage's own verdict (see _agent_verdict_blocked above). create_pr is NOT
+    # gated: opening (or keeping) the draft PR must still happen even when the
+    # gate blocks, so a human can see the review report on the PR itself.
+    blocked = _agent_verdict_blocked(task_result)
+    if git.promote_pr:
+        if blocked:
+            logger.warning("git.promote_skipped_blocked", project=project_name, branch=branch)
+        else:
+            promote_pr(project=project, branch=branch, git=git)
     if git.merge_pr:
-        merge_pr(project=project, branch=branch, git=git)
+        if blocked:
+            logger.warning("git.merge_skipped_blocked", project=project_name, branch=branch)
+        else:
+            merge_pr(project=project, branch=branch, git=git)
 
 
 def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
@@ -171,19 +247,38 @@ def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
     base = project.default_branch or "main"
     title = git.pr_title or f"HivePilot: {branch}"
     cmd = [settings.gh_command, "pr", "create", "--base", base, "--head", branch, "--title", title]
+    if git.draft:
+        cmd.append("--draft")
     if git.pr_body_file:
         cmd += ["--body-file", git.pr_body_file]
     else:
         cmd += ["--body", "Automated pull request opened by HivePilot."]
     try:
         subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
-        logger.info("git.pr_created", project=project.path.name, branch=branch, base=base)
+        logger.info(
+            "git.pr_created", project=project.path.name, branch=branch, base=base, draft=git.draft
+        )
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"Failed to create PR for {project.path.name}: {exc}") from exc
 
 
+def promote_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
+    """Mark *branch*'s draft PR ready for review via gh -- release-gate promotion.
+
+    Sibling to merge_pr: same subprocess/error-handling shape. Only called by
+    perform_git_actions when the gating stage's own verdict did not block
+    (see _agent_verdict_blocked).
+    """
+    cmd = [settings.gh_command, "pr", "ready", branch]
+    try:
+        subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
+        logger.info("git.pr_promoted", project=project.path.name, branch=branch)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Failed to promote PR for {project.path.name}: {exc}") from exc
+
+
 def merge_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
-    """Merge the open PR for *branch* via gh — Jules' autonomous final approval.
+    """Merge the open PR for *branch* via gh -- Jules' autonomous final approval.
 
     Merge (not a review approval) because GitHub forbids approving your own PR, so
     the actionable autonomous step in a solo workflow is the merge itself.

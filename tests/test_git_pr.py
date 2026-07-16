@@ -54,3 +54,21 @@ def test_perform_git_actions_pr_only_on_clean_repo(tmp_path: Path) -> None:
     with patch("hivepilot.services.git_service.create_pr") as mock_pr:
         git_service.perform_git_actions(project_name="p", project=project, git=ga)
     mock_pr.assert_called_once()
+
+
+def test_create_pr_emits_draft_flag_when_draft_true(tmp_path: Path) -> None:
+    project = ProjectConfig(path=tmp_path, default_branch="main")
+    git = GitActions(create_pr=True, draft=True)
+    with patch("hivepilot.services.git_service.subprocess.run") as m:
+        git_service.create_pr(project=project, branch="hivepilot/x", git=git)
+    cmd = m.call_args.args[0]
+    assert "--draft" in cmd
+
+
+def test_create_pr_omits_draft_flag_when_draft_false(tmp_path: Path) -> None:
+    project = ProjectConfig(path=tmp_path, default_branch="main")
+    git = GitActions(create_pr=True)  # draft defaults to False
+    with patch("hivepilot.services.git_service.subprocess.run") as m:
+        git_service.create_pr(project=project, branch="hivepilot/x", git=git)
+    cmd = m.call_args.args[0]
+    assert "--draft" not in cmd
