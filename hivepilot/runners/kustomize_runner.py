@@ -58,6 +58,9 @@ _DESTRUCTIVE_OPS = frozenset({"edit-set-image", "edit-set-namespace"})
 class KustomizeRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
+    # cli-only: non-agent runner; a resolved mode:api fails closed at
+    # orchestrator validation (BaseRunner.supported_modes).
+    supported_modes = frozenset({"cli"})
 
     def run(self, payload: RunnerPayload) -> None:
         self._execute(payload)

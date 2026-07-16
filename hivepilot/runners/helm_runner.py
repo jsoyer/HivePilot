@@ -50,6 +50,9 @@ _CHART_VALUE_OPS = frozenset({"install", "upgrade", "template"})
 class HelmRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
+    # cli-only: non-agent runner; a resolved mode:api fails closed at
+    # orchestrator validation (BaseRunner.supported_modes).
+    supported_modes = frozenset({"cli"})
 
     def run(self, payload: RunnerPayload) -> None:
         self._execute(payload)

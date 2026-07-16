@@ -8,6 +8,8 @@ with a live-registry union check.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from hivepilot.orchestrator import _parse_brain
@@ -19,6 +21,10 @@ from hivepilot.registry import RUNNER_MAP, RunnerKindCollisionError, RunnerRegis
 # mypy, which then rejects passing it where a concrete type[BaseRunner] is
 # expected). These are only ever registered, never instantiated, here.
 class _DummyRunnerA:
+    # supported_modes is part of the BaseRunner Protocol (Sprint 1: mode
+    # cli|api), so a class that structurally satisfies it must declare it too.
+    supported_modes: ClassVar[frozenset[str]] = frozenset({"cli"})
+
     def __init__(self, definition, settings) -> None:
         self.definition = definition
         self.settings = settings
@@ -31,6 +37,8 @@ class _DummyRunnerA:
 
 
 class _DummyRunnerB:
+    supported_modes: ClassVar[frozenset[str]] = frozenset({"cli"})
+
     def __init__(self, definition, settings) -> None:
         self.definition = definition
         self.settings = settings

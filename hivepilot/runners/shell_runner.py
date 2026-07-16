@@ -17,6 +17,9 @@ logger = get_logger(__name__)
 class ShellRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
+    # cli-only: this non-agent runner only ever shells out, so a resolved
+    # mode:api fails closed at orchestrator validation (BaseRunner.supported_modes).
+    supported_modes = frozenset({"cli"})
 
     def run(self, payload: RunnerPayload) -> None:
         template = payload.step.command or self.definition.command
