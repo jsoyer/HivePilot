@@ -371,10 +371,17 @@ def _pdf_safe(value: Any) -> str:
     execute cell content as formulas the way spreadsheets do, so — unlike
     `_csv_safe` — no formula-prefix escaping is needed here; this only
     normalizes `None` the same way `csv.DictWriter` would (empty string).
+
+    fpdf2's built-in core fonts (Helvetica, etc.) only support latin-1 —
+    project/task names and provider/model names (the latter sourced from
+    LLM APIs) are not guaranteed to be latin-1. Encoding with
+    errors="replace" swaps any non-representable character for `?` instead
+    of letting `table()` raise `FPDFUnicodeEncodingException`/
+    `UnicodeEncodeError`, which would otherwise surface as an uncaught 500.
     """
     if value is None:
         return ""
-    return str(value)
+    return str(value).encode("latin-1", "replace").decode("latin-1")
 
 
 def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) -> Response:

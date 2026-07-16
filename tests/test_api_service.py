@@ -676,6 +676,71 @@ class TestAnalyticsPdfExport:
         json_resp = api_client.get("/v1/analytics/durations", headers=_auth(raw))
         assert json_resp.json()["overall"]["count"] == 1
 
+    def test_pdf_content_excludes_other_tenant_data(self, api_client, tmp_tokens_file):
+        """Decode the actual PDF bytes (not just a cross-check against a
+        separate JSON request) and prove the rendered table contains only
+        the caller's tenant data — a future regression that leaked another
+        tenant's rows into the PDF-specific code path would be caught here
+        even though it wouldn't show up in the JSON/CSV tests."""
+        import io
+
+        from pypdf import PdfReader
+
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("acme-project-marker", "t", status="success", tenant="acme")
+        state_service.record_run_start(
+            "other-project-marker", "t", status="success", tenant="other"
+        )
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+
+        reader = PdfReader(io.BytesIO(resp.content))
+        text = "".join(page.extract_text() for page in reader.pages)
+        assert "acme-project-marker" in text
+        assert "other-project-marker" not in text
+
+    def test_summary_pdf_unicode_row_does_not_crash(self, api_client, tmp_tokens_file):
+        """fpdf2's core fonts (Helvetica) are latin-1 only. Project/task
+        names (and provider/model names sourced from LLM APIs) aren't
+        guaranteed latin-1 — a non-latin-1 cell must never raise
+        FPDFUnicodeEncodingException/UnicodeEncodeError inside table()."""
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("projet-éàü-日本語-\U0001f680", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_providers_pdf_unicode_model_name_does_not_crash(self, api_client, tmp_tokens_file):
+        """Same as above but through a provider/model row — model names are
+        sourced from LLM APIs and not guaranteed latin-1."""
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(
+            run_id, "s1", "success", provider="claude", model="claude-—’emoji-\U0001f916"
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_durations_pdf_empty_result(self, api_client, tmp_tokens_file):
+        """Zero-rows path: no runs recorded yet — the PDF must still render
+        (just the 'overall' row with zero counts), not error."""
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/durations?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
 
 class TestAnalyticsPdfExportFpdfAbsent:
     """When fpdf2 isn't installed, ?format=pdf must return a clear 501/400
