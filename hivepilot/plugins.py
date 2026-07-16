@@ -317,8 +317,12 @@ class PluginManager:
     def run_health_check(self, name: str) -> HealthStatus:
         """Run a single named health check. Never raises: an exception
         raised by the callable itself is caught here and reported as
-        `HealthStatus("error", "<ExceptionType>: <short msg>")` — the same
-        never-crash guarantee every other plugin hook in this repo has.
+        `HealthStatus("error", "<ExceptionType>")` — the exception type
+        name only, never the exception message. The full exception
+        (including its message) is logged server-side; it must never be
+        echoed back to callers, since this result is exposed to any
+        read-role token via `GET /v1/plugins/health`. Same never-crash
+        guarantee every other plugin hook in this repo has.
         """
         fn = self.health.get(name)
         if fn is None:
@@ -327,7 +331,7 @@ class PluginManager:
             result = fn()
         except Exception as exc:  # noqa: BLE001 — a health check must never crash
             logger.warning("plugins.health_check_failed", name=name, error=str(exc))
-            return HealthStatus("error", f"{type(exc).__name__}: {exc}")
+            return HealthStatus("error", type(exc).__name__)
         return _normalize_health_result(result)
 
     def check_all(self) -> dict[str, HealthStatus]:

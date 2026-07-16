@@ -651,10 +651,13 @@ def plugins_health_endpoint() -> dict[str, Any]:
     /v1/projects`. `check_all()` never raises (`hivepilot/plugins.py`
     `PluginManager.run_health_check` catches per-check exceptions itself and
     normalizes them to `HealthStatus("error", ...)`), so this endpoint can't
-    500 on a bad check. `HealthStatus.detail` is documented (Phase 19
+    500 on a bad check. `HealthStatus.detail` is either the plugin author's
+    own hand-written status string, which is documented (Phase 19
     discipline, `hivepilot/plugins.py`) to never contain a secret/token
-    value — only presence/mode booleans — so no additional redaction is
-    needed here.
+    value — only presence/mode booleans — or, when a check raises
+    unexpectedly, only the exception's type name (never the exception
+    message, which is logged server-side instead). No additional redaction
+    is needed here.
     """
     results = _get_orchestrator().plugins.check_all()
     return {

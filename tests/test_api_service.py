@@ -10,6 +10,7 @@ the auth/tenant-isolation patterns established in test_multi_tenant.py.
 from __future__ import annotations
 
 import importlib.util
+from types import ModuleType
 
 import pytest
 import yaml
@@ -627,7 +628,10 @@ class TestPluginsHealthEndpoint:
         entry = resp.json()["plugins"][0]
         assert entry["name"] == "broken"
         assert entry["status"] == "error"
-        assert "disk on fire" in entry["detail"]
+        # The raw exception message must never reach a read-role caller...
+        assert "disk on fire" not in entry["detail"]
+        # ...only the exception type name is surfaced.
+        assert "RuntimeError" in entry["detail"]
 
     def test_mem0_health_detail_never_leaks_api_key(self, monkeypatch):
         """Regression guard for the sprint's 'no secret in any detail'
@@ -779,6 +783,14 @@ class TestMemoriesEndpoint:
         resp = api_client.get("/memories?query=hello", headers=_auth(raw))
         assert resp.status_code == 200
 
+    def test_unversioned_route_read_role_forbidden(self, api_client, tmp_tokens_file):
+        """Mirrors `test_read_role_forbidden` above but against the
+        unversioned `/memories` twin — the admin-only gating must hold on
+        both dual-registered paths, not just the `/v1` one."""
+        raw, _ = add_token("read")
+        resp = api_client.get("/memories?query=hello", headers=_auth(raw))
+        assert resp.status_code == 403
+
 
 class TestMem0ClientHelper:
     """Unit tests for `api_service._get_mem0_client()` — mirrors
@@ -866,6 +878,113 @@ class TestMem0ClientHelper:
         assert resp.status_code == 200
         assert "'=2+2" in resp.text
         assert ",=2+2," not in resp.text
+
+
+class TestMem0ClientParity:
+    """Anti-divergence guard: `api_service._get_mem0_client()` is a
+    deliberate standalone copy of `plugins/mem0.py`'s `_get_client()` (see
+    both functions' docstrings for why it isn't a shared import — `plugins/`
+    is user-editable/optional). Nothing enforces the two stay behaviorally
+    aligned except a human reading both diffs, so this test exercises BOTH
+    real implementations under the same settings and asserts they pick the
+    same client-construction branch. Not a refactor — the duplication is
+    intentional; this only catches silent drift between the two copies."""
+
+    @staticmethod
+    def _load_mem0_plugin_module() -> ModuleType:
+        import importlib.util
+        from pathlib import Path
+
+        plugin_path = Path(__file__).resolve().parent.parent / "plugins" / "mem0.py"
+        spec = importlib.util.spec_from_file_location(
+            "hivepilot_plugin_mem0_parity_test", plugin_path
+        )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_disabled_or_unconfigured_both_return_none(self, monkeypatch):
+        """Default settings: `mem0_enabled=False` and the real (not mocked)
+        `mem0ai` library isn't installed in this test environment. Under
+        that real, unmocked state both helpers must degrade to `None`."""
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        assert settings.mem0_enabled is False  # dormant by default
+
+        mem0_plugin = self._load_mem0_plugin_module()
+
+        assert api_service._get_mem0_client() is None
+        assert mem0_plugin._get_client() is None
+
+    def test_hosted_configured_both_build_same_client_type(self, monkeypatch):
+        """`mem0_api_key` set -> both helpers must take the hosted branch
+        and build an instance of the SAME `MemoryClient` type, constructed
+        with the same `api_key` kwarg."""
+        import sys
+        import types
+
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        built: dict[str, str] = {}
+
+        class _FakeMemoryClient:
+            def __init__(self, api_key):
+                built["api_key"] = api_key
+
+        fake_module = types.ModuleType("mem0")
+        fake_module.Memory = None  # type: ignore[attr-defined]
+        fake_module.MemoryClient = _FakeMemoryClient  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mem0", fake_module)
+        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+        monkeypatch.setattr(settings, "mem0_api_key", "sk-parity-test", raising=False)
+
+        mem0_plugin = self._load_mem0_plugin_module()
+        monkeypatch.setattr(mem0_plugin, "Memory", None, raising=False)
+        monkeypatch.setattr(mem0_plugin, "MemoryClient", _FakeMemoryClient, raising=False)
+
+        api_client = api_service._get_mem0_client()
+        plugin_client = mem0_plugin._get_client()
+
+        assert type(api_client) is type(plugin_client) is _FakeMemoryClient
+        assert isinstance(api_client, _FakeMemoryClient)
+        assert isinstance(plugin_client, _FakeMemoryClient)
+
+    def test_self_host_no_api_key_both_build_same_memory_type(self, monkeypatch):
+        """No `mem0_api_key` -> both helpers must take the self-host branch
+        and build an instance of the SAME `Memory` type."""
+        import sys
+        import types
+
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        class _FakeMemory:
+            def __init__(self):
+                pass
+
+            @staticmethod
+            def from_config(config):
+                raise AssertionError("no config set — from_config must not be called")
+
+        fake_module = types.ModuleType("mem0")
+        fake_module.Memory = _FakeMemory  # type: ignore[attr-defined]
+        fake_module.MemoryClient = None  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mem0", fake_module)
+        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+        monkeypatch.setattr(settings, "mem0_api_key", None, raising=False)
+        monkeypatch.setattr(settings, "mem0_config", None, raising=False)
+
+        mem0_plugin = self._load_mem0_plugin_module()
+        monkeypatch.setattr(mem0_plugin, "Memory", _FakeMemory, raising=False)
+        monkeypatch.setattr(mem0_plugin, "MemoryClient", None, raising=False)
+
+        api_client = api_service._get_mem0_client()
+        plugin_client = mem0_plugin._get_client()
+
+        assert type(api_client) is type(plugin_client) is _FakeMemory
 
 
 # ---------------------------------------------------------------------------

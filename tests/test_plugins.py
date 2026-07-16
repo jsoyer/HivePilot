@@ -142,7 +142,9 @@ class TestPluginHealthSurface:
 
         result = pm.run_health_check("z")  # must not raise
         assert result.status == "error"
-        assert "kaboom" in result.detail
+        # The exception message must never be echoed back to callers —
+        # only the exception type name is surfaced.
+        assert "kaboom" not in result.detail
         assert "RuntimeError" in result.detail
 
     def test_unregistered_health_name_reports_error(self, tmp_path, monkeypatch) -> None:
