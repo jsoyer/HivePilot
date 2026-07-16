@@ -105,6 +105,7 @@ from typing import Any
 
 from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
+from hivepilot.plugins import HealthStatus
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.templates import render_template
 from hivepilot.utils.env import gather_overrides, merge_environments
@@ -361,5 +362,20 @@ class HerdrRunner:
         return render_template(template, context)
 
 
+def health(**kwargs: Any) -> HealthStatus:
+    """`ok` when `herdr` is on PATH; `degraded` when it isn't — `HerdrRunner`
+    already falls back to raw `bash -lc` execution in that case, so a missing
+    `herdr` binary degrades pane visibility rather than breaking runs. Never
+    raises: any internal error is reported as the exception TYPE name only
+    (never a message/value), matching `PluginManager.run_health_check`.
+    """
+    try:
+        if shutil.which("herdr"):
+            return HealthStatus("ok", "herdr on PATH")
+        return HealthStatus("degraded", "herdr not on PATH — falls back to raw shell")
+    except Exception as exc:  # noqa: BLE001 — a health check must never crash
+        return HealthStatus("error", type(exc).__name__)
+
+
 def register() -> dict[str, Any]:
-    return {"runners": {"herdr": HerdrRunner}}
+    return {"runners": {"herdr": HerdrRunner}, "health": {"herdr": health}}
