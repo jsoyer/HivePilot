@@ -142,6 +142,19 @@ class Group(BaseModel):
     components: list[str] = Field(default_factory=list)
     # tag -> component names, used to resolve PipelineStage.only_tags.
     tags: dict[str, list[str]] = Field(default_factory=dict)
+    # Monorepo group (opt-in, default False): `components`/`tags` are pure
+    # scoping labels — they gate WHICH stages run via only_components/only_tags
+    # (_stage_should_skip) exactly like a multi-repo group, but every stage
+    # that DOES run executes once at `hub` (git + execution), never fanned out
+    # per component. Component labels are never resolved as projects in this
+    # mode. Default False keeps every existing multi-repo group byte-identical.
+    single_repo: bool = False
+
+    @model_validator(mode="after")
+    def require_hub_when_single_repo(self) -> Group:
+        if self.single_repo and not self.hub:
+            raise ValueError("Group.single_repo=True requires a non-empty 'hub'")
+        return self
 
 
 class GroupsFile(BaseModel):

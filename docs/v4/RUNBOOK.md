@@ -538,6 +538,33 @@ groups:
       ui: [acme-web]        # real tag names/members owned by PRD B / Noxys config
 ```
 
+### `single_repo` groups (monorepos)
+
+Set `single_repo: true` on a group to model a **monorepo** instead of a
+multi-repo product: `components`/`tags` become pure **scoping labels** — they
+still gate *which* stages run (via `only_components`/`only_tags`, same skip
+semantics as below), but every stage that runs executes **once at `hub`**
+(both git actions and task execution), never fanned out per component. This
+is opt-in and defaults to `false` — every existing multi-repo group is
+byte-identical unless it explicitly sets `single_repo: true`.
+
+```yaml
+# groups.yaml example — monorepo group
+groups:
+  acme-monorepo:
+    hub: acme-monorepo        # must be a real project in projects.yaml — the
+                               # single git checkout where every stage runs
+    single_repo: true
+    components: [ui, api]     # scoping labels only — do NOT need to exist in
+    tags:                     # projects.yaml (unlike multi-repo components)
+      ui: [ui]
+```
+
+A stage scoped with `only_tags: [ui]` is skipped when no `ui`-tagged
+component is selected for the run, and runs (once, at `acme-monorepo`) when
+one is. `hub` is required whenever `single_repo: true` — validated at
+`Group` construction time (raises if missing).
+
 ### Plan checkpoint (CHECKPOINT / `pause_before`)
 
 Pipelines with `pause_before: true` on a stage (e.g. `Implementation` in `default`) pause there and wait for human approval before proceeding. The run state is `pending_approval`.

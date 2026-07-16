@@ -353,3 +353,84 @@ def test_only_tags_not_defined_in_any_group_is_flagged(tmp_path: Path) -> None:
     assert matching, f"Expected a problem mentioning 'nope', got: {problems}"
     assert "default" in matching[0]
     assert "build" in matching[0]
+
+
+def test_single_repo_group_components_exempt_from_projects_check(tmp_path: Path) -> None:
+    """A single_repo (monorepo) group's `components` are pure scoping labels,
+    never resolved as projects, so a component name absent from projects.yaml
+    must NOT be flagged -- unlike a normal (multi_repo) group."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "groups.yaml").write_text(
+        yaml.dump(
+            {
+                "groups": {
+                    "acme": {
+                        "hub": "demo",
+                        "single_repo": True,
+                        "components": ["ui", "api"],
+                        "tags": {"frontend": ["ui"]},
+                    }
+                }
+            }
+        )
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    assert not any("component" in p.lower() for p in problems), f"Unexpected problems: {problems}"
+
+
+def test_single_repo_group_hub_still_required_in_projects(tmp_path: Path) -> None:
+    """A single_repo group's `hub` must still resolve to a real project --
+    only `components`/`tags` are exempt, not `hub`."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "groups.yaml").write_text(
+        yaml.dump(
+            {
+                "groups": {
+                    "acme": {
+                        "hub": "does-not-exist",
+                        "single_repo": True,
+                        "components": ["ui", "api"],
+                    }
+                }
+            }
+        )
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "does-not-exist" in p]
+    assert matching, f"Expected a problem naming the missing hub, got: {problems}"
+
+
+def test_multi_repo_group_components_still_validated(tmp_path: Path) -> None:
+    """Regression: a normal (single_repo=False / omitted) group's components
+    are still validated against projects.yaml exactly as before."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "groups.yaml").write_text(
+        yaml.dump(
+            {
+                "groups": {
+                    "acme": {
+                        "hub": "demo",
+                        "components": ["not-a-real-project"],
+                    }
+                }
+            }
+        )
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "not-a-real-project" in p]
+    assert matching, f"Expected a problem naming the undefined component, got: {problems}"

@@ -1384,13 +1384,29 @@ class Orchestrator:
                 return results
 
             if group_mode:
-                is_hub_stage = bool(stage_idx < pause_index and hub)
-                targets = [hub] if is_hub_stage else selected_components
-                # Planning stages run on the hub, which is the product/parent dir
-                # (not a code git repo). Code git actions only make sense on the
-                # component repos in the post-checkpoint fan-out; the hub's planning
-                # artifacts are persisted via the vault auto-commit instead.
-                stage_auto_git = auto_git and not is_hub_stage
+                if group is not None and group.single_repo:
+                    # Monorepo group (single_repo): components/tags are pure
+                    # scoping labels (already applied above via
+                    # _stage_should_skip) — every stage that runs, runs ONCE at
+                    # the hub (the monorepo root), never fanned out per
+                    # component, and git ops run there too since the hub IS
+                    # the code repo in this mode (unlike the multi-repo hub,
+                    # which is a planning-only product/parent dir).
+                    if not hub:
+                        raise ValueError(
+                            "single_repo group requires a non-empty 'hub' "
+                            "(should have been rejected at config-load time)"
+                        )
+                    targets = [hub]
+                    stage_auto_git = auto_git
+                else:
+                    is_hub_stage = bool(stage_idx < pause_index and hub)
+                    targets = [hub] if is_hub_stage else selected_components
+                    # Planning stages run on the hub, which is the product/parent dir
+                    # (not a code git repo). Code git actions only make sense on the
+                    # component repos in the post-checkpoint fan-out; the hub's planning
+                    # artifacts are persisted via the vault auto-commit instead.
+                    stage_auto_git = auto_git and not is_hub_stage
             else:
                 targets = project_names
                 stage_auto_git = auto_git
