@@ -29,6 +29,12 @@ try:
 except ImportError:
     _metrics = None  # type: ignore[assignment]
     _METRICS_AVAILABLE = False
+from hivepilot.observability.tracing import (
+    current_context,
+    get_tracer,
+    record_exception_on_span,
+    use_context,
+)
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager
 from hivepilot.registry import RunnerRegistry
@@ -784,10 +790,22 @@ class Orchestrator:
                     batch_size=settings.dev_batch_size,
                 )
 
+        # Capture the currently-active OTel context (e.g. the `pipeline.run`
+        # span opened by `run_pipeline`) so the `task.run`/`step.run` spans
+        # `_execute_task` opens INSIDE the ThreadPoolExecutor worker thread
+        # below still nest under it — contextvars are NOT automatically
+        # inherited by threads spawned by `ThreadPoolExecutor.submit`. No-op
+        # when OTel isn't installed (`current_context()` returns `None`).
+        _otel_ctx = current_context()
+
+        def _execute_task_traced(**kwargs):
+            with use_context(_otel_ctx):
+                return self._execute_task(**kwargs)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=limit) as executor:
             future_map = {
                 executor.submit(
-                    self._execute_task,
+                    _execute_task_traced,
                     project=project,
                     task_name=task_name,
                     task=task,
@@ -1393,24 +1411,48 @@ class Orchestrator:
         run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
         secrets masking registry is cleared once the WHOLE pipeline run —
         including every nested `run_task` call it makes per stage — is fully
-        complete and every sink has already redacted against it."""
+        complete and every sink has already redacted against it.
+
+        Also opens the root `pipeline.run` OTel span for the whole run —
+        every `task.run`/`step.run` span opened by nested `run_task`/
+        `_execute_task` calls (including across the `ThreadPoolExecutor`
+        worker threads `_run_task_body` dispatches to — see
+        `current_context`/`use_context`) nests under this one."""
         self._enter_run_scope()
+        _project_names = list(project_names)
+        _tracer = get_tracer()
         try:
-            return self._run_pipeline_body(
-                project_names=project_names,
-                pipeline_name=pipeline_name,
-                extra_prompt=extra_prompt,
-                auto_git=auto_git,
-                concurrency=concurrency,
-                dry_run=dry_run,
-                simulate=simulate,
-                start_index=start_index,
-                run_id=run_id,
-                hub=hub,
-                components=components,
-                seed_context=seed_context,
-                group=group,
-            )
+            with _tracer.start_as_current_span(
+                "pipeline.run",
+                attributes={
+                    "hivepilot.pipeline.name": pipeline_name,
+                    "hivepilot.pipeline.projects": ",".join(_project_names),
+                },
+                record_exception=False,
+                set_status_on_exception=False,
+            ) as _pipeline_span:
+                try:
+                    result = self._run_pipeline_body(
+                        project_names=_project_names,
+                        pipeline_name=pipeline_name,
+                        extra_prompt=extra_prompt,
+                        auto_git=auto_git,
+                        concurrency=concurrency,
+                        dry_run=dry_run,
+                        simulate=simulate,
+                        start_index=start_index,
+                        run_id=run_id,
+                        hub=hub,
+                        components=components,
+                        seed_context=seed_context,
+                        group=group,
+                    )
+                except Exception as exc:
+                    record_exception_on_span(_pipeline_span, exc)
+                    _pipeline_span.set_attribute("hivepilot.pipeline.status", "failed")
+                    raise
+                _pipeline_span.set_attribute("hivepilot.pipeline.status", "success")
+                return result
         finally:
             self._exit_run_scope()
 
@@ -2297,6 +2339,81 @@ class Orchestrator:
         resume_outputs: list[str] | None = None,
         approved_step_index: int | None = None,
     ) -> str | None:
+        """Thin OpenTelemetry-tracing wrapper around `_execute_task_body`.
+
+        Opens a `task.run` span (child of the `pipeline.run` span when called
+        from `run_pipeline`/`run_task`, a root span otherwise) for the WHOLE
+        task execution — including the non-native-engine and role-debate
+        early-return paths in `_execute_task_body`. `StepApprovalPending`
+        (a pause, not a failure) and `QuotaDeferredError` (a deferral, not a
+        failure) are both propagated without being recorded as an error; any
+        other exception is recorded on the span + re-raised unchanged. When
+        tracing is off/unavailable, `get_tracer()` returns a no-op tracer, so
+        this wrapper adds negligible overhead and never changes control
+        flow, return values, or propagated exceptions.
+        """
+        from hivepilot.services.quota import QuotaDeferredError
+
+        _tracer = get_tracer()
+        with _tracer.start_as_current_span(
+            "task.run",
+            attributes={
+                "hivepilot.task.name": task_name,
+                "hivepilot.task.project": project.path.name,
+            },
+            # We record exceptions ourselves via `record_exception_on_span`
+            # (which redacts secrets first) — disable OTel's own automatic
+            # on-exit recording, which would otherwise record the RAW
+            # exception a second time when it propagates out of this block.
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as _task_span:
+            try:
+                result = self._execute_task_body(
+                    project=project,
+                    task_name=task_name,
+                    task=task,
+                    extra_prompt=extra_prompt,
+                    auto_git=auto_git,
+                    run_id=run_id,
+                    policy=policy,
+                    simulate=simulate,
+                    dry_run=dry_run,
+                    prior_context=prior_context,
+                    resume_from_step=resume_from_step,
+                    resume_outputs=resume_outputs,
+                    approved_step_index=approved_step_index,
+                )
+            except StepApprovalPending:
+                _task_span.set_attribute("hivepilot.task.status", "paused")
+                raise
+            except QuotaDeferredError:
+                _task_span.set_attribute("hivepilot.task.status", "deferred")
+                raise
+            except Exception as exc:
+                record_exception_on_span(_task_span, exc)
+                _task_span.set_attribute("hivepilot.task.status", "failed")
+                raise
+            _task_span.set_attribute("hivepilot.task.status", "success")
+            return result
+
+    def _execute_task_body(
+        self,
+        *,
+        project: ProjectConfig,
+        task_name: str,
+        task: TaskConfig,
+        extra_prompt: str | None,
+        auto_git: bool,
+        run_id: int | None = None,
+        policy: policy_service.Policy | None = None,
+        simulate: bool = False,
+        dry_run: bool = True,
+        prior_context: str | None = None,
+        resume_from_step: int = 0,
+        resume_outputs: list[str] | None = None,
+        approved_step_index: int | None = None,
+    ) -> str | None:
         """Execute *task*'s steps for *project*.
 
         ``resume_from_step``/``resume_outputs``/``approved_step_index``
@@ -2443,212 +2560,250 @@ class Orchestrator:
                 # resolved, and updated to the fallback runner (if any) inside
                 # the quota-fallback loop below.
                 _used_runner_def: RunnerDefinition | None = None
-                try:
-                    if task.role:
-                        from typing import cast
+                from hivepilot.services.quota import QuotaDeferredError
 
-                        from hivepilot.models import RunnerDefinition, RunnerKind
-                        from hivepilot.roles import get_role, resolve_host, resolve_runner
+                with get_tracer().start_as_current_span(
+                    "step.run",
+                    attributes={"hivepilot.step.name": step.name},
+                    # We record exceptions ourselves via
+                    # `record_exception_on_span` (redacts secrets first) —
+                    # disable OTel's own automatic on-exit recording, which
+                    # would otherwise record the RAW exception a second time
+                    # when it propagates out of this block.
+                    record_exception=False,
+                    set_status_on_exception=False,
+                ) as _step_span:
+                    try:
+                        if task.role:
+                            from typing import cast
 
-                        runner_kind, role_model = resolve_runner(task.role, policy)
-                        role_options: dict[str, str] = {}
-                        role_perm = get_role(task.role).permission_mode
-                        if role_perm:
-                            role_options["permission_mode"] = role_perm
-                        runner_def = RunnerDefinition(
-                            name=f"role:{task.role}",
-                            kind=cast(RunnerKind, runner_kind),
-                            command=None,
-                            model=role_model,
-                            host=resolve_host(task.role, policy),
-                            options=role_options,
-                        )
-                        runner_key = task.role
-                    else:
-                        runner_key = step.runner_ref or step.runner
-                        runner_def = self.registry._definition_for(runner_key)
-                    _used_runner_def = runner_def
-                    if runner_def.kind == "container" and policy and not policy.allow_containers:
-                        raise RuntimeError(
-                            f"Containers are disabled by policy for project {project.path.name}"
-                        )
-                    # Step-level destructive-operation approval gate (Phase 17a-B) —
-                    # mirrors the stage-level `pause_before` checkpoint one level
-                    # finer. `approved_step_index` is the ONE step already approved
-                    # by a prior `run_approved` resume (its gate must not re-fire);
-                    # every other step is checked fresh. `simulate` always bypasses
-                    # (no real destructive op runs under --simulate).
-                    #
-                    # Deliberately checked BEFORE the `before_step` hook below: this
-                    # gate only needs `runner_def`/`step`/`payload` (never anything
-                    # `before_step` sets up), so checking it first means a step that
-                    # pauses here has NOT fired `before_step` yet — preserving the
-                    # documented "fired once before each step that actually runs"
-                    # contract instead of firing once now (wastefully, before the
-                    # pause) and again on resume.
-                    if not simulate and step_idx != approved_step_index:
-                        _gate_runner = _resolve_runner_for_destructive_check(runner_def)
-                        if step_requires_approval(_gate_runner, step, payload):
-                            if run_id:
-                                checkpoint_meta = {
-                                    "kind": "step_checkpoint",
-                                    "task": task_name,
-                                    "project": project.path.name,
-                                    "extra_prompt": extra_prompt,
-                                    "auto_git": auto_git,
-                                    "dry_run": dry_run,
-                                    "resume_from_step": step_idx,
-                                    "step_name": step.name,
-                                    "resume_outputs": list(outputs),
-                                }
-                                state_service.record_approval_request(
-                                    run_id, project.path.name, task_name, checkpoint_meta
-                                )
-                                notification_service.send_approval_keyboard(
-                                    run_id=run_id,
-                                    project=project.path.name,
-                                    task=f"{task_name} → {step.name}",
-                                    details=(
-                                        f"Step '{step.name}' performs a destructive "
-                                        "operation and requires approval before it runs."
-                                    ),
-                                )
-                                state_service.complete_run(run_id, RunStatus.PAUSED.value)
-                            logger.info(
-                                "step.approval_required",
-                                project=project.path.name,
-                                task=task_name,
-                                step=step.name,
+                            from hivepilot.models import RunnerDefinition, RunnerKind
+                            from hivepilot.roles import get_role, resolve_host, resolve_runner
+
+                            runner_kind, role_model = resolve_runner(task.role, policy)
+                            role_options: dict[str, str] = {}
+                            role_perm = get_role(task.role).permission_mode
+                            if role_perm:
+                                role_options["permission_mode"] = role_perm
+                            runner_def = RunnerDefinition(
+                                name=f"role:{task.role}",
+                                kind=cast(RunnerKind, runner_kind),
+                                command=None,
+                                model=role_model,
+                                host=resolve_host(task.role, policy),
+                                options=role_options,
                             )
-                            raise StepApprovalPending(
-                                f"Step '{step.name}' requires approval before executing."
+                            runner_key = task.role
+                        else:
+                            runner_key = step.runner_ref or step.runner
+                            runner_def = self.registry._definition_for(runner_key)
+                        _used_runner_def = runner_def
+                        _step_span.set_attribute("hivepilot.step.runner_kind", str(runner_def.kind))
+                        if (
+                            runner_def.kind == "container"
+                            and policy
+                            and not policy.allow_containers
+                        ):
+                            raise RuntimeError(
+                                f"Containers are disabled by policy for project {project.path.name}"
                             )
-                    self.plugins.run_hook(
-                        "before_step", payload=payload, dry_run=dry_run, role=task.role
-                    )
-                    if simulate:
-                        logger.info(
-                            "step.simulate",
-                            step=step.name,
-                            runner=runner_key,
-                            project=_exec_project.path.name,
-                        )
-                        outputs.append(f"[simulated {runner_key}]")
-                    elif task.role:
-                        from typing import cast
-
-                        from hivepilot.models import RunnerDefinition, RunnerKind
-                        from hivepilot.services.quota import parse_quota_error
-                        from hivepilot.services.runner_throttle import semaphore_for_kind
-
-                        _runner_def_to_try = runner_def
-                        _fallback_runners = (
-                            list(settings.dev_fallback_runners) if task.role == "developer" else []
-                        )
-                        _last_exc: BaseException | None = None
-
-                        while True:
-                            _used_runner_def = _runner_def_to_try
-                            _sem = semaphore_for_kind(_runner_def_to_try.kind)
-                            _sem.acquire()
-                            try:
-                                outputs.append(
-                                    self.registry.capture_definition(_runner_def_to_try, payload)
-                                )
-                                _last_exc = None
-                                break  # success
-                            except Exception as _exc:
-                                _last_exc = _exc
-                                _quota_err = parse_quota_error(str(_exc))
-                                if _quota_err is None:
-                                    raise  # non-quota error → surface immediately
-                                # Quota error — try fallback runners
-                                if not _fallback_runners:
-                                    if task.role == "developer":
-                                        from hivepilot.services.quota import QuotaDeferredError
-
-                                        raise QuotaDeferredError(
-                                            str(_quota_err.raw), reset_at=_quota_err.reset_at
-                                        ) from _exc
-                                    raise  # non-developer roles: surface the original exception
-                                _next_kind = _fallback_runners.pop(0)
+                        # Step-level destructive-operation approval gate (Phase 17a-B) —
+                        # mirrors the stage-level `pause_before` checkpoint one level
+                        # finer. `approved_step_index` is the ONE step already approved
+                        # by a prior `run_approved` resume (its gate must not re-fire);
+                        # every other step is checked fresh. `simulate` always bypasses
+                        # (no real destructive op runs under --simulate).
+                        #
+                        # Deliberately checked BEFORE the `before_step` hook below: this
+                        # gate only needs `runner_def`/`step`/`payload` (never anything
+                        # `before_step` sets up), so checking it first means a step that
+                        # pauses here has NOT fired `before_step` yet — preserving the
+                        # documented "fired once before each step that actually runs"
+                        # contract instead of firing once now (wastefully, before the
+                        # pause) and again on resume.
+                        if not simulate and step_idx != approved_step_index:
+                            _gate_runner = _resolve_runner_for_destructive_check(runner_def)
+                            if step_requires_approval(_gate_runner, step, payload):
+                                if run_id:
+                                    checkpoint_meta = {
+                                        "kind": "step_checkpoint",
+                                        "task": task_name,
+                                        "project": project.path.name,
+                                        "extra_prompt": extra_prompt,
+                                        "auto_git": auto_git,
+                                        "dry_run": dry_run,
+                                        "resume_from_step": step_idx,
+                                        "step_name": step.name,
+                                        "resume_outputs": list(outputs),
+                                    }
+                                    state_service.record_approval_request(
+                                        run_id, project.path.name, task_name, checkpoint_meta
+                                    )
+                                    notification_service.send_approval_keyboard(
+                                        run_id=run_id,
+                                        project=project.path.name,
+                                        task=f"{task_name} → {step.name}",
+                                        details=(
+                                            f"Step '{step.name}' performs a destructive "
+                                            "operation and requires approval before it runs."
+                                        ),
+                                    )
+                                    state_service.complete_run(run_id, RunStatus.PAUSED.value)
                                 logger.info(
-                                    "dev.fallback",
-                                    from_runner=_runner_def_to_try.kind,
-                                    to_runner=_next_kind,
-                                    reset_at=str(_quota_err.reset_at),
+                                    "step.approval_required",
+                                    project=project.path.name,
+                                    task=task_name,
+                                    step=step.name,
                                 )
-                                if _METRICS_AVAILABLE and _metrics is not None:
-                                    try:
-                                        _metrics.quota_fallbacks_total.labels(
-                                            to_runner=_next_kind
-                                        ).inc()
-                                    except Exception:  # noqa: BLE001
-                                        pass
-                                _runner_def_to_try = RunnerDefinition(
-                                    name=f"role:{task.role}:{_next_kind}",
-                                    kind=cast(RunnerKind, _next_kind),
-                                    command=None,
-                                    model=role_model,
-                                    host=resolve_host(task.role, policy),
-                                    options=role_options,
+                                raise StepApprovalPending(
+                                    f"Step '{step.name}' requires approval before executing."
                                 )
-                            finally:
-                                _sem.release()
+                        self.plugins.run_hook(
+                            "before_step", payload=payload, dry_run=dry_run, role=task.role
+                        )
+                        if simulate:
+                            logger.info(
+                                "step.simulate",
+                                step=step.name,
+                                runner=runner_key,
+                                project=_exec_project.path.name,
+                            )
+                            outputs.append(f"[simulated {runner_key}]")
+                        elif task.role:
+                            from typing import cast
 
-                        if _last_exc is not None:
-                            raise _last_exc
-                    else:
-                        outputs.append(self._capture_or_execute(runner_key, payload))
-                    # Phase 24b.2a: read-and-clear whatever usage the runner's
-                    # capture() stashed for THIS step (None when the flag is
-                    # off, the runner isn't claude, or nothing was captured).
-                    _usage = pop_last_usage()
-                    if run_id:
-                        _provider, _model = (
-                            _resolve_step_provider_model(_used_runner_def, step)
-                            if _used_runner_def is not None
-                            else (None, None)
+                            from hivepilot.models import RunnerDefinition, RunnerKind
+                            from hivepilot.services.quota import parse_quota_error
+                            from hivepilot.services.runner_throttle import semaphore_for_kind
+
+                            _runner_def_to_try = runner_def
+                            _fallback_runners = (
+                                list(settings.dev_fallback_runners)
+                                if task.role == "developer"
+                                else []
+                            )
+                            _last_exc: BaseException | None = None
+
+                            while True:
+                                _used_runner_def = _runner_def_to_try
+                                _sem = semaphore_for_kind(_runner_def_to_try.kind)
+                                _sem.acquire()
+                                try:
+                                    outputs.append(
+                                        self.registry.capture_definition(
+                                            _runner_def_to_try, payload
+                                        )
+                                    )
+                                    _last_exc = None
+                                    break  # success
+                                except Exception as _exc:
+                                    _last_exc = _exc
+                                    _quota_err = parse_quota_error(str(_exc))
+                                    if _quota_err is None:
+                                        raise  # non-quota error → surface immediately
+                                    # Quota error — try fallback runners
+                                    if not _fallback_runners:
+                                        if task.role == "developer":
+                                            from hivepilot.services.quota import QuotaDeferredError
+
+                                            raise QuotaDeferredError(
+                                                str(_quota_err.raw), reset_at=_quota_err.reset_at
+                                            ) from _exc
+                                        raise  # non-developer roles: surface the original exception
+                                    _next_kind = _fallback_runners.pop(0)
+                                    logger.info(
+                                        "dev.fallback",
+                                        from_runner=_runner_def_to_try.kind,
+                                        to_runner=_next_kind,
+                                        reset_at=str(_quota_err.reset_at),
+                                    )
+                                    if _METRICS_AVAILABLE and _metrics is not None:
+                                        try:
+                                            _metrics.quota_fallbacks_total.labels(
+                                                to_runner=_next_kind
+                                            ).inc()
+                                        except Exception:  # noqa: BLE001
+                                            pass
+                                    _runner_def_to_try = RunnerDefinition(
+                                        name=f"role:{task.role}:{_next_kind}",
+                                        kind=cast(RunnerKind, _next_kind),
+                                        command=None,
+                                        model=role_model,
+                                        host=resolve_host(task.role, policy),
+                                        options=role_options,
+                                    )
+                                finally:
+                                    _sem.release()
+
+                            if _last_exc is not None:
+                                raise _last_exc
+                        else:
+                            outputs.append(self._capture_or_execute(runner_key, payload))
+                        # Phase 24b.2a: read-and-clear whatever usage the runner's
+                        # capture() stashed for THIS step (None when the flag is
+                        # off, the runner isn't claude, or nothing was captured).
+                        _usage = pop_last_usage()
+                        if run_id:
+                            _provider, _model = (
+                                _resolve_step_provider_model(_used_runner_def, step)
+                                if _used_runner_def is not None
+                                else (None, None)
+                            )
+                            _record_step_success(run_id, step.name, _provider, _model, _usage)
+                        _step_span.set_attribute("hivepilot.step.status", "success")
+                        self.plugins.run_hook(
+                            "after_step",
+                            payload=payload,
+                            dry_run=dry_run,
+                            role=task.role,
+                            output=outputs[-1] if outputs else None,
                         )
-                        _record_step_success(run_id, step.name, _provider, _model, _usage)
-                    self.plugins.run_hook(
-                        "after_step",
-                        payload=payload,
-                        dry_run=dry_run,
-                        role=task.role,
-                        output=outputs[-1] if outputs else None,
-                    )
-                except StepApprovalPending:
-                    # Not a step failure — the run is already recorded as
-                    # PAUSED with an approval request. Propagate unmodified
-                    # so `record_step(..., "failed", ...)` below is never hit
-                    # and `step.allow_failure` never swallows it.
-                    raise
-                except Exception as exc:
-                    # Defensive clear: an exception means capture() raised
-                    # before reaching its usage-stash point, so this is
-                    # expected to be None — but pop unconditionally so no
-                    # stale usage from a partial attempt leaks into the next
-                    # step's success path.
-                    pop_last_usage()
-                    if run_id:
-                        _provider, _model = (
-                            _resolve_step_provider_model(_used_runner_def, step)
-                            if _used_runner_def is not None
-                            else (None, None)
-                        )
-                        state_service.record_step(
-                            run_id,
-                            step.name,
-                            "failed",
-                            str(exc),
-                            provider=_provider,
-                            model=_model,
-                        )
-                    if step.allow_failure:
-                        logger.warning("step.failure_allowed", step=step.name, error=str(exc))
-                        continue
-                    raise
+                    except StepApprovalPending:
+                        # Not a step failure — the run is already recorded as
+                        # PAUSED with an approval request. Propagate unmodified
+                        # so `record_step(..., "failed", ...)` below is never hit
+                        # and `step.allow_failure` never swallows it.
+                        _step_span.set_attribute("hivepilot.step.status", "paused")
+                        raise
+                    except QuotaDeferredError:
+                        # Not a step failure either — mirrors `StepApprovalPending`
+                        # above: a quota deferral is an interrupt that the
+                        # pipeline-level handler (`_run_task_body`'s
+                        # `except QuotaDeferredError`, reached via `run_task`)
+                        # turns into a retry-later `RunResult` +
+                        # `complete_run(..., "deferred")`.
+                        # Propagate unmodified so `record_step(..., "failed", ...)`
+                        # below is never hit and `step.allow_failure` never
+                        # swallows it as a recovered failure.
+                        _step_span.set_attribute("hivepilot.step.status", "deferred")
+                        raise
+                    except Exception as exc:
+                        # Defensive clear: an exception means capture() raised
+                        # before reaching its usage-stash point, so this is
+                        # expected to be None — but pop unconditionally so no
+                        # stale usage from a partial attempt leaks into the next
+                        # step's success path.
+                        record_exception_on_span(_step_span, exc)
+                        _step_span.set_attribute("hivepilot.step.status", "failed")
+                        pop_last_usage()
+                        if run_id:
+                            _provider, _model = (
+                                _resolve_step_provider_model(_used_runner_def, step)
+                                if _used_runner_def is not None
+                                else (None, None)
+                            )
+                            state_service.record_step(
+                                run_id,
+                                step.name,
+                                "failed",
+                                str(exc),
+                                provider=_provider,
+                                model=_model,
+                            )
+                        if step.allow_failure:
+                            logger.warning("step.failure_allowed", step=step.name, error=str(exc))
+                            continue
+                        raise
 
             task_result = "\n".join(o for o in outputs if o).strip() or None
 

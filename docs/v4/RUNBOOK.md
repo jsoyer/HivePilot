@@ -198,6 +198,11 @@ HIVEPILOT_TOKEN_TTL_DAYS=90               # default expiry for new tokens (optio
 # --- Event webhook (n8n, etc.) ---
 HIVEPILOT_EVENT_WEBHOOK_URL=https://n8n.example.com/webhook/hivepilot
 HIVEPILOT_EVENT_WEBHOOK_TOKEN=            # optional Bearer token
+
+# --- Distributed tracing (optional; requires: pip install -e ".[tracing]") ---
+HIVEPILOT_ENABLE_TRACING=false            # opt-in; no-op if the `tracing` extra isn't installed
+HIVEPILOT_OTEL_EXPORTER_OTLP_ENDPOINT=    # unset -> OTel SDK reads standard OTEL_EXPORTER_OTLP_ENDPOINT
+HIVEPILOT_OTEL_SERVICE_NAME=hivepilot     # service.name resource attribute on every span
 ```
 
 ### Roles (roles.yaml)
@@ -914,6 +919,53 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:8045']
     metrics_path: /metrics
+```
+
+### Distributed tracing (OpenTelemetry)
+
+Phase 18 adds OPT-IN, zero-overhead-when-off distributed tracing for pipeline/task/step execution via [OpenTelemetry](https://opentelemetry.io/). Off by default — core install is completely unaffected.
+
+**Install the extra:**
+```bash
+pip install -e ".[tracing]"
+# or, on top of an existing install:
+pip install "hivepilot[tracing]"
+```
+
+This pulls in `opentelemetry-api`, `opentelemetry-sdk`, and `opentelemetry-exporter-otlp-proto-grpc` — nothing else. Without the extra, `HIVEPILOT_ENABLE_TRACING=1` is silently a no-op (`init_tracing()` degrades gracefully when the SDK isn't importable).
+
+**Enable:**
+```bash
+# --- Distributed tracing (optional; requires: pip install -e ".[tracing]") ---
+HIVEPILOT_ENABLE_TRACING=true
+# OTLP collector endpoint. Unset -> falls back to reading the STANDARD
+# OTEL_EXPORTER_OTLP_ENDPOINT env var natively (OTel's own SDK config
+# resolution) — set HIVEPILOT_OTEL_EXPORTER_OTLP_ENDPOINT only if you want
+# it sourced from HivePilot's own .env instead.
+HIVEPILOT_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+# service.name resource attribute on every exported span (default: hivepilot)
+HIVEPILOT_OTEL_SERVICE_NAME=hivepilot
+```
+
+Tracing initializes once per process at whichever "a run begins" entry point starts first: `hivepilot api serve` (FastAPI startup), `hivepilot run-pipeline` (CLI), or the scheduler daemon (`hivepilot worker` / `scheduler_daemon.run()`).
+
+**Spans emitted** (parent → child):
+
+| Span | Emitted from | Key attributes |
+|---|---|---|
+| `pipeline.run` | `Orchestrator.run_pipeline` | `hivepilot.pipeline.name`, `hivepilot.pipeline.projects`, `hivepilot.pipeline.status` |
+| `task.run` | `Orchestrator._execute_task` (one per project, per stage) | `hivepilot.task.name`, `hivepilot.task.project`, `hivepilot.task.status` |
+| `step.run` | The per-step loop inside task execution | `hivepilot.step.name`, `hivepilot.step.runner_kind`, `hivepilot.step.status` |
+
+A failing step/task/pipeline records the exception on its span (message + stacktrace pass through the SAME secret-redaction registry used elsewhere — `config_provenance.redact_text` — before ever reaching OTel, so a resolved `${secret:NAME}` value echoed in an error can never leak into an exported span) and sets span status `ERROR`. Span attributes NEVER include step output, prompts, or secret values — only names/kinds/status.
+
+**Off by default / no OTel SDK installed:** `get_tracer()` always returns something usable as `with get_tracer().start_as_current_span(...)`, whether or not `opentelemetry` is installed — a local no-op implementation when the package is entirely absent, or OTel's own non-recording default tracer when it's installed but no provider was configured (tracing disabled). Either way, spans are never exported and the orchestrator's behavior/return values are byte-identical to a build without this code.
+
+**Consume the traces:** any OTLP-compatible backend — [Jaeger](https://www.jaegertracing.io/), [Zipkin](https://zipkin.io/) (via the OTel collector), or [Grafana Tempo](https://grafana.com/oss/tempo/). Quick local Jaeger for testing:
+```bash
+docker run -d --name jaeger -p 4317:4317 -p 16686:16686 jaegertracing/all-in-one:latest
+# HIVEPILOT_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+# UI: http://localhost:16686
 ```
 
 ### Kubernetes probes

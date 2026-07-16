@@ -83,6 +83,25 @@ class Settings(BaseSettings):
     # — the route returns 404 if either condition isn't met.
     # env: HIVEPILOT_ENABLE_WEBUI
     enable_webui: bool = False
+    # Phase 18 — OpenTelemetry distributed tracing for pipeline/task/step
+    # execution (hivepilot/observability/tracing.py). Off by default; mirrors
+    # enable_webui/headroom_enabled's opt-in-only gating above. Also requires
+    # the `tracing` extra (`pip install hivepilot[tracing]`) to be installed —
+    # when the OTel SDK isn't importable, init_tracing() no-ops regardless of
+    # this flag and get_tracer() always returns the local no-op tracer, so
+    # core install (no extra) is completely unaffected either way.
+    # env: HIVEPILOT_ENABLE_TRACING
+    enable_tracing: bool = False
+    # OTLP span exporter endpoint (e.g. http://localhost:4317 for a local
+    # Jaeger/Zipkin/collector). Unset (None) lets the OTel SDK fall back to
+    # reading the STANDARD `OTEL_EXPORTER_OTLP_ENDPOINT` env var natively
+    # (OTel's own SDK config resolution, not pydantic-settings) — set this
+    # only if you want it sourced from HivePilot's own .env instead.
+    # env: HIVEPILOT_OTEL_EXPORTER_OTLP_ENDPOINT
+    otel_exporter_otlp_endpoint: str | None = None
+    # `service.name` resource attribute attached to every exported span.
+    # env: HIVEPILOT_OTEL_SERVICE_NAME
+    otel_service_name: str = "hivepilot"
     output_format: str = "json"
     plugins_entry: str | None = None
     plugins_enabled: bool = True  # master on/off switch for local-file + entry-point plugin loading
