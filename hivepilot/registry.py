@@ -5,10 +5,12 @@ from typing import Any, Dict, Protocol, Type, cast
 
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition, RunnerKind
+from hivepilot.runners.ansible_runner import AnsibleRunner
 from hivepilot.runners.base import BaseRunner, RunnerPayload, set_last_usage
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
 from hivepilot.runners.cursor_runner import CursorRunner
+from hivepilot.runners.helm_runner import HelmRunner
 from hivepilot.runners.iac_runner import OpenTofuRunner, PulumiRunner, TerraformRunner
 from hivepilot.runners.internal_runner import InternalRunner
 from hivepilot.runners.kubectl_runner import KubectlRunner
@@ -143,6 +145,8 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "opentofu": OpenTofuRunner,
     "pulumi": PulumiRunner,
     "kubectl": KubectlRunner,
+    "ansible": AnsibleRunner,
+    "helm": HelmRunner,
 }
 for _kind, _cls in _BUILTIN_RUNNERS.items():
     RunnerRegistry.register(_kind, _cls)
