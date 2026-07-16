@@ -7,6 +7,7 @@ from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition, RunnerKind
 from hivepilot.runners.ansible_runner import AnsibleRunner
 from hivepilot.runners.base import BaseRunner, RunnerPayload, set_last_usage
+from hivepilot.runners.chef_runner import ChefRunner
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
 from hivepilot.runners.cursor_runner import CursorRunner
@@ -24,6 +25,8 @@ from hivepilot.runners.prompt_cli_runner import (
     OpenCodeRunner,
     VibeRunner,
 )
+from hivepilot.runners.puppet_runner import PuppetRunner
+from hivepilot.runners.salt_runner import SaltRunner
 from hivepilot.runners.shell_runner import ShellRunner
 
 RUNNER_MAP: Dict[str, Type[BaseRunner]] = {}
@@ -151,6 +154,9 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "helm": HelmRunner,
     "kustomize": KustomizeRunner,
     "packer": PackerRunner,
+    "salt": SaltRunner,
+    "chef": ChefRunner,
+    "puppet": PuppetRunner,
 }
 for _kind, _cls in _BUILTIN_RUNNERS.items():
     RunnerRegistry.register(_kind, _cls)

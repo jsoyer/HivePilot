@@ -38,6 +38,9 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "helm",
     "kustomize",
     "packer",
+    "salt",
+    "chef",
+    "puppet",
 )
 
 
