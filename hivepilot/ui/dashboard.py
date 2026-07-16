@@ -76,10 +76,19 @@ def _load_mem0_plugin_module() -> Any | None:
     `module.register()` — the dashboard only wants the module's helpers, not
     a second registration of its lifecycle hooks (those are already
     registered once, by the real `PluginManager`, if plugins are enabled).
+
+    Honors the plugin-system kill switches exactly like `_scan_local_plugins`:
+    returns ``None`` when plugins are globally disabled (`plugins_enabled` is
+    False) or when `mem0` is in `plugins_disabled`, so an operator who turned
+    the plugin off never gets the Mem0 tab silently loading the module and
+    making live mem0 backend calls.
+
     Returns ``None`` on any failure (file missing, load error) — never
     raises.
     """
     try:
+        if not settings.plugins_enabled or "mem0" in settings.plugins_disabled:
+            return None
         plugin_path = settings.base_dir / "plugins" / "mem0.py"
         if not plugin_path.exists():
             return None

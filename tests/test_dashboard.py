@@ -11,7 +11,7 @@ textual = pytest.importorskip("textual.app")
 from textual.coordinate import Coordinate  # noqa: E402
 
 from hivepilot.plugins import HealthStatus  # noqa: E402
-from hivepilot.ui.dashboard import RunDashboard  # noqa: E402
+from hivepilot.ui.dashboard import RunDashboard, _load_mem0_plugin_module  # noqa: E402
 
 
 def _cell_plain(value: Any) -> str:
@@ -362,3 +362,29 @@ async def test_refresh_mem0_no_secret_leaked_in_status_or_table(monkeypatch) -> 
         status_text = str(app.mem0_status.renderable)
         assert "secret-token" not in status_text
         assert "RuntimeError" in status_text
+
+
+def test_load_mem0_plugin_module_honors_kill_switches(monkeypatch) -> None:
+    """The Mem0 tab's loader must respect the plugin-system kill switches
+    exactly like `hivepilot.plugins._scan_local_plugins`: a globally-disabled
+    plugin system, or `mem0` in `plugins_disabled`, means the module is never
+    loaded (so no live mem0 backend call happens) — even though
+    `plugins/mem0.py` exists on disk.
+    """
+    from hivepilot.config import settings
+
+    # Sanity: with plugins enabled and mem0 not disabled, the real
+    # plugins/mem0.py IS loaded (proves the None results below are caused by
+    # the kill switches, not by the file being absent / a load error).
+    monkeypatch.setattr(settings, "plugins_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "plugins_disabled", [], raising=False)
+    assert _load_mem0_plugin_module() is not None
+
+    # Global kill switch off -> never load.
+    monkeypatch.setattr(settings, "plugins_enabled", False, raising=False)
+    assert _load_mem0_plugin_module() is None
+
+    # Per-plugin disable -> never load, even with the system enabled.
+    monkeypatch.setattr(settings, "plugins_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "plugins_disabled", ["mem0"], raising=False)
+    assert _load_mem0_plugin_module() is None
