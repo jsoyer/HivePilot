@@ -10,11 +10,14 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from hivepilot.services import state_service
+from hivepilot.services import db, state_service
 from hivepilot.services.state_service import (
+    get_steps_for_run,
     init_db,
     list_recent_interactions,
     record_interaction,
+    record_run_start,
+    record_step,
 )
 
 # ---------------------------------------------------------------------------
@@ -190,3 +193,103 @@ class TestListRecentInteractions:
         rows = list_recent_interactions(limit=3, run_id=7)
         assert len(rows) == 3
         assert all(r["run_id"] == 7 for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Phase 24b.1 — steps.provider / steps.model (idempotent migration +
+# record_step persistence)
+# ---------------------------------------------------------------------------
+
+
+class TestStepsProviderModelMigration:
+    def test_columns_exist_after_init_db(self) -> None:
+        init_db()
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "provider")
+            assert db.column_exists(conn, "steps", "model")
+
+    def test_init_db_is_idempotent(self) -> None:
+        """Calling init_db() twice must not raise (ALTER TABLE ADD COLUMN
+        guarded by column_exists, same pattern as the 'tenant' migration)."""
+        init_db()
+        init_db()  # must not raise "duplicate column name"
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "provider")
+            assert db.column_exists(conn, "steps", "model")
+
+    def test_pre_existing_db_without_columns_gets_them(self) -> None:
+        """Simulates a pre-24b.1 DB: create the steps table WITHOUT the new
+        columns directly, then call init_db() and confirm the columns are
+        added without error and without touching existing rows."""
+        state_service.init_db()  # creates the full up-to-date schema once
+
+        # Drop and recreate `steps` in the OLD (pre-migration) shape to
+        # simulate an existing DB predating this sprint.
+        with db.connect() as conn:
+            conn.execute("DROP TABLE steps")
+            conn.execute(
+                """
+                CREATE TABLE steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER,
+                    step TEXT,
+                    status TEXT,
+                    detail TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO steps (run_id, step, status, detail) VALUES (?, ?, ?, ?)",
+                (1, "legacy-step", "success", None),
+            )
+
+        with db.connect() as conn:
+            assert not db.column_exists(conn, "steps", "provider")
+
+        init_db()  # idempotent migration must backfill the missing columns
+
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "provider")
+            assert db.column_exists(conn, "steps", "model")
+            row = conn.execute("SELECT * FROM steps WHERE step='legacy-step'").fetchone()
+        assert row is not None
+        assert row["provider"] is None  # existing row untouched -> NULL, not invented
+
+
+class TestRecordStepProviderModel:
+    def test_persists_provider_and_model_when_given(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        rows = get_steps_for_run(run_id)
+        assert len(rows) == 1
+        assert rows[0]["provider"] == "claude"
+        assert rows[0]["model"] == "claude-sonnet-4-6"
+
+    def test_provider_and_model_null_when_omitted(self) -> None:
+        """Backward-compat: old-style calls (no provider/model kwargs) still
+        work and persist NULL — never an invented value."""
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "success")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["provider"] is None
+        assert rows[0]["model"] is None
+
+    def test_positional_detail_still_works_backward_compat(self) -> None:
+        """Existing callers passing `detail` positionally (no provider/model)
+        must be unaffected by the new keyword-only-by-convention params."""
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "failed", "boom")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["detail"] == "boom"
+        assert rows[0]["provider"] is None
+        assert rows[0]["model"] is None
+
+    def test_provider_only_no_model(self) -> None:
+        """A shell step: provider known (runner kind), model genuinely
+        unknown -> NULL, not invented."""
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "shell-step", "success", provider="shell", model=None)
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["provider"] == "shell"
+        assert rows[0]["model"] is None

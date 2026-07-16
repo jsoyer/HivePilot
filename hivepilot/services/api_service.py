@@ -371,6 +371,7 @@ _TRENDS_CSV_FIELDS = ["bucket", "total", "succeeded", "failed", "skipped", "othe
 _DURATIONS_CSV_FIELDS = ["scope", "key", "count", "min", "max", "avg", "p50", "p95", "p99"]
 _HOTSPOTS_CSV_FIELDS = ["step", "status", "count"]
 _APPROVAL_LATENCY_CSV_FIELDS = ["count", "min", "max", "avg", "p50", "p95", "p99"]
+_PROVIDERS_CSV_FIELDS = ["scope", "key", "total", "succeeded", "failed", "skipped", "other"]
 
 
 @v1.get("/analytics/summary")
@@ -476,6 +477,38 @@ def analytics_approval_latency(
     if format == "csv":
         return _csv_response([data], _APPROVAL_LATENCY_CSV_FIELDS)
     return data
+
+
+@v1.get("/analytics/providers")
+@app.get("/analytics/providers")
+def analytics_providers(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    format: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    """Phase 24b.1 — provider/model breakdown analytics: `steps` grouped by
+    provider (runner kind / resolved API provider) and by model, with
+    counts + outcome split. Token/cost analytics are a later sub-sprint
+    (24b.2) — this endpoint only reflects what's persisted per step today.
+    """
+    by_provider = analytics_service.steps_by_provider(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+    by_model = analytics_service.steps_by_model(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+    if format == "csv":
+        rows: list[dict[str, Any]] = [
+            {"scope": "provider", "key": row["provider"], "total": row["total"], **row["outcomes"]}
+            for row in by_provider
+        ] + [
+            {"scope": "model", "key": row["model"], "total": row["total"], **row["outcomes"]}
+            for row in by_model
+        ]
+        return _csv_response(rows, _PROVIDERS_CSV_FIELDS)
+    return {"by_provider": by_provider, "by_model": by_model}
 
 
 @v1.post("/chatops/slack", dependencies=[Depends(require_role("run"))])

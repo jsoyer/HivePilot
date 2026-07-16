@@ -330,3 +330,113 @@ class TestAnalyticsCsvExport:
         assert resp.status_code == 200
         assert "'normal-project" not in resp.text
         assert "normal-project" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Phase 24b.1 — GET /v1/analytics/providers
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsProvidersAuth:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/analytics/providers")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/analytics/providers", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_allows_read_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers", headers=_auth(raw))
+        assert resp.status_code == 200
+
+
+class TestAnalyticsProvidersTenantIsolation:
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", provider="claude", model="m1")
+        state_service.record_step(run_other, "s1", "success", provider="claude", model="m1")
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/providers", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        total = sum(row["total"] for row in data["by_provider"])
+        assert total == 1
+
+    def test_admin_sees_all_tenants(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", provider="claude", model="m1")
+        state_service.record_step(run_other, "s1", "success", provider="claude", model="m1")
+
+        raw, _ = add_token("admin")
+        resp = api_client.get("/v1/analytics/providers", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        total = sum(row["total"] for row in data["by_provider"])
+        assert total == 2
+
+
+class TestAnalyticsProvidersShape:
+    def test_json_shape(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(run_id, "s1", "success", provider="claude", model="claude-x")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "by_provider" in data
+        assert "by_model" in data
+        row = data["by_provider"][0]
+        assert row["provider"] == "claude"
+        assert row["total"] == 1
+        assert "outcomes" in row
+        assert "outcome_rates" in row
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/analytics/providers", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_days_project_task_params_accepted(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers?days=7&project=p&task=t", headers=_auth(raw))
+        assert resp.status_code == 200
+
+
+class TestAnalyticsProvidersCsvExport:
+    def test_csv_export(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(run_id, "s1", "success", provider="claude", model="claude-x")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "text/csv" in resp.headers["content-type"]
+        rows = resp.text.strip().splitlines()
+        assert len(rows) >= 2  # header + at least one data row
+
+    def test_csv_escapes_formula_injection_in_provider_name(self, api_client, tmp_tokens_file):
+        """CSV/formula-injection defense-in-depth: a provider value starting
+        with a formula-trigger character must never reach the CSV cell
+        unescaped."""
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(run_id, "s1", "success", provider="=2+2", model="m")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "'=2+2" in resp.text
+        assert ",=2+2," not in resp.text

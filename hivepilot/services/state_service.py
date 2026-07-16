@@ -120,6 +120,13 @@ def init_db() -> None:
             )
             """
         )
+        # Idempotent migration (Phase 24b.1): persist provider/model per step.
+        # Additive-only, same ALTER TABLE ... ADD COLUMN pattern as the
+        # 'tenant' migrations below — safe to run against an existing DB.
+        if not db.column_exists(conn, "steps", "provider"):
+            conn.execute("ALTER TABLE steps ADD COLUMN provider TEXT")
+        if not db.column_exists(conn, "steps", "model"):
+            conn.execute("ALTER TABLE steps ADD COLUMN model TEXT")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS interactions (
@@ -257,7 +264,20 @@ def record_run_start(
         return run_id
 
 
-def record_step(run_id: int, step: str, status: str, detail: str | None = None) -> None:
+def record_step(
+    run_id: int,
+    step: str,
+    status: str,
+    detail: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Record a step outcome.
+
+    ``provider``/``model`` are additive and optional (Phase 24b.1 — persist
+    provider/model per step): existing callers that omit them are unaffected
+    and persist ``NULL`` for both, exactly as before this sprint.
+    """
     init_db()
     # Choke point: `detail` often carries `str(exc)` from a failed step, which
     # may echo a resolved ${secret:NAME} value an agent printed. Redact before
@@ -267,8 +287,11 @@ def record_step(run_id: int, step: str, status: str, detail: str | None = None) 
     detail = redact_text(detail) if detail is not None else detail
     with db.connect() as conn:
         conn.execute(
-            db.ph("INSERT INTO steps (run_id, step, status, detail) VALUES (?, ?, ?, ?)"),
-            (run_id, step, status, detail),
+            db.ph(
+                "INSERT INTO steps (run_id, step, status, detail, provider, model) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            (run_id, step, status, detail, provider, model),
         )
     if _METRICS_AVAILABLE and _metrics is not None:
         try:

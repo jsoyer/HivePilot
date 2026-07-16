@@ -36,12 +36,22 @@ def _seed_run(
         )
 
 
-def _seed_step(run_id: int, step: str, status: str, timestamp: str = "2026-01-01 00:00:00") -> None:
+def _seed_step(
+    run_id: int,
+    step: str,
+    status: str,
+    timestamp: str = "2026-01-01 00:00:00",
+    provider: str | None = None,
+    model: str | None = None,
+) -> None:
     state_service.init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph("INSERT INTO steps (run_id, step, status, timestamp) VALUES (?, ?, ?, ?)"),
-            (run_id, step, status, timestamp),
+            db.ph(
+                "INSERT INTO steps (run_id, step, status, timestamp, provider, model) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            (run_id, step, status, timestamp, provider, model),
         )
 
 
@@ -465,3 +475,101 @@ class TestTimeWindow:
             days=None, since="2026-05-01 00:00:00", until="2026-12-31 23:59:59"
         )
         assert result["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 24b.1 — steps_by_provider / steps_by_model
+# ---------------------------------------------------------------------------
+
+
+class TestStepsByProvider:
+    def test_grouped_counts_and_outcomes(self) -> None:
+        run1 = _seed_run(project="a", task="t1")
+        run2 = _seed_run(project="a", task="t1")
+        run3 = _seed_run(project="a", task="t1")
+
+        _seed_step(run1, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        _seed_step(run2, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        _seed_step(run3, "s1", "failed", provider="codex", model="gpt-5.5")
+
+        result = analytics_service.steps_by_provider(days=None)
+        by_key = {row["provider"]: row for row in result}
+
+        assert by_key["claude"]["total"] == 2
+        assert by_key["claude"]["outcomes"]["succeeded"] == 2
+        assert by_key["codex"]["total"] == 1
+        assert by_key["codex"]["outcomes"]["failed"] == 1
+
+    def test_null_provider_grouped_as_unknown(self) -> None:
+        """Steps recorded before this sprint (or with a genuinely unknown
+        provider, e.g. a non-native-engine placeholder step) group under
+        'unknown' rather than being dropped."""
+        run1 = _seed_run()
+        _seed_step(run1, "legacy-step", "success", provider=None, model=None)
+
+        result = analytics_service.steps_by_provider(days=None)
+        assert any(row["provider"] == "unknown" and row["total"] == 1 for row in result)
+
+    def test_tenant_isolation_via_run_join(self) -> None:
+        run_acme = _seed_run(tenant="acme")
+        run_other = _seed_run(tenant="other")
+        _seed_step(run_acme, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        _seed_step(run_other, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+
+        result = analytics_service.steps_by_provider(tenant="acme", days=None)
+        total = sum(row["total"] for row in result)
+        assert total == 1
+
+    def test_project_and_task_filters(self) -> None:
+        run_a = _seed_run(project="a", task="t1")
+        run_b = _seed_run(project="b", task="t2")
+        _seed_step(run_a, "s1", "success", provider="claude")
+        _seed_step(run_b, "s1", "success", provider="codex")
+
+        result = analytics_service.steps_by_provider(project="a", days=None)
+        providers = {row["provider"] for row in result}
+        assert providers == {"claude"}
+
+    def test_outcome_rates_present(self) -> None:
+        run1 = _seed_run()
+        _seed_step(run1, "s1", "success", provider="claude")
+        _seed_step(run1, "s2", "failed", provider="claude")
+
+        result = analytics_service.steps_by_provider(days=None)
+        row = next(r for r in result if r["provider"] == "claude")
+        assert round(sum(row["outcome_rates"].values()), 6) == 1.0
+
+    def test_empty_db_returns_empty_list(self) -> None:
+        assert analytics_service.steps_by_provider(days=None) == []
+
+
+class TestStepsByModel:
+    def test_grouped_counts_and_outcomes(self) -> None:
+        run1 = _seed_run()
+        run2 = _seed_run()
+        _seed_step(run1, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        _seed_step(run2, "s1", "success", provider="claude", model="claude-haiku-4-6")
+
+        result = analytics_service.steps_by_model(days=None)
+        models = {row["model"]: row["total"] for row in result}
+        assert models["claude-sonnet-4-6"] == 1
+        assert models["claude-haiku-4-6"] == 1
+
+    def test_null_model_grouped_as_unknown(self) -> None:
+        """A shell step: provider known, model genuinely unknown -> 'unknown'
+        bucket, never dropped or invented."""
+        run1 = _seed_run()
+        _seed_step(run1, "shell-step", "success", provider="shell", model=None)
+
+        result = analytics_service.steps_by_model(days=None)
+        assert any(row["model"] == "unknown" and row["total"] == 1 for row in result)
+
+    def test_tenant_isolation_via_run_join(self) -> None:
+        run_acme = _seed_run(tenant="acme")
+        run_other = _seed_run(tenant="other")
+        _seed_step(run_acme, "s1", "success", model="claude-sonnet-4-6")
+        _seed_step(run_other, "s1", "success", model="claude-sonnet-4-6")
+
+        result = analytics_service.steps_by_model(tenant="acme", days=None)
+        total = sum(row["total"] for row in result)
+        assert total == 1

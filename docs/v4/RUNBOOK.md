@@ -809,6 +809,7 @@ Read-only aggregate endpoints over the existing run store — no schema change, 
 | `GET /v1/analytics/durations` | p50/p95/p99 + min/max/avg run duration (`finished_at - started_at`), overall and by `project`/`task` |
 | `GET /v1/analytics/steps/failures` | `steps` grouped by (`step`, `status`), ranked with highest-failure-count combos first |
 | `GET /v1/analytics/approvals/latency` | p50/p95 (+min/max/avg/count) of `approved_at - requested_at` |
+| `GET /v1/analytics/providers` | `steps` grouped by `provider` and by `model` (counts + outcome split) — see Phase 24b.1 below |
 
 Registered both unversioned (`GET /analytics/...`) and under `/v1`, matching every other route in this API.
 
@@ -816,7 +817,7 @@ Registered both unversioned (`GET /analytics/...`) and under `/v1`, matching eve
 
 **Common query params:** `days` (default 30, relative window) and optional `project`/`task` filters. All endpoints are read-only — they never mutate run state.
 
-**CSV export:** append `?format=csv` to any of the five endpoints for a `text/csv` response instead of JSON (e.g. `GET /v1/analytics/durations?format=csv`). **PDF export is out of scope for Phase 24a** (heavy dependency) — deferred to a future phase.
+**CSV export:** append `?format=csv` to any endpoint for a `text/csv` response instead of JSON (e.g. `GET /v1/analytics/durations?format=csv`). **PDF export is out of scope for Phase 24a** (heavy dependency) — deferred to a future phase.
 
 **Canonical outcome mapping** (single source of truth: `hivepilot.services.analytics_service.canonical_outcome`, shared by the Textual dashboard):
 
@@ -828,6 +829,32 @@ Registered both unversioned (`GET /analytics/...`) and under `/v1`, matching eve
 | anything else (`running`, `pending`, `new`, `planned`, `paused`, `review`, `approval`, `awaiting_approval`, ...) | `other` |
 
 **Percentiles:** computed in Python (SQLite has no percentile aggregate) using the **nearest-rank method**: for `n` sorted values and percentile `p`, `index = ceil(p/100 * n) - 1` (clamped to `[0, n-1]`). Deterministic; always returns an observed value, never an interpolated one.
+
+### Provider/model analytics (Phase 24b.1 — safe first step of cost/provider tracking)
+
+Every step now persists **which provider and model executed it**, additively:
+
+- `steps.provider` — the runner **kind** that ran the step (e.g. `claude`, `shell`, `codex`, `cursor`), or the resolved API provider (e.g. `openai`, `anthropic`) for a prompt-CLI runner configured in API mode. `NULL` when genuinely unknown (e.g. a non-native-engine placeholder step, or a multi-model debate step).
+- `steps.model` — the model string resolved for the step. `NULL` when the step has no model at all (e.g. a `shell` runner).
+
+Both columns are added via the same idempotent `ALTER TABLE ... ADD COLUMN` migration pattern `init_db()` already uses for `tenant` — safe to run against an existing database, and `state_service.record_step(...)` accepts them as optional keyword arguments (`provider=None, model=None`) so every pre-existing caller is unaffected.
+
+`GET /v1/analytics/providers` exposes this as read-only aggregates, mirroring the auth/tenant-scoping/CSV pattern of every other analytics endpoint above:
+
+```json
+{
+  "by_provider": [
+    {"provider": "claude", "total": 42, "outcomes": {"succeeded": 40, "failed": 2, "skipped": 0, "other": 0}, "outcome_rates": {...}}
+  ],
+  "by_model": [
+    {"model": "claude-sonnet-4-6", "total": 42, "outcomes": {...}, "outcome_rates": {...}}
+  ]
+}
+```
+
+Steps with no recorded provider/model (including every step recorded before this sprint) group under the literal key `"unknown"` — never dropped, never invented.
+
+**Out of scope for this sprint:** token counts and cost. No runner-output-format change was made — this sprint only records what the orchestrator already knows about *which* runner/model it dispatched to, not usage/cost data returned by that runner. Token/cost analytics is the next sub-sprint (Phase 24b.2).
 
 ---
 
