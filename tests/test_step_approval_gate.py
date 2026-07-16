@@ -25,14 +25,44 @@ Covers:
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hivepilot.models import PipelineConfig, PipelineStage, ProjectConfig, TaskConfig, TaskStep
+from hivepilot.models import (
+    GitActions,
+    PipelineConfig,
+    PipelineStage,
+    ProjectConfig,
+    TaskConfig,
+    TaskStep,
+)
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.services.state_service import RunStatus
+
+
+def _init_git_repo(tmp_path: Path) -> Path:
+    """Create a minimal git repo with one commit, so `Orchestrator._is_git_repo`
+    (and therefore `_use_worktree`) sees a genuine git repository — mirrors
+    `tests/test_worktree_isolation.py`'s helper of the same name."""
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@test.com"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True, capture_output=True
+    )
+    (tmp_path / "README.md").write_text("init")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-m", "init"], check=True, capture_output=True
+    )
+    return tmp_path
+
 
 # ---------------------------------------------------------------------------
 # step_requires_approval — pure decision helper
@@ -417,3 +447,399 @@ class TestRunApprovedStepCheckpoint:
 
         mock_prep.capture.assert_not_called()
         mock_apply.capture.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed guard: step-level approval gate + git-worktree isolation
+# ---------------------------------------------------------------------------
+#
+# A step-level pause raises `StepApprovalPending`, which unwinds through the
+# `with isolated_worktree(...)` block. That context manager's `finally`
+# unconditionally runs `git worktree remove --force` (see
+# `hivepilot.services.git_service.isolated_worktree`), so a mid-task pause in
+# a worktree-isolated task would silently discard every prior step's file
+# edits — a resume would then run against a FRESH worktree cut from unchanged
+# HEAD. `_execute_task` must refuse this combination up front (before ever
+# entering the worktree context) instead of losing work silently.
+
+
+class TestWorktreeGateFailClosed:
+    def test_destructive_step_refuses_when_task_uses_worktree_isolation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hivepilot.config import settings as _settings
+
+        monkeypatch.setattr(_settings, "worktree_isolation", True)
+
+        repo = _init_git_repo(tmp_path / "repo")
+        orch = _make_orch()
+        mock_prep, mock_apply = _wire_registry(orch)
+        task = _two_step_task().model_copy(update={"git": GitActions(commit=True)})
+        project = ProjectConfig(path=repo)
+
+        with (
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.state_service.record_approval_request") as mock_approval,
+            patch("hivepilot.orchestrator.notification_service.send_approval_keyboard"),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            with pytest.raises(RuntimeError, match="git worktree isolation"):
+                orch._execute_task(
+                    project=project,
+                    task_name="x",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=True,
+                    run_id=42,
+                )
+
+        # The refusal happens before the worktree (and therefore the step
+        # loop) is ever entered — NEITHER step ran, not even the
+        # non-destructive "prep" step, so nothing was silently lost.
+        mock_wt.assert_not_called()
+        mock_prep.capture.assert_not_called()
+        mock_apply.capture.assert_not_called()
+        # A plain failure, not a fake pause/approval state.
+        mock_approval.assert_not_called()
+        mock_complete.assert_not_called()
+
+    def test_require_approval_flag_plus_git_push_also_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Covers both trigger types (`TaskStep.require_approval`, not just a
+        runner-declared destructive op) and `task.git.push` (not just
+        `.commit`) — either alone is enough to enable worktree isolation."""
+        from hivepilot.config import settings as _settings
+        from hivepilot.models import RunnerDefinition
+
+        monkeypatch.setattr(_settings, "worktree_isolation", True)
+
+        repo = _init_git_repo(tmp_path / "repo")
+        orch = _make_orch()
+        orch.registry = MagicMock()
+        orch.registry._definition_for.return_value = RunnerDefinition(kind="shell")
+        mock_runner = MagicMock()
+        orch.registry.get_runner.return_value = mock_runner
+
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="rm-prod", runner="shell", require_approval=True)],
+            git=GitActions(push=True),
+        )
+        project = ProjectConfig(path=repo)
+
+        with (
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            with pytest.raises(RuntimeError, match="git worktree isolation"):
+                orch._execute_task(
+                    project=project,
+                    task_name="x",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=True,
+                    run_id=42,
+                )
+
+        mock_wt.assert_not_called()
+        mock_runner.capture.assert_not_called()
+
+    def test_resume_past_the_gate_is_not_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard only fires on the ORIGINAL run (`approved_step_index is
+        None`). A task WITHOUT any remaining gating step (e.g. after its one
+        destructive step has already been approved and is being resumed) must
+        be allowed to proceed with worktree isolation."""
+        from hivepilot.config import settings as _settings
+
+        monkeypatch.setattr(_settings, "worktree_isolation", True)
+
+        repo = _init_git_repo(tmp_path / "repo")
+        orch = _make_orch()
+        mock_prep, mock_apply = _wire_registry(orch)
+        task = _two_step_task().model_copy(update={"git": GitActions(commit=True)})
+        project = ProjectConfig(path=repo)
+
+        with (
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+            patch("hivepilot.orchestrator.perform_git_actions"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            mock_wt.return_value.__enter__ = MagicMock(return_value=repo)
+            mock_wt.return_value.__exit__ = MagicMock(return_value=False)
+
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=True,
+                run_id=42,
+                resume_from_step=1,
+                resume_outputs=["prep output"],
+                approved_step_index=1,
+            )
+
+        mock_wt.assert_called_once()
+        mock_prep.capture.assert_not_called()
+        mock_apply.capture.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Fix: the destructive-approval gate check now runs BEFORE the `before_step`
+# plugin hook, so a step that pauses has NOT fired `before_step` yet — it
+# fires exactly once, when the step actually runs (on resume), instead of
+# once (wastefully) before the pause and again on resume.
+# ---------------------------------------------------------------------------
+
+
+class TestBeforeStepHookOrdering:
+    def test_before_step_fires_exactly_once_for_gated_step_across_pause_and_resume(
+        self,
+    ) -> None:
+        from hivepilot.orchestrator import StepApprovalPending
+
+        orch = _make_orch()
+        mock_prep, mock_apply = _wire_registry(orch)
+        task = _two_step_task()
+        project = ProjectConfig(path=Path("/tmp/p"))
+
+        def _before_step_calls_for(step_name: str) -> list:
+            return [
+                c
+                for c in orch.plugins.run_hook.call_args_list
+                if c.args
+                and c.args[0] == "before_step"
+                and c.kwargs["payload"].step.name == step_name
+            ]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.state_service.record_approval_request"),
+            patch("hivepilot.orchestrator.notification_service.send_approval_keyboard"),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            with pytest.raises(StepApprovalPending):
+                orch._execute_task(
+                    project=project,
+                    task_name="x",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=False,
+                    run_id=42,
+                )
+
+        # prep actually ran -> before_step fired for it exactly once.
+        assert len(_before_step_calls_for("prep")) == 1
+        # apply is gated and never ran -> before_step must NOT have fired for
+        # it yet (this is the bug being fixed: previously it fired here too).
+        assert len(_before_step_calls_for("apply")) == 0
+
+        orch.plugins.run_hook.reset_mock()
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=42,
+                resume_from_step=1,
+                resume_outputs=["prep output"],
+                approved_step_index=1,
+            )
+
+        # On resume, apply actually runs -> before_step fires exactly once
+        # for it (not zero, not twice).
+        assert len(_before_step_calls_for("apply")) == 1
+        # prep is never re-executed on resume -> before_step must not
+        # re-fire for it either.
+        assert len(_before_step_calls_for("prep")) == 0
+
+
+# ---------------------------------------------------------------------------
+# LOW: fail-OPEN on an unresolvable runner kind (distinct from fail-CLOSED
+# when `is_destructive` itself raises, covered by
+# `TestStepRequiresApproval.test_is_destructive_raising_fails_closed`).
+# ---------------------------------------------------------------------------
+
+
+class TestUnresolvableRunnerKindFailsOpen:
+    def test_unknown_runner_kind_does_not_gate_a_normal_step(self) -> None:
+        from hivepilot.models import RunnerDefinition
+
+        orch = _make_orch()
+        orch.registry = MagicMock()
+        orch.registry._definition_for.return_value = RunnerDefinition(kind="totally-unknown-kind")
+        mock_runner = MagicMock()
+        mock_runner.capture.return_value = "output"
+        orch.registry.get_runner.return_value = mock_runner
+
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="mystery")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.state_service.record_approval_request") as mock_approval,
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            result = orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=42,
+            )
+
+        # An unresolvable runner kind can't be classified destructive, so it
+        # must NOT gate — a normal step just runs.
+        mock_approval.assert_not_called()
+        mock_complete.assert_not_called()
+        mock_runner.capture.assert_called_once()
+        assert result == "output"
+
+
+# ---------------------------------------------------------------------------
+# LOW: a 3-step task with TWO destructive steps pauses twice, and no step
+# ever runs more than once across the full pause -> approve -> resume ->
+# pause -> approve -> resume cycle.
+# ---------------------------------------------------------------------------
+
+
+def _wire_three_step_registry(orch) -> tuple[MagicMock, MagicMock, MagicMock]:
+    from hivepilot.models import RunnerDefinition
+
+    defs = {
+        "shell": RunnerDefinition(kind="shell"),
+        "tf-a": RunnerDefinition(kind="terraform", command="apply"),
+        "tf-b": RunnerDefinition(kind="terraform", command="apply"),
+    }
+    orch.registry = MagicMock()
+    orch.registry._definition_for.side_effect = lambda name: defs[name]
+
+    mock_prep = MagicMock()
+    mock_prep.capture.return_value = "prep output"
+    mock_apply1 = MagicMock()
+    mock_apply1.capture.return_value = "apply1 output"
+    mock_apply2 = MagicMock()
+    mock_apply2.capture.return_value = "apply2 output"
+    runners = {"shell": mock_prep, "tf-a": mock_apply1, "tf-b": mock_apply2}
+    orch.registry.get_runner.side_effect = lambda name: runners[name]
+    return mock_prep, mock_apply1, mock_apply2
+
+
+def _three_step_task_two_destructive() -> TaskConfig:
+    return TaskConfig(
+        description="t",
+        engine="native",
+        steps=[
+            TaskStep(name="prep", runner="shell"),
+            TaskStep(name="apply1", runner="tf-a"),
+            TaskStep(name="apply2", runner="tf-b"),
+        ],
+    )
+
+
+class TestDoublePauseNoStepRunsTwice:
+    def test_two_destructive_steps_each_pause_once_and_nothing_double_runs(self) -> None:
+        from hivepilot.orchestrator import StepApprovalPending
+
+        orch = _make_orch()
+        mock_prep, mock_apply1, mock_apply2 = _wire_three_step_registry(orch)
+        task = _three_step_task_two_destructive()
+        project = ProjectConfig(path=Path("/tmp/p"))
+
+        # --- Original run: pauses at step 1 ("apply1") ---
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.state_service.record_approval_request") as mock_approval1,
+            patch("hivepilot.orchestrator.notification_service.send_approval_keyboard"),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            with pytest.raises(StepApprovalPending):
+                orch._execute_task(
+                    project=project,
+                    task_name="x",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=False,
+                    run_id=42,
+                )
+
+        mock_prep.capture.assert_called_once()
+        mock_apply1.capture.assert_not_called()
+        mock_apply2.capture.assert_not_called()
+        meta1 = mock_approval1.call_args.args[3]
+        assert meta1["resume_from_step"] == 1
+        assert meta1["step_name"] == "apply1"
+
+        # --- First resume: approve step 1 -> runs "apply1", then pauses
+        #     AGAIN at step 2 ("apply2") ---
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.state_service.record_approval_request") as mock_approval2,
+            patch("hivepilot.orchestrator.notification_service.send_approval_keyboard"),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            with pytest.raises(StepApprovalPending):
+                orch._execute_task(
+                    project=project,
+                    task_name="x",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=False,
+                    run_id=42,
+                    resume_from_step=1,
+                    resume_outputs=list(meta1["resume_outputs"]),
+                    approved_step_index=1,
+                )
+
+        mock_prep.capture.assert_called_once()  # still only once
+        mock_apply1.capture.assert_called_once()  # exactly once, not re-run
+        mock_apply2.capture.assert_not_called()
+        meta2 = mock_approval2.call_args.args[3]
+        assert meta2["resume_from_step"] == 2
+        assert meta2["step_name"] == "apply2"
+
+        # --- Second resume: approve step 2 -> runs "apply2", task completes ---
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            result = orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=42,
+                resume_from_step=2,
+                resume_outputs=list(meta2["resume_outputs"]),
+                approved_step_index=2,
+            )
+
+        # No step ever ran more than once across the whole double-pause cycle.
+        mock_prep.capture.assert_called_once()
+        mock_apply1.capture.assert_called_once()
+        mock_apply2.capture.assert_called_once()
+        assert result == "prep output\napply1 output\napply2 output"

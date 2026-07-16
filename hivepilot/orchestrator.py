@@ -202,6 +202,86 @@ def step_requires_approval(runner: object, step: TaskStep, payload: RunnerPayloa
         return True
 
 
+def _find_gating_step(
+    task: TaskConfig,
+    policy: policy_service.Policy | None,
+    registry: RunnerRegistry,
+) -> TaskStep | None:
+    """Return the first step in *task* that would trip `step_requires_approval`
+    — statically, without executing anything — or None if no step would.
+
+    Used at TASK START (before entering `isolated_worktree`) to fail-closed on
+    the combination of git-worktree isolation with a step-level approval gate:
+    a mid-task `StepApprovalPending` pause unwinds through the worktree
+    context, whose `finally` unconditionally runs `git worktree remove
+    --force` (see `hivepilot.services.git_service.isolated_worktree`),
+    deleting any prior steps' file edits before a resume could ever see them.
+    Detecting this up front lets `_execute_task` refuse instead of silently
+    losing that work.
+
+    This is deterministic: `TaskStep.require_approval` is static, and
+    `is_destructive(payload)` (see the runners in `hivepilot/runners/`) reads
+    only step/definition data (e.g. `payload.step.command`), never runtime
+    step output — so checking every step before any of them run is safe and
+    agrees with what `step_requires_approval` would decide once the step
+    actually executes. Mirrors the two runner-resolution branches in
+    `_execute_task`'s step loop (role-based vs. explicit-runner steps). A step
+    whose runner kind can't be resolved is treated as non-gating — the same
+    fail-open-on-resolution-failure default `_resolve_runner_for_destructive_check`
+    already uses (an unresolvable runner can't be destructive by definition).
+    """
+    _role_runner_def: RunnerDefinition | None = None
+    if task.role:
+        from typing import cast
+
+        from hivepilot.models import RunnerKind
+        from hivepilot.roles import get_role, resolve_host, resolve_runner
+
+        try:
+            runner_kind, role_model = resolve_runner(task.role, policy)
+            role_options: dict[str, str] = {}
+            role_perm = get_role(task.role).permission_mode
+            if role_perm:
+                role_options["permission_mode"] = role_perm
+            _role_runner_def = RunnerDefinition(
+                name=f"role:{task.role}",
+                kind=cast(RunnerKind, runner_kind),
+                command=None,
+                model=role_model,
+                host=resolve_host(task.role, policy),
+                options=role_options,
+            )
+        except Exception:  # noqa: BLE001 — can't resolve role runner: don't gate
+            _role_runner_def = None
+
+    _probe_project = ProjectConfig(path=Path("."))
+    for step in task.steps:
+        if step.require_approval:
+            return step
+        if task.role:
+            runner_def = _role_runner_def
+        else:
+            try:
+                runner_key = step.runner_ref or step.runner
+                runner_def = registry._definition_for(runner_key)
+            except Exception:  # noqa: BLE001 — unresolvable step runner: don't gate
+                runner_def = None
+        if runner_def is None:
+            continue
+        gate_runner = _resolve_runner_for_destructive_check(runner_def)
+        probe_payload = RunnerPayload(
+            project_name="",
+            project=_probe_project,
+            task_name="",
+            step=step,
+            metadata={},
+            secrets={},
+        )
+        if step_requires_approval(gate_runner, step, probe_payload):
+            return step
+    return None
+
+
 def _runner_for_stage(stage: PipelineStage) -> str:
     """Return the runner name for a pipeline stage.
 
@@ -2275,6 +2355,28 @@ class Orchestrator:
             and self._is_git_repo(project.path)
         )
 
+        # Fail-closed guard (Phase 17a-B follow-up): a step-level approval
+        # gate is incompatible with git-worktree isolation. `StepApprovalPending`
+        # unwinds through `isolated_worktree`'s `with` block, whose `finally`
+        # unconditionally `git worktree remove --force`s the worktree — so a
+        # mid-task pause would silently discard every prior step's file edits,
+        # and resume would then run against a fresh worktree from unchanged
+        # HEAD. Checked only on the ORIGINAL run (`approved_step_index is
+        # None` — a step-checkpoint resume has this set to the just-approved
+        # step, see `run_approved`), so a resume that's already past the gate
+        # is never refused; the refusal on the original run is what prevents
+        # the unsafe combination from ever starting.
+        if _use_worktree and approved_step_index is None:
+            _gating_step = _find_gating_step(task, policy, self.registry)
+            if _gating_step is not None:
+                raise RuntimeError(
+                    "Step-level approval (destructive op / require_approval) is "
+                    "not supported in a task that uses git worktree isolation "
+                    "(auto_git + git.commit/push), because a mid-task pause "
+                    "would discard the worktree. Move the destructive step "
+                    "into its own task or a pipeline stage with pause_before."
+                )
+
         _wt_ctx = isolated_worktree(project.path) if _use_worktree else nullcontext(project.path)
 
         with _wt_ctx as _exec_path:
@@ -2305,9 +2407,6 @@ class Orchestrator:
                 # the quota-fallback loop below.
                 _used_runner_def: RunnerDefinition | None = None
                 try:
-                    self.plugins.run_hook(
-                        "before_step", payload=payload, dry_run=dry_run, role=task.role
-                    )
                     if task.role:
                         from typing import cast
 
@@ -2342,6 +2441,14 @@ class Orchestrator:
                     # by a prior `run_approved` resume (its gate must not re-fire);
                     # every other step is checked fresh. `simulate` always bypasses
                     # (no real destructive op runs under --simulate).
+                    #
+                    # Deliberately checked BEFORE the `before_step` hook below: this
+                    # gate only needs `runner_def`/`step`/`payload` (never anything
+                    # `before_step` sets up), so checking it first means a step that
+                    # pauses here has NOT fired `before_step` yet — preserving the
+                    # documented "fired once before each step that actually runs"
+                    # contract instead of firing once now (wastefully, before the
+                    # pause) and again on resume.
                     if not simulate and step_idx != approved_step_index:
                         _gate_runner = _resolve_runner_for_destructive_check(runner_def)
                         if step_requires_approval(_gate_runner, step, payload):
@@ -2379,6 +2486,9 @@ class Orchestrator:
                             raise StepApprovalPending(
                                 f"Step '{step.name}' requires approval before executing."
                             )
+                    self.plugins.run_hook(
+                        "before_step", payload=payload, dry_run=dry_run, role=task.role
+                    )
                     if simulate:
                         logger.info(
                             "step.simulate",
