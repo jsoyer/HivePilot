@@ -73,6 +73,36 @@ describe('PanelRenderer', () => {
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>')
   })
 
+  it('renders a stat section label/value as plain escaped text, never raw HTML', () => {
+    const payload = '<img src=x onerror=alert(1)>'
+    render({
+      sections: [{ kind: 'stat', label: payload, value: payload, status: null }],
+    })
+    // Plugin-authored `label`/`value` are UNTRUSTED (same contract as a text
+    // section's `content`) — must render as literal text, never a parsed
+    // <img> element.
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.textContent).toContain(payload)
+  })
+
+  it('renders a table column header and cell as plain escaped text, never raw HTML', () => {
+    const payload = '<img src=x onerror=alert(1)>'
+    render({
+      sections: [
+        {
+          kind: 'table',
+          columns: [payload],
+          rows: [[payload]],
+        },
+      ],
+    })
+    // Plugin-authored table `columns`/`rows` are UNTRUSTED — a malicious
+    // column header or cell must render as literal text, never a parsed
+    // <img> element.
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.textContent).toContain(payload)
+  })
+
   it('renders multiple sections in order', () => {
     render({
       sections: [

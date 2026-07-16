@@ -254,3 +254,76 @@ class TestPanelFetchEndpoint:
         raw, _ = add_token("read")
         resp = api_client.get("/panels/nope", headers=_auth(raw))
         assert resp.status_code == 404
+
+
+class TestPanelFetchEndpointNeverFailsOpen:
+    """Regression coverage for the fail-open privilege-escalation gap: an
+    unrecognized `min_role` made `token_service.role_rank(min_role)` return
+    -1, so `role_rank(caller.role) < role_rank(min_role)` was `0 < -1` —
+    ALWAYS False — and the 403 never fired. `hivepilot/plugins.py` now
+    refuses to REGISTER such a panel at all (see `tests/test_panels.py`
+    `TestPanelInvalidMinRoleRejection`); this class additionally proves
+    `get_panel_endpoint`'s own defensive guard denies every caller even if a
+    panel with an invalid `min_role` reaches it by some other path than the
+    normal `PluginManager()` registration flow (e.g. a spec injected
+    directly into `.panels`, bypassing registration entirely — the same
+    `_fake_plugin_manager` seeding technique the rest of this file uses).
+    """
+
+    @pytest.mark.parametrize(
+        "bad_min_role",
+        ["Admin", "superuser", "", 123, None, []],
+        ids=[
+            "typo-Admin",
+            "superuser",
+            "empty-string",
+            "non-string-int",
+            "none",
+            "non-hashable-list",
+        ],
+    )
+    def test_invalid_min_role_denies_every_role_never_fails_open(
+        self, api_client, tmp_tokens_file, monkeypatch, bad_min_role
+    ):
+        """A panel spec that bypasses registration-time validation (injected
+        directly here, since `PluginManager()` itself can no longer produce
+        one) must still be denied by the endpoint's own defensive guard —
+        for EVERY caller role, including `admin`, since an unenforceable
+        `min_role` must never be silently treated as satisfied."""
+        _patch_orchestrator(
+            monkeypatch,
+            {
+                "restricted": _panel_spec(
+                    "restricted",
+                    "Restricted",
+                    lambda: {"sections": [{"kind": "text", "content": "top secret"}]},
+                    bad_min_role,
+                )
+            },
+        )
+
+        for role in ("read", "run", "approve", "admin"):
+            raw, _ = add_token(role)
+            resp = api_client.get("/v1/panels/restricted", headers=_auth(raw))
+            assert resp.status_code == 403, f"role={role} must be denied, got {resp.status_code}"
+
+    def test_valid_but_high_min_role_still_denies_read_token(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """Sanity companion to the invalid-min_role tests above: the system
+        can't be coerced into serving an admin panel to a read token even
+        via the normal, valid `min_role: "admin"` path."""
+        _patch_orchestrator(
+            monkeypatch,
+            {
+                "admin_only": _panel_spec(
+                    "admin_only",
+                    "Admin Only",
+                    lambda: {"sections": [{"kind": "text", "content": "top secret"}]},
+                    "admin",
+                )
+            },
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/panels/admin_only", headers=_auth(raw))
+        assert resp.status_code == 403

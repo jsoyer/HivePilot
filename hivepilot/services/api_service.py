@@ -851,6 +851,14 @@ def get_panel_endpoint(
     `min_role` is the ONLY access control this endpoint applies — a panel
     author is responsible for not exposing cross-tenant or otherwise
     sensitive data via a low-`min_role` panel.
+
+    **Fail-closed on an invalid `min_role`.** `hivepilot/plugins.py`
+    rejects a panel at registration time if its `min_role` is not a
+    recognized role (`PanelInvalidMinRoleError`), but this endpoint ALSO
+    treats a non-string/unrecognized `min_role` as the highest possible
+    bar and denies every caller — defense in depth against
+    `token_service.role_rank` returning `-1` for an unknown role, which
+    would otherwise make the comparison below fail OPEN.
     """
     plugins = _get_orchestrator().plugins
     spec = plugins.get_panel(name)
@@ -858,7 +866,19 @@ def get_panel_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Panel not found")
 
     min_role = spec.get("min_role", "read")
-    if token_service.role_rank(caller.role) < token_service.role_rank(min_role):
+    min_role_rank = token_service.role_rank(min_role) if isinstance(min_role, str) else -1
+    if min_role_rank < 0:
+        # Defensive, belt-and-suspenders guard: `plugins.py`'s
+        # `PanelInvalidMinRoleError` already refuses to REGISTER a panel
+        # with an unrecognized/non-string `min_role`, so a real panel
+        # should never reach this branch. But `token_service.role_rank`
+        # returns -1 for ANY unrecognized role, and `role_rank(caller.role)
+        # < role_rank(min_role)` would then be `0 < -1` — ALWAYS false —
+        # which fails OPEN and serves the panel to any `read` token. Treat
+        # an unknown/invalid `min_role` as the highest possible bar instead,
+        # so this endpoint denies every caller rather than ever fail open.
+        min_role_rank = max(token_service.ROLE_RANKS.values()) + 1
+    if token_service.role_rank(caller.role) < min_role_rank:
         state_service.record_audit(
             token_hash=caller.token[:16],
             role=caller.role,
