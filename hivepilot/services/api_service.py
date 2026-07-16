@@ -372,6 +372,15 @@ _DURATIONS_CSV_FIELDS = ["scope", "key", "count", "min", "max", "avg", "p50", "p
 _HOTSPOTS_CSV_FIELDS = ["step", "status", "count"]
 _APPROVAL_LATENCY_CSV_FIELDS = ["count", "min", "max", "avg", "p50", "p95", "p99"]
 _PROVIDERS_CSV_FIELDS = ["scope", "key", "total", "succeeded", "failed", "skipped", "other"]
+_COST_CSV_FIELDS = [
+    "scope",
+    "key",
+    "total_steps",
+    "input_tokens",
+    "output_tokens",
+    "cost_usd",
+    "unpriced_steps",
+]
 
 
 @v1.get("/analytics/summary")
@@ -509,6 +518,47 @@ def analytics_providers(
         ]
         return _csv_response(rows, _PROVIDERS_CSV_FIELDS)
     return {"by_provider": by_provider, "by_model": by_model}
+
+
+@v1.get("/analytics/cost")
+@app.get("/analytics/cost")
+def analytics_cost(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    format: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    """Phase 24b.2b — cost/provider analytics: token + cost totals, overall
+    and grouped by `provider`/`model`. Effective cost per step is the
+    self-reported `cost_usd` when present, else an estimate from the price
+    map (`hivepilot.services.pricing`), else the step contributes 0 to the
+    cost total and is counted in `unpriced_steps` — never silently presented
+    as a complete total. Closes Phase 24 (analytics API).
+    """
+    data = analytics_service.cost_summary(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+    if format == "csv":
+        rows: list[dict[str, Any]] = [{"scope": "overall", "key": "", **data["overall"]}]
+        rows += [
+            {
+                "scope": "provider",
+                "key": row["provider"],
+                **{k: v for k, v in row.items() if k != "provider"},
+            }
+            for row in data["by_provider"]
+        ]
+        rows += [
+            {
+                "scope": "model",
+                "key": row["model"],
+                **{k: v for k, v in row.items() if k != "model"},
+            }
+            for row in data["by_model"]
+        ]
+        return _csv_response(rows, _COST_CSV_FIELDS)
+    return data
 
 
 @v1.post("/chatops/slack", dependencies=[Depends(require_role("run"))])

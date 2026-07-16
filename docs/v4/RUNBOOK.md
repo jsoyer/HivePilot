@@ -842,6 +842,7 @@ Read-only aggregate endpoints over the existing run store — no schema change, 
 | `GET /v1/analytics/steps/failures` | `steps` grouped by (`step`, `status`), ranked with highest-failure-count combos first |
 | `GET /v1/analytics/approvals/latency` | p50/p95 (+min/max/avg/count) of `approved_at - requested_at` |
 | `GET /v1/analytics/providers` | `steps` grouped by `provider` and by `model` (counts + outcome split) — see Phase 24b.1 below |
+| `GET /v1/analytics/cost` | Token + cost totals, overall and grouped by `provider`/`model` — see "Cost analytics" below |
 
 Registered both unversioned (`GET /analytics/...`) and under `/v1`, matching every other route in this API.
 
@@ -887,6 +888,38 @@ Both columns are added via the same idempotent `ALTER TABLE ... ADD COLUMN` migr
 Steps with no recorded provider/model (including every step recorded before this sprint) group under the literal key `"unknown"` — never dropped, never invented.
 
 **Out of scope for this sprint:** token counts and cost. No runner-output-format change was made — this sprint only records what the orchestrator already knows about *which* runner/model it dispatched to, not usage/cost data returned by that runner. Token/cost analytics is the next sub-sprint (Phase 24b.2).
+
+### Cost analytics (Phase 24b.2b — closes Phase 24)
+
+`GET /v1/analytics/cost` turns the token/cost columns persisted by Phase 24b.2a's opt-in usage capture (`steps.input_tokens`, `steps.output_tokens`, `steps.cost_usd`) into read-only cost/token aggregates, mirroring the auth/tenant-scoping/CSV pattern of every other analytics endpoint above.
+
+**Price map** (`hivepilot.services.pricing`): a small default table of USD-per-1M-token rates (`input`/`output`) for a handful of common models. **These defaults are indicative and dated (2026-07-15) — not a live-updated price feed.** Override or extend it via `HIVEPILOT_LLM_PRICE_MAP` (JSON object, e.g. `{"my-model": {"input": 3.0, "output": 15.0}}`), which is **merged over** the built-in defaults per-model (an override for one model doesn't drop the others). `pricing.estimate_cost(model, input_tokens, output_tokens)` is a pure function — it never touches the DB or network — returning `None` when the model isn't priced or a token count is missing.
+
+**Cost precedence, per step, in this order:**
+
+1. **Self-reported** `steps.cost_usd` (set only when `claude_capture_usage` was on and the CLI's JSON envelope included `total_cost_usd`) — authoritative, always preferred when present.
+2. **Estimated** from the price map via `pricing.estimate_cost(...)`, when the step has token counts and its model is priced (by default or via `HIVEPILOT_LLM_PRICE_MAP`).
+3. **Unpriced** — no self-reported cost and no price-map match (unknown model, or no tokens recorded at all). Contributes `0.0` to the cost total but is counted separately so the total is never silently presented as complete.
+
+**Response shape:**
+
+```json
+{
+  "overall": {"total_steps": 42, "input_tokens": 120000, "output_tokens": 45000, "cost_usd": 3.87, "unpriced_steps": 5},
+  "by_provider": [
+    {"provider": "claude", "total_steps": 40, "input_tokens": 118000, "output_tokens": 44500, "cost_usd": 3.85, "unpriced_steps": 3}
+  ],
+  "by_model": [
+    {"model": "claude-sonnet-4-6", "total_steps": 40, "input_tokens": 118000, "output_tokens": 44500, "cost_usd": 3.85, "unpriced_steps": 3}
+  ]
+}
+```
+
+`unpriced_steps` is the **coverage number**: it's present at every scope (`overall`, and each `by_provider`/`by_model` row) so a dashboard can show "N of M steps had no cost signal" instead of quietly under-reporting spend. Steps with no recorded provider/model group under the literal key `"unknown"`, same as `GET /v1/analytics/providers`. CSV export (`?format=csv`) uses the same formula-injection guard as every other analytics endpoint.
+
+Auth/tenant scoping/query params (`days`, `project`, `task`) are identical to `GET /v1/analytics/providers`.
+
+**This closes Phase 24** (analytics API — SLA/duration/volume, provider/model breakdown, and cost analytics are all now shipped).
 
 ---
 

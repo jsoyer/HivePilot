@@ -427,6 +427,127 @@ class TestAnalyticsProvidersCsvExport:
         rows = resp.text.strip().splitlines()
         assert len(rows) >= 2  # header + at least one data row
 
+
+# ---------------------------------------------------------------------------
+# Phase 24b.2b — GET /v1/analytics/cost
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsCostAuth:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/analytics/cost")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_allows_read_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 200
+
+
+class TestAnalyticsCostTenantIsolation:
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(
+            run_acme,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            cost_usd=1.5,
+        )
+        state_service.record_step(
+            run_other,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            cost_usd=1.5,
+        )
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["overall"]["total_steps"] == 1
+        assert resp.json()["overall"]["cost_usd"] == 1.5
+
+    def test_admin_sees_all_tenants(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", provider="claude", cost_usd=1.0)
+        state_service.record_step(run_other, "s1", "success", provider="claude", cost_usd=1.0)
+
+        raw, _ = add_token("admin")
+        resp = api_client.get("/v1/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["overall"]["total_steps"] == 2
+
+
+class TestAnalyticsCostShape:
+    def test_json_shape_includes_coverage_number(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(
+            run_id, "s1", "success", provider="claude", model="unpriced-model", input_tokens=10
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "overall" in data
+        assert "by_provider" in data
+        assert "by_model" in data
+        assert "unpriced_steps" in data["overall"]
+        assert data["overall"]["unpriced_steps"] == 1
+
+    def test_days_project_task_params_accepted(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost?days=7&project=p&task=t", headers=_auth(raw))
+        assert resp.status_code == 200
+
+
+class TestAnalyticsCostCsvExport:
+    def test_csv_export(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(
+            run_id, "s1", "success", provider="claude", model="claude-sonnet-4-6", cost_usd=2.0
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "text/csv" in resp.headers["content-type"]
+        rows = resp.text.strip().splitlines()
+        assert rows[0] == "scope,key,total_steps,input_tokens,output_tokens,cost_usd,unpriced_steps"
+        assert len(rows) >= 2
+
+    def test_cost_csv_escapes_formula_injection_in_provider_name(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(run_id, "s1", "success", provider="=2+2", cost_usd=1.0)
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "'=2+2" in resp.text
+        assert ",=2+2," not in resp.text
+
     def test_csv_escapes_formula_injection_in_provider_name(self, api_client, tmp_tokens_file):
         """CSV/formula-injection defense-in-depth: a provider value starting
         with a formula-trigger character must never reach the CSV cell
