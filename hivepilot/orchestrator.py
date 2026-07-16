@@ -2345,12 +2345,15 @@ class Orchestrator:
         from `run_pipeline`/`run_task`, a root span otherwise) for the WHOLE
         task execution — including the non-native-engine and role-debate
         early-return paths in `_execute_task_body`. `StepApprovalPending`
-        (a pause, not a failure) is propagated without being recorded as an
-        error; any other exception is recorded on the span + re-raised
-        unchanged. When tracing is off/unavailable, `get_tracer()` returns a
-        no-op tracer, so this wrapper adds negligible overhead and never
-        changes control flow, return values, or propagated exceptions.
+        (a pause, not a failure) and `QuotaDeferredError` (a deferral, not a
+        failure) are both propagated without being recorded as an error; any
+        other exception is recorded on the span + re-raised unchanged. When
+        tracing is off/unavailable, `get_tracer()` returns a no-op tracer, so
+        this wrapper adds negligible overhead and never changes control
+        flow, return values, or propagated exceptions.
         """
+        from hivepilot.services.quota import QuotaDeferredError
+
         _tracer = get_tracer()
         with _tracer.start_as_current_span(
             "task.run",
@@ -2383,6 +2386,9 @@ class Orchestrator:
                 )
             except StepApprovalPending:
                 _task_span.set_attribute("hivepilot.task.status", "paused")
+                raise
+            except QuotaDeferredError:
+                _task_span.set_attribute("hivepilot.task.status", "deferred")
                 raise
             except Exception as exc:
                 record_exception_on_span(_task_span, exc)
@@ -2554,6 +2560,8 @@ class Orchestrator:
                 # resolved, and updated to the fallback runner (if any) inside
                 # the quota-fallback loop below.
                 _used_runner_def: RunnerDefinition | None = None
+                from hivepilot.services.quota import QuotaDeferredError
+
                 with get_tracer().start_as_current_span(
                     "step.run",
                     attributes={"hivepilot.step.name": step.name},
@@ -2756,6 +2764,17 @@ class Orchestrator:
                         # so `record_step(..., "failed", ...)` below is never hit
                         # and `step.allow_failure` never swallows it.
                         _step_span.set_attribute("hivepilot.step.status", "paused")
+                        raise
+                    except QuotaDeferredError:
+                        # Not a step failure either — mirrors `StepApprovalPending`
+                        # above: a quota deferral is an interrupt that the
+                        # pipeline-level handler (`run_pipeline`'s
+                        # `except QuotaDeferredError`) turns into a retry-later
+                        # `RunResult` + `complete_run(..., "deferred")`.
+                        # Propagate unmodified so `record_step(..., "failed", ...)`
+                        # below is never hit and `step.allow_failure` never
+                        # swallows it as a recovered failure.
+                        _step_span.set_attribute("hivepilot.step.status", "deferred")
                         raise
                     except Exception as exc:
                         # Defensive clear: an exception means capture() raised

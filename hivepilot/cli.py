@@ -189,6 +189,9 @@ def run(
     ),
 ) -> None:
     _require_cli_role("run", token)
+    from hivepilot.observability.tracing import init_tracing
+
+    init_tracing(settings)
     orchestrator = Orchestrator()
     target_projects = _resolve_projects(project, projects, all_projects)
     results = orchestrator.run_task(

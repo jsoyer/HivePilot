@@ -160,6 +160,49 @@ class TestInitTracingGating:
             tracing.init_tracing(s)
         mock_exporter.assert_called_once_with()
 
+    def test_sdk_wiring_error_does_not_propagate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A synchronous construction error in the SDK-wiring block (bad
+        endpoint, exporter transport failure, ...) must never crash the
+        calling entry point — `init_tracing` swallows it, logs the
+        exception TYPE only, and leaves tracing disabled/no-op (does NOT
+        set `_initialized`, so a later call could still succeed)."""
+        monkeypatch.setattr(tracing, "_initialized", False)
+        from hivepilot.config import Settings
+
+        s = Settings(_env_file=None, enable_tracing=True)  # type: ignore[call-arg]
+        with patch(
+            "opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter",
+            side_effect=ValueError("malformed endpoint"),
+        ):
+            tracing.init_tracing(s)  # must not raise
+        assert tracing._initialized is False
+        # Tracing stays no-op after the failed init.
+        tracer = tracing.get_tracer()
+        with tracer.start_as_current_span("x") as span:
+            assert span.is_recording() is False
+
+    def test_sdk_wiring_error_is_logged_without_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the exception TYPE name is logged — never the exception
+        message/args, which could echo a secret-bearing endpoint URL."""
+        monkeypatch.setattr(tracing, "_initialized", False)
+        from hivepilot.config import Settings
+
+        s = Settings(_env_file=None, enable_tracing=True)  # type: ignore[call-arg]
+        with (
+            patch(
+                "opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter",
+                side_effect=ValueError("secret-token=abc123"),
+            ),
+            patch.object(tracing, "logger") as mock_logger,
+        ):
+            tracing.init_tracing(s)
+        mock_logger.warning.assert_called_once_with("tracing.init_failed", error="ValueError")
+        for call in mock_logger.warning.call_args_list:
+            for arg in list(call.args) + list(call.kwargs.values()):
+                assert "secret-token" not in str(arg)
+
 
 # ---------------------------------------------------------------------------
 # record_exception_on_span — with the real OTel SDK
@@ -335,6 +378,62 @@ class TestOrchestratorSpanTree:
         assert task_span.status.status_code == StatusCode.ERROR
         assert task_span.attributes["hivepilot.task.status"] == "failed"
 
+    def test_quota_deferred_step_not_recorded_as_error(self, in_memory_tracer) -> None:
+        """`QuotaDeferredError` is an interrupt (like `StepApprovalPending`),
+        not a failure: the step/task spans must be marked "deferred" — NOT
+        ERROR — and no exception event should be recorded, so a quota
+        deferral never pollutes error dashboards."""
+        from opentelemetry.trace import StatusCode
+
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+        from hivepilot.services.quota import QuotaDeferredError
+
+        tracer, exporter = in_memory_tracer
+        orch = _make_orch_with_task(None)
+        orch.registry = MagicMock()
+
+        def _deferred(payload):
+            raise QuotaDeferredError("quota exceeded", reset_at=None)
+
+        orch.registry.get_runner.return_value = MagicMock(capture=_deferred)
+        orch.registry._definition_for.return_value = MagicMock(
+            kind="claude", options={}, model=None
+        )
+        task = TaskConfig(
+            description="t", engine="native", steps=[TaskStep(name="s1", runner="claude")]
+        )
+        project = ProjectConfig(path=Path("/tmp/tracing-proj-deferred"))
+
+        with (
+            patch("hivepilot.orchestrator.get_tracer", return_value=tracer),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            pytest.raises(QuotaDeferredError),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        spans = {s.name: s for s in exporter.get_finished_spans()}
+        assert set(spans) == {"task.run", "step.run"}
+
+        step_span = spans["step.run"]
+        task_span = spans["task.run"]
+
+        # NOT an error span — the whole point of the fix.
+        assert step_span.status.status_code != StatusCode.ERROR
+        assert step_span.attributes["hivepilot.step.status"] == "deferred"
+        assert len(step_span.events) == 0
+
+        assert task_span.status.status_code != StatusCode.ERROR
+        assert task_span.attributes["hivepilot.task.status"] == "deferred"
+        assert len(task_span.events) == 0
+
     def test_no_secret_in_any_span_attribute_or_event(self, in_memory_tracer) -> None:
         """A registered secret resolved for the step must never appear in
         any span attribute or exception event — spans only ever carry step
@@ -451,6 +550,65 @@ class TestTracingOffByteIdentical:
         assert wrapped_result == body_result == "plain output"
         assert wrapped_calls == body_calls
 
+    def test_execute_task_failure_unchanged_when_tracing_off(self) -> None:
+        """With tracing off (the real, un-patched `get_tracer()` — no OTel
+        provider configured), a FAILING step/task must propagate the SAME
+        exception (type + message) through the wrapped `_execute_task` as
+        the unwrapped `_execute_task_body` — proving the span wrapper's
+        `except Exception: record_exception_on_span(...); raise` doesn't
+        alter the failure path when tracing is off. The success-path
+        variant is `test_execute_task_unchanged_when_tracing_off` above;
+        this covers the failure path it doesn't."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        def _boom(payload):
+            raise RuntimeError("step blew up off-path")
+
+        orch = _make_orch_with_task(None)
+        orch.registry = MagicMock()
+        orch.registry.get_runner.return_value = MagicMock(capture=_boom)
+        orch.registry._definition_for.return_value = MagicMock(
+            kind="claude", options={}, model=None
+        )
+        task = TaskConfig(
+            description="t", engine="native", steps=[TaskStep(name="s1", runner="claude")]
+        )
+        project = ProjectConfig(path=Path("/tmp/tracing-off-proj-fail"))
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_record_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            pytest.raises(RuntimeError, match="step blew up off-path") as wrapped_exc_info,
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+        wrapped_calls = list(mock_record_step.call_args_list)
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_record_step_2,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            pytest.raises(RuntimeError, match="step blew up off-path") as body_exc_info,
+        ):
+            orch._execute_task_body(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+        body_calls = list(mock_record_step_2.call_args_list)
+
+        assert type(wrapped_exc_info.value) is type(body_exc_info.value)
+        assert str(wrapped_exc_info.value) == str(body_exc_info.value)
+        assert wrapped_calls == body_calls
+
     def test_get_tracer_never_raises_and_is_usable(self) -> None:
         """Sanity: the real (un-patched) get_tracer() — whatever OTel state
         the process happens to be in — is always safe to use as a context
@@ -532,6 +690,33 @@ class TestCrossThreadContextPropagation:
 
 
 class TestInitTracingWiring:
+    def test_cli_run_calls_init_tracing(self) -> None:
+        """The single-task `hivepilot run <project> <task>` command must
+        also wire up tracing — mirrors `run-pipeline`'s wiring so
+        `HIVEPILOT_ENABLE_TRACING=true hivepilot run ...` actually exports
+        spans instead of silently staying a no-op."""
+        from hivepilot import cli
+
+        with (
+            patch("hivepilot.observability.tracing.init_tracing") as mock_init,
+            patch("hivepilot.cli._require_cli_role"),
+            patch("hivepilot.cli.Orchestrator") as mock_orch_cls,
+            patch("hivepilot.cli._resolve_projects", return_value=["proj"]),
+        ):
+            mock_orch_cls.return_value.run_task.return_value = []
+            cli.run(
+                project="proj",
+                task="t",
+                extra_prompt=None,
+                auto_git=False,
+                all_projects=False,
+                projects=[],
+                concurrency=None,
+                simulate=False,
+                token=None,
+            )
+        mock_init.assert_called_once()
+
     def test_cli_run_pipeline_calls_init_tracing(self) -> None:
         from hivepilot import cli
 

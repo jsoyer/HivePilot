@@ -37,6 +37,10 @@ import contextlib
 import traceback
 from typing import Any, Iterator
 
+from hivepilot.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 # Guards `init_tracing` so it only wires up the SDK once per process, even
 # though it's called from multiple "a run begins" entry points (API server
 # startup, CLI pipeline entry, scheduler daemon start).
@@ -105,18 +109,30 @@ def init_tracing(settings: Any) -> None:  # noqa: ANN401 — avoid importing hiv
         # process startup.
         return
 
-    service_name = getattr(settings, "otel_service_name", None) or "hivepilot"
-    resource = Resource.create({SERVICE_NAME: service_name})
-    provider = TracerProvider(resource=resource)
+    try:
+        service_name = getattr(settings, "otel_service_name", None) or "hivepilot"
+        resource = Resource.create({SERVICE_NAME: service_name})
+        provider = TracerProvider(resource=resource)
 
-    endpoint = getattr(settings, "otel_exporter_otlp_endpoint", None)
-    # Only pass `endpoint` when HivePilot's own setting is set — otherwise
-    # let OTLPSpanExporter() read the STANDARD `OTEL_EXPORTER_OTLP_ENDPOINT`
-    # env var natively (the OTel SDK's own config resolution), per the
-    # deliverable's requirement to honor it.
-    exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
+        endpoint = getattr(settings, "otel_exporter_otlp_endpoint", None)
+        # Only pass `endpoint` when HivePilot's own setting is set — otherwise
+        # let OTLPSpanExporter() read the STANDARD `OTEL_EXPORTER_OTLP_ENDPOINT`
+        # env var natively (the OTel SDK's own config resolution), per the
+        # deliverable's requirement to honor it.
+        exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+    except Exception as exc:  # noqa: BLE001 — a tracing failure must never break the run
+        # A synchronous construction error (malformed endpoint, bad service
+        # name, exporter transport failure, ...) must not crash the calling
+        # entry point (CLI/API/scheduler startup). Log the exception TYPE
+        # only — never the exception message/args, which could echo a
+        # secret-bearing endpoint URL or config value — and leave the
+        # global no-op provider in place (do NOT set `_initialized`, so a
+        # later call could still succeed once the underlying issue is
+        # fixed).
+        logger.warning("tracing.init_failed", error=type(exc).__name__)
+        return
     _initialized = True
 
 
