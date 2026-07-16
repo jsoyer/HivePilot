@@ -422,6 +422,52 @@ class TestPulumiArgv:
                 runner.run(_payload(tmp_path, operation="bogus"))
 
 
+class TestIsDestructive:
+    """Phase 17a-B: `is_destructive(payload)` — the optional, structural
+    (getattr-discovered, like `capture`) contract the step-level approval
+    gate (`hivepilot.orchestrator.step_requires_approval`) queries. Resolves
+    the operation exactly the same way `run()`/`_execute()` does."""
+
+    @pytest.mark.parametrize("operation", ["apply", "destroy"])
+    def test_terraform_destructive_ops(self, tmp_path: Path, operation: str) -> None:
+        runner = TerraformRunner(_definition("terraform"), settings)
+        assert runner.is_destructive(_payload(tmp_path, operation=operation)) is True
+
+    @pytest.mark.parametrize("operation", ["plan", "validate", "output", "init", "drift", "cost"])
+    def test_terraform_non_destructive_ops(self, tmp_path: Path, operation: str) -> None:
+        runner = TerraformRunner(_definition("terraform"), settings)
+        assert runner.is_destructive(_payload(tmp_path, operation=operation)) is False
+
+    @pytest.mark.parametrize("operation", ["apply", "destroy"])
+    def test_opentofu_destructive_ops(self, tmp_path: Path, operation: str) -> None:
+        runner = OpenTofuRunner(_definition("opentofu"), settings)
+        assert runner.is_destructive(_payload(tmp_path, operation=operation)) is True
+
+    @pytest.mark.parametrize("operation", ["plan", "validate", "output", "init"])
+    def test_opentofu_non_destructive_ops(self, tmp_path: Path, operation: str) -> None:
+        runner = OpenTofuRunner(_definition("opentofu"), settings)
+        assert runner.is_destructive(_payload(tmp_path, operation=operation)) is False
+
+    @pytest.mark.parametrize("operation", ["up", "destroy", "refresh"])
+    def test_pulumi_destructive_ops(self, tmp_path: Path, operation: str) -> None:
+        runner = PulumiRunner(_definition("pulumi"), settings)
+        assert runner.is_destructive(_payload(tmp_path, operation=operation)) is True
+
+    @pytest.mark.parametrize("operation", ["preview", "output"])
+    def test_pulumi_non_destructive_ops(self, tmp_path: Path, operation: str) -> None:
+        runner = PulumiRunner(_definition("pulumi"), settings)
+        assert runner.is_destructive(_payload(tmp_path, operation=operation)) is False
+
+    def test_default_operation_when_unset_is_not_destructive(self, tmp_path: Path) -> None:
+        """No step.command/definition.command/options['operation'] set -> the
+        runner's own default (terraform: 'plan', pulumi: 'preview') applies,
+        which is never destructive."""
+        tf_runner = TerraformRunner(_definition("terraform"), settings)
+        assert tf_runner.is_destructive(_payload(tmp_path, operation=None)) is False
+        pulumi_runner = PulumiRunner(_definition("pulumi"), settings)
+        assert pulumi_runner.is_destructive(_payload(tmp_path, operation=None)) is False
+
+
 class TestNoSecretsInLogs:
     """No TF_VAR secret value may ever be passed to `logger.info` (plan
     output can echo var values; the fix must not leak them into logs).
