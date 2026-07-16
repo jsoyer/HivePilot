@@ -107,6 +107,24 @@ class TestRegister:
         assert "infisical" in hooks["health"]
         assert hooks["health"]["infisical"] is infisical_module.health
 
+    def test_register_returns_contributions_when_enabled_by_default(
+        self, infisical_module: ModuleType
+    ) -> None:
+        # infisical_enabled defaults True (opt-out) — unchanged behavior. This
+        # is a pure register()-level enable gate; no secret value is involved.
+        assert settings.infisical_enabled is True
+        hooks = infisical_module.register()
+        assert set(hooks) == {"secrets", "health"}
+        assert set(hooks["secrets"]) == {"infisical"}
+
+    def test_register_returns_empty_when_disabled(
+        self, infisical_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Disabling contributes nothing — no secrets backend, no health. Still
+        # a register()-level gate only; no secret is read or handled.
+        monkeypatch.setattr(settings, "infisical_enabled", False, raising=False)
+        assert infisical_module.register() == {}
+
 
 class TestHealth:
     """Plugin-health surface: `health()` reports CONFIGURATION status only —
@@ -394,6 +412,19 @@ class TestPluginManagerRegistersInfisical:
         assert "infisical" in SECRETS_MAP
         assert callable(getattr(SECRETS_MAP["infisical"], "resolve", None))
         assert any(r.source == "local-file" and r.name == "infisical" for r in pm.loaded)
+
+    def test_plugin_manager_skips_infisical_when_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", REPO_ROOT, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "infisical_enabled", False, raising=False)
+
+        plugins_mod.PluginManager()
+
+        # register() early-returned {} → no secrets backend registered.
+        assert "infisical" not in SECRETS_MAP
 
     def test_name_collision_with_infisical_aborts(self, infisical_module: ModuleType) -> None:
         """A second backend registering under `infisical` is rejected by the

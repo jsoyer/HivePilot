@@ -112,4 +112,8 @@ def health(**kwargs: Any) -> HealthStatus:
 
 
 def register() -> dict[str, Any]:
+    from hivepilot.config import settings
+
+    if not settings.rtk_enabled:
+        return {}
     return {"runners": {"rtk": RtkRunner}, "health": {"rtk": health}}

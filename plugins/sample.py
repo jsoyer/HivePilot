@@ -23,6 +23,11 @@ def _sample_fetch():
 
 
 def register():
+    from hivepilot.config import settings
+
+    if not settings.sample_enabled:
+        return {}
+
     def before_step(payload, **kwargs):
         logger.info("plugin.before_step", project=payload.project_name, step=payload.step.name)
 

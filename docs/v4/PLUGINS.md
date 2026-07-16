@@ -45,6 +45,16 @@ runners/notifiers/hooks and has no import-time side effects either:
   attribute separator (the short form an operator would more naturally use
   when setting `plugins_disabled` directly via config/env)
 
+Per-plugin enable flags: every bundled plugin has its own `<name>_enabled`
+boolean (`hivepilot/config.py`, env `HIVEPILOT_<NAME>_ENABLED`). The two
+context plugins default **OFF (opt-in, dormant)** — `headroom_enabled` /
+`mem0_enabled` — while the six others default **ON (opt-out)**:
+`herdr_enabled`, `infisical_enabled`, `obsidian_enabled`,
+`onepassword_enabled`, `rtk_enabled`, `sample_enabled`. A plugin whose flag is
+`False` early-returns `{}` from `register()` — it contributes no
+runner/notifier/hook/secret/panel/health. Toggle e.g. `rtk` off with
+`HIVEPILOT_RTK_ENABLED=false`.
+
 See "TUI plugin manager" below for the interactive `space` toggle.
 
 ## Authoring a plugin

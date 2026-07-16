@@ -114,6 +114,21 @@ class TestRegister:
         assert "herdr" in hooks["health"]
         assert hooks["health"]["herdr"] is herdr_module.health
 
+    def test_register_returns_contributions_when_enabled_by_default(
+        self, herdr_module: ModuleType
+    ) -> None:
+        # herdr_enabled defaults True (opt-out) — unchanged behavior.
+        assert settings.herdr_enabled is True
+        hooks = herdr_module.register()
+        assert hooks["runners"] == {"herdr": herdr_module.HerdrRunner}
+        assert "herdr" in hooks["health"]
+
+    def test_register_returns_empty_when_disabled(
+        self, herdr_module: ModuleType, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(settings, "herdr_enabled", False, raising=False)
+        assert herdr_module.register() == {}
+
 
 class TestHealth:
     """Plugin-health surface: `health()` reflects `shutil.which("herdr")` —
@@ -579,3 +594,16 @@ class TestPluginManagerDiscoversHerdr:
 
         assert "herdr" in RUNNER_MAP
         assert any(r.source == "local-file" and r.name == "herdr" for r in pm.loaded)
+
+    def test_plugin_manager_skips_herdr_when_disabled(self, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", REPO_ROOT, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "herdr_enabled", False, raising=False)
+        RUNNER_MAP.pop("herdr", None)  # clean baseline (fixture restores after)
+
+        plugins_mod.PluginManager()
+
+        # register() early-returned {} → contributes no runner kind.
+        assert "herdr" not in RUNNER_MAP
