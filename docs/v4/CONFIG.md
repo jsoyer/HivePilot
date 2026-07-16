@@ -63,9 +63,42 @@ acme-developer:
     commit: true
     push: true
     create_pr: true               # opens a PR via gh (when --auto-git + policy allows)
+    draft: true                   # open it as a draft (gh pr create --draft)
     pr_title: "HivePilot: company pipeline implementation"
     branch_prefix: hivepilot
+
+acme-release-gate:
+  role: ciso                      # any can_block role's stage may carry the gate's git actions
+  steps:
+    - name: security-clearance
+      runner: opencode
+      prompt_file: prompts/agents/ciso.md
+  git:
+    promote_pr: true              # gh pr ready <branch> — marks the draft PR ready for review
+    merge_pr: true                # optional: also merge once ready (method below)
+    merge_method: squash          # merge | squash | rebase
+    branch_prefix: hivepilot
 ```
+
+- `draft` (on `create_pr`): open the PR via `gh pr create --draft`. Pair with a
+  later gate stage's `promote_pr` so the PR only becomes visible for review once
+  a `can_block` role's own verdict clears it.
+- `promote_pr`: `gh pr ready <branch>` — promotes an existing draft PR to ready.
+  **Gated on the stage's own agent report**: `promote_pr` runs *unless* that
+  stage's parsed `status:` is an explicit blocking verdict — one of
+  `BLOCK | BLOCKED | REJECT | REJECTED | REQUEST_CHANGES | CHANGES_REQUESTED |
+  NEEDS_HUMAN | FAIL | FAILED | DENY | DENIED` — in which case it is skipped
+  (logged as `git.promote_skipped_blocked`). The agent status vocabulary is
+  heterogeneous: `PASS`, `APPROVE`, `APPROVED`, `CLEARED`, `ADVISORY`, `OK` all
+  mean "proceed", so a blocking-verdict **blacklist** (not a PASS-only
+  whitelist) is used — the release gate approving with `status: APPROVE` still
+  promotes. Absent/unstructured stage output is likewise non-blocking (legacy
+  behaviour for tasks that aren't `can_block` roles).
+- `merge_pr` (previously undocumented): `gh pr merge <branch> --<merge_method>`
+  — Jules' autonomous final approval, since GitHub forbids approving your own
+  PR. `merge_method` is `merge` (default) | `squash` | `rebase`. `merge_pr` is
+  gated by the same explicit-blocking-verdict check as `promote_pr`, and (when
+  both flags are set) `promote_pr` always runs before `merge_pr`.
 
 ## Runner non-interactive invocation
 
