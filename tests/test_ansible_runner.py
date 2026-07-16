@@ -73,7 +73,7 @@ class TestRegistration:
 
 
 class TestArgv:
-    def _run(self, tmp_path: Path, operation: str, options: dict | None = None):
+    def _run(self, tmp_path: Path, operation: str | None, options: dict | None = None):
         runner = AnsibleRunner(_definition(options), settings)
         with (
             patch(f"{_MODULE}.shutil.which", return_value="/usr/bin/ansible-playbook"),
@@ -122,6 +122,14 @@ class TestArgv:
     def test_check_operation(self, tmp_path: Path) -> None:
         options = {"inventory": "hosts.ini", "playbook": "site.yml"}
         mock_run = self._run(tmp_path, "check", options)
+        argv = mock_run.call_args.args[0]
+        assert argv == ["ansible-playbook", "-i", "hosts.ini", "site.yml", "--check"]
+
+    def test_default_operation_when_unset_builds_check_argv(self, tmp_path: Path) -> None:
+        # No explicit operation/command -> resolves to "check" (dry-run),
+        # producing the same --check argv as the dedicated check operation.
+        options = {"inventory": "hosts.ini", "playbook": "site.yml"}
+        mock_run = self._run(tmp_path, None, options)
         argv = mock_run.call_args.args[0]
         assert argv == ["ansible-playbook", "-i", "hosts.ini", "site.yml", "--check"]
 
@@ -188,22 +196,82 @@ class TestMissingRequiredOptions:
 
 
 class TestMissingBinary:
-    def test_missing_binary_raises_runtime_error(self, tmp_path: Path) -> None:
-        options = {"inventory": "hosts.ini", "playbook": "site.yml"}
-        runner = AnsibleRunner(_definition(options), settings)
-        with patch(f"{_MODULE}.shutil.which", return_value=None):
-            with pytest.raises(RuntimeError, match="not found"):
-                runner.run(_payload(tmp_path, operation="playbook"))
+    """Parametrized across every ansible op so a `_BINARY_FOR_OP` mix-up
+    (e.g. an op silently resolving to the wrong binary) fails a test: for
+    each op, only ITS binary is reported missing (`shutil.which` returns
+    None only for that binary), and `run()` must still raise `RuntimeError`
+    without ever calling `subprocess.run`."""
 
-    def test_missing_binary_never_calls_subprocess(self, tmp_path: Path) -> None:
-        options = {"inventory": "hosts.ini", "playbook": "site.yml"}
+    @pytest.mark.parametrize(
+        "operation,options,missing_binary",
+        [
+            (
+                "playbook",
+                {"inventory": "hosts.ini", "playbook": "site.yml"},
+                "ansible-playbook",
+            ),
+            (
+                "check",
+                {"inventory": "hosts.ini", "playbook": "site.yml"},
+                "ansible-playbook",
+            ),
+            ("adhoc", {"pattern": "web", "module": "ping"}, "ansible"),
+            ("lint", {"playbook": "site.yml"}, "ansible-lint"),
+            (
+                "galaxy-install",
+                {"requirements": "requirements.yml"},
+                "ansible-galaxy",
+            ),
+        ],
+    )
+    def test_missing_binary_raises_runtime_error(
+        self, tmp_path: Path, operation: str, options: dict, missing_binary: str
+    ) -> None:
         runner = AnsibleRunner(_definition(options), settings)
+
+        def _which(binary: str) -> str | None:
+            return None if binary == missing_binary else f"/usr/bin/{binary}"
+
+        with patch(f"{_MODULE}.shutil.which", side_effect=_which):
+            with pytest.raises(RuntimeError, match="not found"):
+                runner.run(_payload(tmp_path, operation=operation))
+
+    @pytest.mark.parametrize(
+        "operation,options,missing_binary",
+        [
+            (
+                "playbook",
+                {"inventory": "hosts.ini", "playbook": "site.yml"},
+                "ansible-playbook",
+            ),
+            (
+                "check",
+                {"inventory": "hosts.ini", "playbook": "site.yml"},
+                "ansible-playbook",
+            ),
+            ("adhoc", {"pattern": "web", "module": "ping"}, "ansible"),
+            ("lint", {"playbook": "site.yml"}, "ansible-lint"),
+            (
+                "galaxy-install",
+                {"requirements": "requirements.yml"},
+                "ansible-galaxy",
+            ),
+        ],
+    )
+    def test_missing_binary_never_calls_subprocess(
+        self, tmp_path: Path, operation: str, options: dict, missing_binary: str
+    ) -> None:
+        runner = AnsibleRunner(_definition(options), settings)
+
+        def _which(binary: str) -> str | None:
+            return None if binary == missing_binary else f"/usr/bin/{binary}"
+
         with (
-            patch(f"{_MODULE}.shutil.which", return_value=None),
+            patch(f"{_MODULE}.shutil.which", side_effect=_which),
             patch(f"{_MODULE}.subprocess.run") as mock_run,
         ):
             with pytest.raises(RuntimeError):
-                runner.run(_payload(tmp_path, operation="playbook"))
+                runner.run(_payload(tmp_path, operation=operation))
         mock_run.assert_not_called()
 
 
@@ -273,11 +341,12 @@ class TestIsDestructive:
         runner = AnsibleRunner(_definition(), settings)
         assert runner.is_destructive(_payload(tmp_path, operation=operation)) is False
 
-    def test_default_operation_when_unset_is_destructive(self, tmp_path: Path) -> None:
-        # Default operation is "playbook" (a real run), matching the runner's
-        # documented default in `_resolve_operation`.
+    def test_default_operation_when_unset_is_not_destructive(self, tmp_path: Path) -> None:
+        # Default operation is "check" (a dry-run), matching the runner's
+        # safe-by-default `_resolve_operation` default (mirrors kubectl's
+        # "get" / helm's "list" defaults).
         runner = AnsibleRunner(_definition(), settings)
-        assert runner.is_destructive(_payload(tmp_path, operation=None)) is True
+        assert runner.is_destructive(_payload(tmp_path, operation=None)) is False
 
 
 class TestNoCaptureLeakPath:

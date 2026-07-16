@@ -79,7 +79,7 @@ class AnsibleRunner(BaseRunner):
         operation = (
             payload.step.command
             or self.definition.command
-            or self.definition.options.get("operation", "playbook")
+            or self.definition.options.get("operation", "check")
         )
         return str(operation).strip().lower()
 
