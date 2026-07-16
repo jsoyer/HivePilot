@@ -14,7 +14,9 @@ from hivepilot.runners.helm_runner import HelmRunner
 from hivepilot.runners.iac_runner import OpenTofuRunner, PulumiRunner, TerraformRunner
 from hivepilot.runners.internal_runner import InternalRunner
 from hivepilot.runners.kubectl_runner import KubectlRunner
+from hivepilot.runners.kustomize_runner import KustomizeRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
+from hivepilot.runners.packer_runner import PackerRunner
 from hivepilot.runners.prompt_cli_runner import (
     CodexRunner,
     GeminiRunner,
@@ -147,6 +149,8 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "kubectl": KubectlRunner,
     "ansible": AnsibleRunner,
     "helm": HelmRunner,
+    "kustomize": KustomizeRunner,
+    "packer": PackerRunner,
 }
 for _kind, _cls in _BUILTIN_RUNNERS.items():
     RunnerRegistry.register(_kind, _cls)
