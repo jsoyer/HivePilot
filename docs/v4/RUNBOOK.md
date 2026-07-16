@@ -656,14 +656,31 @@ operations reference. Operator checklist:
 1. **`init` first, once per fresh checkout.** There is no implicit init —
    run an `init` task/step before the first `plan`/`apply`/`destroy`/`drift`
    against a checkout (or after wiping the local state cache).
-2. **plan -> approve -> apply, never a single un-gated apply.** HivePilot has
-   no step-level approval gate yet, so a destructive `apply`/`destroy`
-   operation must live in its own task, gated either by a pipeline stage's
-   `pause_before: true` or by `policy.require_approval: true` on a dedicated
-   project entry — see "Approval-gated apply" in `docs/v4/CONFIG.md` for both
-   patterns. Approve a paused/queued run the same way as any other
-   checkpoint: `hivepilot approvals approve <run_id> --approver ... --token
-   ...` or the Telegram `/approve <run_id>`.
+2. **plan -> approve -> apply, never a single un-gated apply — now works in
+   ONE task.** A step running `terraform`/`opentofu` `apply`/`destroy` or
+   `pulumi` `up`/`destroy`/`refresh` **auto-gates**: the orchestrator pauses
+   the run right before that step, records an approval request, and — once
+   approved — resumes from that exact step (earlier steps, e.g. `plan`, are
+   never re-run). No `require_approval` flag or task split is needed to get
+   this; it's automatic because the operation is destructive. Any step can
+   also be gated explicitly via `require_approval: true` on that step,
+   runner-agnostic. See "Approval gates: task, stage, and step-level" in
+   `docs/v4/CONFIG.md` for the full mechanics, the single-task example, and
+   the still-valid two-task/pipeline-`pause_before` alternative.
+
+   **Exception — git worktree isolation:** a task that uses `auto_git` with
+   `task.git.commit`/`task.git.push` (worktree isolation) **refuses to start**
+   if any of its steps would auto-gate or set `require_approval: true` — a
+   mid-task pause would discard the isolated worktree. Put the destructive
+   step in its own task (without `auto_git` git actions) or use a
+   `pause_before` pipeline stage checkpoint instead; see "Worktree isolation
+   is incompatible with step-level approval" in `docs/v4/CONFIG.md` for the
+   exact refusal error.
+
+   Approve a paused/queued run the same way as any other checkpoint:
+   `hivepilot approvals approve <run_id> --approver ... --token ...` (or
+   `hivepilot approvals deny <run_id> --reason ...`), the Telegram
+   `/approve <run_id>`, or `POST /approvals/<run_id>`.
 3. **Secrets reach the tool via `${secret:...}` / step `secrets:` -> env.**
    `TF_VAR_*` values, cloud credentials, and Pulumi config secrets are never
    hardcoded in `tasks.yaml` — they're resolved into the runner's process
@@ -674,6 +691,31 @@ operations reference. Operator checklist:
    values) — watch the run's terminal or systemd journal
    (`journalctl -u hivepilot-api -f` for API-triggered runs) rather than
    expecting a plan artifact in the run record or a notification.
+5. **`hivepilot iac apply`/`destroy` (direct CLI, bypasses the orchestrator)
+   also gate and audit destructive ops.** `hivepilot iac plan|apply|destroy|
+   drift|output|cost --project <name> --runner <opentofu|terraform|pulumi>`
+   runs the runner directly (no `hivepilot run` task/step involved). Note
+   the CLI's `apply` subcommand always sends the literal operation `"apply"`
+   to the runner — this matches terraform/opentofu's own vocabulary but NOT
+   pulumi's (`up`, not `apply`); pulumi's `up`/`refresh` are only reachable
+   today through an orchestrator-run task step (`command: up` / `command:
+   refresh`), not through `hivepilot iac`. `destroy` works identically for
+   all three kinds. For a destructive operation (`apply` on
+   terraform/opentofu, `destroy` on any kind), it:
+   - **Prompts for confirmation** (`⚠️ This will run a DESTRUCTIVE <kind>
+     <operation> on project '<project>' — continue?`) unless `--yes`/`-y` is
+     passed (for non-interactive/CI use);
+   - **Writes an audit entry** (`state_service.record_interaction`) recording
+     the actor (OS username), operation, runner kind, and whether it was
+     confirmed via `--yes` or an interactive prompt — this direct CLI path
+     otherwise has no run record at all;
+   - **Resolves `${secret:NAME}` references** in the project's `env` through
+     the same secrets backend an orchestrator-run step uses, so `TF_VAR_*`/
+     cloud credentials reach the process without being hardcoded — resolved
+     values are registered so they can never leak into CLI output or the
+     audit summary.
+
+   Example: `hivepilot iac apply --project acme-infra --runner opentofu --yes`.
 
 ---
 

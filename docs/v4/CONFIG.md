@@ -275,8 +275,8 @@ for pulumi).
 |---|---|---|
 | `init` | `terraform\|tofu init [-backend-config=<backend_config>]` | Must run once (per fresh checkout / wiped state cache) before `plan`/`apply`/`destroy`/`drift`. |
 | `plan` | `... plan -no-color [-var-file=...] [-parallelism=...]` | |
-| `apply` | `... apply -auto-approve [-var-file=...] [-parallelism=...]` | Destructive — see "Approval-gated apply" below. |
-| `destroy` | `... destroy -auto-approve [-var-file=...] [-parallelism=...]` | Destructive. |
+| `apply` | `... apply -auto-approve [-var-file=...] [-parallelism=...]` | Destructive — auto-gates for approval, see "Approval gates" below. |
+| `destroy` | `... destroy -auto-approve [-var-file=...] [-parallelism=...]` | Destructive — auto-gates for approval, see "Approval gates" below. |
 | `output` | `... output -json` | |
 | `validate` | `... validate` | |
 | `drift` | `... plan --detailed-exitcode -no-color [-var-file=...] [-parallelism=...]` | Exit code 2 (changes present) is turned into a `RuntimeError("Drift detected: ...")`, not a silent success. |
@@ -284,13 +284,13 @@ for pulumi).
 
 ### Pulumi operations
 
-| Operation | Command executed |
-|---|---|
-| `preview` | `pulumi preview [--stack <stack>] [--config k=v ...]` |
-| `up` | `pulumi up --yes [--stack ...] [--config ...]` |
-| `destroy` | `pulumi destroy --yes [--stack ...] [--config ...]` |
-| `output` | `pulumi stack output --json [--stack ...]` |
-| `refresh` | `pulumi refresh --yes [--stack ...] [--config ...]` |
+| Operation | Command executed | Notes |
+|---|---|---|
+| `preview` | `pulumi preview [--stack <stack>] [--config k=v ...]` | |
+| `up` | `pulumi up --yes [--stack ...] [--config ...]` | Destructive — auto-gates for approval, see "Approval gates" below. |
+| `destroy` | `pulumi destroy --yes [--stack ...] [--config ...]` | Destructive — auto-gates for approval, see "Approval gates" below. |
+| `output` | `pulumi stack output --json [--stack ...]` | |
+| `refresh` | `pulumi refresh --yes [--stack ...] [--config ...]` | Destructive — auto-gates for approval, see "Approval gates" below. |
 
 ### Options table
 
@@ -359,24 +359,73 @@ deferred to the Mirador panel sprint (A3) — until then, operators should
 watch the run (terminal / systemd journal) rather than expect a persisted
 plan artifact.
 
-## Approval-gated apply: the plan -> approve -> apply pattern
+## Approval gates: task, stage, and step-level
 
-HivePilot does not yet have a **step-level** or **operation-level** approval
-gate. The only two approval mechanisms today are `policy.require_approval`
-(checked once per **project**, for the whole task run) and `pipelines.yaml`'s
-`pause_before` (per **pipeline stage**) — see "policies.yaml" and
-"tasks.yaml" above. Neither can single out one sub-command inside a step, so
-a step running `terraform apply` cannot be "approved before the apply but not
-before the plan" if the plan and apply live in the same task/step.
+HivePilot has three approval mechanisms, from coarsest to finest:
 
-**The only correct way to gate a destructive `apply`/`destroy` today is to
-split plan and apply into separate tasks**, then gate only the apply task.
-Two supported ways to do that split:
+1. **`policy.require_approval`** (per **project**) — the whole task run
+   queues for human approval before any step executes. See "policies.yaml"
+   above.
+2. **`pause_before`** (per **pipeline stage**, `pipelines.yaml`) — the whole
+   run pauses before that stage. See "tasks.yaml" above.
+3. **`TaskStep.require_approval`** (per **step**, Phase 17a Part B) — a
+   single step within a task pauses for approval, without gating the other
+   steps in the same task. Covered in this section.
 
-### Option A — pipeline `pause_before` (single project, recommended)
+### Step-level approval gate (`TaskStep.require_approval`)
 
-`pause_before: true` on a pipeline stage pauses the **whole run** before that
-stage regardless of policy, and needs no project duplication:
+Every step has a `require_approval: bool` field (default `false`) that gates
+that ONE step, runner-agnostic:
+
+```yaml
+tasks:
+  infra-rollout:
+    steps:
+      - name: notify-oncall
+        runner: shell
+        command: "curl -X POST https://hooks/oncall"
+        require_approval: true   # pauses before this step regardless of runner
+```
+
+**Auto-gating of destructive runner operations.** A step gates iff
+`step.require_approval` is `True` **or** the runner declares its
+currently-resolved operation destructive via an optional
+`is_destructive(payload) -> bool` method (a runner without that method is
+never treated as destructive). The three IaC runner kinds implement it:
+
+| Runner kind | Operations that auto-gate |
+|---|---|
+| `terraform` / `opentofu` | `apply`, `destroy` |
+| `pulumi` | `up`, `destroy`, `refresh` |
+
+`plan`/`preview`/`validate`/`output`/`init`/`drift`/`cost` never auto-gate
+(read-only/non-mutating). This means a step running `terraform apply` or
+`pulumi up`/`destroy`/`refresh` pauses for approval **even without setting
+`require_approval` at all** — no config change is needed to get this
+protection on those operations. Fail-closed: if `is_destructive` itself
+raises, the step is treated as destructive rather than silently letting a
+potentially-destructive operation through ungated.
+
+**How approval works at step granularity.** When a gating step is reached,
+the run PAUSES at that exact step (run status becomes `PAUSED`) and an
+approval request is recorded — the same channels as any other checkpoint:
+
+```bash
+hivepilot approvals approve <run_id> --approver alice --token <token>
+hivepilot approvals deny    <run_id> --reason "not now" --token <token>
+```
+or the Telegram `/approve <run_id>` button, or `POST /approvals/<run_id>`
+(requires `require_role("approve")`). On **approval**, the task RESUMES from
+the paused step — prior steps are **not** re-run and their accumulated
+output is preserved. On **reject**, the run is marked `denied` and aborts;
+the gating step (and anything after it) never runs.
+
+### The plan -> approve -> apply pattern — now a single task
+
+Because `apply`/`destroy`/`up`/`refresh` auto-gate, `plan` and `apply` can
+now live in **one task** — the old requirement to split them into two
+tasks (one ungated for `plan`, one `require_approval`-gated for `apply`) is
+**no longer required**, though still valid (see below):
 
 ```yaml
 # tasks.yaml
@@ -387,101 +436,73 @@ runners:
       var_file: prod.tfvars
 
 tasks:
-  infra-plan:
-    description: "Plan infrastructure changes (read-only)"
+  infra-rollout:
+    description: "Plan and apply infrastructure changes in one task"
     steps:
       - name: plan
         runner: opentofu
         runner_ref: tofu-infra
-        command: plan
-    git: { commit: false, push: false, create_pr: false }
-
-  infra-apply:
-    description: "Apply the planned infrastructure changes"
-    steps:
+        command: plan            # read-only — never gates
       - name: apply
         runner: opentofu
         runner_ref: tofu-infra
-        command: apply
+        command: apply            # destructive — auto-gates, no require_approval needed
     git: { commit: false, push: false, create_pr: false }
 ```
 
 ```yaml
-# pipelines.yaml
-pipelines:
-  infra-rollout:
-    description: "Plan, human-approve, then apply."
-    stages:
-      - name: Plan
-        task: infra-plan
-      - name: Apply
-        task: infra-apply
-        pause_before: true   # pipeline pauses here (pending_approval) before Apply runs
-```
-
-```yaml
-# policies.yaml — this project can keep the default (no per-task gate);
-# the pause_before checkpoint above is the gate.
+# policies.yaml — no per-task gate needed; the step itself gates.
 policies:
   default:
     require_approval: false
 ```
 
-`hivepilot run-pipeline <project> infra-rollout` executes `Plan`, then pauses
-(run state `pending_approval`) before `Apply`. A human reviews the plan
-output (it was streamed live — see "Output is not captured" above) and
-approves via `hivepilot approvals approve <run_id> --approver alice --token
-<token>` (or the Telegram `/approve <run_id>`) to let `Apply` proceed.
+`hivepilot run acme-infra infra-rollout` executes `plan` immediately (output
+streams live — see "Output is not captured" above), then pauses (run status
+`PAUSED`) before `apply`. A human reviews the plan output and approves via
+`hivepilot approvals approve <run_id> --approver alice --token <token>` (or
+the Telegram `/approve <run_id>`) — `apply` then runs; `plan` is never
+re-executed.
 
-### Option B — separate project + `require_approval: true` (per-task gate)
+**Alternative: splitting into two tasks/stages is still valid** — e.g. when
+a pipeline needs the *whole run* to pause (not just one step), or when
+`plan` and `apply` should live in genuinely separate projects/tasks for
+other reasons. Two supported ways to split, both unchanged from before this
+sprint:
 
-`policy.require_approval` is keyed by **project name**, not by task, so a
-task-level gate needs two project entries pointing at the same checkout:
+- **`pause_before: true`** on a separate `apply` pipeline stage — pauses the
+  whole run before that stage. See "Plan checkpoint" in `docs/v4/RUNBOOK.md`.
+- **A separate, `require_approval: true` project entry** pointing at the
+  same checkout, with `plan` run against an ungated project and `apply`
+  against the gated one.
 
-```yaml
-# projects.yaml
-projects:
-  acme-infra:            # ungated entry point: plan only
-    path: ~/dev/acme-infra
-    default_branch: main
-  acme-infra-apply:      # same checkout, gated entry point for apply
-    path: ~/dev/acme-infra
-    default_branch: main
-```
+Neither is the *only* way to gate `apply` anymore — the single-task example
+above is now the simpler default.
 
-```yaml
-# policies.yaml
-policies:
-  default:
-    require_approval: false
-  projects:
-    acme-infra:
-      require_approval: false     # plan is read-only; no gate
-    acme-infra-apply:
-      require_approval: true      # every apply run queues for human approval
-```
+### Worktree isolation is incompatible with step-level approval
 
-```yaml
-# tasks.yaml — same task definitions as Option A (infra-plan / infra-apply)
-```
+**Step-level approval is NOT supported in a task that uses git worktree
+isolation** (`auto_git` + `task.git.commit`/`task.git.push`, when
+`settings.worktree_isolation` is enabled). A `StepApprovalPending` pause
+unwinds through the worktree's `with` block, whose `finally` unconditionally
+runs `git worktree remove --force` — a mid-task pause would silently discard
+every prior step's file edits, and a resume would then run against a fresh
+worktree from unchanged `HEAD`.
 
-Run plan directly: `hivepilot run acme-infra infra-plan`. Run apply:
-`hivepilot run acme-infra-apply infra-apply` — this queues (`pending`) until
-`hivepilot approvals approve <run_id> --approver alice --token <token>` is
-called, exactly like any other `require_approval: true` project.
+HivePilot detects this up front (before the worktree is even created) and
+**refuses to start** such a task, rather than starting it and losing work
+later. The exact error:
 
-**Why the split is required, not optional:** a single task/step running
-`terraform apply` cannot be gated more finely than "the whole task run" or
-"the whole pipeline stage" — there is no sub-step/sub-command approval
-granularity today. If plan and apply lived in the same task, `require_approval:
-true` would gate the (harmless) plan too, and `pause_before` on a shared
-stage would gate them together — impossible to review the plan's diff before
-approving the apply specifically. Splitting into two tasks is the only way
-to let `plan` run freely while gating only `apply`. **This is a known
-current limitation** — a future step-level destructive-operation-aware
-approval gate (Phase 17a Part B) is expected to auto-detect
-`apply`/`destroy`/`up` and require approval only for those, removing the
-need for this split-task workaround.
+> `Step-level approval (destructive op / require_approval) is not supported
+> in a task that uses git worktree isolation (auto_git + git.commit/push),
+> because a mid-task pause would discard the worktree. Move the destructive
+> step into its own task or a pipeline stage with pause_before.`
+
+If you hit this, move the gating step into its own task (no `auto_git` +
+`git.commit`/`git.push` on that task), or fall back to a `pause_before`
+pipeline stage checkpoint (see "The plan -> approve -> apply pattern" above),
+which pauses the whole run *between* stages/tasks rather than mid-task, so no
+worktree is ever left mid-flight.
 
 ## Key environment variables / settings
 
