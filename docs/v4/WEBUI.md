@@ -2,14 +2,11 @@
 
 Mirador is HivePilot's browser-based insight dashboard — a dark, tabbed
 shell (Analytics / Cost / Health / Mem0) served directly by the FastAPI
-API process. This page covers install, the auth model, and reverse-proxy
-notes. See `docs/v4/RUNBOOK.md`'s "Mirador web UI surface" section for the
-underlying `/v1/plugins/health` and `/v1/memories` API endpoints the UI
-calls.
-
-> **Sprint status:** the app shell, dark theme, tab layout, and the token
-> gate are shipped (Sprint 2). The four tabs currently render placeholder
-> panels — real data wiring lands in Sprint 3.
+API process, wired to the read-only `/v1/analytics/*`, `/v1/plugins/health`,
+and `/v1/memories` endpoints. This page covers install, the auth model, the
+four views, and reverse-proxy/deployment notes. See `docs/v4/RUNBOOK.md`'s
+"Mirador web UI surface" section for the underlying `/v1/plugins/health` and
+`/v1/memories` API endpoint contracts.
 
 ## Install
 
@@ -37,35 +34,98 @@ The UI route is also unavailable (`404`) if the flag is on but no build is
 present (e.g. a partial/corrupted install) — see
 `hivepilot/webui/__init__.py`'s `static_available()`.
 
-## Auth: bring your own `read` token
+## Auth: bring your own token, `read` to sign in, `admin` for Mem0
 
 Mirador has no separate login system. On first load it asks for a
 HivePilot API token — the **same tokens** the CLI/Telegram/API already use
-(`hivepilot token create --role read`, see `docs/v4/RUNBOOK.md`). The gate
-itself only requires a `read` token (validated against `GET
-/v1/plugins/health`, which every `read` token can call). Individual
-endpoints behind the tabs enforce their own role as usual — notably `GET
-/v1/memories` (the Mem0 tab's data source) requires `admin`, not `read`,
-because mem0 has no per-tenant partitioning (see RUNBOOK's "Memories
-scoping rule"). A `read`-only token can sign in but will see a permission
-error on any view that calls an `admin`-gated endpoint.
+(`hivepilot token create --role read`, see `docs/v4/RUNBOOK.md`). The token
+is validated by calling `GET /v1/plugins/health` with it as a bearer token;
+on `401`/`403` you're shown an error and asked to re-enter it. Once
+accepted, the token is stored **only** in the browser's `localStorage` (key
+`hivepilot.webui.token`) — it is never sent anywhere except as the
+`Authorization: Bearer <token>` header on same-origin `/v1/*` requests, and
+it never appears in any HTML/JS/CSS served by the app (the served bundle is
+static and identical for every visitor). A `401` from any endpoint at any
+point (not just the initial gate check) clears the stored token and returns
+the user to the token prompt.
 
-The token is validated by calling `GET /v1/plugins/health` with it as a
-bearer token; on `401`/`403` you're shown an error and asked to re-enter
-it. Once accepted, the token is stored **only** in the browser's
-`localStorage` (key `hivepilot.webui.token`) — it is never sent anywhere
-except as the `Authorization: Bearer <token>` header on same-origin
-`/v1/*` requests, and it never appears in any HTML/JS/CSS served by the
-app (the served bundle is static and identical for every visitor).
+**The read-vs-admin distinction matters — read this before handing out
+tokens.** The gate itself only requires a `read` token, and a `read` token
+unlocks three of the four tabs: **Analytics**, **Cost**, and **Health**.
+The **Mem0** tab is different: its data source, `GET /v1/memories`, is
+gated behind `require_role("admin")`, not `read`, because mem0 has no
+tenant->project mapping to scope memory search results per caller (see
+RUNBOOK's "Memories scoping rule" for the full reasoning). Concretely:
 
-## Reverse proxy
+- A `read` (or `run`/`approve`) token signs in fine and the other three
+  tabs work normally.
+- Switching to the Mem0 tab and searching returns `403 Forbidden`. The UI
+  recognizes this specific case (`ApiForbiddenError`, see `lib/api.ts`) and
+  renders an in-tab "this view requires an admin token" message instead of
+  treating it like an invalid token — the other three tabs are unaffected
+  and the user is **not** kicked back to the token prompt.
+- An `admin` token unlocks all four tabs, including Mem0 search.
+
+So: issue `read` tokens for general dashboard access, and reserve `admin`
+tokens for whoever actually needs to search mem0 memories through the UI.
+
+## The four views
+
+- **Analytics** — run volume and outcome breakdown (`GET
+  /v1/analytics/summary`), a runs-per-day trend (`GET
+  /v1/analytics/trends`), run duration percentiles (`GET
+  /v1/analytics/durations`), step failure hotspots (`GET
+  /v1/analytics/steps/failures`), and approval latency (`GET
+  /v1/analytics/approvals/latency`). All five fetch independently, so one
+  slow/failing endpoint never blanks the rest of the tab.
+- **Cost** — token and cost totals overall and grouped by provider/model
+  (`GET /v1/analytics/cost`, including an `unpriced_steps` count so a
+  partial-coverage total is never presented as complete), plus provider/model
+  step volume and outcome split (`GET /v1/analytics/providers`).
+- **Health** — the same process-global plugin health data as `hivepilot
+  plugins health` on the CLI (`GET /v1/plugins/health`): each plugin's
+  name, `ok`/`degraded`/`error` status, and a human-readable detail string
+  that is guaranteed never to contain a secret or token value.
+- **Mem0** — a search box over the mem0 memory store (`GET
+  /v1/memories?query=...&limit=20`), rendering each hit's category,
+  project, task, timestamp, and memory text. Requires an `admin` token (see
+  Auth above); gracefully shows "mem0 is not configured" if the server has
+  no mem0 backend wired up, rather than an error.
+
+## Deployment: TLS termination and same-origin serving
 
 Mirador is served same-origin with the API (`/ui` for the shell, `/v1/*`
 for data) — no separate origin, no extra CORS configuration beyond what
-`api_allowed_origins` already requires for the API itself. Put this
-behind the same Caddy/nginx TLS termination already documented for the
-API in `docs/v4/RUNBOOK.md` (`hivepilot caddy setup ...`); no additional
-proxy rules are needed since both live under one process/port.
+`api_allowed_origins` already requires for the API itself.
+
+**Always put this behind a TLS-terminating reverse proxy in production.**
+The bearer token in `Authorization: Bearer <token>` is a live credential —
+never expose `/ui` or `/v1` over plain HTTP outside of local development,
+since a token sent over HTTP can be captured in transit. Use the same
+Caddy/nginx TLS termination already documented for the API in
+`docs/v4/RUNBOOK.md` (`hivepilot caddy setup ...`); no additional proxy
+rules are needed beyond forwarding the whole path to the API process, since
+both the UI and the API live under one process/port. A minimal nginx
+example:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name hivepilot.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/hivepilot.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/hivepilot.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+`HIVEPILOT_ENABLE_WEBUI` stays off by default (see Enable above) — a fresh
+deploy never exposes `/ui` until an operator opts in.
 
 ## Rebuilding the frontend
 
