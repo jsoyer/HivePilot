@@ -194,6 +194,210 @@ def test_build_prompt_substitutes_governance_repo(tmp_path: Path, monkeypatch) -
     assert "/some/governance/repo" in out
 
 
+# ---------------------------------------------------------------------------
+# Phase 24b.2a — opt-in usage capture (tokens/cost/actual-model)
+# ---------------------------------------------------------------------------
+
+
+def _usage_payload(tmp_path: Path) -> RunnerPayload:
+    pf = tmp_path / "p.md"
+    pf.write_text("do it", encoding="utf-8")
+    return RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+        metadata={},
+        secrets={},
+    )
+
+
+class TestUsageCaptureFlagOff:
+    """Default (flag off) must be BYTE-IDENTICAL to pre-24b.2a behaviour."""
+
+    def test_no_output_format_json_flag_in_argv(self, tmp_path: Path, monkeypatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", False, raising=False)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="AGENT SAID THIS", returncode=0)
+            out = runner.capture(payload)
+        assert out == "AGENT SAID THIS"
+        assert m.call_count == 1
+        argv = m.call_args.args[0]
+        assert "--output-format" not in argv
+
+    def test_usage_is_none_when_flag_off(self, tmp_path: Path, monkeypatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", False, raising=False)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="AGENT SAID THIS", returncode=0)
+            runner.capture(payload)
+        assert pop_last_usage() is None
+
+
+class TestUsageCaptureFlagOnWellFormed:
+    def test_returns_result_field_and_captures_usage(self, tmp_path: Path, monkeypatch) -> None:
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps(
+            {
+                "type": "result",
+                "result": "AGENT SAID THIS",
+                "usage": {"input_tokens": 123, "output_tokens": 45},
+                "total_cost_usd": 0.0067,
+                "model": "claude-sonnet-4-6",
+            }
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            out = runner.capture(payload)
+
+        assert out == "AGENT SAID THIS"
+        argv = m.call_args.args[0]
+        assert "--output-format" in argv
+        assert argv[argv.index("--output-format") + 1] == "json"
+
+        usage = pop_last_usage()
+        assert usage is not None
+        assert usage.input_tokens == 123
+        assert usage.output_tokens == 45
+        assert usage.cost_usd == 0.0067
+        assert usage.model == "claude-sonnet-4-6"
+
+    def test_only_one_subprocess_call_on_well_formed_json(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import json
+        from unittest.mock import MagicMock, patch
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps({"result": "TEXT", "usage": {}, "model": "m"})
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            runner.capture(payload)
+        assert m.call_count == 1
+
+
+class TestUsageCaptureGracefulDegradation:
+    def test_malformed_json_falls_back_to_raw_text_and_null_usage(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="NOT VALID JSON {{{", returncode=0)
+            out = runner.capture(payload)
+        assert out == "NOT VALID JSON {{{"
+        assert pop_last_usage() is None
+
+    def test_json_missing_result_field_falls_back(self, tmp_path: Path, monkeypatch) -> None:
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps({"usage": {"input_tokens": 1}})
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            out = runner.capture(payload)
+        assert out == envelope
+        assert pop_last_usage() is None
+
+    def test_cli_errors_on_the_flag_falls_back_without_crash(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Simulates an older claude CLI that rejects --output-format json:
+        the json-mode attempt exits non-zero, the runner must retry the plain
+        invocation and succeed, not crash and not fabricate usage."""
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+
+        def _run_side_effect(argv, **kwargs):
+            if "--output-format" in argv:
+                return MagicMock(returncode=2, stdout="", stderr="error: unknown option")
+            return MagicMock(returncode=0, stdout="PLAIN AGENT OUTPUT", stderr="")
+
+        with patch(
+            "hivepilot.runners.claude_runner.subprocess.run", side_effect=_run_side_effect
+        ) as m:
+            out = runner.capture(payload)
+
+        assert out == "PLAIN AGENT OUTPUT"
+        assert pop_last_usage() is None
+        assert m.call_count == 2
+
+    def test_usage_capture_never_raises_when_underlying_command_would_succeed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A step that would have succeeded with the flag off must still
+        succeed with the flag on, even under total JSON-mode breakage."""
+        from unittest.mock import MagicMock, patch
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+
+        def _run_side_effect(argv, **kwargs):
+            if "--output-format" in argv:
+                return MagicMock(returncode=1, stdout="", stderr="boom")
+            return MagicMock(returncode=0, stdout="OK", stderr="")
+
+        with patch("hivepilot.runners.claude_runner.subprocess.run", side_effect=_run_side_effect):
+            out = runner.capture(payload)
+        assert out == "OK"
+
+    def test_no_secret_or_output_content_in_warning_logs(self, tmp_path: Path, monkeypatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+
+        with (
+            patch("hivepilot.runners.claude_runner.subprocess.run") as m,
+            patch("hivepilot.runners.claude_runner.logger") as mock_logger,
+        ):
+            m.return_value = MagicMock(
+                stdout="super-secret-token-abc123 NOT VALID JSON", returncode=0
+            )
+            runner.capture(payload)
+
+        for call in mock_logger.warning.call_args_list:
+            rendered = " ".join(str(a) for a in call.args) + " ".join(
+                f"{k}={v}" for k, v in call.kwargs.items()
+            )
+            assert "super-secret-token-abc123" not in rendered
+
+
 def test_build_prompt_governance_repo_empty_when_not_configured(
     tmp_path: Path, monkeypatch
 ) -> None:

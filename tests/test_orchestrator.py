@@ -830,6 +830,156 @@ class TestStepProviderModelThreading:
 
 
 # ---------------------------------------------------------------------------
+# Phase 24b.2a — orchestrator threads captured usage (tokens/cost/actual
+# model) from the runner into state_service.record_step.
+# ---------------------------------------------------------------------------
+
+
+class TestUsageThreading:
+    def test_no_usage_captured_keeps_existing_call_signature(self) -> None:
+        """When pop_last_usage() returns None (flag off / non-claude runner /
+        no capture), record_step must be called EXACTLY as it was before this
+        sprint — no input_tokens/output_tokens/cost_usd kwargs at all. This
+        guarantees Phase 24b.1 callers/tests remain byte-compatible."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "agent output"
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch("hivepilot.orchestrator.pop_last_usage", return_value=None),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(1, "s", "success", provider="codex", model="gpt-5.5")
+
+    def test_captured_usage_threads_tokens_and_cost(self) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+        from hivepilot.runners.base import UsageInfo
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "agent output"
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        usage = UsageInfo(input_tokens=100, output_tokens=50, cost_usd=0.02, model=None)
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch("hivepilot.orchestrator.pop_last_usage", return_value=usage),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(
+            1,
+            "s",
+            "success",
+            provider="codex",
+            model="gpt-5.5",
+            input_tokens=100,
+            output_tokens=50,
+            cost_usd=0.02,
+        )
+
+    def test_captured_usage_model_overrides_resolved_model(self) -> None:
+        """A claude step's actual model (from the JSON envelope) closes the
+        24b.1 gap where profile/default-model claude steps persisted None."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+        from hivepilot.runners.base import UsageInfo
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "agent output"
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        usage = UsageInfo(
+            input_tokens=1, output_tokens=2, cost_usd=0.001, model="claude-sonnet-4-6-actual"
+        )
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch("hivepilot.orchestrator.pop_last_usage", return_value=usage),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        args, kwargs = mock_step.call_args
+        assert kwargs["model"] == "claude-sonnet-4-6-actual"
+
+    def test_failed_step_never_threads_usage(self) -> None:
+        """A step that raised must never carry usage (capture() only stashes
+        usage right before its successful return)."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.side_effect = RuntimeError("boom")
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md", allow_failure=True)],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch("hivepilot.orchestrator.pop_last_usage", return_value=None),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(
+            1, "s", "failed", "boom", provider="codex", model="gpt-5.5"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Dual-model debate (item B) — DebateService wired & reachable
 # ---------------------------------------------------------------------------
 

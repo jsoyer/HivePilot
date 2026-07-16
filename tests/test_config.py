@@ -78,6 +78,31 @@ class TestContextRoutingMode:
 
 
 # ---------------------------------------------------------------------------
+# Phase 24b.2a — claude_capture_usage (opt-in usage capture)
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeCaptureUsage:
+    """`claude_capture_usage` defaults to False (byte-identical behaviour) and
+    is env-overridable (HIVEPILOT_CLAUDE_CAPTURE_USAGE)."""
+
+    def test_default_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CLAUDE_CAPTURE_USAGE", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.claude_capture_usage is False
+
+    def test_env_override_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CLAUDE_CAPTURE_USAGE", "true")
+        s = Settings()
+        assert s.claude_capture_usage is True
+
+    def test_env_override_false_explicit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CLAUDE_CAPTURE_USAGE", "false")
+        s = Settings()
+        assert s.claude_capture_usage is False
+
+
+# ---------------------------------------------------------------------------
 # headroom plugin — headroom_enabled
 # ---------------------------------------------------------------------------
 

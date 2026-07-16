@@ -147,6 +147,11 @@ HIVEPILOT_CLAUDE_PERMISSION_MODE=acceptEdits  # acceptEdits | bypassPermissions 
 # acceptEdits: agent edits files autonomously, bash still gated
 # bypassPermissions: full autonomy (required for headless dev runs)
 # Omit or leave empty for read-only/planning agents
+HIVEPILOT_CLAUDE_CAPTURE_USAGE=false        # opt-in: per-step token/cost/actual-model capture
+# false (default): byte-identical to today -- no --output-format json, raw stdout
+# true: adds --output-format json, still returns only the agent's text as step
+#       output; records input/output tokens + CLI-self-reported cost + actual
+#       model. Any JSON/CLI failure gracefully falls back to flag-off behaviour.
 
 # --- Concurrency & quota ---
 HIVEPILOT_CLAUDE_MAX_CONCURRENCY=1         # max concurrent claude steps

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition
-from hivepilot.runners.base import BaseRunner, RunnerPayload
+from hivepilot.runners.base import BaseRunner, RunnerPayload, UsageInfo, set_last_usage
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.utils.env import gather_overrides, merge_environments
 from hivepilot.utils.logging import get_logger
@@ -18,6 +19,60 @@ from hivepilot.utils.sandbox import DEFAULT_ALLOWLIST, scrub_env, wrap_bwrap
 logger = get_logger(__name__)
 
 _ELEVATED_PERMISSION_MODES = frozenset({"bypassPermissions", "acceptEdits"})
+
+
+def _insert_output_format_json(argv: list[str]) -> list[str]:
+    """Return a copy of *argv* with ``--output-format json`` inserted right
+    after the command + ``--print`` (index 2), before any other flags and
+    before the trailing positional prompt argument. Never mutates *argv*.
+    """
+    return [*argv[:2], "--output-format", "json", *argv[2:]]
+
+
+def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
+    """Parse a ``claude --output-format json`` stdout envelope.
+
+    Returns ``(agent_text, usage)`` on success, or ``None`` when the output
+    isn't valid JSON or lacks the one field that actually matters for
+    correctness — ``result`` (the agent's own text, which becomes the step
+    output). ``usage``/``cost``/``model`` sub-fields are independently
+    None-safe: a CLI that reports the text but not, say, cost still yields a
+    usable result with ``cost_usd=None`` rather than discarding everything.
+
+    Assumption (🟡 MEDIUM — not verified against live CLI output, mocked in
+    tests): the envelope shape is
+    ``{"result": str, "usage": {"input_tokens": int, "output_tokens": int},
+    "total_cost_usd": float, "model": str}``. Any deviation degrades
+    gracefully via the None-safe field extraction below plus the caller's
+    fallback-to-raw-stdout path when this function returns None.
+    """
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    text = data.get("result")
+    if not isinstance(text, str):
+        return None
+
+    usage_field = data.get("usage")
+    raw_input = usage_field.get("input_tokens") if isinstance(usage_field, dict) else None
+    raw_output = usage_field.get("output_tokens") if isinstance(usage_field, dict) else None
+    raw_cost = data.get("total_cost_usd")
+    raw_model = data.get("model")
+
+    input_tokens = int(raw_input) if isinstance(raw_input, (int, float)) else None
+    output_tokens = int(raw_output) if isinstance(raw_output, (int, float)) else None
+    cost_usd = float(raw_cost) if isinstance(raw_cost, (int, float)) else None
+    model = raw_model if isinstance(raw_model, str) else None
+
+    return text, UsageInfo(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+        model=model,
+    )
 
 
 def _apply_sandbox(
@@ -166,6 +221,10 @@ class ClaudeRunner(BaseRunner):
     def capture(self, payload: RunnerPayload) -> str:
         """Run claude and return its stdout (so the agent's output can be surfaced
         in the interaction log / live stream, not just discarded)."""
+        # Clear any stale usage from a prior capture() call up front — every
+        # code path below either overwrites this with fresh usage (well-formed
+        # JSON) or must leave it None (flag off / any degradation path).
+        set_last_usage(None)
         args, env = self._build_invocation(payload)
         argv, cwd, run_env = build_invocation(
             args,
@@ -187,6 +246,49 @@ class ClaudeRunner(BaseRunner):
             intentional_env=env_overlay,
         )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
+        capture_usage = bool(getattr(self.settings, "claude_capture_usage", False))
+
+        if capture_usage:
+            json_argv = _insert_output_format_json(argv)
+            json_result = subprocess.run(
+                json_argv,
+                cwd=cwd,
+                env=run_env,
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+            if json_result.returncode == 0:
+                parsed = _parse_usage_envelope(json_result.stdout)
+                if parsed is not None:
+                    text, usage = parsed
+                    set_last_usage(usage)
+                    return text
+                # Valid exit, but the JSON was unparseable or lacked the
+                # `result` field — no need to re-invoke (the agent already
+                # ran to completion once); treat this attempt's own stdout
+                # as raw text, exactly like flag-off behaviour would have
+                # produced, and record null usage.
+                logger.warning(
+                    "claude_runner.usage_capture.malformed_envelope_fallback",
+                    project=payload.project_name,
+                    step=payload.step.name,
+                )
+                return json_result.stdout
+            # Non-zero exit with the flag present most likely means this
+            # claude CLI build doesn't understand --output-format json (an
+            # argument-parsing failure occurs before the agent starts doing
+            # any real work) — retry once with the plain invocation so the
+            # step still succeeds exactly as it would with the flag off.
+            logger.warning(
+                "claude_runner.usage_capture.cli_error_fallback",
+                project=payload.project_name,
+                step=payload.step.name,
+                returncode=json_result.returncode,
+            )
+
         result = subprocess.run(
             argv,
             cwd=cwd,

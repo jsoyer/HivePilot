@@ -130,6 +130,42 @@ Precedence (first wins): step `metadata.permission_mode` → runner
 gated), `bypassPermissions` (full autonomy), `plan`, `default`. Unset = no flag
 (safe for read-only planning agents).
 
+### Usage capture (tokens/cost/actual-model) — opt-in
+
+`HIVEPILOT_CLAUDE_CAPTURE_USAGE` (default `false`) enables per-step token/cost/
+actual-model capture from the claude runner (Phase 24b.2a). Default **off** is
+byte-identical to today's behaviour: `capture()` invokes `claude` without
+`--output-format json` and returns raw stdout, exactly as before this flag
+existed.
+
+When **on**, `capture()` adds `--output-format json`, parses the CLI's JSON
+envelope, and:
+
+- still returns only the agent's `result` text as the step output (unchanged
+  from the caller's point of view — turning this flag on never changes what
+  an agent's output looks like downstream)
+- additionally records `input_tokens` / `output_tokens` (from the envelope's
+  `usage` object), `total_cost_usd`, and the `model` actually used — persisted
+  on `steps.input_tokens` / `steps.output_tokens` / `steps.cost_usd`, and the
+  actual `model` overrides the config-resolved model recorded on `steps.model`
+  (closing the gap where a profile- or default-model claude step otherwise
+  persisted `NULL` for `model` — see the provider/model persistence above)
+
+**Graceful degradation guarantee:** this flag can only ever make a step
+behave like flag-off — it can never make a working step fail, and it can
+never corrupt step output. If the JSON is malformed, missing the `result`
+field, or the CLI errors on the `--output-format json` flag itself (e.g. an
+older claude CLI build that doesn't support it), the runner falls back to
+raw-text output with `NULL` usage and logs a one-line warning (step/project
+name + failure kind only — never output content, tokens, or secrets). A step
+that would have succeeded with the flag off always still succeeds with the
+flag on.
+
+**Cost is CLI-self-reported only** in this sprint — there is no built-in
+price-map, and no cost analytics endpoints yet. A runner/provider that
+doesn't self-report `total_cost_usd` simply persists `NULL` for `cost_usd`
+until a later phase adds a price-map fallback.
+
 ## Key environment variables / settings
 
 | Setting | Env | Default |
@@ -137,6 +173,7 @@ gated), `bypassPermissions` (full autonomy), `plan`, `default`. Unset = no flag
 | obsidian_vault | `HIVEPILOT_OBSIDIAN_VAULT` | `…/obsidian-vault/Acme` |
 | container_runtime | `HIVEPILOT_CONTAINER_RUNTIME` | `docker` (or `podman`; per-runner override via `options.runtime`) |
 | claude_permission_mode | `HIVEPILOT_CLAUDE_PERMISSION_MODE` | — (global fallback; developer role already sets `bypassPermissions`) |
+| claude_capture_usage | `HIVEPILOT_CLAUDE_CAPTURE_USAGE` | `false` — opt-in per-step token/cost/actual-model capture; see "Usage capture" above |
 | state_db | `HIVEPILOT_STATE_DB` | `state.db` |
 | telegram_bot_token | `HIVEPILOT_TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` | — |
 | telegram_allowed_chat_ids | `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` | `[]` (open) |

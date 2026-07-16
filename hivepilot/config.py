@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     # gated) | bypassPermissions (full autonomy) | plan | default. None = no flag
     # (the safe default; suitable for read-only planning agents).
     claude_permission_mode: str | None = None
+    # Phase 24b.2a — opt-in usage capture (tokens/cost/actual-model) from the
+    # claude runner. Default False = BYTE-IDENTICAL current behaviour: capture()
+    # invokes claude without --output-format json and returns raw stdout. When
+    # True, capture() adds --output-format json, parses the JSON envelope, still
+    # returns only the agent's `.result` text as the step output (unchanged),
+    # and additionally records input/output tokens + self-reported cost + the
+    # actual model used. Any parsing/shape/CLI failure gracefully falls back to
+    # raw-stdout behaviour with null usage — this flag must never break a run.
+    # env: HIVEPILOT_CLAUDE_CAPTURE_USAGE
+    claude_capture_usage: bool = False
     gh_command: str = "gh"
     git_command: str = "git"
     concurrency_limit: int = 4
