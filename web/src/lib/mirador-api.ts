@@ -231,3 +231,62 @@ export function fetchMemories(query: string, limit = 20): Promise<MemoriesRespon
   const params = new URLSearchParams({ query, limit: String(limit) })
   return apiFetch<MemoriesResponse>(`/v1/memories?${params.toString()}`, { on403: 'forbidden' })
 }
+
+// ---------------------------------------------------------------------------
+// GET /v1/panels, GET /v1/panels/{name} — Mirador plugin `panel` type
+// (Sprint 3 web surface). Shapes transcribed from `hivepilot/plugins.py`
+// `PanelSpec` / `PanelData` / `PanelStatSection` / `PanelTableSection` /
+// `PanelTextSection` — read that file before changing anything here.
+// Section content (label/value/content/table cells) is plugin-authored and
+// UNTRUSTED (see `PanelData`'s docstring there): `PanelRenderer` renders it
+// via plain JSX interpolation only, never `dangerouslySetInnerHTML`.
+// ---------------------------------------------------------------------------
+
+export interface PanelSummary {
+  name: string
+  title: string
+  min_role: string
+}
+
+export interface PanelsResponse {
+  panels: PanelSummary[]
+}
+
+export interface PanelStatSection {
+  kind: 'stat'
+  label: string
+  value: string
+  status: 'ok' | 'warn' | 'error' | null
+}
+
+export interface PanelTableSection {
+  kind: 'table'
+  columns: string[]
+  rows: string[][]
+}
+
+export interface PanelTextSection {
+  kind: 'text'
+  content: string
+}
+
+export type PanelSection = PanelStatSection | PanelTableSection | PanelTextSection
+
+export interface PanelData {
+  sections: PanelSection[]
+}
+
+/** Every registered panel's name/title/min_role. Role gate: `read` (the
+ * floor) — a panel's own `min_role` only gates fetching ITS data below, not
+ * whether it's listed here. */
+export function fetchPanels(): Promise<PanelsResponse> {
+  return apiFetch<PanelsResponse>('/v1/panels')
+}
+
+/** A single panel's data. A panel's own `min_role` may be higher than the
+ * token gate's floor check (exactly like `/v1/memories`'s `admin` gate) —
+ * uses `on403: 'forbidden'` so an under-role token throws
+ * `ApiForbiddenError` without being cleared. See `PanelView`. */
+export function fetchPanel(name: string): Promise<PanelData> {
+  return apiFetch<PanelData>(`/v1/panels/${encodeURIComponent(name)}`, { on403: 'forbidden' })
+}

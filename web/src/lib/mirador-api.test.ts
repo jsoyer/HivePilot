@@ -15,6 +15,8 @@ import {
   fetchAnalyticsTrends,
   fetchApprovalLatency,
   fetchMemories,
+  fetchPanel,
+  fetchPanels,
   fetchPluginsHealth,
   fetchStepFailures,
 } from './mirador-api'
@@ -81,5 +83,21 @@ describe('mirador-api fetch wrappers', () => {
     const [url] = apiFetchMock.mock.calls[0] as [string]
     expect(url).toContain('query=rate+limit+%2F+retry')
     expect(url).not.toContain(' ')
+  })
+
+  it('fetchPanels calls GET /v1/panels', async () => {
+    await fetchPanels()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/panels')
+  })
+
+  it('fetchPanel calls GET /v1/panels/{name} and opts into on403: "forbidden"', async () => {
+    await fetchPanel('rtk-status')
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/panels/rtk-status', { on403: 'forbidden' })
+  })
+
+  it('fetchPanel URL-encodes the panel name', async () => {
+    await fetchPanel('weird name/slash')
+    const [url] = apiFetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/v1/panels/weird%20name%2Fslash')
   })
 })

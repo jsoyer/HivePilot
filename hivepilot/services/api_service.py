@@ -796,6 +796,84 @@ def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
     return {"configured": True, "memories": memories}
 
 
+# ---------------------------------------------------------------------------
+# Mirador web UI surface (Sprint 3) — plugin panels. Read-only, sibling to
+# the plugin-health/mem0 endpoints above.
+# ---------------------------------------------------------------------------
+
+
+@v1.get("/panels", dependencies=[Depends(require_role("read"))])
+@app.get("/panels", dependencies=[Depends(require_role("read"))])
+def list_panels_endpoint() -> dict[str, Any]:
+    """Every registered Mirador panel (name/title/min_role), mirroring the
+    TUI's own panel listing (Sprint 2, `hivepilot/ui/dashboard.py`). Panel
+    name/title/`min_role` are plugin CONFIGURATION, not secret — every
+    `read` token sees the full panel list regardless of its own role. A
+    panel's `min_role` only gates *fetching that panel's data*
+    (`get_panel_endpoint` below), not whether it appears in this list.
+    Never raises: `PluginManager.list_panels()` only reads its own
+    in-memory dict.
+    """
+    panels = _get_orchestrator().plugins.list_panels()
+    return {
+        "panels": [
+            {"name": p["name"], "title": p["title"], "min_role": p.get("min_role", "read")}
+            for p in panels
+        ]
+    }
+
+
+@v1.get("/panels/{name}")
+@app.get("/panels/{name}")
+def get_panel_endpoint(
+    name: str, caller: token_service.TokenEntry = Depends(require_role("read"))
+) -> dict[str, Any]:
+    """A single panel's data. Unlike every other endpoint in this file, the
+    required role is DATA-DEPENDENT: the panel itself declares its own
+    `min_role` (default "read" — see `hivepilot/plugins.py` `PanelSpec`), so
+    it cannot be expressed as a static `Depends(require_role(...))`.
+    Instead, `Depends(require_role("read"))` above only enforces the floor
+    (any authenticated token; 401 otherwise) — the panel's OWN `min_role` is
+    enforced HERE, after the panel is resolved, using the same
+    `token_service.role_rank` comparison `require_role` itself uses
+    internally. A `read` token therefore gets 403 on a panel declaring
+    `min_role: "admin"`, while an `admin` token gets 200 for the same panel.
+
+    Unknown panel name -> 404. A raising/malformed `fetch()` -> 200 with a
+    normalized error panel (exception TYPE name only, never the exception
+    message — see `PluginManager.run_panel_fetch`), never a 500. No secret
+    can appear in any response (panel names/titles are config; error detail
+    is a type name only).
+
+    **No framework-level tenant scoping.** Unlike `/v1/analytics/*` and
+    `/v1/runs`, panel data has no `tenant` concept at this layer: a panel's
+    `fetch()` returns whatever the plugin computes, entirely unfiltered.
+    `min_role` is the ONLY access control this endpoint applies — a panel
+    author is responsible for not exposing cross-tenant or otherwise
+    sensitive data via a low-`min_role` panel.
+    """
+    plugins = _get_orchestrator().plugins
+    spec = plugins.get_panel(name)
+    if spec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Panel not found")
+
+    min_role = spec.get("min_role", "read")
+    if token_service.role_rank(caller.role) < token_service.role_rank(min_role):
+        state_service.record_audit(
+            token_hash=caller.token[:16],
+            role=caller.role,
+            endpoint=f"/v1/panels/{name}",
+            method="GET",
+            result="forbidden",
+            tenant=caller.tenant,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role for this panel"
+        )
+
+    return dict(plugins.run_panel_fetch(name))
+
+
 @v1.post("/chatops/slack", dependencies=[Depends(require_role("run"))])
 @app.post("/chatops/slack", dependencies=[Depends(require_role("run"))])
 def slack_handler(payload: dict[str, Any]):
