@@ -28,6 +28,7 @@ import yaml
 
 from hivepilot.config import settings
 from hivepilot.scaffold.templates import _FILES as _BASE_SCAFFOLD_FILES
+from hivepilot.services.agent_checks import MandatoryAgentReport, check_mandatory_agents
 
 # ---------------------------------------------------------------------------
 # Extra minimal-valid templates for the config surfaces the existing
@@ -115,6 +116,11 @@ class InitOutcome:
     # config_service.sync() actually writes), which may differ from `target`
     # when a custom --path was given (see `run_init`).
     validated_target: Path
+    # Presence verdict for the mandatory agent CLIs (claude/codex/vibe). The
+    # CLI layer (`hivepilot.cli.init_config`) decides what to do with this --
+    # hard-fail when `any_ok` is False, warn-but-continue when `claude_ok` is
+    # False -- keeping this module's functions plain and exit-free.
+    mandatory_agents: MandatoryAgentReport
 
 
 def resolve_target_dir(path: Path | None) -> Path:
@@ -360,6 +366,7 @@ def run_init(
         validation_target = target
 
     validation = validate_target(validation_target)
+    mandatory_agents = check_mandatory_agents()
 
     return InitOutcome(
         mode=mode,
@@ -369,4 +376,5 @@ def run_init(
         synced_files=synced_files,
         validation=validation,
         validated_target=validation_target,
+        mandatory_agents=mandatory_agents,
     )
