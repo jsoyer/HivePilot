@@ -167,6 +167,50 @@ price-map fallback (Phase 24b.2b) doesn't backfill `steps.cost_usd` itself;
 it's applied read-only, at query time, by `GET /v1/analytics/cost` (see
 "Price map & cost analytics" below).
 
+### Usage capture for non-claude runners — automatic, no flag
+
+Prompt-CLI runners configured in **API mode** (`mode: api` — step metadata or
+runner `options`, covering `codex`/`gemini`/`opencode`/`vibe`/`ollama`-kind
+runners pointed at `api_provider: openai|anthropic|google|mistral|perplexity|
+openrouter`) capture token usage the same way the claude runner does —
+persisted on `steps.input_tokens` / `steps.output_tokens` / `steps.model` —
+but **with no opt-in flag**. Unlike `claude_capture_usage` (which re-invokes
+the CLI a second time with `--output-format json` to obtain usage), an API
+call already returns usage in the very same request/response that produces
+the reply text, so there is no re-invocation and no behaviour change to the
+run itself — capturing it is non-invasive by construction.
+
+**Migration note:** this change also makes `options.mode: api` reachable via
+`capture()` for the FIRST time in the primary execution path — before this,
+`capture()` ignored `mode` entirely and always ran the CLI-subprocess branch
+regardless of an `api`-mode config, so a misconfigured `mode: api` step was
+silently running its CLI fallback instead. Operators with an existing
+`mode: api` prompt-cli config should verify the provider's `*_API_KEY`
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`,
+`PERPLEXITY_API_KEY`, or `OPENROUTER_API_KEY`) is actually set before
+upgrading — those steps now hard-fail with `"<PROVIDER>_API_KEY missing"`
+instead of quietly falling back to the CLI.
+
+- **Providers whose response is read for usage:** `openai`, `mistral`,
+  `perplexity`, `openrouter` (OpenAI-compatible `usage.prompt_tokens` /
+  `usage.completion_tokens`), `anthropic` (`usage.input_tokens` /
+  `usage.output_tokens`), `google`/Gemini (`usageMetadata.promptTokenCount` /
+  `usageMetadata.candidatesTokenCount`).
+- **`model`** is set only when the provider's response body echoes it back
+  (openai/anthropic-shaped responses do; Gemini's `generateContent` response
+  does not, so `steps.model` stays whatever the config already resolved).
+- **`cost_usd` stays `NULL`** for every one of these providers — none of them
+  report cost in the plain request shape used here — so the price-map
+  fallback (`HIVEPILOT_LLM_PRICE_MAP`, above) is what estimates cost for
+  these steps at query time, exactly as it already does for claude steps
+  that didn't self-report cost.
+- **Never invented, never crash-prone:** only fields the response actually
+  carries are persisted. A response without a `usage` object, or with an
+  unexpected shape, degrades to no usage captured (existing behaviour,
+  unchanged output text) rather than failing the step; any degradation is
+  logged as a one-line warning with the provider name only — never response
+  content, prompt text, or API keys.
+
 ### Price map & cost analytics (Phase 24b.2b — closes Phase 24)
 
 `hivepilot.services.pricing` supplies a small default USD-per-1M-token price
