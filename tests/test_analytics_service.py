@@ -282,6 +282,28 @@ class TestRunDurations:
         result = analytics_service.run_durations(days=None)
         assert result["overall"]["count"] == 1
 
+    def test_negative_delta_excluded_clock_skew(self) -> None:
+        """finished_at BEFORE started_at (clock skew / bad data) must be
+        excluded — never produce a negative duration or crash the percentile
+        computation."""
+        _seed_run(
+            status="success",
+            started_at="2026-01-01 00:00:10",
+            finished_at="2026-01-01 00:00:00",
+        )
+        # One valid run alongside it, to prove the skewed row is dropped
+        # rather than the whole dataset being discarded.
+        _seed_run(
+            status="success",
+            started_at="2026-01-01 00:00:00",
+            finished_at="2026-01-01 00:00:05",
+        )
+
+        result = analytics_service.run_durations(days=None)
+        assert result["overall"]["count"] == 1
+        assert result["overall"]["p50"] == 5.0
+        assert result["overall"]["min"] >= 0.0
+
     def test_grouped_by_project(self) -> None:
         _seed_run(
             project="a",
@@ -379,6 +401,29 @@ class TestApprovalLatency:
 
         result = analytics_service.approval_latency(days=None)
         assert result["count"] == 0
+
+    def test_negative_delta_excluded_clock_skew(self) -> None:
+        """approved_at BEFORE requested_at (clock skew / bad data) must be
+        excluded — never produce a negative latency or crash the percentile
+        computation."""
+        run_skewed = _seed_run()
+        _seed_approval(
+            run_skewed,
+            requested_at="2026-01-01 00:00:10",
+            approved_at="2026-01-01 00:00:00",
+        )
+        # One valid approval alongside it, to prove the skewed row is
+        # dropped rather than the whole dataset being discarded.
+        run_valid = _seed_run()
+        _seed_approval(
+            run_valid,
+            requested_at="2026-01-01 00:00:00",
+            approved_at="2026-01-01 00:00:05",
+        )
+
+        result = analytics_service.approval_latency(days=None)
+        assert result["count"] == 1
+        assert result["p50"] == 5.0
 
     def test_tenant_filter(self) -> None:
         run_acme = _seed_run(tenant="acme")

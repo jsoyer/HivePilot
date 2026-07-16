@@ -337,12 +337,32 @@ def _analytics_tenant(caller: token_service.TokenEntry) -> str | None:
     return None if caller.role == "admin" else caller.tenant
 
 
+# CSV/formula-injection defense-in-depth: Excel, Google Sheets, and
+# LibreOffice all execute a cell as a formula if it starts with one of these
+# characters when the CSV is opened. project/task names aren't attacker-
+# reachable today (validated against config before a run can exist), but
+# this is user-facing exported data, so guard it anyway.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _csv_safe(value: Any) -> Any:
+    """Prefix string cells that start with a formula-trigger character with
+    a single quote — the standard CSV-injection mitigation. Spreadsheet
+    apps then render the leading quote as plain text instead of evaluating
+    a formula; csv.reader consumers see the literal `'`-prefixed string.
+    Non-string (numeric) cells pass through untouched.
+    """
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def _csv_response(rows: list[dict[str, Any]], fieldnames: list[str]) -> Response:
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow(row)
+        writer.writerow({key: _csv_safe(value) for key, value in row.items()})
     return Response(content=buf.getvalue(), media_type="text/csv")
 
 

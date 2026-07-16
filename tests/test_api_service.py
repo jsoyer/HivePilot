@@ -146,12 +146,17 @@ class TestAnalyticsTenantIsolation:
     def test_durations_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
         from hivepilot.services import state_service
 
-        state_service.record_run_start("p", "t", status="success", tenant="acme")
-        state_service.record_run_start("p", "t", status="success", tenant="other")
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.complete_run(run_acme, "success")
+        state_service.complete_run(run_other, "success")
 
         raw, _ = add_token("read", tenant="acme")
         resp = api_client.get("/v1/analytics/durations", headers=_auth(raw))
         assert resp.status_code == 200
+        # Proves actual tenant scoping (not just reachability): only the
+        # 'acme' finished run should be counted, not 'other'.
+        assert resp.json()["overall"]["count"] == 1
 
     def test_step_failures_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
         from hivepilot.services import state_service
@@ -285,3 +290,43 @@ class TestAnalyticsCsvExport:
         resp = api_client.get("/v1/analytics/approvals/latency?format=csv", headers=_auth(raw))
         assert resp.status_code == 200
         assert "text/csv" in resp.headers["content-type"]
+
+    def test_summary_csv_escapes_formula_injection_in_project_name(
+        self, api_client, tmp_tokens_file
+    ):
+        """CSV/formula-injection defense-in-depth: a project name starting
+        with '=' must never reach the CSV cell unescaped — Excel/Sheets/
+        LibreOffice would otherwise execute it as a formula on open."""
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("=2+2", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "'=2+2" in resp.text
+        # The raw, unescaped formula must not appear anywhere in the output.
+        assert ",=2+2," not in resp.text
+
+    def test_steps_failures_csv_escapes_formula_injection_in_step_name(
+        self, api_client, tmp_tokens_file
+    ):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(run_id, "+cmd|calc", "failed")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/steps/failures?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "'+cmd|calc" in resp.text
+
+    def test_csv_guard_only_applies_to_leading_formula_chars(self, api_client, tmp_tokens_file):
+        """A normal project name must round-trip unescaped — the guard must
+        not over-fire on ordinary strings."""
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("normal-project", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "'normal-project" not in resp.text
+        assert "normal-project" in resp.text
