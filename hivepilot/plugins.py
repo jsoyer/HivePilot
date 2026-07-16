@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.metadata as metadata
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, NamedTuple, TypedDict
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
@@ -77,6 +77,149 @@ def _normalize_health_result(result: Any) -> HealthStatus:
     if status not in HEALTH_STATUSES:
         return HealthStatus("error", f"invalid health status: {status!r}")
     return HealthStatus(status, str(detail) if detail is not None else "")
+
+
+# Mirador panel plugin type (Sprint 1 — routing + contracts only; TUI
+# rendering is Sprint 2, web is Sprint 3). A plugin contributes renderer-agnostic
+# panels via `register()["panels"] = [PanelSpec, ...]`. `PanelSpec` is a PLAIN
+# DICT at runtime (TypedDict is a type-checking-only construct — no dataclass
+# on the importlib-plugin path, matching every other contribution type here).
+
+# The closed set of section `kind` values a panel's PanelData may contain.
+PANEL_SECTION_KINDS = ("stat", "table", "text")
+
+# Valid `stat` section `status` values (mirrors HEALTH_STATUSES). `None` is
+# also a valid status (no status badge) but is handled separately since it is
+# the "unset" value, not a member of this enum.
+PANEL_STAT_STATUSES = ("ok", "warn", "error")
+
+
+class PanelStatSection(TypedDict):
+    kind: str  # literal "stat"
+    label: str
+    value: str
+    status: str | None
+
+
+class PanelTableSection(TypedDict):
+    kind: str  # literal "table"
+    columns: list[str]
+    rows: list[list[str]]
+
+
+class PanelTextSection(TypedDict):
+    kind: str  # literal "text"
+    content: str
+
+
+class PanelData(TypedDict):
+    """Renderer-agnostic panel payload: a closed set of section kinds.
+
+    Returned by a panel's `fetch()` callable (see `PanelSpec`) and by
+    `run_panel_fetch`. Always pass through `normalize_panel_data` before
+    trusting a panel's raw returned value — it validates/coerces the shape
+    and never lets a malformed section escape to a renderer.
+    """
+
+    sections: list[PanelStatSection | PanelTableSection | PanelTextSection]
+
+
+class _PanelSpecRequired(TypedDict):
+    name: str
+    title: str
+    fetch: Callable[[], PanelData]
+
+
+class PanelSpec(_PanelSpecRequired, total=False):
+    """A single panel contribution declared by `register()["panels"]`.
+
+    `name` is a stable id, collision-checked like every other plugin
+    contribution type (runner kind / notifier name / secrets backend name /
+    health name). `fetch` is a no-arg callable returning `PanelData` — always
+    invoke it via `run_panel_fetch`, never directly, so a raising/malformed
+    panel can never crash a caller. `min_role` is optional (default "read"),
+    used by the web surface in Sprint 3 to gate panel visibility.
+    """
+
+    min_role: str
+
+
+class PanelNameCollisionError(RuntimeError):
+    """Raised when two plugins declare a `panel` under the same name.
+
+    Mirrors `HealthNameCollisionError` — a hard stop, not a silent last-wins
+    overwrite, so a plugin can never shadow another plugin's panel unnoticed.
+    """
+
+
+class PanelDataError(ValueError):
+    """Raised by `normalize_panel_data` when a panel's returned value does
+    not match the closed `PanelData` shape (wrong top-level type, missing
+    `sections`, unknown section `kind`, or a section missing/mistyping its
+    required fields). Structural problems are rejected outright — only a
+    stat section's `status` value is lenient (see `normalize_panel_data`),
+    mirroring `_normalize_health_result`'s unknown-status fallback.
+    """
+
+
+def normalize_panel_data(data: Any) -> PanelData:
+    """Coerce/validate a panel's returned value into the closed `PanelData` shape.
+
+    Structurally malformed input (not a dict, missing/non-list `sections`, a
+    non-dict section, an unknown section `kind`, or a section missing/mistyping
+    one of its required fields) raises `PanelDataError` — callers (namely
+    `run_panel_fetch`) must catch it and fall back to an error panel; this
+    function itself never silently drops a whole panel's data. The one lenient
+    exception is a stat section's `status`: an unrecognized value normalizes
+    to `None` (no status badge) rather than rejecting the entire section,
+    mirroring `_normalize_health_result`'s unknown-status fallback.
+    """
+    if not isinstance(data, dict):
+        raise PanelDataError(f"panel data must be a dict, got {type(data).__name__}")
+    sections = data.get("sections")
+    if not isinstance(sections, list):
+        raise PanelDataError("panel data must have a 'sections' list")
+
+    normalized: list[PanelStatSection | PanelTableSection | PanelTextSection] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            raise PanelDataError(f"panel section must be a dict, got {type(section).__name__}")
+        kind = section.get("kind")
+        if kind not in PANEL_SECTION_KINDS:
+            raise PanelDataError(f"invalid panel section kind: {kind!r}")
+
+        if kind == "stat":
+            label = section.get("label")
+            value = section.get("value")
+            if not isinstance(label, str) or not isinstance(value, str):
+                raise PanelDataError("stat section requires string 'label' and 'value'")
+            status = section.get("status")
+            if status is not None and status not in PANEL_STAT_STATUSES:
+                # Unknown-status fallback (mirrors _normalize_health_result):
+                # coerce rather than reject the whole section.
+                status = None
+            normalized.append(
+                PanelStatSection(kind="stat", label=label, value=value, status=status)
+            )
+        elif kind == "table":
+            columns = section.get("columns")
+            rows = section.get("rows")
+            if not isinstance(columns, list) or not all(isinstance(c, str) for c in columns):
+                raise PanelDataError("table section requires a list of string 'columns'")
+            if not isinstance(rows, list) or not all(
+                isinstance(row, list) and all(isinstance(cell, str) for cell in row) for row in rows
+            ):
+                raise PanelDataError("table section requires 'rows' as a list of string lists")
+            normalized.append(
+                PanelTableSection(kind="table", columns=list(columns), rows=[list(r) for r in rows])
+            )
+        else:  # kind == "text"
+            content = section.get("content")
+            if not isinstance(content, str):
+                raise PanelDataError("text section requires string 'content'")
+            normalized.append(PanelTextSection(kind="text", content=content))
+
+    return PanelData(sections=normalized)
 
 
 def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
@@ -215,6 +358,10 @@ class PluginManager:
         # hooks). Per-manager instance dict — no process-global map needed,
         # health is scoped to this PluginManager the same way `self.hooks` is.
         self.health: dict[str, Callable[..., Any]] = {}
+        # name -> PanelSpec, collected the same way as health (popped out of
+        # a plugin's declared hooks, collision-checked, scoped to this
+        # PluginManager instance — no process-global map needed).
+        self.panels: dict[str, PanelSpec] = {}
         # Back-compat: flat list of discovered callables (mirrors the pre-Sprint-2
         # `load_plugins()`-derived attribute), regardless of whether calling
         # `register()` on them below succeeds.
@@ -236,7 +383,8 @@ class PluginManager:
             notifiers = hooks.pop("notifiers", None)
             secrets = hooks.pop("secrets", None)
             health = hooks.pop("health", None)
-            if runners or notifiers or secrets or health:
+            panels = hooks.pop("panels", None)
+            if runners or notifiers or secrets or health or panels:
                 from hivepilot.registry import (
                     RUNNER_MAP,
                     SECRETS_MAP,
@@ -253,15 +401,17 @@ class PluginManager:
 
                 # A kind/name collision is a hard stop and propagates uncaught
                 # (unlike an isolated broken plugin, which is logged and skipped).
-                # Register this one plugin's runners+notifiers+secrets+health
+                # Register this one plugin's runners+notifiers+secrets+health+panels
                 # atomically: if any entry collides, roll back the entries THIS
                 # plugin already added (to the process-global maps, or to this
-                # instance's `self.health`) before re-raising, so an aborted
-                # plugin never leaves orphaned, untracked registrations behind.
+                # instance's `self.health` / `self.panels`) before re-raising, so
+                # an aborted plugin never leaves orphaned, untracked registrations
+                # behind.
                 applied_runners: list[str] = []
                 applied_notifiers: list[str] = []
                 applied_secrets: list[str] = []
                 applied_health: list[str] = []
+                applied_panels: list[str] = []
                 try:
                     for kind, cls in (runners or {}).items():
                         was_present = kind in RUNNER_MAP
@@ -286,11 +436,26 @@ class PluginManager:
                             )
                         self.health[health_name] = health_fn
                         applied_health.append(health_name)
+                    for panel_spec in panels or []:
+                        panel_name = panel_spec["name"]
+                        if panel_name in self.panels:
+                            raise PanelNameCollisionError(
+                                f"panel '{panel_name}' is already registered; "
+                                "refusing to silently replace it"
+                            )
+                        self.panels[panel_name] = {
+                            "name": panel_name,
+                            "title": panel_spec["title"],
+                            "fetch": panel_spec["fetch"],
+                            "min_role": panel_spec.get("min_role", "read"),
+                        }
+                        applied_panels.append(panel_name)
                 except (
                     RunnerKindCollisionError,
                     NotifierKindCollisionError,
                     SecretsBackendCollisionError,
                     HealthNameCollisionError,
+                    PanelNameCollisionError,
                 ):
                     for kind in applied_runners:
                         RUNNER_MAP.pop(kind, None)
@@ -300,6 +465,8 @@ class PluginManager:
                         SECRETS_MAP.pop(secret_name, None)
                     for health_name in applied_health:
                         self.health.pop(health_name, None)
+                    for panel_name in applied_panels:
+                        self.panels.pop(panel_name, None)
                     raise
 
                 if notifiers:
@@ -339,3 +506,51 @@ class PluginManager:
         `run_health_check`) — safe to call unconditionally from `plugins
         list` / `plugins health` / the TUI."""
         return {name: self.run_health_check(name) for name in self.health}
+
+    def list_panels(self) -> list[PanelSpec]:
+        """Every registered panel, sorted by name — safe to call unconditionally
+        from the TUI (Sprint 2) / web surface (Sprint 3)."""
+        return [self.panels[name] for name in sorted(self.panels)]
+
+    def get_panel(self, name: str) -> PanelSpec | None:
+        """Look up a single registered panel by name, or `None` if unknown."""
+        return self.panels.get(name)
+
+    def run_panel_fetch(self, name: str) -> PanelData:
+        """Run a single named panel's `fetch()`. Never raises: an exception
+        raised by `fetch()` itself, or a malformed return value (rejected by
+        `normalize_panel_data`), is caught here and reported as a single
+        `stat` section — `{"label": "error", "value": "<ExceptionType>",
+        "status": "error"}` — the exception TYPE name only, never the
+        exception message, since panel data may be exposed to any read-role
+        token via the web surface (Sprint 3). The full exception (including
+        its message) is logged server-side. Same never-crash guarantee
+        `run_health_check` has.
+        """
+        spec = self.panels.get(name)
+        if spec is None:
+            return PanelData(
+                sections=[
+                    PanelStatSection(
+                        kind="stat",
+                        label="error",
+                        value="PanelNotFound",
+                        status="error",
+                    )
+                ]
+            )
+        try:
+            result = spec["fetch"]()
+            return normalize_panel_data(result)
+        except Exception as exc:  # noqa: BLE001 — a panel fetch must never crash
+            logger.warning("plugins.panel_fetch_failed", name=name, error=str(exc))
+            return PanelData(
+                sections=[
+                    PanelStatSection(
+                        kind="stat",
+                        label="error",
+                        value=type(exc).__name__,
+                        status="error",
+                    )
+                ]
+            )
