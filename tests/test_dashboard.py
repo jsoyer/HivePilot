@@ -6,6 +6,8 @@ import pytest
 
 textual = pytest.importorskip("textual.app")
 
+from textual.coordinate import Coordinate  # noqa: E402
+
 from hivepilot.ui.dashboard import RunDashboard  # noqa: E402
 
 
@@ -48,7 +50,9 @@ async def test_refresh_metrics_reconciles_success_and_complete_as_success() -> N
     app = RunDashboard()
     async with app.run_test():
         rows = {
-            app.metrics_table.get_cell_at((r, 0)): app.metrics_table.get_cell_at((r, 1))
+            app.metrics_table.get_cell_at(Coordinate(r, 0)): app.metrics_table.get_cell_at(
+                Coordinate(r, 1)
+            )
             for r in range(app.metrics_table.row_count)
         }
         assert rows["total_runs"] == "2"
@@ -66,7 +70,9 @@ async def test_refresh_metrics_counts_true_failures() -> None:
     app = RunDashboard()
     async with app.run_test():
         rows = {
-            app.metrics_table.get_cell_at((r, 0)): app.metrics_table.get_cell_at((r, 1))
+            app.metrics_table.get_cell_at(Coordinate(r, 0)): app.metrics_table.get_cell_at(
+                Coordinate(r, 1)
+            )
             for r in range(app.metrics_table.row_count)
         }
         assert rows["failure"] == "1"
