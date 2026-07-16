@@ -28,6 +28,14 @@ Endpoints covered (every one `web/src/lib/mirador-api.ts` calls):
     GET /v1/analytics/cost
     GET /v1/plugins/health
     GET /v1/memories
+    GET /v1/panels
+    GET /v1/panels/{name}
+
+The last two guard the `panel` plugin type (Mirador Sprint 4): their exact
+response shapes are hand-transcribed as `PanelSummary`/`PanelsResponse` and
+`PanelData`/`PanelStatSection`/`PanelTableSection`/`PanelTextSection` in
+`web/src/lib/mirador-api.ts` — see that file's own comment block just above
+those interfaces.
 """
 
 from __future__ import annotations
@@ -299,3 +307,96 @@ class TestMemoriesContract:
         assert set(data.keys()) == {"configured", "memories", "detail"}
         assert data["configured"] is False
         assert data["memories"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/panels, GET /v1/panels/{name} (Mirador Sprint 4 — panel plugin type)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def seeded_panel_plugin_manager(tmp_path, monkeypatch):
+    """A REAL `PluginManager`, constructed by loading a temp `plugins/`
+    directory containing one panel plugin — mirrors
+    `tests/test_panels.py::TestPanelRegistration.test_local_plugin_panel_is_collected`'s
+    seeding technique (monkeypatch `settings.base_dir`, then instantiate the
+    real `PluginManager()`) rather than hand-building a `PanelSpec` dict, so
+    this contract test exercises the actual registration + `run_panel_fetch`
+    path end-to-end, exactly like `TestPluginsHealthContract` exercises the
+    real health-check path elsewhere in this repo's test suite.
+    """
+    from hivepilot import plugins as plugins_mod
+
+    pdir = tmp_path / "plugins"
+    pdir.mkdir()
+    (pdir / "contract_panel.py").write_text(
+        "def _fetch():\n"
+        "    return {\n"
+        "        'sections': [\n"
+        "            {'kind': 'stat', 'label': 'steps run', 'value': '42', 'status': 'ok'},\n"
+        "            {'kind': 'table', 'columns': ['a'], 'rows': [['1']]},\n"
+        "            {'kind': 'text', 'content': 'hello'},\n"
+        "        ]\n"
+        "    }\n"
+        "def register():\n"
+        "    return {\n"
+        "        'panels': [\n"
+        "            {'name': 'contract_panel', 'title': 'Contract Panel', 'fetch': _fetch}\n"
+        "        ]\n"
+        "    }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+    return plugins_mod.PluginManager()
+
+
+def _patch_orchestrator_panels(monkeypatch, plugin_manager) -> None:
+    from hivepilot.services import api_service
+
+    monkeypatch.setattr(
+        api_service, "_get_orchestrator", lambda: SimpleNamespace(plugins=plugin_manager)
+    )
+
+
+class TestPanelsListContract:
+    def test_top_level_keys(self, api_client, read_token, seeded_panel_plugin_manager, monkeypatch):
+        """Matches `PanelsResponse`/`PanelSummary` in
+        `web/src/lib/mirador-api.ts`: `{"panels": [{"name", "title",
+        "min_role"}, ...]}` — a rename of any of these three keys must fail
+        this assertion."""
+        _patch_orchestrator_panels(monkeypatch, seeded_panel_plugin_manager)
+        resp = api_client.get("/v1/panels", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"panels"}
+        assert len(data["panels"]) == 1
+        assert set(data["panels"][0].keys()) == {"name", "title", "min_role"}
+        assert data["panels"][0] == {
+            "name": "contract_panel",
+            "title": "Contract Panel",
+            "min_role": "read",
+        }
+
+
+class TestPanelFetchContract:
+    def test_top_level_keys(self, api_client, read_token, seeded_panel_plugin_manager, monkeypatch):
+        """Matches `PanelData`/`PanelStatSection`/`PanelTableSection`/
+        `PanelTextSection` in `web/src/lib/mirador-api.ts`: a top-level
+        `{"sections": [...]}` with one section of each closed kind, each
+        carrying exactly its documented fields — a rename of any of these
+        keys, or of the `kind` values themselves, must fail this
+        assertion."""
+        _patch_orchestrator_panels(monkeypatch, seeded_panel_plugin_manager)
+        resp = api_client.get("/v1/panels/contract_panel", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"sections"}
+        assert len(data["sections"]) == 3
+
+        stat, table, text = data["sections"]
+        assert stat["kind"] == "stat"
+        assert set(stat.keys()) == {"kind", "label", "value", "status"}
+        assert table["kind"] == "table"
+        assert set(table.keys()) == {"kind", "columns", "rows"}
+        assert text["kind"] == "text"
+        assert set(text.keys()) == {"kind", "content"}
