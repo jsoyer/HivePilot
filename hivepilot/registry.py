@@ -11,6 +11,7 @@ from hivepilot.runners.container_runner import ContainerRunner
 from hivepilot.runners.cursor_runner import CursorRunner
 from hivepilot.runners.iac_runner import OpenTofuRunner, PulumiRunner, TerraformRunner
 from hivepilot.runners.internal_runner import InternalRunner
+from hivepilot.runners.kubectl_runner import KubectlRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
 from hivepilot.runners.prompt_cli_runner import (
     CodexRunner,
@@ -141,6 +142,7 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "terraform": TerraformRunner,
     "opentofu": OpenTofuRunner,
     "pulumi": PulumiRunner,
+    "kubectl": KubectlRunner,
 }
 for _kind, _cls in _BUILTIN_RUNNERS.items():
     RunnerRegistry.register(_kind, _cls)
