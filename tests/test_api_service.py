@@ -9,11 +9,15 @@ the auth/tenant-isolation patterns established in test_multi_tenant.py.
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from hivepilot.services.token_service import add_token
+
+_HAS_FPDF = importlib.util.find_spec("fpdf") is not None
 
 
 def test_healthz_ok():
@@ -561,3 +565,241 @@ class TestAnalyticsCostCsvExport:
         assert resp.status_code == 200
         assert "'=2+2" in resp.text
         assert ",=2+2," not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# PDF export (Phase 24 follow-up) — ?format=pdf on the analytics endpoints.
+# fpdf2 is an OPTIONAL extra (pyproject.toml `pdf` extra); when it's not
+# installed, ?format=pdf must fail gracefully (never a 500/traceback).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_FPDF, reason="fpdf2 optional extra not installed")
+class TestAnalyticsPdfExport:
+    """fpdf2 is an optional extra — skip this class (not the whole module,
+    so CSV/JSON regression tests below still run) when it's absent."""
+
+    def test_summary_pdf(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("p", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+        assert len(resp.content) > 0
+        assert "attachment" in resp.headers["content-disposition"]
+        assert ".pdf" in resp.headers["content-disposition"]
+
+    def test_trends_pdf(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/trends?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_durations_pdf(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/durations?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_steps_failures_pdf(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(run_id, "deploy", "failed")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/steps/failures?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_approvals_latency_pdf(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t")
+        state_service.record_approval_request(run_id, "p", "t", {})
+        state_service.update_approval(run_id, "approved")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/approvals/latency?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_providers_pdf(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(run_id, "s1", "success", provider="claude", model="claude-x")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_cost_pdf(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(
+            run_id, "s1", "success", provider="claude", model="claude-sonnet-4-6", cost_usd=2.0
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_pdf_requires_auth(self, api_client):
+        resp = api_client.get("/v1/analytics/summary?format=pdf")
+        assert resp.status_code == 401
+
+    def test_pdf_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        """The PDF path renders the same tenant-scoped rows as JSON/CSV —
+        prove real scoping, not just reachability, by checking the acme-only
+        row count feeds through (mirrors TestAnalyticsTenantIsolation)."""
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.complete_run(run_acme, "success")
+        state_service.complete_run(run_other, "success")
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/durations?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        # Cross-check: the JSON path (same tenant token) sees exactly 1 run.
+        json_resp = api_client.get("/v1/analytics/durations", headers=_auth(raw))
+        assert json_resp.json()["overall"]["count"] == 1
+
+    def test_pdf_content_excludes_other_tenant_data(self, api_client, tmp_tokens_file):
+        """Decode the actual PDF bytes (not just a cross-check against a
+        separate JSON request) and prove the rendered table contains only
+        the caller's tenant data — a future regression that leaked another
+        tenant's rows into the PDF-specific code path would be caught here
+        even though it wouldn't show up in the JSON/CSV tests."""
+        import io
+
+        from pypdf import PdfReader
+
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("acme-project-marker", "t", status="success", tenant="acme")
+        state_service.record_run_start(
+            "other-project-marker", "t", status="success", tenant="other"
+        )
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+
+        reader = PdfReader(io.BytesIO(resp.content))
+        text = "".join(page.extract_text() for page in reader.pages)
+        assert "acme-project-marker" in text
+        assert "other-project-marker" not in text
+
+    def test_summary_pdf_unicode_row_does_not_crash(self, api_client, tmp_tokens_file):
+        """fpdf2's core fonts (Helvetica) are latin-1 only. Project/task
+        names (and provider/model names sourced from LLM APIs) aren't
+        guaranteed latin-1 — a non-latin-1 cell must never raise
+        FPDFUnicodeEncodingException/UnicodeEncodeError inside table()."""
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("projet-éàü-日本語-\U0001f680", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_providers_pdf_unicode_model_name_does_not_crash(self, api_client, tmp_tokens_file):
+        """Same as above but through a provider/model row — model names are
+        sourced from LLM APIs and not guaranteed latin-1."""
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="running")
+        state_service.record_step(
+            run_id, "s1", "success", provider="claude", model="claude-—’emoji-\U0001f916"
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/providers?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_durations_pdf_empty_result(self, api_client, tmp_tokens_file):
+        """Zero-rows path: no runs recorded yet — the PDF must still render
+        (just the 'overall' row with zero counts), not error."""
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/durations?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.content.startswith(b"%PDF")
+
+
+class TestAnalyticsPdfExportFpdfAbsent:
+    """When fpdf2 isn't installed, ?format=pdf must return a clear 501/400
+    error — never a 500/traceback."""
+
+    @pytest.fixture()
+    def no_fpdf(self, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "fpdf" or name.startswith("fpdf."):
+                raise ImportError("No module named 'fpdf'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    def test_summary_pdf_absent_returns_clear_error(self, api_client, tmp_tokens_file, no_fpdf):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code in (501, 400)
+        assert resp.status_code != 500
+        detail = resp.json()["detail"]
+        assert "pdf" in detail.lower()
+        assert "hivepilot[pdf]" in detail
+
+    def test_cost_pdf_absent_returns_clear_error(self, api_client, tmp_tokens_file, no_fpdf):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost?format=pdf", headers=_auth(raw))
+        assert resp.status_code in (501, 400)
+        assert resp.status_code != 500
+        assert "hivepilot[pdf]" in resp.json()["detail"]
+
+
+class TestAnalyticsCsvAndJsonRegression:
+    """?format=csv and default JSON must be unaffected by the PDF addition."""
+
+    def test_summary_csv_unchanged(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("p", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "text/csv" in resp.headers["content-type"]
+
+    def test_summary_json_default_unchanged(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("p", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "application/json" in resp.headers["content-type"]
+        assert "total" in resp.json()
+
+    def test_cost_csv_unchanged(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost?format=csv", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert "text/csv" in resp.headers["content-type"]
