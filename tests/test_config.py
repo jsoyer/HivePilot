@@ -107,6 +107,48 @@ class TestClaudeCaptureUsage:
 # ---------------------------------------------------------------------------
 
 
+class TestEnableTracing:
+    """`enable_tracing` (Phase 18) defaults to False — ships dormant, mirrors
+    `enable_webui`/`headroom_enabled`'s opt-in gating — and is env-overridable.
+    `otel_exporter_otlp_endpoint` defaults to None (the OTel SDK falls back to
+    reading the standard `OTEL_EXPORTER_OTLP_ENDPOINT` env var natively when
+    unset). `otel_service_name` defaults to "hivepilot"."""
+
+    def test_enable_tracing_default_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_ENABLE_TRACING", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.enable_tracing is False
+
+    def test_enable_tracing_env_override_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_ENABLE_TRACING", "true")
+        s = Settings()
+        assert s.enable_tracing is True
+
+    def test_otel_exporter_otlp_endpoint_default_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HIVEPILOT_OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.otel_exporter_otlp_endpoint is None
+
+    def test_otel_exporter_otlp_endpoint_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HIVEPILOT_OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
+        s = Settings()
+        assert s.otel_exporter_otlp_endpoint == "http://collector:4317"
+
+    def test_otel_service_name_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_OTEL_SERVICE_NAME", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.otel_service_name == "hivepilot"
+
+    def test_otel_service_name_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_OTEL_SERVICE_NAME", "hivepilot-staging")
+        s = Settings()
+        assert s.otel_service_name == "hivepilot-staging"
+
+
 class TestHeadroomEnabled:
     """`headroom_enabled` defaults to False (ships dormant, mirrors
     `context_routing_mode`'s opt-in gating) and is env-overridable."""

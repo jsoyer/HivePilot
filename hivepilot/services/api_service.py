@@ -39,6 +39,20 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware  # noqa: E40
 
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
+
+# -- Distributed tracing (Phase 18) -----------------------------------------
+@app.on_event("startup")
+async def _init_tracing() -> None:
+    """Wire up OpenTelemetry tracing (opt-in, no-op unless
+    `HIVEPILOT_ENABLE_TRACING=1` + the `tracing` extra is installed) once
+    the API server process actually starts serving — this is "a run
+    begins" for the API entry point (mirrors the CLI's `run-pipeline`
+    command and the scheduler daemon's `run()`)."""
+    from hivepilot.observability.tracing import init_tracing
+
+    init_tracing(settings)
+
+
 # -- Body size limit (Phase 14b) -------------------------------------------
 _MAX_BODY_BYTES = getattr(settings, "api_max_body_size", 1_048_576)  # 1 MB default
 

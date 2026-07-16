@@ -46,6 +46,15 @@ class SchedulerDaemon:
 
     def run(self) -> None:
         """Start the daemon loop (blocking).  Handles SIGTERM / SIGINT cleanly."""
+        from hivepilot.config import settings
+        from hivepilot.observability.tracing import init_tracing
+
+        # Phase 18 — opt-in, no-op unless HIVEPILOT_ENABLE_TRACING=1 + the
+        # `tracing` extra is installed. This is "a run begins" for the
+        # scheduler daemon entry point (mirrors the API server startup and
+        # the CLI's `run-pipeline` command).
+        init_tracing(settings)
+
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
 
