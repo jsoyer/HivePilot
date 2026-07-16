@@ -289,6 +289,46 @@ def register():
             plugins_mod.PluginManager()
 
 
+class TestPluginSkillsHooksIsolation:
+    """Sprint 1 (skill-plugin-type): `skills` is popped out of a plugin's
+    declared hooks the same way `runners`/`notifiers`/`secrets`/`health`/
+    `panels` are — it must never leak into `PluginManager.hooks` (which is
+    reserved for `before_step`/`after_step`-style lifecycle hooks), and
+    `PluginManager.skills` must exist as a dict even when no plugin declares
+    any skill. Full skill-registry coverage lives in
+    `tests/test_skills_registry.py`.
+    """
+
+    def test_skills_attribute_exists_and_is_dict_with_no_plugins(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        pm = plugins_mod.PluginManager()
+
+        assert hasattr(pm, "skills")
+        assert pm.skills == {}
+
+    def test_skills_key_never_leaks_into_hooks_dict(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "with_skill.py").write_text(
+            "def register():\n"
+            "    return {'skills': [{'name': 's1', 'description': 'D', "
+            "'provider': 'p', 'files': {'SKILL.md': 'x'}}]}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        assert "skills" not in pm.hooks
+        assert "s1" in pm.skills
+
+
 class TestLoadPluginsByPath:
     """Plugins load by file path — no dependency on `plugins` being on sys.path
     (regression: the installed binary / Telegram bot crashed with

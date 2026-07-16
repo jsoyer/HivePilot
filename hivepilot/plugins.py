@@ -249,6 +249,63 @@ def normalize_panel_data(data: Any) -> PanelData:
     return PanelData(sections=normalized)
 
 
+# Skill plugin type (Sprint 1 — registry + contracts only; consuming skills
+# in a runner's prompt/context is Sprint 2, validation is Sprint 3,
+# orchestrator wiring is Sprint 4, CLI surface is Sprint 5). A plugin
+# contributes skills via `register()["skills"] = [SkillSpec, ...]`. `SkillSpec`
+# is a PLAIN DICT at runtime (TypedDict is a type-checking-only construct —
+# no dataclass on the importlib-plugin path, matching every other
+# contribution type here, e.g. `PanelSpec`).
+
+
+class _SkillSpecRequired(TypedDict):
+    name: str
+    description: str
+    provider: str
+    files: dict[str, str]  # rel-path under .claude/skills/<name>/ -> content
+
+
+class SkillSpec(_SkillSpecRequired, total=False):
+    """A single skill contribution declared by `register()["skills"]`.
+
+    `name` is a stable id, collision-checked like every other plugin
+    contribution type (runner kind / notifier name / secrets backend name /
+    health name / panel name). `files` maps a relative path under
+    `.claude/skills/<name>/` to its content (e.g. `{"SKILL.md": "..."}`) —
+    consuming/writing these files out is deferred to a later sprint. No
+    `render()` callable is defined here; one may be added once a real skill
+    needs it. `min_role` is optional and, unlike `PanelSpec`, has NO implicit
+    default here — it is only validated (against `token_service.ROLE_RANKS`)
+    and stored when a plugin actually declares it.
+    """
+
+    system_prompt: str  # optional text a runner may append
+    applies_to: list[str]  # runner kinds this skill targets; absent = any
+    min_role: str
+
+
+class SkillNameCollisionError(RuntimeError):
+    """Raised when two plugins declare a `skill` under the same name.
+
+    Mirrors `PanelNameCollisionError` — a hard stop, not a silent last-wins
+    overwrite, so a plugin can never shadow another plugin's skill unnoticed.
+    """
+
+
+class SkillInvalidMinRoleError(RuntimeError):
+    """Raised when a plugin declares a skill with a `min_role` that is not a
+    recognized role (`token_service.ROLE_RANKS` — the source of truth for
+    every valid role name).
+
+    Mirrors `PanelInvalidMinRoleError`'s fail-closed rationale: an
+    unrecognized `min_role` must never be silently accepted (which would
+    make any future rank comparison against it fail open) — rejecting it at
+    registration time keeps a skill from ever being registered with an
+    unenforceable gate, atomic with the other collision errors above (the
+    whole plugin's contribution rolls back).
+    """
+
+
 def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
     """Scan `plugins/` directory for local-file plugins.
 
@@ -389,6 +446,10 @@ class PluginManager:
         # a plugin's declared hooks, collision-checked, scoped to this
         # PluginManager instance — no process-global map needed).
         self.panels: dict[str, PanelSpec] = {}
+        # name -> SkillSpec, collected the same way as panels (popped out of
+        # a plugin's declared hooks, collision-checked, scoped to this
+        # PluginManager instance — no process-global map needed).
+        self.skills: dict[str, SkillSpec] = {}
         # Back-compat: flat list of discovered callables (mirrors the pre-Sprint-2
         # `load_plugins()`-derived attribute), regardless of whether calling
         # `register()` on them below succeeds.
@@ -411,7 +472,8 @@ class PluginManager:
             secrets = hooks.pop("secrets", None)
             health = hooks.pop("health", None)
             panels = hooks.pop("panels", None)
-            if runners or notifiers or secrets or health or panels:
+            skills = hooks.pop("skills", None)
+            if runners or notifiers or secrets or health or panels or skills:
                 from hivepilot.registry import (
                     RUNNER_MAP,
                     SECRETS_MAP,
@@ -428,17 +490,18 @@ class PluginManager:
 
                 # A kind/name collision is a hard stop and propagates uncaught
                 # (unlike an isolated broken plugin, which is logged and skipped).
-                # Register this one plugin's runners+notifiers+secrets+health+panels
+                # Register this one plugin's runners+notifiers+secrets+health+panels+skills
                 # atomically: if any entry collides, roll back the entries THIS
                 # plugin already added (to the process-global maps, or to this
-                # instance's `self.health` / `self.panels`) before re-raising, so
-                # an aborted plugin never leaves orphaned, untracked registrations
-                # behind.
+                # instance's `self.health` / `self.panels` / `self.skills`) before
+                # re-raising, so an aborted plugin never leaves orphaned, untracked
+                # registrations behind.
                 applied_runners: list[str] = []
                 applied_notifiers: list[str] = []
                 applied_secrets: list[str] = []
                 applied_health: list[str] = []
                 applied_panels: list[str] = []
+                applied_skills: list[str] = []
                 try:
                     for kind, cls in (runners or {}).items():
                         was_present = kind in RUNNER_MAP
@@ -496,6 +559,47 @@ class PluginManager:
                             "min_role": min_role,
                         }
                         applied_panels.append(panel_name)
+                    for skill_spec in skills or []:
+                        skill_name = skill_spec["name"]
+                        if skill_name in self.skills:
+                            raise SkillNameCollisionError(
+                                f"skill '{skill_name}' is already registered; "
+                                "refusing to silently replace it"
+                            )
+                        skill_entry: SkillSpec = {
+                            "name": skill_name,
+                            "description": skill_spec["description"],
+                            "provider": skill_spec["provider"],
+                            "files": skill_spec["files"],
+                        }
+                        if "system_prompt" in skill_spec:
+                            skill_entry["system_prompt"] = skill_spec["system_prompt"]
+                        if "applies_to" in skill_spec:
+                            skill_entry["applies_to"] = skill_spec["applies_to"]
+                        # min_role is OPTIONAL for skills (unlike panels, which
+                        # default to "read") — only validate/store it when the
+                        # plugin actually declared one.
+                        if "min_role" in skill_spec:
+                            min_role = skill_spec["min_role"]
+                            # isinstance() FIRST: a non-string/non-hashable
+                            # min_role (e.g. `[]`/`{}`) must be rejected here,
+                            # before any `in token_service.ROLE_RANKS`
+                            # membership check, so it can never raise a raw
+                            # TypeError. Fail-closed: never a `-1` sentinel
+                            # that would invert a future rank comparison to
+                            # always pass (see `SkillInvalidMinRoleError`).
+                            if (
+                                not isinstance(min_role, str)
+                                or min_role not in token_service.ROLE_RANKS
+                            ):
+                                raise SkillInvalidMinRoleError(
+                                    f"skill '{skill_name}' declares invalid min_role "
+                                    f"{min_role!r}; must be a string, one of "
+                                    f"{sorted(token_service.ROLE_RANKS)}"
+                                )
+                            skill_entry["min_role"] = min_role
+                        self.skills[skill_name] = skill_entry
+                        applied_skills.append(skill_name)
                 except (
                     RunnerKindCollisionError,
                     NotifierKindCollisionError,
@@ -503,6 +607,8 @@ class PluginManager:
                     HealthNameCollisionError,
                     PanelNameCollisionError,
                     PanelInvalidMinRoleError,
+                    SkillNameCollisionError,
+                    SkillInvalidMinRoleError,
                 ):
                     for kind in applied_runners:
                         RUNNER_MAP.pop(kind, None)
@@ -514,6 +620,8 @@ class PluginManager:
                         self.health.pop(health_name, None)
                     for panel_name in applied_panels:
                         self.panels.pop(panel_name, None)
+                    for skill_name in applied_skills:
+                        self.skills.pop(skill_name, None)
                     raise
 
                 if notifiers:
@@ -562,6 +670,15 @@ class PluginManager:
     def get_panel(self, name: str) -> PanelSpec | None:
         """Look up a single registered panel by name, or `None` if unknown."""
         return self.panels.get(name)
+
+    def list_skills(self) -> list[SkillSpec]:
+        """Every registered skill, sorted by name — safe to call unconditionally
+        by any future consumer (runner prompt assembly, CLI, orchestrator)."""
+        return [self.skills[name] for name in sorted(self.skills)]
+
+    def get_skill(self, name: str) -> SkillSpec | None:
+        """Look up a single registered skill by name, or `None` if unknown."""
+        return self.skills.get(name)
 
     def run_panel_fetch(self, name: str) -> PanelData:
         """Run a single named panel's `fetch()`. Never raises: an exception
