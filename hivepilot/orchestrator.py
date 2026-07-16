@@ -2768,9 +2768,10 @@ class Orchestrator:
                     except QuotaDeferredError:
                         # Not a step failure either — mirrors `StepApprovalPending`
                         # above: a quota deferral is an interrupt that the
-                        # pipeline-level handler (`run_pipeline`'s
-                        # `except QuotaDeferredError`) turns into a retry-later
-                        # `RunResult` + `complete_run(..., "deferred")`.
+                        # pipeline-level handler (`_run_task_body`'s
+                        # `except QuotaDeferredError`, reached via `run_task`)
+                        # turns into a retry-later `RunResult` +
+                        # `complete_run(..., "deferred")`.
                         # Propagate unmodified so `record_step(..., "failed", ...)`
                         # below is never hit and `step.allow_failure` never
                         # swallows it as a recovered failure.

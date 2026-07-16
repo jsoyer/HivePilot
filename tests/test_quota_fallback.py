@@ -22,10 +22,10 @@ def _make_orchestrator_with_mocked_registry():
     return orch
 
 
-def _make_task_config(role="developer"):
+def _make_task_config(role="developer", allow_failure=False):
     from hivepilot.models import GitActions, TaskConfig, TaskStep
 
-    step = TaskStep(name="dev-step", runner="claude")
+    step = TaskStep(name="dev-step", runner="claude", allow_failure=allow_failure)
     task = TaskConfig(
         description="dev task",
         steps=[step],
@@ -128,6 +128,60 @@ def test_non_quota_error_does_not_fallback():
 
     # Only called once — no fallback
     assert orch.registry.capture_definition.call_count == 1
+
+
+def test_quota_deferred_step_with_allow_failure_propagates_not_swallowed(monkeypatch):
+    """CATASTROPHIC-RISK regression guard: a developer step with
+    `allow_failure=True` whose runner exhausts every fallback must still
+    raise `QuotaDeferredError` out of `_execute_task` — it must NOT be
+    caught by the generic `except Exception` / `record_step(..., "failed",
+    ...)` / `if step.allow_failure: continue` path and silently swallowed.
+    A quota deferral is an interrupt for the pipeline-level deferred
+    handler (`_run_task_body`'s `except QuotaDeferredError`, reached via
+    `run_task`), not a step failure — losing it here means the whole task
+    is silently dropped instead of retried later.
+    """
+    from hivepilot import config
+    from hivepilot.services.quota import QuotaDeferredError
+
+    # No fallback runners configured — the developer-role fallback loop
+    # exhausts immediately and must raise QuotaDeferredError.
+    monkeypatch.setattr(config.settings, "dev_fallback_runners", [])
+
+    orch = _make_orchestrator_with_mocked_registry()
+    task, step = _make_task_config(role="developer", allow_failure=True)
+    project = _make_project_config()
+
+    orch.registry.capture_definition.side_effect = RuntimeError(QUOTA_MSG)
+
+    with (
+        patch("hivepilot.roles.get_role") as mock_get_role,
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_host", return_value=None),
+        patch("hivepilot.services.state_service.record_step") as mock_record_step,
+    ):
+        mock_role = MagicMock()
+        mock_role.models = []
+        mock_role.permission_mode = None
+        mock_get_role.return_value = mock_role
+
+        with pytest.raises(QuotaDeferredError):
+            orch._execute_task(
+                project=project,
+                task_name="dev-task",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+                simulate=False,
+                dry_run=True,
+            )
+
+    # The quota deferral must never be recorded as a "failed" step — that
+    # would be the `allow_failure=True` generic-exception path silently
+    # swallowing a defer-and-retry-later signal.
+    for _call in mock_record_step.call_args_list:
+        assert _call.args[2] != "failed", f"quota-defer mis-recorded as failed: {_call}"
 
 
 def test_non_developer_role_does_not_fallback():
