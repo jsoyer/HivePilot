@@ -104,3 +104,34 @@ jobs:
 
       - name: Fail if committed static/ is stale vs the source build
         run: git diff --exit-code hivepilot/webui/static
+
+  helm-lint:
+    name: Helm chart lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: helm lint
+        run: helm lint deploy/helm/hivepilot
+
+      - name: helm template (default values)
+        run: helm template deploy/helm/hivepilot > /dev/null
+
+      - name: helm template (gated paths — ingress, bots, rbac)
+        run: |
+          helm template deploy/helm/hivepilot \
+            --set ingress.enabled=true \
+            --set bots.telegram.enabled=true \
+            --set bots.slack.enabled=true \
+            --set bots.discord.enabled=true \
+            --set rbac.create=true \
+            --set rbac.scope=ClusterRole \
+            --set 'config.files.projects\.yaml=projects: {}' \
+            --set secrets.apiTokensYaml="tokens: []" \
+            --set secrets.data.HIVEPILOT_API_TOKEN=placeholder \
+            > /dev/null

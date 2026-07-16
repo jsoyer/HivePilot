@@ -1,0 +1,58 @@
+{{/*
+Opt-in RBAC (values.rbac.create, default false). See values.yaml comment and
+README "RBAC & the kubectl runner" for the blast-radius discussion before
+enabling this in a cluster where the kubectl runner plugin is in use.
+*/}}
+{{- if .Values.rbac.create }}
+{{- if eq .Values.rbac.scope "ClusterRole" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "hivepilot.fullname" . }}
+  labels:
+    {{- include "hivepilot.labels" . | nindent 4 }}
+rules:
+  {{- toYaml .Values.rbac.rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "hivepilot.fullname" . }}
+  labels:
+    {{- include "hivepilot.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hivepilot.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "hivepilot.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- else }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "hivepilot.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hivepilot.labels" . | nindent 4 }}
+rules:
+  {{- toYaml .Values.rbac.rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "hivepilot.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hivepilot.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hivepilot.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "hivepilot.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

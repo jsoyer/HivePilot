@@ -1,0 +1,28 @@
+apiVersion: v2
+name: hivepilot
+description: >-
+  HivePilot — a multi-agent orchestration platform that drives coding-agent
+  CLIs (claude, codex, cursor-agent, gemini, opencode, ...) through
+  configurable pipelines. This chart deploys the API server, the scheduler
+  daemon, and optional chat-ops bots (Telegram/Slack/Discord) on Kubernetes.
+type: application
+
+# Chart version (bump on any template/values change).
+version: 0.1.0
+
+# Matches hivepilot's own release version (pyproject.toml `version`). Bump in
+# lockstep when the app version changes; the chart version above is
+# independent and tracks chart-only changes.
+appVersion: "0.2.0"
+
+keywords:
+  - hivepilot
+  - multi-agent
+  - orchestration
+  - ai-agents
+  - devops
+home: https://github.com/jsoyer/HivePilot
+sources:
+  - https://github.com/jsoyer/HivePilot
+maintainers:
+  - name: HivePilot maintainers
