@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from hivepilot.models import KNOWN_RUNNER_KINDS, Group, PipelineStage, RunnerDefinition, RunnerKind
+from hivepilot.models import (
+    KNOWN_RUNNER_KINDS,
+    Group,
+    PipelineStage,
+    RunnerDefinition,
+    RunnerKind,
+    TaskStep,
+)
 
 
 def test_known_runner_kinds_all_have_runner_map_entries() -> None:
@@ -143,3 +150,21 @@ def test_group_single_repo_true_without_hub_raises() -> None:
 def test_group_single_repo_true_with_empty_string_hub_raises() -> None:
     with pytest.raises(ValueError, match="single_repo"):
         Group(description="d", hub="", single_repo=True, components=["ui", "api"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 17a-B — TaskStep.require_approval (step-level destructive-operation
+# approval gate)
+# ---------------------------------------------------------------------------
+
+
+def test_task_step_require_approval_defaults_false() -> None:
+    """Backward-compatible default: a step with no explicit flag never gates
+    on its own (a destructive runner can still gate it independently)."""
+    step = TaskStep(name="s", runner="terraform")
+    assert step.require_approval is False
+
+
+def test_task_step_require_approval_accepts_true() -> None:
+    step = TaskStep(name="s", runner="shell", require_approval=True)
+    assert step.require_approval is True

@@ -58,6 +58,12 @@ class TaskStep(BaseModel):
     allow_failure: bool = False
     append_prompt: str | None = None
     timeout_seconds: int | None = None
+    # Step-level destructive-operation approval gate (Phase 17a-B): when True,
+    # the orchestrator pauses the task for human approval before this step
+    # runs, regardless of whether the runner itself declares the operation
+    # destructive. A runner-declared destructive operation gates even when
+    # this flag is left False (see `hivepilot.orchestrator.step_requires_approval`).
+    require_approval: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
     knowledge_files: list[str] = Field(default_factory=list)
     secrets: dict[str, dict[str, Any]] = Field(default_factory=dict)

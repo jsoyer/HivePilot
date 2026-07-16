@@ -27,6 +27,13 @@ logger = get_logger(__name__)
 _DEFAULT_TF_TIMEOUT = 1800
 _DEFAULT_PULUMI_TIMEOUT = 1800
 
+# Phase 17a-B: operations that mutate real infrastructure — gated behind the
+# step-level approval flow (see hivepilot.orchestrator.step_requires_approval).
+# `plan`/`validate`/`output`/`init`/`drift`/`cost` are read-only/non-mutating
+# and are intentionally excluded.
+_TF_DESTRUCTIVE_OPS = frozenset({"apply", "destroy"})
+_PULUMI_DESTRUCTIVE_OPS = frozenset({"up", "destroy", "refresh"})
+
 
 @dataclass
 class _TfBaseRunner(BaseRunner):
@@ -36,6 +43,19 @@ class _TfBaseRunner(BaseRunner):
 
     def run(self, payload: RunnerPayload) -> None:
         self._execute(payload)
+
+    def is_destructive(self, payload: RunnerPayload) -> bool:
+        """Optional structural contract (getattr-discovered, like `capture`):
+        True when the operation this step/definition resolves to mutates real
+        infrastructure (`apply`/`destroy`). Resolved exactly the same way
+        `_execute` resolves it, so the gate always agrees with what would
+        actually run."""
+        operation = (
+            payload.step.command
+            or self.definition.command
+            or self.definition.options.get("operation", "plan")
+        )
+        return operation in _TF_DESTRUCTIVE_OPS
 
     def _execute(self, payload: RunnerPayload) -> None:
         operation = (
@@ -192,6 +212,19 @@ class PulumiRunner(BaseRunner):
 
     def run(self, payload: RunnerPayload) -> None:
         self._execute(payload)
+
+    def is_destructive(self, payload: RunnerPayload) -> bool:
+        """Optional structural contract (getattr-discovered, like `capture`):
+        True when the operation this step/definition resolves to mutates the
+        stack (`up`/`destroy`/`refresh`). `refresh` is included because it can
+        both reconcile state and apply drift corrections. Resolved exactly the
+        same way `_execute` resolves it."""
+        operation = (
+            payload.step.command
+            or self.definition.command
+            or self.definition.options.get("operation", "preview")
+        )
+        return operation in _PULUMI_DESTRUCTIVE_OPS
 
     def _execute(self, payload: RunnerPayload) -> None:
         operation = (
