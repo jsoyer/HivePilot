@@ -1865,3 +1865,160 @@ class TestCveGate:
         assert "LEAKY-PACKAGE-NAME-SHOULD-NOT-APPEAR" not in detail
         assert "CVE-2099-9999" not in detail
         assert "critical" in detail  # severity COUNTS dict is safe to include
+
+
+# ---------------------------------------------------------------------------
+# Phase 21 Sprint 3 -- CVE gate defense-in-depth on the `require_approval`
+# resume path (`run_approved`).
+#
+# `require_approval` and `block_on_severity` are independent `if`/`elif`
+# branches in `_run_task_body`: a project configured with BOTH only ever has
+# the `require_approval` branch evaluated pre-run (records a pending
+# approval, never reaches the CVE-gate `elif`), and `run_approved` dispatches
+# an approved run straight to `_execute_task`. Without a gate check inside
+# `run_approved` itself, an approver could approve straight past a critical
+# CVE finding entirely ungated. These tests are the regression guard.
+# ---------------------------------------------------------------------------
+
+
+class TestCveGateRunApprovedResume:
+    def _orch_with_project_and_task(self):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/cve-gate-approved-proj"))
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        return orch
+
+    def _approval_row(self):
+        import json as _json
+
+        # No "kind" key -- this is the per-task `require_approval` pending
+        # approval created by `_run_task_body`, NOT a step_checkpoint resume.
+        return {
+            "status": "pending",
+            "project": "proj",
+            "task": "x",
+            "metadata": _json.dumps(
+                {"task": "x", "project": "proj", "extra_prompt": None, "auto_git": False}
+            ),
+        }
+
+    def test_approved_run_blocked_by_cve_gate_never_executes(self) -> None:
+        """The regression guard for the HIGH finding: both gates configured,
+        approval granted, but a critical finding must still block -- the
+        approver cannot approve past the CVE gate."""
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import Finding, ScanResult
+
+        policy = Policy(require_approval=True, block_on_severity="critical")
+        scan_result = ScanResult(
+            tool="grype",
+            total=1,
+            by_severity={"critical": 1, "high": 0, "medium": 0},
+            findings=[
+                Finding(id="CVE-2099-0003", package="libbaz", version="1.0.0", severity="critical")
+            ],
+        )
+
+        orch = self._orch_with_project_and_task()
+
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=self._approval_row(),
+            ),
+            patch("hivepilot.orchestrator.state_service.update_approval") as mock_update,
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=policy),
+            patch.object(orch, "_execute_task") as mock_execute,
+            patch(
+                "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                return_value=scan_result,
+            ),
+        ):
+            result = orch.run_approved(run_id=1, approve=True, approver="tester")
+
+        assert result.success is False
+        assert "Blocked by CVE gate" in (result.detail or "")
+        mock_execute.assert_not_called()
+        mock_complete.assert_called_once()
+        assert mock_complete.call_args.args[1] == "failed"
+        mock_update.assert_called_once()
+        assert mock_update.call_args.args[1] == "approved"
+
+    def test_approved_run_below_threshold_proceeds_to_execute(self) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import Finding, ScanResult
+
+        policy = Policy(require_approval=True, block_on_severity="critical")
+        scan_result = ScanResult(
+            tool="grype",
+            total=1,
+            by_severity={"critical": 0, "high": 0, "medium": 1},
+            findings=[
+                Finding(id="CVE-2099-0004", package="libqux", version="1.0.0", severity="medium")
+            ],
+        )
+
+        orch = self._orch_with_project_and_task()
+
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=self._approval_row(),
+            ),
+            patch("hivepilot.orchestrator.state_service.update_approval"),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=policy),
+            patch.object(orch, "_execute_task") as mock_execute,
+            patch(
+                "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                return_value=scan_result,
+            ),
+        ):
+            result = orch.run_approved(run_id=1, approve=True, approver="tester")
+
+        assert result.success is True
+        mock_execute.assert_called_once()
+        mock_complete.assert_called_once_with(1, "success")
+
+    def test_reject_with_cve_gate_configured_not_double_handled(self) -> None:
+        """Reject path is unaffected by the CVE gate check -- a denied run
+        must not evaluate the gate at all (it's irrelevant once rejected)."""
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(require_approval=True, block_on_severity="critical")
+        orch = self._orch_with_project_and_task()
+
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=self._approval_row(),
+            ),
+            patch("hivepilot.orchestrator.state_service.update_approval") as mock_update,
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch(
+                "hivepilot.orchestrator.policy_service.get_policy", return_value=policy
+            ) as mock_get_policy,
+            patch.object(orch, "_execute_task") as mock_execute,
+            patch("hivepilot.orchestrator.scan_service.scan_vulnerabilities") as mock_scan,
+        ):
+            result = orch.run_approved(run_id=1, approve=False, approver="tester")
+
+        assert result.success is False
+        mock_execute.assert_not_called()
+        mock_scan.assert_not_called()
+        mock_get_policy.assert_not_called()
+        mock_complete.assert_called_once()
+        assert mock_complete.call_args.args[1] == "denied"
+        mock_update.assert_called_once()
+        assert mock_update.call_args.args[1] == "denied"
