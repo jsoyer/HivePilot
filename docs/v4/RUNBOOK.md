@@ -887,6 +887,23 @@ Both columns are added via the same idempotent `ALTER TABLE ... ADD COLUMN` migr
 }
 ```
 
+### Mirador web UI surface (Sprint 1) — plugin health & mem0 memory search
+
+Two small read-only endpoints for the Mirador web UI, siblings of the Analytics API above (same `require_role(...)`/dual-registration conventions), but neither is tenant-scoped:
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /v1/plugins/health` | `read` | Plugin health — same data as `PluginManager.check_all()` / the `plugins health` CLI command |
+| `GET /v1/memories?query=...&limit=20` | **`admin`** | Semantic search proxy over mem0 (Mirador Mem0 view) |
+
+Both registered unversioned (`GET /plugins/health`, `GET /memories`) and under `/v1`, matching every other route in this API.
+
+**`GET /v1/plugins/health`** returns `{"plugins": [{"name": ..., "status": "ok"|"degraded"|"error", "detail": ...}, ...]}`. Health is process-global plugin state, not partitioned by tenant — every valid `read` token sees the same result, like `GET /v1/tasks`. `PluginManager.check_all()` never raises (a raising health check is caught and normalized to `HealthStatus("error", ...)`), so this endpoint cannot 500 on a broken check. `HealthStatus.detail` never contains a secret/token value (Phase 19 discipline, enforced by every shipped health check, e.g. `plugins/mem0.py`'s `health()`) — only presence/mode booleans.
+
+**`GET /v1/memories`** proxies a mem0 `search(query, limit=limit)` call, built the same way `plugins/mem0.py` builds its client (lazy import, `settings.mem0_*`). Graceful when mem0 is unconfigured — `mem0_enabled` off (the default), `mem0ai` not installed, or the client can't be built — returns `HTTP 200` with `{"configured": false, "memories": [], "detail": "..."}`, never a 500. A `client.search()` failure at call time degrades the same way. When configured: `{"configured": true, "memories": [{"memory": "...", "id": ..., "metadata": {...}, "score": ...}, ...]}`.
+
+**Memories scoping rule (read this before wiring a `read` token to this endpoint):** mem0 memories carry `project`/`task`/`role` provenance metadata (`plugins/mem0.py`'s `_provenance_metadata`) but the mem0 store itself is **not** partitioned by HivePilot `tenant` — there is no `tenant` field on `ProjectConfig`/`projects.yaml` anywhere in this codebase, so "the caller's tenant's projects" cannot be derived to filter memories by. Rather than fabricate that mapping, `/v1/memories` is gated behind `require_role("admin")` instead of `"read"` — the same role that already sees unfiltered data on every analytics endpoint and on `GET /runs`/`GET /approvals`. **No `read`/`run`/`approve` token, regardless of tenant, can call this endpoint at all.** If a genuine tenant->project mapping is introduced later, this endpoint should be revisited to filter by it and reopened to `read` tokens.
+
 Steps with no recorded provider/model (including every step recorded before this sprint) group under the literal key `"unknown"` — never dropped, never invented.
 
 **Out of scope for this sprint:** token counts and cost. No runner-output-format change was made — this sprint only records what the orchestrator already knows about *which* runner/model it dispatched to, not usage/cost data returned by that runner. Token/cost analytics is the next sub-sprint (Phase 24b.2).
