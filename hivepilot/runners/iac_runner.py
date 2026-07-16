@@ -1,5 +1,18 @@
+"""Terraform / OpenTofu / Pulumi runners.
+
+Plan/preview output is intentionally NOT captured or returned by these
+runners — it can echo secret var values (``TF_VAR_*``, Pulumi stack config),
+and the ``RunResult.detail`` path it would otherwise flow through (CLI
+stdout, the ``/v1/run`` API body, Slack/Discord/Telegram notifications) is
+not redacted. ``run()`` always executes with ``capture_output=False`` so
+output streams live to the parent's stdout instead. A safe plan-SUMMARY
+capture (counts only, no diff body) is deferred to the Mirador panel sprint
+(A3).
+"""
+
 from __future__ import annotations
 
+import shutil
 import subprocess
 from dataclasses import dataclass
 
@@ -22,6 +35,9 @@ class _TfBaseRunner(BaseRunner):
     _binary: str = "tofu"
 
     def run(self, payload: RunnerPayload) -> None:
+        self._execute(payload)
+
+    def _execute(self, payload: RunnerPayload) -> None:
         operation = (
             payload.step.command
             or self.definition.command
@@ -30,9 +46,15 @@ class _TfBaseRunner(BaseRunner):
         timeout = (
             payload.step.timeout_seconds or self.definition.timeout_seconds or _DEFAULT_TF_TIMEOUT
         )
-        env = merge_environments(payload.project.env, self.definition.env)
+        env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         cwd = str(payload.project.path)
         opts = self.definition.options
+
+        if not shutil.which(self._binary):
+            raise RuntimeError(
+                f"{self._binary} CLI not found on PATH. Install it before running "
+                f"the '{self.definition.kind}' runner."
+            )
 
         logger.info(
             "runner.start",
@@ -66,6 +88,7 @@ class _TfBaseRunner(BaseRunner):
                 check=True,
                 text=True,
                 timeout=timeout,
+                capture_output=False,
             )
         except subprocess.CalledProcessError as exc:
             if operation == "drift" and exc.returncode == 2:
@@ -84,8 +107,6 @@ class _TfBaseRunner(BaseRunner):
 
     def _run_cost_estimate(self, *, cwd: str, env: dict, timeout: int) -> None:
         """Run infracost breakdown. Requires infracost CLI to be installed."""
-        import shutil
-
         if not shutil.which("infracost"):
             raise RuntimeError(
                 "infracost CLI not found. Install from https://www.infracost.io/docs/"
@@ -99,7 +120,11 @@ class _TfBaseRunner(BaseRunner):
             capture_output=True,
             timeout=timeout,
         )
-        logger.info("iac.cost_estimate", output=result.stdout.strip())
+        # Deliberately NOT logged at info: infracost breakdown output can
+        # reflect resource configuration derived from secret-backed TF vars.
+        # This debug-level capture is internal to infracost only — it is
+        # never returned or persisted (see module docstring).
+        logger.debug("iac.cost_estimate", output=result.stdout.strip())
 
     def _build_command(self, operation: str, opts: dict) -> list[str]:
         cmd: list[str] = [self._binary]
@@ -108,15 +133,20 @@ class _TfBaseRunner(BaseRunner):
         var_file = opts.get("var_file")
         if var_file:
             extra_flags.append(f"-var-file={var_file}")
-        backend_config = opts.get("backend_config")
-        if backend_config:
-            extra_flags.append(f"-backend-config={backend_config}")
         parallelism = opts.get("parallelism")
         if parallelism is not None:
             extra_flags.append(f"-parallelism={parallelism}")
 
-        if operation == "plan":
-            cmd += ["plan"] + extra_flags
+        # -backend-config is init-only: passing it to plan/apply/destroy/drift
+        # is a Terraform/OpenTofu usage error (non-zero exit, nothing runs).
+        # It must NOT be added to `extra_flags` above.
+        backend_config = opts.get("backend_config")
+
+        if operation == "init":
+            init_flags = [f"-backend-config={backend_config}"] if backend_config else []
+            cmd += ["init"] + init_flags
+        elif operation == "plan":
+            cmd += ["plan", "-no-color"] + extra_flags
         elif operation == "apply":
             cmd += ["apply", "-auto-approve"] + extra_flags
         elif operation == "destroy":
@@ -126,9 +156,10 @@ class _TfBaseRunner(BaseRunner):
         elif operation == "validate":
             cmd += ["validate"]
         elif operation == "drift":
-            cmd += ["plan", "--detailed-exitcode"] + extra_flags
+            cmd += ["plan", "--detailed-exitcode", "-no-color"] + extra_flags
         elif operation == "cost":
-            # infracost breakdown delegates to a separate tool — handled in run()
+            # infracost breakdown delegates to a separate tool — handled in
+            # _execute() before this method is reached.
             cmd = ["infracost", "breakdown", "--path", "."]
         else:
             raise ValueError(f"Unknown IaC operation: {operation!r}")
@@ -160,6 +191,9 @@ class PulumiRunner(BaseRunner):
     settings: Settings
 
     def run(self, payload: RunnerPayload) -> None:
+        self._execute(payload)
+
+    def _execute(self, payload: RunnerPayload) -> None:
         operation = (
             payload.step.command
             or self.definition.command
@@ -170,9 +204,14 @@ class PulumiRunner(BaseRunner):
             or self.definition.timeout_seconds
             or _DEFAULT_PULUMI_TIMEOUT
         )
-        env = merge_environments(payload.project.env, self.definition.env)
+        env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         cwd = str(payload.project.path)
         opts = self.definition.options
+
+        if not shutil.which("pulumi"):
+            raise RuntimeError(
+                "pulumi CLI not found on PATH. Install it before running the 'pulumi' runner."
+            )
 
         logger.info(
             "runner.start",
@@ -190,6 +229,7 @@ class PulumiRunner(BaseRunner):
             check=True,
             text=True,
             timeout=timeout,
+            capture_output=False,
         )
 
         logger.info(
