@@ -116,11 +116,18 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
         hub = group_def.get("hub")
         if hub and hub not in project_names:
             problems.append(f"Group '{group_name}' hub '{hub}' is not defined in projects.yaml")
-        for component in group_def.get("components") or []:
-            if component not in project_names:
-                problems.append(
-                    f"Group '{group_name}' component '{component}' is not defined in projects.yaml"
-                )
+        # single_repo (monorepo) groups: `components`/`tags` are pure scoping
+        # labels, never resolved as projects (targets=[hub] always — see
+        # orchestrator._run_pipeline_body), so they are exempt from the
+        # "defined in projects.yaml" check below. Only `hub` must be a real
+        # project for a single_repo group.
+        if not group_def.get("single_repo"):
+            for component in group_def.get("components") or []:
+                if component not in project_names:
+                    problems.append(
+                        f"Group '{group_name}' component '{component}' is not "
+                        "defined in projects.yaml"
+                    )
 
     # -----------------------------------------------------------------------
     # Check: every role's `prompt_file` resolves (file exists)

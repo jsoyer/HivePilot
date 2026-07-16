@@ -155,3 +155,145 @@ def test_execution_fans_out_only_to_selected_components() -> None:
     assert targets["plan"] == ["hub"]  # planning on the hub
     assert targets["build"] == ["c1", "c3"]  # narrowed to the selected subset (c2 dropped)
     assert targets["ship"] == ["c1", "c3"]
+
+
+def test_single_repo_group_runs_once_at_hub_no_fanout() -> None:
+    """A single_repo (monorepo) group never fans out: every stage that runs
+    (post- as well as pre-checkpoint) targets the hub exactly once, and
+    stage_auto_git tracks the caller's auto_git (git ops run at the hub,
+    which IS the monorepo code repo in this mode) -- unlike a multi_repo
+    group, which forces auto_git False on hub-only planning stages."""
+    from hivepilot.models import Group
+    from hivepilot.orchestrator import RunResult
+
+    pipeline = PipelineConfig(
+        description="t",
+        stages=[
+            PipelineStage(name="plan", task="plan"),
+            PipelineStage(name="synth", task="synth"),
+            PipelineStage(name="build", task="build", pause_before=True),
+            PipelineStage(name="ship", task="ship"),
+        ],
+    )
+    orch = _orch(pipeline)
+    targets: dict[str, list[str]] = {}
+    auto_git_seen: dict[str, bool] = {}
+    group = Group(description="d", hub="hub", single_repo=True, components=["c1", "c2", "c3"])
+
+    def fake_run_task(**kw):
+        targets[kw["task_name"]] = list(kw["project_names"])
+        auto_git_seen[kw["task_name"]] = kw["auto_git"]
+        detail = "COMPONENTS: c1, c3" if kw["task_name"] == "synth" else "ok"
+        return [RunResult(kw["project_names"][0], kw["task_name"], True, detail)]
+
+    with (
+        patch("hivepilot.orchestrator.state_service.record_run_start", return_value=2),
+        patch("hivepilot.orchestrator.state_service.complete_run"),
+        patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+        patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        patch.object(orch, "run_task", side_effect=fake_run_task),
+    ):
+        orch.run_pipeline(
+            project_names=["hub"],
+            pipeline_name="p",
+            extra_prompt=None,
+            auto_git=True,
+            dry_run=True,
+            simulate=True,
+            hub="hub",
+            components=["c1", "c2", "c3"],
+            group=group,
+        )
+
+    # Every stage — pre- AND post-checkpoint — runs exactly once, at the hub,
+    # regardless of the agents' COMPONENTS narrowing (c1/c3 selected above).
+    assert targets == {
+        "plan": ["hub"],
+        "synth": ["hub"],
+        "build": ["hub"],
+        "ship": ["hub"],
+    }
+    # auto_git is never forced off for single_repo — the hub IS the code repo.
+    assert all(auto_git_seen[name] is True for name in ("plan", "synth", "build", "ship"))
+
+
+def test_single_repo_group_scoping_still_gates_which_stages_run() -> None:
+    """Scoping (only_tags/only_components) still gates WHICH stages run in a
+    single_repo group -- a stage tagged to a component that isn't selected is
+    SKIPPED, and a stage tagged to a selected component RUNS (once, at hub)."""
+    from hivepilot.models import Group
+    from hivepilot.orchestrator import RunResult
+
+    pipeline = PipelineConfig(
+        description="t",
+        stages=[
+            PipelineStage(name="ui-review", task="ui-review", only_tags=["ui"]),
+            PipelineStage(name="always", task="always"),
+        ],
+    )
+    orch = _orch(pipeline)
+    group = Group(
+        description="d",
+        hub="hub",
+        single_repo=True,
+        components=["ui", "backend"],
+        tags={"ui": ["ui"]},
+    )
+    calls: list[str] = []
+
+    def fake_run_task(**kw):
+        calls.append(kw["task_name"])
+        return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+    # Case 1: no "ui" component selected -> ui-review is SKIPPED, "always" still runs.
+    with (
+        patch("hivepilot.orchestrator.state_service.record_run_start", return_value=3),
+        patch("hivepilot.orchestrator.state_service.complete_run"),
+        patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+        patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        patch.object(orch, "run_task", side_effect=fake_run_task),
+    ):
+        orch.run_pipeline(
+            project_names=["hub"],
+            pipeline_name="p",
+            extra_prompt=None,
+            auto_git=False,
+            dry_run=True,
+            simulate=True,
+            hub="hub",
+            components=["backend"],
+            group=group,
+        )
+
+    assert calls == ["always"], f"ui-review must be skipped when 'ui' isn't selected: {calls}"
+
+    # Case 2: "ui" component selected -> ui-review RUNS, once, at the hub.
+    calls.clear()
+    targets: dict[str, list[str]] = {}
+
+    def fake_run_task_2(**kw):
+        calls.append(kw["task_name"])
+        targets[kw["task_name"]] = list(kw["project_names"])
+        return [RunResult(kw["project_names"][0], kw["task_name"], True)]
+
+    with (
+        patch("hivepilot.orchestrator.state_service.record_run_start", return_value=4),
+        patch("hivepilot.orchestrator.state_service.complete_run"),
+        patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+        patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        patch.object(orch, "run_task", side_effect=fake_run_task_2),
+    ):
+        orch.run_pipeline(
+            project_names=["hub"],
+            pipeline_name="p",
+            extra_prompt=None,
+            auto_git=False,
+            dry_run=True,
+            simulate=True,
+            hub="hub",
+            components=["ui"],
+            group=group,
+        )
+
+    assert calls == ["ui-review", "always"]
+    assert targets["ui-review"] == ["hub"]  # runs once, at the hub — not fanned out

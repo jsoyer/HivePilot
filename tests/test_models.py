@@ -118,3 +118,28 @@ def test_group_tags_accepts_tag_to_components_mapping() -> None:
         tags={"frontend": ["c1"], "backend": ["c2"]},
     )
     assert group.tags == {"frontend": ["c1"], "backend": ["c2"]}
+
+
+def test_group_single_repo_defaults_to_false() -> None:
+    """Default single_repo=False keeps every existing multi-repo group
+    byte-identical -- this is the opt-in gate for monorepo groups."""
+    group = Group(description="d", hub="h", components=["c1", "c2"])
+    assert group.single_repo is False
+
+
+def test_group_single_repo_true_with_hub_is_accepted() -> None:
+    group = Group(description="d", hub="hub", single_repo=True, components=["ui", "api"])
+    assert group.single_repo is True
+    assert group.hub == "hub"
+
+
+def test_group_single_repo_true_without_hub_raises() -> None:
+    """single_repo=True requires a non-empty hub — a monorepo group with no
+    hub has nowhere to run its stages."""
+    with pytest.raises(ValueError, match="single_repo"):
+        Group(description="d", single_repo=True, components=["ui", "api"])
+
+
+def test_group_single_repo_true_with_empty_string_hub_raises() -> None:
+    with pytest.raises(ValueError, match="single_repo"):
+        Group(description="d", hub="", single_repo=True, components=["ui", "api"])
