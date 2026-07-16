@@ -19,7 +19,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from hivepilot.plugins import PluginManager
+from hivepilot.plugins import PanelSpec, PluginManager
 from hivepilot.services.token_service import add_token
 
 
@@ -44,7 +44,7 @@ def _auth(raw_token: str) -> dict:
     return {"Authorization": f"Bearer {raw_token}"}
 
 
-def _fake_plugin_manager(panels: dict[str, dict[str, Any]]) -> PluginManager:
+def _fake_plugin_manager(panels: dict[str, PanelSpec]) -> PluginManager:
     """Build a real `PluginManager` instance (bypassing `__init__`, exactly
     like `TestPluginsHealthEndpoint.test_raising_check_surfaces_as_error_not_500`
     does for `.health`) with `.panels` seeded directly. `list_panels`/
@@ -62,11 +62,11 @@ def _panel_spec(
     title: str,
     fetch: Callable[[], Any],
     min_role: str = "read",
-) -> dict[str, Any]:
-    return {"name": name, "title": title, "fetch": fetch, "min_role": min_role}
+) -> PanelSpec:
+    return PanelSpec(name=name, title=title, fetch=fetch, min_role=min_role)
 
 
-def _patch_orchestrator(monkeypatch, panels: dict[str, dict[str, Any]]) -> None:
+def _patch_orchestrator(monkeypatch, panels: dict[str, PanelSpec]) -> None:
     from hivepilot.services import api_service
 
     pm = _fake_plugin_manager(panels)

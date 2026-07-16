@@ -31,7 +31,7 @@ format: ## Auto-format code with ruff
 	$(RUFF) format hivepilot tests
 
 typecheck: ## Run mypy (mirrors CI)
-	$(MYPY) hivepilot
+	$(MYPY) hivepilot tests
 
 test: ## Run the test suite
 	$(PYTEST) -q

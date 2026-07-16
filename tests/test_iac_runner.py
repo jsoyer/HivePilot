@@ -342,9 +342,11 @@ class TestNoCaptureLeakPath:
             patch("hivepilot.runners.iac_runner.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="some output")
-            result = runner.run(_payload(tmp_path, operation="plan"))
+            # `run()` is annotated `-> None`; nothing is returned or captured
+            # (mypy statically guarantees the None return, so no runtime
+            # assertion on the return value is needed here).
+            runner.run(_payload(tmp_path, operation="plan"))
 
-        assert result is None
         assert mock_run.call_args.kwargs["capture_output"] is False
 
     def test_pulumi_run_streams_live_not_captured(self, tmp_path: Path) -> None:
@@ -354,9 +356,11 @@ class TestNoCaptureLeakPath:
             patch("hivepilot.runners.iac_runner.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="preview output")
-            result = runner.run(_payload(tmp_path, operation="preview"))
+            # `run()` is annotated `-> None`; nothing is returned or captured
+            # (mypy statically guarantees the None return, so no runtime
+            # assertion on the return value is needed here).
+            runner.run(_payload(tmp_path, operation="preview"))
 
-        assert result is None
         assert mock_run.call_args.kwargs["capture_output"] is False
 
     def test_orchestrator_capture_or_execute_falls_back_to_run(self, tmp_path: Path) -> None:
