@@ -32,6 +32,18 @@ python -m venv .venv && .venv/bin/pip install -e .          # lightweight core
 **Dry-run vs simulate:** `--dry-run` (default true) only skips *vault writes*;
 the agents still run. `--simulate` skips *agent execution* entirely (safe preview).
 
+### Dashboard cost section
+
+`hivepilot dashboard` (Textual TUI, needs `[dashboard]`) shows a read-only
+**Cost** table alongside the existing runs/steps/interactions views: overall
+cost (USD) and input/output token totals across all recorded steps, an
+`unpriced` coverage count (steps with no self-reported cost and no price-map
+match, so the total is never presented as silently complete), and a
+per-provider/per-model breakdown. It reuses
+`hivepilot.services.analytics_service.cost_summary()` — see
+[RUNBOOK.md](RUNBOOK.md) ("Cost analytics") for the pricing table and cost
+precedence rules. The Metrics table also gained p50/p95/p99 run duration.
+
 ### Typical run
 
 ```bash

@@ -77,3 +77,82 @@ async def test_refresh_metrics_counts_true_failures() -> None:
         }
         assert rows["failure"] == "1"
         assert rows["success"] == "0"
+
+
+def _cost_rows_by_scope(app: RunDashboard) -> dict[str, list[str]]:
+    return {
+        app.cost_table.get_cell_at(Coordinate(r, 0)): [
+            app.cost_table.get_cell_at(Coordinate(r, c)) for c in range(6)
+        ]
+        for r in range(app.cost_table.row_count)
+    }
+
+
+@pytest.mark.asyncio
+async def test_refresh_cost_method_exists_and_is_callable() -> None:
+    assert hasattr(RunDashboard, "refresh_cost")
+    assert callable(getattr(RunDashboard, "refresh_cost"))
+
+
+@pytest.mark.asyncio
+async def test_refresh_cost_populates_overall_and_provider_breakdown() -> None:
+    """Seeds one priced step (price-map-covered model, no self-reported cost_usd
+    -> falls back to pricing.estimate_cost) and one unpriced step (unknown
+    model), then asserts the Cost table's overall row aggregates totals/cost
+    correctly and reports the unpriced-step coverage, and that a per-provider
+    breakdown row exists."""
+    from hivepilot.services import state_service
+
+    run_id = state_service.record_run_start("acme", "task1")
+    state_service.record_step(
+        run_id,
+        "generate",
+        "success",
+        provider="claude",
+        model="claude-sonnet-4-6",
+        input_tokens=100_000,
+        output_tokens=50_000,
+    )
+    state_service.record_step(
+        run_id,
+        "review",
+        "success",
+        provider="claude",
+        model="unpriced-model",
+        input_tokens=10,
+        output_tokens=10,
+    )
+
+    app = RunDashboard()
+    async with app.run_test():
+        by_scope = _cost_rows_by_scope(app)
+
+        overall = by_scope["overall"]
+        assert overall[1] == "2"  # total_steps
+        assert overall[2] == "100010"  # input_tokens
+        assert overall[3] == "50010"  # output_tokens
+        # (100_000/1e6)*3.0 + (50_000/1e6)*15.0 == 1.05, unpriced step contributes 0.0
+        assert overall[4] == "1.05"  # cost_usd
+        assert overall[5] == "1"  # unpriced_steps
+
+        provider_row = by_scope["provider:claude"]
+        assert provider_row[1] == "2"
+        assert provider_row[4] == "1.05"
+
+        model_row = by_scope["model:claude-sonnet-4-6"]
+        assert model_row[1] == "1"
+        assert model_row[5] == "0"
+
+
+@pytest.mark.asyncio
+async def test_refresh_cost_with_no_steps_shows_zeroed_overall_row() -> None:
+    app = RunDashboard()
+    async with app.run_test():
+        by_scope = _cost_rows_by_scope(app)
+        assert app.cost_table.row_count == 1
+        overall = by_scope["overall"]
+        assert overall[1] == "0"
+        assert overall[2] == "0"
+        assert overall[3] == "0"
+        assert overall[4] == "0.0"
+        assert overall[5] == "0"
