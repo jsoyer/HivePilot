@@ -798,6 +798,37 @@ All authenticated API requests are logged to the state database via `state_servi
 
 HivePilot uses `structlog`. Set `HIVEPILOT_LOG_TO_FILE=true` to write logs to `runs/logs/`.
 
+### Analytics API (Phase 24a — SLA / duration / volume)
+
+Read-only aggregate endpoints over the existing run store — no schema change, no writes. Feeds SLA dashboards, trend charts, and duration/latency reporting on top of `runs`/`steps`/`approvals`.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/analytics/summary` | Totals + outcome rates, overall and grouped by `project`/`task`/raw `status` |
+| `GET /v1/analytics/trends?bucket=day\|week` | Time-series run counts (+ outcome split), bucketed on `started_at` |
+| `GET /v1/analytics/durations` | p50/p95/p99 + min/max/avg run duration (`finished_at - started_at`), overall and by `project`/`task` |
+| `GET /v1/analytics/steps/failures` | `steps` grouped by (`step`, `status`), ranked with highest-failure-count combos first |
+| `GET /v1/analytics/approvals/latency` | p50/p95 (+min/max/avg/count) of `approved_at - requested_at` |
+
+Registered both unversioned (`GET /analytics/...`) and under `/v1`, matching every other route in this API.
+
+**Auth & tenant scoping:** every endpoint requires `Depends(require_role("read"))` — the lowest role tier, so any valid token may call these. Results are filtered to the caller's tenant exactly like `GET /runs`/`GET /approvals`; **admin** tokens see all tenants, non-admin tokens never see another tenant's data.
+
+**Common query params:** `days` (default 30, relative window) and optional `project`/`task` filters. All endpoints are read-only — they never mutate run state.
+
+**CSV export:** append `?format=csv` to any of the five endpoints for a `text/csv` response instead of JSON (e.g. `GET /v1/analytics/durations?format=csv`). **PDF export is out of scope for Phase 24a** (heavy dependency) — deferred to a future phase.
+
+**Canonical outcome mapping** (single source of truth: `hivepilot.services.analytics_service.canonical_outcome`, shared by the Textual dashboard):
+
+| Raw `status` | Canonical outcome |
+|---|---|
+| `success`, `complete` | `succeeded` |
+| `failed`, `denied`, `rate_limit`, `auth_expired`, `test_failure`, `security_blocker` | `failed` |
+| `deferred` | `skipped` |
+| anything else (`running`, `pending`, `new`, `planned`, `paused`, `review`, `approval`, `awaiting_approval`, ...) | `other` |
+
+**Percentiles:** computed in Python (SQLite has no percentile aggregate) using the **nearest-rank method**: for `n` sorted values and percentile `p`, `index = ceil(p/100 * n) - 1` (clamped to `[0, n-1]`). Deterministic; always returns an observed value, never an interpolated one.
+
 ---
 
 ## 13. Troubleshooting

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import threading
 import uuid
 from collections import defaultdict
@@ -13,7 +15,7 @@ from pydantic import BaseModel, field_validator
 
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
-from hivepilot.services import chatops_service, state_service, token_service
+from hivepilot.services import analytics_service, chatops_service, state_service, token_service
 from hivepilot.services.metrics import registry, run_duration_seconds
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 
@@ -322,6 +324,158 @@ def handle_approval(
             reason=action.reason,
         )
     return {"result": result.__dict__}
+
+
+# ---------------------------------------------------------------------------
+# Analytics (Phase 24a) — read-only aggregates over the run store.
+# Every endpoint: Depends(require_role("read")), tenant-filtered from the
+# caller's token (admin: unfiltered, mirrors GET /runs / GET /approvals).
+# ---------------------------------------------------------------------------
+
+
+def _analytics_tenant(caller: token_service.TokenEntry) -> str | None:
+    return None if caller.role == "admin" else caller.tenant
+
+
+# CSV/formula-injection defense-in-depth: Excel, Google Sheets, and
+# LibreOffice all execute a cell as a formula if it starts with one of these
+# characters when the CSV is opened. project/task names aren't attacker-
+# reachable today (validated against config before a run can exist), but
+# this is user-facing exported data, so guard it anyway.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _csv_safe(value: Any) -> Any:
+    """Prefix string cells that start with a formula-trigger character with
+    a single quote — the standard CSV-injection mitigation. Spreadsheet
+    apps then render the leading quote as plain text instead of evaluating
+    a formula; csv.reader consumers see the literal `'`-prefixed string.
+    Non-string (numeric) cells pass through untouched.
+    """
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def _csv_response(rows: list[dict[str, Any]], fieldnames: list[str]) -> Response:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: _csv_safe(value) for key, value in row.items()})
+    return Response(content=buf.getvalue(), media_type="text/csv")
+
+
+_SUMMARY_CSV_FIELDS = ["scope", "key", "total", "succeeded", "failed", "skipped", "other"]
+_TRENDS_CSV_FIELDS = ["bucket", "total", "succeeded", "failed", "skipped", "other"]
+_DURATIONS_CSV_FIELDS = ["scope", "key", "count", "min", "max", "avg", "p50", "p95", "p99"]
+_HOTSPOTS_CSV_FIELDS = ["step", "status", "count"]
+_APPROVAL_LATENCY_CSV_FIELDS = ["count", "min", "max", "avg", "p50", "p95", "p99"]
+
+
+@v1.get("/analytics/summary")
+@app.get("/analytics/summary")
+def analytics_summary(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    format: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    data = analytics_service.run_summary(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+    if format == "csv":
+        rows: list[dict[str, Any]] = [
+            {"scope": "overall", "key": "", "total": data["total"], **data["outcomes"]}
+        ]
+        for key, val in data["by_project"].items():
+            rows.append({"scope": "project", "key": key, "total": val["total"], **val["outcomes"]})
+        for key, val in data["by_task"].items():
+            rows.append({"scope": "task", "key": key, "total": val["total"], **val["outcomes"]})
+        return _csv_response(rows, _SUMMARY_CSV_FIELDS)
+    return data
+
+
+@v1.get("/analytics/trends")
+@app.get("/analytics/trends")
+def analytics_trends(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    bucket: str = "day",
+    format: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    if bucket not in ("day", "week"):
+        raise HTTPException(status_code=400, detail="bucket must be 'day' or 'week'")
+    data = analytics_service.run_trends(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task, bucket=bucket
+    )
+    if format == "csv":
+        rows = [
+            {"bucket": row["bucket"], "total": row["total"], **row["outcomes"]}
+            for row in data["series"]
+        ]
+        return _csv_response(rows, _TRENDS_CSV_FIELDS)
+    return data
+
+
+@v1.get("/analytics/durations")
+@app.get("/analytics/durations")
+def analytics_durations(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    format: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    data = analytics_service.run_durations(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+    if format == "csv":
+        rows = [{"scope": "overall", "key": "", **data["overall"]}]
+        for key, stats in data["by_project"].items():
+            rows.append({"scope": "project", "key": key, **stats})
+        for key, stats in data["by_task"].items():
+            rows.append({"scope": "task", "key": key, **stats})
+        return _csv_response(rows, _DURATIONS_CSV_FIELDS)
+    return data
+
+
+@v1.get("/analytics/steps/failures")
+@app.get("/analytics/steps/failures")
+def analytics_step_failures(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    limit: int = 20,
+    format: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    hotspots = analytics_service.step_failure_hotspots(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task, limit=limit
+    )
+    if format == "csv":
+        return _csv_response(hotspots, _HOTSPOTS_CSV_FIELDS)
+    return {"hotspots": hotspots}
+
+
+@v1.get("/analytics/approvals/latency")
+@app.get("/analytics/approvals/latency")
+def analytics_approval_latency(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    format: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    data = analytics_service.approval_latency(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+    if format == "csv":
+        return _csv_response([data], _APPROVAL_LATENCY_CSV_FIELDS)
+    return data
 
 
 @v1.post("/chatops/slack", dependencies=[Depends(require_role("run"))])
