@@ -631,6 +631,171 @@ def analytics_cost(
     return data
 
 
+# ---------------------------------------------------------------------------
+# Mirador web UI surface (Sprint 1) — plugin health + mem0 memory search.
+# Both are read-only. Sibling to the analytics endpoints above, but NEITHER
+# is tenant-scoped: plugin health is process-global state (no per-tenant
+# concept applies), and mem0 memories have no tenant->project mapping to
+# filter by (see `list_memories`'s docstring for the full scope analysis).
+# ---------------------------------------------------------------------------
+
+
+@v1.get("/plugins/health", dependencies=[Depends(require_role("read"))])
+@app.get("/plugins/health", dependencies=[Depends(require_role("read"))])
+def plugins_health_endpoint() -> dict[str, Any]:
+    """Plugin health, mirroring the `plugins health` CLI's
+    `PluginManager.check_all()` call (see `hivepilot/cli.py`
+    `_print_health_table`). Health is process-global plugin state (NOT
+    tenant-partitioned, unlike the analytics endpoints above) — every `read`
+    token sees the same result, exactly like `GET /v1/tasks`/`GET
+    /v1/projects`. `check_all()` never raises (`hivepilot/plugins.py`
+    `PluginManager.run_health_check` catches per-check exceptions itself and
+    normalizes them to `HealthStatus("error", ...)`), so this endpoint can't
+    500 on a bad check. `HealthStatus.detail` is either the plugin author's
+    own hand-written status string, which is documented (Phase 19
+    discipline, `hivepilot/plugins.py`) to never contain a secret/token
+    value — only presence/mode booleans — or, when a check raises
+    unexpectedly, only the exception's type name (never the exception
+    message, which is logged server-side instead). No additional redaction
+    is needed here.
+    """
+    results = _get_orchestrator().plugins.check_all()
+    return {
+        "plugins": [
+            {"name": name, "status": health.status, "detail": health.detail}
+            for name, health in sorted(results.items())
+        ]
+    }
+
+
+def _get_mem0_client() -> Any | None:
+    """Build a mem0 client from Settings — mirrors `plugins/mem0.py`'s
+    `_get_client()` exactly (hosted `MemoryClient` when
+    `settings.mem0_api_key` is set, else self-host `Memory()` /
+    `Memory.from_config()`). Duplicated here rather than importing
+    `plugins/mem0.py` directly: `plugins/` is a user-editable, optional
+    directory (an operator may delete or replace any file in it, and it's
+    loaded via `importlib.util.spec_from_file_location`, not a stable
+    package import), so the core API must not depend on that specific file
+    being present. Never raises: any construction failure (library absent,
+    bad config, network error on hosted init) degrades to `None` — the same
+    graceful-degradation contract the plugin itself has.
+    """
+    if not settings.mem0_enabled:
+        return None
+    try:
+        from mem0 import Memory, MemoryClient
+    except ImportError:  # mem0ai is optional — never a hivepilot dependency
+        return None
+    try:
+        if settings.mem0_api_key:
+            return MemoryClient(api_key=settings.mem0_api_key)
+        config = settings.mem0_config
+        return Memory.from_config(config) if config else Memory()
+    except Exception as exc:  # noqa: BLE001 — must never crash the endpoint
+        from hivepilot.utils.logging import get_logger
+
+        get_logger(__name__).warning("api.memories.client_init_failed", error=str(exc))
+        return None
+
+
+def _extract_memory_items(results: Any) -> list[dict[str, Any]]:
+    """Best-effort normalization of a mem0 `search()` result into plain dicts.
+
+    Tolerant of mem0's known response shapes (a bare list of dicts/strings,
+    or `{"results": [...]}` / `{"memories": [...]}` — mirrors
+    `plugins/mem0.py`'s `_extract_memory_texts`) but keeps the full item
+    (`id`/`metadata`/`score`) rather than just the text, since the Mirador
+    Mem0 view needs the structured PROVENANCE metadata (`project`/`task`/
+    `role`/`category`/`ts` — see `plugins/mem0.py`'s `_provenance_metadata`)
+    to render/filter, not just the memory string. Degrades to an empty list
+    for any unrecognized shape rather than raising.
+    """
+    if results is None:
+        return []
+    items: Any = results
+    if isinstance(results, dict):
+        items = results.get("results", results.get("memories", []))
+    if not isinstance(items, list):
+        return []
+    extracted: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, str):
+            if item:
+                extracted.append({"memory": item})
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = item.get("memory") or item.get("text") or item.get("content")
+        if not isinstance(text, str) or not text:
+            continue
+        entry: dict[str, Any] = {"memory": text}
+        if "id" in item:
+            entry["id"] = item["id"]
+        if isinstance(item.get("metadata"), dict):
+            entry["metadata"] = item["metadata"]
+        if "score" in item:
+            entry["score"] = item["score"]
+        extracted.append(entry)
+    return extracted
+
+
+@v1.get("/memories", dependencies=[Depends(require_role("admin"))])
+@app.get("/memories", dependencies=[Depends(require_role("admin"))])
+def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
+    """Mirador Mem0 view — semantic search proxy over mem0.
+
+    **Scope/tenant safety (investigated, Sprint 1 — the key risk this
+    endpoint carries).** mem0 memories carry `project`/`task`/`role`
+    PROVENANCE metadata (`plugins/mem0.py` `_provenance_metadata`, added in
+    PR #143) but the mem0 store itself is NOT partitioned by HivePilot
+    `tenant`: nothing in this repo maps a `tenant` to the set of `project`s
+    it may see — `hivepilot.models.ProjectConfig` has no `tenant` field at
+    all, and `tenant` only exists on `TokenEntry` / DB rows written by
+    `state_service` (used to scope *runs*, not project ownership). Filtering
+    returned memories to "the caller's tenant's projects" is therefore NOT
+    cleanly derivable without inventing a tenant->project mapping that
+    doesn't exist anywhere else in the codebase — doing that here, ad hoc,
+    would be worse than not shipping the feature (a fabricated, unverified
+    trust boundary). So: this endpoint is gated behind
+    `require_role("admin")` instead of `"read"` — the same role that already
+    sees unfiltered data on every analytics endpoint (`_analytics_tenant`
+    returns `None` for admin) and unfiltered `GET /runs` / `GET /approvals`.
+    No non-admin token, regardless of its tenant, can call this endpoint at
+    all — the most restrictive safe option available given the data model,
+    and consistent with this file's existing tenant-scoping precedent.
+
+    **Graceful degradation:** `mem0_enabled` off (the default), `mem0ai` not
+    installed, or the client can't be built -> `200` with
+    `{"configured": false, "memories": [], "detail": ...}`, never a 500 and
+    never a stack trace. A `client.search()` failure degrades the same way.
+    """
+    limit = max(1, min(limit, 100))
+    client = _get_mem0_client()
+    if client is None:
+        return {
+            "configured": False,
+            "memories": [],
+            "detail": "mem0 not configured (mem0_enabled is off, mem0ai isn't "
+            "installed, or the mem0 client could not be built)",
+        }
+
+    try:
+        results = client.search(query, limit=limit)
+    except Exception as exc:  # noqa: BLE001 — a mem0 client failure must never 500
+        from hivepilot.utils.logging import get_logger
+
+        get_logger(__name__).warning("api.memories.search_failed", error=str(exc))
+        return {
+            "configured": False,
+            "memories": [],
+            "detail": "mem0 search failed",
+        }
+
+    memories = _extract_memory_items(results)[:limit]
+    return {"configured": True, "memories": memories}
+
+
 @v1.post("/chatops/slack", dependencies=[Depends(require_role("run"))])
 @app.post("/chatops/slack", dependencies=[Depends(require_role("run"))])
 def slack_handler(payload: dict[str, Any]):
