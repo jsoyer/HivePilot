@@ -80,3 +80,27 @@ jobs:
 
       - name: Check public prompts for org-specific content
         run: python scripts/check_public_safe.py
+
+  webui-build:
+    name: Mirador web UI build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Build Mirador web UI
+        run: npm run build
+        working-directory: web
+
+      - name: Fail if committed static/ is stale vs the source build
+        run: git diff --exit-code hivepilot/webui/static
