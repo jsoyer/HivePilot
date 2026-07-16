@@ -245,6 +245,63 @@ class TestScanVulnerabilitiesOsv:
             scan_service.scan_vulnerabilities(tmp_path, tool="osv-scanner")
 
 
+_FAILURE_PATH_LEAK_MARKER = "leaked-secret-token=SEKRET123"  # noqa: S105
+
+
+class TestAntiLeakOnFailurePaths:
+    """Failure-path tests locking in the anti-leak guarantee: stdout/stderr
+    (which can echo scanned-repo content / secrets) must NEVER surface in a
+    raised exception message, whether the failure is an unexpected exit code
+    or malformed scanner JSON."""
+
+    def test_unexpected_exit_code_does_not_leak_stdout_or_stderr(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/grype")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(
+                args=["fake"],
+                returncode=2,
+                stdout=_FAILURE_PATH_LEAK_MARKER,
+                stderr=_FAILURE_PATH_LEAK_MARKER,
+            ),
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            scan_service.scan_vulnerabilities(tmp_path, tool="grype")
+
+        message = str(exc_info.value)
+        assert _FAILURE_PATH_LEAK_MARKER not in message
+        assert "grype" in message
+        assert "2" in message
+
+    def test_grype_malformed_json_does_not_leak_raw_stdout(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/grype")
+        bad_json = "{not valid json " + _FAILURE_PATH_LEAK_MARKER
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _fake_completed_process(bad_json))
+
+        with pytest.raises(RuntimeError) as exc_info:
+            scan_service.scan_vulnerabilities(tmp_path, tool="grype")
+
+        assert _FAILURE_PATH_LEAK_MARKER not in str(exc_info.value)
+
+    def test_osv_scanner_malformed_json_does_not_leak_raw_stdout(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/osv-scanner")
+        bad_json = "{not valid json " + _FAILURE_PATH_LEAK_MARKER
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _fake_completed_process(bad_json))
+
+        with pytest.raises(RuntimeError) as exc_info:
+            scan_service.scan_vulnerabilities(tmp_path, tool="osv-scanner")
+
+        assert _FAILURE_PATH_LEAK_MARKER not in str(exc_info.value)
+
+
 class TestScanVulnerabilitiesMissingTool:
     def test_missing_grype_raises_clear_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -334,6 +391,39 @@ class TestGenerateSbom:
 
         assert out_file.exists()
         assert out_file.read_text() == sbom
+
+    def test_creates_missing_parent_directories_before_writing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/syft")
+        monkeypatch.setattr(
+            subprocess, "run", lambda *a, **k: _fake_completed_process('{"bomFormat": "CycloneDX"}')
+        )
+
+        out_file = tmp_path / "nested" / "dir" / "sbom.json"
+        assert not out_file.parent.exists()
+
+        sbom = scan_service.generate_sbom(tmp_path, format="cyclonedx", output_path=out_file)
+
+        assert out_file.exists()
+        assert out_file.read_text() == sbom
+
+    def test_write_failure_raises_runtime_error_with_type_name_only(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/syft")
+        monkeypatch.setattr(
+            subprocess, "run", lambda *a, **k: _fake_completed_process('{"bomFormat": "CycloneDX"}')
+        )
+
+        # output_path is an existing directory, so write_text() raises
+        # IsADirectoryError -- must surface as the exception TYPE name only,
+        # never the raw OS error message.
+        out_dir = tmp_path / "already-a-dir"
+        out_dir.mkdir()
+
+        with pytest.raises(RuntimeError, match="IsADirectoryError"):
+            scan_service.generate_sbom(tmp_path, format="cyclonedx", output_path=out_dir)
 
     def test_missing_syft_raises_clear_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

@@ -397,7 +397,14 @@ def generate_sbom(
     )
 
     if output_path is not None:
-        Path(output_path).write_text(sbom)
+        resolved_output = Path(output_path)
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            resolved_output.write_text(sbom)
+        except OSError as exc:
+            raise RuntimeError(
+                f"failed to write SBOM to {output_path}: {type(exc).__name__}"
+            ) from exc
 
     logger.info(
         "scan.sbom.end", format=format, output_path=str(output_path) if output_path else None

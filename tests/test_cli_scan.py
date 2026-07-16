@@ -18,6 +18,8 @@ real grype/osv-scanner/syft binary is ever invoked. Covers:
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -182,12 +184,24 @@ class TestScanSbomCommand:
         assert "CycloneDX" in result.output
 
     def test_writes_to_output_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # Exercises the REAL generate_sbom (only subprocess.run/syft-lookup are
+        # mocked) with a nested, not-yet-existing output directory, proving
+        # the CLI end-to-end writes the SBOM to disk without a traceback.
         sbom_content = '{"bomFormat": "CycloneDX"}'
-        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom_content)
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/syft")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: subprocess.CompletedProcess(
+                args=["fake"], returncode=0, stdout=sbom_content, stderr=""
+            ),
+        )
         out_file = tmp_path / "out" / "sbom.json"
         runner = CliRunner()
         result = runner.invoke(app, ["scan", "sbom", "proj", "--output", str(out_file)])
         assert result.exit_code == 0, result.output
+        assert out_file.exists()
+        assert out_file.read_text() == sbom_content
 
     def test_missing_syft_error_surfaces_clear_message(
         self, monkeypatch: pytest.MonkeyPatch
