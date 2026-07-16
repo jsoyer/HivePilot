@@ -126,13 +126,14 @@ def _panel_stat_widget(section: PanelStatSection) -> Static:
 
 def _panel_table_widget(section: PanelTableSection) -> DataTable:
     """Render one `table` section as a fresh `DataTable` — columns/rows are
-    plugin-authored/UNTRUSTED strings (`PanelData` docstring) but `DataTable`
-    cells are rendered literally, never parsed as markup, same guarantee the
-    rest of this module's tables already rely on."""
+    plugin-authored/UNTRUSTED strings (`PanelData` docstring). Each header and
+    cell is wrapped in `rich.text.Text(...)` — the same literal-rendering
+    guarantee `_panel_stat_widget`/`_panel_text_widget` rely on — rather than
+    depending on an unverified "DataTable doesn't parse markup" assumption."""
     table: DataTable = DataTable()
-    table.add_columns(*section["columns"])
+    table.add_columns(*(Text(column) for column in section["columns"]))
     for row in section["rows"]:
-        table.add_row(*row)
+        table.add_row(*(Text(cell) for cell in row))
     return table
 
 
@@ -326,9 +327,7 @@ class RunDashboard(App):
         self._mem0_module_override = mem0_module
         self._plugin_manager_override = plugin_manager
         self._panel_manager = self._resolve_panel_manager()
-        self._panels: list[PanelSpec] = (
-            self._panel_manager.list_panels() if self._panel_manager is not None else []
-        )
+        self._panels: list[PanelSpec] = self._list_panels_safe()
         self._panel_content_ids: dict[str, str] = {}
         self._pane_id_to_panel: dict[str, str] = {}
         for panel in self._panels:
@@ -349,6 +348,22 @@ class RunDashboard(App):
             return Orchestrator().plugins
         except Exception:  # noqa: BLE001 — panel tabs must never crash the dashboard
             return None
+
+    def _list_panels_safe(self) -> list[PanelSpec]:
+        """`list_panels()` on the resolved panel manager (`self._panel_manager`
+        — see `_resolve_panel_manager`), wrapped in its own try/except so a
+        plugin bug raised from `list_panels()` itself (e.g. a panel plugin
+        that misbehaves during registration/discovery) degrades to zero panel
+        tabs rather than raising out of `__init__` — which would fail the
+        *whole* dashboard's construction, taking down the 4 built-in tabs
+        with it. Mirrors `_resolve_panel_manager`'s own never-raise guard for
+        `Orchestrator()` construction."""
+        if self._panel_manager is None:
+            return []
+        try:
+            return self._panel_manager.list_panels()
+        except Exception:  # noqa: BLE001 — panel tabs must never crash the dashboard
+            return []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -570,6 +585,15 @@ class RunDashboard(App):
         reachable defensively — `self._panels` would already be empty and
         this method would have no tab to be called for), degrades to a plain
         placeholder instead of raising.
+
+        The fetch+widget-build+mount step below is *additionally* wrapped in
+        its own try/except — defense-in-depth on top of `run_panel_fetch`'s
+        own never-raise, mirroring `refresh_health`/`refresh_mem0`'s guards —
+        so a bug in `_panel_section_widgets` (or in the mount/remove_children
+        calls themselves) degrades to a single error placeholder instead of
+        crashing the dashboard. Never surfaces `str(exc)`, only the exception
+        TYPE name, same "no secret leak" convention as the rest of this
+        module.
         """
         content_id = self._panel_content_ids.get(name)
         if content_id is None:
@@ -579,14 +603,22 @@ class RunDashboard(App):
         except Exception:  # noqa: BLE001 — a missing/unmounted pane must not crash the app
             return
 
-        if self._panel_manager is None:
-            widgets: list[Widget] = [Static("Panel unavailable.")]
-        else:
-            data = self._panel_manager.run_panel_fetch(name)
-            widgets = _panel_section_widgets(data)
-
-        await container.remove_children()
-        await container.mount(*widgets)
+        try:
+            if self._panel_manager is None:
+                widgets: list[Widget] = [Static("Panel unavailable.")]
+            else:
+                data = self._panel_manager.run_panel_fetch(name)
+                widgets = _panel_section_widgets(data)
+            await container.remove_children()
+            await container.mount(*widgets)
+        except Exception as exc:  # noqa: BLE001 — refresh_panel must never crash the dashboard
+            try:
+                await container.remove_children()
+                await container.mount(
+                    Static(Text(f"Error rendering panel ({type(exc).__name__})."))
+                )
+            except Exception:  # noqa: BLE001 — best-effort fallback; nothing further to do
+                pass
 
     async def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         """Fetch-on-activate: a panel's `fetch()` may do real work (network
