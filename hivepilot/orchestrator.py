@@ -13,7 +13,14 @@ from typing import TYPE_CHECKING
 import questionary
 
 from hivepilot.config import settings
-from hivepilot.models import Group, PipelineStage, ProjectConfig, TaskConfig, TaskStep
+from hivepilot.models import (
+    Group,
+    PipelineStage,
+    ProjectConfig,
+    RunnerDefinition,
+    TaskConfig,
+    TaskStep,
+)
 
 try:
     from hivepilot.services import metrics as _metrics  # noqa: F401
@@ -140,6 +147,44 @@ def _runner_for_stage(stage: PipelineStage) -> str:
     runners.
     """
     return "claude"
+
+
+def _resolve_step_provider_model(
+    runner_def: RunnerDefinition, step: TaskStep
+) -> tuple[str | None, str | None]:
+    """Resolve the ``(provider, model)`` pair to persist for a step's
+    ``state_service.record_step`` call, from the ``RunnerDefinition`` that
+    actually executed (or was attempted for) it (Phase 24b.1 — persist
+    provider/model per step; see ``Plans/phase24-analytics-api-spec.md``
+    Sprint 24b step 3).
+
+    - For a prompt-CLI runner configured in API mode
+      (``options.mode == "api"``; see ``PromptCliRunner._run_api``), the
+      *real* provider is ``options.api_provider`` (e.g. ``"openai"``,
+      ``"anthropic"``) rather than the runner kind (e.g. ``"codex"``), and
+      the model mirrors ``PromptCliRunner._run_api``'s own resolution:
+      ``step.metadata["model"]`` else ``options.api_model``.
+    - Otherwise the provider is the runner **kind** (e.g. ``"claude"``,
+      ``"shell"``, ``"cursor"``) and the model mirrors
+      ``PromptCliRunner._build_cli_args``'s resolution:
+      ``step.metadata["model"]`` else ``runner_def.model``.
+
+    Only what's genuinely known at the orchestrator level is returned — no
+    invented values. In particular this does NOT replicate
+    ``ClaudeRunner._resolve_model``'s deeper profile-based lookup or its
+    ``settings.default_model`` fallback (both live inside the runner and are
+    out of scope for this "safe first step" sprint) — a Claude step whose
+    model comes from a profile or the global default therefore persists
+    whatever ``runner_def.model`` already carries (often ``None`` in that
+    case), not the runner's fully-resolved model string.
+    """
+    options = runner_def.options or {}
+    if options.get("mode") == "api":
+        provider = options.get("api_provider")
+        model = step.metadata.get("model") or options.get("api_model")
+        return provider, model
+    model = step.metadata.get("model") or runner_def.model
+    return runner_def.kind, model
 
 
 def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
@@ -728,7 +773,7 @@ class Orchestrator:
         """
         from typing import cast
 
-        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.models import RunnerKind, TaskStep
         from hivepilot.roles import get_role, resolve_host, resolve_runner
         from hivepilot.runners.base import RunnerPayload
 
@@ -905,7 +950,7 @@ class Orchestrator:
         """
         from typing import cast
 
-        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.models import RunnerKind, TaskStep
         from hivepilot.roles import get_role, resolve_host, resolve_runner
         from hivepilot.runners.base import RunnerPayload
 
@@ -1668,7 +1713,7 @@ class Orchestrator:
         import json as _json
         from typing import cast
 
-        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.models import RunnerKind, TaskStep
         from hivepilot.roles import get_role, resolve_host, resolve_runner
         from hivepilot.runners.base import RunnerPayload
 
@@ -1865,7 +1910,7 @@ class Orchestrator:
         synthesize via DebateService, and write an ADR. Returns the ADR emit dict."""
         from typing import cast
 
-        from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+        from hivepilot.models import RunnerKind, TaskStep
         from hivepilot.roles import get_role, resolve_host, resolve_runner
         from hivepilot.services.debate_service import DebateService, Position
 
@@ -2078,6 +2123,12 @@ class Orchestrator:
                     metadata=metadata,
                     secrets=secrets,
                 )
+                # Phase 24b.1: tracks the RunnerDefinition actually used/attempted
+                # for this step, so record_step(...) below can thread the
+                # genuinely-known provider/model — set as soon as runner_def is
+                # resolved, and updated to the fallback runner (if any) inside
+                # the quota-fallback loop below.
+                _used_runner_def: RunnerDefinition | None = None
                 try:
                     self.plugins.run_hook(
                         "before_step", payload=payload, dry_run=dry_run, role=task.role
@@ -2105,6 +2156,7 @@ class Orchestrator:
                     else:
                         runner_key = step.runner_ref or step.runner
                         runner_def = self.registry._definition_for(runner_key)
+                    _used_runner_def = runner_def
                     if runner_def.kind == "container" and policy and not policy.allow_containers:
                         raise RuntimeError(
                             f"Containers are disabled by policy for project {project.path.name}"
@@ -2131,6 +2183,7 @@ class Orchestrator:
                         _last_exc: BaseException | None = None
 
                         while True:
+                            _used_runner_def = _runner_def_to_try
                             _sem = semaphore_for_kind(_runner_def_to_try.kind)
                             _sem.acquire()
                             try:
@@ -2183,7 +2236,14 @@ class Orchestrator:
                     else:
                         outputs.append(self._capture_or_execute(runner_key, payload))
                     if run_id:
-                        state_service.record_step(run_id, step.name, "success")
+                        _provider, _model = (
+                            _resolve_step_provider_model(_used_runner_def, step)
+                            if _used_runner_def is not None
+                            else (None, None)
+                        )
+                        state_service.record_step(
+                            run_id, step.name, "success", provider=_provider, model=_model
+                        )
                     self.plugins.run_hook(
                         "after_step",
                         payload=payload,
@@ -2193,7 +2253,19 @@ class Orchestrator:
                     )
                 except Exception as exc:
                     if run_id:
-                        state_service.record_step(run_id, step.name, "failed", str(exc))
+                        _provider, _model = (
+                            _resolve_step_provider_model(_used_runner_def, step)
+                            if _used_runner_def is not None
+                            else (None, None)
+                        )
+                        state_service.record_step(
+                            run_id,
+                            step.name,
+                            "failed",
+                            str(exc),
+                            provider=_provider,
+                            model=_model,
+                        )
                     if step.allow_failure:
                         logger.warning("step.failure_allowed", step=step.name, error=str(exc))
                         continue

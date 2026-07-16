@@ -417,6 +417,109 @@ def step_failure_hotspots(
     return hotspots[:limit]
 
 
+def _steps_grouped_by(
+    column: str,
+    tenant: str | None,
+    days: int | None,
+    since: str | None,
+    until: str | None,
+    project: str | None,
+    task: str | None,
+) -> list[dict[str, Any]]:
+    """Shared query for `steps_by_provider`/`steps_by_model` (Phase 24b.1):
+    `steps` rows joined to `runs` for tenant scoping (mirrors
+    `step_failure_hotspots`), grouped by *column* (``"provider"`` or
+    ``"model"``), with counts + outcome split via `canonical_outcome`.
+
+    A ``NULL`` value in *column* (a step whose provider/model was genuinely
+    unknown at record time — e.g. a shell runner has no model, or a step
+    recorded before this sprint's migration) groups under the literal key
+    ``"unknown"``, never dropped and never invented as a real provider/model
+    name. Results are sorted by descending total (most-used first).
+    """
+    if column not in ("provider", "model"):
+        raise ValueError(f"column must be 'provider' or 'model', got {column!r}")
+    state_service.init_db()
+    since_ts, until_ts = _resolve_window(days, since, until)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if project is not None:
+        clauses.append("r.project=?")
+        params.append(project)
+    if task is not None:
+        clauses.append("r.task=?")
+        params.append(task)
+    if since_ts is not None:
+        clauses.append("s.timestamp>=?")
+        params.append(since_ts)
+    if until_ts is not None:
+        clauses.append("s.timestamp<=?")
+        params.append(until_ts)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT s.{column} AS grouping_key, s.status AS status
+        FROM steps s
+        JOIN runs r ON r.id = s.run_id
+        {where}
+    """
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        key = row["grouping_key"] or "unknown"
+        grouped[key].append(row["status"])
+
+    result: list[dict[str, Any]] = []
+    for key, statuses in grouped.items():
+        counts = {o.value: 0 for o in Outcome}
+        for status in statuses:
+            counts[canonical_outcome(status)] += 1
+        total = len(statuses)
+        result.append(
+            {
+                column: key,
+                "total": total,
+                "outcomes": counts,
+                "outcome_rates": _outcome_rates(counts, total),
+            }
+        )
+    result.sort(key=lambda r: -r["total"])
+    return result
+
+
+def steps_by_provider(
+    tenant: str | None = None,
+    days: int | None = 30,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    task: str | None = None,
+) -> list[dict[str, Any]]:
+    """`steps` grouped by `provider` (the runner kind or resolved API
+    provider — see `hivepilot.orchestrator._resolve_step_provider_model`),
+    with counts + outcome split. Steps with no recorded provider group under
+    ``"unknown"``."""
+    return _steps_grouped_by("provider", tenant, days, since, until, project, task)
+
+
+def steps_by_model(
+    tenant: str | None = None,
+    days: int | None = 30,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    task: str | None = None,
+) -> list[dict[str, Any]]:
+    """`steps` grouped by `model`, with counts + outcome split. Steps with no
+    recorded model (e.g. a shell runner) group under ``"unknown"``."""
+    return _steps_grouped_by("model", tenant, days, since, until, project, task)
+
+
 def approval_latency(
     tenant: str | None = None,
     days: int | None = 30,

@@ -552,8 +552,12 @@ class TestSimulateMode:
                 simulate=True,
             )
         orch.registry.execute.assert_not_called()
-        # step is still recorded as success (simulated)
-        mock_step.assert_called_with(1, "s", "success")
+        # step is still recorded as success (simulated). registry is a bare
+        # MagicMock here so runner_def.kind/.model aren't real strings — this
+        # test only cares about the (run_id, step, status) triple, not the
+        # Phase 24b.1 provider/model kwargs (covered by
+        # TestStepProviderModelThreading with a real RunnerDefinition).
+        assert mock_step.call_args.args[:3] == (1, "s", "success")
 
     def test_run_pipeline_forwards_simulate_to_run_task(self) -> None:
         pipeline = _make_pipeline_by_name("stage-a")
@@ -635,6 +639,194 @@ class TestRoleDrivenExecution:
 
         with pytest.raises(RuntimeError):
             self._run("reviewer", policy=Policy(allowed_runners=["opencode", "claude"]))
+
+
+# ---------------------------------------------------------------------------
+# Phase 24b.1 — orchestrator threads the resolved provider/model into
+# state_service.record_step for each step.
+# ---------------------------------------------------------------------------
+
+
+class TestStepProviderModelThreading:
+    def test_role_step_success_records_provider_and_model(self) -> None:
+        """reviewer resolves to kind='codex', model='gpt-5.5' (same fixture
+        as TestRoleDrivenExecution) — record_step must receive both."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "agent output"
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(1, "s", "success", provider="codex", model="gpt-5.5")
+
+    def test_role_step_failure_records_provider_and_model(self) -> None:
+        """A failed step must still thread provider/model — the runner that
+        was actually attempted is known even though it raised."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.side_effect = RuntimeError("boom")
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md", allow_failure=True)],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(
+            1, "s", "failed", "boom", provider="codex", model="gpt-5.5"
+        )
+
+    def test_fallback_records_the_runner_that_actually_succeeded(self) -> None:
+        """Quota fallback (developer role): claude -> codex. record_step must
+        reflect the FALLBACK runner (codex), not the originally-resolved one."""
+        from hivepilot.models import GitActions, ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+
+        def capture_side_effect(runner_def, payload):
+            if runner_def.kind == "claude":
+                raise RuntimeError(
+                    "claude exited 1: You've hit your session limit · resets 9:40pm (Europe/Paris)"
+                )
+            return "codex output"
+
+        orch.registry.capture_definition.side_effect = capture_side_effect
+        task = TaskConfig(
+            description="t",
+            role="developer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+            git=GitActions(),
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch("hivepilot.config.settings.dev_fallback_runners", ["codex"]),
+        ):
+            result = orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        assert result == "codex output"
+        mock_step.assert_called_once()
+        args, kwargs = mock_step.call_args
+        assert args == (1, "s", "success")
+        assert kwargs["provider"] == "codex"
+
+    def test_non_role_step_with_no_model_records_provider_only(self) -> None:
+        """A non-role shell step: provider (runner kind) is known, model is
+        genuinely unknown -> recorded as None, never invented."""
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry._definition_for.return_value = RunnerDefinition(
+            name="shell", kind="shell", command="echo hi"
+        )
+        mock_runner = MagicMock()
+        mock_runner.capture.return_value = "shell output"
+        orch.registry.get_runner.return_value = mock_runner
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="shell", command="echo hi")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(1, "s", "success", provider="shell", model=None)
+
+    def test_step_metadata_model_override_wins_over_runner_definition(self) -> None:
+        """A step's own `metadata['model']` override (if set) takes priority
+        over the resolved RunnerDefinition.model when threading into
+        record_step — mirrors how the runners themselves resolve `model`."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "agent output"
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[
+                TaskStep(
+                    name="s",
+                    runner="claude",
+                    prompt_file="p.md",
+                    metadata={"model": "override-model"},
+                )
+            ],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(
+            1, "s", "success", provider="codex", model="override-model"
+        )
 
 
 # ---------------------------------------------------------------------------
