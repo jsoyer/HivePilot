@@ -1,3 +1,15 @@
+"""Terraform / OpenTofu / Pulumi runners.
+
+Plan/preview output is intentionally NOT captured or returned by these
+runners — it can echo secret var values (``TF_VAR_*``, Pulumi stack config),
+and the ``RunResult.detail`` path it would otherwise flow through (CLI
+stdout, the ``/v1/run`` API body, Slack/Discord/Telegram notifications) is
+not redacted. ``run()`` always executes with ``capture_output=False`` so
+output streams live to the parent's stdout instead. A safe plan-SUMMARY
+capture (counts only, no diff body) is deferred to the Mirador panel sprint
+(A3).
+"""
+
 from __future__ import annotations
 
 import shutil
@@ -23,21 +35,9 @@ class _TfBaseRunner(BaseRunner):
     _binary: str = "tofu"
 
     def run(self, payload: RunnerPayload) -> None:
-        self._execute(payload, capture_output=False)
+        self._execute(payload)
 
-    def capture(self, payload: RunnerPayload) -> str:
-        """Run the operation and return its captured stdout.
-
-        SECURITY NOTE: the returned text may contain sensitive values — a
-        ``plan``/``drift``/``validate``/``output`` run can echo
-        ``TF_VAR_*`` values or other secret-derived configuration in its
-        diff/output. Callers that persist or display this text
-        (interactions, analytics, the Mirador panel) MUST treat it as
-        sensitive and MUST NOT log it verbatim at info level.
-        """
-        return self._execute(payload, capture_output=True) or ""
-
-    def _execute(self, payload: RunnerPayload, *, capture_output: bool) -> str | None:
+    def _execute(self, payload: RunnerPayload) -> None:
         operation = (
             payload.step.command
             or self.definition.command
@@ -76,20 +76,19 @@ class _TfBaseRunner(BaseRunner):
             )
 
         if operation == "cost":
-            return self._run_cost_estimate(
-                cwd=cwd, env=env, timeout=timeout, capture_output=capture_output
-            )
+            self._run_cost_estimate(cwd=cwd, env=env, timeout=timeout)
+            return
 
         cmd = self._build_command(operation, opts)
         try:
-            result = subprocess.run(
+            subprocess.run(
                 cmd,
                 cwd=cwd,
                 env=env,
                 check=True,
                 text=True,
                 timeout=timeout,
-                capture_output=capture_output,
+                capture_output=False,
             )
         except subprocess.CalledProcessError as exc:
             if operation == "drift" and exc.returncode == 2:
@@ -105,11 +104,8 @@ class _TfBaseRunner(BaseRunner):
             step=payload.step.name,
             operation=operation,
         )
-        return result.stdout if capture_output else None
 
-    def _run_cost_estimate(
-        self, *, cwd: str, env: dict, timeout: int, capture_output: bool
-    ) -> str | None:
+    def _run_cost_estimate(self, *, cwd: str, env: dict, timeout: int) -> None:
         """Run infracost breakdown. Requires infracost CLI to be installed."""
         if not shutil.which("infracost"):
             raise RuntimeError(
@@ -126,8 +122,9 @@ class _TfBaseRunner(BaseRunner):
         )
         # Deliberately NOT logged at info: infracost breakdown output can
         # reflect resource configuration derived from secret-backed TF vars.
+        # This debug-level capture is internal to infracost only — it is
+        # never returned or persisted (see module docstring).
         logger.debug("iac.cost_estimate", output=result.stdout.strip())
-        return result.stdout if capture_output else None
 
     def _build_command(self, operation: str, opts: dict) -> list[str]:
         cmd: list[str] = [self._binary]
@@ -136,12 +133,14 @@ class _TfBaseRunner(BaseRunner):
         var_file = opts.get("var_file")
         if var_file:
             extra_flags.append(f"-var-file={var_file}")
-        backend_config = opts.get("backend_config")
-        if backend_config:
-            extra_flags.append(f"-backend-config={backend_config}")
         parallelism = opts.get("parallelism")
         if parallelism is not None:
             extra_flags.append(f"-parallelism={parallelism}")
+
+        # -backend-config is init-only: passing it to plan/apply/destroy/drift
+        # is a Terraform/OpenTofu usage error (non-zero exit, nothing runs).
+        # It must NOT be added to `extra_flags` above.
+        backend_config = opts.get("backend_config")
 
         if operation == "init":
             init_flags = [f"-backend-config={backend_config}"] if backend_config else []
@@ -192,20 +191,9 @@ class PulumiRunner(BaseRunner):
     settings: Settings
 
     def run(self, payload: RunnerPayload) -> None:
-        self._execute(payload, capture_output=False)
+        self._execute(payload)
 
-    def capture(self, payload: RunnerPayload) -> str:
-        """Run the operation and return its captured stdout.
-
-        SECURITY NOTE: the returned text may contain sensitive values — a
-        ``preview``/``output`` run can echo secret-derived stack config
-        values. Callers that persist or display this text (interactions,
-        analytics, the Mirador panel) MUST treat it as sensitive and MUST
-        NOT log it verbatim at info level.
-        """
-        return self._execute(payload, capture_output=True) or ""
-
-    def _execute(self, payload: RunnerPayload, *, capture_output: bool) -> str | None:
+    def _execute(self, payload: RunnerPayload) -> None:
         operation = (
             payload.step.command
             or self.definition.command
@@ -234,14 +222,14 @@ class PulumiRunner(BaseRunner):
         )
 
         cmd = self._build_command(operation, opts)
-        result = subprocess.run(
+        subprocess.run(
             cmd,
             cwd=cwd,
             env=env,
             check=True,
             text=True,
             timeout=timeout,
-            capture_output=capture_output,
+            capture_output=False,
         )
 
         logger.info(
@@ -251,7 +239,6 @@ class PulumiRunner(BaseRunner):
             step=payload.step.name,
             operation=operation,
         )
-        return result.stdout if capture_output else None
 
     def _build_command(self, operation: str, opts: dict) -> list[str]:
         cmd: list[str] = ["pulumi"]

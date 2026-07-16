@@ -21,9 +21,14 @@ Covers:
 (f) Missing binary -> RuntimeError (not a raw FileNotFoundError) -- this is
     hardening we check via `shutil.which` returning None, without ever
     invoking the real subprocess.
-(g) `capture()` returns the mocked stdout instead of discarding it.
-(h) No secret value from a `TF_VAR_*` secret ever appears in anything
-    passed to `logger.info` for a `plan`/`capture()` call.
+(g) `run()` always executes with `capture_output=False` (live streaming) and
+    neither runner exposes a `capture()` method — raw plan/preview output
+    can echo secret var values, so it must never be captured, returned, or
+    persisted via `RunResult.detail` (CLI/API/chat notifications). A safe
+    plan-SUMMARY capture is deferred to the Mirador panel sprint (A3).
+(h) `-backend-config` is init-only: it must be present in `init` argv and
+    absent from `plan`/`apply`/`destroy`/`drift` argv (passing it there is a
+    Terraform/OpenTofu usage error).
 """
 
 from __future__ import annotations
@@ -93,6 +98,37 @@ class TestTerraformArgv:
         mock_run = self._run(tmp_path, "init", options)
         argv = mock_run.call_args.args[0]
         assert argv == ["terraform", "init", "-backend-config=backend.hcl"]
+
+    @pytest.mark.parametrize("operation", ["plan", "apply", "destroy", "drift"])
+    def test_backend_config_absent_outside_init(self, tmp_path: Path, operation: str) -> None:
+        """Regression: -backend-config is init-only. Passing it to plan/apply/
+        destroy/drift is a Terraform/OpenTofu usage error (non-zero exit,
+        nothing runs) -- it must never leak into those operations' argv, even
+        when var_file/parallelism (which ARE valid there) are also set."""
+        options = {
+            "backend_config": "backend.hcl",
+            "var_file": "prod.tfvars",
+            "parallelism": 5,
+        }
+        mock_run = self._run(tmp_path, operation, options)
+        argv = mock_run.call_args.args[0]
+        assert not any("-backend-config" in arg for arg in argv)
+        # sibling flags that ARE valid on these operations must still be present
+        assert "-var-file=prod.tfvars" in argv
+        assert "-parallelism=5" in argv
+
+    def test_backend_config_present_in_init_only(self, tmp_path: Path) -> None:
+        options = {
+            "backend_config": "backend.hcl",
+            "var_file": "prod.tfvars",
+            "parallelism": 5,
+        }
+        mock_run = self._run(tmp_path, "init", options)
+        argv = mock_run.call_args.args[0]
+        assert "-backend-config=backend.hcl" in argv
+        # var_file/parallelism are not valid on `init` and must not appear
+        assert not any("-var-file" in arg for arg in argv)
+        assert not any("-parallelism" in arg for arg in argv)
 
     def test_plan(self, tmp_path: Path) -> None:
         mock_run = self._run(tmp_path, "plan")
@@ -276,22 +312,30 @@ class TestSecretsReachTheEnvironment:
         assert env["TF_VAR_db_password"] == "secret-value"
 
 
-class TestCapture:
-    def test_terraform_capture_returns_stdout(self, tmp_path: Path) -> None:
+class TestNoCaptureLeakPath:
+    """Regression for the HIGH security finding: these runners used to expose
+    a `capture(payload) -> str` method returning raw plan/preview stdout.
+    The orchestrator's `_capture_or_execute` auto-prefers `capture()` over
+    `run()` when present (see `hivepilot/orchestrator.py`), so that raw text
+    -- which routinely echoes `TF_VAR_*`/secret values -- flowed via
+    `RunResult.detail` to CLI stdout, the `/v1/run` API body, and
+    Slack/Discord/Telegram UNREDACTED. `capture()` must stay gone, and
+    `run()` must always execute live (`capture_output=False`, inheriting the
+    parent's stdout) so nothing is captured, returned, or persisted."""
+
+    def test_terraform_runner_has_no_capture_method(self) -> None:
         runner = TerraformRunner(_definition("terraform"), settings)
-        with (
-            patch("hivepilot.runners.iac_runner.shutil.which", return_value="/usr/bin/terraform"),
-            patch("hivepilot.runners.iac_runner.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout="Plan: 1 to add, 0 to change, 0 to destroy."
-            )
-            output = runner.capture(_payload(tmp_path, operation="plan"))
+        assert not hasattr(runner, "capture")
 
-        assert output == "Plan: 1 to add, 0 to change, 0 to destroy."
-        assert mock_run.call_args.kwargs["capture_output"] is True
+    def test_opentofu_runner_has_no_capture_method(self) -> None:
+        runner = OpenTofuRunner(_definition("opentofu"), settings)
+        assert not hasattr(runner, "capture")
 
-    def test_terraform_run_discards_stdout(self, tmp_path: Path) -> None:
+    def test_pulumi_runner_has_no_capture_method(self) -> None:
+        runner = PulumiRunner(_definition("pulumi"), settings)
+        assert not hasattr(runner, "capture")
+
+    def test_terraform_run_streams_live_not_captured(self, tmp_path: Path) -> None:
         runner = TerraformRunner(_definition("terraform"), settings)
         with (
             patch("hivepilot.runners.iac_runner.shutil.which", return_value="/usr/bin/terraform"),
@@ -303,16 +347,25 @@ class TestCapture:
         assert result is None
         assert mock_run.call_args.kwargs["capture_output"] is False
 
-    def test_pulumi_capture_returns_stdout(self, tmp_path: Path) -> None:
+    def test_pulumi_run_streams_live_not_captured(self, tmp_path: Path) -> None:
         runner = PulumiRunner(_definition("pulumi"), settings)
         with (
             patch("hivepilot.runners.iac_runner.shutil.which", return_value="/usr/bin/pulumi"),
             patch("hivepilot.runners.iac_runner.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="preview output")
-            output = runner.capture(_payload(tmp_path, operation="preview"))
+            result = runner.run(_payload(tmp_path, operation="preview"))
 
-        assert output == "preview output"
+        assert result is None
+        assert mock_run.call_args.kwargs["capture_output"] is False
+
+    def test_orchestrator_capture_or_execute_falls_back_to_run(self, tmp_path: Path) -> None:
+        """`_capture_or_execute` must fall back to `run()` (and return "")
+        rather than raising or somehow still capturing output, now that
+        these runners no longer expose `capture()`."""
+        runner = TerraformRunner(_definition("terraform"), settings)
+        capture = getattr(runner, "capture", None)
+        assert capture is None
 
 
 class TestPulumiArgv:
@@ -371,27 +424,14 @@ class TestPulumiArgv:
 
 class TestNoSecretsInLogs:
     """No TF_VAR secret value may ever be passed to `logger.info` (plan
-    output can echo var values; the fix must not leak them into logs)."""
+    output can echo var values; the fix must not leak them into logs).
 
-    def test_capture_does_not_log_secret_value(self, tmp_path: Path) -> None:
-        runner = TerraformRunner(_definition("terraform"), settings)
-        secret_value = "super-secret-db-password-xyz"
-        secrets = {"TF_VAR_db_password": secret_value}
-        with (
-            patch("hivepilot.runners.iac_runner.shutil.which", return_value="/usr/bin/terraform"),
-            patch("hivepilot.runners.iac_runner.subprocess.run") as mock_run,
-            patch("hivepilot.runners.iac_runner.logger") as mock_logger,
-        ):
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=f"resource created using {secret_value}"
-            )
-            runner.capture(_payload(tmp_path, operation="plan", secrets=secrets))
-
-        for call in mock_logger.info.call_args_list:
-            call_text = " ".join(str(a) for a in call.args) + " ".join(
-                f"{k}={v}" for k, v in call.kwargs.items()
-            )
-            assert secret_value not in call_text
+    NOTE: the plan/preview path no longer captures stdout at all (see
+    `TestNoCaptureLeakPath` -- `run()` always uses `capture_output=False`),
+    so there is no Python-visible stdout for a `plan` run to leak into logs
+    in the first place. The remaining risk is the `cost` path, which DOES
+    capture infracost's stdout internally (to log it at debug only) --
+    covered below."""
 
     def test_cost_estimate_does_not_log_stdout_at_info(self, tmp_path: Path) -> None:
         runner = TerraformRunner(_definition("terraform"), settings)
