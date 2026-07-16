@@ -313,7 +313,7 @@ async def test_refresh_mem0_lists_memories_when_configured(monkeypatch) -> None:
 
     monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
 
-    memories = [
+    memories: list[dict[str, object]] = [
         {
             "memory": "prefers concise commit messages",
             "metadata": {
