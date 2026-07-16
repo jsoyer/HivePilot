@@ -260,34 +260,37 @@ class ClaudeRunner(BaseRunner):
                 timeout=timeout,
                 stdin=subprocess.DEVNULL,
             )
-            if json_result.returncode == 0:
-                parsed = _parse_usage_envelope(json_result.stdout)
-                if parsed is not None:
-                    text, usage = parsed
-                    set_last_usage(usage)
-                    return text
-                # Valid exit, but the JSON was unparseable or lacked the
-                # `result` field — no need to re-invoke (the agent already
-                # ran to completion once); treat this attempt's own stdout
-                # as raw text, exactly like flag-off behaviour would have
-                # produced, and record null usage.
-                logger.warning(
-                    "claude_runner.usage_capture.malformed_envelope_fallback",
-                    project=payload.project_name,
-                    step=payload.step.name,
-                )
-                return json_result.stdout
-            # Non-zero exit with the flag present most likely means this
-            # claude CLI build doesn't understand --output-format json (an
-            # argument-parsing failure occurs before the agent starts doing
-            # any real work) — retry once with the plain invocation so the
-            # step still succeeds exactly as it would with the flag off.
+            if json_result.returncode != 0:
+                # Do NOT retry without the flag: a non-zero exit here can
+                # happen AFTER the agent already did real work (mid-run
+                # crash, OOM/SIGKILL, network drop post-push, rate-limit
+                # after partial work) — for the developer role
+                # (bypassPermissions) that means files were edited/committed/
+                # pushed already. Re-invoking the same prompt would DUPLICATE
+                # that work. Instead raise exactly what the flag-off path
+                # raises below, so this is "no worse than flag off" (which
+                # never retries either). If a claude build genuinely doesn't
+                # support --output-format json, enabling this flag surfaces
+                # as a run failure and the operator turns the flag back off —
+                # we never silently double-run the agent to route around it.
+                err = (json_result.stderr or json_result.stdout or "").strip()[-2000:]
+                raise RuntimeError(f"claude exited {json_result.returncode}: {err}")
+            parsed = _parse_usage_envelope(json_result.stdout)
+            if parsed is not None:
+                text, usage = parsed
+                set_last_usage(usage)
+                return text
+            # Valid exit, but the JSON was unparseable or lacked the
+            # `result` field — no need to re-invoke (the agent already
+            # ran to completion once); treat this attempt's own stdout
+            # as raw text, exactly like flag-off behaviour would have
+            # produced, and record null usage.
             logger.warning(
-                "claude_runner.usage_capture.cli_error_fallback",
+                "claude_runner.usage_capture.malformed_envelope_fallback",
                 project=payload.project_name,
                 step=payload.step.name,
-                returncode=json_result.returncode,
             )
+            return json_result.stdout
 
         result = subprocess.run(
             argv,
