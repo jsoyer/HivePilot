@@ -42,4 +42,13 @@ startup and refuse to run schedules. Set
 secrets.data.HIVEPILOT_API_TOKEN to a bootstrapped token with role >= "run".
 {{- end }}
 
+{{- if not .Values.scheduler.enabled }}
+
+NOTE: the scheduler daemon (hivepilot-scheduler) is disabled by default.
+It needs a run-role HIVEPILOT_API_TOKEN to start and will CrashLoopBackOff
+without one. After bootstrapping an admin token (see below) and minting a
+run-role token, set secrets.data.HIVEPILOT_API_TOKEN and re-run
+`helm upgrade` with `--set scheduler.enabled=true`.
+{{- end }}
+
 Full install/config/secrets walkthrough: deploy/helm/hivepilot/README.md

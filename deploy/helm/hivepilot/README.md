@@ -174,10 +174,15 @@ helm upgrade --install hivepilot deploy/helm/hivepilot \
 `secrets.data.HIVEPILOT_API_TOKEN` is required whenever `scheduler.enabled`
 is true — the scheduler daemon calls `_require_cli_role("run", token)` on
 startup and refuses to run without a token of role `run` or higher (`admin`
-qualifies). Until you complete this bootstrap, the API starts with an empty
-token store — every `/v1` write endpoint returns `401` (fail-closed by
-design), but the unauthenticated `/healthz`/`/readyz`/`/metrics` endpoints
-still work, so the pod stays healthy/ready even pre-bootstrap.
+qualifies). This is exactly why `scheduler.enabled` defaults to `false`: a
+bare `helm install` has no `secrets.data`, so a default-enabled scheduler
+would CrashLoopBackOff. Until you complete this bootstrap, the API starts
+with an empty token store — every `/v1` write endpoint returns `401`
+(fail-closed by design), but the unauthenticated `/healthz`/`/readyz`/
+`/metrics` endpoints still work, so the pod stays healthy/ready even
+pre-bootstrap. Once you've bootstrapped a token, enable the scheduler with
+`--set scheduler.enabled=true --set secrets.data.HIVEPILOT_API_TOKEN=<token
+with role run or higher>`.
 
 Adding/rotating tokens later means repeating this process (generate outside
 the cluster against a copy of the current `api_tokens.yaml`, then
@@ -190,9 +195,12 @@ rotation without a chart upgrade.
 ## Enabling components (bots, scheduler)
 
 - `api.enabled` (default `true`) — the control API + `/ui` Mirador frontend
-  (if `env.enableWebui: true`).
-- `scheduler.enabled` (default `true`) — the schedule/retry daemon. Disable
-  if you only want on-demand runs via the API/CLI.
+  (if `env.enableWebui: true`). Doesn't need a token to start.
+- `scheduler.enabled` (default `false`) — the schedule/retry daemon. Opt-in
+  because it needs a run-role `HIVEPILOT_API_TOKEN` (see "Bootstrap the
+  first admin token" above) to start; without one it CrashLoopBackOffs. Once
+  you've bootstrapped and set `secrets.data.HIVEPILOT_API_TOKEN`, enable it
+  with `--set scheduler.enabled=true`.
 - `bots.telegram.enabled` / `bots.slack.enabled` / `bots.discord.enabled`
   (all default `false`) — each is an independent Deployment running
   `hivepilot <name> start --mode <mode>` (blocking, long-lived). Set the

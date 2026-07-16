@@ -91,9 +91,15 @@ api:
 # entries and processes the retry queue. Single replica (writes to the same
 # state.db as the API). Needs HIVEPILOT_API_TOKEN with role >= run — sourced
 # from `secrets.data.HIVEPILOT_API_TOKEN` (see README bootstrap steps).
+#
+# OFF by default: a bare `helm install` has no secrets.data, and the daemon
+# exits non-zero without a run-role token, so enabling it out of the box would
+# CrashLoopBackOff. Bootstrap the token first (see README), then enable with
+# `--set scheduler.enabled=true` (the API itself doesn't need a token to
+# start — only the scheduler does).
 # -----------------------------------------------------------------------------
 scheduler:
-  enabled: true
+  enabled: false
   intervalSeconds: 30
   shutdownTimeoutSeconds: 120
   resources:
