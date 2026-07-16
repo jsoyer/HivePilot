@@ -123,4 +123,45 @@ describe('useAsyncData', () => {
     })
     expect(readState()).toEqual({ status: 'success', data: 'fresh' })
   })
+
+  it('does not update state (or warn) when the fetch resolves after unmount', async () => {
+    const gate = deferred<string>()
+    const fetcher = vi.fn().mockReturnValue(gate.promise)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    act(() => {
+      root.render(<Probe fetcher={fetcher} deps={[]} />)
+    })
+    expect(readState().status).toBe('loading')
+    expect(container.textContent).not.toBe('')
+
+    // Unmount BEFORE the fetch resolves — this runs the hook's cleanup,
+    // which flips its internal `cancelled` flag before `fetcher`'s promise
+    // ever settles.
+    act(() => {
+      root.unmount()
+    })
+    expect(container.innerHTML).toBe('')
+
+    // Now resolve the deferred promise. Two independent regression guards:
+    // (1) no React warning is logged (the classic pre-React-18 signal for a
+    // "setState on an unmounted component" bug — React 18+ no longer emits
+    // this warning since the update is a guaranteed no-op regardless, but
+    // asserting it stays silent still catches a regression in any renderer
+    // that DOES warn), and (2) the container stays empty — if a stale
+    // update somehow caused React to re-commit content after the resolve,
+    // this would catch it directly at the DOM level rather than trusting
+    // console output alone.
+    await act(async () => {
+      gate.resolve('too-late')
+      await gate.promise
+    })
+
+    expect(consoleError).not.toHaveBeenCalled()
+    expect(container.innerHTML).toBe('')
+
+    // Recreate the root so `afterEach`'s `root.unmount()` has a live root to
+    // unmount (this test already unmounted the original one).
+    root = createRoot(container)
+  })
 })
