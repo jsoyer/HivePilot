@@ -414,3 +414,59 @@ class TestApiModeUsagePersistsViaRecordStep:
         assert row["output_tokens"] == 8
         assert row["model"] == "gpt-4-0613"
         assert row["provider"] == "openai"
+
+
+class TestCaptureClearsStaleUsageAtEntry:
+    """Code-review fix: capture() must clear any stale usage UNCONDITIONALLY
+    at entry, before the mode branch — orchestrator._capture_or_execute (the
+    path for all non-role tasks) calls runner.capture(payload) directly,
+    bypassing RunnerRegistry.capture_definition's own choke-point clear. Without
+    an unconditional clear here, a stale UsageInfo left by an earlier,
+    unrelated capture() (e.g. a debate/rebuttal call that never popped) could
+    be mis-attributed by pop_last_usage() to the wrong step's tokens/cost/
+    model. Mirrors ClaudeRunner.capture()'s clear-at-entry."""
+
+    def test_cli_mode_capture_does_not_leak_stale_usage(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import UsageInfo, pop_last_usage, set_last_usage
+
+        # Simulate a stale stash left by an earlier, unrelated capture() call
+        # (e.g. a debate/rebuttal capture that never popped its usage).
+        set_last_usage(UsageInfo(input_tokens=999, output_tokens=999, model="stale-model"))
+
+        payload = _api_payload(tmp_path)
+        runner = _cli_runner()  # default mode == "cli" (no options.mode set)
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="CLI OUTPUT", returncode=0)
+            out = runner.capture(payload)
+
+        assert out == "CLI OUTPUT"
+        # The stale usage must NOT bleed into this CLI-mode step.
+        assert pop_last_usage() is None
+
+    def test_api_mode_capture_does_not_leak_stale_usage_when_provider_reports_none(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Same guarantee for the API branch when the provider's response
+        itself carries no usage — the entry-point clear must still hold (this
+        already passed before the fix via _capture_api's own clear, but now
+        it's covered by the single entry-point clear in capture())."""
+        from unittest.mock import patch
+
+        from hivepilot.runners.base import UsageInfo, pop_last_usage, set_last_usage
+
+        set_last_usage(UsageInfo(input_tokens=999, output_tokens=999, model="stale-model"))
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        payload = _api_payload(tmp_path)
+        runner = _api_runner("openai")
+        body = {"choices": [{"message": {"content": "NO USAGE HERE"}}]}
+        with patch(
+            "hivepilot.runners.prompt_cli_runner.requests.post",
+            return_value=_fake_response(body),
+        ):
+            out = runner.capture(payload)
+
+        assert out == "NO USAGE HERE"
+        assert pop_last_usage() is None

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -137,7 +136,20 @@ class PromptCliRunner(BaseRunner):
         CLI a second time with ``--output-format json``), the provider SDKs
         already return usage in the SAME request/response that produces the
         text, so capturing it changes nothing about the run itself.
+
+        Clears any stale usage stashed by an earlier, unrelated capture()
+        call UNCONDITIONALLY, before the mode branch — both the CLI branch
+        below and the API branch in ``_capture_api`` rely on this. This
+        matters because ``orchestrator._capture_or_execute`` (the path for
+        all non-role tasks) calls ``capture()`` directly, bypassing the
+        ``RunnerRegistry.capture_definition`` choke-point clear — without an
+        unconditional clear here, a stale ``UsageInfo`` left by a prior
+        debate/rebuttal capture that never popped could otherwise be
+        mis-attributed by this step's ``pop_last_usage()`` to the wrong
+        step's tokens/cost/model. Mirrors ``ClaudeRunner.capture()``'s
+        clear-at-entry for the same reason.
         """
+        set_last_usage(None)
         mode = (
             payload.step.metadata.get("mode") or self.definition.options.get("mode") or "cli"
         ).lower()
@@ -174,8 +186,11 @@ class PromptCliRunner(BaseRunner):
         reply text and (when reported) usage, and stash usage via
         ``set_last_usage()`` for the orchestrator to pop right after this call
         returns — the same handoff contract ``ClaudeRunner.capture()`` uses.
+
+        The stale-usage clear happens unconditionally at the top of
+        ``capture()`` (before the mode branch), not here — no need to repeat
+        it in this branch-specific helper.
         """
-        set_last_usage(None)
         prompt_text = self._augment_prompt(payload, self._load_prompt(payload))
         provider = self.definition.options.get("api_provider") or ""
         result = self._run_api(prompt_text, payload, env)
@@ -435,7 +450,13 @@ class PromptCliRunner(BaseRunner):
         if not response.ok:
             raise RuntimeError(f"API request failed: {response.status_code} {response.text}")
         result = response.json()
-        logger.info("api_runner.response", response=json.dumps(result)[:200])
+        # Metadata only — never log response content: a provider's reply body
+        # can carry the reflected prompt (which may itself carry knowledge
+        # context / business content) and this path is now reachable from the
+        # primary production flow (capture() dispatches to it for mode: api).
+        logger.info(
+            "api_runner.response", status_code=response.status_code, bytes=len(response.content)
+        )
         return result if isinstance(result, dict) else {}
 
 

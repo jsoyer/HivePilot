@@ -180,6 +180,17 @@ call already returns usage in the very same request/response that produces
 the reply text, so there is no re-invocation and no behaviour change to the
 run itself — capturing it is non-invasive by construction.
 
+**Migration note:** this change also makes `options.mode: api` reachable via
+`capture()` for the FIRST time in the primary execution path — before this,
+`capture()` ignored `mode` entirely and always ran the CLI-subprocess branch
+regardless of an `api`-mode config, so a misconfigured `mode: api` step was
+silently running its CLI fallback instead. Operators with an existing
+`mode: api` prompt-cli config should verify the provider's `*_API_KEY`
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`,
+`PERPLEXITY_API_KEY`, or `OPENROUTER_API_KEY`) is actually set before
+upgrading — those steps now hard-fail with `"<PROVIDER>_API_KEY missing"`
+instead of quietly falling back to the CLI.
+
 - **Providers whose response is read for usage:** `openai`, `mistral`,
   `perplexity`, `openrouter` (OpenAI-compatible `usage.prompt_tokens` /
   `usage.completion_tokens`), `anthropic` (`usage.input_tokens` /
