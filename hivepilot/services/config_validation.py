@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from hivepilot.config import settings
+from hivepilot.services import scan_service
 
 
 def _load(path: Path) -> Any:
@@ -153,6 +154,27 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
         if project_key not in project_names:
             problems.append(
                 f"Policy entry for project '{project_key}' is not defined in projects.yaml"
+            )
+
+    # -----------------------------------------------------------------------
+    # Check: every policy's `block_on_severity` (Phase 21 Sprint 2 CVE gate),
+    # when set, is one of scan_service.SEVERITY_LEVELS. Checked for the
+    # `default` policy plus every per-project override -- a typo here would
+    # otherwise only surface as a `ValueError` the first time that project
+    # runs (policy_service.get_policy validates the same eagerly), so this
+    # gives the same fail-closed guarantee at `config validate` time too.
+    # -----------------------------------------------------------------------
+    policy_default = (policies_data.get("policies") or {}).get("default") or {}
+    _policy_entries: list[tuple[str, dict[str, Any]]] = [("default", policy_default)]
+    _policy_entries.extend(policy_projects.items())
+    for policy_scope, policy_rules in _policy_entries:
+        if not isinstance(policy_rules, dict):
+            continue
+        block_on_severity = policy_rules.get("block_on_severity")
+        if block_on_severity is not None and block_on_severity not in scan_service.SEVERITY_LEVELS:
+            problems.append(
+                f"Policy '{policy_scope}' has invalid block_on_severity "
+                f"{block_on_severity!r}. Must be one of {scan_service.SEVERITY_LEVELS} or unset."
             )
 
     # -----------------------------------------------------------------------

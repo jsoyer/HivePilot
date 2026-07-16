@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from hivepilot.config import settings
+from hivepilot.services import scan_service
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -23,6 +24,19 @@ class Policy:
     #   "fallback" — try env/file providers keyed by NAME, else abort.
     # Any value other than "fallback" is treated as "closed".
     secrets_fail_mode: str = "closed"
+    # Phase 21 Sprint 2 — pipeline CVE gate. `None` (default) means no gate:
+    # `Orchestrator._run_task_body` never calls `scan_service.scan_vulnerabilities`
+    # and behaviour is byte-identical to before this sprint. When set, it must
+    # be one of `scan_service.SEVERITY_LEVELS` — validated eagerly in
+    # `get_policy` below so a typo in policies.yaml fails loudly at load time
+    # instead of silently never gating (fail-closed).
+    block_on_severity: str | None = None
+    # Scanner backend for the CVE gate: "grype" (default) or "osv-scanner".
+    # Not eagerly validated here — an unsupported value surfaces as a
+    # `ValueError` from `scan_service.scan_vulnerabilities` itself, which the
+    # orchestrator's CVE gate treats the same as any other scan failure
+    # (fail-closed: block the run, never fail-open).
+    scan_tool: str = "grype"
 
 
 def _load_yaml(path: Path) -> dict:
@@ -59,6 +73,14 @@ def get_policy(project_name: str) -> Policy:
     project_rules = policies.get("projects", {}).get(project_name) if policies else None
     default = policies.get("default", {}) if policies else {}
     rules = {**default, **(project_rules or {})}
+    block_on_severity = rules.get("block_on_severity")
+    if block_on_severity is not None and block_on_severity not in scan_service.SEVERITY_LEVELS:
+        # Fail-closed at load time: a mistyped severity must never be
+        # silently ignored (which would leave the CVE gate un-enforced).
+        raise ValueError(
+            f"Invalid policy 'block_on_severity' for project {project_name!r}: "
+            f"{block_on_severity!r}. Must be one of {scan_service.SEVERITY_LEVELS} or unset."
+        )
     return Policy(
         allow_auto_git=rules.get("allow_auto_git", True),
         require_approval=rules.get("require_approval", False),
@@ -66,6 +88,8 @@ def get_policy(project_name: str) -> Policy:
         role_overrides=rules.get("role_overrides", {}) or {},
         allowed_runners=rules.get("allowed_runners"),
         secrets_fail_mode=rules.get("secrets_fail_mode", "closed"),
+        block_on_severity=block_on_severity,
+        scan_tool=rules.get("scan_tool", "grype"),
     )
 
 

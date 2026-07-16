@@ -7,6 +7,18 @@
 #       role_overrides:
 #         cto:  { model: glm }                    # keep runner, force EU-hosted model
 #         qa:   { runner: opencode, model: qwen } # change runner + model
+#
+# Pipeline CVE gate (Phase 21 Sprint 2) — opt-in, off by default:
+#   projects:
+#     <project>:
+#       block_on_severity: critical    # critical|high|medium|low|negligible|unknown
+#       scan_tool: grype                # grype (default) or osv-scanner
+# When set, a run against that project scans the target repo's dependency
+# tree (grype/osv-scanner, same scanners as `hivepilot scan vulns`) BEFORE
+# executing any step. A finding at/above `block_on_severity` blocks the run
+# (recorded failed, no step executed). Fail-closed: if the scanner itself
+# fails (e.g. not installed), the run is blocked too — a configured gate
+# never silently passes.
 policies:
   default:
     allow_auto_git: true

@@ -1626,3 +1626,242 @@ class TestRunResultDetailRedaction:
             "the secret leaked verbatim into run_approved's failure RunResult"
         )
         assert cp.REDACTED in (result.detail or "")
+
+
+# ---------------------------------------------------------------------------
+# Phase 21 Sprint 2 -- pipeline CVE gate (`policy.block_on_severity`)
+#
+# Mirrors the `require_approval` run-level pre-execution gate: BEFORE a run's
+# steps are dispatched, `_run_task_body` may run `scan_service.
+# scan_vulnerabilities` and block the run entirely (recorded as a failed run,
+# `project` never added to `immediate_projects`, so no step/runner is ever
+# invoked) if the scan finds anything at/above the configured severity, or if
+# the scan itself fails (fail-closed).
+# ---------------------------------------------------------------------------
+
+
+class TestCveGate:
+    def _orch_with_project_and_task(self, task):
+        from hivepilot.models import ProjectConfig
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/cve-gate-proj"))
+        orch.tasks.tasks["x"] = task
+        return orch
+
+    def _task(self):
+        from hivepilot.models import TaskConfig, TaskStep
+
+        return TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+
+    def _run_task(self, orch, *, policy, extra_patches=(), simulate=False, tmp_path=None):
+        from contextlib import ExitStack
+
+        fake_runner = MagicMock()
+        fake_runner.capture.return_value = "step ran"
+        orch.registry = MagicMock()
+        orch.registry.get_runner.return_value = fake_runner
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(orch, "_resolve_secrets", return_value={}))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.policy_service.enforce_policy", return_value=policy)
+            )
+            stack.enter_context(
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1)
+            )
+            mock_complete_run = stack.enter_context(
+                patch("hivepilot.orchestrator.state_service.complete_run")
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.state_service.record_step"))
+            mock_notify = stack.enter_context(
+                patch("hivepilot.orchestrator.notification_service.send_notification")
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.knowledge_service.append_feedback"))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path)
+            )
+            for extra in extra_patches:
+                stack.enter_context(extra)
+
+            results = orch.run_task(
+                project_names=["proj"],
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+                simulate=simulate,
+            )
+        return results, fake_runner, mock_complete_run, mock_notify
+
+    def test_at_or_above_threshold_blocks_run_and_never_executes_step(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import Finding, ScanResult
+
+        policy = Policy(block_on_severity="critical")
+        scan_result = ScanResult(
+            tool="grype",
+            total=1,
+            by_severity={"critical": 1, "high": 0, "medium": 0},
+            findings=[
+                Finding(id="CVE-2099-0001", package="libfoo", version="1.0.0", severity="critical")
+            ],
+        )
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, fake_runner, mock_complete_run, mock_notify = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                    return_value=scan_result,
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "Blocked by CVE gate" in (results[0].detail or "")
+        assert "critical" in (results[0].detail or "")
+        fake_runner.capture.assert_not_called()
+        mock_complete_run.assert_called_once()
+        assert mock_complete_run.call_args.args[1] == "failed"
+
+    def test_below_threshold_proceeds_and_executes_step(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import Finding, ScanResult
+
+        policy = Policy(block_on_severity="critical")
+        scan_result = ScanResult(
+            tool="grype",
+            total=1,
+            by_severity={"critical": 0, "high": 0, "medium": 1},
+            findings=[
+                Finding(id="CVE-2099-0002", package="libbar", version="2.0.0", severity="medium")
+            ],
+        )
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, fake_runner, mock_complete_run, mock_notify = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                    return_value=scan_result,
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is True
+        fake_runner.capture.assert_called_once()
+
+    def test_gate_unset_proceeds_without_calling_scan(self, tmp_path) -> None:
+        """Default policy (block_on_severity=None): no overhead, no behaviour
+        change -- scan_vulnerabilities must never be called."""
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy()  # block_on_severity defaults to None
+
+        orch = self._orch_with_project_and_task(self._task())
+        with patch("hivepilot.orchestrator.scan_service.scan_vulnerabilities") as mock_scan:
+            results, fake_runner, _, _ = self._run_task(orch, policy=policy, tmp_path=tmp_path)
+
+        mock_scan.assert_not_called()
+        assert len(results) == 1
+        assert results[0].success is True
+        fake_runner.capture.assert_called_once()
+
+    def test_simulate_bypasses_the_gate_entirely(self, tmp_path) -> None:
+        """`--simulate` skips the CVE gate exactly like it skips
+        `require_approval`: no scan, no block."""
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(block_on_severity="critical")
+
+        orch = self._orch_with_project_and_task(self._task())
+        with patch("hivepilot.orchestrator.scan_service.scan_vulnerabilities") as mock_scan:
+            results, fake_runner, _, _ = self._run_task(
+                orch, policy=policy, tmp_path=tmp_path, simulate=True
+            )
+
+        mock_scan.assert_not_called()
+        assert len(results) == 1
+        assert results[0].success is True
+
+    def test_scan_failure_blocks_fail_closed_and_never_executes_step(self, tmp_path) -> None:
+        """A scanner that raises (missing binary, timeout, ...) must BLOCK
+        the run -- a configured CVE gate must never fail open."""
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(block_on_severity="critical")
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, fake_runner, mock_complete_run, mock_notify = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                    side_effect=RuntimeError("grype not found on PATH"),
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        detail = results[0].detail or ""
+        assert "CVE gate configured but scan failed" in detail
+        assert "RuntimeError" in detail
+        # No secret/raw-scanner-output leak: never echo the exception message.
+        assert "grype not found on PATH" not in detail
+        fake_runner.capture.assert_not_called()
+
+    def test_block_message_carries_only_severity_counts_no_raw_output(self, tmp_path) -> None:
+        """Anti-leak: the block detail must be built from `by_severity`
+        COUNTS only -- never raw scanner stdout or a specific package name
+        that could embed lockfile/source material."""
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import Finding, ScanResult
+
+        policy = Policy(block_on_severity="critical")
+        scan_result = ScanResult(
+            tool="grype",
+            total=1,
+            by_severity={"critical": 1, "high": 0, "medium": 0},
+            findings=[
+                Finding(
+                    id="CVE-2099-9999",
+                    package="LEAKY-PACKAGE-NAME-SHOULD-NOT-APPEAR",
+                    version="1.0.0",
+                    severity="critical",
+                )
+            ],
+        )
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, *_ = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                    return_value=scan_result,
+                ),
+            ),
+        )
+
+        detail = results[0].detail or ""
+        assert "LEAKY-PACKAGE-NAME-SHOULD-NOT-APPEAR" not in detail
+        assert "CVE-2099-9999" not in detail
+        assert "critical" in detail  # severity COUNTS dict is safe to include

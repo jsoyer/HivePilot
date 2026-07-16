@@ -778,9 +778,9 @@ commands** (like `hivepilot iac ...`) — they resolve a project's `path` from
    unknown counts) plus a findings table (CVE id, package, version,
    severity, fixed-in version when known). `--fail-on <severity>` makes the
    command exit non-zero if any finding is at or above that severity — a
-   manual gate for CI/pre-merge use today; a pipeline-stage CVE policy gate
-   (failing a *pipeline run* automatically) is a separate follow-up sprint,
-   not yet wired.
+   manual gate for CI/pre-merge use. For an automatic *pipeline-run* gate
+   (blocking `hivepilot run`/pipeline execution itself, not just the manual
+   CLI command), see "Pipeline CVE gate" below (Phase 21 Sprint 2).
 2. **`hivepilot scan sbom <project> [--format cyclonedx|spdx] [--output
    <file>]`** — generates a Software Bill of Materials via `syft` (also
    required on `PATH`; missing raises a clear error). Prints the SBOM to
@@ -797,6 +797,50 @@ commands** (like `hivepilot iac ...`) — they resolve a project's `path` from
 Example: `hivepilot scan vulns acme-repo --fail-on critical` (exits 1 if any
 critical CVE is found); `hivepilot scan sbom acme-repo --format cyclonedx
 --output sbom.json`.
+
+### Pipeline CVE gate (Phase 21 Sprint 2)
+
+Unlike `hivepilot scan vulns` above (a manual, read-only CLI command),
+the pipeline CVE gate blocks a *run itself* — set `block_on_severity` in a
+project's `policies.yaml` entry:
+
+```yaml
+policies:
+  projects:
+    acme-repo:
+      block_on_severity: critical   # critical|high|medium|low|negligible|unknown
+      scan_tool: grype               # grype (default) or osv-scanner
+```
+
+With that set, every `hivepilot run` (or pipeline stage) against
+`acme-repo` scans the repo's dependency tree **before** executing any step —
+the same run-level pre-execution gate pattern as `policy.require_approval`.
+A finding at/above `critical` blocks the run entirely: it's recorded as a
+failed run and no step is ever executed. Below the threshold, the run
+proceeds unchanged. Leaving `block_on_severity` unset (the default) means
+`scan_vulnerabilities` is never called — zero overhead, zero behaviour
+change for projects that don't opt in.
+
+**Fail-closed by design.** If the scanner itself fails for any reason (not
+installed, timeout, unexpected exit) while the gate is configured, the run
+is **blocked** with `CVE gate configured but scan failed: <ExceptionType>` —
+never silently allowed to proceed. A security gate the operator explicitly
+opted into must not become a no-op just because the scanner binary is
+missing on a given host.
+
+**No secret/raw-output leak in the block message.** The recorded/notified
+block detail is built only from the scan's `by_severity` counts (e.g.
+`{'critical': 1, 'high': 0, ...}`) plus the configured threshold — never the
+scanner's raw stdout, a specific package name, or a CVE identifier (which
+could echo lockfile/source-tree material — the same anti-leak discipline
+`scan_service` already applies, see the "Supply-chain scanning" section
+above).
+
+`--simulate` bypasses the CVE gate entirely, exactly like it bypasses
+`require_approval` — no scan is run, nothing is blocked. An invalid
+`block_on_severity` value is rejected eagerly both by `policy_service.
+get_policy` (at the first run against that project) and by `hivepilot
+config validate` (at config-lint time).
 
 ---
 
