@@ -271,6 +271,59 @@ def test_scratch_cleaned_up_after_capture_failure(tmp_path: Path) -> None:
     assert not scratch.exists()
 
 
+def test_mid_materialisation_failure_cleans_up_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skill #1's files (possibly containing resolved secret content) are
+    written to the scratch first; skill #2 then fails to resolve a secret
+    ref, raising mid-loop before the scratch dir is ever attached to any
+    payload metadata. The scratch must not survive the exception."""
+    monkeypatch.setenv("HP_SKILL_SECRET_STORE", "super-secret-value")
+    catalog = {"mytoken": {"source": "env", "key": "HP_SKILL_SECRET_STORE"}}
+    runner = _runner()
+    payload = _payload(tmp_path, secrets_catalog=catalog)
+    skill_ok = _skill(name="first", files={"SKILL.md": "token=${secret:mytoken}"})
+    skill_bad = _skill(name="second", files={"SKILL.md": "token=${secret:MISSING}"})
+
+    created: list[Path] = []
+    real_mkdtemp = __import__("tempfile").mkdtemp
+
+    def _tracking_mkdtemp(*args: object, **kwargs: object) -> str:
+        path = real_mkdtemp(*args, **kwargs)  # type: ignore[arg-type]
+        created.append(Path(path))
+        return path
+
+    monkeypatch.setattr("hivepilot.runners.claude_runner.tempfile.mkdtemp", _tracking_mkdtemp)
+
+    with pytest.raises(Exception):
+        runner.apply_skill(payload, [skill_ok, skill_bad])
+
+    assert len(created) == 1
+    assert not created[0].exists(), "orphaned scratch dir survived a mid-loop exception"
+
+
+def test_apply_skill_rejects_absolute_file_path(tmp_path: Path) -> None:
+    runner = _runner()
+    payload = _payload(tmp_path)
+    skill = _skill(files={"/etc/passwd": "malicious content"})
+
+    with pytest.raises(ValueError, match="unsafe skill file path"):
+        runner.apply_skill(payload, [skill])
+
+    assert not Path("/etc/passwd").read_text(encoding="utf-8") == "malicious content"
+
+
+def test_apply_skill_rejects_path_traversal_escape(tmp_path: Path) -> None:
+    runner = _runner()
+    payload = _payload(tmp_path)
+    # skill_dir is <scratch>/.claude/skills/demo (3 levels below <scratch>);
+    # 4 levels of ".." escapes <scratch> itself, not just the skill subtree.
+    skill = _skill(files={"../../../../escape.txt": "malicious content"})
+
+    with pytest.raises(ValueError, match="unsafe skill file path"):
+        runner.apply_skill(payload, [skill])
+
+
 def test_no_skills_applied_means_no_scratch_to_clean(tmp_path: Path) -> None:
     """A step that never called apply_skill must not choke on cleanup
     (no skill_scratch_dir key present at all)."""

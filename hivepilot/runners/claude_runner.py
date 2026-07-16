@@ -263,11 +263,16 @@ class ClaudeRunner(BaseRunner):
           written to disk or stashed on the payload — never logged raw.
         * Returns a NEW `RunnerPayload` (copied `metadata`); *payload* itself
           is never mutated.
-        * The scratch directory is intentionally NOT cleaned up here — it
-          must survive until `_build_invocation` consumes it inside
+        * On success, the scratch directory is intentionally NOT cleaned up
+          here — it must survive until `_build_invocation` consumes it inside
           `run()`/`capture()`, which remove it in a `finally` block after the
           subprocess call completes (success or exception) so it never
-          outlives the step.
+          outlives the step. If materialisation itself fails partway through
+          (e.g. an unresolvable `${secret:NAME}` in a later skill, or an
+          unsafe `files` path), the scratch dir is removed here before the
+          exception propagates — it is never attached to payload metadata in
+          that case, so the `run()`/`capture()` `finally` cleanup would never
+          otherwise see it.
         """
         kind = self.definition.kind
         applicable: list[SkillSpec] = []
@@ -290,15 +295,30 @@ class ClaudeRunner(BaseRunner):
         catalog = payload.project.secrets
         scratch_dir = Path(tempfile.mkdtemp(prefix="hivepilot-skill-"))
         prompts: list[str] = []
-        for skill in applicable:
-            skill_dir = scratch_dir / ".claude" / "skills" / skill["name"]
-            for rel_path, content in skill["files"].items():
-                target = skill_dir / rel_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(_resolve_skill_text(content, catalog), encoding="utf-8")
-            system_prompt = skill.get("system_prompt")
-            if system_prompt:
-                prompts.append(_resolve_skill_text(system_prompt, catalog))
+        try:
+            scratch_dir_resolved = scratch_dir.resolve()
+            for skill in applicable:
+                skill_dir = scratch_dir / ".claude" / "skills" / skill["name"]
+                for rel_path, content in skill["files"].items():
+                    if Path(rel_path).is_absolute():
+                        raise ValueError(f"unsafe skill file path: {rel_path!r}")
+                    target = (skill_dir / rel_path).resolve()
+                    if not target.is_relative_to(scratch_dir_resolved):
+                        raise ValueError(f"unsafe skill file path: {rel_path!r}")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(_resolve_skill_text(content, catalog), encoding="utf-8")
+                system_prompt = skill.get("system_prompt")
+                if system_prompt:
+                    prompts.append(_resolve_skill_text(system_prompt, catalog))
+        except Exception:
+            # A failure mid-materialisation (unresolvable secret ref, unsafe
+            # path, disk error, ...) must not leave a scratch dir — possibly
+            # containing already-resolved secret content from an earlier
+            # skill in this loop — orphaned on disk after the exception
+            # propagates past the point where it would normally be attached
+            # to payload metadata for run()/capture()'s finally-block cleanup.
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+            raise
 
         metadata[_SKILL_SCRATCH_DIR_KEY] = str(scratch_dir)
         if prompts:
