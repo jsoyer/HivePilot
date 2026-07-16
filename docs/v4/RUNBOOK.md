@@ -762,6 +762,42 @@ checklist:
    HivePilot's redaction can't scrub (it only masks values registered via
    `${secret:}` resolution).
 
+### Supply-chain scanning (`hivepilot scan`)
+
+`hivepilot scan vulns`/`hivepilot scan sbom` are **read-only, direct CLI
+commands** (like `hivepilot iac ...`) — they resolve a project's `path` from
+`projects.yaml` and call `hivepilot.services.scan_service` directly, with no
+`hivepilot run` task/step or orchestrator run record involved.
+
+1. **`hivepilot scan vulns <project> [--tool grype|osv-scanner] [--fail-on
+   <severity>]`** — scans the project's dependency tree for known CVEs.
+   `--tool` selects the scanner binary (`grype` by default; `osv-scanner` as
+   an alternative — both must be installed separately and on `PATH`, a
+   missing binary raises a clear error rather than failing silently).
+   Output is a severity breakdown (critical/high/medium/low/negligible/
+   unknown counts) plus a findings table (CVE id, package, version,
+   severity, fixed-in version when known). `--fail-on <severity>` makes the
+   command exit non-zero if any finding is at or above that severity — a
+   manual gate for CI/pre-merge use today; a pipeline-stage CVE policy gate
+   (failing a *pipeline run* automatically) is a separate follow-up sprint,
+   not yet wired.
+2. **`hivepilot scan sbom <project> [--format cyclonedx|spdx] [--output
+   <file>]`** — generates a Software Bill of Materials via `syft` (also
+   required on `PATH`; missing raises a clear error). Prints the SBOM to
+   stdout, or writes it to `--output <file>` when given. `--format`
+   defaults to CycloneDX JSON; `spdx` produces SPDX JSON instead.
+3. **Scanner output never leaks raw.** The vulnerability scanner's raw JSON
+   stdout (which can echo fragments of the scanned tree — package names,
+   file paths, occasionally lockfile content) is parsed entirely inside
+   `scan_service` into structured fields; only those parsed fields
+   (severity counts + the findings list) ever reach the CLI or any output
+   sink. SBOM generation is different in kind — the SBOM document itself
+   *is* the deliverable, so it is returned/written verbatim.
+
+Example: `hivepilot scan vulns acme-repo --fail-on critical` (exits 1 if any
+critical CVE is found); `hivepilot scan sbom acme-repo --format cyclonedx
+--output sbom.json`.
+
 ---
 
 ## 8. Quota Resilience

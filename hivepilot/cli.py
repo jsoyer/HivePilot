@@ -62,6 +62,8 @@ obsidian_app = typer.Typer(help="Obsidian vault integration")
 app.add_typer(obsidian_app, name="obsidian")
 plugins_app = typer.Typer(help="Inspect loaded plugins")
 app.add_typer(plugins_app, name="plugins")
+scan_app = typer.Typer(help="Supply-chain security scanning (SBOM + vulnerability scan)")
+app.add_typer(scan_app, name="scan")
 logger = get_logger(__name__)
 
 
@@ -1946,6 +1948,101 @@ def iac_cost(
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# Supply-chain scanning: vulnerability scan (grype/osv-scanner) + SBOM (syft)
+# (Phase 21 Sprint 1)
+#
+# Both commands resolve the project's `path` (the same `load_projects()`
+# lookup the `iac`/`project` commands use) and delegate to
+# `hivepilot.services.scan_service` -- a plain service, not a runner, invoked
+# directly here (no `Orchestrator`/`RunResult` in this path). The service
+# already returns fully parsed/structured results, so nothing raw ever
+# reaches this CLI layer to leak. `scan vulns --fail-on <severity>` is a
+# manual gate at this CLI layer only; a pipeline-stage CVE policy gate is a
+# separate follow-up sprint.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_project_path(project_name: str) -> Path:
+    projects = load_projects()
+    if project_name not in projects.projects:
+        raise typer.BadParameter(f"Unknown project: {project_name}")
+    return projects.projects[project_name].path
+
+
+@scan_app.command("vulns")
+def scan_vulns(
+    project: str = typer.Argument(..., help="Project name"),
+    tool: str = typer.Option("grype", "--tool", help="Scanner: grype, osv-scanner"),
+    fail_on: Optional[str] = typer.Option(
+        None,
+        "--fail-on",
+        help="Exit non-zero if any finding is at or above this severity "
+        "(critical, high, medium, low, negligible)",
+    ),
+) -> None:
+    """Scan a project's dependencies for known vulnerabilities (CVEs)."""
+    from hivepilot.services import scan_service
+
+    project_path = _resolve_project_path(project)
+
+    if fail_on is not None and fail_on.strip().lower() not in scan_service.SEVERITY_LEVELS:
+        raise typer.BadParameter(
+            f"--fail-on must be one of {', '.join(scan_service.SEVERITY_LEVELS)}"
+        )
+
+    try:
+        result = scan_service.scan_vulnerabilities(project_path, tool=tool)
+    except (RuntimeError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Scan tool: {result.tool}")
+    typer.echo(f"Total findings: {result.total}")
+    for severity in scan_service.SEVERITY_LEVELS:
+        typer.echo(f"  {severity}: {result.by_severity.get(severity, 0)}")
+
+    if result.findings:
+        typer.echo("")
+        typer.echo(f"{'ID':<20} {'PACKAGE':<25} {'VERSION':<15} {'SEVERITY':<10} FIXED")
+        for finding in result.findings:
+            typer.echo(
+                f"{finding.id:<20} {finding.package:<25} {finding.version:<15} "
+                f"{finding.severity:<10} {finding.fixed_version or '-'}"
+            )
+
+    if fail_on is not None and scan_service.exceeds_severity(result, fail_on.strip().lower()):
+        typer.echo(f"\nFound findings at or above '--fail-on {fail_on}' severity.", err=True)
+        raise typer.Exit(code=1)
+
+
+@scan_app.command("sbom")
+def scan_sbom(
+    project: str = typer.Argument(..., help="Project name"),
+    format: str = typer.Option("cyclonedx", "--format", help="SBOM format: cyclonedx, spdx"),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o", help="Write SBOM to this file instead of stdout"
+    ),
+) -> None:
+    """Generate a Software Bill of Materials (SBOM) for a project."""
+    from hivepilot.services import scan_service
+
+    project_path = _resolve_project_path(project)
+
+    try:
+        sbom = scan_service.generate_sbom(
+            project_path, format=format, output_path=Path(output) if output else None
+        )
+    except (RuntimeError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    if output:
+        typer.echo(f"SBOM written to {output}")
+    else:
+        typer.echo(sbom)
 
 
 # ---------------------------------------------------------------------------
