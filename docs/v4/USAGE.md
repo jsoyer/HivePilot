@@ -25,24 +25,42 @@ python -m venv .venv && .venv/bin/pip install -e .          # lightweight core
 | `hivepilot approvals` / `… run-approved` | List / act on pending approvals |
 | `hivepilot list-pipelines` / `list-projects` / `list-tasks` | Discovery |
 | `hivepilot tokens add --role admin` | Mint an API/CLI token (first must be admin) |
-| `hivepilot dashboard` | Textual TUI: runs, steps, interactions (needs `[dashboard]`) |
+| `hivepilot dashboard` | Mirador — tabbed Textual TUI (needs `[dashboard]`) |
 | `hivepilot telegram` | Start the Telegram bot (polling; needs `[notifications]` + token) |
 | `hivepilot doctor` | Environment / readiness check |
 
 **Dry-run vs simulate:** `--dry-run` (default true) only skips *vault writes*;
 the agents still run. `--simulate` skips *agent execution* entirely (safe preview).
 
-### Dashboard cost section
+### Mirador — the dashboard's tabbed layout
 
-`hivepilot dashboard` (Textual TUI, needs `[dashboard]`) shows a read-only
-**Cost** table alongside the existing runs/steps/interactions views: overall
-cost (USD) and input/output token totals across all recorded steps, an
-`unpriced` coverage count (steps with no self-reported cost and no price-map
-match, so the total is never presented as silently complete), and a
-per-provider/per-model breakdown. It reuses
-`hivepilot.services.analytics_service.cost_summary()` — see
-[RUNBOOK.md](RUNBOOK.md) ("Cost analytics") for the pricing table and cost
-precedence rules. The Metrics table also gained p50/p95/p99 run duration.
+`hivepilot dashboard` (Textual TUI, needs `[dashboard]`) launches **Mirador**,
+a tabbed, read-only insight dashboard (the `hivepilot dashboard` command name
+itself is unchanged — "Mirador" is just the app's title/branding). Four tabs
+(`r` refreshes the active data, `q` quits):
+
+- **Analytics** — runs, the Metrics table (totals, outcome counts, and
+  p50/p95/p99 run duration), a step-failure-hotspots table (the
+  `(step, status)` combinations with the most failures, from
+  `analytics_service.step_failure_hotspots()`), and recent interactions.
+- **Cost** — overall cost (USD) and input/output token totals across all
+  recorded steps, an `unpriced` coverage count (steps with no self-reported
+  cost and no price-map match, so the total is never presented as silently
+  complete), and a per-provider/per-model breakdown. Reuses
+  `hivepilot.services.analytics_service.cost_summary()` — see
+  [RUNBOOK.md](RUNBOOK.md) ("Cost analytics") for the pricing table and cost
+  precedence rules.
+- **Health** — plugin health (name / status / detail), read via
+  `PluginManager.check_all()` — the same never-raise health check every
+  `plugins health`/`plugins list` CLI command uses. A broken health check
+  renders as `error`, it never crashes the dashboard.
+- **Mem0** — recent memories (with their typed provenance metadata —
+  category/project/task/timestamp) when the [mem0 plugin](PLUGINS.md) is
+  configured (`HIVEPILOT_MEM0_ENABLED=true`) and reachable; otherwise a clear
+  "not configured" placeholder. Never crashes, never shows a secret/token.
+
+All tabs are unscoped/unbounded (tenant=None, days=None) — Mirador is a local
+operator tool, like `hivepilot plugins list`.
 
 ### Typical run
 
