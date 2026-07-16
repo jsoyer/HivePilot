@@ -1746,10 +1746,52 @@ def init_project(
 # ---------------------------------------------------------------------------
 
 
-def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu") -> None:
+def _cli_actor() -> str:
+    """Best-effort OS username for the CLI audit trail (Part B-cli). Falls
+    back to a generic label rather than failing the whole operation over an
+    unreadable environment."""
+    import getpass
+
+    try:
+        return getpass.getuser()
+    except Exception:  # noqa: BLE001
+        return "cli"
+
+
+def _run_iac_operation(
+    project_name: str, operation: str, kind: str = "opentofu", *, yes: bool = False
+) -> None:
+    """Execute a single IaC operation against *project_name* through the
+    resolved runner directly (no orchestrator run/task involved -- this IS
+    the orchestrator-bypass CLI path), while still honouring the same two
+    contracts an orchestrator-run step gets (Part B-cli — closes the gap left
+    by Part B-core, which only gates `Orchestrator.run_task`):
+
+    * Secrets: any ``${secret:NAME}`` reference in the project's ``env`` is
+      resolved through the exact same mechanism
+      ``Orchestrator._resolve_secrets`` uses for an orchestrator-run step
+      (``secret_refs.resolve_secret_refs`` + ``secrets_service.secret_resolver``),
+      so a CLI-triggered ``apply``/``destroy`` gets real ``TF_VAR_*``/cloud
+      credentials instead of a literal unresolved ``${secret:...}`` string --
+      and every resolved value is registered with
+      ``config_provenance.register_secret_value`` so it can never leak into
+      echoed CLI output or the audit summary below.
+    * Destructive-op gate: when the resolved runner's optional
+      ``is_destructive(payload)`` (see
+      ``hivepilot.orchestrator.step_requires_approval`` for the
+      orchestrator's equivalent gate) reports that *operation* mutates real
+      infrastructure, a human must explicitly confirm -- via ``--yes`` or an
+      interactive prompt -- before anything runs, and the confirmed
+      operation is always recorded via ``state_service.record_interaction``,
+      the audit trail this direct CLI path would otherwise have none of.
+    """
     from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
     from hivepilot.registry import resolve_runner_class
     from hivepilot.runners.base import RunnerPayload
+    from hivepilot.services import policy_service
+    from hivepilot.services.config_provenance import register_secret_value
+    from hivepilot.services.secret_refs import resolve_secret_refs
+    from hivepilot.services.secrets_service import secret_resolver
 
     projects = load_projects()
     if project_name not in projects.projects:
@@ -1758,16 +1800,60 @@ def _run_iac_operation(project_name: str, operation: str, kind: str = "opentofu"
 
     definition = RunnerDefinition(name=kind, kind=cast(RunnerKind, kind), command=operation)
     step = TaskStep(name=f"iac-{operation}", runner=kind, command=operation)
+
+    # Mirrors Orchestrator._resolve_secrets: direct step.secrets form (always
+    # empty for a CLI-built step today, but kept for parity) plus lazily
+    # resolved ${secret:NAME} references embedded in project.env.
+    policy = policy_service.get_policy(project_name)
+    resolved_secrets: dict[str, str] = {}
+    if step.secrets:
+        resolved_secrets.update(secret_resolver.resolve(step.secrets))
+    if project.env:
+        resolved_secrets.update(
+            resolve_secret_refs(
+                project.env, catalog=project.secrets, fail_mode=policy.secrets_fail_mode
+            )
+        )
+    for value in resolved_secrets.values():
+        register_secret_value(value)
+
     payload = RunnerPayload(
         project_name=project_name,
         project=project,
         task_name=f"iac-{operation}",
         step=step,
         metadata={},
+        secrets=resolved_secrets,
     )
 
     runner_cls = resolve_runner_class(kind)
     runner = runner_cls(definition=definition, settings=settings)
+
+    is_destructive_fn = getattr(runner, "is_destructive", None)
+    destructive = bool(is_destructive_fn(payload)) if is_destructive_fn is not None else False
+
+    if destructive:
+        if not yes:
+            typer.confirm(
+                f"⚠️  This will run a DESTRUCTIVE {kind} {operation} on project "
+                f"'{project_name}' — continue?",
+                abort=True,
+            )
+        state_service.record_interaction(
+            actor=_cli_actor(),
+            action=f"iac.{operation}",
+            target=project_name,
+            summary=(
+                f"Destructive IaC '{operation}' ({kind}) run via CLI for project '{project_name}'"
+            ),
+            metadata={
+                "operation": operation,
+                "runner": kind,
+                "confirmed_via": "--yes" if yes else "interactive prompt",
+                "destructive": True,
+            },
+        )
+
     runner.run(payload)
 
 
@@ -1790,10 +1876,13 @@ def iac_apply(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Apply infrastructure changes."""
-    if not yes:
-        typer.confirm(f"Apply infrastructure changes for project '{project}'?", abort=True)
-    _run_iac_operation(project, "apply", kind=runner)
+    """Apply infrastructure changes.
+
+    A destructive apply always requires explicit confirmation (interactive
+    prompt, or --yes for non-interactive use) and is always audit-logged --
+    see `_run_iac_operation`.
+    """
+    _run_iac_operation(project, "apply", kind=runner, yes=yes)
 
 
 @iac_app.command("destroy")
@@ -1804,12 +1893,13 @@ def iac_destroy(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Destroy infrastructure."""
-    if not yes:
-        typer.confirm(
-            f"Destroy infrastructure for project '{project}'? This is irreversible.", abort=True
-        )
-    _run_iac_operation(project, "destroy", kind=runner)
+    """Destroy infrastructure.
+
+    Always requires explicit confirmation (interactive prompt, or --yes for
+    non-interactive use) and is always audit-logged -- see
+    `_run_iac_operation`.
+    """
+    _run_iac_operation(project, "destroy", kind=runner, yes=yes)
 
 
 @iac_app.command("drift")
