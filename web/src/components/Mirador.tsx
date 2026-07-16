@@ -1,36 +1,22 @@
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { AnalyticsView } from './views/AnalyticsView'
+import { CostView } from './views/CostView'
+import { HealthView } from './views/HealthView'
+import { Mem0View } from './views/Mem0View'
 
 const TABS = [
-  { value: 'analytics', label: 'Analytics' },
-  { value: 'cost', label: 'Cost' },
-  { value: 'health', label: 'Health' },
-  { value: 'mem0', label: 'Mem0' },
+  { value: 'analytics', label: 'Analytics', Panel: AnalyticsView },
+  { value: 'cost', label: 'Cost', Panel: CostView },
+  { value: 'health', label: 'Health', Panel: HealthView },
+  { value: 'mem0', label: 'Mem0', Panel: Mem0View },
 ] as const
-
-function PlaceholderPanel({ label }: { label: string }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {label}
-          <Badge variant="outline">Sprint 3</Badge>
-        </CardTitle>
-        <CardDescription>Wired in Sprint 3.</CardDescription>
-      </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        Real {label.toLowerCase()} data lands here once this view is wired up.
-      </CardContent>
-    </Card>
-  )
-}
 
 /**
  * The Mirador app shell — dark, tabbed insight dashboard (Analytics / Cost /
- * Health / Mem0). Placeholder panels only in this sprint; Sprint 3 wires
- * each tab to real `/v1/analytics/*`, `/v1/plugins/health`, and mem0 data
- * via `@/lib/api`'s `apiFetch`.
+ * Health / Mem0). Each tab is wired to real HivePilot API data (Sprint 3):
+ * `/v1/analytics/*` for Analytics/Cost, `/v1/plugins/health` for Health, and
+ * `/v1/memories` for Mem0 — see `./views/*` and `@/lib/mirador-api`.
  */
 export function Mirador() {
   return (
@@ -47,9 +33,9 @@ export function Mirador() {
             </TabsTrigger>
           ))}
         </TabsList>
-        {TABS.map((tab) => (
-          <TabsContent key={tab.value} value={tab.value} className="mt-4">
-            <PlaceholderPanel label={tab.label} />
+        {TABS.map(({ value, Panel }) => (
+          <TabsContent key={value} value={value} className="mt-4">
+            <Panel />
           </TabsContent>
         ))}
       </Tabs>

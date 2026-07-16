@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { ApiAuthError, apiFetch, getToken, setToken } from '@/lib/api'
+import { ApiAuthError, apiFetch, getToken, setToken, TOKEN_CLEARED_EVENT } from '@/lib/api'
 
 type GateStatus = 'checking' | 'signed-out' | 'signed-in'
 
@@ -42,6 +42,19 @@ export function TokenGate({ children }: TokenGateProps) {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  // A signed-in view (Mirador's tabs) can hit a 401 on any of its own API
+  // calls well after the gate's own mount-time check — e.g. a token that
+  // expired mid-session. `apiFetch` already clears the token in that case;
+  // react to that here so the app falls back to the gate immediately
+  // instead of leaving a signed-in tree mounted with a now-invalid token.
+  useEffect(() => {
+    function handleTokenCleared() {
+      setStatus('signed-out')
+    }
+    window.addEventListener(TOKEN_CLEARED_EVENT, handleTokenCleared)
+    return () => window.removeEventListener(TOKEN_CLEARED_EVENT, handleTokenCleared)
   }, [])
 
   const handleSubmit = useCallback(

@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiAuthError, getToken, setToken } from '@/lib/api'
+import { ApiAuthError, clearToken, getToken, setToken } from '@/lib/api'
 import { TokenGate } from './TokenGate'
 
 const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }))
@@ -145,5 +145,27 @@ describe('TokenGate', () => {
     // Clearing the token on 401/403 is apiFetch's job (covered by
     // api.test.ts) — apiFetch is mocked out here, so it's a no-op; the gate
     // itself only reacts to the thrown ApiAuthError.
+  })
+
+  it('falls back to the token form when a background call (e.g. from Mirador) clears the token', async () => {
+    setToken('good-token')
+    apiFetchMock.mockResolvedValue({ plugins: [] })
+
+    await act(async () => {
+      mount()
+    })
+
+    expect(container.querySelector('[data-testid="protected-content"]')).not.toBeNull()
+
+    // Simulate a background 401 elsewhere in the app: apiFetch (the real,
+    // un-mocked implementation) clears the token and fires
+    // TOKEN_CLEARED_EVENT. The gate itself doesn't need to know which view
+    // triggered it — it just reacts to the event.
+    await act(async () => {
+      clearToken()
+    })
+
+    expect(container.querySelector('input[aria-label="HivePilot read token"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="protected-content"]')).toBeNull()
   })
 })
