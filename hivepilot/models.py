@@ -3,7 +3,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def _dedup_ordered(value: list[str] | None) -> list[str] | None:
+    """Dedup a list of strings while preserving first-occurrence order.
+
+    ``None`` passes through unchanged — absence means "dormant", not "empty
+    list" (see `TaskStep.skills` / `PipelineStage.skills`)."""
+    if value is None:
+        return None
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in value:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
 
 RunnerKind = str
 
@@ -75,6 +92,18 @@ class TaskStep(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     knowledge_files: list[str] = Field(default_factory=list)
     secrets: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Skill plugin type (skill-plugin-type PRD, Sprint 3): ordered, deduped
+    # names of plugin-contributed skills this step wants applied. Default
+    # None -- dormant, byte-identical when absent. Cross-referenced against
+    # `PluginManager.list_skills()` (unknown name -> hard validation error)
+    # and gated by each skill's optional `min_role` -- see
+    # `hivepilot/services/config_validation.py`.
+    skills: list[str] | None = None
+
+    @field_validator("skills")
+    @classmethod
+    def _dedup_skills(cls, v: list[str] | None) -> list[str] | None:
+        return _dedup_ordered(v)
 
     @model_validator(mode="after")
     def validate_fields(self) -> TaskStep:
@@ -140,6 +169,17 @@ class PipelineStage(BaseModel):
     # When True, a failed stage does not fail-fast the run (the pipeline
     # continues to the next stage instead of breaking).
     continue_on_failure: bool = False
+    # Skill plugin type (skill-plugin-type PRD, Sprint 3): ordered, deduped
+    # names of plugin-contributed skills this stage wants applied. Default
+    # None -- dormant, byte-identical when absent. See `TaskStep.skills` for
+    # the identical semantics and `hivepilot/services/config_validation.py`
+    # for the fail-closed cross-reference + `min_role` check.
+    skills: list[str] | None = None
+
+    @field_validator("skills")
+    @classmethod
+    def _dedup_skills(cls, v: list[str] | None) -> list[str] | None:
+        return _dedup_ordered(v)
 
 
 class PipelineConfig(BaseModel):

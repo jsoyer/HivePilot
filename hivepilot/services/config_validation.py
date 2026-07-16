@@ -258,4 +258,104 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
                         f"tags (groups.yaml)"
                     )
 
+    # -----------------------------------------------------------------------
+    # Check: every `skills:` entry (TaskStep.skills / PipelineStage.skills,
+    # skill-plugin-type PRD Sprint 3) references a REGISTERED plugin skill,
+    # and -- when that skill declares a `min_role` -- the referencing task's
+    # `role:` satisfies it.
+    #
+    # Dormancy gate: `skills` is absent from every task step and pipeline
+    # stage in the overwhelming majority of configs today. First collect
+    # every reference as a cheap dict-walk (no plugin work at all); only if
+    # at least one reference exists do we construct a `PluginManager()` (a
+    # real scan of the plugins/ dir + entry points, with process-global side
+    # effects on RUNNER_MAP/NOTIFIER_MAP/SECRETS_MAP -- see
+    # tests/conftest.py::_isolate_runner_and_notifier_maps). This keeps a
+    # no-skills config byte-identical: no new problems AND no new
+    # construction/side effects (see
+    # test_no_skills_config_is_byte_identical_to_pre_sprint3_behavior).
+    #
+    # "The step's resolved role" is the owning TASK's `role:` value --
+    # TaskStep has no per-step role of its own; role is bound once per task
+    # and shared by every step in it (mirrors how `resolve_runner(task.role,
+    # policy)` resolves execution in orchestrator.py). A PipelineStage's
+    # resolved role is its referenced task's role.
+    #
+    # A skill with NO `min_role` is intentionally public/ungated (see
+    # `hivepilot/plugins.py` SkillSpec docstring -- unlike PanelSpec there is
+    # no implicit default). Never conflate "not yet gated" with
+    # "intentionally public": only a skill that explicitly declares
+    # `min_role` is checked below.
+    #
+    # Fail-closed, mirroring `api_service.get_panel_endpoint` /
+    # authz-config-fail-closed: `token_service.role_rank()` returns -1 for
+    # any name it doesn't recognize. If EITHER the skill's `min_role` OR the
+    # resolved task role is unrecognized (rank -1), that is a hard
+    # validation error, never a silent pass -- a `-1 < -1` or `-1 < N`
+    # comparison must never be allowed to evaluate as "satisfied". This also
+    # means today's agent-persona role names (ceo, developer, reviewer, ...)
+    # can never satisfy a `min_role` gate, because they are a different
+    # namespace than `token_service.ROLE_RANKS` (read/run/approve/admin) --
+    # see Sprint 3 Agent Notes for the explicit design decision.
+    # -----------------------------------------------------------------------
+    skill_refs: list[tuple[str, list[str], str | None]] = []
+    for task_name, task_def in (tasks_data.get("tasks") or {}).items():
+        if not isinstance(task_def, dict):
+            continue
+        task_role = task_def.get("role")
+        for step in task_def.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            step_skills = step.get("skills")
+            if step_skills:
+                skill_refs.append(
+                    (
+                        f"Task '{task_name}' step '{step.get('name', '?')}'",
+                        list(step_skills),
+                        task_role,
+                    )
+                )
+
+    for pipeline_name, pipeline in (pipelines_data.get("pipelines") or {}).items():
+        for stage in pipeline.get("stages") or []:
+            stage_skills = stage.get("skills")
+            if stage_skills:
+                task_ref = stage.get("task")
+                stage_task_def = (tasks_data.get("tasks") or {}).get(task_ref) if task_ref else None
+                stage_role = (
+                    stage_task_def.get("role") if isinstance(stage_task_def, dict) else None
+                )
+                skill_refs.append(
+                    (
+                        f"Pipeline '{pipeline_name}' stage '{stage.get('name', '?')}'",
+                        list(stage_skills),
+                        stage_role,
+                    )
+                )
+
+    if skill_refs:
+        from hivepilot.plugins import PluginManager
+        from hivepilot.services import token_service
+
+        plugin_manager = PluginManager()
+        for owner_label, skill_names, resolved_role in skill_refs:
+            for skill_name in skill_names:
+                skill = plugin_manager.get_skill(skill_name)
+                if skill is None:
+                    problems.append(f"{owner_label} references unknown skill '{skill_name}'")
+                    continue
+                min_role = skill.get("min_role")
+                if not min_role:
+                    continue
+                required_rank = token_service.role_rank(min_role)
+                actual_rank = (
+                    token_service.role_rank(resolved_role) if isinstance(resolved_role, str) else -1
+                )
+                if required_rank < 0 or actual_rank < 0 or actual_rank < required_rank:
+                    problems.append(
+                        f"{owner_label} uses skill '{skill_name}' which requires "
+                        f"min_role '{min_role}', but its resolved role "
+                        f"{resolved_role!r} does not satisfy it"
+                    )
+
     return problems
