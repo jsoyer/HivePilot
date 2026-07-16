@@ -980,11 +980,16 @@ def _webui_enabled() -> bool:
     return bool(settings.enable_webui) and webui.static_available()
 
 
-@app.get("/ui")
-@app.get("/ui/{sub_path:path}")
+@app.get("/ui", include_in_schema=False)
+@app.get("/ui/{sub_path:path}", include_in_schema=False)
 def serve_webui(sub_path: str = "") -> FileResponse:
     if not _webui_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    # A traversal attempt or unknown sub-path (resolve_static_path() returns
+    # None) intentionally degrades to serving INDEX_HTML — the SPA fallback
+    # for client-side routing. This is not an oversight: resolve_static_path()
+    # has already guaranteed the request can never escape STATIC_DIR before
+    # we get here, so falling back to the index is always safe.
     file_path = webui.resolve_static_path(sub_path) or webui.INDEX_HTML
     return FileResponse(str(file_path))
 

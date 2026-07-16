@@ -81,4 +81,25 @@ git add hivepilot/webui/static
 
 CI (`webui-build` job in `.github/workflows/ci.yml`) rebuilds from
 `web/` on every push/PR and fails if the committed `hivepilot/webui/static/`
-doesn't exactly match a fresh build — so a stale bundle can't merge.
+doesn't exactly match a fresh build — so a stale bundle can't merge. Node
+is pinned via `web/.nvmrc`, consumed by both the CI step
+(`node-version-file: web/.nvmrc`) and local `nvm use` in `web/`, so a Node
+version drift between CI and a contributor's machine can't produce a
+spurious diff.
+
+The committed assets under `hivepilot/webui/static/assets/` use
+content-hashed filenames (e.g. `index-a1b2c3d4.js`), so **any** source
+change — even a whitespace-only one — changes the hash and therefore the
+diff. If `webui-build` fails and the diff is hash-only churn with no
+behavior change, that's not a functional regression: just rebuild
+(`cd web && npm run build`) and recommit `hivepilot/webui/static/` as
+shown above.
+
+**Note on the toggle's discoverability:** the `/ui` routes are registered
+unconditionally (`include_in_schema=False` only removes them from
+`/openapi.json`/`/docs`); a request with an unsupported method (e.g.
+`OPTIONS /ui`) still returns `405` rather than `404` even when
+`HIVEPILOT_ENABLE_WEBUI` is off. This means the *existence* of the
+feature flag is discoverable pre-auth — the served content behind it
+never is (that stays behind `_webui_enabled()`'s runtime gate). Treated
+as acceptable residual, not a vulnerability.

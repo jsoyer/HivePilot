@@ -87,10 +87,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node 26
+      - name: Set up Node (pinned via web/.nvmrc)
         uses: actions/setup-node@v4
         with:
-          node-version: "26"
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 

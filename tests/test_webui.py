@@ -168,3 +168,42 @@ class TestPathTraversalGuard:
         resolved = webui.resolve_static_path("assets/index-test.js")
         assert resolved is not None
         assert resolved == Path(fake_static_dir / "assets" / "index-test.js").resolve()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            # httpx/TestClient normalizes literal ".." dot-segments client-side
+            # before the request ever leaves the client, so a naive
+            # "/ui/../../../etc/passwd" never reaches the server with the
+            # traversal intact. URL-encoding the dots/slashes bypasses that
+            # client-side normalization and delivers the raw ".." segments to
+            # the ASGI app, exactly as a real attacker's request would arrive
+            # over the wire — this is what actually exercises the server-side
+            # guard in `webui.resolve_static_path()`.
+            "/ui/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+            "/ui/..%2f..%2f..%2fetc%2fpasswd",
+        ],
+    )
+    def test_route_rejects_traversal_and_falls_back_to_spa(
+        self, api_client, enable_webui, fake_static_dir, payload
+    ):
+        """End-to-end guard check through the live GET /ui/{sub_path} route
+        (not just the resolve_static_path() helper in isolation): a
+        traversal payload must never leak file content from outside
+        STATIC_DIR and must never 500 — it degrades to the safe SPA
+        fallback (index.html), same as any other unknown sub-path.
+
+        `%2e%2e` / `%2f` are percent-encoded so the client's own URL parser
+        never collapses the ".." locally — the raw traversal segments are
+        what actually reach the server and exercise resolve_static_path()'s
+        guard, verified by hand: TestClient(app).get(payload) passes the
+        encoded string straight through to Starlette's routing, which
+        decodes it server-side into "../../../etc/passwd" for the handler.
+        """
+        resp = api_client.get(payload)
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        # Never the content of a real outside file (e.g. /etc/passwd).
+        assert "root:" not in resp.text
+        # Always the SPA fallback shell, never a directory listing/crash.
+        assert "<div id='root'>" in resp.text
