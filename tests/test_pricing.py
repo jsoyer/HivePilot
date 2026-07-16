@@ -84,6 +84,42 @@ class TestEstimateCostConfigOverride:
         cost = pricing.estimate_cost("claude-sonnet-4-6", 1_000_000, 500_000)
         assert cost == 10.5
 
+    def test_malformed_override_entry_is_skipped_not_raised(self, monkeypatch) -> None:
+        """A malformed per-model override value (not a dict — e.g. a typo'd
+        JSON string/int instead of {"input":.., "output":..}) must degrade
+        gracefully: the bad entry is skipped (never merged in), the model
+        resolves as unpriced (None), and no exception propagates. Locks in
+        the `isinstance(rates, dict)` guard in `_effective_price_map`."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "llm_price_map",
+            {"model-x": "not-a-dict"},
+            raising=False,
+        )
+        cost = pricing.estimate_cost("model-x", 1_000_000, 500_000)
+        assert cost is None
+
+    def test_malformed_override_entry_does_not_break_other_models(self, monkeypatch) -> None:
+        """A malformed entry for one model must not prevent a well-formed
+        override (or a default) for another model from resolving."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "llm_price_map",
+            {
+                "model-x": "not-a-dict",
+                "model-y": {"input": 2.0, "output": 4.0},
+            },
+            raising=False,
+        )
+        assert pricing.estimate_cost("model-x", 1_000_000, 500_000) is None
+        assert pricing.estimate_cost("model-y", 1_000_000, 1_000_000) == 6.0
+        # A default model, untouched by either override entry, still resolves.
+        assert pricing.estimate_cost("claude-sonnet-4-6", 1_000_000, 500_000) == 10.5
+
 
 class TestDefaultPriceMap:
     def test_default_price_map_is_non_empty(self) -> None:

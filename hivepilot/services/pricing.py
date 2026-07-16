@@ -20,8 +20,6 @@ merged OVER these defaults (per-model, not a wholesale replacement) — see
 
 from __future__ import annotations
 
-from typing import Any
-
 # USD per 1,000,000 (1 Mtok) tokens. Indicative only, dated 2026-07-15 —
 # NOT a guarantee of current provider pricing. Override via
 # HIVEPILOT_LLM_PRICE_MAP. Intentionally small: only a few common models,
@@ -79,4 +77,4 @@ def estimate_cost(
     return (input_tokens / 1_000_000) * in_rate + (output_tokens / 1_000_000) * out_rate
 
 
-__all__: list[Any] = ["DEFAULT_PRICE_MAP", "estimate_cost"]
+__all__: list[str] = ["DEFAULT_PRICE_MAP", "estimate_cost"]

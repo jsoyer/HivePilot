@@ -637,6 +637,32 @@ class TestCostSummary:
         assert result["overall"]["cost_usd"] == 1.23
         assert result["overall"]["unpriced_steps"] == 0
 
+    def test_self_reported_zero_cost_is_not_treated_as_missing(self) -> None:
+        """A self-reported cost_usd of exactly 0.0 must still win over the
+        price-map estimate (which would be nonzero here) — `_step_cost` must
+        check `cost_usd is not None`, not `if cost_usd:` (0.0 is falsy but a
+        legitimate, present, self-reported value). Guards this precedence
+        invariant against a future 'simplify the truthiness check' refactor."""
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=0.0,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        # Must be exactly the self-reported 0.0, NOT the 10.5 the price map
+        # would estimate for this model/token combination.
+        assert result["overall"]["cost_usd"] == 0.0
+        # A self-reported 0.0 is still a cost SIGNAL — this step is priced,
+        # not unpriced.
+        assert result["overall"]["unpriced_steps"] == 0
+
     def test_tokens_only_priced_model_uses_estimate(self) -> None:
         run1 = _seed_run()
         _seed_step_with_usage(
