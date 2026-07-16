@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiAuthError,
+  ApiForbiddenError,
   apiFetch,
   clearToken,
   getToken,
   setToken,
+  TOKEN_CLEARED_EVENT,
   TOKEN_STORAGE_KEY,
 } from './api'
 
@@ -27,6 +29,15 @@ describe('token storage', () => {
     setToken('abc123')
     clearToken()
     expect(getToken()).toBeNull()
+  })
+
+  it('dispatches TOKEN_CLEARED_EVENT on clearToken so the app can react (e.g. return to the token gate)', () => {
+    setToken('abc123')
+    const listener = vi.fn()
+    window.addEventListener(TOKEN_CLEARED_EVENT, listener)
+    clearToken()
+    window.removeEventListener(TOKEN_CLEARED_EVENT, listener)
+    expect(listener).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -113,5 +124,33 @@ describe('apiFetch', () => {
     await expect(apiFetch('/v1/plugins/health')).rejects.not.toBeInstanceOf(ApiAuthError)
     // A 500 is a server error, not an auth failure — the token stays valid.
     expect(getToken()).toBe('secret-token')
+  })
+
+  it('still clears the token and throws ApiAuthError on 401 even when on403 is "forbidden"', async () => {
+    setToken('bad-token')
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Missing token' }), { status: 401 }),
+    ) as unknown as typeof fetch
+
+    await expect(apiFetch('/v1/memories?query=x', { on403: 'forbidden' })).rejects.toBeInstanceOf(
+      ApiAuthError,
+    )
+    expect(getToken()).toBeNull()
+  })
+
+  it('with on403: "forbidden", throws ApiForbiddenError on 403 WITHOUT clearing the token', async () => {
+    setToken('read-role-token')
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Forbidden' }), { status: 403 }),
+    ) as unknown as typeof fetch
+
+    await expect(apiFetch('/v1/memories?query=x', { on403: 'forbidden' })).rejects.toBeInstanceOf(
+      ApiForbiddenError,
+    )
+    // Unlike the default 403 handling, a "forbidden" 403 doesn't mean the
+    // token itself is bad — it means the token's role is insufficient for
+    // this specific endpoint. Other endpoints the token IS allowed to call
+    // must keep working, so the token must not be cleared.
+    expect(getToken()).toBe('read-role-token')
   })
 })
