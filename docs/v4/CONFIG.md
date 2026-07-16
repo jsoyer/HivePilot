@@ -161,10 +161,33 @@ name + failure kind only — never output content, tokens, or secrets). A step
 that would have succeeded with the flag off always still succeeds with the
 flag on.
 
-**Cost is CLI-self-reported only** in this sprint — there is no built-in
-price-map, and no cost analytics endpoints yet. A runner/provider that
-doesn't self-report `total_cost_usd` simply persists `NULL` for `cost_usd`
-until a later phase adds a price-map fallback.
+**Cost is CLI-self-reported only** at capture time — a runner/provider that
+doesn't self-report `total_cost_usd` persists `NULL` for `cost_usd`. The
+price-map fallback (Phase 24b.2b) doesn't backfill `steps.cost_usd` itself;
+it's applied read-only, at query time, by `GET /v1/analytics/cost` (see
+"Price map & cost analytics" below).
+
+### Price map & cost analytics (Phase 24b.2b — closes Phase 24)
+
+`hivepilot.services.pricing` supplies a small default USD-per-1M-token price
+table (`input`/`output` rate per model), used as a **fallback** estimate by
+`GET /v1/analytics/cost` (`hivepilot.services.analytics_service.cost_summary`)
+whenever a step has no self-reported `cost_usd`. **The defaults are
+indicative and dated (2026-07-15), not a maintained live price feed** —
+override or extend them via `HIVEPILOT_LLM_PRICE_MAP`, a JSON object merged
+**over** the defaults per-model:
+
+```bash
+HIVEPILOT_LLM_PRICE_MAP='{"claude-sonnet-4-6": {"input": 3.0, "output": 15.0}, "my-custom-model": {"input": 1.0, "output": 2.0}}'
+```
+
+**Per-step cost precedence** (see `analytics_service._step_cost`):
+
+1. self-reported `steps.cost_usd` (authoritative, when `claude_capture_usage` captured it)
+2. estimated from the price map (`pricing.estimate_cost`), when tokens are recorded and the model is priced
+3. unpriced — contributes `0.0` to the total, counted in the response's `unpriced_steps` coverage number so a dashboard never presents an incomplete total as if it were exhaustive
+
+See `docs/v4/RUNBOOK.md` "Cost analytics" for the `GET /v1/analytics/cost` endpoint shape.
 
 ## Key environment variables / settings
 
@@ -174,6 +197,7 @@ until a later phase adds a price-map fallback.
 | container_runtime | `HIVEPILOT_CONTAINER_RUNTIME` | `docker` (or `podman`; per-runner override via `options.runtime`) |
 | claude_permission_mode | `HIVEPILOT_CLAUDE_PERMISSION_MODE` | — (global fallback; developer role already sets `bypassPermissions`) |
 | claude_capture_usage | `HIVEPILOT_CLAUDE_CAPTURE_USAGE` | `false` — opt-in per-step token/cost/actual-model capture; see "Usage capture" above |
+| llm_price_map | `HIVEPILOT_LLM_PRICE_MAP` | — (JSON object, merged over `pricing.DEFAULT_PRICE_MAP`); see "Price map & cost analytics" above |
 | state_db | `HIVEPILOT_STATE_DB` | `state.db` |
 | telegram_bot_token | `HIVEPILOT_TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` | — |
 | telegram_allowed_chat_ids | `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` | `[]` (open) |

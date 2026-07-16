@@ -55,7 +55,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
-from hivepilot.services import db, state_service
+from hivepilot.services import db, pricing, state_service
 
 # ---------------------------------------------------------------------------
 # Canonical outcome mapping
@@ -567,3 +567,119 @@ def approval_latency(
         durations.append(delta)
 
     return _duration_stats(durations)
+
+
+# ---------------------------------------------------------------------------
+# cost_summary (Phase 24b.2b) — cost/provider analytics on top of the
+# Phase 24b.1 provider/model columns and the Phase 24b.2a usage columns.
+# ---------------------------------------------------------------------------
+
+
+def _step_cost(row: dict[str, Any]) -> tuple[float, bool]:
+    """Effective cost for one `steps` row + whether it was priced at all.
+
+    Precedence: self-reported ``cost_usd`` (authoritative) > an estimate from
+    the price map (`pricing.estimate_cost`) > unpriced (contributes 0.0 to
+    the cost total but is flagged so callers never silently present a total
+    that omits unpriced steps as if it were complete).
+    """
+    cost_usd = row.get("cost_usd")
+    if cost_usd is not None:
+        return float(cost_usd), True
+    estimated = pricing.estimate_cost(
+        row.get("model"), row.get("input_tokens"), row.get("output_tokens")
+    )
+    if estimated is not None:
+        return estimated, True
+    return 0.0, False
+
+
+def _accumulate_cost(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    total_cost = 0.0
+    total_input = 0
+    total_output = 0
+    unpriced_steps = 0
+    for row in rows:
+        cost, priced = _step_cost(row)
+        total_cost += cost
+        total_input += row.get("input_tokens") or 0
+        total_output += row.get("output_tokens") or 0
+        if not priced:
+            unpriced_steps += 1
+    return {
+        "total_steps": len(rows),
+        "input_tokens": total_input,
+        "output_tokens": total_output,
+        "cost_usd": round(total_cost, 6),
+        "unpriced_steps": unpriced_steps,
+    }
+
+
+def cost_summary(
+    tenant: str | None = None,
+    days: int | None = 30,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    task: str | None = None,
+) -> dict[str, Any]:
+    """Cost/token totals, overall and grouped by `provider` and `model`.
+
+    Tenant-scoped via `steps JOIN runs` (mirrors `_steps_grouped_by`). A
+    `NULL` provider/model groups under the literal key ``"unknown"`` — never
+    dropped, never invented. Each group (and the overall total) reports both
+    the summed cost AND ``unpriced_steps`` — a count of steps that had no
+    cost signal at all (no self-reported `cost_usd` and no price-map match),
+    so a dashboard can show coverage instead of presenting a total that
+    silently omits unpriced steps as if it were complete.
+    """
+    state_service.init_db()
+    since_ts, until_ts = _resolve_window(days, since, until)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if project is not None:
+        clauses.append("r.project=?")
+        params.append(project)
+    if task is not None:
+        clauses.append("r.task=?")
+        params.append(task)
+    if since_ts is not None:
+        clauses.append("s.timestamp>=?")
+        params.append(since_ts)
+    if until_ts is not None:
+        clauses.append("s.timestamp<=?")
+        params.append(until_ts)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT s.provider AS provider, s.model AS model,
+               s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
+               s.cost_usd AS cost_usd
+        FROM steps s
+        JOIN runs r ON r.id = s.run_id
+        {where}
+    """
+    with db.connect() as conn:
+        rows = [dict(row) for row in conn.execute(db.ph(sql), tuple(params)).fetchall()]
+
+    by_provider: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_provider[row.get("provider") or "unknown"].append(row)
+        by_model[row.get("model") or "unknown"].append(row)
+
+    provider_summary = [
+        {"provider": key, **_accumulate_cost(group)} for key, group in by_provider.items()
+    ]
+    provider_summary.sort(key=lambda r: -r["cost_usd"])
+    model_summary = [{"model": key, **_accumulate_cost(group)} for key, group in by_model.items()]
+    model_summary.sort(key=lambda r: -r["cost_usd"])
+
+    return {
+        "overall": _accumulate_cost(rows),
+        "by_provider": provider_summary,
+        "by_model": model_summary,
+    }

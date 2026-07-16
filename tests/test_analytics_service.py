@@ -55,6 +55,43 @@ def _seed_step(
         )
 
 
+def _seed_step_with_usage(
+    run_id: int,
+    step: str,
+    status: str,
+    provider: str | None = None,
+    model: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
+    timestamp: str = "2026-01-01 00:00:00",
+) -> None:
+    """Seed helper for Phase 24b.2b cost tests — writes the token/cost
+    columns state_service.record_step() also accepts, via direct SQL for
+    deterministic control (mirrors `_seed_step`)."""
+    state_service.init_db()
+    with db.connect() as conn:
+        conn.execute(
+            db.ph(
+                "INSERT INTO steps "
+                "(run_id, step, status, timestamp, provider, model, "
+                "input_tokens, output_tokens, cost_usd) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                run_id,
+                step,
+                status,
+                timestamp,
+                provider,
+                model,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            ),
+        )
+
+
 def _seed_approval(
     run_id: int,
     tenant: str = "default",
@@ -573,3 +610,207 @@ class TestStepsByModel:
         result = analytics_service.steps_by_model(tenant="acme", days=None)
         total = sum(row["total"] for row in result)
         assert total == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 24b.2b — cost_summary
+# ---------------------------------------------------------------------------
+
+
+class TestCostSummary:
+    def test_self_reported_cost_preferred_over_estimate(self) -> None:
+        """A self-reported cost_usd must win even though the tokens+model
+        would estimate to a different (10.5) value via the price map."""
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=1.23,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        assert result["overall"]["cost_usd"] == 1.23
+        assert result["overall"]["unpriced_steps"] == 0
+
+    def test_self_reported_zero_cost_is_not_treated_as_missing(self) -> None:
+        """A self-reported cost_usd of exactly 0.0 must still win over the
+        price-map estimate (which would be nonzero here) — `_step_cost` must
+        check `cost_usd is not None`, not `if cost_usd:` (0.0 is falsy but a
+        legitimate, present, self-reported value). Guards this precedence
+        invariant against a future 'simplify the truthiness check' refactor."""
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=0.0,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        # Must be exactly the self-reported 0.0, NOT the 10.5 the price map
+        # would estimate for this model/token combination.
+        assert result["overall"]["cost_usd"] == 0.0
+        # A self-reported 0.0 is still a cost SIGNAL — this step is priced,
+        # not unpriced.
+        assert result["overall"]["unpriced_steps"] == 0
+
+    def test_tokens_only_priced_model_uses_estimate(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        assert result["overall"]["cost_usd"] == 10.5
+        assert result["overall"]["unpriced_steps"] == 0
+
+    def test_tokens_with_unpriced_model_counts_as_unpriced(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="acme-provider",
+            model="totally-unlisted-model",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        assert result["overall"]["cost_usd"] == 0.0
+        assert result["overall"]["unpriced_steps"] == 1
+        # Token totals are still counted even though cost couldn't be priced.
+        assert result["overall"]["input_tokens"] == 1_000_000
+        assert result["overall"]["output_tokens"] == 500_000
+
+    def test_no_usage_at_all_counts_as_unpriced(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(run1, "s1", "success", provider="shell", model=None)
+
+        result = analytics_service.cost_summary(days=None)
+        assert result["overall"]["unpriced_steps"] == 1
+        assert result["overall"]["cost_usd"] == 0.0
+        assert result["overall"]["input_tokens"] == 0
+        assert result["overall"]["output_tokens"] == 0
+
+    def test_overall_total_steps_counts_every_step(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(run1, "s1", "success", provider="shell", model=None)
+        _seed_step_with_usage(
+            run1,
+            "s2",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=1000,
+            cost_usd=0.5,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        assert result["overall"]["total_steps"] == 2
+
+    def test_grouped_by_provider_and_model(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+        _seed_step_with_usage(
+            run1,
+            "s2",
+            "success",
+            provider="codex",
+            model="totally-unlisted-model",
+            input_tokens=100,
+            output_tokens=100,
+            cost_usd=None,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        by_provider = {row["provider"]: row for row in result["by_provider"]}
+        assert by_provider["claude"]["cost_usd"] == 10.5
+        assert by_provider["codex"]["unpriced_steps"] == 1
+
+        by_model = {row["model"]: row for row in result["by_model"]}
+        assert by_model["claude-sonnet-4-6"]["cost_usd"] == 10.5
+        assert by_model["totally-unlisted-model"]["unpriced_steps"] == 1
+
+    def test_null_provider_and_model_grouped_as_unknown(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(run1, "legacy-step", "success", provider=None, model=None)
+
+        result = analytics_service.cost_summary(days=None)
+        providers = {row["provider"] for row in result["by_provider"]}
+        models = {row["model"] for row in result["by_model"]}
+        assert "unknown" in providers
+        assert "unknown" in models
+
+    def test_tenant_isolation_via_run_join(self) -> None:
+        run_acme = _seed_run(tenant="acme")
+        run_other = _seed_run(tenant="other")
+        _seed_step_with_usage(
+            run_acme,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+        _seed_step_with_usage(
+            run_other,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+
+        result = analytics_service.cost_summary(tenant="acme", days=None)
+        assert result["overall"]["total_steps"] == 1
+        assert result["overall"]["cost_usd"] == 10.5
+
+    def test_project_and_task_filters(self) -> None:
+        run_a = _seed_run(project="a", task="t1")
+        run_b = _seed_run(project="b", task="t2")
+        _seed_step_with_usage(run_a, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        _seed_step_with_usage(run_b, "s1", "success", provider="codex", model="gpt-5.5")
+
+        result = analytics_service.cost_summary(project="a", days=None)
+        providers = {row["provider"] for row in result["by_provider"]}
+        assert providers == {"claude"}
+
+    def test_empty_db_returns_zeroed_overall(self) -> None:
+        result = analytics_service.cost_summary(days=None)
+        assert result["overall"]["total_steps"] == 0
+        assert result["overall"]["cost_usd"] == 0.0
+        assert result["overall"]["unpriced_steps"] == 0
+        assert result["by_provider"] == []
+        assert result["by_model"] == []

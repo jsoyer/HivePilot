@@ -158,6 +158,29 @@ class TestMem0Enabled:
 
 
 # ---------------------------------------------------------------------------
+# llm_price_map — Phase 24b.2b cost/provider analytics price-map override
+# ---------------------------------------------------------------------------
+
+
+class TestLlmPriceMap:
+    """`llm_price_map` defaults to None (pricing.py's default table applies
+    unmodified) and is env-overridable via a JSON object."""
+
+    def test_default_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_LLM_PRICE_MAP", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.llm_price_map is None
+
+    def test_env_override_parses_json_object(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "HIVEPILOT_LLM_PRICE_MAP",
+            '{"my-model": {"input": 1.0, "output": 2.0}}',
+        )
+        s = Settings()
+        assert s.llm_price_map == {"my-model": {"input": 1.0, "output": 2.0}}
+
+
+# ---------------------------------------------------------------------------
 # Plugin enable/disable — plugins_disabled (Sprint 5)
 # ---------------------------------------------------------------------------
 

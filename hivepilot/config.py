@@ -241,6 +241,14 @@ class Settings(BaseSettings):
     # (vector store / embedder / llm overrides). Only used when mem0_api_key
     # is unset. env: HIVEPILOT_MEM0_CONFIG (JSON string)
     mem0_config: dict[str, Any] | None = None
+    # Phase 24b.2b — operator-supplied price-map override, merged OVER
+    # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
+    # wholesale replacement — see `pricing._effective_price_map`). Shape:
+    # {"<model>": {"input": <usd/Mtok>, "output": <usd/Mtok>}}. Unset (None)
+    # means the built-in defaults apply unmodified. Used as a fallback cost
+    # estimate only when a step has no self-reported `cost_usd`.
+    # env: HIVEPILOT_LLM_PRICE_MAP (JSON string)
+    llm_price_map: dict[str, Any] | None = None
     stage_cache_enabled: bool = False  # opt-in SQLite stage memoization (L3)
     cache_backend: str = "sqlite"  # sqlite | redis (L3)
     redis_url: str | None = None  # required when cache_backend=redis (L3)
