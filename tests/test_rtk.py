@@ -78,6 +78,21 @@ class TestRegister:
         assert "rtk" in hooks["health"]
         assert hooks["health"]["rtk"] is rtk_module.health
 
+    def test_register_returns_contributions_when_enabled_by_default(
+        self, rtk_module: ModuleType
+    ) -> None:
+        # rtk_enabled defaults True (opt-out) — unchanged behavior.
+        assert settings.rtk_enabled is True
+        hooks = rtk_module.register()
+        assert hooks["runners"] == {"rtk": rtk_module.RtkRunner}
+        assert "rtk" in hooks["health"]
+
+    def test_register_returns_empty_when_disabled(
+        self, rtk_module: ModuleType, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(settings, "rtk_enabled", False, raising=False)
+        assert rtk_module.register() == {}
+
 
 class TestHealth:
     """Sprint 2 (plugin-health): `health()` reflects `shutil.which("rtk")`."""
@@ -198,3 +213,17 @@ class TestPluginManagerDiscoversRtk:
 
         assert "rtk" in RUNNER_MAP
         assert any(r.source == "local-file" and r.name == "rtk" for r in pm.loaded)
+
+    def test_plugin_manager_skips_rtk_when_disabled(self, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", REPO_ROOT, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "rtk_enabled", False, raising=False)
+        RUNNER_MAP.pop("rtk", None)  # clean baseline (fixture restores after)
+
+        plugins_mod.PluginManager()
+
+        # register() early-returned {} → the file is still discovered, but it
+        # contributes no runner kind to the process-global RUNNER_MAP.
+        assert "rtk" not in RUNNER_MAP

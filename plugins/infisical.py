@@ -249,4 +249,8 @@ def health(**kwargs: Any) -> HealthStatus:
 
 
 def register() -> dict[str, Any]:
+    from hivepilot.config import settings
+
+    if not settings.infisical_enabled:
+        return {}
     return {"secrets": {_PROVIDER: InfisicalBackend()}, "health": {_PROVIDER: health}}

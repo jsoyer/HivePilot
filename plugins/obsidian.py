@@ -187,6 +187,10 @@ def health(**kwargs: Any) -> HealthStatus:
 
 
 def register() -> dict[str, Any]:
+    from hivepilot.config import settings
+
+    if not settings.obsidian_enabled:
+        return {}
     return {
         "notifiers": {"obsidian": notify},
         "on_pipeline_end": on_pipeline_end,

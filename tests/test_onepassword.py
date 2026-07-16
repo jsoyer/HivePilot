@@ -117,6 +117,24 @@ class TestRegister:
         assert "onepassword" in hooks["health"]
         assert hooks["health"]["onepassword"] is op_module.health
 
+    def test_register_returns_contributions_when_enabled_by_default(
+        self, op_module: ModuleType
+    ) -> None:
+        # onepassword_enabled defaults True (opt-out) — unchanged behavior.
+        # Pure register()-level enable gate; no secret value is involved.
+        assert settings.onepassword_enabled is True
+        hooks = op_module.register()
+        assert set(hooks) == {"secrets", "health"}
+        assert set(hooks["secrets"]) == {"onepassword"}
+
+    def test_register_returns_empty_when_disabled(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Disabling contributes nothing — no secrets backend, no health. Still
+        # a register()-level gate only; no secret is read or handled.
+        monkeypatch.setattr(settings, "onepassword_enabled", False, raising=False)
+        assert op_module.register() == {}
+
 
 class TestHealth:
     """Plugin-health surface: `health()` reports CONFIGURATION status only —
@@ -483,6 +501,19 @@ class TestPluginManagerRegistersOnePassword:
         assert "onepassword" in SECRETS_MAP
         assert callable(getattr(SECRETS_MAP["onepassword"], "resolve", None))
         assert any(r.source == "local-file" and r.name == "onepassword" for r in pm.loaded)
+
+    def test_plugin_manager_skips_onepassword_when_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", REPO_ROOT, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "onepassword_enabled", False, raising=False)
+
+        plugins_mod.PluginManager()
+
+        # register() early-returned {} → no secrets backend registered.
+        assert "onepassword" not in SECRETS_MAP
 
     def test_onepassword_does_not_collide_with_infisical_or_builtins(
         self, monkeypatch: pytest.MonkeyPatch

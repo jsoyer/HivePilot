@@ -267,6 +267,20 @@ class Settings(BaseSettings):
     # (vector store / embedder / llm overrides). Only used when mem0_api_key
     # is unset. env: HIVEPILOT_MEM0_CONFIG (JSON string)
     mem0_config: dict[str, Any] | None = None
+    # Per-plugin enable flags for the six always-on bundled plugins. UNLIKE
+    # headroom_enabled/mem0_enabled above (which default False — opt-IN,
+    # dormant), these six default True — opt-OUT: current behavior is
+    # byte-identical by default, but each plugin can now be toggled off
+    # individually via its own flag. Each register() early-returns `{}`
+    # (contributing nothing) when its flag is False.
+    # env: HIVEPILOT_HERDR_ENABLED / _INFISICAL_ / _OBSIDIAN_ /
+    #      _ONEPASSWORD_ / _RTK_ / _SAMPLE_ENABLED
+    herdr_enabled: bool = True
+    infisical_enabled: bool = True
+    obsidian_enabled: bool = True
+    onepassword_enabled: bool = True
+    rtk_enabled: bool = True
+    sample_enabled: bool = True
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:

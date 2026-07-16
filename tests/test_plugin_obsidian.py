@@ -90,6 +90,23 @@ class TestRegister:
         assert "health" in hooks
         assert hooks["health"]["obsidian"] is obsidian_module.health
 
+    def test_register_returns_contributions_when_enabled_by_default(
+        self, obsidian_module: ModuleType
+    ) -> None:
+        # obsidian_enabled defaults True (opt-out) — unchanged behavior.
+        assert config_mod.settings.obsidian_enabled is True
+        hooks = obsidian_module.register()
+        assert "obsidian" in hooks["notifiers"]
+        assert "on_pipeline_end" in hooks
+        assert "on_error" in hooks
+        assert "obsidian" in hooks["health"]
+
+    def test_register_returns_empty_when_disabled(
+        self, obsidian_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config_mod.settings, "obsidian_enabled", False, raising=False)
+        assert obsidian_module.register() == {}
+
 
 class TestHealth:
     """Sprint 2 (plugin-health): `health()` reflects `settings.obsidian_vault`
@@ -354,3 +371,16 @@ class TestPluginManagerDiscoversObsidian:
         assert any(r.source == "local-file" and r.name == "obsidian" for r in pm.loaded)
         assert pm.hooks.get("on_pipeline_end")
         assert pm.hooks.get("on_error")
+
+    def test_plugin_manager_skips_obsidian_when_disabled(self, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", REPO_ROOT, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "obsidian_enabled", False, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        # register() early-returned {} → no notifier and no lifecycle hooks.
+        assert "obsidian" not in NOTIFIER_MAP
+        assert not pm.hooks.get("on_pipeline_end")
+        assert not pm.hooks.get("on_error")

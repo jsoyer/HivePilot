@@ -378,4 +378,8 @@ def health(**kwargs: Any) -> HealthStatus:
 
 
 def register() -> dict[str, Any]:
+    from hivepilot.config import settings
+
+    if not settings.herdr_enabled:
+        return {}
     return {"runners": {"herdr": HerdrRunner}, "health": {"herdr": health}}
