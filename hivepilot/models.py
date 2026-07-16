@@ -36,6 +36,8 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "kubectl",
     "ansible",
     "helm",
+    "kustomize",
+    "packer",
 )
 
 
