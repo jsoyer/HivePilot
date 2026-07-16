@@ -3,8 +3,11 @@ from __future__ import annotations
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Footer, Header
 
-from hivepilot.services import state_service
+from hivepilot.services import analytics_service, state_service
 from hivepilot.ui.formatting import INTERACTION_COLUMNS, interaction_rows
+
+_SUCCEEDED = analytics_service.Outcome.SUCCEEDED.value
+_FAILED = analytics_service.Outcome.FAILED.value
 
 
 class RunDashboard(App):
@@ -24,13 +27,13 @@ class RunDashboard(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        self.runs_table = DataTable(id="runs")
+        self.runs_table: DataTable = DataTable(id="runs")
         self.runs_table.add_columns("ID", "Project", "Task", "Status", "Started", "Finished")
-        self.metrics_table = DataTable(id="metrics")
+        self.metrics_table: DataTable = DataTable(id="metrics")
         self.metrics_table.add_columns("Metric", "Value")
-        self.steps_table = DataTable(id="steps")
+        self.steps_table: DataTable = DataTable(id="steps")
         self.steps_table.add_columns("Run ID", "Step", "Status", "Detail", "Timestamp")
-        self.interactions_table = DataTable(id="interactions")
+        self.interactions_table: DataTable = DataTable(id="interactions")
         self.interactions_table.add_columns(*INTERACTION_COLUMNS)
         yield self.metrics_table
         yield self.runs_table
@@ -70,8 +73,18 @@ class RunDashboard(App):
     def refresh_metrics(self) -> None:
         runs = state_service.list_all_runs()
         total = len(runs)
-        success = sum(1 for run in runs if run["status"] == "success")
-        failure = sum(1 for run in runs if run["status"] not in ("success", "pending", "running"))
+        # Phase 24a: reconciled via the same canonical outcome mapping used by
+        # analytics_service (and the /v1/analytics/* API) — "success" (legacy
+        # literal) and "complete" (RunStatus.COMPLETE) both count as success;
+        # only the formal failure states (+ "failed"/"denied") count as
+        # failure. Previously `status not in ("success", "pending", "running")`
+        # miscounted "complete" runs as failures.
+        success = sum(
+            1 for run in runs if analytics_service.canonical_outcome(run["status"]) == _SUCCEEDED
+        )
+        failure = sum(
+            1 for run in runs if analytics_service.canonical_outcome(run["status"]) == _FAILED
+        )
         stats = {
             "total_runs": total,
             "success": success,
