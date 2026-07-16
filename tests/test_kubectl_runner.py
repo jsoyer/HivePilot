@@ -34,7 +34,7 @@ from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.registry import RUNNER_MAP, resolve_runner_class
 from hivepilot.runners.base import RunnerPayload
-from hivepilot.runners.kubectl_runner import KubectlRunner
+from hivepilot.runners.kubectl_runner import _KNOWN_ROLLOUT_SUBS, KubectlRunner
 
 
 def _payload(
@@ -132,6 +132,18 @@ class TestArgv:
         mock_run = self._run(tmp_path, "rollout", options)
         argv = mock_run.call_args.args[0]
         assert argv == ["kubectl", "rollout", "undo", "deployment/foo"]
+
+    def test_rollout_pause(self, tmp_path: Path) -> None:
+        options = {"rollout": "pause", "resource": "deployment/foo"}
+        mock_run = self._run(tmp_path, "rollout", options)
+        argv = mock_run.call_args.args[0]
+        assert argv == ["kubectl", "rollout", "pause", "deployment/foo"]
+
+    def test_rollout_resume(self, tmp_path: Path) -> None:
+        options = {"rollout": "resume", "resource": "deployment/foo"}
+        mock_run = self._run(tmp_path, "rollout", options)
+        argv = mock_run.call_args.args[0]
+        assert argv == ["kubectl", "rollout", "resume", "deployment/foo"]
 
     def test_describe(self, tmp_path: Path) -> None:
         options = {"resource": "pod", "name": "foo"}
@@ -270,7 +282,7 @@ class TestIsDestructive:
         runner = KubectlRunner(_definition({"resource": "pods"}), settings)
         assert runner.is_destructive(_payload(tmp_path, operation=operation)) is False
 
-    @pytest.mark.parametrize("sub", ["restart", "undo"])
+    @pytest.mark.parametrize("sub", ["restart", "undo", "pause", "resume"])
     def test_rollout_mutating_subs_are_destructive(self, tmp_path: Path, sub: str) -> None:
         runner = KubectlRunner(
             _definition({"rollout": sub, "resource": "deployment/foo"}), settings
@@ -308,3 +320,155 @@ class TestNoCaptureLeakPath:
             runner.run(_payload(tmp_path, operation="get"))
 
         assert mock_run.call_args.kwargs["capture_output"] is False
+
+
+class TestRolloutSubValidation:
+    """Phase 28b hardening: the `rollout` branch of `_build_command` must
+    validate `sub` against a closed set, failing closed like the top-level
+    operation dispatch (`else: raise ValueError`) does."""
+
+    def test_unknown_rollout_sub_raises_value_error(self, tmp_path: Path) -> None:
+        runner = KubectlRunner(
+            _definition({"rollout": "scale", "resource": "deployment/foo"}), settings
+        )
+        with (
+            patch("hivepilot.runners.kubectl_runner.shutil.which", return_value="/usr/bin/kubectl"),
+            patch("hivepilot.runners.kubectl_runner.subprocess.run"),
+        ):
+            with pytest.raises(ValueError, match="Unknown kubectl rollout subcommand"):
+                runner.run(_payload(tmp_path, operation="rollout"))
+
+
+class TestMissingResourceValidation:
+    """Phase 28b hardening: `get`/`describe`/`rollout`/`delete`-by-resource
+    must fail fast with a clear `ValueError` when `options.resource` is
+    empty/absent, instead of emitting an empty string into argv that
+    kubectl would reject cryptically."""
+
+    @pytest.mark.parametrize(
+        "operation,options",
+        [
+            ("get", {}),
+            ("describe", {}),
+            ("rollout", {"rollout": "status"}),
+            ("delete", {"resource": ""}),
+        ],
+    )
+    def test_missing_resource_raises_value_error(
+        self, tmp_path: Path, operation: str, options: dict
+    ) -> None:
+        runner = KubectlRunner(_definition(options), settings)
+        with (
+            patch("hivepilot.runners.kubectl_runner.shutil.which", return_value="/usr/bin/kubectl"),
+            patch("hivepilot.runners.kubectl_runner.subprocess.run"),
+        ):
+            with pytest.raises(ValueError, match="requires options.resource"):
+                runner.run(_payload(tmp_path, operation=operation))
+
+    def test_delete_by_manifest_does_not_require_resource(self, tmp_path: Path) -> None:
+        # The `delete -f <manifest>` path never touches `options.resource`.
+        runner = KubectlRunner(_definition({"manifest": "deploy.yaml"}), settings)
+        with (
+            patch("hivepilot.runners.kubectl_runner.shutil.which", return_value="/usr/bin/kubectl"),
+            patch("hivepilot.runners.kubectl_runner.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            runner.run(_payload(tmp_path, operation="delete"))
+        argv = mock_run.call_args.args[0]
+        assert argv == ["kubectl", "delete", "-f", "deploy.yaml"]
+
+
+class TestCaseNormalization:
+    """Phase 28b hardening: operation and rollout-sub values are normalized
+    via `.strip().lower()` in one shared spot each (`_resolve_operation` /
+    `_resolve_rollout_sub`), used by both `is_destructive` and
+    `_build_command`, so a case variant like `"Delete"`/`"Restart"` can
+    never make the gate and the executed argv disagree."""
+
+    def test_case_variant_operation_normalizes_and_works(self, tmp_path: Path) -> None:
+        runner = KubectlRunner(_definition({"resource": "pod", "name": "foo"}), settings)
+        assert runner.is_destructive(_payload(tmp_path, operation="Delete")) is True
+        with (
+            patch("hivepilot.runners.kubectl_runner.shutil.which", return_value="/usr/bin/kubectl"),
+            patch("hivepilot.runners.kubectl_runner.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            runner.run(_payload(tmp_path, operation="Delete"))
+        argv = mock_run.call_args.args[0]
+        assert argv == ["kubectl", "delete", "pod", "foo"]
+
+    def test_case_variant_rollout_sub_normalizes_and_works(self, tmp_path: Path) -> None:
+        runner = KubectlRunner(
+            _definition({"rollout": "Restart", "resource": "deployment/foo"}), settings
+        )
+        assert runner.is_destructive(_payload(tmp_path, operation="rollout")) is True
+        with (
+            patch("hivepilot.runners.kubectl_runner.shutil.which", return_value="/usr/bin/kubectl"),
+            patch("hivepilot.runners.kubectl_runner.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            runner.run(_payload(tmp_path, operation="rollout"))
+        argv = mock_run.call_args.args[0]
+        assert argv == ["kubectl", "rollout", "restart", "deployment/foo"]
+
+
+class TestGateArgvAgreement:
+    """Phase 28b hardening: `is_destructive()` and `_build_command()` are
+    both resolved from the SAME `options` dict. This walks every operation
+    (and every rollout sub-command) and asserts the two can never disagree:
+    `is_destructive()` returning True must correspond exactly to argv that
+    kubectl would actually run being a mutating one (apply / delete /
+    rollout {restart,undo,pause,resume}), and a non-destructive
+    classification must never correspond to a mutating executed argv. A
+    future edit to only one of `is_destructive`/`_build_command` that makes
+    them diverge should fail this test. For options that make `_build_command`
+    raise (unknown rollout sub, missing resource), that's fine — fail-closed
+    execution is a valid way to never disagree with a False gate."""
+
+    _MUTATING_ROLLOUT_SUBS = frozenset({"restart", "undo", "pause", "resume"})
+
+    def _argv_is_mutating(self, argv: list[str]) -> bool:
+        if argv[1] in ("apply", "delete"):
+            return True
+        if argv[1] == "rollout":
+            return argv[2] in self._MUTATING_ROLLOUT_SUBS
+        return False
+
+    @pytest.mark.parametrize(
+        "operation,options,expect_raises",
+        [
+            ("apply", {"manifest": "deploy.yaml"}, False),
+            ("delete", {"resource": "pod", "name": "foo"}, False),
+            ("delete", {"resource": ""}, True),
+            ("get", {"resource": "pods"}, False),
+            ("get", {}, True),
+            ("diff", {"manifest": "deploy.yaml"}, False),
+            ("describe", {"resource": "pod", "name": "foo"}, False),
+            ("describe", {}, True),
+            *[
+                ("rollout", {"rollout": sub, "resource": "deployment/foo"}, False)
+                for sub in sorted(_KNOWN_ROLLOUT_SUBS)
+            ],
+            ("rollout", {"rollout": "scale", "resource": "deployment/foo"}, True),
+            ("rollout", {"rollout": "status"}, True),
+        ],
+    )
+    def test_gate_agrees_with_executed_argv(
+        self, tmp_path: Path, operation: str, options: dict, expect_raises: bool
+    ) -> None:
+        runner = KubectlRunner(_definition(options), settings)
+        gate_result = runner.is_destructive(_payload(tmp_path, operation=operation))
+
+        with (
+            patch("hivepilot.runners.kubectl_runner.shutil.which", return_value="/usr/bin/kubectl"),
+            patch("hivepilot.runners.kubectl_runner.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            if expect_raises:
+                with pytest.raises(ValueError):
+                    runner.run(_payload(tmp_path, operation=operation))
+                return
+            runner.run(_payload(tmp_path, operation=operation))
+
+        argv = mock_run.call_args.args[0]
+        assert gate_result is self._argv_is_mutating(argv)
