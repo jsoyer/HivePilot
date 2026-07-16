@@ -34,6 +34,8 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "opentofu",
     "pulumi",
     "kubectl",
+    "ansible",
+    "helm",
 )
 
 
