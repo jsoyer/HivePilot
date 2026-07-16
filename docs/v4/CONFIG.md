@@ -359,6 +359,166 @@ deferred to the Mirador panel sprint (A3) — until then, operators should
 watch the run (terminal / systemd journal) rather than expect a persisted
 plan artifact.
 
+## Kubernetes (`kubectl`) runner
+
+One built-in runner **kind** wraps the `kubectl` CLI directly (no
+capture/parsing of its output — see "Output is not captured" below):
+`kind: kubectl` (binary `kubectl`). Declare an instance under `runners:` like
+any other runner, then point a task step at it:
+
+```yaml
+# tasks.yaml
+runners:
+  prod-cluster:
+    kind: kubectl
+    options:
+      namespace: payments
+      context: prod-eu-west
+      kubeconfig: /etc/hivepilot/kubeconfig-prod
+
+tasks:
+  k8s-get-pods:
+    description: "List pods in the payments namespace"
+    steps:
+      - name: get
+        runner: kubectl
+        runner_ref: prod-cluster
+        command: get           # -> kubectl get pods -o wide -n payments --context prod-eu-west
+        options:
+          resource: pods
+          output: wide
+    git: { commit: false, push: false, create_pr: false }
+```
+
+### Operation selection
+
+The operation run each invocation is resolved in this precedence order
+(first match wins): `step.command` -> `definition.command` ->
+`options.operation` -> default (`get`).
+
+### Operations
+
+| Operation | Command executed | Notes |
+|---|---|---|
+| `apply` | `kubectl apply -f <manifest>` or `kubectl apply -k <kustomize>` (`kustomize` wins if both set) | Destructive — auto-gates for approval, see "Approval gates" below. |
+| `delete` | `kubectl delete -f <manifest>` if `manifest` is set, else `kubectl delete <resource> [<name>]` | Requires either `manifest` or `resource`; raises `ValueError` if neither is set. Destructive — auto-gates for approval. |
+| `get` | `kubectl get <resource> [<name>] -o <output>` | Requires `options.resource`; `output` defaults to `wide`. |
+| `diff` | `kubectl diff -f <manifest>` | |
+| `rollout` | `kubectl rollout <sub> <resource>` where `<sub>` is `options.rollout` (default `status`) | Requires `options.resource`. `<sub>` must be one of `status`/`history`/`pause`/`resume`/`restart`/`undo` — anything else raises `ValueError` (fails closed). `restart`/`undo`/`pause`/`resume` are destructive and auto-gate; `status`/`history` are read-only and never gate. |
+| `describe` | `kubectl describe <resource> [<name>]` | Requires `options.resource`. |
+
+Every command additionally appends `-n <namespace>` and `--context <context>`
+when those options are set.
+
+### Options table
+
+| Option | Meaning |
+|---|---|
+| `operation` | Fallback operation when neither `step.command` nor `definition.command` is set. |
+| `namespace` | Appends `-n <namespace>` to every command. |
+| `context` | Appends `--context <context>` to every command. |
+| `kubeconfig` | Sets the `KUBECONFIG` env var for the subprocess (path to a mounted kubeconfig file) rather than a CLI flag. |
+| `manifest` | Path passed to `apply -f` / `delete -f` / `diff -f`. |
+| `kustomize` | Path passed to `apply -k` (takes precedence over `manifest` for `apply`). |
+| `resource` | Resource type for `get`/`delete`/`rollout`/`describe` (e.g. `deployment`, `pods`, `svc`). Required by those operations — raises `ValueError` if missing. |
+| `name` | Optional resource name appended after `resource` for `get`/`delete`/`describe`. |
+| `output` | `-o <output>` for `get` (default `wide`, e.g. `yaml`, `json`, `name`). |
+| `rollout` | Sub-command for `rollout` (`status`/`history`/`pause`/`resume`/`restart`/`undo`, default `status`). |
+
+### Cluster access: in-cluster service account vs mounted kubeconfig
+
+`kubectl` resolves cluster access the same way it always does — no
+HivePilot-specific auth path. Two common setups:
+
+- **In-cluster service account** — when HivePilot itself runs inside the
+  target cluster (e.g. as a Deployment), `kubectl` auto-discovers the
+  in-cluster config from the pod's mounted service-account token; no
+  `kubeconfig` option is needed.
+- **Mounted kubeconfig** — for out-of-cluster operation (HivePilot running
+  elsewhere, targeting one or more remote clusters), set `options.kubeconfig`
+  to a path to a kubeconfig file mounted into the HivePilot process/container,
+  optionally combined with `options.context` to select a specific context
+  inside a multi-cluster kubeconfig.
+
+A cluster-scoped bearer token can also be injected as an env var via
+`${secret:}` (see "Secrets and environment" below) if the target cluster's
+auth plugin reads its token from the environment rather than the kubeconfig
+file itself.
+
+### Secrets and environment
+
+The runner environment is layered `project.env` -> `definition.env` ->
+`{KUBECONFIG: options.kubeconfig}` (if set) -> `payload.secrets` (later
+layers win, on top of the process's own `os.environ`). Use a step's
+`secrets:` block or `${secret:NAME}` references in `project.env` to inject a
+cluster token or other credential without hardcoding it in `tasks.yaml`:
+
+```yaml
+tasks:
+  k8s-apply:
+    steps:
+      - name: apply
+        runner: kubectl
+        runner_ref: prod-cluster
+        command: apply
+        options:
+          manifest: deploy/payments.yaml
+        secrets:
+          KUBE_TOKEN:
+            source: env
+            key: PROD_CLUSTER_TOKEN
+```
+
+### Missing binary
+
+If `kubectl` isn't on `PATH`, the runner raises a clear `RuntimeError`
+identifying the missing binary and the runner kind, before ever spawning a
+subprocess (`shutil.which` guard) — never a raw `FileNotFoundError`
+traceback.
+
+### Output is not captured (v1)
+
+`run()` always executes with `capture_output=False` — every operation's
+output streams live to the parent process's stdout and is **not** returned,
+stored, or forwarded to any sink (CLI response, the `/v1/run` API body,
+Slack/Discord/Telegram notifications). This is deliberate: read operations
+such as `kubectl get secret -o yaml` or `kubectl describe` can base64-dump or
+echo secret material sourced from the cluster itself (Kubernetes `Secret`
+objects), and the `RunResult.detail` path those sinks read from is not
+redacted for cluster-sourced values — the Phase 10c choke point
+(`redact_text`) only masks values explicitly registered via `${secret:}`
+resolution. Operators should watch the run (terminal / systemd journal)
+rather than expect captured output in the run record or a notification.
+
+### Auto-gating of destructive operations
+
+`apply`, `delete`, and the mutating `rollout` sub-commands
+(`restart`/`undo`/`pause`/`resume`) are classified destructive via the
+runner's `is_destructive(payload)` method — the same optional structural
+contract the IaC runners implement (see "Approval gates" below for the full
+mechanics). This means a step running `kubectl apply`/`delete`, or
+`kubectl rollout restart`/`undo`/`pause`/`resume`, **auto-gates behind
+approval automatically** — in a pipeline today, and via any future direct
+CLI path — with no `require_approval` flag needed. `get`/`diff`/`describe`
+and `rollout status`/`rollout history` never auto-gate (read-only).
+
+```yaml
+tasks:
+  k8s-rollout:
+    steps:
+      - name: check-status        # rollout status -> never gates
+        runner: kubectl
+        runner_ref: prod-cluster
+        command: rollout
+        options: { resource: deployment/payments-api, rollout: status }
+
+      - name: apply-manifest       # apply -> auto-gates, pauses for approval
+        runner: kubectl
+        runner_ref: prod-cluster
+        command: apply
+        options: { manifest: deploy/payments.yaml }
+```
+
 ## Approval gates: task, stage, and step-level
 
 HivePilot has three approval mechanisms, from coarsest to finest:
@@ -391,20 +551,24 @@ tasks:
 `step.require_approval` is `True` **or** the runner declares its
 currently-resolved operation destructive via an optional
 `is_destructive(payload) -> bool` method (a runner without that method is
-never treated as destructive). The three IaC runner kinds implement it:
+never treated as destructive). The IaC and `kubectl` runner kinds implement
+it:
 
 | Runner kind | Operations that auto-gate |
 |---|---|
 | `terraform` / `opentofu` | `apply`, `destroy` |
 | `pulumi` | `up`, `destroy`, `refresh` |
+| `kubectl` | `apply`, `delete`, `rollout restart`/`undo`/`pause`/`resume` |
 
-`plan`/`preview`/`validate`/`output`/`init`/`drift`/`cost` never auto-gate
-(read-only/non-mutating). This means a step running `terraform apply` or
-`pulumi up`/`destroy`/`refresh` pauses for approval **even without setting
-`require_approval` at all** — no config change is needed to get this
-protection on those operations. Fail-closed: if `is_destructive` itself
-raises, the step is treated as destructive rather than silently letting a
-potentially-destructive operation through ungated.
+`plan`/`preview`/`validate`/`output`/`init`/`drift`/`cost` (IaC runners) and
+`get`/`diff`/`describe`/`rollout status`/`rollout history` (`kubectl`) never
+auto-gate (read-only/non-mutating). This means a step running
+`terraform apply`, `pulumi up`/`destroy`/`refresh`, or `kubectl apply`/
+`delete`/`rollout restart`/`undo`/`pause`/`resume` pauses for approval **even
+without setting `require_approval` at all** — no config change is needed to
+get this protection on those operations. Fail-closed: if `is_destructive`
+itself raises, the step is treated as destructive rather than silently
+letting a potentially-destructive operation through ungated.
 
 **How approval works at step granularity.** When a gating step is reached,
 the run PAUSES at that exact step (run status becomes `PAUSED`) and an

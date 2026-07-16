@@ -717,6 +717,46 @@ operations reference. Operator checklist:
 
    Example: `hivepilot iac apply --project acme-infra --runner opentofu --yes`.
 
+### Running Kubernetes ops (`kubectl`)
+
+The `kubectl` runner kind wraps the `kubectl` CLI directly (`hivepilot doctor`
+reports whether it's on `PATH`; a missing binary raises a clear error at run
+time rather than failing silently). See `docs/v4/CONFIG.md` "Kubernetes
+(`kubectl`) runner" for the full options/operations reference. Operator
+checklist:
+
+1. **Destructive ops auto-gate — `apply`/`delete`/`rollout restart`/`undo`/
+   `pause`/`resume` pause for approval automatically.** No `require_approval`
+   flag is needed to get this protection; it's automatic because the
+   operation is destructive. `get`/`diff`/`describe`/`rollout status`/
+   `rollout history` run without pausing. Approve/deny a paused run the same
+   way as any other checkpoint: `hivepilot approvals approve <run_id>
+   --approver ... --token ...` (or `hivepilot approvals deny <run_id>
+   --reason ...`), the Telegram `/approve <run_id>`, or `POST
+   /approvals/<run_id>`. On approval, the run resumes from the paused step —
+   earlier steps are never re-run.
+2. **Namespace and context scoping.** Set `options.namespace` to target a
+   specific namespace (`-n <namespace>` on every command) and
+   `options.context` to select a kubeconfig context (`--context <context>`)
+   when a single kubeconfig spans multiple clusters. Scope these per runner
+   instance in `tasks.yaml` so a task can never accidentally drift onto the
+   wrong namespace/cluster.
+3. **Kubeconfig / in-cluster auth.** When HivePilot runs inside the target
+   cluster, `kubectl` auto-discovers the in-cluster service-account config —
+   no `kubeconfig` option needed. When HivePilot runs outside the cluster,
+   set `options.kubeconfig` to a mounted kubeconfig file path. A cluster
+   token can also be injected via `${secret:...}` / a step `secrets:` block
+   (same mechanism as IaC credentials above) if the cluster's auth plugin
+   reads its token from the environment.
+4. **Output streams live and is not stored.** Like the IaC runners, `kubectl`
+   never captures or persists its CLI output — watch the run's terminal or
+   systemd journal (`journalctl -u hivepilot-api -f` for API-triggered runs)
+   rather than expecting output in the run record or a notification. This is
+   deliberate: read operations such as `kubectl get secret -o yaml` or
+   `kubectl describe` can dump cluster-sourced secret material that
+   HivePilot's redaction can't scrub (it only masks values registered via
+   `${secret:}` resolution).
+
 ---
 
 ## 8. Quota Resilience
