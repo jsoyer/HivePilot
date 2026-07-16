@@ -1323,3 +1323,306 @@ class TestSecretRegistryRunScope:
         assert cp.registered_secret_values() == frozenset(), (
             "the registry must be cleared once the OUTERMOST run_task call returns"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 10c — RunResult.detail redaction choke point.
+#
+# A runner's captured stdout (`_execute_task`'s `task_result`) flows straight
+# into `RunResult.detail`, which reaches sinks that do NOT redact themselves
+# (cli.py's `typer.echo(result.detail)`, api_service's `/v1/run` response
+# body, discord/slack/telegram `_format_results`) — unlike the DB/notification
+# sinks (state_service, notification_service, artifact writers), which already
+# redact via `config_provenance.redact_text`. These tests drive the REAL
+# `Orchestrator.run_task`/`run_approved` path (the actual object cli/api/chat
+# consume) with a fake runner whose output/exception embeds a registered
+# secret value, and assert it never appears verbatim in the returned
+# `RunResult.detail`.
+# ---------------------------------------------------------------------------
+
+
+class TestRunResultDetailRedaction:
+    MARKER = "SUPERSECRET-RUNRESULT-MARKER-9f2c1a7b"
+
+    def _orch_with_project_and_task(self, task):
+        from hivepilot.models import ProjectConfig
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/redact-proj"))
+        orch.tasks.tasks["x"] = task
+        return orch
+
+    def _clean_registry(self):
+        from hivepilot.services import config_provenance
+
+        config_provenance.clear_secret_values()
+        return config_provenance
+
+    def test_run_task_redacts_registered_secret_from_success_detail(self, tmp_path) -> None:
+        """A fake runner's `capture()` echoes a REGISTERED secret value in its
+        stdout; the resulting `RunResult.detail` returned by the PUBLIC
+        `run_task` must have it masked."""
+        from hivepilot.models import TaskConfig, TaskStep
+        from hivepilot.services.policy_service import Policy
+
+        cp = self._clean_registry()
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        orch = self._orch_with_project_and_task(task)
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.capture.return_value = f"leaked output {self.MARKER} end"
+        orch.registry.get_runner.return_value = fake_runner
+
+        cp.register_secret_value(self.MARKER)
+        try:
+            with (
+                patch.object(orch, "_resolve_secrets", return_value={}),
+                patch(
+                    "hivepilot.orchestrator.policy_service.enforce_policy",
+                    return_value=Policy(),
+                ),
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+                patch("hivepilot.orchestrator.state_service.complete_run"),
+                patch("hivepilot.orchestrator.state_service.record_step"),
+                patch("hivepilot.orchestrator.notification_service.send_notification"),
+                patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+            ):
+                results = orch.run_task(
+                    project_names=["proj"],
+                    task_name="x",
+                    extra_prompt=None,
+                    auto_git=False,
+                )
+        finally:
+            cp.clear_secret_values()
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert self.MARKER not in (results[0].detail or ""), (
+            "the secret leaked verbatim into the RunResult consumed by cli/api/chat"
+        )
+        assert cp.REDACTED in (results[0].detail or "")
+
+    def test_run_task_redacts_registered_secret_from_failure_detail(self, tmp_path) -> None:
+        """A step raises an exception whose message embeds a REGISTERED
+        secret (e.g. a runner error echoing captured stdout) — the failure
+        `RunResult.detail` from the PUBLIC `run_task` must have it masked."""
+        from hivepilot.models import TaskConfig, TaskStep
+        from hivepilot.services.policy_service import Policy
+
+        cp = self._clean_registry()
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        orch = self._orch_with_project_and_task(task)
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.capture.side_effect = RuntimeError(f"non-zero exit, stdout was: {self.MARKER}")
+        orch.registry.get_runner.return_value = fake_runner
+
+        cp.register_secret_value(self.MARKER)
+        try:
+            with (
+                patch.object(orch, "_resolve_secrets", return_value={}),
+                patch(
+                    "hivepilot.orchestrator.policy_service.enforce_policy",
+                    return_value=Policy(),
+                ),
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+                patch("hivepilot.orchestrator.state_service.complete_run"),
+                patch("hivepilot.orchestrator.state_service.record_step"),
+                patch("hivepilot.orchestrator.notification_service.send_notification"),
+                patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+            ):
+                results = orch.run_task(
+                    project_names=["proj"],
+                    task_name="x",
+                    extra_prompt=None,
+                    auto_git=False,
+                )
+        finally:
+            cp.clear_secret_values()
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert self.MARKER not in (results[0].detail or ""), (
+            "the secret leaked verbatim into the failure RunResult"
+        )
+        assert cp.REDACTED in (results[0].detail or "")
+
+    def test_run_task_redacts_registered_secret_sent_to_notion_and_linear(self, tmp_path) -> None:
+        """A step raises an exception whose message embeds a REGISTERED
+        secret. The `_run_task_body` failure `except` block also forwards
+        that message to `notion_service.on_run_complete` (Notion page PATCH)
+        and `linear_service.on_run_failure` (Linear issue creation) — both
+        external network sinks that do NOT self-redact. Both must receive
+        the already-redacted text, never the raw exception string."""
+        from hivepilot.models import TaskConfig, TaskStep
+        from hivepilot.services.policy_service import Policy
+
+        cp = self._clean_registry()
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        orch = self._orch_with_project_and_task(task)
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.capture.side_effect = RuntimeError(f"non-zero exit, stdout was: {self.MARKER}")
+        orch.registry.get_runner.return_value = fake_runner
+
+        cp.register_secret_value(self.MARKER)
+        try:
+            with (
+                patch.object(orch, "_resolve_secrets", return_value={}),
+                patch(
+                    "hivepilot.orchestrator.policy_service.enforce_policy",
+                    return_value=Policy(),
+                ),
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+                patch("hivepilot.orchestrator.state_service.complete_run"),
+                patch("hivepilot.orchestrator.state_service.record_step"),
+                patch("hivepilot.orchestrator.notification_service.send_notification"),
+                patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+                patch(
+                    "hivepilot.services.notion_service.on_run_start",
+                    return_value="notion-page-123",
+                ) as mock_on_run_start,
+                patch("hivepilot.services.notion_service.on_run_complete") as mock_on_run_complete,
+                patch("hivepilot.services.linear_service.on_run_failure") as mock_on_run_failure,
+            ):
+                results = orch.run_task(
+                    project_names=["proj"],
+                    task_name="x",
+                    extra_prompt=None,
+                    auto_git=False,
+                )
+        finally:
+            cp.clear_secret_values()
+
+        assert mock_on_run_start.called
+        assert len(results) == 1
+        assert results[0].success is False
+        assert self.MARKER not in (results[0].detail or "")
+
+        # Notion: `detail=` kwarg must be redacted, never the raw exception text.
+        assert mock_on_run_complete.called, "on_run_complete was not called on failure"
+        notion_kwargs = mock_on_run_complete.call_args.kwargs
+        assert self.MARKER not in notion_kwargs.get("detail", ""), (
+            "the secret leaked verbatim into the Notion page update"
+        )
+        assert cp.REDACTED in notion_kwargs.get("detail", "")
+
+        # Linear: `error=` kwarg must be redacted, never the raw exception text.
+        assert mock_on_run_failure.called, "on_run_failure was not called on failure"
+        linear_kwargs = mock_on_run_failure.call_args.kwargs
+        assert self.MARKER not in linear_kwargs.get("error", ""), (
+            "the secret leaked verbatim into the Linear issue"
+        )
+        assert cp.REDACTED in linear_kwargs.get("error", "")
+
+    def test_run_task_leaves_non_secret_detail_unchanged(self, tmp_path) -> None:
+        """No secret registered -> `redact_text` is a no-op — the raw runner
+        output passes through the choke point untouched (proves the fix
+        doesn't over-redact / mangle ordinary output)."""
+        from hivepilot.models import TaskConfig, TaskStep
+        from hivepilot.services.policy_service import Policy
+
+        self._clean_registry()
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        orch = self._orch_with_project_and_task(task)
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.capture.return_value = "plain, unremarkable agent output"
+        orch.registry.get_runner.return_value = fake_runner
+
+        with (
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch(
+                "hivepilot.orchestrator.policy_service.enforce_policy",
+                return_value=Policy(),
+            ),
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+            patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+        ):
+            results = orch.run_task(
+                project_names=["proj"],
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+            )
+
+        assert len(results) == 1
+        assert results[0].detail == "plain, unremarkable agent output"
+
+    def test_run_approved_redacts_registered_secret_from_failure_detail(self) -> None:
+        """`run_approved`'s post-approval `_execute_task` failure path is a
+        separate RunResult construction site from `_run_task_body` — must
+        independently redact a registered secret in `str(exc)`."""
+        import json as _json
+
+        from hivepilot.models import ProjectConfig, TaskConfig
+
+        cp = self._clean_registry()
+        task = TaskConfig(description="t", engine="native", steps=[])
+        orch = self._orch_with_project_and_task(task)
+        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/redact-proj"))
+
+        approval_row = {
+            "status": "pending",
+            "project": "proj",
+            "task": "x",
+            "metadata": _json.dumps({}),
+        }
+
+        cp.register_secret_value(self.MARKER)
+        try:
+            with (
+                patch(
+                    "hivepilot.orchestrator.state_service.get_approval",
+                    return_value=approval_row,
+                ),
+                patch("hivepilot.orchestrator.state_service.update_approval"),
+                patch("hivepilot.orchestrator.state_service.complete_run"),
+                patch("hivepilot.orchestrator.notification_service.send_notification"),
+                patch(
+                    "hivepilot.orchestrator.policy_service.get_policy",
+                    return_value=None,
+                ),
+                patch.object(
+                    orch,
+                    "_execute_task",
+                    side_effect=RuntimeError(f"agent echoed: {self.MARKER}"),
+                ),
+            ):
+                result = orch.run_approved(run_id=1, approve=True, approver="tester")
+        finally:
+            cp.clear_secret_values()
+
+        assert result.success is False
+        assert self.MARKER not in (result.detail or ""), (
+            "the secret leaked verbatim into run_approved's failure RunResult"
+        )
+        assert cp.REDACTED in (result.detail or "")

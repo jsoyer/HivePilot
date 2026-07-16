@@ -41,7 +41,7 @@ from hivepilot.services import (
 )
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
-from hivepilot.services.config_provenance import register_secret_value
+from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
 from hivepilot.services.interaction_service import (
     Interaction,
@@ -807,6 +807,30 @@ class Orchestrator:
                 project = future_map[future]
                 try:
                     detail = future.result()
+                    # Phase 10c: `detail` here is `_execute_task`'s joined
+                    # step-output string (whatever the runner's `capture()`
+                    # returned) — this is the RunResult choke point every
+                    # downstream sink (cli.py's `typer.echo(result.detail)`,
+                    # api_service's `/v1/run` response body, and the
+                    # discord/slack/telegram `_format_results` chat replies)
+                    # ultimately reads from. Those sinks do NOT redact
+                    # themselves (unlike state_service/notification_service/
+                    # artifact writers — see config_provenance's sink list),
+                    # so a runner that echoes a resolved `${secret:}` value in
+                    # its stdout would otherwise leak it verbatim to a chat
+                    # channel or API response. Masking here means every sink
+                    # gets the already-redacted text for free.
+                    #
+                    # Known limitation: `redact_text` only masks values that
+                    # were actually `register_secret_value`'d (i.e. resolved
+                    # via `${secret:NAME}` — see `_resolve_secrets`). A secret
+                    # echoed from a source HivePilot never registered — e.g.
+                    # terraform state, a data-source lookup, or a hardcoded
+                    # plaintext value in `definition.env` — will NOT be
+                    # caught. This is necessary-but-not-sufficient; the full
+                    # fix would also register `definition.env` secret-shaped
+                    # values at resolution time (out of scope here).
+                    detail = redact_text(detail) if detail else detail
                     results.append(RunResult(project.path.name, task_name, True, detail))
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "success")
@@ -878,7 +902,16 @@ class Orchestrator:
                     logger.error(
                         "run.failure", project=project.path.name, task=task_name, error=str(exc)
                     )
-                    results.append(RunResult(project.path.name, task_name, False, str(exc)))
+                    # Phase 10c: a raised runner/step error can itself echo
+                    # captured output (e.g. "non-zero exit: <stdout>") — mask
+                    # registered secrets here too, same choke-point rationale
+                    # as the success-path `detail` above. Compute this ONCE
+                    # and reuse it for every downstream sink in this block
+                    # (RunResult, Notion, Linear) — they all receive the same
+                    # exception message, so a single redaction point avoids a
+                    # raw `str(exc)` slipping through to any one of them.
+                    exc_text = redact_text(str(exc))
+                    results.append(RunResult(project.path.name, task_name, False, exc_text))
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "failed", str(exc))
                     notification_service.send_notification(
@@ -888,14 +921,16 @@ class Orchestrator:
                         from hivepilot.services.notion_service import on_run_complete
 
                         on_run_complete(
-                            notion_page_ids.get(project.path.name), status="failed", detail=str(exc)
+                            notion_page_ids.get(project.path.name),
+                            status="failed",
+                            detail=exc_text,
                         )
                     except Exception:  # noqa: BLE001
                         pass
                     try:
                         from hivepilot.services.linear_service import on_run_failure
 
-                        on_run_failure(project=project.path.name, task=task_name, error=str(exc))
+                        on_run_failure(project=project.path.name, task=task_name, error=exc_text)
                     except Exception:  # noqa: BLE001
                         pass
         summary = {
@@ -2093,7 +2128,9 @@ class Orchestrator:
             notification_service.send_notification(
                 f"❌ Run {run_id} for {project_name}:{task_name} failed after approval ({exc})"
             )
-            return RunResult(project_name, task_name, False, str(exc))
+            # Phase 10c: same choke-point rationale as `_run_task_body` — mask
+            # registered secrets before this reaches cli/api/chat sinks.
+            return RunResult(project_name, task_name, False, redact_text(str(exc)))
         state_service.complete_run(run_id, "success")
         return RunResult(project_name, task_name, True)
 

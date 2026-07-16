@@ -149,6 +149,16 @@ def all_keys(cfg: Settings | None = None) -> list[str]:
 #         built from `prior_chunks` agent output via
 #         Orchestrator._build_checkpoint_details).
 #       - services.knowledge_service.append_feedback (the vault feedback log).
+#       - Orchestrator._run_task_body / Orchestrator.run_approved (the
+#         `RunResult.detail` returned to CALLERS — Phase 10c): unlike the
+#         sinks above, `RunResult.detail` is consumed directly by cli.py
+#         (`typer.echo(result.detail)`), services.api_service's `/v1/run`
+#         response body, and the discord/slack/telegram `_format_results`
+#         chat replies — none of which redact themselves. Redacting at the
+#         `RunResult(...)` construction choke point (both the success-path
+#         `detail` and the failure-path `str(exc)`, which can itself echo
+#         captured runner output) means every one of those sinks gets
+#         already-masked text for free.
 #   * `payload.secrets` itself (the runner-env mapping holding resolved
 #     plaintext) is protected structurally, not by redaction: it is never
 #     serialized into run state or artifacts (state_service only persists
