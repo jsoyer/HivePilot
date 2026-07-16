@@ -1,0 +1,108 @@
+{{/*
+Scheduler daemon (`hivepilot schedule daemon`) — polls schedules.yaml and the
+retry queue, writing to the SAME state.db as the API. Single replica for the
+same reason as the API Deployment (SQLite is not multi-writer safe).
+No HTTP server here, so no liveness/readiness probe (Kubernetes' default
+"container running == alive" applies) — see README "Scheduler probes".
+terminationGracePeriodSeconds is derived from shutdownTimeoutSeconds (+10s
+buffer) so Kubernetes doesn't SIGKILL the daemon before its own graceful
+SIGTERM handler (hivepilot/services/scheduler_daemon.py) finishes waiting for
+in-flight tasks.
+*/}}
+{{- if .Values.scheduler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hivepilot.componentName" (dict "context" . "component" "scheduler") }}
+  labels:
+    {{- include "hivepilot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hivepilot.componentSelectorLabels" (dict "context" . "component" "scheduler") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hivepilot.componentSelectorLabels" (dict "context" . "component" "scheduler") | nindent 8 }}
+        {{- with .Values.scheduler.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.scheduler.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "hivepilot.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ add .Values.scheduler.shutdownTimeoutSeconds 10 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: scheduler
+          image: {{ include "hivepilot.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.scheduler.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["hivepilot"]
+          args:
+            - schedule
+            - daemon
+            - --interval
+            - {{ .Values.scheduler.intervalSeconds | quote }}
+            - --shutdown-timeout
+            - {{ .Values.scheduler.shutdownTimeoutSeconds | quote }}
+          env:
+            - name: HIVEPILOT_STATE_DB
+              value: "state-data/state.db"
+            - name: HIVEPILOT_RUNS_DIR
+              value: "state-data/runs"
+            - name: HIVEPILOT_LOGS_DIR
+              value: "state-data/runs/logs"
+            - name: HIVEPILOT_LOG_TO_FILE
+              value: {{ .Values.env.logToFile | quote }}
+            {{- with .Values.scheduler.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "hivepilot.secretName" . }}
+            {{- with .Values.scheduler.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /app/state-data
+            {{- include "hivepilot.configVolumeMounts" . | nindent 12 }}
+            {{- with .Values.scheduler.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "hivepilot.stateVolume" . | nindent 8 }}
+        {{- include "hivepilot.configVolumes" . | nindent 8 }}
+        {{- with .Values.scheduler.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.scheduler.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

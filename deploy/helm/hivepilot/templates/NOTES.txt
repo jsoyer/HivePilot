@@ -1,0 +1,54 @@
+HivePilot has been deployed as "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components enabled:
+  - API server (hivepilot-api):      {{ .Values.api.enabled }}
+  - Scheduler daemon (hivepilot-scheduler): {{ .Values.scheduler.enabled }}
+  - Telegram bot:                    {{ .Values.bots.telegram.enabled }}
+  - Slack bot:                       {{ .Values.bots.slack.enabled }}
+  - Discord bot:                     {{ .Values.bots.discord.enabled }}
+
+{{- if .Values.api.enabled }}
+
+1. Check the API is healthy:
+
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "hivepilot.componentName" (dict "context" . "component" "api") }} 8045:{{ .Values.service.port }}
+   curl -s http://127.0.0.1:8045/healthz
+   curl -s http://127.0.0.1:8045/readyz
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+2. The API (and, if HIVEPILOT_ENABLE_WEBUI is set, the Mirador web UI at /ui)
+   is exposed via Ingress at:
+
+   {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- end }}
+
+{{- if not .Values.secrets.apiTokensYaml }}
+
+WARNING: secrets.apiTokensYaml is empty — the API started with an EMPTY
+token store. Every authenticated /v1 endpoint returns 401 until you
+bootstrap a real admin token. See deploy/helm/hivepilot/README.md
+"Bootstrap the first admin token" for the exact steps, then re-run
+`helm upgrade` with the generated api_tokens.yaml content (or
+`--set-file secrets.apiTokensYaml=./api_tokens.yaml`).
+{{- end }}
+
+{{- if and .Values.scheduler.enabled (not (hasKey .Values.secrets.data "HIVEPILOT_API_TOKEN")) }}
+
+WARNING: scheduler.enabled=true but secrets.data.HIVEPILOT_API_TOKEN is not
+set — the scheduler daemon will fail its `_require_cli_role` check on
+startup and refuse to run schedules. Set
+secrets.data.HIVEPILOT_API_TOKEN to a bootstrapped token with role >= "run".
+{{- end }}
+
+{{- if not .Values.scheduler.enabled }}
+
+NOTE: the scheduler daemon (hivepilot-scheduler) is disabled by default.
+It needs a run-role HIVEPILOT_API_TOKEN to start and will CrashLoopBackOff
+without one. After bootstrapping an admin token (see below) and minting a
+run-role token, set secrets.data.HIVEPILOT_API_TOKEN and re-run
+`helm upgrade` with `--set scheduler.enabled=true`.
+{{- end }}
+
+Full install/config/secrets walkthrough: deploy/helm/hivepilot/README.md

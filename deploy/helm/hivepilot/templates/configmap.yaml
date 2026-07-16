@@ -1,0 +1,13 @@
+{{- if and (not .Values.config.existingConfigMap) .Values.config.files }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hivepilot.configMapName" . }}
+  labels:
+    {{- include "hivepilot.labels" . | nindent 4 }}
+data:
+  {{- range $filename, $content := .Values.config.files }}
+  {{ $filename }}: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

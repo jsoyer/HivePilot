@@ -1,0 +1,292 @@
+# Default values for the hivepilot chart.
+# This is a YAML-formatted file. Declare variables to be substituted into templates.
+#
+# See deploy/helm/hivepilot/README.md for the full install/config walkthrough,
+# including how to bootstrap the first admin API token and wire an external
+# secrets manager (Infisical / 1Password plugins) instead of plain Secret data.
+
+# -----------------------------------------------------------------------------
+# Image
+# -----------------------------------------------------------------------------
+image:
+  # Build from the repo's own Dockerfile and push to your registry — there is
+  # no public HivePilot image today.
+  repository: ghcr.io/jsoyer/hivepilot
+  # Defaults to Chart.appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# ServiceAccount — mounted into every HivePilot pod. Left with no extra RBAC
+# by default (see `rbac` below); only useful once you opt into RBAC, or if you
+# want pods to present an in-cluster identity to the kubectl runner plugin
+# (which still shells out to the `kubectl` binary — it does not auto-detect
+# in-cluster config, you must point KUBECONFIG at a generated kubeconfig that
+# uses this ServiceAccount's token; see README "RBAC & the kubectl runner").
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# RBAC — OFF by default (`rbac.create: false`). HivePilot's kubectl runner
+# plugin can execute arbitrary kubectl commands (destructive ones such as
+# apply/delete/rollout are approval-gated at the HivePilot pipeline level,
+# but that is an application-level gate, not a Kubernetes-level one). Granting
+# this ServiceAccount RBAC widens the blast radius of a compromised pod or a
+# misconfigured pipeline to the scope you grant here. Only enable this if you
+# intend to run the kubectl runner in-cluster, and start from the minimal
+# `rules` below (read-only) — do not grant cluster-admin.
+# -----------------------------------------------------------------------------
+rbac:
+  create: false
+  # "Role"/"RoleBinding" (namespaced, default) or "ClusterRole"/"ClusterRoleBinding".
+  scope: Role
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "services", "configmaps", "events"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["deployments", "replicasets"]
+      verbs: ["get", "list", "watch"]
+
+# -----------------------------------------------------------------------------
+# HivePilot API server (`hivepilot api serve`) — single replica (SQLite state
+# is not multi-writer safe; see README "Single-replica & HA caveat"). Serves
+# /v1/* (control API), /metrics (Prometheus), /ui (Mirador web UI, opt-in),
+# and the unauthenticated /healthz + /readyz probe endpoints.
+# -----------------------------------------------------------------------------
+api:
+  enabled: true
+  port: 8045
+  # Extra CLI flags appended to `hivepilot api serve --host 0.0.0.0 --port <port>`.
+  extraArgs: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podAnnotations: {}
+  podLabels: {}
+  securityContext: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Extra env vars (list of {name, value} or {name, valueFrom: ...}), merged
+  # after the chart-managed ones.
+  extraEnv: []
+  extraEnvFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+# -----------------------------------------------------------------------------
+# Scheduler daemon (`hivepilot schedule daemon`) — polls due schedules.yaml
+# entries and processes the retry queue. Single replica (writes to the same
+# state.db as the API). Needs HIVEPILOT_API_TOKEN with role >= run — sourced
+# from `secrets.data.HIVEPILOT_API_TOKEN` (see README bootstrap steps).
+#
+# OFF by default: a bare `helm install` has no secrets.data, and the daemon
+# exits non-zero without a run-role token, so enabling it out of the box would
+# CrashLoopBackOff. Bootstrap the token first (see README), then enable with
+# `--set scheduler.enabled=true` (the API itself doesn't need a token to
+# start — only the scheduler does).
+# -----------------------------------------------------------------------------
+scheduler:
+  enabled: false
+  intervalSeconds: 30
+  shutdownTimeoutSeconds: 120
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  securityContext: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+  extraEnvFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+
+# -----------------------------------------------------------------------------
+# Chat-ops bots — optional Deployments, each gated independently. All OFF by
+# default. Each needs its own token/credentials in `secrets.data` (e.g.
+# HIVEPILOT_TELEGRAM_BOT_TOKEN) — see README. Bots are blocking, long-lived
+# processes (polling/gateway mode), so each is a 1-replica Deployment.
+# -----------------------------------------------------------------------------
+bots:
+  telegram:
+    enabled: false
+    mode: polling # polling | webhook
+    resources:
+      requests: { cpu: 25m, memory: 96Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    extraEnv: []
+    extraEnvFrom: []
+  slack:
+    enabled: false
+    mode: socket # socket | webhook
+    resources:
+      requests: { cpu: 25m, memory: 96Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    extraEnv: []
+    extraEnvFrom: []
+  discord:
+    enabled: false
+    mode: gateway # gateway | webhook
+    resources:
+      requests: { cpu: 25m, memory: 96Mi }
+      limits: { cpu: 250m, memory: 256Mi }
+    extraEnv: []
+    extraEnvFrom: []
+
+# -----------------------------------------------------------------------------
+# Probes against the API's real, unauthenticated health endpoints
+# (hivepilot/services/api_service.py): /healthz is a pure liveness ping,
+# /readyz checks the state DB + config load. The scheduler and bot Deployments
+# have no HTTP server, so they use exec/TCP-free `hivepilot doctor`-style
+# process liveness (Kubernetes' default: container running == alive); only
+# the API Deployment gets HTTP probes.
+# -----------------------------------------------------------------------------
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# -----------------------------------------------------------------------------
+# Service (ClusterIP) fronting the API Deployment.
+# -----------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8045
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Ingress — exposes the API (/v1/*, /metrics) and the Mirador web UI (/ui, if
+# HIVEPILOT_ENABLE_WEBUI is set via `env.enableWebui`). Off by default.
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: hivepilot.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: false
+    secretName: ""
+
+# -----------------------------------------------------------------------------
+# Persistence — a single RWO PVC holding state.db (SQLite), run artifacts and
+# logs. Shared (via subPath, not a shared mount) is not required since the
+# scheduler and API run in the SAME pod's-worth of state only when each has
+# its own volume claim... by default this chart provisions ONE PVC and mounts
+# it into BOTH the api and scheduler Deployments so they observe the same
+# state.db. NOTE: two pods (api + scheduler) both mounting one RWO volume
+# still works because most CSI drivers allow ReadWriteOnce across nodes when
+# both pods land on the same node, but is NOT guaranteed cluster-wide; pin
+# both Deployments to the same node (nodeSelector/affinity) or use a
+# ReadWriteMany-capable storageClass if your cluster spans nodes. See README.
+# -----------------------------------------------------------------------------
+persistence:
+  enabled: true
+  # Leave empty to use the cluster default StorageClass.
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 2Gi
+  # Use an existing PVC instead of creating one (name only; enabled above is
+  # ignored when this is set).
+  existingClaim: ""
+
+# -----------------------------------------------------------------------------
+# Non-secret configuration — rendered into a ConfigMap and mounted OVER the
+# example config files already baked into the image at /app/<file> (see
+# Dockerfile `COPY . .`). Any filename you do NOT set here falls back to the
+# image's baked-in example (roles.yaml/model_profiles.yaml ship sane,
+# non-secret defaults; projects.yaml/tasks.yaml/pipelines.yaml/policies.yaml/
+# groups.yaml/schedules.yaml are almost certainly deployment-specific and
+# should be overridden). Empty by default — nothing is overridden until you
+# set values here (or point at your own ConfigMap via `existingConfigMap`).
+#
+# Example:
+#   config:
+#     files:
+#       projects.yaml: |
+#         projects:
+#           my-app:
+#             path: /workspace/my-app
+# -----------------------------------------------------------------------------
+config:
+  # Bring your own ConfigMap (must contain the same keys/filenames you'd put
+  # under `files` below) instead of letting the chart render one.
+  existingConfigMap: ""
+  files: {}
+
+# -----------------------------------------------------------------------------
+# Secrets — NEVER put real tokens/keys in a values file you commit. The
+# defaults below are empty placeholders. Two options:
+#   1. `secrets.existingSecret` — reference a Secret you manage out-of-band
+#      (kubectl, sealed-secrets, external-secrets-operator, or the HivePilot
+#      Infisical/1Password secrets-provider plugins resolving ${secret:NAME}
+#      at runtime — see README "Secrets options").
+#   2. Inline `secrets.data` / `secrets.apiTokensYaml` — the chart renders a
+#      Secret for you. Only use this with `--set` / `-f my-secrets.yaml`
+#      (a file that is itself gitignored), never inline in a committed
+#      values.yaml.
+# -----------------------------------------------------------------------------
+secrets:
+  existingSecret: ""
+  # Arbitrary env vars injected into every enabled Deployment via envFrom
+  # (HIVEPILOT_API_TOKEN, HIVEPILOT_TELEGRAM_BOT_TOKEN, HIVEPILOT_CHATOPS_TOKEN,
+  # ANTHROPIC_API_KEY, provider keys for whichever runner CLIs you use, ...).
+  data: {}
+  # Content of api_tokens.yaml (hashed tokens — never plaintext). Empty by
+  # default: the API still starts and auto-creates an empty `tokens: []` file
+  # at that path (fail-closed — every /v1 write endpoint returns 401 until you
+  # bootstrap a real token). See README "Bootstrap the first admin token".
+  apiTokensYaml: ""
+
+# -----------------------------------------------------------------------------
+# Application-level env toggles (non-secret).
+# -----------------------------------------------------------------------------
+env:
+  # HIVEPILOT_ENABLE_WEBUI — serves the pre-built Mirador React bundle at /ui.
+  enableWebui: false
+  # HIVEPILOT_ENABLE_TEXTUAL_UI — irrelevant to server pods (TUI is a local,
+  # interactive CLI feature); left here for parity/completeness, default off.
+  enableTextualUi: false
+  # HIVEPILOT_LOG_TO_FILE — off by default in-cluster; prefer stdout -> your
+  # log aggregator (Loki/ELK/CloudWatch/...).
+  logToFile: false
+
+# Common pod-level settings shared by all Deployments unless overridden above.
+# The upstream Dockerfile has no USER directive (runs as root) and writes
+# under /app at runtime (state.db, runs/, api_tokens.yaml), so runAsNonRoot
+# defaults to false to match today's image out of the box. Harden this
+# (runAsNonRoot: true + runAsUser/runAsGroup) once the image gains a
+# non-root USER — track alongside any future Dockerfile change.
+podSecurityContext:
+  runAsNonRoot: false
+  fsGroup: 1000

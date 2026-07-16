@@ -1,0 +1,43 @@
+{{- if and .Values.ingress.enabled .Values.api.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "hivepilot.fullname" . }}
+  labels:
+    {{- include "hivepilot.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Values.ingress.tls.secretName | default (printf "%s-tls" (include "hivepilot.fullname" .)) }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # Control API + /metrics + /v1/*.
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "hivepilot.componentName" (dict "context" . "component" "api") }}
+                port:
+                  number: {{ .Values.service.port }}
+          # Mirador web UI (only serves 200s when HIVEPILOT_ENABLE_WEBUI=true
+          # AND the static bundle is present in the image — 404s otherwise).
+          - path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "hivepilot.componentName" (dict "context" . "component" "api") }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

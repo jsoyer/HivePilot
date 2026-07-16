@@ -1,0 +1,76 @@
+{{/*
+Optional chat-ops bot Deployments (telegram/slack/discord), each gated by
+values.bots.<name>.enabled (default false — see values.yaml). Each is a
+blocking, long-lived process (`hivepilot <name> start --mode <mode>`) driving
+the HivePilot orchestrator directly (in-process, same as the scheduler), so
+it needs the same config + tokens mounts. Credentials (bot token, webhook
+secret, ...) come from `secrets.data` (envFrom), NOT from chart values.
+*/}}
+{{- range $name, $bot := .Values.bots }}
+{{- if $bot.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hivepilot.componentName" (dict "context" $ "component" (printf "bot-%s" $name)) }}
+  labels:
+    {{- include "hivepilot.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ printf "bot-%s" $name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hivepilot.componentSelectorLabels" (dict "context" $ "component" (printf "bot-%s" $name)) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hivepilot.componentSelectorLabels" (dict "context" $ "component" (printf "bot-%s" $name)) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "hivepilot.serviceAccountName" $ }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ printf "bot-%s" $name }}
+          image: {{ include "hivepilot.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["hivepilot"]
+          args:
+            - {{ $name }}
+            - start
+            - --mode
+            - {{ $bot.mode | quote }}
+          env:
+            - name: HIVEPILOT_STATE_DB
+              value: "state-data/state.db"
+            - name: HIVEPILOT_RUNS_DIR
+              value: "state-data/runs"
+            - name: HIVEPILOT_LOGS_DIR
+              value: "state-data/runs/logs"
+            - name: HIVEPILOT_LOG_TO_FILE
+              value: {{ $.Values.env.logToFile | quote }}
+            {{- with $bot.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "hivepilot.secretName" $ }}
+            {{- with $bot.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml $bot.resources | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /app/state-data
+            {{- include "hivepilot.configVolumeMounts" $ | nindent 12 }}
+      volumes:
+        {{- include "hivepilot.stateVolume" $ | nindent 8 }}
+        {{- include "hivepilot.configVolumes" $ | nindent 8 }}
+{{- end }}
+{{- end }}
