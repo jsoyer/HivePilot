@@ -1,24 +1,41 @@
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { fetchPanels } from '@/lib/mirador-api'
+import { useAsyncData } from '@/lib/use-async-data'
 import { AnalyticsView } from './views/AnalyticsView'
 import { CostView } from './views/CostView'
 import { HealthView } from './views/HealthView'
 import { Mem0View } from './views/Mem0View'
+import { PanelView } from './views/PanelView'
 
-const TABS = [
+const BUILTIN_TABS = [
   { value: 'analytics', label: 'Analytics', Panel: AnalyticsView },
   { value: 'cost', label: 'Cost', Panel: CostView },
   { value: 'health', label: 'Health', Panel: HealthView },
   { value: 'mem0', label: 'Mem0', Panel: Mem0View },
 ] as const
 
+/** A dynamic panel tab's `value` — prefixed so it can never collide with a
+ * built-in tab's static `value` above. */
+function panelTabValue(name: string): string {
+  return `panel-${name}`
+}
+
 /**
- * The Mirador app shell — dark, tabbed insight dashboard (Analytics / Cost /
- * Health / Mem0). Each tab is wired to real HivePilot API data (Sprint 3):
- * `/v1/analytics/*` for Analytics/Cost, `/v1/plugins/health` for Health, and
- * `/v1/memories` for Mem0 — see `./views/*` and `@/lib/mirador-api`.
+ * The Mirador app shell — dark, tabbed insight dashboard. Four built-in tabs
+ * (Analytics / Cost / Health / Mem0, wired to real HivePilot API data —
+ * `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`, see `./views/*`
+ * and `@/lib/mirador-api`), plus one DYNAMIC tab per plugin-contributed
+ * `panel` (Sprint 3 web surface, `GET /v1/panels`) appended after them.
+ * Each plugin panel tab lazy-fetches its own data (`GET /v1/panels/{name}`)
+ * via `PanelView`, which handles its own loading/error/empty/403 states —
+ * a panel that fails to load (or 403s for the caller's role) never breaks
+ * the rest of the shell.
  */
 export function Mirador() {
+  const panelsState = useAsyncData(() => fetchPanels(), [])
+  const pluginPanels = panelsState.status === 'success' ? panelsState.data.panels : []
+
   return (
     <div className="min-h-screen bg-background p-6 text-foreground">
       <header className="mb-6 flex items-center gap-3">
@@ -27,15 +44,25 @@ export function Mirador() {
       </header>
       <Tabs defaultValue="analytics">
         <TabsList>
-          {TABS.map((tab) => (
+          {BUILTIN_TABS.map((tab) => (
             <TabsTrigger key={tab.value} value={tab.value}>
               {tab.label}
             </TabsTrigger>
           ))}
+          {pluginPanels.map((panel) => (
+            <TabsTrigger key={panel.name} value={panelTabValue(panel.name)}>
+              {panel.title}
+            </TabsTrigger>
+          ))}
         </TabsList>
-        {TABS.map(({ value, Panel }) => (
+        {BUILTIN_TABS.map(({ value, Panel }) => (
           <TabsContent key={value} value={value} className="mt-4">
             <Panel />
+          </TabsContent>
+        ))}
+        {pluginPanels.map((panel) => (
+          <TabsContent key={panel.name} value={panelTabValue(panel.name)} className="mt-4">
+            <PanelView name={panel.name} title={panel.title} minRole={panel.min_role} />
           </TabsContent>
         ))}
       </Tabs>

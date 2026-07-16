@@ -6,6 +6,7 @@ from importlib import import_module
 from typing import Any, Callable, NamedTuple, TypedDict
 
 from hivepilot.config import settings
+from hivepilot.services import token_service
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -155,6 +156,26 @@ class PanelNameCollisionError(RuntimeError):
 
     Mirrors `HealthNameCollisionError` — a hard stop, not a silent last-wins
     overwrite, so a plugin can never shadow another plugin's panel unnoticed.
+    """
+
+
+class PanelInvalidMinRoleError(RuntimeError):
+    """Raised when a plugin declares a panel with a `min_role` that is not a
+    recognized role (`token_service.ROLE_RANKS` — the source of truth for
+    every valid role name).
+
+    This closes a fail-open privilege-escalation gap: `token_service.role_rank`
+    returns `-1` for ANY unrecognized role, so an unrecognized `min_role`
+    (typo `"Admin"`, `"superuser"`, empty string, or a non-string value like
+    `123`/`None`/`[]`) would make the per-panel gate in
+    `get_panel_endpoint` (`hivepilot/services/api_service.py`) compare
+    `role_rank(caller.role) < role_rank(min_role)` as `0 < -1`, which is
+    ALWAYS false — the 403 never fires and a meant-to-be-restricted panel is
+    served to any `read` token. Rejecting an invalid `min_role` here, at
+    registration time, means a panel can never even be registered with an
+    unenforceable gate — fail-closed, and atomic with the other
+    runner/notifier/secrets/health/panel collision errors above (the whole
+    plugin's contribution rolls back, mirroring `PanelNameCollisionError`).
     """
 
 
@@ -449,11 +470,30 @@ class PluginManager:
                                 f"panel '{panel_name}' is already registered; "
                                 "refusing to silently replace it"
                             )
+                        min_role = panel_spec.get("min_role", "read")
+                        # isinstance() FIRST: a non-string/non-hashable min_role
+                        # (e.g. `[]`/`{}`) must be rejected here, before any
+                        # `in token_service.ROLE_RANKS` membership check, so it
+                        # can never raise a raw TypeError. A min_role that isn't
+                        # one of token_service's recognized roles is rejected
+                        # too — token_service.role_rank() returns -1 for any
+                        # unrecognized role, which would make the endpoint's
+                        # `role_rank(caller.role) < role_rank(min_role)` gate
+                        # fail open (see PanelInvalidMinRoleError docstring).
+                        if (
+                            not isinstance(min_role, str)
+                            or min_role not in token_service.ROLE_RANKS
+                        ):
+                            raise PanelInvalidMinRoleError(
+                                f"panel '{panel_name}' declares invalid min_role "
+                                f"{min_role!r}; must be a string, one of "
+                                f"{sorted(token_service.ROLE_RANKS)}"
+                            )
                         self.panels[panel_name] = {
                             "name": panel_name,
                             "title": panel_spec["title"],
                             "fetch": panel_spec["fetch"],
-                            "min_role": panel_spec.get("min_role", "read"),
+                            "min_role": min_role,
                         }
                         applied_panels.append(panel_name)
                 except (
@@ -462,6 +502,7 @@ class PluginManager:
                     SecretsBackendCollisionError,
                     HealthNameCollisionError,
                     PanelNameCollisionError,
+                    PanelInvalidMinRoleError,
                 ):
                     for kind in applied_runners:
                         RUNNER_MAP.pop(kind, None)

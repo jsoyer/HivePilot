@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiForbiddenError } from '@/lib/api'
 
 // Mirador wires four real data views (Analytics/Cost/Health/Mem0) — mock
 // every endpoint they call so this test exercises the shell (tabs, default
@@ -31,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   fetchAnalyticsProviders: vi.fn().mockResolvedValue({ by_provider: [], by_model: [] }),
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [] }),
   fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
+  fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
+  fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
 }))
 
 vi.mock('@/lib/mirador-api', async (importOriginal) => {
@@ -118,5 +121,126 @@ describe('Mirador', () => {
     })
 
     expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Mem0 memory search')
+  })
+})
+
+describe('Mirador — dynamic plugin panel tabs', () => {
+  // The file-level `beforeEach` above already mounted a default Mirador
+  // (all `fetchPanels`/`fetchPanel` mocks resolved to empty) into
+  // `container`/`root` before this block's own `beforeEach` runs. Unmount
+  // that default instance first so each test below can set its own
+  // `fetchPanels`/`fetchPanel` resolutions and mount a fresh instance
+  // without leaking the discarded one.
+  beforeEach(() => {
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
+  })
+
+  it('adds one tab per panel returned by fetchPanels, after the built-in tabs', async () => {
+    mocks.fetchPanels.mockResolvedValue({
+      panels: [
+        { name: 'rtk-status', title: 'RTK Status', min_role: 'read' },
+        { name: 'secure-panel', title: 'Secure Panel', min_role: 'admin' },
+      ],
+    })
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root.render(<Mirador />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
+    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'RTK Status', 'Secure Panel'])
+  })
+
+  it('switches to a dynamic panel tab and renders its data via PanelRenderer', async () => {
+    for (const mock of Object.values(mocks)) mock.mockClear()
+    mocks.fetchPanels.mockResolvedValue({
+      panels: [{ name: 'rtk-status', title: 'RTK Status', min_role: 'read' }],
+    })
+    mocks.fetchPanel.mockResolvedValue({
+      sections: [{ kind: 'stat', label: 'Queue depth', value: '4', status: 'ok' }],
+    })
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root.render(<Mirador />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const panelTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'RTK Status',
+    ) as HTMLElement
+
+    await act(async () => {
+      panelTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      panelTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.fetchPanel).toHaveBeenCalledWith('rtk-status')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toContain('Queue depth')
+    expect(panel?.textContent).toContain('4')
+  })
+
+  it('shows a graceful requires-token message for a 403 on an under-role panel tab', async () => {
+    for (const mock of Object.values(mocks)) mock.mockClear()
+    mocks.fetchPanels.mockResolvedValue({
+      panels: [{ name: 'secure-panel', title: 'Secure Panel', min_role: 'admin' }],
+    })
+    mocks.fetchPanel.mockRejectedValue(new ApiForbiddenError())
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root.render(<Mirador />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const panelTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Secure Panel',
+    ) as HTMLElement
+
+    await act(async () => {
+      panelTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      panelTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const forbidden = container.querySelector('[data-testid="panel-forbidden"]')
+    expect(forbidden).not.toBeNull()
+    expect(forbidden?.textContent).toMatch(/admin/i)
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('renders no extra tabs when fetchPanels resolves with an empty list', async () => {
+    for (const mock of Object.values(mocks)) mock.mockClear()
+    mocks.fetchPanels.mockResolvedValue({ panels: [] })
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root.render(<Mirador />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
+    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0'])
   })
 })

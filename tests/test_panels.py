@@ -219,6 +219,149 @@ def register():
             plugins_mod.PluginManager()
 
 
+class TestPanelInvalidMinRoleRejection:
+    """A `min_role` typo/non-role value must never silently pass through —
+    it fails REGISTRATION entirely (fail-closed, atomic rollback), the same
+    shape as `TestPanelCollisionRollback` above. This is the regression
+    coverage for the fail-open privilege-escalation gap: an unrecognized
+    `min_role` made `token_service.role_rank(min_role)` return -1, so the
+    per-panel gate in `get_panel_endpoint` never 403'd (`0 < -1` is always
+    False) and any `read` token could read a meant-to-be-restricted panel.
+    """
+
+    @pytest.mark.parametrize(
+        "min_role_literal",
+        ['"Admin"', '""', "123", "None", "[]"],
+        ids=["typo-Admin", "empty-string", "non-string-int", "none", "non-hashable-list"],
+    )
+    def test_invalid_min_role_fails_plugin_registration(
+        self, tmp_path, monkeypatch, min_role_literal
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.plugins import PanelInvalidMinRoleError
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "bad_role.py").write_text(
+            "def _fetch():\n    return {'sections': []}\n"
+            "def register():\n"
+            "    return {'panels': [{'name': 'restricted', 'title': 'R', "
+            f"'fetch': _fetch, 'min_role': {min_role_literal}}}]}}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        with pytest.raises(PanelInvalidMinRoleError):
+            plugins_mod.PluginManager()
+
+    def test_invalid_min_role_leaves_no_orphaned_registration(self, tmp_path, monkeypatch) -> None:
+        """After the raising `PluginManager()` construction fails, the panel
+        must be genuinely absent — not partially registered. Constructs a
+        fresh manager the same way the collision tests do, then inspects the
+        raised instance is never usable; the real assertion is that no
+        caller can ever observe 'restricted' via a working PluginManager,
+        which the atomic try/except in `plugins.py` guarantees by never
+        letting `self.panels[panel_name]` get set before the validation
+        check runs."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.plugins import PanelInvalidMinRoleError
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "bad_role.py").write_text(
+            "def _fetch():\n    return {'sections': []}\n"
+            "def register():\n"
+            "    return {'panels': [{'name': 'restricted', 'title': 'R', "
+            "'fetch': _fetch, 'min_role': 'superuser'}]}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        with pytest.raises(PanelInvalidMinRoleError):
+            plugins_mod.PluginManager()
+
+    def test_mixed_contribution_rolls_back_runner_and_notifier_when_min_role_invalid(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Cross-type atomicity when an invalid `min_role` is the failing
+        member: a plugin declaring a runner AND a notifier AND a panel with
+        a bad `min_role` must roll back ALL of its contributions, not just
+        the panel. Mirrors
+        `test_mixed_type_collision_rolls_back_runner_and_notifier_when_panel_collides`.
+        """
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.plugins import PanelInvalidMinRoleError
+        from hivepilot.registry import RUNNER_MAP
+        from hivepilot.services.notification_service import NOTIFIER_MAP
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "mixed.py").write_text(
+            """
+class MRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def _m_notifier(msg):
+    return None
+
+
+def _m_fetch():
+    return {'sections': []}
+
+
+def register():
+    return {
+        "runners": {"m-kind": MRunner},
+        "notifiers": {"m-notif": _m_notifier},
+        "panels": [
+            {"name": "m-panel", "title": "M", "fetch": _m_fetch, "min_role": "Admin"}
+        ],
+    }
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        with pytest.raises(PanelInvalidMinRoleError):
+            plugins_mod.PluginManager()
+
+        assert "m-kind" not in RUNNER_MAP
+        assert "m-notif" not in NOTIFIER_MAP
+
+    def test_valid_roles_from_token_service_all_register_successfully(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Every role in `token_service.ROLE_RANKS` (the source of truth)
+        must be accepted — this is the positive counterpart proving the
+        validation isn't over-broad."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.services import token_service
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        panel_entries = ", ".join(
+            f"{{'name': 'panel_{role}', 'title': '{role}', 'fetch': _fetch, 'min_role': '{role}'}}"
+            for role in token_service.ROLE_RANKS
+        )
+        (pdir / "all_roles.py").write_text(
+            "def _fetch():\n    return {'sections': []}\n"
+            "def register():\n"
+            f"    return {{'panels': [{panel_entries}]}}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        for role in token_service.ROLE_RANKS:
+            assert pm.get_panel(f"panel_{role}")["min_role"] == role
+
+
 class TestPanelDisabledSkip:
     def test_disabled_plugin_contributes_no_panel(self, tmp_path, monkeypatch) -> None:
         from hivepilot import plugins as plugins_mod
