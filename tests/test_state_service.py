@@ -293,3 +293,112 @@ class TestRecordStepProviderModel:
         rows = get_steps_for_run(run_id)
         assert rows[0]["provider"] == "shell"
         assert rows[0]["model"] is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 24b.2a — steps.input_tokens / steps.output_tokens / steps.cost_usd
+# (idempotent migration + record_step persistence)
+# ---------------------------------------------------------------------------
+
+
+class TestStepsUsageMigration:
+    def test_columns_exist_after_init_db(self) -> None:
+        init_db()
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "input_tokens")
+            assert db.column_exists(conn, "steps", "output_tokens")
+            assert db.column_exists(conn, "steps", "cost_usd")
+
+    def test_init_db_is_idempotent(self) -> None:
+        """Calling init_db() twice must not raise (ALTER TABLE ADD COLUMN
+        guarded by column_exists, same pattern as provider/model)."""
+        init_db()
+        init_db()  # must not raise "duplicate column name"
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "input_tokens")
+            assert db.column_exists(conn, "steps", "output_tokens")
+            assert db.column_exists(conn, "steps", "cost_usd")
+
+    def test_pre_existing_db_without_columns_gets_them(self) -> None:
+        """Simulates a pre-24b.2a DB (has provider/model but not the usage
+        columns): recreate steps in that shape, then confirm init_db()
+        backfills the 3 new columns without touching existing rows."""
+        state_service.init_db()  # creates the full up-to-date schema once
+
+        with db.connect() as conn:
+            conn.execute("DROP TABLE steps")
+            conn.execute(
+                """
+                CREATE TABLE steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER,
+                    step TEXT,
+                    status TEXT,
+                    detail TEXT,
+                    provider TEXT,
+                    model TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO steps (run_id, step, status, detail, provider, model) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (1, "legacy-step", "success", None, "claude", "claude-sonnet-4-6"),
+            )
+
+        with db.connect() as conn:
+            assert not db.column_exists(conn, "steps", "input_tokens")
+
+        init_db()  # idempotent migration must backfill the missing columns
+
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "input_tokens")
+            assert db.column_exists(conn, "steps", "output_tokens")
+            assert db.column_exists(conn, "steps", "cost_usd")
+            row = conn.execute("SELECT * FROM steps WHERE step='legacy-step'").fetchone()
+        assert row is not None
+        assert row["provider"] == "claude"  # existing row untouched
+        assert row["input_tokens"] is None  # backfilled -> NULL, not invented
+        assert row["output_tokens"] is None
+        assert row["cost_usd"] is None
+
+
+class TestRecordStepUsage:
+    def test_persists_tokens_and_cost_when_given(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(
+            run_id,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=123,
+            output_tokens=45,
+            cost_usd=0.0067,
+        )
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["input_tokens"] == 123
+        assert rows[0]["output_tokens"] == 45
+        assert rows[0]["cost_usd"] == 0.0067
+
+    def test_tokens_and_cost_null_when_omitted(self) -> None:
+        """Backward-compat: existing callers that never pass usage kwargs
+        still work and persist NULL — never an invented value."""
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["input_tokens"] is None
+        assert rows[0]["output_tokens"] is None
+        assert rows[0]["cost_usd"] is None
+
+    def test_fully_backward_compat_call_with_no_new_kwargs_at_all(self) -> None:
+        """A caller using only the pre-24b.1 signature (no provider/model/
+        usage) must still work unchanged."""
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "failed", "boom")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["detail"] == "boom"
+        assert rows[0]["input_tokens"] is None
+        assert rows[0]["output_tokens"] is None
+        assert rows[0]["cost_usd"] is None

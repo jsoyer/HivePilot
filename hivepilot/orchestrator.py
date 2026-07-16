@@ -32,7 +32,7 @@ except ImportError:
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager
 from hivepilot.registry import RunnerRegistry
-from hivepilot.runners.base import RunnerPayload
+from hivepilot.runners.base import RunnerPayload, UsageInfo, pop_last_usage
 from hivepilot.services import (
     knowledge_service,
     notification_service,
@@ -185,6 +185,37 @@ def _resolve_step_provider_model(
         return provider, model
     model = step.metadata.get("model") or runner_def.model
     return runner_def.kind, model
+
+
+def _record_step_success(
+    run_id: int,
+    step_name: str,
+    provider: str | None,
+    model: str | None,
+    usage: UsageInfo | None,
+) -> None:
+    """Call ``state_service.record_step`` for a successful step, threading
+    captured usage (Phase 24b.2a — opt-in usage capture) when present.
+
+    When *usage* is None (flag off, non-claude runner, or nothing captured),
+    this issues the EXACT same ``record_step`` call as before this sprint —
+    Phase 24b.1 callers/tests stay byte-compatible. When *usage* carries an
+    actual model (from the JSON envelope), it overrides *model* — this closes
+    the 24b.1 gap where profile/default-model claude steps persisted None.
+    """
+    if usage is None:
+        state_service.record_step(run_id, step_name, "success", provider=provider, model=model)
+        return
+    state_service.record_step(
+        run_id,
+        step_name,
+        "success",
+        provider=provider,
+        model=usage.model or model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cost_usd=usage.cost_usd,
+    )
 
 
 def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
@@ -2251,15 +2282,17 @@ class Orchestrator:
                             raise _last_exc
                     else:
                         outputs.append(self._capture_or_execute(runner_key, payload))
+                    # Phase 24b.2a: read-and-clear whatever usage the runner's
+                    # capture() stashed for THIS step (None when the flag is
+                    # off, the runner isn't claude, or nothing was captured).
+                    _usage = pop_last_usage()
                     if run_id:
                         _provider, _model = (
                             _resolve_step_provider_model(_used_runner_def, step)
                             if _used_runner_def is not None
                             else (None, None)
                         )
-                        state_service.record_step(
-                            run_id, step.name, "success", provider=_provider, model=_model
-                        )
+                        _record_step_success(run_id, step.name, _provider, _model, _usage)
                     self.plugins.run_hook(
                         "after_step",
                         payload=payload,
@@ -2268,6 +2301,12 @@ class Orchestrator:
                         output=outputs[-1] if outputs else None,
                     )
                 except Exception as exc:
+                    # Defensive clear: an exception means capture() raised
+                    # before reaching its usage-stash point, so this is
+                    # expected to be None — but pop unconditionally so no
+                    # stale usage from a partial attempt leaks into the next
+                    # step's success path.
+                    pop_last_usage()
                     if run_id:
                         _provider, _model = (
                             _resolve_step_provider_model(_used_runner_def, step)

@@ -127,6 +127,15 @@ def init_db() -> None:
             conn.execute("ALTER TABLE steps ADD COLUMN provider TEXT")
         if not db.column_exists(conn, "steps", "model"):
             conn.execute("ALTER TABLE steps ADD COLUMN model TEXT")
+        # Idempotent migration (Phase 24b.2a): persist opt-in usage capture
+        # (tokens/cost) per step, same additive ALTER TABLE ... ADD COLUMN
+        # pattern as provider/model above — safe to run against an existing DB.
+        if not db.column_exists(conn, "steps", "input_tokens"):
+            conn.execute("ALTER TABLE steps ADD COLUMN input_tokens INTEGER")
+        if not db.column_exists(conn, "steps", "output_tokens"):
+            conn.execute("ALTER TABLE steps ADD COLUMN output_tokens INTEGER")
+        if not db.column_exists(conn, "steps", "cost_usd"):
+            conn.execute("ALTER TABLE steps ADD COLUMN cost_usd REAL")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS interactions (
@@ -271,12 +280,21 @@ def record_step(
     detail: str | None = None,
     provider: str | None = None,
     model: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     """Record a step outcome.
 
     ``provider``/``model`` are additive and optional (Phase 24b.1 — persist
     provider/model per step): existing callers that omit them are unaffected
     and persist ``NULL`` for both, exactly as before this sprint.
+
+    ``input_tokens``/``output_tokens``/``cost_usd`` are additive and optional
+    (Phase 24b.2a — opt-in usage capture): existing callers that omit them are
+    unaffected and persist ``NULL`` for all three, exactly as before this
+    sprint. Cost here is whatever the runner's CLI self-reports — there is no
+    price-map lookup in this sprint (that's a later phase).
     """
     init_db()
     # Choke point: `detail` often carries `str(exc)` from a failed step, which
@@ -288,10 +306,12 @@ def record_step(
     with db.connect() as conn:
         conn.execute(
             db.ph(
-                "INSERT INTO steps (run_id, step, status, detail, provider, model) "
-                "VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT INTO steps "
+                "(run_id, step, status, detail, provider, model, "
+                "input_tokens, output_tokens, cost_usd) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
-            (run_id, step, status, detail, provider, model),
+            (run_id, step, status, detail, provider, model, input_tokens, output_tokens, cost_usd),
         )
     if _METRICS_AVAILABLE and _metrics is not None:
         try:

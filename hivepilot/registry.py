@@ -5,7 +5,7 @@ from typing import Any, Dict, Protocol, Type, cast
 
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition, RunnerKind
-from hivepilot.runners.base import BaseRunner, RunnerPayload
+from hivepilot.runners.base import BaseRunner, RunnerPayload, set_last_usage
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
 from hivepilot.runners.cursor_runner import CursorRunner
@@ -96,6 +96,18 @@ class RunnerRegistry:
         runner_cls(definition, settings).run(payload)
 
     def capture_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> str:
+        # Phase 24b.2a follow-up: clear any usage stashed by an EARLIER,
+        # unrelated capture (e.g. a debate/rebuttal/challenge-resolution call
+        # that never pops it — see hivepilot/orchestrator.py's non-main-loop
+        # capture_definition call sites) before this call's runner does
+        # anything. capture_definition is the single choke point every
+        # runner's capture() goes through, so clearing here guarantees no
+        # step's usage can ever be misattributed to a LATER, unrelated step
+        # that pops via pop_last_usage() after this call returns. The runner
+        # itself (e.g. ClaudeRunner.capture()) still sets fresh usage when it
+        # actually captures it — this is belt-and-suspenders with that
+        # runner-level clear-at-top, not a replacement for it.
+        set_last_usage(None)
         if self._is_worker_host(definition):
             from hivepilot.runners.worker_runner import RemoteWorkerRunner
 
