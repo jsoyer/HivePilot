@@ -30,6 +30,9 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "container",
     "cursor",
     "vibe",
+    "terraform",
+    "opentofu",
+    "pulumi",
 )
 
 

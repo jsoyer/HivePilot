@@ -9,6 +9,7 @@ from hivepilot.runners.base import BaseRunner, RunnerPayload, set_last_usage
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
 from hivepilot.runners.cursor_runner import CursorRunner
+from hivepilot.runners.iac_runner import OpenTofuRunner, PulumiRunner, TerraformRunner
 from hivepilot.runners.internal_runner import InternalRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
 from hivepilot.runners.prompt_cli_runner import (
@@ -137,6 +138,9 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "container": ContainerRunner,
     "cursor": CursorRunner,
     "vibe": VibeRunner,
+    "terraform": TerraformRunner,
+    "opentofu": OpenTofuRunner,
+    "pulumi": PulumiRunner,
 }
 for _kind, _cls in _BUILTIN_RUNNERS.items():
     RunnerRegistry.register(_kind, _cls)
