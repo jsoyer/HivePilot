@@ -925,6 +925,10 @@ Auth/tenant scoping/query params (`days`, `project`, `task`) are identical to `G
 
 ### Mirador web UI surface (Sprint 1) — plugin health & mem0 memory search
 
+> The browser UI itself (app shell, token gate, install/enable/reverse-proxy
+> notes) is documented separately in `docs/v4/WEBUI.md`. This section covers
+> only the two API endpoints below.
+
 Two small read-only endpoints for the Mirador web UI, siblings of the Analytics API above (same `require_role(...)`/dual-registration conventions), but neither is tenant-scoped:
 
 | Endpoint | Auth | Purpose |

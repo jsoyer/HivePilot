@@ -956,4 +956,42 @@ def trigger_schedule(schedule_name: str, request: Request):
     )
 
 
+# ---------------------------------------------------------------------------
+# Mirador web UI (Sprint 2) — serves the pre-built static bundle committed
+# under hivepilot/webui/static/ (see hivepilot/webui/__init__.py). Gated by
+# settings.enable_webui (env HIVEPILOT_ENABLE_WEBUI) AND a real build being
+# present, both read fresh on every request so a disabled/absent UI is a
+# clean 404 — no auth required to load the shell itself (the shell's own
+# token gate, not this server, is what protects the data underneath; every
+# /v1/* call it makes is auth-enforced as normal).
+# ---------------------------------------------------------------------------
+from fastapi.responses import FileResponse  # noqa: E402
+
+from hivepilot import webui  # noqa: E402
+
+# NOTE: import the module (`webui`), not its names — `webui.STATIC_DIR` /
+# `webui.INDEX_HTML` are read fresh via attribute access below (and are what
+# tests monkeypatch); `from hivepilot.webui import INDEX_HTML` would instead
+# bind a stale copy at import time that a monkeypatched `webui.INDEX_HTML`
+# could never reach.
+
+
+def _webui_enabled() -> bool:
+    return bool(settings.enable_webui) and webui.static_available()
+
+
+@app.get("/ui", include_in_schema=False)
+@app.get("/ui/{sub_path:path}", include_in_schema=False)
+def serve_webui(sub_path: str = "") -> FileResponse:
+    if not _webui_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    # A traversal attempt or unknown sub-path (resolve_static_path() returns
+    # None) intentionally degrades to serving INDEX_HTML — the SPA fallback
+    # for client-side routing. This is not an oversight: resolve_static_path()
+    # has already guaranteed the request can never escape STATIC_DIR before
+    # we get here, so falling back to the index is always safe.
+    file_path = webui.resolve_static_path(sub_path) or webui.INDEX_HTML
+    return FileResponse(str(file_path))
+
+
 app.include_router(v1)

@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     concurrency_limit: int = 4
     interactive_default_all: bool = False
     enable_textual_ui: bool = False
+    # Mirador web UI (hivepilot/webui/) — serves the pre-built React/Vite
+    # bundle committed under hivepilot/webui/static/ at GET /ui. Off by
+    # default; mirrors enable_textual_ui's opt-in pattern above. Also
+    # requires a real build to be present (hivepilot.webui.static_available())
+    # — the route returns 404 if either condition isn't met.
+    # env: HIVEPILOT_ENABLE_WEBUI
+    enable_webui: bool = False
     output_format: str = "json"
     plugins_entry: str | None = None
     plugins_enabled: bool = True  # master on/off switch for local-file + entry-point plugin loading

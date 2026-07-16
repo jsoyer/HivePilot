@@ -82,6 +82,21 @@ containers = [
 pdf = [
   "fpdf2>=2.7,<3.0",
 ]
+# Mirador web UI (hivepilot/webui/) — serves the pre-built React/Vite bundle
+# committed under hivepilot/webui/static/ (see [tool.setuptools.package-data]
+# below) at GET /ui, gated by HIVEPILOT_ENABLE_WEBUI. This is a thin/marker
+# extra: StaticFiles/FileResponse come from starlette, already pulled in by
+# the `api` extra (fastapi) — no new runtime dependency. `webui` depends on
+# `api` because serving requires the FastAPI app to exist in the first
+# place. No Node/npm is required at install or run time — the bundle is
+# already built; rebuild it via `cd web && npm run build` only if you're
+# changing the frontend itself.
+webui = [
+  "fastapi>=0.110,<1.0",
+  "uvicorn>=0.24,<1.0",
+  "prometheus-client>=0.17,<1.0",
+  "itsdangerous>=2.1,<3.0",
+]
 full = [
   "langchain>=0.2,<0.3",
   "langchain-community>=0.2,<0.3",
@@ -168,3 +183,10 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["hivepilot*"]
+
+[tool.setuptools.package-data]
+# Ship the pre-built Mirador web UI bundle (committed, not generated at
+# build time — see web/vite.config.ts's build.outDir) inside the wheel, so
+# `pip install hivepilot[webui]` needs zero Node. "**/*" covers the nested
+# assets/ subdirectory (JS/CSS/font chunks) as well as index.html/favicon.svg.
+"hivepilot.webui" = ["static/**/*"]
