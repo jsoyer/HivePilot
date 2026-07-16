@@ -58,6 +58,7 @@ A plugin is a module exposing a zero-arg `register()` function that returns a
 | `notifiers` | `dict[str, Callable[[str], None]]` | registered into `NOTIFIER_MAP` |
 | `secrets` | `dict[str, SecretsBackend]` | registered into `SECRETS_MAP` |
 | `health` | `dict[str, Callable[..., HealthStatus \| dict]]` | registered into `PluginManager.health` — see "Health checks" below |
+| `panels` | `list[PanelSpec]` | registered into `PluginManager.panels` — see "Panels (Mirador)" below |
 | `before_step` | `Callable[..., None]` | hook, fired before each step |
 | `after_step` | `Callable[..., None]` | hook, fired after each step |
 | `on_pipeline_start` | `Callable[..., None]` | hook, fired once when `run_pipeline` starts |
@@ -209,6 +210,123 @@ atomically — see "Collision & error handling" below.
 
 A plugin without a `health` key simply doesn't appear in the health surface
 — fully backward-compatible with every plugin shipped before this feature.
+
+### Panels (Mirador)
+
+A plugin may optionally contribute a **panel** — a renderer-agnostic view
+shown in **both** Mirador surfaces: the Textual TUI dashboard (extra tabs,
+`hivepilot/ui/dashboard.py`) and the web UI (extra tabs, `docs/v4/WEBUI.md`).
+A panel author writes ONE `fetch()` function; both renderers turn its output
+into their own native widgets — no HTML or Textual markup is ever authored by
+a plugin.
+
+`register()["panels"]` is `list[PanelSpec]`, where each `PanelSpec` is a
+plain dict:
+
+```python
+class PanelSpec(TypedDict, total=False):
+    name: str                       # required — stable id, collision-checked
+    title: str                      # required — display title
+    fetch: Callable[[], PanelData]  # required — no-arg, returns PanelData
+    min_role: str                   # optional — default "read"
+```
+
+`fetch()` returns a `PanelData` — a dict with a single `sections` key, a list
+of section dicts drawn from the **closed** set of kinds `stat` / `table` /
+`text`:
+
+| kind | fields |
+|---|---|
+| `stat` | `label: str`, `value: str`, `status: "ok" \| "warn" \| "error" \| None` |
+| `table` | `columns: list[str]`, `rows: list[list[str]]` |
+| `text` | `content: str` |
+
+Any other shape (wrong top-level type, missing `sections`, an unknown
+`kind`, or a section missing/mistyping a required field) is rejected by
+`normalize_panel_data` (`hivepilot/plugins.py`) — the one exception is an
+unrecognized `stat` `status`, which normalizes to `None` (no badge) rather
+than rejecting the whole section.
+
+```python
+# plugins/sample.py
+def _sample_fetch():
+    return {
+        "sections": [
+            {"kind": "stat", "label": "steps run", "value": "42", "status": "ok"},
+            {
+                "kind": "table",
+                "columns": ["project", "status"],
+                "rows": [["demo-project", "ok"], ["other-project", "warn"]],
+            },
+            {"kind": "text", "content": "Sample panel contributed by plugins/sample.py."},
+        ]
+    }
+
+
+def register():
+    return {
+        "panels": [
+            {"name": "sample_stats", "title": "Sample Stats", "fetch": _sample_fetch},
+        ],
+    }
+```
+
+**Never-raise — don't rely on `fetch()` raising.** A panel's `fetch()` is
+never called directly by a renderer — always through
+`PluginManager.run_panel_fetch`, which never propagates an exception. A
+raising or malformed `fetch()` degrades to a single `stat` section
+(`{"label": "error", "value": "<ExceptionType>", "status": "error"}`) showing
+the exception's **type name only** — the exception message itself is logged
+server-side but never returned to a caller. Since panel data may be served to
+any token whose role clears `min_role` (see below), **never put a secret in
+an exception message, and never put a secret in panel data either.**
+
+**Section content is untrusted, rendered as plain text — but don't emit
+secrets anyway.** `label`/`value`/`content`/table cells are plugin-authored
+and are treated as untrusted display text by both renderers: the web
+renderer (`PanelRenderer.tsx`) interpolates them through plain JSX (React
+escapes automatically; the code never uses `dangerouslySetInnerHTML`), and
+the TUI renderer (`hivepilot/ui/dashboard.py`) renders them literally as
+plain widget text, never as markup. This protects against XSS/markup
+injection, not against a panel author choosing to display a secret — that
+responsibility is entirely on the author (see `min_role` below).
+
+**`min_role` — the only access control a panel has.** Optional, defaults to
+`"read"`. It **must** be one of the four real roles
+(`token_service.ROLE_RANKS`: `read` / `run` / `approve` / `admin`) — an
+invalid value (a typo, an empty string, a non-string) makes the **whole
+plugin fail to register**, fail-closed (`PanelInvalidMinRoleError`), exactly
+like a name collision (see "Collision & error handling" below). This closes
+a fail-open gap: `token_service.role_rank` returns `-1` for any unrecognized
+role, which would otherwise make the endpoint's `role_rank(caller) <
+role_rank(min_role)` gate compare `0 < -1` — always false, serving a
+meant-to-be-restricted panel to anyone.
+
+`min_role` gates the **web** endpoint only — `GET /v1/panels/{name}`
+(`hivepilot/services/api_service.py`) enforces it after resolving the panel
+(the required role is data-dependent, so it can't be a static
+`Depends(require_role(...))`); a token whose role ranks below `min_role`
+gets `403`. The TUI dashboard runs in-process with no separate token/role
+check, so `min_role` has no effect there — it's a web-only gate.
+
+> **No automatic tenant scoping.** Unlike `/v1/analytics/*` and `/v1/runs`,
+> panel data has **no** `tenant` concept at this layer — `fetch()` returns
+> whatever the plugin computes, entirely unfiltered, and `min_role` is the
+> **only** access control this endpoint applies. If your panel could expose
+> cross-tenant or otherwise sensitive data, it is **your** responsibility as
+> the panel author to filter it yourself and/or raise `min_role` (e.g.
+> `"admin"`) for anything sensitive — there is no framework-level guardrail
+> beneath `min_role`, unlike the Mem0 tab's `admin` gate (see
+> `docs/v4/WEBUI.md`).
+
+**Collision & routing.** Panel `name`s are collected into
+`PluginManager.panels` (an instance dict, scoped to the manager like
+`PluginManager.health`) the same way health checks are: a `name` that
+collides with an already-registered panel (built-in or another plugin's) is
+a hard stop (`PanelNameCollisionError`), rolling back this plugin's other
+contributions atomically — see "Collision & error handling" below. A panel
+plugin honors `plugins_enabled` / `plugins_disabled` exactly like every
+other contribution type — a disabled plugin contributes no panels.
 
 ### Hook example
 
@@ -831,18 +949,22 @@ discovered automatically at process start — no config change needed.
 ## Collision & error handling
 
 - **Kind/name collision** — if a plugin declares a `runners`, `notifiers`,
-  `secrets`, or `health` key whose name is already registered to a
+  `secrets`, `health`, or `panels` key whose name is already registered to a
   *different* implementation, that raises (`RunnerKindCollisionError` /
   `NotifierKindCollisionError` / `SecretsBackendCollisionError` /
-  `HealthNameCollisionError`) and **aborts loading**. This is a hard stop by
-  design: silently shadowing a built-in (e.g. redefining `claude`, or a
-  secrets backend named `vault`) — or silently shadowing another plugin's
-  health check — is never the right default. Registration of a single
-  plugin's runners+notifiers+secrets+health is atomic: if any entry
-  collides, every entry that plugin already added (to the process-global
-  maps, or to `PluginManager.health`) in this same load is rolled back
-  before the error propagates — an aborted plugin never leaves orphaned,
-  partially-applied registrations behind.
+  `HealthNameCollisionError` / `PanelNameCollisionError`) and **aborts
+  loading**. This is a hard stop by design: silently shadowing a built-in
+  (e.g. redefining `claude`, or a secrets backend named `vault`) — or
+  silently shadowing another plugin's health check or panel — is never the
+  right default. A `panels` entry has one more failure mode:
+  `PanelInvalidMinRoleError` when its `min_role` isn't a recognized role
+  (see "Panels (Mirador)" above) — also a hard, fail-closed stop.
+  Registration of a single plugin's runners+notifiers+secrets+health+panels
+  is atomic: if any entry collides (or fails `min_role` validation), every
+  entry that plugin already added (to the process-global maps, or to
+  `PluginManager.health` / `PluginManager.panels`) in this same load is
+  rolled back before the error propagates — an aborted plugin never leaves
+  orphaned, partially-applied registrations behind.
 - **Broken plugin** — any other failure (import error, exception inside
   `register()`, a bad entry point) is logged
   (`plugins.load_failed` / `plugins.register_failed` /

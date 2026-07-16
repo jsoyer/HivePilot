@@ -92,6 +92,23 @@ tokens for whoever actually needs to search mem0 memories through the UI.
   Auth above); gracefully shows "mem0 is not configured" if the server has
   no mem0 backend wired up, rather than an error.
 
+## Plugin panels
+
+Any plugin that declares a Mirador **panel** (see `docs/v4/PLUGINS.md`'s
+"Panels (Mirador)" section) shows up as an additional tab, appended after
+Analytics / Cost / Health / Mem0. Panels are served by `GET /v1/panels`
+(the list of registered panels — name/title/`min_role`) and `GET
+/v1/panels/{name}` (a single panel's data); each panel tab lazy-fetches its
+own data independently, so one plugin's panel never blocks another tab.
+
+A panel declares its own `min_role` (default `"read"`), checked against your
+token when its tab's data is fetched — **not** at sign-in, and **not**
+against the other built-in tabs. If your token's role ranks below a panel's
+`min_role`, that one tab shows an in-tab "This panel requires a `<role>`
+token" message (the same non-disruptive pattern the Mem0 tab uses for its
+`admin` gate) instead of kicking you back to the token prompt; every other
+tab, including other panels, keeps working normally.
+
 ## Deployment: TLS termination and same-origin serving
 
 Mirador is served same-origin with the API (`/ui` for the shell, `/v1/*`
