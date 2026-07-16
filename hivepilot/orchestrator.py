@@ -43,6 +43,7 @@ from hivepilot.services import (
     knowledge_service,
     notification_service,
     policy_service,
+    scan_service,
     state_service,
 )
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
@@ -711,6 +712,7 @@ class Orchestrator:
         for project in projects:
             policy = policy_service.enforce_policy(project.path.name, auto_git=auto_git)
             run_policies[project.path.name] = policy
+            severity = policy.block_on_severity
             if policy.require_approval and not simulate:
                 run_id = state_service.record_run_start(
                     project.path.name, task_name, status="pending"
@@ -732,6 +734,28 @@ class Orchestrator:
                         project.path.name, task_name, False, f"Pending approval (run {run_id})"
                     )
                 )
+            elif (
+                severity
+                and not simulate
+                and (
+                    cve_block_detail := self._cve_gate_block_detail(
+                        project, policy.scan_tool, severity
+                    )
+                )
+                is not None
+            ):
+                # Phase 21 Sprint 2 — pipeline CVE gate. Mirrors the
+                # `require_approval` branch above: a run-level pre-execution
+                # gate that records a failed run and never adds `project` to
+                # `immediate_projects`, so no step is ever executed.
+                run_id = state_service.record_run_start(
+                    project.path.name, task_name, status="running"
+                )
+                state_service.complete_run(run_id, "failed", cve_block_detail)
+                notification_service.send_notification(
+                    f"⛔ {project.path.name}: {task_name} blocked by CVE gate"
+                )
+                results.append(RunResult(project.path.name, task_name, False, cve_block_detail))
             else:
                 run_id = state_service.record_run_start(
                     project.path.name, task_name, status="running"
@@ -2144,6 +2168,34 @@ class Orchestrator:
         _resume_outputs = metadata.get("resume_outputs") if _is_step_checkpoint else None
         _approved_step_index = _resume_from_step if _is_step_checkpoint else None
         _dry_run = metadata.get("dry_run", True) if _is_step_checkpoint else True
+
+        # Phase 21 Sprint 3 -- CVE gate defense-in-depth. `require_approval`
+        # and `block_on_severity` are independent gates in `_run_task_body`
+        # (an `if`/`elif`, not both): a project configured with BOTH only
+        # ever has the `require_approval` branch evaluated pre-run, so the
+        # CVE gate is never checked before this approved run dispatches to
+        # `_execute_task` directly. Without this check an approver could
+        # approve straight past a critical CVE finding. Only applies to the
+        # per-task `require_approval` resume (`_is_step_checkpoint` False):
+        # a step-checkpoint resume is a LATER pause of a run that already
+        # passed through this exact check on its first, non-step-checkpoint
+        # `run_approved` call for the same `run_id` -- re-running it here
+        # would be a redundant (but harmless) second scan, so we skip it.
+        # `simulate` is never in play here: `_run_task_body` only enters the
+        # `require_approval` branch (the source of this resume) when
+        # `not simulate`, so a simulated run never produces a pending
+        # approval for `run_approved` to resume.
+        if not _is_step_checkpoint and policy and policy.block_on_severity:
+            cve_block_detail = self._cve_gate_block_detail(
+                project, policy.scan_tool, policy.block_on_severity
+            )
+            if cve_block_detail is not None:
+                state_service.complete_run(run_id, "failed", cve_block_detail)
+                notification_service.send_notification(
+                    f"⛔ {project_name}: {task_name} blocked by CVE gate"
+                )
+                return RunResult(project_name, task_name, False, cve_block_detail)
+
         try:
             self._execute_task(
                 project=project,
@@ -2868,6 +2920,50 @@ class Orchestrator:
         if name not in self.projects.projects:
             raise ValueError(f"Unknown project: {name}")
         return self.projects.projects[name]
+
+    def _cve_gate_block_detail(
+        self, project: ProjectConfig, tool: str, severity: str
+    ) -> str | None:
+        """Phase 21 Sprint 2 — evaluate the pipeline CVE gate for *project*.
+
+        Reuses `scan_service.scan_vulnerabilities`/`exceeds_severity`
+        directly (no re-implementation of scanning here). Returns a
+        block-reason string when the run must be blocked, or `None` when it
+        may proceed.
+
+        Fail-closed: ANY exception from `scan_vulnerabilities` — missing
+        scanner binary, timeout, unexpected exit code, unparseable output —
+        is treated as a block, never as "proceed". A CVE gate the operator
+        opted into (`policy.block_on_severity`) must never silently pass when
+        it cannot actually run the scan.
+
+        Anti-leak: the returned detail is persisted (`state_service.
+        complete_run`) and sent to notifications, so it must never contain
+        raw scanner stdout or a specific package/CVE identifier that could
+        embed lockfile/source material — only the `by_severity` COUNTS dict
+        `scan_service` already guarantees is leak-free (see scan_service's
+        module docstring) plus the exception's type name (never its message,
+        which could echo a path or scanner-reported detail).
+        """
+        try:
+            scan_result = scan_service.scan_vulnerabilities(
+                project.path, tool=tool, severity_threshold=severity
+            )
+            if scan_service.exceeds_severity(scan_result, severity):
+                return (
+                    f"Blocked by CVE gate: {scan_result.by_severity} — findings at/above {severity}"
+                )
+        except Exception as exc:  # noqa: BLE001 — fail-closed, see docstring above.
+            logger.error(
+                "run.cve_gate_scan_failed",
+                project=project.path.name,
+                tool=tool,
+                severity=severity,
+                error_type=type(exc).__name__,
+            )
+            return f"CVE gate configured but scan failed: {type(exc).__name__}"
+
+        return None
 
     def _resolve_secrets(
         self,

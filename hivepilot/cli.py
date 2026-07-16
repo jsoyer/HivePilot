@@ -1960,8 +1960,9 @@ def iac_cost(
 # directly here (no `Orchestrator`/`RunResult` in this path). The service
 # already returns fully parsed/structured results, so nothing raw ever
 # reaches this CLI layer to leak. `scan vulns --fail-on <severity>` is a
-# manual gate at this CLI layer only; a pipeline-stage CVE policy gate is a
-# separate follow-up sprint.
+# manual gate at this CLI layer only; the automatic pipeline-run CVE gate
+# (`policy.block_on_severity`, Phase 21 Sprint 2) lives in
+# `Orchestrator._run_task_body`/`_cve_gate_block_detail`, not here.
 # ---------------------------------------------------------------------------
 
 

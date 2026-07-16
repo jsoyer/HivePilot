@@ -44,11 +44,46 @@ policies:
       # role_overrides:
       #   cto: { model: opencode-go/glm-5.2 }    # keep runner, change model
       #   qa:  { runner: claude }                # change runner
+      # Optional pipeline CVE gate (Phase 21 Sprint 2 — see below):
+      # block_on_severity: critical
+      # scan_tool: grype                         # grype (default) or osv-scanner
 ```
 
 - `require_approval: true` → runs queue (`approvals`) until a human approves; `--simulate` bypasses it.
 - `allow_auto_git` is enforced: requesting `--auto-git` against a project that forbids it raises.
 - `role_overrides` / `allowed_runners` are applied by `resolve_runner`.
+- `block_on_severity` / `scan_tool` — the pipeline CVE gate; see "Pipeline CVE gate" below.
+
+### Pipeline CVE gate (`policy.block_on_severity`)
+
+Opt-in, off by default (`block_on_severity: None` — byte-identical behaviour
+to before Phase 21 Sprint 2). When a project's policy sets `block_on_severity`
+to one of `critical|high|medium|low|negligible|unknown`
+(`hivepilot.services.scan_service.SEVERITY_LEVELS`), `Orchestrator._run_task_body`
+runs a vulnerability scan (`scan_service.scan_vulnerabilities`, same scanner
+`hivepilot scan vulns` uses — `grype` by default, or `osv-scanner` via
+`scan_tool: osv-scanner`) against the project's `path` **before** executing
+any step of a run, mirroring the `require_approval` pre-execution gate:
+
+- Finding at/above `block_on_severity` → the run is **blocked**: recorded as
+  a failed run (`state_service.complete_run(..., "failed", ...)`), a
+  notification is sent, and no step/runner is ever invoked. The recorded
+  detail carries only the `by_severity` **counts** (e.g. `{'critical': 1,
+  ...}`) and the threshold — never raw scanner output or a specific
+  package/CVE identifier.
+- No finding at/above the threshold → the run proceeds normally.
+- `block_on_severity` unset (default) → `scan_vulnerabilities` is never
+  called; no overhead, no behaviour change.
+- `--simulate` bypasses the gate entirely (no scan, no block) — same as
+  `require_approval`.
+- **Fail-closed:** if the scan itself fails (scanner not installed, timeout,
+  unexpected exit code — anything `scan_vulnerabilities` raises), the run is
+  **blocked**, not silently allowed to proceed. A CVE gate the operator opted
+  into must never fail open.
+- An invalid `block_on_severity` value is rejected eagerly — both by
+  `policy_service.get_policy` (raises at the first run against that project)
+  and by `hivepilot config validate` (flags it at config-lint time, before
+  any run).
 
 ## tasks.yaml (a task)
 

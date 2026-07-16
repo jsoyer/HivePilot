@@ -434,3 +434,59 @@ def test_multi_repo_group_components_still_validated(tmp_path: Path) -> None:
 
     matching = [p for p in problems if "not-a-real-project" in p]
     assert matching, f"Expected a problem naming the undefined component, got: {problems}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 21 Sprint 2 -- pipeline CVE gate: block_on_severity validation
+# ---------------------------------------------------------------------------
+
+
+def test_valid_block_on_severity_produces_no_problem(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump({"policies": {"default": {"block_on_severity": "critical"}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    assert not any("block_on_severity" in p for p in problems), f"Unexpected: {problems}"
+
+
+def test_invalid_block_on_severity_on_default_is_flagged(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump({"policies": {"default": {"block_on_severity": "super-critical"}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "block_on_severity" in p and "default" in p]
+    assert matching, f"Expected a problem naming the invalid severity, got: {problems}"
+
+
+def test_invalid_block_on_severity_on_project_override_is_flagged(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump(
+            {
+                "policies": {
+                    "default": {},
+                    "projects": {"demo": {"block_on_severity": "nope"}},
+                }
+            }
+        )
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "block_on_severity" in p and "demo" in p]
+    assert matching, f"Expected a problem naming the invalid severity, got: {problems}"
