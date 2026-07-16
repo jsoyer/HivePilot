@@ -119,6 +119,12 @@ class PanelData(TypedDict):
     `run_panel_fetch`. Always pass through `normalize_panel_data` before
     trusting a panel's raw returned value — it validates/coerces the shape
     and never lets a malformed section escape to a renderer.
+
+    Section content (`label`/`value`/`content`/table cells/`title`) is
+    plugin-authored and UNTRUSTED: `normalize_panel_data` validates the
+    *shape* only, never the text. Renderers must treat these strings as
+    untrusted — the web/HTML renderer (Sprint 3) MUST escape them and never
+    inject raw markup; the TUI renderer must not evaluate markup either.
     """
 
     sections: list[PanelStatSection | PanelTableSection | PanelTextSection]
