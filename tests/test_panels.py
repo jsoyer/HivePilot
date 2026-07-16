@@ -10,9 +10,12 @@ guarantee.
 from __future__ import annotations
 
 import sys
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
+
+from hivepilot.plugins import PanelStatSection
 
 # Stub optional deps before importing (mirrors tests/test_plugins.py).
 _STUBS = [
@@ -421,14 +424,16 @@ class TestNormalizePanelData:
 
         raw = {"sections": [{"kind": "stat", "label": "l", "value": "v", "status": None}]}
         result = normalize_panel_data(raw)
-        assert result["sections"][0]["status"] is None
+        stat = cast(PanelStatSection, result["sections"][0])
+        assert stat["status"] is None
 
     def test_unknown_stat_status_is_coerced_to_none_not_rejected(self) -> None:
         from hivepilot.plugins import normalize_panel_data
 
         raw = {"sections": [{"kind": "stat", "label": "l", "value": "v", "status": "bogus"}]}
         result = normalize_panel_data(raw)
-        assert result["sections"][0]["status"] is None
+        stat = cast(PanelStatSection, result["sections"][0])
+        assert stat["status"] is None
 
     def test_rejects_non_dict_top_level(self) -> None:
         from hivepilot.plugins import PanelDataError, normalize_panel_data
@@ -515,7 +520,7 @@ class TestRunPanelFetch:
         serialized = str(result)
         assert "super-secret-token-abc123" not in serialized
         assert "RuntimeError" in serialized
-        stat = result["sections"][0]
+        stat = cast(PanelStatSection, result["sections"][0])
         assert stat["status"] == "error"
 
     def test_run_panel_fetch_on_malformed_return_value_never_raises(
@@ -539,7 +544,7 @@ class TestRunPanelFetch:
 
         result = pm.run_panel_fetch("malformed")  # must not raise
 
-        stat = result["sections"][0]
+        stat = cast(PanelStatSection, result["sections"][0])
         assert stat["status"] == "error"
         assert "PanelDataError" in stat["value"]
 
@@ -553,7 +558,8 @@ class TestRunPanelFetch:
 
         result = pm.run_panel_fetch("does-not-exist")
 
-        assert result["sections"][0]["status"] == "error"
+        stat = cast(PanelStatSection, result["sections"][0])
+        assert stat["status"] == "error"
 
 
 class TestSamplePanelIntegration:
