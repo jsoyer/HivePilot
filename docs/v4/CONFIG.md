@@ -233,6 +233,256 @@ HIVEPILOT_LLM_PRICE_MAP='{"claude-sonnet-4-6": {"input": 3.0, "output": 15.0}, "
 
 See `docs/v4/RUNBOOK.md` "Cost analytics" for the `GET /v1/analytics/cost` endpoint shape.
 
+## IaC runners (terraform / opentofu / pulumi)
+
+Three built-in runner **kinds** wrap the corresponding CLI binary directly
+(no capture/parsing of their output — see "Output is not captured" below):
+`kind: terraform` (binary `terraform`), `kind: opentofu` (binary `tofu`),
+`kind: pulumi` (binary `pulumi`). Declare an instance under `runners:` like
+any other runner, then point a task step at it:
+
+```yaml
+# tasks.yaml
+runners:
+  tofu-infra:
+    kind: opentofu
+    options:
+      var_file: prod.tfvars
+      parallelism: 4
+      workspace: prod
+
+tasks:
+  infra-plan:
+    description: "Plan infrastructure changes"
+    steps:
+      - name: plan
+        runner: opentofu
+        runner_ref: tofu-infra
+        command: plan          # -> tofu plan -no-color -var-file=prod.tfvars -parallelism=4
+    git: { commit: false, push: false, create_pr: false }
+```
+
+### Operation selection
+
+The operation run each invocation is resolved in this precedence order
+(first match wins): `step.command` -> `definition.command` ->
+`options.operation` -> default (`plan` for terraform/opentofu, `preview`
+for pulumi).
+
+### Terraform / OpenTofu operations
+
+| Operation | Command executed | Notes |
+|---|---|---|
+| `init` | `terraform\|tofu init [-backend-config=<backend_config>]` | Must run once (per fresh checkout / wiped state cache) before `plan`/`apply`/`destroy`/`drift`. |
+| `plan` | `... plan -no-color [-var-file=...] [-parallelism=...]` | |
+| `apply` | `... apply -auto-approve [-var-file=...] [-parallelism=...]` | Destructive — see "Approval-gated apply" below. |
+| `destroy` | `... destroy -auto-approve [-var-file=...] [-parallelism=...]` | Destructive. |
+| `output` | `... output -json` | |
+| `validate` | `... validate` | |
+| `drift` | `... plan --detailed-exitcode -no-color [-var-file=...] [-parallelism=...]` | Exit code 2 (changes present) is turned into a `RuntimeError("Drift detected: ...")`, not a silent success. |
+| `cost` | delegates to `infracost breakdown --path .` | Requires the separate `infracost` CLI on `PATH`. Its stdout is captured internally only for infracost's own debug log — never returned, persisted, or forwarded to any sink (it can reflect secret-backed TF var values). |
+
+### Pulumi operations
+
+| Operation | Command executed |
+|---|---|
+| `preview` | `pulumi preview [--stack <stack>] [--config k=v ...]` |
+| `up` | `pulumi up --yes [--stack ...] [--config ...]` |
+| `destroy` | `pulumi destroy --yes [--stack ...] [--config ...]` |
+| `output` | `pulumi stack output --json [--stack ...]` |
+| `refresh` | `pulumi refresh --yes [--stack ...] [--config ...]` |
+
+### Options table
+
+| Option | Applies to | Meaning |
+|---|---|---|
+| `operation` | all | Fallback operation when neither `step.command` nor `definition.command` is set. |
+| `var_file` | terraform/opentofu | Appends `-var-file=<path>` to `plan`/`apply`/`destroy`/`drift`. |
+| `backend_config` | terraform/opentofu | Appends `-backend-config=<path>` — **`init`-only**. Passing it with any other operation is a usage error in Terraform/OpenTofu itself, so the runner never adds it outside `init`. |
+| `parallelism` | terraform/opentofu | Appends `-parallelism=<n>` to `plan`/`apply`/`destroy`/`drift`. |
+| `workspace` | terraform/opentofu | Runs `terraform\|tofu workspace select <workspace>` before the operation. |
+| `stack` | pulumi | Appends `--stack <name>` to every pulumi subcommand. |
+| `config` | pulumi | `dict[str, str]` — each entry becomes `--config key=value`. |
+
+### Secrets and environment
+
+The runner environment is layered `project.env` -> `definition.env` ->
+`payload.secrets` (later layers win, on top of the process's own `os.environ`).
+`payload.secrets` is populated from a step's `secrets:` block
+(`{ENV_VAR_NAME: {source: env, key: ...}}`, resolved through the configured
+secrets backend) and from any `${secret:NAME}` references embedded in
+`project.env`. Use it to inject `TF_VAR_*` variables or cloud credentials
+without hardcoding them in `tasks.yaml`:
+
+```yaml
+tasks:
+  infra-apply:
+    steps:
+      - name: apply
+        runner: opentofu
+        runner_ref: tofu-infra
+        command: apply
+        secrets:
+          TF_VAR_db_password:
+            source: env
+            key: PROD_DB_PASSWORD
+          AWS_SECRET_ACCESS_KEY:
+            source: env
+            key: PROD_AWS_SECRET_ACCESS_KEY
+```
+
+### `init` must precede `plan`/`apply` on a fresh checkout
+
+There is no implicit `init`. Running `plan`/`apply`/`destroy`/`drift` against
+a fresh checkout (or after the local `.terraform`/Pulumi state cache was
+wiped) fails with the underlying CLI's own "not initialized" error — run an
+`init` step/task first.
+
+### Missing binary
+
+If the required CLI (`terraform`, `tofu`, `pulumi`, or `infracost` for the
+`cost` operation) isn't on `PATH`, the runner raises a clear `RuntimeError`
+identifying the missing binary and the runner kind, before ever spawning a
+subprocess (`shutil.which` guard) — never a raw `FileNotFoundError`
+traceback.
+
+### Output is not captured (v1)
+
+`run()` always executes with `capture_output=False` — `plan`/`apply`/
+`preview`/`up`/etc. output streams live to the parent process's stdout and is
+**not** returned, stored, or forwarded to any sink (CLI response, the
+`/v1/run` API body, Slack/Discord/Telegram notifications). This is
+deliberate: plan/apply output can echo `TF_VAR_*` values or Pulumi stack
+config, and the `RunResult.detail` path those sinks read from is not
+redacted. A safe, counts-only plan-summary capture (no diff body) is
+deferred to the Mirador panel sprint (A3) — until then, operators should
+watch the run (terminal / systemd journal) rather than expect a persisted
+plan artifact.
+
+## Approval-gated apply: the plan -> approve -> apply pattern
+
+HivePilot does not yet have a **step-level** or **operation-level** approval
+gate. The only two approval mechanisms today are `policy.require_approval`
+(checked once per **project**, for the whole task run) and `pipelines.yaml`'s
+`pause_before` (per **pipeline stage**) — see "policies.yaml" and
+"tasks.yaml" above. Neither can single out one sub-command inside a step, so
+a step running `terraform apply` cannot be "approved before the apply but not
+before the plan" if the plan and apply live in the same task/step.
+
+**The only correct way to gate a destructive `apply`/`destroy` today is to
+split plan and apply into separate tasks**, then gate only the apply task.
+Two supported ways to do that split:
+
+### Option A — pipeline `pause_before` (single project, recommended)
+
+`pause_before: true` on a pipeline stage pauses the **whole run** before that
+stage regardless of policy, and needs no project duplication:
+
+```yaml
+# tasks.yaml
+runners:
+  tofu-infra:
+    kind: opentofu
+    options:
+      var_file: prod.tfvars
+
+tasks:
+  infra-plan:
+    description: "Plan infrastructure changes (read-only)"
+    steps:
+      - name: plan
+        runner: opentofu
+        runner_ref: tofu-infra
+        command: plan
+    git: { commit: false, push: false, create_pr: false }
+
+  infra-apply:
+    description: "Apply the planned infrastructure changes"
+    steps:
+      - name: apply
+        runner: opentofu
+        runner_ref: tofu-infra
+        command: apply
+    git: { commit: false, push: false, create_pr: false }
+```
+
+```yaml
+# pipelines.yaml
+pipelines:
+  infra-rollout:
+    description: "Plan, human-approve, then apply."
+    stages:
+      - name: Plan
+        task: infra-plan
+      - name: Apply
+        task: infra-apply
+        pause_before: true   # pipeline pauses here (pending_approval) before Apply runs
+```
+
+```yaml
+# policies.yaml — this project can keep the default (no per-task gate);
+# the pause_before checkpoint above is the gate.
+policies:
+  default:
+    require_approval: false
+```
+
+`hivepilot run-pipeline <project> infra-rollout` executes `Plan`, then pauses
+(run state `pending_approval`) before `Apply`. A human reviews the plan
+output (it was streamed live — see "Output is not captured" above) and
+approves via `hivepilot approvals approve <run_id> --approver alice --token
+<token>` (or the Telegram `/approve <run_id>`) to let `Apply` proceed.
+
+### Option B — separate project + `require_approval: true` (per-task gate)
+
+`policy.require_approval` is keyed by **project name**, not by task, so a
+task-level gate needs two project entries pointing at the same checkout:
+
+```yaml
+# projects.yaml
+projects:
+  acme-infra:            # ungated entry point: plan only
+    path: ~/dev/acme-infra
+    default_branch: main
+  acme-infra-apply:      # same checkout, gated entry point for apply
+    path: ~/dev/acme-infra
+    default_branch: main
+```
+
+```yaml
+# policies.yaml
+policies:
+  default:
+    require_approval: false
+  projects:
+    acme-infra:
+      require_approval: false     # plan is read-only; no gate
+    acme-infra-apply:
+      require_approval: true      # every apply run queues for human approval
+```
+
+```yaml
+# tasks.yaml — same task definitions as Option A (infra-plan / infra-apply)
+```
+
+Run plan directly: `hivepilot run acme-infra infra-plan`. Run apply:
+`hivepilot run acme-infra-apply infra-apply` — this queues (`pending`) until
+`hivepilot approvals approve <run_id> --approver alice --token <token>` is
+called, exactly like any other `require_approval: true` project.
+
+**Why the split is required, not optional:** a single task/step running
+`terraform apply` cannot be gated more finely than "the whole task run" or
+"the whole pipeline stage" — there is no sub-step/sub-command approval
+granularity today. If plan and apply lived in the same task, `require_approval:
+true` would gate the (harmless) plan too, and `pause_before` on a shared
+stage would gate them together — impossible to review the plan's diff before
+approving the apply specifically. Splitting into two tasks is the only way
+to let `plan` run freely while gating only `apply`. **This is a known
+current limitation** — a future step-level destructive-operation-aware
+approval gate (Phase 17a Part B) is expected to auto-detect
+`apply`/`destroy`/`up` and require approval only for those, removing the
+need for this split-task workaround.
+
 ## Key environment variables / settings
 
 | Setting | Env | Default |

@@ -645,6 +645,36 @@ From Telegram or any chat-ops integration:
 | `/steps` | List pipeline stages of last run |
 | `/approve <run_id>` | Approve a pending checkpoint |
 
+### Running IaC (terraform / opentofu / pulumi)
+
+The `terraform`/`opentofu`/`pulumi` runner kinds wrap the corresponding CLI
+directly (`hivepilot doctor` reports whether the binaries are on `PATH`; a
+missing binary raises a clear error at run time rather than failing
+silently). See `docs/v4/CONFIG.md` "IaC runners" for the full options/
+operations reference. Operator checklist:
+
+1. **`init` first, once per fresh checkout.** There is no implicit init —
+   run an `init` task/step before the first `plan`/`apply`/`destroy`/`drift`
+   against a checkout (or after wiping the local state cache).
+2. **plan -> approve -> apply, never a single un-gated apply.** HivePilot has
+   no step-level approval gate yet, so a destructive `apply`/`destroy`
+   operation must live in its own task, gated either by a pipeline stage's
+   `pause_before: true` or by `policy.require_approval: true` on a dedicated
+   project entry — see "Approval-gated apply" in `docs/v4/CONFIG.md` for both
+   patterns. Approve a paused/queued run the same way as any other
+   checkpoint: `hivepilot approvals approve <run_id> --approver ... --token
+   ...` or the Telegram `/approve <run_id>`.
+3. **Secrets reach the tool via `${secret:...}` / step `secrets:` -> env.**
+   `TF_VAR_*` values, cloud credentials, and Pulumi config secrets are never
+   hardcoded in `tasks.yaml` — they're resolved into the runner's process
+   environment the same way any other step's secrets are (see "Secrets and
+   environment" in `docs/v4/CONFIG.md`).
+4. **Plan/apply output streams live and is not stored.** These runners never
+   capture or persist their CLI output (it can echo secret-backed variable
+   values) — watch the run's terminal or systemd journal
+   (`journalctl -u hivepilot-api -f` for API-triggered runs) rather than
+   expecting a plan artifact in the run record or a notification.
+
 ---
 
 ## 8. Quota Resilience
