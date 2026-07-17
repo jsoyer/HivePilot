@@ -10,10 +10,19 @@ A Role is a declarative binding of:
 Roles are NOT stateful classes and are NOT executed here.
 Execution is handled by the existing pipeline/runner machinery (another sprint).
 
-Model profile assignments (all Claude for Phase 1):
-  - architecture (opus):  CEO, CTO, CISO   — strategy / security decisions
-  - coding (sonnet):      Developer, Reviewer, QA  — implementation / review
-  - automation (haiku):   Chief of Staff, Documentation  — coordination / docs
+Code-owned defaults (roles-model-effort-config-owned PRD, Sprint 2): the
+in-code ``_DEFAULT_ROLES`` fallback is intentionally reduced to a single
+generic ``developer -> claude`` binding — no hard-coded model, no optional
+runner (opencode/gemini) dependency. The full multi-agent "company" roster
+(CEO, CTO, CISO, Chief of Staff, Reviewer, QA, Documentation) that used to
+live here is now config-owned: it ships as a restorable template at
+``examples/roles.yaml`` (NOT auto-loaded) and, in this repository's own
+dogfooded deployment, as the real ``roles.yaml`` at the repo root (unchanged
+by this sprint — the full-replace loader means an existing customized
+``roles.yaml`` keeps behaving exactly as before). A deployment with no
+``roles.yaml`` at all now gets just the generic developer role instead of
+silently depending on optional runner plugins (opencode/gemini) it may not
+have configured.
 """
 
 from __future__ import annotations
@@ -67,62 +76,16 @@ class Role(BaseModel):
     command_task: str | None = None
 
 
-# NOTE (Sprint 2, runner-defaults-plugins-mode PRD): `runner="opencode"` /
-# `runner="gemini"` below are plain strings, resolved lazily at dispatch
-# time via `resolve_runner()` -> `RunnerRegistry`/`resolve_runner_class`
-# (hivepilot/registry.py) — there is no hard "this kind must be a built-in"
-# assumption anywhere in this module. `opencode`/`gemini` moved from
-# `hivepilot.registry._BUILTIN_RUNNERS` into default-on, PATH-gated plugins
-# (plugins/opencode.py / plugins/gemini.py) this sprint; these role bindings
-# keep resolving identically to before as long as the plugin is enabled
-# (default True) and the CLI binary is on PATH — the same conditions that
-# already had to hold for these roles to actually run. If either is false,
-# `resolve_runner_class` now raises an actionable error naming the exact
-# enable flag + required binary (see `RunnerPluginUnavailableError`).
+# Sprint 2 (roles-model-effort-config-owned PRD): reduced to a single
+# generic role. The previous 8-role "company" roster (ceo/chief_of_staff/
+# cto/reviewer/ciso/qa/documentation, plus this developer entry) lived here
+# as hard-coded defaults; it now ships as a restorable, NOT-auto-loaded
+# template at `examples/roles.yaml` (see that file for the exact previous
+# values, including the opencode/gemini/codex/cursor runner bindings and
+# dual-model debate config). `developer` is the only role a deployment gets
+# "for free" with zero roles.yaml configuration — no hard-coded model (the
+# runner picks its own default), no dependency on an optional runner plugin.
 _DEFAULT_ROLES: dict[str, Role] = {
-    "ceo": Role(
-        name="ceo",
-        display_name="Aliénor",
-        title="CEO",
-        prompt_file=_PROMPTS_DIR / "ceo.md",
-        model_profile="architecture",
-        inputs=["roadmap", "metrics", "customer_feedback"],
-        outputs=["objectives", "priorities", "constraints"],
-        can_block=False,
-        order=1,
-        runner="opencode",
-        models=["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"],
-        command_task="ceo-intake",
-    ),
-    "chief_of_staff": Role(
-        name="chief_of_staff",
-        display_name="Jules",
-        title="Chief of Staff",
-        prompt_file=_PROMPTS_DIR / "chief_of_staff.md",
-        model_profile="automation",
-        inputs=["objectives", "constraints", "status_report"],
-        outputs=["execution_plan", "blocker_report", "cycle_report"],
-        can_block=False,
-        order=2,
-        runner="cursor",
-        command_task="cos-synthesis",
-    ),
-    "cto": Role(
-        name="cto",
-        display_name="Blaise",
-        title="CTO",
-        prompt_file=_PROMPTS_DIR / "cto.md",
-        model_profile="architecture",
-        inputs=["execution_plan", "architecture_docs", "tech_debt_log"],
-        outputs=["technical_spec", "adr", "rejection_notice"],
-        can_block=True,
-        order=3,
-        runner="opencode",
-        # Single opencode model (claude brain removed to spare the claude quota the
-        # developer stage needs). One model → runs single, no dual-model debate.
-        models=["opencode-go/kimi-k2.7-code"],
-        command_task="cto-review",
-    ),
     "developer": Role(
         name="developer",
         display_name="Gustave",
@@ -132,69 +95,13 @@ _DEFAULT_ROLES: dict[str, Role] = {
         inputs=["technical_spec", "architecture_docs", "codebase_context"],
         outputs=["implementation", "test_suite", "implementation_notes"],
         can_block=False,
-        order=4,
+        order=1,
         runner="claude",
         # Full headless autonomy: Gustave writes code and runs the test suite
         # (TDD) without confirmation prompts. The human plan checkpoint gates the
         # pipeline before this stage, and execution is scoped to the component repo.
         permission_mode="bypassPermissions",
         command_task="developer",
-    ),
-    "reviewer": Role(
-        name="reviewer",
-        display_name="Victor",
-        title="Reviewer",
-        prompt_file=_PROMPTS_DIR / "reviewer.md",
-        model_profile="coding",
-        inputs=["implementation", "technical_spec", "test_suite"],
-        outputs=["review_report", "approval"],
-        can_block=True,
-        order=5,
-        runner="codex",
-        model="gpt-5.5",
-        command_task="reviewer",
-    ),
-    "ciso": Role(
-        name="ciso",
-        display_name="Hugo",
-        title="CISO",
-        prompt_file=_PROMPTS_DIR / "ciso.md",
-        model_profile="architecture",
-        inputs=["implementation", "review_report", "security_policy"],
-        outputs=["security_report", "clearance"],
-        can_block=True,
-        order=6,
-        runner="opencode",
-        # Single opencode model (claude brain removed to spare the claude quota the
-        # developer stage needs). One model → runs single, no dual-model debate.
-        models=["opencode-go/glm-5.2"],
-        command_task="ciso",
-    ),
-    "qa": Role(
-        name="qa",
-        display_name="Marie",
-        title="QA",
-        prompt_file=_PROMPTS_DIR / "qa.md",
-        model_profile="coding",
-        inputs=["implementation", "technical_spec", "test_suite"],
-        outputs=["qa_test_suite", "test_report", "edge_case_log"],
-        can_block=False,
-        order=7,
-        runner="cursor",
-        command_task="qa",
-    ),
-    "documentation": Role(
-        name="documentation",
-        display_name="Théo",
-        title="Documentation",
-        prompt_file=_PROMPTS_DIR / "documentation.md",
-        model_profile="automation",
-        inputs=["implementation", "adr", "existing_docs"],
-        outputs=["updated_docs", "updated_adrs", "changelog_entry"],
-        can_block=False,
-        order=8,
-        runner="gemini",
-        command_task="documentation",
     ),
 }
 

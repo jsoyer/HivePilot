@@ -1,0 +1,178 @@
+# Example HivePilot roles.yaml — the full "company" roster.
+#
+# NOT auto-loaded. hivepilot/roles.py ships with only a single generic
+# `developer -> claude` role in its code-owned _DEFAULT_ROLES fallback
+# (roles-model-effort-config-owned PRD, Sprint 2). This file is the
+# canonical, restorable definition of the previous 8-role roster
+# (CEO, Chief of Staff, CTO, Developer, Reviewer, CISO, QA, Documentation)
+# that used to be hard-coded in roles.py.
+#
+# To use it: copy (or symlink) this file to your config directory's
+# `roles.yaml` (see hivepilot/config.py Settings.resolve_config_path for the
+# resolution chain: $XDG_CONFIG_HOME/hivepilot/roles.yaml, then
+# config_repo/roles.yaml, then base_dir/roles.yaml). `load_roles()` does a
+# full replace — every role your deployment should have must be listed here,
+# there is no merge with the code defaults.
+#
+# Runner notes:
+#   - ceo/cto/ciso -> opencode (PATH-gated, default-on plugin; needs the
+#     `opencode` CLI on PATH)
+#   - documentation -> gemini (PATH-gated, default-on plugin; needs the
+#     `gemini` CLI on PATH)
+#   - reviewer -> codex (kind="codex", explicit model="gpt-5.5")
+#   - chief_of_staff/qa -> cursor (needs the `cursor-agent` CLI on PATH)
+#   - developer -> claude (always a built-in runner)
+#
+# prompt_file paths are relative to prompts/agents/.
+
+roles:
+  - name: ceo
+    display_name: "Aliénor"
+    title: "CEO"
+    command_task: "ceo-intake"
+    prompt_file: "ceo.md"
+    model_profile: "architecture"
+    inputs:
+      - roadmap
+      - metrics
+      - customer_feedback
+    outputs:
+      - objectives
+      - priorities
+      - constraints
+    can_block: false
+    order: 1
+    runner: "opencode"
+    models:
+      - "opencode-go/qwen3.7-max"
+      - "opencode-go/kimi-k2.6"
+
+  - name: chief_of_staff
+    display_name: "Jules"
+    title: "Chief of Staff"
+    command_task: "cos-synthesis"
+    prompt_file: "chief_of_staff.md"
+    model_profile: "automation"
+    inputs:
+      - objectives
+      - constraints
+      - status_report
+    outputs:
+      - execution_plan
+      - blocker_report
+      - cycle_report
+    can_block: false
+    order: 2
+    runner: "cursor"
+
+  - name: cto
+    display_name: "Blaise"
+    title: "CTO"
+    command_task: "cto-review"
+    prompt_file: "cto.md"
+    model_profile: "architecture"
+    inputs:
+      - execution_plan
+      - architecture_docs
+      - tech_debt_log
+    outputs:
+      - technical_spec
+      - adr
+      - rejection_notice
+    can_block: true
+    order: 3
+    runner: "opencode"
+    models:
+      - "opencode-go/kimi-k2.7-code"
+
+  - name: developer
+    display_name: "Gustave"
+    title: "Developer"
+    command_task: "developer"
+    prompt_file: "developer.md"
+    model_profile: "coding"
+    inputs:
+      - technical_spec
+      - architecture_docs
+      - codebase_context
+    outputs:
+      - implementation
+      - test_suite
+      - implementation_notes
+    can_block: false
+    order: 4
+    runner: "claude"
+    permission_mode: "bypassPermissions"
+
+  - name: reviewer
+    display_name: "Victor"
+    title: "Reviewer"
+    command_task: "reviewer"
+    prompt_file: "reviewer.md"
+    model_profile: "coding"
+    inputs:
+      - implementation
+      - technical_spec
+      - test_suite
+    outputs:
+      - review_report
+      - approval
+    can_block: true
+    order: 5
+    runner: "codex"
+    model: "gpt-5.5"
+
+  - name: ciso
+    display_name: "Hugo"
+    title: "CISO"
+    command_task: "ciso"
+    prompt_file: "ciso.md"
+    model_profile: "architecture"
+    inputs:
+      - implementation
+      - review_report
+      - security_policy
+    outputs:
+      - security_report
+      - clearance
+    can_block: true
+    order: 6
+    runner: "opencode"
+    models:
+      - "opencode-go/glm-5.2"
+
+  - name: qa
+    display_name: "Marie"
+    title: "QA"
+    command_task: "qa"
+    prompt_file: "qa.md"
+    model_profile: "coding"
+    inputs:
+      - implementation
+      - technical_spec
+      - test_suite
+    outputs:
+      - qa_test_suite
+      - test_report
+      - edge_case_log
+    can_block: false
+    order: 7
+    runner: "cursor"
+
+  - name: documentation
+    display_name: "Théo"
+    title: "Documentation"
+    command_task: "documentation"
+    prompt_file: "documentation.md"
+    model_profile: "automation"
+    inputs:
+      - implementation
+      - adr
+      - existing_docs
+    outputs:
+      - updated_docs
+      - updated_adrs
+      - changelog_entry
+    can_block: false
+    order: 8
+    runner: "gemini"
