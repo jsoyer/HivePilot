@@ -260,6 +260,14 @@ def _first_matching_excerpt(text: str, terms: list[str]) -> str:
     return ""
 
 
+# Per-note read cap: bound how much of any single note is pulled into memory
+# for scoring/excerpting, so one pathological note (e.g. a multi-MB pasted log)
+# can't blow up recall. The `obsidian_recall_max_bytes` cap in `recall` only
+# bounds the INJECTED block, never the read — this bounds the read itself.
+# Matches beyond this cap are intentionally ignored (v1 relevance heuristic).
+_MAX_NOTE_READ_BYTES = 64 * 1024
+
+
 def _search_vault(vault: Path, query_terms: list[str]) -> list[tuple[Path, str]]:
     """Simple ranked grep over the vault's `.md` notes for *query_terms*.
 
@@ -282,7 +290,10 @@ def _search_vault(vault: Path, query_terms: list[str]) -> list[tuple[Path, str]]
     scored: list[tuple[int, Path, str]] = []
     for note in candidates:
         try:
-            text = note.read_text(encoding="utf-8", errors="ignore")
+            # Bounded read (see _MAX_NOTE_READ_BYTES): only pull enough of the
+            # note into memory to score it and lift a one-line excerpt.
+            with note.open("r", encoding="utf-8", errors="ignore") as fh:
+                text = fh.read(_MAX_NOTE_READ_BYTES)
         except OSError:
             continue
         name_lower = note.stem.lower()
