@@ -74,12 +74,19 @@ class TestGetRulesForRole:
             assert isinstance(rules, list), f"Expected list for role '{role_name}'"
             assert len(rules) > 0, f"Expected non-empty list for role '{role_name}'"
 
-    def test_unknown_role_raises_key_error(self):
-        """Design choice: unknown role raises KeyError (mirrors roles.get_role behaviour)."""
+    def test_unknown_role_returns_empty_list(self):
+        """Sprint 2 (roles-model-effort-config-owned PRD) changed this from
+        KeyError to a safe empty-list return: a role absent from ROLE_RULES
+        (e.g. a business role not loaded under the reduced generic-only code
+        defaults) must never crash a caller that only wants its rule
+        manifest. Old expectation: `pytest.raises(KeyError)`. New
+        expectation: `get_rules_for_role(...) == []`. This is an intended
+        behavior change mandated by the sprint spec, not a hidden
+        regression -- `roles.get_role` (a different function) still raises
+        KeyError for a genuinely unknown role."""
         from hivepilot.agent_rules import get_rules_for_role
 
-        with pytest.raises(KeyError):
-            get_rules_for_role("nonexistent_role")
+        assert get_rules_for_role("nonexistent_role") == []
 
     def test_returns_ordered_list_of_strings(self):
         from hivepilot.agent_rules import get_rules_for_role
