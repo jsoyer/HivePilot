@@ -3156,6 +3156,94 @@ def plugins_tui() -> None:
     PluginManagerApp().run()
 
 
+@plugins_app.command("search")
+def plugins_search(
+    query: str = typer.Argument("", help="Substring to match against plugin name/description"),
+) -> None:
+    """Search the configured plugin discovery INDEX (Phase 26b Approach A).
+
+    METADATA ONLY — see docs/v4/PLUGINS.md "Trust model": this fetches a
+    small JSON document (name/description/install-hint/checksum) from
+    `HIVEPILOT_PLUGINS_INDEX_URL` and displays it. It never downloads or
+    executes plugin code; installation stays on your own `pip install` /
+    `git clone` (see `plugins info <name>` for the exact command).
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.services.plugin_index import fetch_index, format_install_hint, search_index
+
+    try:
+        entries = fetch_index()
+    except RuntimeError as exc:
+        typer.echo(f"plugins search: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    matches = search_index(entries, query)
+
+    console = Console(width=200)
+    table = Table(title="Plugin Index")
+    table.add_column("name")
+    table.add_column("version")
+    table.add_column("description")
+    table.add_column("install")
+    for entry in matches:
+        table.add_row(
+            entry.name, entry.version or "-", entry.description, format_install_hint(entry.install)
+        )
+    if not matches:
+        table.add_row("-", "-", "-", "-")
+    console.print(table)
+
+
+@plugins_app.command("info")
+def plugins_info(
+    name: str = typer.Argument(..., help="Plugin name as listed in the index"),
+) -> None:
+    """Show full index metadata for one plugin: description, author,
+    homepage, contributes, checksum, and the exact install command to run
+    yourself (Phase 26b Approach A).
+
+    METADATA ONLY — this command never installs anything for you (see
+    docs/v4/PLUGINS.md "Trust model"). It only prints the `pip install` /
+    `git clone` command the operator should run through their own trusted
+    path.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.services.plugin_index import fetch_index, format_install_hint
+
+    try:
+        entries = fetch_index()
+    except RuntimeError as exc:
+        typer.echo(f"plugins info: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    entry = next((e for e in entries if e.name.lower() == name.lower()), None)
+    if entry is None:
+        typer.echo(f"plugins info: no plugin named {name!r} found in the index", err=True)
+        raise typer.Exit(1)
+
+    orchestrator = Orchestrator()
+    installed = any(record.name == entry.name for record in orchestrator.plugins.loaded)
+
+    console = Console(width=200)
+    table = Table(title=f"Plugin: {entry.name}")
+    table.add_column("field")
+    table.add_column("value")
+    table.add_row("name", entry.name)
+    table.add_row("version", entry.version or "-")
+    table.add_row("description", entry.description)
+    table.add_row("author", entry.author or "-")
+    table.add_row("homepage", entry.homepage or "-")
+    table.add_row("contributes", ", ".join(entry.contributes) if entry.contributes else "-")
+    table.add_row("checksum", entry.checksum or "-")
+    table.add_row("installed locally", "yes" if installed else "no")
+    table.add_row("install command", f"To install, run: {format_install_hint(entry.install)}")
+    console.print(table)
+
+
 @skills_app.command("list")
 def skills_list() -> None:
     """List every registered plugin-contributed skill (skill-plugin-type PRD,
