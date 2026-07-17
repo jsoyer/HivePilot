@@ -11,22 +11,27 @@ def test_vibe_kind_is_registered() -> None:
 
 
 def test_known_kinds_returns_frozenset_of_builtins() -> None:
+    # Sprint 2 (runner-defaults-plugins-mode PRD): gemini/opencode/ollama
+    # moved OUT of _BUILTIN_RUNNERS into default-on, PATH-gated plugins —
+    # they are no longer unconditionally present here. `openrouter` is the
+    # one new built-in agent kind (API-only). See
+    # tests/test_agent_plugin_migration.py for the migrated-kind coverage.
     builtins = {
         "claude",
         "shell",
         "langchain",
         "internal",
         "codex",
-        "gemini",
-        "opencode",
-        "ollama",
         "container",
         "cursor",
         "vibe",
+        "openrouter",
     }
     known = RunnerRegistry.known_kinds()
     assert isinstance(known, frozenset)
     assert builtins <= known
+    for migrated_kind in ("gemini", "opencode", "ollama"):
+        assert migrated_kind not in builtins
 
 
 def test_capture_definition_routes_http_host_to_worker(monkeypatch) -> None:
