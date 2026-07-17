@@ -161,14 +161,24 @@ def test_non_agent_runners_are_cli_only() -> None:
 def test_every_registered_runner_exposes_supported_modes() -> None:
     """INVARIANT: every class registered in RUNNER_MAP must expose a
     `supported_modes` frozenset so the orchestrator can fail closed on an
-    unsupported (kind, mode) combination for ANY runner it might dispatch."""
+    unsupported (kind, mode) combination for ANY runner it might dispatch.
+
+    Sprint 2 (runner-defaults-plugins-mode PRD) carves out one deliberate
+    exception: `openrouter` has no CLI binary at all, so its
+    `supported_modes` is strictly `{"api"}` — every OTHER registered kind
+    must still support (at least) `cli`.
+    """
     from hivepilot.registry import RUNNER_MAP
 
+    api_only_kinds = {"openrouter"}
     for kind, cls in RUNNER_MAP.items():
         modes = getattr(cls, "supported_modes", None)
         assert isinstance(modes, frozenset), f"{kind} ({cls.__name__}) lacks supported_modes"
         assert modes, f"{kind} ({cls.__name__}) has an empty supported_modes"
-        assert "cli" in modes, f"{kind} ({cls.__name__}) must at least support cli"
+        if kind in api_only_kinds:
+            assert modes == frozenset({"api"}), f"{kind} ({cls.__name__}) must be api-only"
+        else:
+            assert "cli" in modes, f"{kind} ({cls.__name__}) must at least support cli"
 
 
 # ── validate_runner_mode fail-closed ──────────────────────────────────────────

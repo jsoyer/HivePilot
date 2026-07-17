@@ -17,14 +17,9 @@ from hivepilot.runners.internal_runner import InternalRunner
 from hivepilot.runners.kubectl_runner import KubectlRunner
 from hivepilot.runners.kustomize_runner import KustomizeRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
+from hivepilot.runners.openrouter_runner import OpenRouterRunner
 from hivepilot.runners.packer_runner import PackerRunner
-from hivepilot.runners.prompt_cli_runner import (
-    CodexRunner,
-    GeminiRunner,
-    OllamaRunner,
-    OpenCodeRunner,
-    VibeRunner,
-)
+from hivepilot.runners.prompt_cli_runner import CodexRunner, VibeRunner
 from hivepilot.runners.puppet_runner import PuppetRunner
 from hivepilot.runners.salt_runner import SaltRunner
 from hivepilot.runners.shell_runner import ShellRunner
@@ -36,6 +31,33 @@ class RunnerKindCollisionError(RuntimeError):
     pass
 
 
+class RunnerPluginUnavailableError(RuntimeError):
+    """Raised by ``resolve_runner_class`` when *kind* is a KNOWN optional
+    agent plugin (gemini/opencode/ollama — see ``_OPTIONAL_AGENT_PLUGIN_KINDS``,
+    Sprint 2 of the runner-defaults-plugins-mode PRD) that is NOT currently
+    registered in ``RUNNER_MAP``, because either its per-plugin enable flag is
+    off or its CLI binary isn't on PATH.
+
+    Deliberately distinct from the plain ``KeyError`` ``resolve_runner_class``
+    raises for a genuinely unknown kind: this names the exact enable flag and
+    required binary so an operator can fix it immediately (or run
+    ``hivepilot plugins health`` / ``hivepilot plugins list`` to diagnose),
+    instead of a generic "unknown kind" message that gives no actionable next
+    step.
+    """
+
+
+# kind -> (Settings flag name, required CLI binary). Every kind listed here
+# was a hardcoded _BUILTIN_RUNNERS entry before Sprint 2 and is now
+# registered (or not) by its own plugins/<kind>.py — see that module's
+# docstring for the canonical gated-agent-plugin skeleton these all share.
+_OPTIONAL_AGENT_PLUGIN_KINDS: Dict[str, tuple[str, str]] = {
+    "gemini": ("gemini_enabled", "gemini"),
+    "opencode": ("opencode_enabled", "opencode"),
+    "ollama": ("ollama_enabled", "ollama"),
+}
+
+
 def resolve_runner_class(kind: str) -> Type[BaseRunner]:
     """Look up the runner class registered for *kind* in ``RUNNER_MAP``.
 
@@ -45,9 +67,25 @@ def resolve_runner_class(kind: str) -> Type[BaseRunner]:
     closes the whole class of "advertised-but-unregistered kind" crash (e.g.
     the historical ``"api"`` orphan — see roadmap Phase 26a) for every
     caller that resolves a kind through this helper.
+
+    For a KNOWN optional agent plugin kind (gemini/opencode/ollama) that
+    simply isn't active right now (flag off or binary absent), raises the
+    more actionable ``RunnerPluginUnavailableError`` instead — see its
+    docstring.
     """
     runner_cls = RUNNER_MAP.get(kind)
     if runner_cls is None:
+        if kind in _OPTIONAL_AGENT_PLUGIN_KINDS:
+            flag_name, binary = _OPTIONAL_AGENT_PLUGIN_KINDS[kind]
+            env_var = f"HIVEPILOT_{flag_name.upper()}"
+            raise RunnerPluginUnavailableError(
+                f"Runner kind {kind!r} is provided by an optional, PATH-gated "
+                f"plugin that is not currently active. Either it was disabled "
+                f"(set {env_var}=true to re-enable — default is true) or the "
+                f"{binary!r} CLI binary is not on PATH. Run `hivepilot plugins "
+                f"health` to check, or `hivepilot plugins list` to see what is "
+                f"currently registered."
+            )
         raise KeyError(f"Unknown runner kind {kind!r}; available: {sorted(RUNNER_MAP)}")
     return runner_cls
 
@@ -140,12 +178,15 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "langchain": LangChainRunner,
     "internal": InternalRunner,
     "codex": CodexRunner,
-    "gemini": GeminiRunner,
-    "opencode": OpenCodeRunner,
-    "ollama": OllamaRunner,
     "container": ContainerRunner,
     "cursor": CursorRunner,
     "vibe": VibeRunner,
+    # Sprint 2 (runner-defaults-plugins-mode PRD): the only NEW built-in
+    # agent kind — API-only, no CLI binary. gemini/opencode/ollama moved OUT
+    # of this dict into gated plugins (plugins/gemini.py / opencode.py /
+    # ollama.py); see RunnerPluginUnavailableError above for their
+    # resolution-time error and _OPTIONAL_AGENT_PLUGIN_KINDS for the mapping.
+    "openrouter": OpenRouterRunner,
     "terraform": TerraformRunner,
     "opentofu": OpenTofuRunner,
     "pulumi": PulumiRunner,

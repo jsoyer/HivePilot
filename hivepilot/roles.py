@@ -65,6 +65,18 @@ class Role(BaseModel):
     command_task: str | None = None
 
 
+# NOTE (Sprint 2, runner-defaults-plugins-mode PRD): `runner="opencode"` /
+# `runner="gemini"` below are plain strings, resolved lazily at dispatch
+# time via `resolve_runner()` -> `RunnerRegistry`/`resolve_runner_class`
+# (hivepilot/registry.py) — there is no hard "this kind must be a built-in"
+# assumption anywhere in this module. `opencode`/`gemini` moved from
+# `hivepilot.registry._BUILTIN_RUNNERS` into default-on, PATH-gated plugins
+# (plugins/opencode.py / plugins/gemini.py) this sprint; these role bindings
+# keep resolving identically to before as long as the plugin is enabled
+# (default True) and the CLI binary is on PATH — the same conditions that
+# already had to hold for these roles to actually run. If either is false,
+# `resolve_runner_class` now raises an actionable error naming the exact
+# enable flag + required binary (see `RunnerPluginUnavailableError`).
 _DEFAULT_ROLES: dict[str, Role] = {
     "ceo": Role(
         name="ceo",

@@ -421,9 +421,18 @@ class TestRoleWire:
         assert (config_dir / "roles.yaml").read_bytes() == before
 
     def test_runner_valid_kind(self, config_dir: Path) -> None:
-        result = runner.invoke(app, ["role", "wire", "developer", "runner", "opencode"])
+        # Sprint 2 (runner-defaults-plugins-mode PRD): "opencode" moved from
+        # an unconditional built-in into a PATH-gated plugin, and
+        # `config_dir` (this fixture) points settings.base_dir at a bare
+        # tmp_path with no plugins/ directory — so the real PluginManager
+        # scan this command runs (see cli.py's role_wire "runner" field
+        # validation) would never see it regardless of what's on the host's
+        # PATH. Use "codex" instead: a kind that stays unconditionally
+        # built-in, so this test asserts what it actually means to (a valid
+        # kind is accepted) without depending on plugin/environment specifics.
+        result = runner.invoke(app, ["role", "wire", "developer", "runner", "codex"])
         assert result.exit_code == 0, result.output
-        assert "runner: opencode" in (config_dir / "roles.yaml").read_text()
+        assert "runner: codex" in (config_dir / "roles.yaml").read_text()
 
     def test_runner_invalid_kind_rejected(self, config_dir: Path) -> None:
         result = runner.invoke(app, ["role", "wire", "developer", "runner", "not-a-runner"])

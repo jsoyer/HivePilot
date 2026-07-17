@@ -281,6 +281,18 @@ class Settings(BaseSettings):
     onepassword_enabled: bool = True
     rtk_enabled: bool = True
     sample_enabled: bool = True
+    # Sprint 2 (runner-defaults-plugins-mode PRD): gemini/opencode/ollama
+    # moved OUT of hivepilot.registry._BUILTIN_RUNNERS and into default-on,
+    # PATH-gated plugins (plugins/gemini.py / plugins/opencode.py /
+    # plugins/ollama.py) — same opt-OUT pattern as the six flags above. Each
+    # plugin's register() ALSO checks `shutil.which(<binary>)`, so a config
+    # still referencing `kind: gemini`/`opencode`/`ollama` keeps resolving
+    # exactly as before whenever both the flag is True (default) and the
+    # binary is on PATH.
+    # env: HIVEPILOT_GEMINI_ENABLED / _OPENCODE_ENABLED / _OLLAMA_ENABLED
+    gemini_enabled: bool = True
+    opencode_enabled: bool = True
+    ollama_enabled: bool = True
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:

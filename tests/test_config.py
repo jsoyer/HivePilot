@@ -245,3 +245,41 @@ class TestPluginsDisabled:
     def test_is_list_of_str_type(self) -> None:
         s = Settings()
         assert isinstance(s.plugins_disabled, list)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2 (runner-defaults-plugins-mode PRD) — gemini/opencode/ollama
+# per-plugin enable flags. Mirrors herdr_enabled/infisical_enabled/
+# obsidian_enabled/onepassword_enabled/rtk_enabled/sample_enabled's exact
+# default-True, opt-OUT pattern: gemini/opencode/ollama moved OUT of
+# _BUILTIN_RUNNERS and into PATH-gated plugins (plugins/gemini.py etc.) in
+# this sprint, and each flag defaults True so existing configs referencing
+# `kind: gemini`/`opencode`/`ollama` keep resolving exactly as before
+# whenever the CLI binary is on PATH.
+# ---------------------------------------------------------------------------
+
+
+class TestGeminiOpencodeOllamaEnabledFlags:
+    def test_all_three_default_to_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_GEMINI_ENABLED", raising=False)
+        monkeypatch.delenv("HIVEPILOT_OPENCODE_ENABLED", raising=False)
+        monkeypatch.delenv("HIVEPILOT_OLLAMA_ENABLED", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.gemini_enabled is True
+        assert s.opencode_enabled is True
+        assert s.ollama_enabled is True
+
+    def test_gemini_enabled_env_override_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_GEMINI_ENABLED", "false")
+        s = Settings()
+        assert s.gemini_enabled is False
+
+    def test_opencode_enabled_env_override_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_OPENCODE_ENABLED", "false")
+        s = Settings()
+        assert s.opencode_enabled is False
+
+    def test_ollama_enabled_env_override_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_OLLAMA_ENABLED", "false")
+        s = Settings()
+        assert s.ollama_enabled is False
