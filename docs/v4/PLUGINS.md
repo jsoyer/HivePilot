@@ -116,8 +116,8 @@ runners/notifiers/hooks and has no import-time side effects either:
 Per-plugin enable flags: every bundled plugin has its own `<name>_enabled`
 boolean (`hivepilot/config.py`, env `HIVEPILOT_<NAME>_ENABLED`). The two
 context plugins default **OFF (opt-in, dormant)** — `headroom_enabled` /
-`mem0_enabled` — while the six others default **ON (opt-out)**:
-`herdr_enabled`, `infisical_enabled`, `obsidian_enabled`,
+`mem0_enabled` — while the seven others default **ON (opt-out)**:
+`herdr_enabled`, `hugo_enabled`, `infisical_enabled`, `obsidian_enabled`,
 `onepassword_enabled`, `rtk_enabled`, `sample_enabled`. A plugin whose flag is
 `False` early-returns `{}` from `register()` — it contributes no
 runner/notifier/hook/secret/panel/health. Toggle e.g. `rtk` off with
@@ -567,6 +567,62 @@ steps:
 Any step assigned to a runner of kind `herdr` gets its command executed in a
 dedicated herdr pane automatically, with the same-directory graceful
 fallback described above.
+
+### Example: the `hugo` runner (`plugins/hugo.py`)
+
+Ships in this repo as a reference runner plugin (not a built-in — it's a
+local-file plugin, same trust tier as anything else in `plugins/`). Opt-in by
+default (`hugo_enabled`, default `True`, env `HIVEPILOT_HUGO_ENABLED`) and
+PATH-gated at run time (`shutil.which("hugo")`), it wraps the
+[Hugo](https://gohugo.io) static-site-generator CLI as a first-class
+`kind: "hugo"` runner: `new` / `build` / `serve`. Non-destructive — every
+operation only touches local files (rendered site output, new content
+scaffolding) or starts a local dev server; deploying the generated site
+stays with whatever `GitActions`/`git push` step already handles it.
+
+`HugoRunner` resolves the operation exactly the same way the IaC/Helm
+runners do (`hivepilot.runners.iac_runner`/`helm_runner`) — a single
+`_resolve_operation` is the source of truth: `payload.step.command` wins,
+falling back to the runner definition's `command`, falling back to
+`options.operation`, defaulting to `"build"`.
+
+```yaml
+# roles.yaml
+runners:
+  site-build:
+    kind: hugo
+    options:
+      operation: build
+      minify: true
+      destination: public
+      base_url: "https://example.com"
+      environment: production
+```
+
+```yaml
+# tasks.yaml
+steps:
+  - name: build-site
+    runner: site-build
+```
+
+| Operation | Command | Notes |
+| --- | --- | --- |
+| `build` (default) | `hugo --minify` | `--minify` is added unless `options.minify` is explicitly `false`. Optional `--destination <options.destination>`, `--baseURL <options.base_url>`, `--environment <options.environment>` when those option keys are present. |
+| `new` | `hugo new <options.path>` | Requires `options.path` (content path, e.g. `posts/my-post.md`) — a missing/empty path raises `ValueError`. Optional `--kind <options.archetype>`. |
+| `serve` | `hugo serve` | Optional `--bind <options.bind>`, `--port <options.port>`. **Blocks** — starts a long-running local dev server; intended for local/dev use, not one-shot automation. |
+
+An unrecognized operation raises `ValueError` (fail-closed) rather than
+silently falling back to `build`.
+
+**Health check** — `register()["health"]["hugo"]` reports `ok` when
+`shutil.which("hugo")` finds the binary, `error` ("hugo not on PATH —
+install Hugo to use this runner") otherwise — unlike `rtk`/`herdr` above,
+this runner has no raw-command fallback, so a missing `hugo` binary means
+the runner cannot execute at all.
+
+Disable it the same way as any other bundled plugin: `HIVEPILOT_HUGO_ENABLED=false`,
+or add `"hugo"` to `HIVEPILOT_PLUGINS_DISABLED`.
 
 ### Example: the `headroom` plugin (`plugins/headroom.py`)
 

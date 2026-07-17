@@ -302,6 +302,11 @@ class Settings(BaseSettings):
     pi_enabled: bool = True
     qwen_code_enabled: bool = True
     kimi_cli_enabled: bool = True
+    # Phase 25 — brand-new `kind: "hugo"` static-site-generator runner added
+    # directly as a default-on, PATH-gated plugin (plugins/hugo.py) — same
+    # opt-OUT + shutil.which gating pattern as rtk_enabled/pi_enabled/etc.
+    # env: HIVEPILOT_HUGO_ENABLED
+    hugo_enabled: bool = True
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:
