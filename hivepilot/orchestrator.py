@@ -42,6 +42,7 @@ from hivepilot.registry import RunnerRegistry
 from hivepilot.runners.base import (
     RunnerPayload,
     UsageInfo,
+    apply_skill_if_supported,
     pop_last_usage,
     validate_runner_mode,
 )
@@ -687,6 +688,7 @@ class Orchestrator:
         dry_run: bool = True,
         prior_context: str | None = None,
         mode: str = "cli",
+        stage_skills: list[str] | None = None,
     ) -> list[RunResult]:
         """Public entry point. Delegates to `_run_task_body` inside a run-scope
         (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-secrets
@@ -710,6 +712,7 @@ class Orchestrator:
                 dry_run=dry_run,
                 prior_context=prior_context,
                 mode=mode,
+                stage_skills=stage_skills,
             )
         finally:
             self._exit_run_scope()
@@ -726,6 +729,7 @@ class Orchestrator:
         dry_run: bool = True,
         prior_context: str | None = None,
         mode: str = "cli",
+        stage_skills: list[str] | None = None,
     ) -> list[RunResult]:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
@@ -870,6 +874,7 @@ class Orchestrator:
                     dry_run=dry_run,
                     prior_context=prior_context,
                     mode=mode,
+                    stage_skills=stage_skills,
                 ): project
                 for project in immediate_projects
             }
@@ -1755,6 +1760,7 @@ class Orchestrator:
                 # Resolve the stage's execution mode (stage over pipeline over
                 # "cli" default) and propagate it into every step's dispatch.
                 mode=resolve_mode(pipeline, stage),
+                stage_skills=list(stage.skills) if stage.skills else None,
                 prior_context=_route_prior_context(
                     role=consuming_role,
                     prior_chunks=prior_chunks,
@@ -2424,6 +2430,7 @@ class Orchestrator:
         resume_outputs: list[str] | None = None,
         approved_step_index: int | None = None,
         mode: str = "cli",
+        stage_skills: list[str] | None = None,
     ) -> str | None:
         """Thin OpenTelemetry-tracing wrapper around `_execute_task_body`.
 
@@ -2470,6 +2477,7 @@ class Orchestrator:
                     resume_outputs=resume_outputs,
                     approved_step_index=approved_step_index,
                     mode=mode,
+                    stage_skills=stage_skills,
                 )
             except StepApprovalPending:
                 _task_span.set_attribute("hivepilot.task.status", "paused")
@@ -2501,6 +2509,7 @@ class Orchestrator:
         resume_outputs: list[str] | None = None,
         approved_step_index: int | None = None,
         mode: str = "cli",
+        stage_skills: list[str] | None = None,
     ) -> str | None:
         """Execute *task*'s steps for *project*.
 
@@ -2687,6 +2696,43 @@ class Orchestrator:
                             runner_def = self.registry._definition_for(runner_key)
                         _used_runner_def = runner_def
                         _step_span.set_attribute("hivepilot.step.runner_kind", str(runner_def.kind))
+                        # Skill attachment (Sprint 4, skill-plugin-type PRD): resolve this
+                        # step's declared skill names -- its own `TaskStep.skills` plus the
+                        # enclosing pipeline stage's `PipelineStage.skills` (threaded in via
+                        # `stage_skills` when this task run originated from a pipeline stage,
+                        # see `run_pipeline` / `resolve_mode`'s sibling threading of `mode`) --
+                        # to registered `SkillSpec`s, and enrich `payload` via the existing
+                        # `apply_skill_if_supported` choke point. A step/stage that declares
+                        # no skills never enters this block -- byte-identical to before this
+                        # wiring (see `hivepilot.runners.base.apply_skill_if_supported`).
+                        _skill_names: list[str] = list(step.skills or [])
+                        for _stage_skill_name in stage_skills or []:
+                            if _stage_skill_name not in _skill_names:
+                                _skill_names.append(_stage_skill_name)
+                        if _skill_names:
+                            from hivepilot.registry import resolve_runner_class
+
+                            _resolved_skills = []
+                            for _skill_name in _skill_names:
+                                _skill_spec = self.plugins.get_skill(_skill_name)
+                                if _skill_spec is None:
+                                    # Should not happen -- config validation (config_validation.py)
+                                    # rejects an unregistered skill ref at load time -- but a
+                                    # runtime plugin-manager mismatch must degrade, not crash
+                                    # a whole run.
+                                    logger.warning(
+                                        "step.skill_not_found",
+                                        step=step.name,
+                                        skill=_skill_name,
+                                    )
+                                    continue
+                                _resolved_skills.append(_skill_spec)
+                            if _resolved_skills:
+                                _skill_runner_cls = resolve_runner_class(runner_def.kind)
+                                _skill_runner = _skill_runner_cls(runner_def, settings)
+                                payload = apply_skill_if_supported(
+                                    _skill_runner, payload, _resolved_skills
+                                )
                         # Resolve the effective execution mode for this step and
                         # validate it against the runner's declared capabilities
                         # BEFORE any dispatch, so a mode:api step on a cli-only
