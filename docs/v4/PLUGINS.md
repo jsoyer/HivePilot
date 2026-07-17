@@ -111,7 +111,11 @@ runners/notifiers/hooks and has no import-time side effects either:
   matched by either the full `plugins_entry` string (what the TUI shows/
   toggles for this plugin) or just its module-name portion before the `:`
   attribute separator (the short form an operator would more naturally use
-  when setting `plugins_disabled` directly via config/env)
+  when setting `plugins_disabled` directly via config/env). Its
+  `PluginRecord.source` is tagged `"explicit-entry"` — a distinct value from
+  `"local-file"`, even though the pinned module often lives under
+  `plugins/`, because it's an arbitrary `module:attr` import that bypasses
+  the local-file scan entirely rather than a result of it (Phase 26a).
 
 Per-plugin enable flags: every bundled plugin has its own `<name>_enabled`
 boolean (`hivepilot/config.py`, env `HIVEPILOT_<NAME>_ENABLED`). The two
@@ -1264,7 +1268,16 @@ hivepilot plugins list
 Prints six tables:
 
 - **Loaded Plugins** — every successfully-loaded `PluginRecord`: `name`,
-  `source` (`local-file` | `entry-point`), `location`.
+  `source` (`local-file` | `entry-point` | `explicit-entry`; `built-in` is
+  reserved but not currently produced by any loader), `location`, and
+  **`contributes`** (Phase 26a) — a per-plugin summary of exactly which
+  runner/notifier/secrets-backend/health-check/panel/skill names and
+  lifecycle-hook names THIS plugin registered, e.g. `runners: hugo · health:
+  hugo`, or `-` when it contributed nothing attributable (its `register()`
+  returned `{}`). Sourced from `PluginRecord.contributions`, populated by
+  `PluginManager` as each plugin's `register()` result is applied — a
+  contribution rolled back due to a collision (see "Collision & error
+  handling" below) is never credited to the plugin that lost.
 - **Agent Runners** — the coding-agent taxonomy from "Agent runner taxonomy"
   above, sourced live from the registry: every built-in agent kind
   (`claude`/`codex`/`vibe` tagged `built-in`+`active`, `openrouter` tagged
@@ -1288,11 +1301,16 @@ Prints six tables:
   checks" above). Empty (no plugin declares `health`) shows a `-` placeholder
   row, same convention as an empty **Loaded Plugins** table.
 
-This is a v1 inventory, not a full join — it does not attribute which
-specific runner kind or notifier came from which loaded plugin beyond what a
-`PluginRecord` itself records. If a plugin contributes a runner kind or hook
-and it doesn't show up as expected, check the process log for
-`plugins.load_failed` / `plugins.register_failed` first.
+The **Agent Runners** / **Other Runner Kinds** / **Notifiers** / **Secrets
+Backends** tables above are still a v1 inventory relative to EACH OTHER — not
+a full join between them (e.g. the Notifiers table doesn't cross-reference
+back to which row in the Agent Runners table shares a plugin). The **Loaded
+Plugins** table's `contributes` column (Phase 26a) closes that gap for
+"which plugin contributed this specific name", independent of the other four
+tables. If a plugin contributes a runner kind or hook and it doesn't show up
+as expected (in either place), check the process log for
+`plugins.load_failed` / `plugins.register_failed` first — a broken plugin is
+skipped entirely and contributes nothing.
 
 ### `skills list`
 
@@ -1330,13 +1348,16 @@ HIVEPILOT_ENABLE_TEXTUAL_UI=1 hivepilot plugins tui
 
 An interactive browser/inspector over the same data as `plugins list` — a
 **Loaded Plugins** table (name / source / status / type(s) / detail), with
-`Enter` showing the selected plugin's best-effort runner kinds, notifier
-names, and hook names in a details pane (`r` refreshes, `q` quits).
-Attribution is derived by matching each contributed runner/notifier/hook's
-`__module__` against a hint built from the plugin's own source/location —
-best-effort, same v1 limitation as `plugins list` (see "Inspecting loaded
-plugins" above and roadmap Phase 26a): when attribution can't be derived,
-the row shows `unknown (see aggregate)` instead of guessing.
+`Enter` showing the selected plugin's runner kinds, notifier names, secrets
+backends, panels, and hook names in a details pane (`r` refreshes, `q`
+quits). Attribution prefers the real per-plugin `PluginRecord.contributions`
+(Phase 26a — the same data `plugins list`'s `contributes` column reads from,
+see "Inspecting loaded plugins" above); when that's empty (a hand-built
+record predating this attribution, or one whose source this module can't
+otherwise resolve), it falls back to a best-effort match of each contributed
+runner/notifier/hook's `__module__` against a hint built from the plugin's
+own source/location — when even that can't be derived, the row shows
+`unknown (see aggregate)` instead of guessing.
 
 **Health (Sprint 2 of the plugin-health spec)** — the details pane also
 shows a `Health: <status> — <detail>` line for the highlighted plugin, when a

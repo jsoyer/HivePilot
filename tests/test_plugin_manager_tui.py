@@ -106,8 +106,9 @@ def test_plugin_rows_attributes_panel_by_module_hint() -> None:
 
 
 def test_plugin_rows_falls_back_to_unknown_when_attribution_unavailable() -> None:
-    """If per-plugin attribution can't be derived, show the (noted) fallback —
-    matches the roadmap Phase 26a limitation documented in docs/v4/PLUGINS.md."""
+    """If neither real attribution (`record.contributions`, empty here) nor
+    the module-hint fallback can be derived, show the noted placeholder —
+    documented in docs/v4/PLUGINS.md."""
     record = PluginRecord(
         name="mystery", source="entry-point", location="unrelated_pkg:register (dist==1.0)"
     )
@@ -120,6 +121,64 @@ def test_plugin_rows_falls_back_to_unknown_when_attribution_unavailable() -> Non
 
 def test_plugin_rows_empty_when_no_plugins_loaded() -> None:
     assert plugin_rows([], {}, {}, {}) == []
+
+
+class TestRealPerPluginAttribution:
+    """Phase 26a: `plugin_capabilities` prefers real `PluginRecord.contributions`
+    over the module-hint heuristic when it's populated — no cross-referencing
+    the process-global maps needed at all in that case."""
+
+    def test_prefers_record_contributions_over_module_hint(self) -> None:
+        from hivepilot.ui.plugin_manager import plugin_capabilities
+
+        # A module hint that would resolve to nothing (no matching entries in
+        # any of the maps below) — proves the real `contributions` data, not
+        # the fallback, is what actually produced the result.
+        record = PluginRecord(
+            name="hugo",
+            source="local-file",
+            location="/repo/plugins/hugo.py",
+            contributions={"runners": ["hugo"], "health": ["hugo"]},
+        )
+
+        caps = plugin_capabilities(record, {}, {}, {})
+
+        assert caps["runners"] == ["hugo"]
+        # "health" isn't one of the TUI's tracked capability kinds
+        # (_CAPABILITY_KINDS) — it's silently dropped, same as any other
+        # contribution type the TUI doesn't render a column for.
+        assert "health" not in caps
+
+    def test_falls_back_to_module_hint_when_contributions_empty(self) -> None:
+        """A hand-built `PluginRecord` with no `contributions` (the default)
+        still gets the original best-effort module-hint attribution — full
+        backward compatibility with every pre-Phase-26a fixture/test."""
+        from hivepilot.ui.plugin_manager import plugin_capabilities
+
+        runner_cls = _module_tagged("RtkRunner", "hivepilot_plugin_rtk")
+        record = PluginRecord(name="rtk", source="local-file", location="/repo/plugins/rtk.py")
+
+        caps = plugin_capabilities(record, {"rtk": runner_cls}, {}, {})
+
+        assert caps["runners"] == ["rtk"]
+
+    def test_explicit_entry_module_hint_matches_entry_point_format(self) -> None:
+        """`explicit-entry`'s `location` is a plain `module:attr` string (no
+        `(dist==version)` suffix) — the same format `entry-point` uses when
+        it has no dist — so the module-hint fallback resolves it the same
+        way when `contributions` is empty."""
+        from hivepilot.ui.plugin_manager import plugin_capabilities
+
+        runner_cls = _module_tagged("PinnedRunner", "my_pkg.plugin")
+        record = PluginRecord(
+            name="my_pkg.plugin:register",
+            source="explicit-entry",
+            location="my_pkg.plugin:register",
+        )
+
+        caps = plugin_capabilities(record, {"pinned-kind": runner_cls}, {}, {})
+
+        assert caps["runners"] == ["pinned-kind"]
 
 
 @pytest.mark.asyncio

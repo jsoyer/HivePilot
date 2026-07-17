@@ -360,7 +360,7 @@ class TestPerPluginDisabled:
         pm = PluginManager()
 
         assert "fixture-kind" in RUNNER_MAP
-        assert any(r.name == entry and r.source == "local-file" for r in pm.loaded)
+        assert any(r.name == entry and r.source == "explicit-entry" for r in pm.loaded)
 
     def test_entry_point_plugin_in_disabled_list_is_not_loaded(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
@@ -401,6 +401,47 @@ def register():
         PluginManager()
 
         assert not marker.exists()
+
+
+class TestExplicitEntrySourceValue:
+    """Phase 26a: the explicit `settings.plugins_entry` pin is tagged
+    `source="explicit-entry"` — a distinct 4th `PluginRecord.source` value,
+    not the misleading `"local-file"` it used to share with the (unrelated)
+    `plugins/*.py` directory scan. `TestPerPluginDisabled` above already
+    covers the `plugins_disabled` gate on this path; this class covers only
+    the `source` tag itself.
+    """
+
+    def test_explicit_entry_source_is_not_local_file(self, tmp_path, monkeypatch) -> None:
+        entry = "tests.fixtures.entry_point_plugin:register"
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_entry", entry, raising=False)
+
+        pm = PluginManager()
+
+        record = next(r for r in pm.loaded if r.name == entry)
+        assert record.source == "explicit-entry"
+        assert record.source != "local-file"
+        assert record.location == entry
+
+    def test_explicit_entry_disabled_by_full_string_still_honored(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Regression guard for the source-value rename: the
+        `plugins_disabled` gate on this load path (matched by the full
+        `explicit_entry` string) must still work now that its `source` tag
+        changed from `"local-file"` to `"explicit-entry"` — the skip
+        happens before a `PluginRecord` is even constructed, so it must be
+        source-value-agnostic."""
+        entry = "tests.fixtures.entry_point_plugin:register"
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_entry", entry, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_disabled", [entry], raising=False)
+
+        pm = PluginManager()
+
+        assert "fixture-kind" not in RUNNER_MAP
+        assert pm.loaded == []
 
 
 class TestDeclaredNotifiersCollection:

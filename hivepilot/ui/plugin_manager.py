@@ -54,12 +54,19 @@ _CAPABILITY_LABELS = {
 def _plugin_module_hint(record: PluginRecord) -> str | None:
     """Best-effort module name a plugin's contributed objects would carry.
 
+    Only used as a FALLBACK when `record.contributions` is empty — see
+    `plugin_capabilities` below, which now prefers the real per-plugin
+    attribution `PluginManager` records at registration time.
+
     Mirrors how `hivepilot/plugins.py` loads each source:
     - local-file: `_scan_local_plugins` loads via
       `importlib.util.spec_from_file_location(f"hivepilot_plugin_{file.stem}", file)`
       — so any class/function defined in that file reports that module name.
-    - entry-point: `record.location` is `"<module>:<attr> (<dist>==<version>)"`
-      (see `load_entry_point_plugins`) — the module before `:` is the hint.
+    - entry-point / explicit-entry: `record.location` is
+      `"<module>:<attr> (<dist>==<version>)"` (entry-point, see
+      `load_entry_point_plugins`) or plain `"<module>:<attr>"`
+      (explicit-entry, see `PluginManager.__init__` — the `settings.
+      plugins_entry` pin) — the module before `:` is the hint either way.
 
     Returns None when no reliable hint can be derived.
     """
@@ -68,7 +75,7 @@ def _plugin_module_hint(record: PluginRecord) -> str | None:
         if not stem:
             return None
         return f"hivepilot_plugin_{stem}"
-    if record.source == "entry-point":
+    if record.source in ("entry-point", "explicit-entry"):
         value = record.location.split(" (", 1)[0]
         module = value.split(":", 1)[0].strip()
         return module or None
@@ -88,21 +95,33 @@ def plugin_capabilities(
     secrets_map: dict[str, Any] | None = None,
     panels: dict[str, Any] | None = None,
 ) -> dict[str, list[str]]:
-    """Best-effort cross-reference of a plugin record against the process-global
-    RUNNER_MAP / NOTIFIER_MAP / SECRETS_MAP / PluginManager.hooks / .panels, by
-    matching `__module__` against the hint derived from the plugin's own
-    source/location.
+    """Per-plugin attribution for the TUI's Type/Detail columns.
+
+    Phase 26a: `PluginManager` now records real per-plugin attribution on
+    `PluginRecord.contributions` (`hivepilot/plugins.py`) — exactly which
+    runner/notifier/secrets-backend/panel/skill names and lifecycle-hook
+    names THIS plugin contributed, collision-rollback-aware. When
+    `record.contributions` is non-empty, it is used directly — no guessing.
+
+    Only when it's empty (e.g. a `PluginRecord` constructed by hand in a
+    test/fixture, predating this attribution, or from a source this function
+    can't otherwise resolve) does this fall back to the original best-effort
+    cross-reference against the process-global RUNNER_MAP / NOTIFIER_MAP /
+    SECRETS_MAP / PluginManager.hooks / .panels, by matching `__module__`
+    against the hint derived from the plugin's own source/location.
 
     Secrets backends are registered as INSTANCES, so their module is read off
     the instance's class (`instance.__module__` resolves to the class attr) —
     the same cross-reference the CLI `plugins list` performs against SECRETS_MAP.
     Panels are matched by their `fetch` callable's module.
 
-    Per-plugin attribution isn't tracked anywhere upstream (`plugins list`
-    documents this same v1 limitation — it's not a full join either); when the
-    hint can't be derived, or nothing matches, every list comes back empty and
-    the caller should show the "unknown (see aggregate)" fallback.
+    When neither the real attribution nor the fallback hint can be derived,
+    or nothing matches, every list comes back empty and the caller should
+    show the "unknown (see aggregate)" fallback.
     """
+    if record.contributions:
+        return {kind: sorted(record.contributions.get(kind, [])) for kind in _CAPABILITY_KINDS}
+
     caps: dict[str, list[str]] = {kind: [] for kind in _CAPABILITY_KINDS}
     hint = _plugin_module_hint(record)
     if not hint:
