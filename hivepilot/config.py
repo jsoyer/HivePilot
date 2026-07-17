@@ -319,6 +319,21 @@ class Settings(BaseSettings):
     # opt-OUT + shutil.which gating pattern as rtk_enabled/pi_enabled/etc.
     # env: HIVEPILOT_HUGO_ENABLED
     hugo_enabled: bool = True
+    # Sprint 02 (plugin-arch-overhaul PRD) — obsidian "brain" recall sub-flags.
+    # `obsidian_recall_enabled` gates the NEW `before_step` (`recall`) /
+    # `after_step` (`store`) context-provider behavior independently of
+    # `obsidian_enabled` (which still gates the whole plugin, including the
+    # pre-existing notifier/journal hooks). Both default True (opt-out),
+    # matching the six-flag pattern above; recall additionally requires a
+    # configured+present `obsidian_vault` regardless of this flag.
+    # env: HIVEPILOT_OBSIDIAN_RECALL_ENABLED
+    obsidian_recall_enabled: bool = True
+    # Hard byte cap on the vault-note excerpt block `recall` injects into
+    # `RunnerPayload.metadata["extra_prompt"]` per step — keeps a large vault
+    # from ballooning the rendered prompt. Enforced strictly on the injected
+    # content only (pre-existing `extra_prompt` content, e.g. from mem0, is
+    # never truncated). env: HIVEPILOT_OBSIDIAN_RECALL_MAX_BYTES
+    obsidian_recall_max_bytes: int = 4000
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:
