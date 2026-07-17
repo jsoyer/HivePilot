@@ -239,10 +239,24 @@ async def _run_agent_order(update: Any, role_key: str, target: str, order: str) 
     display = entry["display"]
     task_name = entry["task"]
 
-    # Special case: auditor has no ad-hoc entrypoint
-    if task_name is None:
+    # Special case: auditor is a meta-agent by design (not a real Role, no
+    # ad-hoc entrypoint) -- distinct from a business role that simply isn't
+    # loaded (roles-model-effort-config-owned PRD, Sprint 2: the code-owned
+    # defaults now ship only `developer`, so ceo/cto/etc. only resolve when a
+    # deployment's roles.yaml defines them -- see examples/roles.yaml).
+    if role_key == "auditor":
         await update.message.reply_text(
             "Henri (Auditor) runs automatically after each cycle; ad-hoc audit not wired yet."
+        )
+        return
+
+    if task_name is None:
+        # role_key resolved via an alias but isn't loaded in ROLES right now
+        # (e.g. a generic-only deployment without this business role in its
+        # roles.yaml) -- degrade gracefully instead of crashing.
+        await update.message.reply_text(
+            f"{display} is not configured on this deployment (role '{role_key}' not loaded). "
+            "Define it in roles.yaml -- see examples/roles.yaml for a template."
         )
         return
 

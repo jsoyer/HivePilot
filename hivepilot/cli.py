@@ -2658,7 +2658,12 @@ def obsidian_audit(
 def debate(
     project: str = typer.Argument(..., help="Project to debate within"),
     topic: str = typer.Argument(..., help="Debate topic / decision"),
-    role: str = typer.Option("ceo", "--role", help="Dual-model role (default: ceo)"),
+    role: str = typer.Option(
+        "developer",
+        "--role",
+        help="Dual-model role (default: developer -- the only role guaranteed present "
+        "without a custom roles.yaml; see examples/roles.yaml for ceo/cto/etc.)",
+    ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--no-dry-run", help="Skip vault ADR write (default: dry-run)"
     ),
