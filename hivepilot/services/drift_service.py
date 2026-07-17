@@ -1,13 +1,30 @@
 """Read-only IaC drift detection (Phase 20 Sprint D1).
 
 Runs the same drift operation `hivepilot.runners.iac_runner` runs (`tofu`/
-`terraform plan --detailed-exitcode -no-color`), but with
-`capture_output=True` so the plan summary counts can be read, and returns a
-structured `DriftResult` — never the raw plan stdout/stderr.
+`terraform plan --detailed-exitcode -no-color`, preceded by the same
+`workspace select` preamble when a non-default workspace is configured), but
+with `capture_output=True` so the plan summary counts can be read, and
+returns a structured `DriftResult` — never the raw plan stdout/stderr.
 
 This is a **service**, not a runner: it is invoked directly (e.g. by a future
 `hivepilot drift check` CLI command or the Mirador panel), never through
 `Orchestrator`/`RunResult`.
+
+Real project config (`definition`)
+------------------------------------
+`detect_drift` accepts the project's actual `RunnerDefinition` (the same
+object a pipeline/CLI run would resolve, carrying `options`
+`var_file`/`parallelism`/`workspace`/`backend_config` and `env`). When
+`definition` is omitted, an empty synthetic definition is used instead — this
+fallback only produces a *correct* drift check for a zero-option project
+(no workspace, no var_file, no extra env); any project relying on those
+options MUST have its real `RunnerDefinition` passed in, or the drift check
+can silently compare against the wrong state (wrong workspace) or produce a
+false positive (missing `-var-file`). `hivepilot.cli._run_iac_operation`
+today also synthesizes an empty definition for its `iac plan`/`apply`/`drift`
+commands (a pre-existing gap, not introduced or fixed here) — once that CLI
+path (or a pipeline step) is threaded through a real per-project
+`RunnerDefinition`, that same object should be passed to `detect_drift`.
 
 Anti-leak guarantee
 --------------------
@@ -20,8 +37,14 @@ extracts ONLY the "Plan: N to add, N to change, N to destroy" counts line via
 a strict regex, and the raw buffer is discarded — it is never stored on the
 returned `DriftResult`, never logged, and never included in a raised
 exception message. A non-zero/non-two exit code raises `RuntimeError` with
-the tool name and exit code ONLY (see `_run_iac_operation`'s `RunResult`
-discipline for the equivalent non-drift-op case).
+the tool name and exit code ONLY. `subprocess.TimeoutExpired` is handled the
+same way: any partial `.stdout`/`.stderr`/`.output` it carries is scrubbed
+in-place and the re-raised `RuntimeError` is chained with `from None`, so no
+captured secret material survives reachable via `__cause__`/`__context__` for
+downstream introspection (error trackers, structured-logging `exc_info`,
+etc.) to pick up. The `workspace select` preamble is captured (unlike
+`iac_runner`'s live-streaming version) purely so it can never leak either —
+its output is discarded immediately, never logged/returned.
 
 To guarantee the drift argv can never diverge from `iac_runner`'s, this
 module builds a `RunnerPayload` and calls the resolved Terraform/OpenTofu
@@ -91,10 +114,21 @@ def _require_tool(tool: str, *, purpose: str) -> None:
         raise RuntimeError(f"{tool} not found on PATH. Install it before {purpose}.")
 
 
+def _scrub_timeout_buffers(exc: subprocess.TimeoutExpired) -> None:
+    """Clear any partial captured stdout/stderr a `TimeoutExpired` carries,
+    in place, so it can never be read back through this same exception
+    object via `__cause__`/`__context__` after we re-raise (see module
+    docstring's anti-leak guarantee)."""
+    exc.stdout = None
+    exc.stderr = None
+    exc.output = None
+
+
 def detect_drift(
     project: ProjectConfig,
     *,
     runner_kind: str = "opentofu",
+    definition: RunnerDefinition | None = None,
     timeout: int = _DEFAULT_DRIFT_TIMEOUT,
     secrets: dict[str, str] | None = None,
 ) -> DriftResult:
@@ -102,23 +136,34 @@ def detect_drift(
     `DriftResult`.
 
     `runner_kind` selects the IaC runner: `"opentofu"` (default) or
-    `"terraform"`. `secrets` mirrors `RunnerPayload.secrets` (already-resolved
-    `${secret:NAME}` values, e.g. `TF_VAR_*`/cloud credentials) and is merged
-    into the child process environment exactly the way `iac_runner` merges
-    it.
+    `"terraform"`. `definition` should be the project's real
+    `RunnerDefinition` (carrying `options`/`env`) whenever one exists — see
+    the module docstring's "Real project config" section for why this
+    matters; omitting it falls back to an empty synthetic definition that is
+    only correct for a zero-option project. `secrets` mirrors
+    `RunnerPayload.secrets` (already-resolved `${secret:NAME}` values, e.g.
+    `TF_VAR_*`/cloud credentials) and is merged into the child process
+    environment exactly the way `iac_runner` merges it.
 
     Raises `ValueError` if `runner_kind` is `"pulumi"` (Pulumi has no drift
     operation) or an unknown kind, `RuntimeError` if the runner's CLI binary
-    isn't on `PATH`, the drift check times out, or the tool exits with an
-    unexpected code (never `0`/no-drift or `2`/drift-detected).
+    isn't on `PATH`, the (optional) workspace-select preamble or the drift
+    check itself times out or exits with an unexpected code (never `0`/
+    no-drift or `2`/drift-detected for the drift check).
     """
-    runner_cls = resolve_runner_class(runner_kind)
+    try:
+        runner_cls = resolve_runner_class(runner_kind)
+    except KeyError as exc:
+        raise ValueError(f"Unknown IaC runner kind: {runner_kind!r}") from exc
     if runner_cls is PulumiRunner:
         raise ValueError(f"drift is not supported for the {runner_kind!r} runner")
 
-    project_name = project.path.name
+    # Path("/").name == "" (and, pre-`ProjectConfig.expand_path`, Path(".").name
+    # would be too) — fall back to the full path string so a root/edge-case
+    # project path never surfaces as an empty, unusable project label.
+    project_name = project.path.name or str(project.path)
 
-    definition = RunnerDefinition(name=runner_kind, kind=runner_kind)
+    resolved_definition = definition or RunnerDefinition(name=runner_kind, kind=runner_kind)
     step = TaskStep(name="drift", runner=runner_kind, command="drift")
     payload = RunnerPayload(
         project_name=project_name,
@@ -129,7 +174,7 @@ def detect_drift(
         secrets=secrets or {},
     )
 
-    runner = cast(_TfBaseRunner, runner_cls(definition=definition, settings=settings))
+    runner = cast(_TfBaseRunner, runner_cls(definition=resolved_definition, settings=settings))
     binary = runner._binary
     _require_tool(binary, purpose="detecting infrastructure drift")
 
@@ -137,11 +182,40 @@ def detect_drift(
     # stays in lockstep even if a future caller starts passing a definition
     # with its own `command`/`options["operation"]` override.
     operation = (
-        payload.step.command or definition.command or definition.options.get("operation", "plan")
+        payload.step.command
+        or resolved_definition.command
+        or resolved_definition.options.get("operation", "plan")
     )
-    env = merge_environments(payload.project.env, definition.env, payload.secrets)
+    env = merge_environments(payload.project.env, resolved_definition.env, payload.secrets)
     cwd = str(payload.project.path)
-    argv = runner._build_command(operation, definition.options)
+
+    # Workspace preamble — mirrors _TfBaseRunner._execute's `workspace select`
+    # step exactly (same argv: `[binary, "workspace", "select", workspace]`),
+    # so a non-default workspace's drift check compares against the SAME
+    # state a real plan/apply would. Captured (unlike the runner's own
+    # live-streaming call) so its output is never leaked — it's discarded
+    # immediately, never logged/returned.
+    workspace = resolved_definition.options.get("workspace")
+    if workspace:
+        ws_argv = [binary, "workspace", "select", workspace]
+        try:
+            ws_proc = subprocess.run(
+                ws_argv,
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _scrub_timeout_buffers(exc)
+            raise RuntimeError(f"{binary} workspace select timed out after {timeout}s") from None
+        if ws_proc.returncode != 0:
+            raise RuntimeError(
+                f"{binary} workspace select failed with exit code {ws_proc.returncode}"
+            )
+
+    argv = runner._build_command(operation, resolved_definition.options)
 
     logger.info("drift.start", runner=runner_kind, project=project_name)
 
@@ -155,7 +229,8 @@ def detect_drift(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"{binary} drift check timed out after {timeout}s") from exc
+        _scrub_timeout_buffers(exc)
+        raise RuntimeError(f"{binary} drift check timed out after {timeout}s") from None
 
     if proc.returncode == 0:
         logger.info("drift.end", runner=runner_kind, project=project_name, drifted=False)
