@@ -5,7 +5,10 @@ Covers `DriftScanConfig`/`load_drift_config`, `due_drift_projects`, and
 
 `state_service`, `drift_service.scan_and_record`, `project_service.load_projects`,
 and `notification_service.send_notification` are all mocked so these tests never
-touch a real state DB, IaC tool, or outbound webhook.
+touch a real state DB, IaC tool, or outbound webhook -- except
+`TestDueDriftProjectsRealDb`, which deliberately uses the real (per-test
+isolated) `state_service` DB to verify the naive-vs-aware datetime concern
+raised in review.
 """
 
 from __future__ import annotations
@@ -14,7 +17,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from hivepilot.models import ProjectConfig
+from hivepilot.services import state_service
 from hivepilot.services.drift_schedule import (
     DriftScanConfig,
     due_drift_projects,
@@ -95,6 +101,21 @@ schedules:
         cfg = load_drift_config(path)
         assert cfg.enabled is False
 
+    def test_scalar_projects_is_not_char_iterated(self, tmp_path: Path) -> None:
+        # `projects: proj-a` (bare scalar) must NOT become
+        # `list("proj-a")` == ['p','r','o','j','-','a'].
+        path = _write_schedules(tmp_path, "drift:\n  enabled: true\n  projects: proj-a\n")
+        cfg = load_drift_config(path)
+        assert cfg.projects == []
+        assert "p" not in cfg.projects
+
+    def test_scalar_channels_falls_back_to_none(self, tmp_path: Path) -> None:
+        # `channels: slack` (bare scalar) must NOT become
+        # `list("slack")` == ['s','l','a','c','k'].
+        path = _write_schedules(tmp_path, "drift:\n  enabled: true\n  channels: slack\n")
+        cfg = load_drift_config(path)
+        assert cfg.channels is None
+
 
 # ---------------------------------------------------------------------------
 # due_drift_projects
@@ -140,6 +161,41 @@ class TestDueDriftProjects:
         ) as mock_last_run:
             due_drift_projects(cfg)
         mock_last_run.assert_called_once_with("drift:proj-a")
+
+
+class TestDueDriftProjectsRealDb:
+    """Reviewer-flagged VERIFY item: does `get_schedule_last_run` return a
+    naive datetime that raises `TypeError` when compared against an
+    aware `datetime.now(timezone.utc)` on tick 2+? Uses the real (per-test
+    isolated, see conftest `_isolate_state_db`) state DB -- no mocking."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "PRE-EXISTING SHARED-CODE BUG (out of scope for D3): "
+            "state_service.get_schedule_last_run() parses SQLite's "
+            "CURRENT_TIMESTAMP via datetime.fromisoformat(), which yields a "
+            "NAIVE datetime (no tzinfo). due_drift_projects (mirroring "
+            "schedule_service.due_schedules() exactly, by design) then "
+            "compares `last_run + timedelta(...)` against "
+            "`datetime.now(timezone.utc)` (AWARE), raising "
+            "`TypeError: can't compare offset-naive and offset-aware "
+            "datetimes` on every tick AFTER a project's first real stamp. "
+            "This affects due_schedules() too -- not introduced by D3. "
+            "strict=True: if this test ever XPASSes, the upstream bug was "
+            "fixed and this xfail must be removed. See D3 review VERIFY 3."
+        ),
+    )
+    def test_due_calc_after_a_real_stamp_does_not_raise(self) -> None:
+        state_service.update_schedule_run("drift:demo")
+        last_run = state_service.get_schedule_last_run("drift:demo")
+        assert last_run is not None
+
+        cfg = DriftScanConfig(enabled=True, projects=["demo"], interval_minutes=60)
+        # Must not raise TypeError (naive vs aware datetime comparison).
+        due = due_drift_projects(cfg)
+        # Just stamped, interval is 60min -- must not be due yet.
+        assert due == []
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +381,39 @@ class TestRunDriftScan:
         mock_notify.assert_called_once()
         assert "ghost-project" in mock_notify.call_args.args[0]
         mock_mark.assert_called_once_with("drift:ghost-project")
+
+    def test_unexpected_exception_still_stamps_but_no_alert_and_propagates(
+        self, tmp_path: Path
+    ) -> None:
+        """MUST-FIX 1 regression test: an exception OTHER than RuntimeError/
+        ValueError (e.g. a locked-DB error from `record_drift_scan`) must
+        still stamp last-run (via `finally`), must NOT send an alert (its
+        message isn't guaranteed leak-free), and MUST propagate out of
+        `run_drift_scan` so the daemon's outer per-project try/except is what
+        ultimately swallows it."""
+        cfg = self._cfg()
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                side_effect=OSError("database is locked"),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            with pytest.raises(OSError, match="database is locked"):
+                run_drift_scan(cfg, "proj-a")
+
+        mock_notify.assert_not_called()
+        mock_mark.assert_called_once_with("drift:proj-a")
 
 
 # ---------------------------------------------------------------------------

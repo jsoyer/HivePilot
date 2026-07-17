@@ -62,14 +62,23 @@ def load_drift_config(path: Path | None = None) -> DriftScanConfig:
         drift = data.get("drift")
         if not isinstance(drift, dict):
             return DriftScanConfig()
+        projects_raw = drift.get("projects", [])
         channels_raw = drift.get("channels")
         return DriftScanConfig(
             enabled=bool(drift.get("enabled", False)),
             interval_minutes=int(drift.get("interval_minutes", _DEFAULT_INTERVAL_MINUTES)),
-            projects=list(drift.get("projects", []) or []),
+            # Guard against a bare scalar (e.g. `projects: proj-a`) being
+            # silently char-iterated by `list(...)` into bogus single-letter
+            # "projects" -- only a real list is ever accepted.
+            projects=list(projects_raw) if isinstance(projects_raw, list) else [],
             runner_kind=str(drift.get("runner_kind", "opentofu")),
             auto_remediate=bool(drift.get("auto_remediate", False)),
-            channels=list(channels_raw) if channels_raw else None,
+            # Same guard for `channels: slack` (bare scalar) -- fall back to
+            # None (send_notification's own all-channels default) rather
+            # than char-iterating it.
+            channels=list(channels_raw)
+            if isinstance(channels_raw, list) and channels_raw
+            else None,
         )
     except Exception:  # noqa: BLE001 -- fail-safe: never crash the daemon on bad config
         logger.warning("drift_schedule.config_load_failed", exc_info=True)
@@ -104,43 +113,50 @@ def due_drift_projects(cfg: DriftScanConfig) -> list[str]:
 def run_drift_scan(cfg: DriftScanConfig, project_name: str) -> None:
     """Scan *project_name* for drift and alert if needed.
 
-    Stamps the `drift:<project_name>` last-run marker regardless of outcome
-    (drifted, clean, or scan failure) so the schedule cadence holds even when
-    a scan errors. Alerts contain ONLY the project name, runner kind, and
-    integer plan counts (or a generic "changes detected" when the summary
-    line couldn't be parsed) -- never raw plan output. Scan failures
-    (`RuntimeError`/`ValueError` -- `drift_service.scan_and_record`'s only
-    raised exceptions, already tool+exit-code-only per its anti-leak
-    guarantee) are caught here and turned into a failure alert; they never
-    propagate, so one bad project can never take down the scheduler tick.
+    Stamps the `drift:<project_name>` last-run marker in a `finally` block so
+    it fires regardless of outcome -- success, a known-safe scan failure
+    (`RuntimeError`/`ValueError`), OR an unexpected exception (e.g. a
+    `sqlite3.OperationalError` from a lock contended by the daemon/API/CLI
+    sharing one state DB). Without this, an unexpected exception would skip
+    the stamp entirely and `due_drift_projects` would re-select the project
+    every tick forever (retry-spam). Alerts contain ONLY the project name,
+    runner kind, and integer plan counts (or a generic "changes detected"
+    when the summary line couldn't be parsed) -- never raw plan output.
+
+    Only the known-safe `RuntimeError`/`ValueError` path (already
+    tool+exit-code-only per `drift_service`'s anti-leak guarantee) gets a
+    failure alert -- an arbitrary/unexpected exception's string is NOT
+    guaranteed leak-free, so it is deliberately not alerted on; it re-raises
+    after the `finally` stamp so the caller (the daemon's per-project
+    try/except) logs+swallows it instead.
     """
     schedule_name = _drift_schedule_name(project_name)
     try:
-        project = project_service.load_projects().projects.get(project_name)
-        if project is None:
-            raise RuntimeError(f"Unknown project: {project_name!r}")
-        result = drift_service.scan_and_record(
-            project, runner_kind=cfg.runner_kind, tenant="default"
-        )
-    except (RuntimeError, ValueError) as exc:
-        state_service.update_schedule_run(schedule_name)
+        try:
+            project = project_service.load_projects().projects.get(project_name)
+            if project is None:
+                raise RuntimeError(f"Unknown project: {project_name!r}")
+            result = drift_service.scan_and_record(
+                project, runner_kind=cfg.runner_kind, tenant="default"
+            )
+        except (RuntimeError, ValueError) as exc:
+            notification_service.send_notification(
+                f"⚠️ Drift scan FAILED on {project_name}: {exc}",
+                channels=cfg.channels,
+            )
+            return
+
+        if not result.drifted:
+            return
+
+        if result.summary is not None:
+            s = result.summary
+            counts = f"+{s.to_add} ~{s.to_change} -{s.to_destroy}"
+        else:
+            counts = "changes detected"
         notification_service.send_notification(
-            f"⚠️ Drift scan FAILED on {project_name}: {exc}",
+            f"⚠️ Drift detected on {project_name} ({cfg.runner_kind}): {counts}",
             channels=cfg.channels,
         )
-        return
-
-    state_service.update_schedule_run(schedule_name)
-
-    if not result.drifted:
-        return
-
-    if result.summary is not None:
-        s = result.summary
-        counts = f"+{s.to_add} ~{s.to_change} -{s.to_destroy}"
-    else:
-        counts = "changes detected"
-    notification_service.send_notification(
-        f"⚠️ Drift detected on {project_name} ({cfg.runner_kind}): {counts}",
-        channels=cfg.channels,
-    )
+    finally:
+        state_service.update_schedule_run(schedule_name)
