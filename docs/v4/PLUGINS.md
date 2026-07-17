@@ -29,6 +29,74 @@ plugin runner/notifier executes with the same process environment and
 Master switch: `settings.plugins_enabled: bool = True` (`hivepilot/config.py`).
 Set to `False` to disable both discovery mechanisms; built-ins are unaffected.
 
+## Agent runner taxonomy: built-in vs. plugin
+
+Coding-agent runner kinds ship in two tiers, both dispatched through the same
+`RunnerRegistry` / `kind:` config field — the tier only affects *where* the
+runner class is registered from, and whether it can ever be absent.
+
+**Built-in agent kinds** — `{claude, codex, vibe, openrouter}`
+(`hivepilot.registry._BUILTIN_RUNNERS`) are unconditionally registered at
+import time, no `PATH` check — always present in `RUNNER_MAP`.
+
+| kind | binary | notes |
+|---|---|---|
+| `claude` | `claude` | `mode: cli` and `mode: api` (Anthropic Messages API) |
+| `codex` | `codex` | `mode: cli` and `mode: api` |
+| `vibe` | `vibe` | `mode: cli` and `mode: api`; has no `--model` flag — the model comes from its own config / `MISTRAL_API_KEY` |
+| `openrouter` | — (API-only) | `supported_modes == {"api"}` — no CLI binary, never spawns a subprocess |
+
+**Plugin agent kinds** — `{gemini, opencode, ollama, pi, qwen-code, kimi-cli}`
+(one file per kind under `plugins/`, all following the same canonical
+gated-agent-plugin skeleton — see `plugins/gemini.py`'s module docstring)
+are registered into `RUNNER_MAP` only when BOTH its per-plugin enable flag is
+`True` (default: all six default **ON**, opt-out) AND its CLI binary is found
+on `PATH` (`shutil.which`) at process start. Either condition failing means
+the kind is simply **absent** from `RUNNER_MAP` — a config that still
+references it resolves to the actionable `RunnerPluginUnavailableError`
+(naming the exact flag + binary), never a bare `KeyError`.
+
+| kind | binary | enable flag | env override | install |
+|---|---|---|---|---|
+| `gemini` | `gemini` | `gemini_enabled` | `HIVEPILOT_GEMINI_ENABLED` | see the Gemini CLI's own install docs |
+| `opencode` | `opencode` | `opencode_enabled` | `HIVEPILOT_OPENCODE_ENABLED` | see opencode's own install docs |
+| `ollama` | `ollama` | `ollama_enabled` | `HIVEPILOT_OLLAMA_ENABLED` | see Ollama's own install docs |
+| `pi` | `pi` | `pi_enabled` | `HIVEPILOT_PI_ENABLED` | `npm i -g @earendil-works/pi-coding-agent` |
+| `qwen-code` | `qwen` (binary `qwen`, kind `qwen-code` — deliberately diverges, like `ollama`'s pair) | `qwen_code_enabled` | `HIVEPILOT_QWEN_CODE_ENABLED` | `npm i -g @qwen-code/qwen-code` |
+| `kimi-cli` | `kimi` (binary `kimi`, kind `kimi-cli`) | `kimi_cli_enabled` | `HIVEPILOT_KIMI_CLI_ENABLED` | `uv tool install kimi-cli` |
+
+**PATH-activation rule.** Activation is evaluated ONCE, at `PluginManager()`
+construction (process start): installing/removing a binary, or flipping its
+enable flag, only takes effect on the **next** process start — the same
+"effective on next start only" limitation the TUI's `space` toggle documents
+below. Check current activation any time with `hivepilot plugins list` (see
+"Inspecting loaded plugins" below — the **Agent Runners** table tags every
+plugin agent kind `active`/`inactive`) or `hivepilot plugins health`.
+
+**Mandatory-agent install requirement.** HivePilot needs **at least one** of
+the three mandatory built-in agent CLIs — `claude` / `codex` / `vibe`
+(`hivepilot.services.agent_checks.MANDATORY_AGENTS`) — on `PATH` to run a
+pipeline at all; `claude` is the strongest/most-tested prerequisite.
+`hivepilot init` and `hivepilot doctor` both scan for these and print a
+warning — **never a hard failure** — when none is found: `init`'s whole job
+is to scaffold the config you need before you can install an agent CLI into
+it, so hard-failing there would be a chicken-and-egg regression on a fresh
+machine or in CI.
+
+> **Known gap: default role mappings depend on OPTIONAL plugin binaries.**
+> The shipped default role mappings (`hivepilot/roles.py`) route `ceo` /
+> `cto` / `ciso` to `runner="opencode"` and `documentation` to
+> `runner="gemini"` — both are OPTIONAL, PATH-gated plugin agent kinds from
+> the table above, **not** part of the mandatory set. On a host where the
+> `opencode` or `gemini` binary isn't on `PATH` (or its enable flag was
+> turned off), a task using one of these default roles fails at dispatch
+> with `RunnerPluginUnavailableError`. The mandatory-agent check `init` /
+> `doctor` runs only guarantees a **built-in** agent (`claude`/`codex`/
+> `vibe`) is present — it does **not** guarantee `opencode` or `gemini` are
+> installed. If you use these default roles, install the corresponding CLI
+> (see the table above) or repoint the role at a different runner kind in
+> your own `roles.yaml`.
+
 Per-plugin switch: `settings.plugins_disabled: list[str] = []`
 (`hivepilot/config.py`, env `HIVEPILOT_PLUGINS_DISABLED`) — names of
 individual plugins to skip, even when `plugins_enabled` is `True`. Checked in
@@ -990,12 +1058,22 @@ discovered automatically at process start — no config change needed.
 hivepilot plugins list
 ```
 
-Prints five tables:
+Prints six tables:
 
 - **Loaded Plugins** — every successfully-loaded `PluginRecord`: `name`,
   `source` (`local-file` | `entry-point`), `location`.
-- **Runner Kinds** — every kind currently in `RUNNER_MAP`, labeled
-  `built-in` or `plugin` by membership in `KNOWN_RUNNER_KINDS`.
+- **Agent Runners** — the coding-agent taxonomy from "Agent runner taxonomy"
+  above, sourced live from the registry: every built-in agent kind
+  (`claude`/`codex`/`vibe` tagged `built-in`+`active`, `openrouter` tagged
+  `built-in`+`API-only`), plus every plugin agent kind
+  (`gemini`/`opencode`/`ollama`/`pi`/`qwen-code`/`kimi-cli`) tagged `plugin`
+  and `active` (currently in `RUNNER_MAP` — flag on + binary on `PATH`) or
+  `inactive` (flag off, or binary absent), each with its `HIVEPILOT_<NAME>_
+  ENABLED` enable-flag env var so an inactive row is immediately actionable.
+- **Other Runner Kinds** — every remaining (non-agent) kind currently in
+  `RUNNER_MAP` — `shell`, `langchain`, `internal`, `container`, `cursor`, the
+  IaC runners, etc. — labeled `built-in` or `plugin` by membership in
+  `KNOWN_RUNNER_KINDS`.
 - **Notifiers** — every notifier currently in `NOTIFIER_MAP`, labeled
   `built-in` or `plugin` by membership in `{slack, discord, telegram}`.
 - **Secrets Backends** — every backend currently in `SECRETS_MAP`, labeled

@@ -2841,7 +2841,12 @@ def plugins_list() -> None:
     from rich.table import Table
 
     from hivepilot.models import KNOWN_RUNNER_KINDS
-    from hivepilot.registry import KNOWN_SECRET_BACKENDS, RUNNER_MAP, SECRETS_MAP
+    from hivepilot.registry import (
+        _OPTIONAL_AGENT_PLUGIN_KINDS,
+        KNOWN_SECRET_BACKENDS,
+        RUNNER_MAP,
+        SECRETS_MAP,
+    )
     from hivepilot.services.notification_service import KNOWN_NOTIFIER_NAMES, NOTIFIER_MAP
 
     orchestrator = Orchestrator()
@@ -2857,10 +2862,39 @@ def plugins_list() -> None:
         plugins_table.add_row("-", "-", "-")
     console.print(plugins_table)
 
-    runners_table = Table(title="Runner Kinds")
+    # Sprint 5 (runner-defaults-plugins-mode PRD): the agent taxonomy gets its
+    # own table, distinct from every other runner kind — built-in agents
+    # {claude, codex, vibe, openrouter} (openrouter tagged API-only, no CLI
+    # binary) plus every PATH-gated plugin agent (gemini/opencode/ollama/pi/
+    # qwen-code/kimi-cli — see hivepilot.registry._OPTIONAL_AGENT_PLUGIN_KINDS,
+    # the single source of truth this reuses), each tagged active (flag on +
+    # binary on PATH — i.e. currently in RUNNER_MAP) or inactive (flag off,
+    # or binary absent), with its per-plugin enable-flag env var so an
+    # inactive row is immediately actionable. See docs/v4/PLUGINS.md.
+    _builtin_agent_kinds = ("claude", "codex", "vibe", "openrouter")
+    _api_only_agent_kinds = frozenset({"openrouter"})
+
+    agents_table = Table(title="Agent Runners")
+    agents_table.add_column("kind")
+    agents_table.add_column("source")
+    agents_table.add_column("status")
+    agents_table.add_column("enable flag")
+    for kind in _builtin_agent_kinds:
+        status = "API-only" if kind in _api_only_agent_kinds else "active"
+        agents_table.add_row(kind, "built-in", status, "-")
+    for kind in sorted(_OPTIONAL_AGENT_PLUGIN_KINDS):
+        flag_name, _binary = _OPTIONAL_AGENT_PLUGIN_KINDS[kind]
+        status = "active" if kind in RUNNER_MAP else "inactive"
+        agents_table.add_row(kind, "plugin", status, f"HIVEPILOT_{flag_name.upper()}")
+    console.print(agents_table)
+
+    _agent_kinds = set(_builtin_agent_kinds) | set(_OPTIONAL_AGENT_PLUGIN_KINDS)
+    runners_table = Table(title="Other Runner Kinds")
     runners_table.add_column("kind")
     runners_table.add_column("source")
     for kind in sorted(RUNNER_MAP):
+        if kind in _agent_kinds:
+            continue  # already covered by the Agent Runners table above
         source = "built-in" if kind in KNOWN_RUNNER_KINDS else "plugin"
         runners_table.add_row(kind, source)
     console.print(runners_table)
