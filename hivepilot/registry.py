@@ -55,6 +55,13 @@ _OPTIONAL_AGENT_PLUGIN_KINDS: Dict[str, tuple[str, str]] = {
     "gemini": ("gemini_enabled", "gemini"),
     "opencode": ("opencode_enabled", "opencode"),
     "ollama": ("ollama_enabled", "ollama"),
+    # Sprint 3: new default-on, PATH-gated agent plugins (plugins/pi.py,
+    # plugins/qwen_code.py, plugins/kimi_cli.py). Listed here so an inactive
+    # one (flag off or binary absent) resolves to the actionable
+    # RunnerPluginUnavailableError, not a bare KeyError.
+    "pi": ("pi_enabled", "pi"),
+    "qwen-code": ("qwen_code_enabled", "qwen"),
+    "kimi-cli": ("kimi_cli_enabled", "kimi"),
 }
 
 
