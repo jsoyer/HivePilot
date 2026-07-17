@@ -1,6 +1,6 @@
 # 🐝 HivePilot v4
 
-HivePilot is an AI command center for multi-repo workflows. It dispatches Claude Code, LangChain, LangGraph, CrewAI, shell runners, Codex/Gemini/OpenCode/Cursor/Ollama CLIs, and Git/GitHub automation from a single YAML-driven orchestrator.
+HivePilot is an AI command center for multi-repo workflows. It dispatches Claude Code, LangChain, LangGraph, CrewAI, shell runners, built-in coding-agent CLIs (Codex, Vibe, OpenRouter) plus PATH-gated [plugin agent CLIs](docs/v4/PLUGINS.md#agent-runner-taxonomy-built-in-vs-plugin) (Gemini, OpenCode, Ollama, Pi, Qwen-Code, Kimi-CLI), Cursor, and Git/GitHub automation from a single YAML-driven orchestrator.
 
 ## 🆕 V4 — the agent company
 

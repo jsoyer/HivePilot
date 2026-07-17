@@ -11,8 +11,12 @@ python -m venv .venv && .venv/bin/pip install -e .          # lightweight core
 .venv/bin/pip install -e ".[dashboard]"                     # + Textual dashboard
 ```
 
-`hivepilot doctor` checks paths, external binaries, and the **agent runner CLIs**
-(claude / codex / gemini / opencode / cursor) on PATH.
+`hivepilot doctor` checks paths, external binaries, the agent runner CLIs
+referenced by your configured tasks, and the **mandatory agent CLI**
+verdict — at least one of `claude` / `codex` / `vibe` must be on PATH to run
+a pipeline (`claude` is the strongest/most-tested prerequisite). See
+[PLUGINS.md](PLUGINS.md#agent-runner-taxonomy-built-in-vs-plugin) for the
+full built-in vs. plugin agent taxonomy and PATH-activation rule.
 
 ## CLI reference
 
@@ -70,6 +74,42 @@ hivepilot run-pipeline acme company --auto-git          # real run -> queued for
 hivepilot approvals                                      # see the pending run
 # approve via CLI or Telegram, then agents execute; developer opens a PR you merge
 ```
+
+### Execution mode: `cli` vs `api`
+
+Every pipeline — and each of its stages — has an execution `mode` that
+decides whether its agent-capable runners are driven through their **CLI
+binary** (`mode: cli`, the default — byte-identical to pre-`mode`
+behaviour) or through the provider's own **HTTP API** (`mode: api` —
+`claude` currently routes `mode: api` through the Anthropic Messages API).
+
+`PipelineConfig.mode` sets the pipeline-wide default (`"cli"` if omitted); an
+individual `PipelineStage.mode` overrides it for that stage only.
+Precedence is **stage > pipeline > `"cli"`** (`hivepilot.models.resolve_mode`):
+
+```yaml
+# pipelines.yaml
+company:
+  description: "..."
+  mode: cli               # pipeline-wide default (cli is also the implicit default if omitted)
+  stages:
+    - name: plan
+      task: ceo-intake      # inherits the pipeline default -> cli
+    - name: draft-docs
+      task: documentation
+      mode: api             # this stage's agent-capable runners go through the API instead
+```
+
+A runner kind that doesn't support the resolved mode fails **before any
+subprocess/request is made** (`RunnerModeUnsupportedError`, fail-closed) —
+e.g. routing a `mode: api` stage at a CLI-only runner like `shell`. Every
+agent-capable runner (`claude`, plus every `PromptCliRunner`-based kind —
+`codex`/`vibe` and every plugin agent kind from
+[PLUGINS.md](PLUGINS.md#agent-runner-taxonomy-built-in-vs-plugin)) supports
+`{"cli", "api"}`; every non-agent runner supports `{"cli"}` only; and
+`openrouter` is the one deliberate exception — **API-only**
+(`supported_modes == {"api"}`, it has no CLI binary at all, so `mode: cli`
+on `openrouter` fails the same way).
 
 ## Telegram — remote command & control
 
