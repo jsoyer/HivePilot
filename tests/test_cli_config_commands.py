@@ -157,7 +157,15 @@ def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     (tmp_path / "policies.yaml").write_text("policies: {}\n", encoding="utf-8")
     (tmp_path / "groups.yaml").write_text("groups: {}\n", encoding="utf-8")
-    (tmp_path / "pipelines.yaml").write_text("pipelines: {}\n", encoding="utf-8")
+    (tmp_path / "pipelines.yaml").write_text(
+        "pipelines:\n"
+        "  demo-pipeline:\n"
+        "    description: Demo pipeline\n"
+        "    stages:\n"
+        "      - name: Stage One\n"
+        "        task: dev-task\n",
+        encoding="utf-8",
+    )
     (tmp_path / "model_profiles.yaml").write_text(
         "claude_profiles:\n  coding:\n    model: sonnet\n  architecture:\n    model: opus\n",
         encoding="utf-8",
@@ -540,6 +548,132 @@ def register():
         assert "ghost" in result.output
         assert "developer" in result.output  # lists a valid (raw) role
         assert (config_dir / "roles.yaml").read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# stage attach-skill / detach-skill (Sprint 5 of skill-plugin-type PRD)
+# ---------------------------------------------------------------------------
+
+
+def _register_skill_plugin(config_dir: Path, name: str = "known-skill") -> None:
+    """Register a single skill via a real local-file plugin under
+    config_dir/plugins/ -- the same directory `settings.base_dir` (already
+    pointed at config_dir by the `config_dir` fixture) is scanned from,
+    mirroring TestRoleWire.test_runner_plugin_registered_kind_accepted's
+    genuine on-disk plugin discovery pattern."""
+    pdir = config_dir / "plugins"
+    pdir.mkdir(exist_ok=True)
+    stem = name.replace("-", "_")
+    (pdir / f"{stem}_skill.py").write_text(
+        "def register():\n"
+        f"    return {{'skills': [{{'name': {name!r}, 'description': 'D', "
+        f"'provider': 'acme', 'files': {{'SKILL.md': 'hello'}}}}]}}\n",
+        encoding="utf-8",
+    )
+
+
+class TestStageAttachDetachSkill:
+    def test_attach_unknown_pipeline_lists_valid_pipelines(self, config_dir: Path) -> None:
+        result = runner.invoke(
+            app, ["stage", "attach-skill", "ghost-pipeline", "Stage One", "known-skill"]
+        )
+        assert result.exit_code == 1
+        assert "demo-pipeline" in result.output
+
+    def test_attach_unknown_stage_lists_valid_stages(self, config_dir: Path) -> None:
+        result = runner.invoke(
+            app, ["stage", "attach-skill", "demo-pipeline", "ghost-stage", "known-skill"]
+        )
+        assert result.exit_code == 1
+        assert "Stage One" in result.output
+
+    def test_attach_unknown_skill_is_hard_error_and_writes_nothing(self, config_dir: Path) -> None:
+        """Fail-closed: an unregistered skill name refuses the write. This
+        reuses (never reimplements) Sprint 3's
+        `config_validation.validate_config` cross-reference check -- run by
+        `apply_and_validate` against the prospective pipelines.yaml before
+        anything is persisted."""
+        before = (config_dir / "pipelines.yaml").read_bytes()
+        result = runner.invoke(
+            app, ["stage", "attach-skill", "demo-pipeline", "Stage One", "does-not-exist"]
+        )
+        assert result.exit_code == 1
+        assert "unknown skill" in result.output.lower()
+        assert "does-not-exist" in result.output
+        assert (config_dir / "pipelines.yaml").read_bytes() == before
+
+    def test_attach_known_skill_writes_and_is_idempotent(self, config_dir: Path) -> None:
+        _register_skill_plugin(config_dir)
+
+        result = runner.invoke(
+            app, ["stage", "attach-skill", "demo-pipeline", "Stage One", "known-skill"]
+        )
+        assert result.exit_code == 0, result.output
+        text = (config_dir / "pipelines.yaml").read_text()
+        assert "known-skill" in text
+        assert validate_config(base_dir=config_dir) == []
+
+        rerun = runner.invoke(
+            app, ["stage", "attach-skill", "demo-pipeline", "Stage One", "known-skill"]
+        )
+        assert rerun.exit_code == 0, rerun.output
+        assert "no changes" in rerun.output.lower()
+
+    def test_attach_dry_run_writes_nothing(self, config_dir: Path) -> None:
+        _register_skill_plugin(config_dir)
+        before = (config_dir / "pipelines.yaml").read_bytes()
+
+        result = runner.invoke(
+            app,
+            ["stage", "attach-skill", "demo-pipeline", "Stage One", "known-skill", "--dry-run"],
+        )
+        assert result.exit_code == 0, result.output
+        assert (config_dir / "pipelines.yaml").read_bytes() == before
+
+    def test_detach_removes_skill_and_round_trips_clean(self, config_dir: Path) -> None:
+        _register_skill_plugin(config_dir)
+        attach = runner.invoke(
+            app, ["stage", "attach-skill", "demo-pipeline", "Stage One", "known-skill"]
+        )
+        assert attach.exit_code == 0, attach.output
+
+        detach = runner.invoke(
+            app, ["stage", "detach-skill", "demo-pipeline", "Stage One", "known-skill"]
+        )
+        assert detach.exit_code == 0, detach.output
+        text = (config_dir / "pipelines.yaml").read_text()
+        assert "known-skill" not in text
+        assert "skills:" not in text  # empty list dropped, not left as `skills: []`
+        assert validate_config(base_dir=config_dir) == []
+
+    def test_detach_already_absent_is_noop(self, config_dir: Path) -> None:
+        result = runner.invoke(
+            app, ["stage", "detach-skill", "demo-pipeline", "Stage One", "ghost-skill"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "no changes" in result.output.lower()
+
+    def test_detach_dry_run_writes_nothing(self, config_dir: Path) -> None:
+        _register_skill_plugin(config_dir)
+        attach = runner.invoke(
+            app, ["stage", "attach-skill", "demo-pipeline", "Stage One", "known-skill"]
+        )
+        assert attach.exit_code == 0, attach.output
+        before = (config_dir / "pipelines.yaml").read_bytes()
+
+        result = runner.invoke(
+            app,
+            ["stage", "detach-skill", "demo-pipeline", "Stage One", "known-skill", "--dry-run"],
+        )
+        assert result.exit_code == 0, result.output
+        assert (config_dir / "pipelines.yaml").read_bytes() == before
+
+    def test_detach_unknown_pipeline_lists_valid_pipelines(self, config_dir: Path) -> None:
+        result = runner.invoke(
+            app, ["stage", "detach-skill", "ghost-pipeline", "Stage One", "known-skill"]
+        )
+        assert result.exit_code == 1
+        assert "demo-pipeline" in result.output
 
 
 # ---------------------------------------------------------------------------

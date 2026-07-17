@@ -69,6 +69,7 @@ A plugin is a module exposing a zero-arg `register()` function that returns a
 | `secrets` | `dict[str, SecretsBackend]` | registered into `SECRETS_MAP` |
 | `health` | `dict[str, Callable[..., HealthStatus \| dict]]` | registered into `PluginManager.health` — see "Health checks" below |
 | `panels` | `list[PanelSpec]` | registered into `PluginManager.panels` — see "Panels (Mirador)" below |
+| `skills` | `list[SkillSpec]` | registered into `PluginManager.skills` — see "Skills" below |
 | `before_step` | `Callable[..., None]` | hook, fired before each step |
 | `after_step` | `Callable[..., None]` | hook, fired after each step |
 | `on_pipeline_start` | `Callable[..., None]` | hook, fired once when `run_pipeline` starts |
@@ -337,6 +338,111 @@ a hard stop (`PanelNameCollisionError`), rolling back this plugin's other
 contributions atomically — see "Collision & error handling" below. A panel
 plugin honors `plugins_enabled` / `plugins_disabled` exactly like every
 other contribution type — a disabled plugin contributes no panels.
+
+### Skills
+
+A plugin may optionally contribute a **skill** — a named bundle of files (and
+an optional appended system-prompt snippet) that a runner MAY apply to its
+own invocation, e.g. writing reference material an agent runner reads before
+acting. Unlike a runner/notifier/secrets backend, a skill has **no runtime
+behavior of its own** — it is pure declarative content; whether and how it
+does anything depends entirely on the runner that consumes it.
+
+`register()["skills"]` is `list[SkillSpec]`, where each `SkillSpec` is a
+plain dict (`hivepilot/plugins.py`):
+
+```python
+class SkillSpec(TypedDict, total=False):
+    name: str                  # required — stable id, collision-checked
+    description: str           # required — human-readable summary
+    provider: str               # required — the contributing plugin's identity
+    files: dict[str, str]       # required — rel-path under .claude/skills/<name>/ -> content
+    system_prompt: str          # optional — text a runner may append to its prompt
+    applies_to: list[str]       # optional — runner kinds this skill targets; absent = any
+    min_role: str                # optional — token_service role gate; absent = ungated/public
+```
+
+```python
+# plugins/sample_skill.py
+def register():
+    return {
+        "skills": [
+            {
+                "name": "sample-skill",
+                "description": "Trivial example skill demonstrating the SkillSpec contract.",
+                "provider": "sample_skill",
+                "files": {"SKILL.md": "# Sample Skill\n\n..."},
+            }
+        ]
+    }
+```
+
+**Attaching a skill to a task step or pipeline stage.** `TaskStep.skills` /
+`PipelineStage.skills` (`hivepilot/models.py`) is an optional, ordered,
+deduped `list[str]` of skill names — absent (`None`) by default, so a config
+that never references `skills` behaves byte-identically to before this
+feature existed. Declare it directly in `tasks.yaml` / `pipelines.yaml`, or
+manage it via `hivepilot stage attach-skill` / `hivepilot stage detach-skill`
+(see "Attaching skills to a pipeline stage" in `docs/v4/CONFIG.md`).
+
+**Fail-closed per-stage/step selection.** Every `skills:` reference is
+cross-checked by `hivepilot config validate`
+(`hivepilot.services.config_validation.validate_config`) against the live
+skill catalog (`PluginManager.list_skills()`):
+
+- A name that doesn't match any registered skill is a **hard validation
+  error** ("references unknown skill '\<name\>'") — never silently ignored.
+- When a skill declares `min_role`, the referencing step/stage's resolved
+  role (the owning task's `role:`) must satisfy it
+  (`token_service.role_rank`), exactly like `PanelSpec.min_role`'s
+  fail-closed comparison — an unrecognized role on **either** side of the
+  comparison (rank `-1`) is always a denial, never a silent pass. A skill
+  with no `min_role` is intentionally public/ungated.
+- This check is dormant (no `PluginManager()` construction, zero added cost)
+  for any config that never references `skills` anywhere — see
+  `test_no_skills_config_is_byte_identical_to_pre_sprint3_behavior`.
+
+**How a runner applies a skill.** A runner class OPTIONALLY implements
+`apply_skill(self, payload: RunnerPayload, skills: list[SkillSpec]) ->
+RunnerPayload` (`hivepilot.runners.base.BaseRunner` — structural, not part
+of the `Protocol`'s required surface, exactly like `capture()` /
+`is_destructive()`). Callers dispatch through the single choke point
+`apply_skill_if_supported(runner, payload, skills)`, which returns *payload*
+unchanged when the runner doesn't implement `apply_skill` — **a runner
+without skill support silently ignores every skill it is handed**, it never
+errors. `ClaudeRunner.apply_skill` is the reference implementation:
+
+- Skips any skill whose `applies_to` is set and does not include this
+  runner's `definition.kind` (logged at info, not an error — a routing
+  filter, not a validation failure).
+- Materialises each applicable skill's `files` into a FRESH, EPHEMERAL
+  scratch directory (`tempfile.mkdtemp()`) under
+  `<scratch>/.claude/skills/<name>/<relpath>` — **never** the target
+  repo's own real `.claude/skills/` directory, which is never written to.
+  The scratch directory is removed in a `finally` block once the step's
+  subprocess call completes (success or exception) — it never outlives the
+  step, and is removed immediately if materialisation itself fails partway
+  through (never left orphaned with partially-resolved secret content).
+- Routes both `files` content and `system_prompt` through the EXISTING
+  `${secret:NAME}` resolution + masking choke point
+  (`hivepilot.services.secret_refs.resolve_secret_refs` — the same one
+  `Orchestrator._resolve_secrets` uses) before anything reaches disk, the
+  appended prompt, or a log line — a skill can safely reference a project's
+  named secret catalog without ever leaking the resolved value raw.
+- Never mutates the caller's `payload` in place — always returns a new
+  `RunnerPayload` (immutable-update pattern, same discipline as everywhere
+  else in this codebase).
+
+**Collision & routing.** Skill `name`s are collected into
+`PluginManager.skills` (an instance dict, scoped to the manager exactly like
+`PluginManager.panels` / `PluginManager.health`): a `name` that collides
+with an already-registered skill (built-in — there are none — or another
+plugin's) is a hard stop (`SkillNameCollisionError`), and an invalid
+`min_role` is a hard stop (`SkillInvalidMinRoleError`) — both roll back this
+plugin's other contributions atomically, see "Collision & error handling"
+below. A skill plugin honors `plugins_enabled` / `plugins_disabled` exactly
+like every other contribution type — a disabled plugin contributes no
+skills, and disappears from `hivepilot skills list`.
 
 ### Hook example
 
@@ -935,6 +1041,44 @@ env:
   DATABASE_URL: ${secret:DATABASE_URL}
 ```
 
+### Example: the `sample_skill` plugin (`plugins/sample_skill.py`)
+
+Ships in this repo as the reference **skill** plugin — the minimal
+`register()["skills"]` shape (see "Skills" above): `name`, `description`,
+`provider`, and a single `files` entry (`SKILL.md`). It declares no
+`system_prompt`, `applies_to`, or `min_role` — a fully public, ungated
+skill any runner with `apply_skill` support may apply.
+
+```python
+# plugins/sample_skill.py
+def register():
+    return {
+        "skills": [
+            {
+                "name": "sample-skill",
+                "description": "Trivial example skill demonstrating the SkillSpec contract.",
+                "provider": "sample_skill",
+                "files": {"SKILL.md": "# Sample Skill\n\n..."},
+            }
+        ]
+    }
+```
+
+Like `plugins/sample.py` (the panel/hook reference plugin), enable/disable is
+handled ENTIRELY by the central plugin gate — `settings.plugins_enabled` /
+`settings.plugins_disabled` (keyed off the file stem `sample_skill`) — it
+declares no per-plugin `sample_skill_enabled` setting of its own.
+
+Built as a plain **dict literal**, never a local `@dataclass`: `SkillSpec` is
+a `TypedDict` (a type-checking-only construct — a plain dict at runtime), and
+local-file plugins are exec'd via `importlib.util.spec_from_file_location()`
+(`hivepilot.plugins._scan_local_plugins`), which never registers the module
+in `sys.modules` — combined with `from __future__ import annotations`, a
+local `@dataclass` on that load path trips a real CPython 3.14 `dataclasses`
+bug (see "Example: the `rtk` runner" above for the full write-up). A dict
+literal sidesteps it entirely — the same discipline every contribution type
+in this repo's example plugins follows.
+
 ## Packaging
 
 ### Local file
@@ -959,20 +1103,23 @@ discovered automatically at process start — no config change needed.
 ## Collision & error handling
 
 - **Kind/name collision** — if a plugin declares a `runners`, `notifiers`,
-  `secrets`, `health`, or `panels` key whose name is already registered to a
-  *different* implementation, that raises (`RunnerKindCollisionError` /
-  `NotifierKindCollisionError` / `SecretsBackendCollisionError` /
-  `HealthNameCollisionError` / `PanelNameCollisionError`) and **aborts
+  `secrets`, `health`, `panels`, or `skills` key whose name is already
+  registered to a *different* implementation, that raises
+  (`RunnerKindCollisionError` / `NotifierKindCollisionError` /
+  `SecretsBackendCollisionError` / `HealthNameCollisionError` /
+  `PanelNameCollisionError` / `SkillNameCollisionError`) and **aborts
   loading**. This is a hard stop by design: silently shadowing a built-in
   (e.g. redefining `claude`, or a secrets backend named `vault`) — or
-  silently shadowing another plugin's health check or panel — is never the
-  right default. A `panels` entry has one more failure mode:
+  silently shadowing another plugin's health check, panel, or skill — is
+  never the right default. A `panels` entry has one more failure mode:
   `PanelInvalidMinRoleError` when its `min_role` isn't a recognized role
-  (see "Panels (Mirador)" above) — also a hard, fail-closed stop.
-  Registration of a single plugin's runners+notifiers+secrets+health+panels
-  is atomic: if any entry collides (or fails `min_role` validation), every
-  entry that plugin already added (to the process-global maps, or to
-  `PluginManager.health` / `PluginManager.panels`) in this same load is
+  (see "Panels (Mirador)" above); a `skills` entry mirrors that with
+  `SkillInvalidMinRoleError` (see "Skills" above) — both hard, fail-closed
+  stops. Registration of a single plugin's
+  runners+notifiers+secrets+health+panels+skills is atomic: if any entry
+  collides (or fails `min_role` validation), every entry that plugin already
+  added (to the process-global maps, or to `PluginManager.health` /
+  `PluginManager.panels` / `PluginManager.skills`) in this same load is
   rolled back before the error propagates — an aborted plugin never leaves
   orphaned, partially-applied registrations behind.
 - **Broken plugin** — any other failure (import error, exception inside
@@ -1012,6 +1159,22 @@ specific runner kind or notifier came from which loaded plugin beyond what a
 `PluginRecord` itself records. If a plugin contributes a runner kind or hook
 and it doesn't show up as expected, check the process log for
 `plugins.load_failed` / `plugins.register_failed` first.
+
+### `skills list`
+
+```bash
+hivepilot skills list
+```
+
+Prints a single **Skills** table, sourced from `PluginManager.list_skills()`
+(sorted by name): `name`, `description`, `provider` (the contributing
+plugin's identity string, not necessarily the same as the loaded plugin's
+`PluginRecord.name`), and `applies_to` — the comma-joined runner-kind list a
+skill declares, or `any` when it doesn't restrict which runner kinds it
+targets. Empty (no plugin declares `skills`) shows a `-` placeholder row,
+same convention as an empty **Loaded Plugins** / **Health** table. A skill
+contributed by a plugin listed in `plugins_disabled` never appears here —
+see "Skills" above.
 
 ### `plugins health`
 
