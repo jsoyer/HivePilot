@@ -437,6 +437,224 @@ class TestRunDriftScan:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Gated auto-remediation (Phase 20 Sprint D4)
+# ---------------------------------------------------------------------------
+
+
+class TestRunDriftScanRemediation:
+    """Auto-remediation NEVER applies infrastructure directly -- it always
+    routes through `Orchestrator.run_task` so the destructive apply step
+    inside the operator-configured `remediate_task` is paused by the
+    EXISTING step-approval gate. `StepApprovalPending` (whether raised by
+    `run_task` or reflected in a returned `RunResult.detail`) is the
+    EXPECTED, desired outcome -- not an error."""
+
+    def _cfg(self, **overrides: object) -> DriftScanConfig:
+        base = DriftScanConfig(
+            enabled=True,
+            interval_minutes=60,
+            projects=["proj-a"],
+            runner_kind="opentofu",
+            auto_remediate=True,
+        )
+        for key, value in overrides.items():
+            setattr(base, key, value)
+        return base
+
+    def _drifted_result(self) -> DriftResult:
+        return DriftResult(
+            project="proj-a",
+            runner="opentofu",
+            drifted=True,
+            summary=DriftSummary(to_add=1, to_change=0, to_destroy=0),
+        )
+
+    def test_remediation_queues_via_run_task_and_catches_step_approval_pending(
+        self, tmp_path: Path
+    ) -> None:
+        from hivepilot.orchestrator import StepApprovalPending
+
+        cfg = self._cfg(remediate_task="apply-infra")
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.run_task.side_effect = StepApprovalPending(
+                "Step 'apply' requires approval before executing."
+            )
+            run_drift_scan(cfg, "proj-a")  # must not raise/crash the daemon
+
+        mock_orch_cls.return_value.run_task.assert_called_once()
+        call_kwargs = mock_orch_cls.return_value.run_task.call_args.kwargs
+        assert call_kwargs["project_names"] == ["proj-a"]
+        assert call_kwargs["task_name"] == "apply-infra"
+        assert call_kwargs["auto_git"] is False
+
+        # drift alert + "awaiting approval" alert
+        assert mock_notify.call_count == 2
+        messages = [c.args[0] for c in mock_notify.call_args_list]
+        assert any("awaiting approval" in m for m in messages)
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_remediation_pending_run_result_also_alerts(self, tmp_path: Path) -> None:
+        """`Orchestrator.run_task` actually ABSORBS `StepApprovalPending`
+        internally and returns a `RunResult` list with a "Pending approval"
+        detail instead of raising it to its own caller -- this is the real
+        observed behaviour, so it must be handled identically to the raise
+        path above."""
+        from hivepilot.orchestrator import RunResult
+
+        cfg = self._cfg(remediate_task="apply-infra")
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch("hivepilot.services.drift_schedule.state_service.update_schedule_run"),
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.run_task.return_value = [
+                RunResult("proj-a", "apply-infra", False, "Pending approval (run 7): gated")
+            ]
+            run_drift_scan(cfg, "proj-a")
+
+        messages = [c.args[0] for c in mock_notify.call_args_list]
+        assert any("awaiting approval" in m for m in messages)
+
+    def test_remediation_never_calls_runner_directly(self, tmp_path: Path) -> None:
+        """The ONLY orchestration path drift remediation ever takes is
+        `Orchestrator.run_task` -- it must never resolve/instantiate a
+        runner class itself to apply anything."""
+        from hivepilot.orchestrator import StepApprovalPending
+
+        cfg = self._cfg(remediate_task="apply-infra")
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch("hivepilot.services.drift_schedule.notification_service.send_notification"),
+            patch("hivepilot.services.drift_schedule.state_service.update_schedule_run"),
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+            patch("hivepilot.registry.resolve_runner_class") as mock_resolve_runner,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.run_task.side_effect = StepApprovalPending("pending")
+            run_drift_scan(cfg, "proj-a")
+
+        mock_resolve_runner.assert_not_called()
+
+    def test_no_remediate_task_skips_remediation_and_alerts(self, tmp_path: Path) -> None:
+        cfg = self._cfg(remediate_task=None)
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            run_drift_scan(cfg, "proj-a")
+
+        mock_orch_cls.return_value.run_task.assert_not_called()
+        assert mock_notify.call_count == 2
+        messages = [c.args[0] for c in mock_notify.call_args_list]
+        assert any("no remediate_task" in m for m in messages)
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_auto_remediate_false_is_regression_safe(self, tmp_path: Path) -> None:
+        cfg = self._cfg(auto_remediate=False, remediate_task="apply-infra")
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            run_drift_scan(cfg, "proj-a")
+
+        mock_orch_cls.return_value.run_task.assert_not_called()
+        mock_notify.assert_called_once()  # just the drift-detected alert
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_unexpected_run_task_exception_propagates_without_alert(self, tmp_path: Path) -> None:
+        cfg = self._cfg(remediate_task="apply-infra")
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.run_task.side_effect = RuntimeError("boom")
+            with pytest.raises(RuntimeError, match="boom"):
+                run_drift_scan(cfg, "proj-a")
+
+        # Only the drift-detected alert -- no remediation-failure alert, since
+        # an arbitrary exception's string isn't guaranteed leak-free.
+        mock_notify.assert_called_once()
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+
 class TestSchedulerDaemonDriftScanTick:
     def test_disabled_config_runs_no_scans(self) -> None:
         from hivepilot.services.scheduler_daemon import SchedulerDaemon
