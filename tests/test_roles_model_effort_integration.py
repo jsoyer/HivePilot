@@ -13,7 +13,8 @@ disk, validation actually firing before dispatch), not just return shapes:
     the REAL `resolve_stage_model`/`resolve_effort` (pipeline-vs-stage) +
     `resolve_stage_dispatch` (policy/stage/role/runner-default) chain, and
     the resolved values are then fed into REAL `ClaudeRunner`/`CodexRunner`
-    instances whose subprocess argv is asserted to actually carry them.
+    instances whose subprocess argv (and, for Claude's effort, the
+    MAX_THINKING_TOKENS env var) is asserted to actually carry them.
 (b) `policy.role_overrides` outranks a stage-level override for BOTH `model`
     and `effort`, verified both at `resolve_stage_dispatch` and by building
     the runner argv from the resolved value (the stage's value never
@@ -59,7 +60,7 @@ from hivepilot.models import (
     resolve_stage_model,
 )
 from hivepilot.runners.base import RunnerPayload
-from hivepilot.runners.claude_runner import ClaudeRunner
+from hivepilot.runners.claude_runner import EFFORT_TOKEN_MAP, ClaudeRunner
 from hivepilot.runners.prompt_cli_runner import CodexRunner
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.policy_service import Policy
@@ -170,8 +171,13 @@ class TestTwoStagePipelineModelEffortReachesRunners:
         claude_args = mock_run.call_args.args[0]
         assert "--model" in claude_args
         assert claude_args[claude_args.index("--model") + 1] == "claude-fast-x"
-        # Claude has no effort flag -- "low" never reaches argv.
+        # Claude effort is NOT a no-op: the resolved "low" is injected as the
+        # MAX_THINKING_TOKENS env var (EFFORT_TOKEN_MAP["low"] == 4000) on the
+        # subprocess -- it just never becomes an argv entry.
         assert not any("effort" in str(a).lower() for a in claude_args)
+        assert mock_run.call_args.kwargs["env"]["MAX_THINKING_TOKENS"] == str(
+            EFFORT_TOKEN_MAP["low"]
+        )
 
         codex_def = RunnerDefinition(
             kind=review_runner,
@@ -259,12 +265,13 @@ class TestNoRolesYamlFallsBackToDeveloperAndDispatches:
         original_roles = roles_module.ROLES
         try:
             roles_module.ROLES = fallback_roles
-            runner, model = roles_module.resolve_runner("developer")
+            runner, model, effort = roles_module.resolve_runner("developer")
         finally:
             roles_module.ROLES = original_roles
 
         assert runner == "claude"
         assert model is None  # no hard-coded model on the fallback developer role
+        assert effort is None  # the generic developer declares no effort tier
 
 
 # ---------------------------------------------------------------------------
