@@ -3169,6 +3169,7 @@ def plugins_search(
     `git clone` (see `plugins info <name>` for the exact command).
     """
     from rich.console import Console
+    from rich.markup import escape as rich_escape
     from rich.table import Table
 
     from hivepilot.services.plugin_index import fetch_index, format_install_hint, search_index
@@ -3188,8 +3189,17 @@ def plugins_search(
     table.add_column("description")
     table.add_column("install")
     for entry in matches:
+        # Every index field is ATTACKER-CONTROLLED (compromised/MITM'd index
+        # host) — escape before it ever reaches rich's Table renderer, which
+        # otherwise interprets `[...]` as markup (style injection, or a
+        # crash on unbalanced tags) even when Rich's own color output is
+        # suppressed for a non-terminal. See plugin_index.py's parse-time
+        # control-char stripping for the other half of this defense.
         table.add_row(
-            entry.name, entry.version or "-", entry.description, format_install_hint(entry.install)
+            rich_escape(entry.name),
+            rich_escape(entry.version or "-"),
+            rich_escape(entry.description),
+            rich_escape(format_install_hint(entry.install)),
         )
     if not matches:
         table.add_row("-", "-", "-", "-")
@@ -3210,6 +3220,7 @@ def plugins_info(
     path.
     """
     from rich.console import Console
+    from rich.markup import escape as rich_escape
     from rich.table import Table
 
     from hivepilot.services.plugin_index import fetch_index, format_install_hint
@@ -3228,19 +3239,30 @@ def plugins_info(
     orchestrator = Orchestrator()
     installed = any(record.name == entry.name for record in orchestrator.plugins.loaded)
 
+    # Every index field is ATTACKER-CONTROLLED (compromised/MITM'd index
+    # host) — escape before it ever reaches rich's Table renderer. See
+    # plugin_index.py's parse-time control-char stripping for the other
+    # half of this defense, and `format_install_hint`'s own allow-list
+    # validation for the install command specifically.
     console = Console(width=200)
-    table = Table(title=f"Plugin: {entry.name}")
+    table = Table(title=f"Plugin: {rich_escape(entry.name)}")
     table.add_column("field")
     table.add_column("value")
-    table.add_row("name", entry.name)
-    table.add_row("version", entry.version or "-")
-    table.add_row("description", entry.description)
-    table.add_row("author", entry.author or "-")
-    table.add_row("homepage", entry.homepage or "-")
-    table.add_row("contributes", ", ".join(entry.contributes) if entry.contributes else "-")
-    table.add_row("checksum", entry.checksum or "-")
+    table.add_row("name", rich_escape(entry.name))
+    table.add_row("version", rich_escape(entry.version or "-"))
+    table.add_row("description", rich_escape(entry.description))
+    table.add_row("author", rich_escape(entry.author or "-"))
+    table.add_row("homepage", rich_escape(entry.homepage or "-"))
+    table.add_row(
+        "contributes",
+        rich_escape(", ".join(entry.contributes) if entry.contributes else "-"),
+    )
+    table.add_row("checksum", rich_escape(entry.checksum or "-"))
     table.add_row("installed locally", "yes" if installed else "no")
-    table.add_row("install command", f"To install, run: {format_install_hint(entry.install)}")
+    table.add_row(
+        "install command",
+        rich_escape(f"To install, run: {format_install_hint(entry.install)}"),
+    )
     console.print(table)
 
 
