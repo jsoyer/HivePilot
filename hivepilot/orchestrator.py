@@ -2980,6 +2980,38 @@ class Orchestrator:
             raise ValueError(f"Unknown project: {name}")
         return self.projects.projects[name]
 
+    def remediation_gate_present(self, project_name: str, task_name: str) -> bool:
+        """Preflight, side-effect-free check: would running *task_name*
+        against *project_name* trip the step-level approval gate before any
+        step actually executes?
+
+        Used by gated auto-remediation callers (e.g. `drift_schedule.
+        _attempt_remediation`, Phase 20 D4) to refuse dispatching a
+        `remediate_task` that isn't actually destructive/gated --
+        `step_requires_approval` is fail-OPEN for a step whose runner has no
+        `is_destructive` method (or whose resolved operation isn't
+        apply/destroy), so a misconfigured `remediate_task` would otherwise
+        run un-approved via `run_task`.
+
+        Resolves the task and policy exactly the way `run_task`/
+        `_run_task_body` does (`self.tasks.tasks[task_name]`,
+        `policy_service.enforce_policy` — always with `auto_git=False` here,
+        since gated remediation never uses auto_git), then delegates to the
+        same static, non-executing `_find_gating_step` the worktree-isolation
+        refusal (`_execute_task`) already relies on to agree with the real
+        gate. Fail-closed: an unknown task/project, or any resolution error,
+        returns False (not gated) -- never True by default.
+        """
+        try:
+            if task_name not in self.tasks.tasks:
+                return False
+            task = self.tasks.tasks[task_name]
+            project = self._project(project_name)
+            policy = policy_service.enforce_policy(project.path.name, auto_git=False)
+        except Exception:  # noqa: BLE001 -- fail-closed: unresolvable -> not gated
+            return False
+        return _find_gating_step(task, policy, self.registry) is not None
+
     def _cve_gate_block_detail(
         self, project: ProjectConfig, tool: str, severity: str
     ) -> str | None:

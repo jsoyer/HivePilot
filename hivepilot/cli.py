@@ -64,6 +64,8 @@ plugins_app = typer.Typer(help="Inspect loaded plugins")
 app.add_typer(plugins_app, name="plugins")
 scan_app = typer.Typer(help="Supply-chain security scanning (SBOM + vulnerability scan)")
 app.add_typer(scan_app, name="scan")
+drift_app = typer.Typer(help="Infrastructure drift detection")
+app.add_typer(drift_app, name="drift")
 logger = get_logger(__name__)
 
 
@@ -1971,6 +1973,113 @@ def iac_cost(
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# Drift detection commands (Phase 20 Sprint D4)
+#
+# `drift scan` is READ-ONLY: it calls `drift_service.scan_and_record`
+# directly (a plain service, not `_run_iac_operation`) and only ever prints
+# integer plan counts / status, never raw plan stdout -- same anti-leak
+# guarantee as `drift_schedule.run_drift_scan`'s alerts. `drift status`/
+# `drift report` are read-only state queries, tenant-scoped explicitly on
+# every call. There is deliberately NO destructive command in this group --
+# a gated remediation `apply` only ever happens via the operator-configured
+# `remediate_task`, routed through `Orchestrator.run_task` (see
+# `hivepilot.services.drift_schedule._attempt_remediation`), never a raw CLI
+# apply.
+# ---------------------------------------------------------------------------
+
+
+@drift_app.command("scan")
+def drift_scan_cmd(
+    project: str = typer.Option(..., "--project", "-p", help="Project name"),
+    runner: str = typer.Option("opentofu", "--runner", "-r", help="Runner: opentofu, terraform"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to scope this scan to"),
+) -> None:
+    """Run an IaC drift scan for a project and record the result."""
+    from hivepilot.services import drift_service
+
+    projects = load_projects()
+    if project not in projects.projects:
+        raise typer.BadParameter(f"Unknown project: {project}")
+    project_cfg = projects.projects[project]
+
+    try:
+        result = drift_service.scan_and_record(project_cfg, runner_kind=runner, tenant=tenant)
+    except (RuntimeError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    if not result.drifted:
+        typer.echo("No drift detected.")
+        return
+
+    if result.summary is not None:
+        s = result.summary
+        typer.echo(f"Drift detected: +{s.to_add} ~{s.to_change} -{s.to_destroy}")
+    else:
+        typer.echo("Drift detected (changes detected).")
+
+
+@drift_app.command("status")
+def drift_status_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max rows to show"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to scope this read to"),
+) -> None:
+    """Show recent drift-scan history."""
+    rows = state_service.get_recent_drift_scans(project=project, limit=limit, tenant=tenant)
+    if not rows:
+        typer.echo("No drift scans recorded.")
+        return
+
+    typer.echo(f"{'Checked At':<20} {'Project':<20} {'Runner':<10} {'Status':<8} Changes")
+    typer.echo("-" * 80)
+    for row in rows:
+        if row.get("status") == "drift":
+            changes = (
+                f"+{row.get('to_add') or 0} ~{row.get('to_change') or 0} "
+                f"-{row.get('to_destroy') or 0}"
+            )
+        else:
+            changes = "-"
+        typer.echo(
+            f"{str(row.get('checked_at', '?')):<20} {str(row.get('project', '?')):<20} "
+            f"{str(row.get('runner', '?')):<10} {str(row.get('status', '?')):<8} {changes}"
+        )
+
+
+@drift_app.command("report")
+def drift_report_cmd(
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to scope this read to"),
+) -> None:
+    """Show the current no-drift baseline + recent history for a project."""
+    if project is not None:
+        baseline = state_service.get_drift_baseline(project, tenant=tenant)
+        if baseline is None:
+            typer.echo(f"No no-drift baseline recorded yet for {project}.")
+        else:
+            typer.echo(
+                f"Baseline ({project}): last clean scan at "
+                f"{baseline.get('checked_at', '?')} via {baseline.get('runner', '?')}"
+            )
+        typer.echo("")
+
+    rows = state_service.get_recent_drift_scans(project=project, limit=10, tenant=tenant)
+    if not rows:
+        typer.echo("No drift scan history recorded.")
+        return
+
+    typer.echo("Recent history:")
+    for row in rows:
+        typer.echo(
+            f"  {row.get('checked_at', '?')}  {str(row.get('project', '?')):<20} "
+            f"{str(row.get('status', '?')):<8} "
+            f"(+{row.get('to_add') or 0} ~{row.get('to_change') or 0} "
+            f"-{row.get('to_destroy') or 0})"
+        )
 
 
 # ---------------------------------------------------------------------------

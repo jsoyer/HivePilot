@@ -7,14 +7,38 @@ due-calc exactly, keyed by a `drift:<project>` schedule name so it never
 collides with a real `ScheduleEntry`), runs the scan via
 `drift_service.scan_and_record`, and sends a SECRET-SAFE, counts-only alert
 when drift is detected (or a tool+exit-code-only alert when the scan itself
-fails). No auto-remediation happens here -- `DriftScanConfig.auto_remediate`
-is carried through for a future sprint (D4) to act on; this module never
-reads it.
+fails).
+
+Gated auto-remediation (Phase 20 Sprint D4)
+--------------------------------------------
+When `cfg.auto_remediate` is set AND drift was detected, this module kicks
+off the operator-configured `cfg.remediate_task` -- a project task whose
+step(s) resolve to a destructive IaC operation (`apply`/`destroy`) -- via
+`Orchestrator.run_task`. It NEVER applies infrastructure directly: routing
+through `Orchestrator.run_task` means the destructive step is paused by the
+EXISTING step-level approval gate (`hivepilot.orchestrator.
+step_requires_approval` / `StepApprovalPending`), the exact same gate every
+other orchestrator-run destructive step goes through. A human must
+separately approve the paused run via `Orchestrator.run_approved` (existing
+Telegram/Slack/CLI approval flow) -- this module only ever *queues*
+remediation.
+
+Fail-closed: without an operator-configured `remediate_task` there is no
+task to gate remediation on, so remediation is skipped entirely (with an
+alert) rather than guessing one. `Orchestrator.run_task` currently absorbs
+a mid-task `StepApprovalPending` internally and returns it reflected in a
+`RunResult.detail` (rather than raising it to its own caller) -- both that
+returned-status shape AND a direct raise (in case that internal contract
+ever changes) are treated identically: the EXPECTED, desired "awaiting
+approval" outcome, never an error. Any OTHER exception from `run_task` is
+NOT caught here -- it propagates (after the last-run stamp still fires) so
+the daemon's per-project try/except is what ultimately swallows it, since an
+arbitrary exception's string isn't guaranteed leak-free.
 
 Fail-safe by design: `load_drift_config` never raises (missing file/key or
 malformed YAML all resolve to a disabled default), and `run_drift_scan` never
-propagates a scan failure -- both are load-bearing for the scheduler daemon,
-which must never die because one project's drift check misbehaves.
+propagates a *scan* failure -- both are load-bearing for the scheduler
+daemon, which must never die because one project's drift check misbehaves.
 """
 
 from __future__ import annotations
@@ -26,6 +50,7 @@ from pathlib import Path
 import yaml
 
 from hivepilot.config import settings
+from hivepilot.orchestrator import Orchestrator, StepApprovalPending
 from hivepilot.services import drift_service, notification_service, project_service, state_service
 from hivepilot.utils.logging import get_logger
 
@@ -42,8 +67,13 @@ class DriftScanConfig:
     interval_minutes: int = _DEFAULT_INTERVAL_MINUTES
     projects: list[str] = field(default_factory=list)
     runner_kind: str = "opentofu"
-    # Carried for D4 (auto-remediation); never read/acted on in this module.
     auto_remediate: bool = False
+    # The project task to run for gated auto-remediation (Phase 20 D4) --
+    # its step(s) must resolve to a destructive IaC operation for the
+    # existing step-approval gate to actually pause it. `None` (the default)
+    # means auto-remediation is fail-closed: `run_drift_scan` skips
+    # remediation entirely rather than guessing a task.
+    remediate_task: str | None = None
     channels: list[str] | None = None
 
 
@@ -64,6 +94,7 @@ def load_drift_config(path: Path | None = None) -> DriftScanConfig:
             return DriftScanConfig()
         projects_raw = drift.get("projects", [])
         channels_raw = drift.get("channels")
+        remediate_task_raw = drift.get("remediate_task")
         return DriftScanConfig(
             enabled=bool(drift.get("enabled", False)),
             interval_minutes=int(drift.get("interval_minutes", _DEFAULT_INTERVAL_MINUTES)),
@@ -73,6 +104,12 @@ def load_drift_config(path: Path | None = None) -> DriftScanConfig:
             projects=list(projects_raw) if isinstance(projects_raw, list) else [],
             runner_kind=str(drift.get("runner_kind", "opentofu")),
             auto_remediate=bool(drift.get("auto_remediate", False)),
+            # Fail-closed: only a real, non-empty string is ever accepted --
+            # anything else (missing key, wrong type) resolves to None so
+            # run_drift_scan's remediation guard skips rather than guesses.
+            remediate_task=remediate_task_raw
+            if isinstance(remediate_task_raw, str) and remediate_task_raw
+            else None,
             # Same guard for `channels: slack` (bare scalar) -- fall back to
             # None (send_notification's own all-channels default) rather
             # than char-iterating it.
@@ -108,6 +145,100 @@ def due_drift_projects(cfg: DriftScanConfig) -> list[str]:
         if next_run_time <= now:
             due.append(project_name)
     return due
+
+
+def _attempt_remediation(cfg: DriftScanConfig, project_name: str) -> None:
+    """Kick off gated auto-remediation for *project_name* (Phase 20 D4).
+
+    NEVER applies infrastructure directly -- always routes through
+    `Orchestrator.run_task`, so the destructive apply step inside
+    `cfg.remediate_task` is paused by the EXISTING step-approval gate
+    exactly like any other orchestrator-run destructive step. This function
+    only ever *queues* remediation; a human must separately approve it via
+    `Orchestrator.run_approved`.
+
+    Fail-closed guard 1: without an operator-configured `remediate_task`
+    there is no task to gate on, so remediation is skipped (with an alert)
+    rather than guessing one.
+
+    Fail-closed guard 2 (review MUST-FIX): `step_requires_approval` is
+    fail-OPEN for a step whose runner has no `is_destructive` method (or
+    whose resolved operation isn't apply/destroy) -- a `remediate_task` that
+    doesn't actually resolve to a gated step would otherwise run
+    `Orchestrator.run_task` to completion UN-approved, defeating D4's whole
+    invariant. `Orchestrator.remediation_gate_present` is the SAME static,
+    non-executing check (`_find_gating_step`) the orchestrator's own
+    worktree-isolation refusal relies on to agree with the real gate --
+    dispatch is refused unless it provably returns True.
+
+    `Orchestrator.run_task` currently absorbs a mid-task
+    `StepApprovalPending` internally and reflects it in a returned
+    `RunResult.detail` instead of raising it to its own caller -- both that
+    shape and a direct raise (defense-in-depth, in case that internal
+    contract ever changes) are handled identically here as the EXPECTED,
+    desired "awaiting approval" outcome. Any OTHER exception is deliberately
+    NOT caught -- it propagates to `run_drift_scan`'s caller (after the
+    last-run stamp still fires via its `finally`), since an arbitrary
+    exception's string isn't guaranteed leak-free.
+    """
+    if cfg.remediate_task is None:
+        notification_service.send_notification(
+            f"⚠️ auto_remediate enabled for {project_name} but no remediate_task "
+            "configured — skipping remediation",
+            channels=cfg.channels,
+        )
+        return
+
+    orch = Orchestrator()
+
+    if not orch.remediation_gate_present(project_name, cfg.remediate_task):
+        notification_service.send_notification(
+            f"⚠️ Remediation for {project_name} SKIPPED — remediate_task "
+            f"'{cfg.remediate_task}' has no approval-gated (destructive) step; "
+            "refusing to auto-run it un-approved. Fix the task config.",
+            channels=cfg.channels,
+        )
+        return
+
+    try:
+        results = orch.run_task(
+            project_names=[project_name],
+            task_name=cfg.remediate_task,
+            extra_prompt=None,
+            auto_git=False,
+        )
+    except StepApprovalPending:
+        notification_service.send_notification(
+            f"🔒 Remediation for {project_name} is queued and awaiting approval",
+            channels=cfg.channels,
+        )
+        return
+
+    if any(
+        result.detail is not None and result.detail.startswith("Pending approval")
+        for result in results
+    ):
+        notification_service.send_notification(
+            f"🔒 Remediation for {project_name} is queued and awaiting approval",
+            channels=cfg.channels,
+        )
+        return
+
+    # The preflight already proved a gating step is present, so `run_task`
+    # SHOULD have paused -- if none of the results show that, something is
+    # off (a changed internal contract, or the task genuinely ran). Silence
+    # here would defeat the whole point of the preflight, so this is always
+    # surfaced, not swallowed.
+    logger.warning(
+        "drift_schedule.remediation_no_pending_signal",
+        project=project_name,
+        task=cfg.remediate_task,
+    )
+    notification_service.send_notification(
+        f"⚠️ Remediation for {project_name} dispatched but no approval-pending "
+        "signal was seen — verify nothing applied without approval",
+        channels=cfg.channels,
+    )
 
 
 def run_drift_scan(cfg: DriftScanConfig, project_name: str) -> None:
@@ -158,5 +289,8 @@ def run_drift_scan(cfg: DriftScanConfig, project_name: str) -> None:
             f"⚠️ Drift detected on {project_name} ({cfg.runner_kind}): {counts}",
             channels=cfg.channels,
         )
+
+        if cfg.auto_remediate:
+            _attempt_remediation(cfg, project_name)
     finally:
         state_service.update_schedule_run(schedule_name)
