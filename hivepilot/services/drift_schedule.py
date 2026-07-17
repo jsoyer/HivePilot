@@ -157,9 +157,19 @@ def _attempt_remediation(cfg: DriftScanConfig, project_name: str) -> None:
     only ever *queues* remediation; a human must separately approve it via
     `Orchestrator.run_approved`.
 
-    Fail-closed guard: without an operator-configured `remediate_task` there
-    is no task to gate on, so remediation is skipped (with an alert) rather
-    than guessing one.
+    Fail-closed guard 1: without an operator-configured `remediate_task`
+    there is no task to gate on, so remediation is skipped (with an alert)
+    rather than guessing one.
+
+    Fail-closed guard 2 (review MUST-FIX): `step_requires_approval` is
+    fail-OPEN for a step whose runner has no `is_destructive` method (or
+    whose resolved operation isn't apply/destroy) -- a `remediate_task` that
+    doesn't actually resolve to a gated step would otherwise run
+    `Orchestrator.run_task` to completion UN-approved, defeating D4's whole
+    invariant. `Orchestrator.remediation_gate_present` is the SAME static,
+    non-executing check (`_find_gating_step`) the orchestrator's own
+    worktree-isolation refusal relies on to agree with the real gate --
+    dispatch is refused unless it provably returns True.
 
     `Orchestrator.run_task` currently absorbs a mid-task
     `StepApprovalPending` internally and reflects it in a returned
@@ -179,8 +189,19 @@ def _attempt_remediation(cfg: DriftScanConfig, project_name: str) -> None:
         )
         return
 
+    orch = Orchestrator()
+
+    if not orch.remediation_gate_present(project_name, cfg.remediate_task):
+        notification_service.send_notification(
+            f"⚠️ Remediation for {project_name} SKIPPED — remediate_task "
+            f"'{cfg.remediate_task}' has no approval-gated (destructive) step; "
+            "refusing to auto-run it un-approved. Fix the task config.",
+            channels=cfg.channels,
+        )
+        return
+
     try:
-        results = Orchestrator().run_task(
+        results = orch.run_task(
             project_names=[project_name],
             task_name=cfg.remediate_task,
             extra_prompt=None,
@@ -201,6 +222,23 @@ def _attempt_remediation(cfg: DriftScanConfig, project_name: str) -> None:
             f"🔒 Remediation for {project_name} is queued and awaiting approval",
             channels=cfg.channels,
         )
+        return
+
+    # The preflight already proved a gating step is present, so `run_task`
+    # SHOULD have paused -- if none of the results show that, something is
+    # off (a changed internal contract, or the task genuinely ran). Silence
+    # here would defeat the whole point of the preflight, so this is always
+    # surfaced, not swallowed.
+    logger.warning(
+        "drift_schedule.remediation_no_pending_signal",
+        project=project_name,
+        task=cfg.remediate_task,
+    )
+    notification_service.send_notification(
+        f"⚠️ Remediation for {project_name} dispatched but no approval-pending "
+        "signal was seen — verify nothing applied without approval",
+        channels=cfg.channels,
+    )
 
 
 def run_drift_scan(cfg: DriftScanConfig, project_name: str) -> None:

@@ -2022,3 +2022,89 @@ class TestCveGateRunApprovedResume:
         assert mock_complete.call_args.args[1] == "denied"
         mock_update.assert_called_once()
         assert mock_update.call_args.args[1] == "denied"
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator.remediation_gate_present (Phase 20 D4 review MUST-FIX)
+#
+# Gated auto-remediation (`drift_schedule._attempt_remediation`) must refuse
+# to dispatch a `remediate_task` that isn't provably approval-gated --
+# `step_requires_approval` is fail-OPEN for a step whose runner has no
+# `is_destructive` method (or whose resolved operation isn't apply/destroy).
+# These tests exercise the REAL `remediation_gate_present`/`_find_gating_step`
+# (no mocking of the gate-check itself) against real `TaskConfig`/`TaskStep`
+# objects and the REAL `RunnerRegistry`, so a real `opentofu` apply step
+# actually proves the preflight agrees with the real gate.
+# ---------------------------------------------------------------------------
+
+
+def _make_orchestrator_with_real_registry(task_name, task, project_name, project):
+    """Like `_make_orchestrator_with_pipeline`, but deliberately does NOT
+    stub `RunnerRegistry` -- the real registry (and therefore the real
+    `is_destructive()` gate) is what `remediation_gate_present` must agree
+    with."""
+    from hivepilot.models import PipelinesFile
+    from hivepilot.orchestrator import Orchestrator
+
+    with (
+        patch(
+            "hivepilot.orchestrator.load_projects",
+            return_value=MagicMock(projects={project_name: project}),
+        ),
+        patch(
+            "hivepilot.orchestrator.load_tasks",
+            return_value=MagicMock(tasks={task_name: task}, runners={}),
+        ),
+        patch("hivepilot.orchestrator.load_pipelines", return_value=PipelinesFile(pipelines={})),
+        patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
+    ):
+        orch = Orchestrator()
+    return orch
+
+
+class TestRemediationGatePresent:
+    def test_destructive_apply_step_is_gated(self, tmp_path: Path) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        task = TaskConfig(
+            description="apply infra",
+            steps=[TaskStep(name="apply", runner="opentofu", command="apply")],
+        )
+        project = ProjectConfig(path=tmp_path)
+        orch = _make_orchestrator_with_real_registry("apply-infra", task, "proj-a", project)
+
+        assert orch.remediation_gate_present("proj-a", "apply-infra") is True
+
+    def test_non_destructive_plan_step_is_not_gated(self, tmp_path: Path) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        task = TaskConfig(
+            description="plan only",
+            steps=[TaskStep(name="plan", runner="opentofu", command="plan")],
+        )
+        project = ProjectConfig(path=tmp_path)
+        orch = _make_orchestrator_with_real_registry("plan-only", task, "proj-a", project)
+
+        assert orch.remediation_gate_present("proj-a", "plan-only") is False
+
+    def test_unknown_task_fails_closed(self, tmp_path: Path) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig
+
+        project = ProjectConfig(path=tmp_path)
+        orch = _make_orchestrator_with_real_registry(
+            "some-task", TaskConfig(description="x"), "proj-a", project
+        )
+
+        assert orch.remediation_gate_present("proj-a", "ghost-task") is False
+
+    def test_unknown_project_fails_closed(self, tmp_path: Path) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        task = TaskConfig(
+            description="apply infra",
+            steps=[TaskStep(name="apply", runner="opentofu", command="apply")],
+        )
+        project = ProjectConfig(path=tmp_path)
+        orch = _make_orchestrator_with_real_registry("apply-infra", task, "proj-a", project)
+
+        assert orch.remediation_gate_present("ghost-project", "apply-infra") is False

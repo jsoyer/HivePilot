@@ -494,11 +494,15 @@ class TestRunDriftScanRemediation:
             patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
         ):
             mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.remediation_gate_present.return_value = True
             mock_orch_cls.return_value.run_task.side_effect = StepApprovalPending(
                 "Step 'apply' requires approval before executing."
             )
             run_drift_scan(cfg, "proj-a")  # must not raise/crash the daemon
 
+        mock_orch_cls.return_value.remediation_gate_present.assert_called_once_with(
+            "proj-a", "apply-infra"
+        )
         mock_orch_cls.return_value.run_task.assert_called_once()
         call_kwargs = mock_orch_cls.return_value.run_task.call_args.kwargs
         assert call_kwargs["project_names"] == ["proj-a"]
@@ -536,6 +540,7 @@ class TestRunDriftScanRemediation:
             patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
         ):
             mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.remediation_gate_present.return_value = True
             mock_orch_cls.return_value.run_task.return_value = [
                 RunResult("proj-a", "apply-infra", False, "Pending approval (run 7): gated")
             ]
@@ -566,6 +571,7 @@ class TestRunDriftScanRemediation:
             patch("hivepilot.registry.resolve_runner_class") as mock_resolve_runner,
         ):
             mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.remediation_gate_present.return_value = True
             mock_orch_cls.return_value.run_task.side_effect = StepApprovalPending("pending")
             run_drift_scan(cfg, "proj-a")
 
@@ -645,6 +651,7 @@ class TestRunDriftScanRemediation:
             patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
         ):
             mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.remediation_gate_present.return_value = True
             mock_orch_cls.return_value.run_task.side_effect = RuntimeError("boom")
             with pytest.raises(RuntimeError, match="boom"):
                 run_drift_scan(cfg, "proj-a")
@@ -653,6 +660,78 @@ class TestRunDriftScanRemediation:
         # an arbitrary exception's string isn't guaranteed leak-free.
         mock_notify.assert_called_once()
         mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_fails_closed_when_remediate_task_not_gated(self, tmp_path: Path) -> None:
+        """MUST-FIX regression guard: a `remediate_task` that does NOT
+        resolve to a provably-gated (destructive) step must be refused --
+        `run_task` is NEVER dispatched, since `step_requires_approval` is
+        fail-OPEN and would otherwise run it un-approved."""
+        cfg = self._cfg(remediate_task="not-gated-task")
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.remediation_gate_present.return_value = False
+            run_drift_scan(cfg, "proj-a")
+
+        mock_orch_cls.return_value.remediation_gate_present.assert_called_once_with(
+            "proj-a", "not-gated-task"
+        )
+        mock_orch_cls.return_value.run_task.assert_not_called()
+        # drift alert + "SKIPPED" alert
+        assert mock_notify.call_count == 2
+        messages = [c.args[0] for c in mock_notify.call_args_list]
+        assert any("SKIPPED" in m and "not-gated-task" in m for m in messages)
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_dispatched_but_no_pending_signal_warns(self, tmp_path: Path) -> None:
+        """The preflight already proved a gating step is present, so
+        `run_task` SHOULD have paused -- if it didn't (no `RunResult.detail`
+        starting with "Pending approval"), that's surfaced with a cautious
+        warning alert rather than silently assumed fine."""
+        from hivepilot.orchestrator import RunResult
+
+        cfg = self._cfg(remediate_task="apply-infra")
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=self._drifted_result(),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch("hivepilot.services.drift_schedule.state_service.update_schedule_run"),
+            patch("hivepilot.services.drift_schedule.Orchestrator") as mock_orch_cls,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            mock_orch_cls.return_value.remediation_gate_present.return_value = True
+            mock_orch_cls.return_value.run_task.return_value = [
+                RunResult("proj-a", "apply-infra", True, "completed cleanly")
+            ]
+            run_drift_scan(cfg, "proj-a")
+
+        # drift alert + "no approval-pending signal" alert
+        assert mock_notify.call_count == 2
+        messages = [c.args[0] for c in mock_notify.call_args_list]
+        assert any("no approval-pending signal" in m for m in messages)
 
 
 class TestSchedulerDaemonDriftScanTick:
