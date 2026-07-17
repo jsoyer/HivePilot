@@ -251,6 +251,47 @@ Precedence (first wins): step `metadata.permission_mode` → runner
 gated), `bypassPermissions` (full autonomy), `plan`, `default`. Unset = no flag
 (safe for read-only planning agents).
 
+### Reasoning effort
+
+`effort: low|medium|high|xhigh|max` (the closed `EffortLevel` set) can be set at
+four levels, resolved by a single **unified precedence**:
+
+```
+policy.role_overrides.effort  >  stage/pipeline  >  role  >  runner-default
+```
+
+- **policy** — `policies.yaml` `role_overrides[<role>].effort` (top control; a
+  stage or step can never override it).
+- **stage / pipeline** — `PipelineStage.effort` (per-stage), falling back to
+  `PipelineConfig.effort` (pipeline-wide default).
+- **role** — `roles.yaml` `Role.effort`.
+- A per-step `TaskStep.effort` is a **fallback** applied only when nothing was
+  resolved above (it never overrides a stage- or policy-mandated effort).
+
+The resolved level is authoritative on `RunnerDefinition.effort` and reaches
+**two** runners:
+
+- **Claude** — translated to the `MAX_THINKING_TOKENS` env var on the `claude`
+  subprocess:
+
+  | Effort | `MAX_THINKING_TOKENS` |
+  |---|---|
+  | `low` | 4000 |
+  | `medium` | 12000 |
+  | `high` | 24000 |
+  | `xhigh` | 40000 |
+  | `max` | 63999 |
+
+- **Codex** — translated to the `-c model_reasoning_effort=<level>` CLI flag
+  (default `medium` when nothing is resolved and no `options["cli_flags"]`
+  escape hatch is set). `xhigh` is passed through literally.
+
+`xhigh` is a HivePilot superset level between `high` and `max`. Every other
+runner (gemini, opencode, cursor, ...) has no effort concept and ignores it.
+When no `effort` is declared anywhere (the default), Claude sets no
+`MAX_THINKING_TOKENS` and Codex emits its `medium` default — byte-identical to
+the pre-unification behaviour of each runner.
+
 ### Usage capture (tokens/cost/actual-model) — opt-in
 
 `HIVEPILOT_CLAUDE_CAPTURE_USAGE` (default `false`) enables per-step token/cost/

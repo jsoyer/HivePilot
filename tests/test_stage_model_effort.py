@@ -216,16 +216,17 @@ class TestResolveStageDispatchPrecedence:
         from hivepilot.roles import resolve_runner, resolve_stage_dispatch
 
         policy = Policy(role_overrides={"reviewer": {"model": "gpt-6"}})
-        expected_runner, expected_model = resolve_runner("reviewer", policy)
-        runner, model, _effort = resolve_stage_dispatch("reviewer", policy)
-        assert (runner, model) == (expected_runner, expected_model)
+        expected_runner, expected_model, expected_effort = resolve_runner("reviewer", policy)
+        runner, model, effort = resolve_stage_dispatch("reviewer", policy)
+        assert (runner, model, effort) == (expected_runner, expected_model, expected_effort)
 
     def test_resolve_runner_unaffected_by_this_sprint(self) -> None:
-        """`resolve_runner` itself (used by callers with no stage context,
-        e.g. the dual-model debate path) must be untouched."""
+        """`resolve_runner`'s runner/model resolution (used by callers with no
+        stage context, e.g. the dual-model debate path) is unchanged; it now
+        returns a 3-tuple `(runner, model, effort)` (unified effort system)."""
         from hivepilot.roles import resolve_runner
 
-        runner, model = resolve_runner("reviewer")
+        runner, model, _effort = resolve_runner("reviewer")
         assert runner == "codex"
         assert model == "gpt-5.5"
 
@@ -325,11 +326,16 @@ class TestAllowedRunnersFailClosedOnEmptyList:
 # ---------------------------------------------------------------------------
 
 
-def _payload(tmp_path: Path, step_metadata: dict | None = None) -> RunnerPayload:
-    """*step_metadata* lands on ``step.metadata`` — the channel
-    ``resolve_runner_effort``/``_build_cli_args`` (model) actually read a
-    per-step override from, NOT ``payload.metadata`` (that's the
-    extra_prompt/prior_context channel)."""
+def _payload(
+    tmp_path: Path,
+    step_metadata: dict | None = None,
+    step_effort: EffortLevel | None = None,
+) -> RunnerPayload:
+    """*step_effort* lands on the first-class ``TaskStep.effort`` field — the
+    per-step effort channel ``resolve_runner_effort`` reads (as a FALLBACK
+    beneath the authoritative ``RunnerDefinition.effort``). *step_metadata*
+    lands on ``step.metadata`` (the per-step *model* override channel, and the
+    extra_prompt/prior_context channel is ``payload.metadata``)."""
     prompt_file = tmp_path / "prompt.md"
     prompt_file.write_text("do the thing", encoding="utf-8")
     return RunnerPayload(
@@ -337,7 +343,11 @@ def _payload(tmp_path: Path, step_metadata: dict | None = None) -> RunnerPayload
         project=ProjectConfig(path=tmp_path),
         task_name="t",
         step=TaskStep(
-            name="s", runner="x", prompt_file=str(prompt_file), metadata=step_metadata or {}
+            name="s",
+            runner="x",
+            prompt_file=str(prompt_file),
+            metadata=step_metadata or {},
+            effort=step_effort,
         ),
         metadata={},
         secrets={},
@@ -372,17 +382,83 @@ class TestCodexEffortPropagation:
         idx = args.index("-c")
         assert args[idx + 1] == "model_reasoning_effort=high"
 
-    def test_step_metadata_effort_overrides_definition(self, tmp_path: Path) -> None:
+    def test_definition_effort_authoritative_over_step(self, tmp_path: Path) -> None:
+        """Unified precedence: the orchestrator-resolved
+        ``RunnerDefinition.effort`` (``policy > stage > role``) is authoritative
+        and WINS over a per-step ``TaskStep.effort`` — a step can never silently
+        override a stage/policy-mandated effort (same rule Claude enforces)."""
         from hivepilot.config import settings
 
         runner = CodexRunner(
             RunnerDefinition(kind="codex", command="codex", effort="low"), settings
         )
         with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
-            runner.run(_payload(tmp_path, step_metadata={"effort": "xhigh"}))
+            runner.run(_payload(tmp_path, step_effort="xhigh"))
         args = mock_run.call_args.args[0]
         idx = args.index("-c")
-        assert args[idx + 1] == "model_reasoning_effort=xhigh"
+        assert args[idx + 1] == "model_reasoning_effort=low"
+
+    def test_step_effort_applies_as_fallback_when_definition_none(self, tmp_path: Path) -> None:
+        """A per-step ``TaskStep.effort`` still drives Codex when nothing was
+        resolved upstream (``RunnerDefinition.effort is None``)."""
+        from hivepilot.config import settings
+
+        runner = CodexRunner(RunnerDefinition(kind="codex", command="codex"), settings)
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
+            runner.run(_payload(tmp_path, step_effort="high"))
+        args = mock_run.call_args.args[0]
+        idx = args.index("-c")
+        assert args[idx + 1] == "model_reasoning_effort=high"
+
+
+class TestStageEffortReachesBothRunners:
+    """Unified-system proof: a SINGLE stage-level effort, once resolved via
+    ``resolve_stage_dispatch``, drives BOTH the Claude runner (as a
+    ``MAX_THINKING_TOKENS`` value) AND the Codex runner (as a
+    ``-c model_reasoning_effort=<level>`` flag) — the two previously-separate
+    effort mechanisms now share one resolved value."""
+
+    def test_single_stage_effort_reaches_claude_and_codex(self, tmp_path: Path) -> None:
+        from hivepilot.config import settings
+        from hivepilot.roles import resolve_stage_dispatch
+
+        # `developer` role binds to claude; resolve a stage-level effort on it.
+        _runner, _model, resolved = resolve_stage_dispatch("developer", stage_effort="xhigh")
+        assert resolved == "xhigh"
+
+        # Claude runner: resolved effort -> MAX_THINKING_TOKENS (40000 for xhigh).
+        claude = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude", effort=resolved),
+            settings,
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=0)
+            claude.run(_effort_payload_claude(tmp_path))
+        assert m.call_args.kwargs["env"]["MAX_THINKING_TOKENS"] == "40000"
+
+        # Codex runner: SAME resolved effort -> -c model_reasoning_effort=xhigh.
+        codex = CodexRunner(
+            RunnerDefinition(kind="codex", command="codex", effort=resolved), settings
+        )
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
+            codex.run(_payload(tmp_path))
+        args = mock_run.call_args.args[0]
+        assert args[args.index("-c") + 1] == "model_reasoning_effort=xhigh"
+
+
+def _effort_payload_claude(tmp_path: Path) -> RunnerPayload:
+    from hivepilot.models import ProjectConfig, TaskStep
+
+    pf = tmp_path / "c.md"
+    pf.write_text("do it", encoding="utf-8")
+    return RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+        metadata={},
+        secrets={},
+    )
 
 
 class TestCodexCliFlagsEscapeHatchPrecedence:

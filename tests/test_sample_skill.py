@@ -50,7 +50,12 @@ class TestSampleSkillPluginRegisterShape:
         spec.loader.exec_module(module)
         return module
 
-    def test_register_returns_minimal_skillspec_shape(self) -> None:
+    def test_register_returns_minimal_skillspec_shape(self, monkeypatch) -> None:
+        # plugin-arch-overhaul Sprint 01 made this demo opt-IN
+        # (sample_skill_enabled defaults False) — enable it to see its skill.
+        from hivepilot.config import settings as _settings
+
+        monkeypatch.setattr(_settings, "sample_skill_enabled", True, raising=False)
         module = self._load_module()
         hooks = module.register()
 
@@ -102,8 +107,15 @@ def isolated_plugin_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
 
 
 class TestSampleSkillPluginRealDiscovery:
-    def test_enabled_by_default_registers_sample_skill(self, isolated_plugin_dir: Path) -> None:
+    def test_registers_sample_skill_when_flag_enabled(
+        self, isolated_plugin_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # plugin-arch-overhaul Sprint 01: opt-IN demo (sample_skill_enabled
+        # defaults False) — enable it, then discovery registers the skill.
+        from hivepilot import plugins as plugins_mod
         from hivepilot.plugins import PluginManager
+
+        monkeypatch.setattr(plugins_mod.settings, "sample_skill_enabled", True, raising=False)
 
         pm = PluginManager()
         skill = pm.get_skill("sample-skill")

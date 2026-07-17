@@ -15,11 +15,12 @@ local `@dataclass` on that load path trips a real CPython 3.14
 which is `None` for an unregistered module) -- see `plugins/rtk.py` for the
 full write-up. A dict literal sidesteps it entirely.
 
-Enable/disable is handled ENTIRELY by the central plugin gate
-(`settings.plugins_enabled` / `settings.plugins_disabled`, keyed off this
-file's stem `sample_skill`) -- unlike `plugins/rtk.py` / `plugins/sample.py`,
-this plugin declares no per-plugin settings flag of its own; `register()`
-always contributes its one skill when this file is loaded at all.
+Enable/disable: gated on `settings.sample_skill_enabled` (default False --
+opt-IN, dormant), same pattern as `plugins/rtk.py` / `plugins/sample.py`
+(plugin-arch-overhaul PRD, Sprint 01 -- uniform gating). `register()` early-
+returns `{}` when the flag is False; it also still respects the central
+plugin gate (`settings.plugins_enabled` / `settings.plugins_disabled`, keyed
+off this file's stem `sample_skill`) same as every other local-file plugin.
 """
 
 from __future__ import annotations
@@ -39,6 +40,10 @@ without skill support silently ignore this contribution.
 
 
 def register() -> dict[str, Any]:
+    from hivepilot.config import settings
+
+    if not settings.sample_skill_enabled:
+        return {}
     return {
         "skills": [
             {

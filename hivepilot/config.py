@@ -280,7 +280,19 @@ class Settings(BaseSettings):
     obsidian_enabled: bool = True
     onepassword_enabled: bool = True
     rtk_enabled: bool = True
-    sample_enabled: bool = True
+    sample_enabled: bool = False
+    # Demo skill plugin (plugins/sample_skill.py) — opt-IN, dormant by
+    # default. env: HIVEPILOT_SAMPLE_SKILL_ENABLED
+    sample_skill_enabled: bool = False
+    # Built-in agent runners are individually disable-able (plugin-arch-overhaul
+    # Sprint 01). Default True — turning one off removes it from RUNNER_MAP via
+    # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
+    # (shell/terraform/kubectl/…) stay unconditional and get no flag.
+    # env: HIVEPILOT_CLAUDE_ENABLED / _CODEX_ENABLED / _VIBE_ENABLED / _OPENROUTER_ENABLED
+    claude_enabled: bool = True
+    codex_enabled: bool = True
+    vibe_enabled: bool = True
+    openrouter_enabled: bool = True
     # Sprint 2 (runner-defaults-plugins-mode PRD): gemini/opencode/ollama
     # moved OUT of hivepilot.registry._BUILTIN_RUNNERS and into default-on,
     # PATH-gated plugins (plugins/gemini.py / plugins/opencode.py /
@@ -307,6 +319,42 @@ class Settings(BaseSettings):
     # opt-OUT + shutil.which gating pattern as rtk_enabled/pi_enabled/etc.
     # env: HIVEPILOT_HUGO_ENABLED
     hugo_enabled: bool = True
+    # Sprint 02 (plugin-arch-overhaul PRD) — obsidian "brain" recall sub-flags.
+    # `obsidian_recall_enabled` gates the NEW `before_step` (`recall`) /
+    # `after_step` (`store`) context-provider behavior independently of
+    # `obsidian_enabled` (which still gates the whole plugin, including the
+    # pre-existing notifier/journal hooks). Both default True (opt-out),
+    # matching the six-flag pattern above; recall additionally requires a
+    # configured+present `obsidian_vault` regardless of this flag.
+    # env: HIVEPILOT_OBSIDIAN_RECALL_ENABLED
+    obsidian_recall_enabled: bool = True
+    # Hard byte cap on the vault-note excerpt block `recall` injects into
+    # `RunnerPayload.metadata["extra_prompt"]` per step — keeps a large vault
+    # from ballooning the rendered prompt. Enforced strictly on the injected
+    # content only (pre-existing `extra_prompt` content, e.g. from mem0, is
+    # never truncated). env: HIVEPILOT_OBSIDIAN_RECALL_MAX_BYTES
+    obsidian_recall_max_bytes: int = 4000
+    # Sprint 03 (plugin-arch-overhaul PRD) — brand-new `kind: "tmux"`
+    # execution-wrapper runner (runs each step inside a dedicated tmux
+    # session for live attach/observe) added directly as a default-on,
+    # PATH-gated plugin (plugins/tmux.py) — same opt-OUT + shutil.which
+    # gating pattern as rtk_enabled/herdr_enabled/hugo_enabled.
+    # env: HIVEPILOT_TMUX_ENABLED
+    tmux_enabled: bool = True
+    # Sprint 04 (plugin-arch-overhaul) — bitwarden/vaultwarden secrets backends.
+    # Two first-party `secrets` provider plugins (plugins/bitwarden.py /
+    # plugins/vaultwarden.py) that shell out to the official Bitwarden `bw` CLI
+    # (an optional EXTERNAL tool, never a Python dependency). Same opt-OUT +
+    # fail-closed pattern as infisical/onepassword: resolve() raises naming ONLY
+    # the item + provider (never the secret value or the BW_SESSION token).
+    # `bitwarden` targets the Bitwarden cloud endpoint; `vaultwarden` targets a
+    # self-hosted Bitwarden-compatible server via `vaultwarden_server_url`
+    # (`bw config server <url>`). Session is read from the BW_SESSION env var.
+    # env: HIVEPILOT_BITWARDEN_ENABLED / _VAULTWARDEN_ENABLED /
+    #      _VAULTWARDEN_SERVER_URL
+    bitwarden_enabled: bool = True
+    vaultwarden_enabled: bool = True
+    vaultwarden_server_url: str | None = None
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:

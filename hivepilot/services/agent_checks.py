@@ -17,6 +17,28 @@ from dataclasses import dataclass
 # grep (`MANDATORY_AGENTS\s*=\s*\(?['"]claude['"]`) matches literally.
 MANDATORY_AGENTS = ("claude", "codex", "vibe")
 
+# Canonical set of "agent" runner kinds — the SINGLE source of truth shared by
+# hivepilot.registry (active_agent_runner_kinds / _BUILTIN_RUNNERS gating) and
+# hivepilot.orchestrator (fail-closed run_pipeline guard). Built-in agent kinds
+# + the optional, PATH-gated agent-plugin kinds (gemini/opencode/ollama/pi/
+# qwen-code/kimi-cli). Infra runners (shell/terraform/kubectl/…) are NOT agents
+# and are deliberately absent. Keep in sync with registry._OPTIONAL_AGENT_PLUGIN_KINDS
+# and _BUILTIN_RUNNERS' agent entries — do not re-list this literal anywhere else.
+AGENT_RUNNER_KINDS: frozenset[str] = frozenset(
+    {
+        "claude",
+        "codex",
+        "vibe",
+        "openrouter",
+        "gemini",
+        "opencode",
+        "ollama",
+        "pi",
+        "qwen-code",
+        "kimi-cli",
+    }
+)
+
 
 @dataclass(frozen=True)
 class MandatoryAgentReport:

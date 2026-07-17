@@ -150,18 +150,27 @@ company:
                               # default effort ("high")
 ```
 
-**Per-runner effort mapping.** `effort` is an internal HivePilot concept,
-not every runner understands it:
+**Per-runner effort mapping.** `effort` is an internal HivePilot concept —
+each runner maps it (or ignores it) on its own:
 
+- **Claude** (`ClaudeRunner`) injects the resolved level as the
+  `MAX_THINKING_TOKENS` environment variable on the `claude` subprocess
+  (`hivepilot.runners.claude_runner.EFFORT_TOKEN_MAP`): `low` → 4000,
+  `medium` → 12000, `high` → 24000, `xhigh` → 40000, `max` → 63999. When no
+  effort resolves anywhere in the chain, `MAX_THINKING_TOKENS` is left unset
+  (byte-identical to a pre-`effort` run). This is a real reasoning-effort
+  knob, **not** a no-op.
 - **Codex** (`CodexRunner`) maps it to the `-c model_reasoning_effort=<level>`
   CLI flag; when no effort resolves anywhere in the chain, it still defaults
   to `medium` (byte-identical to the pre-`effort`-field hardcoded flag).
-- **Claude** (`ClaudeRunner`) has no reasoning-effort CLI flag equivalent —
-  the resolved value is read but never turned into an argv entry (a
-  documented no-op; it never crashes).
-- **Every other runner** (prompt-cli-based plugin kinds, `shell`,
-  `container`, IaC runners, etc.) also treats `effort` as a safe no-op —
-  it is read (so a future flag can be wired in one place) but ignored.
+  `xhigh` is passed through literally.
+- **Every other runner** (`gemini`/`opencode`/`cursor`/`vibe`/`ollama` and the
+  other prompt-cli plugin kinds, `shell`, `container`, IaC runners, etc.) has
+  no reasoning-effort concept and treats `effort` as a safe no-op — the value
+  is read but never turned into an argument or env var.
+
+See [CONFIG.md](CONFIG.md#reasoning-effort) for the same mapping from the
+config angle and [RUNBOOK.md](RUNBOOK.md) for the ops-facing table.
 
 ## Telegram — remote command & control
 

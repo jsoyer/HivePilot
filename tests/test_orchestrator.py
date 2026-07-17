@@ -828,6 +828,93 @@ class TestStepProviderModelThreading:
             1, "s", "success", provider="codex", model="override-model"
         )
 
+    def test_role_with_no_effort_builds_runner_definition_with_effort_none(self) -> None:
+        """Regression guard: the built-in `developer` role declares no
+        `effort` -- the RunnerDefinition constructed for it at the role-based
+        step-execution site (`resolve_runner` -> `RunnerDefinition(effort=...)`)
+        must carry `effort=None`, never an invented value. This is the
+        byte-identical-by-default contract for every existing role binding."""
+        from hivepilot.models import GitActions, ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+
+        captured_defs = []
+
+        def capture_side_effect(runner_def, payload):
+            captured_defs.append(runner_def)
+            return "agent output"
+
+        orch.registry.capture_definition.side_effect = capture_side_effect
+        task = TaskConfig(
+            description="t",
+            role="developer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+            git=GitActions(),
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        assert len(captured_defs) == 1
+        assert captured_defs[0].effort is None
+
+    def test_role_with_effort_threads_it_into_runner_definition(self) -> None:
+        """A role with an explicit `effort` (e.g. via roles.yaml/policy) must
+        have that value carried onto the constructed RunnerDefinition at the
+        role-based step-execution site — the plumbing `ClaudeRunner
+        ._resolve_effort` later reads to set MAX_THINKING_TOKENS."""
+        from hivepilot.models import GitActions, ProjectConfig, TaskConfig, TaskStep
+        from hivepilot.roles import ROLES
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+
+        captured_defs = []
+
+        def capture_side_effect(runner_def, payload):
+            captured_defs.append(runner_def)
+            return "agent output"
+
+        orch.registry.capture_definition.side_effect = capture_side_effect
+        task = TaskConfig(
+            description="t",
+            role="developer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+            git=GitActions(),
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        original = ROLES["developer"]
+        effortful = original.model_copy(update={"effort": "high"})
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch.dict(ROLES, {"developer": effortful}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        assert len(captured_defs) == 1
+        assert captured_defs[0].effort == "high"
+
 
 # ---------------------------------------------------------------------------
 # Phase 24b.2a — orchestrator threads captured usage (tokens/cost/actual
