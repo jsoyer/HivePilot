@@ -199,10 +199,11 @@ def get_rules_for_role(role_name: str) -> list[str]:
     loaded in a deployment relying on the reduced generic-only defaults)
     returns the ``CROSS_CUTTING_RULES`` floor instead of raising
     ``KeyError``. This is fail-safe, not fail-open: every known role already
-    inherits this enforced policy minimum (privacy-by-design,
-    detection-fabric, EU-sovereign, no-raw-prompt-logging), so an unknown
-    role must inherit it too rather than fall through with zero policy
-    coverage. A fresh ``list(...)`` copy is returned so callers cannot
+    inherits this enforced policy minimum (English-only artifacts,
+    code-review-graph-before-Grep, detection-fabric, EU-sovereign-first,
+    privacy-by-design/no-raw-prompt-logging), so an unknown role must
+    inherit it too rather than fall through with zero policy coverage. A
+    fresh ``list(...)`` copy is returned so callers cannot
     mutate the module-level constant. Callers that want to assert a role is
     genuinely known should check ``hivepilot.roles.ROLES`` directly; this
     function's job is only to hand back a rule manifest for a role, never to

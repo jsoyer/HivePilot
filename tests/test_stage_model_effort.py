@@ -183,6 +183,29 @@ class TestResolveStageDispatchPrecedence:
         runner, model, effort = resolve_stage_dispatch("developer", policy, stage_effort="max")
         assert effort == "low"
 
+    def test_policy_invalid_effort_override_fails_closed(self) -> None:
+        """A policy `role_overrides[role].effort` is raw, operator-supplied
+        config — unlike `stage.effort`/`role.effort` (pydantic-validated
+        `EffortLevel` fields), it must be validated at the point it is read
+        so a typo/misconfiguration (e.g. "extreme") fails loudly via
+        `hivepilot.models.validate_effort` instead of silently reaching a
+        runner as an unrecognized value."""
+        from hivepilot.roles import resolve_stage_dispatch
+
+        policy = Policy(role_overrides={"developer": {"effort": "extreme"}})
+        with pytest.raises(ValueError, match="effort must be one of"):
+            resolve_stage_dispatch("developer", policy)
+
+    def test_policy_valid_effort_override_passes_through(self) -> None:
+        """A legal `EffortLevel` string in a policy override still resolves
+        normally through the validation wrapper."""
+        from hivepilot.roles import resolve_stage_dispatch
+
+        policy = Policy(role_overrides={"developer": {"effort": "high"}})
+        runner, model, effort = resolve_stage_dispatch("developer", policy)
+        assert runner == "claude"
+        assert effort == "high"
+
     def test_policy_runner_override_still_applies_with_stage_model_set(self) -> None:
         from hivepilot.roles import resolve_stage_dispatch
 
