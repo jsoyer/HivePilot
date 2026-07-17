@@ -53,7 +53,7 @@ class TestActiveAgentRunnerKindsForGuard:
         from hivepilot.registry import RUNNER_MAP
 
         RUNNER_MAP.clear()
-        RUNNER_MAP["claude"] = object()
+        RUNNER_MAP["claude"] = object()  # type: ignore[assignment]
         assert active_agent_runner_kinds() == {"claude"}
 
 

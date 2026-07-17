@@ -99,8 +99,8 @@ class TestActiveAgentRunnerKindsHelper:
         from hivepilot.registry import RUNNER_MAP
 
         RUNNER_MAP.clear()
-        RUNNER_MAP["claude"] = object()  # agent kind
-        RUNNER_MAP["shell"] = object()  # infra kind, must be excluded
+        RUNNER_MAP["claude"] = object()  # type: ignore[assignment]  # agent kind
+        RUNNER_MAP["shell"] = object()  # type: ignore[assignment]  # infra kind, must be excluded
         assert active_agent_runner_kinds() == {"claude"}
         # restored to baseline by tests/conftest.py's autouse
         # `_isolate_runner_and_notifier_maps` fixture after this test.
