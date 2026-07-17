@@ -28,12 +28,16 @@ register = sample.register
 
 
 class TestSampleRegister:
-    def test_register_returns_before_and_after_step_hooks(self) -> None:
+    def test_register_returns_before_and_after_step_hooks(self, monkeypatch) -> None:
+        # sample_enabled now defaults False (opt-in demo, plugin-arch-overhaul
+        # Sprint 01) — enable it to exercise the contributing path.
+        monkeypatch.setattr(settings, "sample_enabled", True, raising=False)
         hooks = register()
         assert callable(hooks["before_step"])
         assert callable(hooks["after_step"])
 
-    def test_register_declares_a_sample_panel(self) -> None:
+    def test_register_declares_a_sample_panel(self, monkeypatch) -> None:
+        monkeypatch.setattr(settings, "sample_enabled", True, raising=False)
         hooks = register()
         panels = hooks["panels"]
         assert len(panels) == 1
@@ -42,9 +46,13 @@ class TestSampleRegister:
         assert panel["title"] == "Sample Stats"
         assert callable(panel["fetch"])
 
-    def test_register_returns_contributions_when_enabled_by_default(self) -> None:
-        # sample_enabled defaults True (opt-out) — unchanged behavior.
-        assert settings.sample_enabled is True
+    def test_register_is_dormant_by_default_opt_in(self) -> None:
+        # plugin-arch-overhaul Sprint 01 flipped this demo to opt-IN.
+        assert settings.sample_enabled is False
+        assert register() == {}
+
+    def test_register_returns_contributions_when_enabled(self, monkeypatch) -> None:
+        monkeypatch.setattr(settings, "sample_enabled", True, raising=False)
         hooks = register()
         assert callable(hooks["before_step"])
         assert callable(hooks["after_step"])

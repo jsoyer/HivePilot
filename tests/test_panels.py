@@ -570,6 +570,10 @@ class TestSamplePanelIntegration:
         consume it."""
         from hivepilot import plugins as plugins_mod
 
+        # plugins/sample.py is now opt-IN (plugin-arch-overhaul Sprint 01:
+        # sample_enabled defaults False) — enable it to exercise the panel path.
+        monkeypatch.setattr(plugins_mod.settings, "sample_enabled", True, raising=False)
+
         pm = plugins_mod.PluginManager()
 
         panel = pm.get_panel("sample_stats")
