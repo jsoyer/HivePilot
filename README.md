@@ -20,6 +20,12 @@ a CEO dual-model debate, full interaction visibility, and remote control.
 The YAML reference below still applies (projects/tasks/pipelines/policies); V4 adds
 `role:` on tasks and per-project `role_overrides`/`allowed_runners` in policies.
 
+Roles, per-stage `model`, and per-stage reasoning `effort` are entirely config/pipeline-owned:
+the engine ships one generic `developer -> claude` role by default and the full company roster
+above is an opt-in template (`examples/roles.yaml`) — see
+[Usage](docs/v4/USAGE.md#model--reasoning-effort-model--effort) and
+[Plugins](docs/v4/PLUGINS.md#agent-runner-taxonomy-built-in-vs-plugin) for details.
+
 ---
 
 ## ✨ Highlights
