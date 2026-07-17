@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from hivepilot.config import Settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+from hivepilot.plugins import SkillSpec
 
 
 @dataclass(slots=True)
@@ -25,6 +26,67 @@ class BaseRunner(Protocol):
     def __init__(self, definition: RunnerDefinition, settings: Settings) -> None: ...
 
     def run(self, payload: RunnerPayload) -> None: ...
+
+    # ------------------------------------------------------------------
+    # apply_skill — OPTIONAL, structural (Sprint 2, skill-plugin-type PRD)
+    # ------------------------------------------------------------------
+    # NOT part of this Protocol's required surface (deliberately absent from
+    # the signatures above) — exactly like `capture()` (see `registry.py`,
+    # `getattr(runner, "capture", None)`) and `is_destructive()` (see
+    # `orchestrator.step_requires_approval`, `getattr(runner, "is_destructive",
+    # None)`). A runner opts in by defining:
+    #
+    #   def apply_skill(self, payload: RunnerPayload, skills: list[SkillSpec]) -> RunnerPayload: ...
+    #
+    # Contract:
+    #   * Runner-agnostic: each runner decides *how* a skill is applied to its
+    #     own invocation (file materialisation, prompt injection, etc.) — this
+    #     Protocol makes no assumption about the mechanism.
+    #   * Default-absent == no-op: a runner that does NOT implement
+    #     `apply_skill` is never treated as skill-aware; skills are simply
+    #     ignored for that runner. Callers MUST use getattr-based discovery
+    #     (see `apply_skill_if_supported` below) — never assume the method
+    #     exists.
+    #   * `applies_to` mismatch: when a skill's optional `applies_to` list is
+    #     present and does NOT include this runner's `definition.kind`, the
+    #     runner MUST skip that skill (log at info/debug) rather than error —
+    #     this is a routing filter, not a validation failure.
+    #   * Immutability: MUST return a (new) `RunnerPayload` — the caller's
+    #     `payload` must never be mutated in place (mirrors the
+    #     immutable-update pattern used throughout the codebase).
+    #   * Security: any skill content that may embed `${secret:NAME}`
+    #     references MUST be routed through the EXISTING masking /
+    #     `${secret:}` resolution choke point (`hivepilot.services.secret_refs
+    #     .resolve_secret_refs`, the same one `Orchestrator._resolve_secrets`
+    #     uses) before it reaches any sink (materialised file, appended
+    #     prompt, log line). See `ClaudeRunner.apply_skill` for the reference
+    #     implementation.
+    #
+    # `SkillSpec` (`hivepilot.plugins`) is imported above purely for this
+    # documented signature / for concrete runner implementations to type
+    # against — `plugins.py` does not import back from this module, so there
+    # is no import cycle.
+
+
+def apply_skill_if_supported(
+    runner: object, payload: RunnerPayload, skills: list[SkillSpec]
+) -> RunnerPayload:
+    """Structural dispatch helper for the optional `apply_skill` contract
+    (see the comment block on `BaseRunner` above).
+
+    Returns *payload* unchanged when *runner* does not implement
+    `apply_skill` (the documented no-op default for non-participating
+    runners). Otherwise delegates to `runner.apply_skill(payload, skills)`
+    and returns its result.
+
+    This is the single reusable choke point future callers (e.g. the
+    orchestrator, Sprint 4) should use rather than each re-implementing the
+    same `getattr(..., None)` check.
+    """
+    apply_skill = getattr(runner, "apply_skill", None)
+    if apply_skill is None:
+        return payload
+    return apply_skill(payload, skills)
 
 
 @dataclass(frozen=True, slots=True)

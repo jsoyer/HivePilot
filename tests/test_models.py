@@ -168,3 +168,30 @@ def test_task_step_require_approval_defaults_false() -> None:
 def test_task_step_require_approval_accepts_true() -> None:
     step = TaskStep(name="s", runner="shell", require_approval=True)
     assert step.require_approval is True
+
+
+# ---------------------------------------------------------------------------
+# skill-plugin-type PRD, Sprint 3 — TaskStep.skills / PipelineStage.skills
+# ---------------------------------------------------------------------------
+
+
+def test_task_step_skills_defaults_to_none() -> None:
+    """Absence of `skills` must be byte-identical to pre-Sprint-3 behavior:
+    default is None, not an empty list."""
+    step = TaskStep(name="s", runner="claude")
+    assert step.skills is None
+
+
+def test_task_step_skills_preserves_order_and_dedups() -> None:
+    step = TaskStep(name="s", runner="claude", skills=["b", "a", "b", "c", "a"])
+    assert step.skills == ["b", "a", "c"]
+
+
+def test_pipeline_stage_skills_defaults_to_none() -> None:
+    stage = PipelineStage(name="x", task="t")
+    assert stage.skills is None
+
+
+def test_pipeline_stage_skills_preserves_order_and_dedups() -> None:
+    stage = PipelineStage(name="x", task="t", skills=["z", "y", "z"])
+    assert stage.skills == ["z", "y"]

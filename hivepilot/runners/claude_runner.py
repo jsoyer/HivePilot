@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition
+from hivepilot.plugins import SkillSpec
 from hivepilot.runners.base import BaseRunner, RunnerPayload, UsageInfo, set_last_usage
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.utils.env import gather_overrides, merge_environments
@@ -19,6 +23,40 @@ from hivepilot.utils.sandbox import DEFAULT_ALLOWLIST, scrub_env, wrap_bwrap
 logger = get_logger(__name__)
 
 _ELEVATED_PERMISSION_MODES = frozenset({"bypassPermissions", "acceptEdits"})
+
+# Metadata keys `apply_skill` stashes on the (copied) payload for
+# `_build_invocation` to consume, and `run()`/`capture()` to clean up after
+# the subprocess call completes (success or exception). Private to this
+# module — not part of the public RunnerPayload/SkillSpec contract.
+_SKILL_SCRATCH_DIR_KEY = "skill_scratch_dir"
+_SKILL_SYSTEM_PROMPT_KEY = "skill_system_prompt"
+
+
+def _resolve_skill_text(text: str, catalog: dict[str, dict[str, Any]]) -> str:
+    """Resolve ``${secret:NAME}`` references in *text* via the EXISTING
+    masking/resolution choke point (``hivepilot.services.secret_refs
+    .resolve_secret_refs`` — the same one ``Orchestrator._resolve_secrets``
+    uses for ``project.env``). Every resolved value is registered for
+    redaction (``config_provenance.register_secret_value``) as a side effect
+    of that call, so it is masked from every later log/sink automatically.
+
+    Fail-closed (``fail_mode="closed"``): an unresolvable reference raises
+    rather than silently leaving the raw ``${secret:...}`` token in a
+    materialised skill file or an appended system prompt.
+
+    Text with no reference is returned unchanged (nothing to resolve/mask).
+
+    Imported lazily (module-level, not top-of-file) to avoid a circular
+    import: `hivepilot.services.secret_refs` imports `secrets_service`,
+    which `hivepilot.registry` imports `claude_runner` FOR — a top-level
+    import here would deadlock that chain at process start (mirrors the
+    existing lazy-import pattern used by `_build_knowledge_context` below
+    for `knowledge_service`).
+    """
+    from hivepilot.services.secret_refs import resolve_secret_refs
+
+    resolved = resolve_secret_refs({"_": text}, catalog=catalog, fail_mode="closed")
+    return resolved.get("_", text)
 
 
 def _insert_output_format_json(argv: list[str]) -> list[str]:
@@ -165,6 +203,24 @@ class ClaudeRunner(BaseRunner):
             args.extend(["--model", model])
         if self.definition.agent:
             args.extend(["--agent", self.definition.agent])
+        # Skill materialisation (Sprint 2, skill-plugin-type PRD): apply_skill()
+        # stashes the ephemeral scratch dir + concatenated system prompt on
+        # payload.metadata; absent when no skills were applied (no-op).
+        # `--add-dir` grants Claude tool access to the scratch (the skill's
+        # `.claude/skills/<name>/...` files live there — the REAL repo's own
+        # `.claude/skills/` is never written to, see `apply_skill`).
+        skill_scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        if skill_scratch_dir:
+            args.extend(["--add-dir", str(skill_scratch_dir)])
+        # `--append-system-prompt` (verified via `claude --help`) appends to —
+        # rather than replaces — the default system prompt, and is documented
+        # as the explicit way to inject context when a session is non-interactive.
+        # Preferred over prepending skill content into the positional prompt so
+        # it can never be confused with the user/task's own instructions to the
+        # agent (see Agent Notes for the full open-question-(b) rationale).
+        skill_system_prompt = payload.metadata.get(_SKILL_SYSTEM_PROMPT_KEY)
+        if skill_system_prompt:
+            args.extend(["--append-system-prompt", str(skill_system_prompt)])
         # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
         # agent actually write code in headless --print mode. Without it claude
         # blocks on an interactive permission prompt it cannot show and the run
@@ -187,6 +243,87 @@ class ClaudeRunner(BaseRunner):
             or self.definition.options.get("permission_mode")
             or self.settings.claude_permission_mode
         )
+
+    def apply_skill(self, payload: RunnerPayload, skills: list[SkillSpec]) -> RunnerPayload:
+        """Materialise the *skills* applicable to this runner into an
+        EPHEMERAL scratch directory and stash a concatenated system prompt —
+        the Claude-runner implementation of the optional/structural
+        `apply_skill` contract documented on `hivepilot.runners.base.BaseRunner`.
+
+        * `applies_to` mismatch (present and doesn't include this runner's
+          `definition.kind`) skips that skill — non-fatal, logged at info.
+        * Each applicable skill's `files` are written to
+          `<scratch>/.claude/skills/<name>/<relpath>` where `<scratch>` is a
+          FRESH `tempfile.mkdtemp()` directory created by this call — never
+          the project's own working directory, so a pre-existing REAL
+          `.claude/skills/<name>/` in the target repo is never touched.
+        * `${secret:NAME}` references in `files` values / `system_prompt` are
+          resolved + masked via `_resolve_skill_text` (the existing
+          `secret_refs.resolve_secret_refs` choke point) before they are
+          written to disk or stashed on the payload — never logged raw.
+        * Returns a NEW `RunnerPayload` (copied `metadata`); *payload* itself
+          is never mutated.
+        * On success, the scratch directory is intentionally NOT cleaned up
+          here — it must survive until `_build_invocation` consumes it inside
+          `run()`/`capture()`, which remove it in a `finally` block after the
+          subprocess call completes (success or exception) so it never
+          outlives the step. If materialisation itself fails partway through
+          (e.g. an unresolvable `${secret:NAME}` in a later skill, or an
+          unsafe `files` path), the scratch dir is removed here before the
+          exception propagates — it is never attached to payload metadata in
+          that case, so the `run()`/`capture()` `finally` cleanup would never
+          otherwise see it.
+        """
+        kind = self.definition.kind
+        applicable: list[SkillSpec] = []
+        for skill in skills:
+            applies_to = skill.get("applies_to")
+            if applies_to and kind not in applies_to:
+                logger.info(
+                    "claude_runner.apply_skill.skipped",
+                    skill=skill.get("name"),
+                    reason="applies_to_mismatch",
+                    runner_kind=kind,
+                )
+                continue
+            applicable.append(skill)
+
+        metadata = dict(payload.metadata)
+        if not applicable:
+            return replace(payload, metadata=metadata)
+
+        catalog = payload.project.secrets
+        scratch_dir = Path(tempfile.mkdtemp(prefix="hivepilot-skill-"))
+        prompts: list[str] = []
+        try:
+            scratch_dir_resolved = scratch_dir.resolve()
+            for skill in applicable:
+                skill_dir = scratch_dir / ".claude" / "skills" / skill["name"]
+                for rel_path, content in skill["files"].items():
+                    if Path(rel_path).is_absolute():
+                        raise ValueError(f"unsafe skill file path: {rel_path!r}")
+                    target = (skill_dir / rel_path).resolve()
+                    if not target.is_relative_to(scratch_dir_resolved):
+                        raise ValueError(f"unsafe skill file path: {rel_path!r}")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(_resolve_skill_text(content, catalog), encoding="utf-8")
+                system_prompt = skill.get("system_prompt")
+                if system_prompt:
+                    prompts.append(_resolve_skill_text(system_prompt, catalog))
+        except Exception:
+            # A failure mid-materialisation (unresolvable secret ref, unsafe
+            # path, disk error, ...) must not leave a scratch dir — possibly
+            # containing already-resolved secret content from an earlier
+            # skill in this loop — orphaned on disk after the exception
+            # propagates past the point where it would normally be attached
+            # to payload metadata for run()/capture()'s finally-block cleanup.
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+            raise
+
+        metadata[_SKILL_SCRATCH_DIR_KEY] = str(scratch_dir)
+        if prompts:
+            metadata[_SKILL_SYSTEM_PROMPT_KEY] = "\n\n".join(prompts)
+        return replace(payload, metadata=metadata)
 
     def run(self, payload: RunnerPayload) -> None:
         args, env = self._build_invocation(payload)
@@ -215,7 +352,16 @@ class ClaudeRunner(BaseRunner):
             step=payload.step.name,
             host=self.definition.host,
         )
-        subprocess.run(argv, cwd=cwd, env=run_env, check=True, text=True, stdin=subprocess.DEVNULL)
+        scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        try:
+            subprocess.run(
+                argv, cwd=cwd, env=run_env, check=True, text=True, stdin=subprocess.DEVNULL
+            )
+        finally:
+            # Ephemeral skill scratch (see apply_skill) must not outlive the
+            # step — removed here on BOTH success and exception.
+            if scratch_dir:
+                shutil.rmtree(scratch_dir, ignore_errors=True)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
     def capture(self, payload: RunnerPayload) -> str:
@@ -247,11 +393,55 @@ class ClaudeRunner(BaseRunner):
         )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         capture_usage = bool(getattr(self.settings, "claude_capture_usage", False))
+        scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
 
-        if capture_usage:
-            json_argv = _insert_output_format_json(argv)
-            json_result = subprocess.run(
-                json_argv,
+        try:
+            if capture_usage:
+                json_argv = _insert_output_format_json(argv)
+                json_result = subprocess.run(
+                    json_argv,
+                    cwd=cwd,
+                    env=run_env,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    stdin=subprocess.DEVNULL,
+                )
+                if json_result.returncode != 0:
+                    # Do NOT retry without the flag: a non-zero exit here can
+                    # happen AFTER the agent already did real work (mid-run
+                    # crash, OOM/SIGKILL, network drop post-push, rate-limit
+                    # after partial work) — for the developer role
+                    # (bypassPermissions) that means files were edited/committed/
+                    # pushed already. Re-invoking the same prompt would DUPLICATE
+                    # that work. Instead raise exactly what the flag-off path
+                    # raises below, so this is "no worse than flag off" (which
+                    # never retries either). If a claude build genuinely doesn't
+                    # support --output-format json, enabling this flag surfaces
+                    # as a run failure and the operator turns the flag back off —
+                    # we never silently double-run the agent to route around it.
+                    err = (json_result.stderr or json_result.stdout or "").strip()[-2000:]
+                    raise RuntimeError(f"claude exited {json_result.returncode}: {err}")
+                parsed = _parse_usage_envelope(json_result.stdout)
+                if parsed is not None:
+                    text, usage = parsed
+                    set_last_usage(usage)
+                    return text
+                # Valid exit, but the JSON was unparseable or lacked the
+                # `result` field — no need to re-invoke (the agent already
+                # ran to completion once); treat this attempt's own stdout
+                # as raw text, exactly like flag-off behaviour would have
+                # produced, and record null usage.
+                logger.warning(
+                    "claude_runner.usage_capture.malformed_envelope_fallback",
+                    project=payload.project_name,
+                    step=payload.step.name,
+                )
+                return json_result.stdout
+
+            result = subprocess.run(
+                argv,
                 cwd=cwd,
                 env=run_env,
                 check=False,
@@ -260,52 +450,15 @@ class ClaudeRunner(BaseRunner):
                 timeout=timeout,
                 stdin=subprocess.DEVNULL,
             )
-            if json_result.returncode != 0:
-                # Do NOT retry without the flag: a non-zero exit here can
-                # happen AFTER the agent already did real work (mid-run
-                # crash, OOM/SIGKILL, network drop post-push, rate-limit
-                # after partial work) — for the developer role
-                # (bypassPermissions) that means files were edited/committed/
-                # pushed already. Re-invoking the same prompt would DUPLICATE
-                # that work. Instead raise exactly what the flag-off path
-                # raises below, so this is "no worse than flag off" (which
-                # never retries either). If a claude build genuinely doesn't
-                # support --output-format json, enabling this flag surfaces
-                # as a run failure and the operator turns the flag back off —
-                # we never silently double-run the agent to route around it.
-                err = (json_result.stderr or json_result.stdout or "").strip()[-2000:]
-                raise RuntimeError(f"claude exited {json_result.returncode}: {err}")
-            parsed = _parse_usage_envelope(json_result.stdout)
-            if parsed is not None:
-                text, usage = parsed
-                set_last_usage(usage)
-                return text
-            # Valid exit, but the JSON was unparseable or lacked the
-            # `result` field — no need to re-invoke (the agent already
-            # ran to completion once); treat this attempt's own stdout
-            # as raw text, exactly like flag-off behaviour would have
-            # produced, and record null usage.
-            logger.warning(
-                "claude_runner.usage_capture.malformed_envelope_fallback",
-                project=payload.project_name,
-                step=payload.step.name,
-            )
-            return json_result.stdout
-
-        result = subprocess.run(
-            argv,
-            cwd=cwd,
-            env=run_env,
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode != 0:
-            err = (result.stderr or result.stdout or "").strip()[-2000:]
-            raise RuntimeError(f"claude exited {result.returncode}: {err}")
-        return result.stdout
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout or "").strip()[-2000:]
+                raise RuntimeError(f"claude exited {result.returncode}: {err}")
+            return result.stdout
+        finally:
+            # Ephemeral skill scratch (see apply_skill) must not outlive the
+            # step — removed here on BOTH success and exception.
+            if scratch_dir:
+                shutil.rmtree(scratch_dir, ignore_errors=True)
 
     def _build_prompt(
         self, payload: RunnerPayload, instructions: str, knowledge_context: str | None
