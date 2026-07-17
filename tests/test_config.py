@@ -283,3 +283,22 @@ class TestGeminiOpencodeOllamaEnabledFlags:
         monkeypatch.setenv("HIVEPILOT_OLLAMA_ENABLED", "false")
         s = Settings()
         assert s.ollama_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 25 — hugo runner plugin enable flag. Mirrors rtk_enabled's exact
+# default-True, opt-OUT pattern: a brand-new, PATH-gated `kind: "hugo"`
+# runner shipped directly as plugins/hugo.py.
+# ---------------------------------------------------------------------------
+
+
+class TestHugoEnabledFlag:
+    def test_default_is_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_HUGO_ENABLED", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.hugo_enabled is True
+
+    def test_env_override_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_HUGO_ENABLED", "false")
+        s = Settings()
+        assert s.hugo_enabled is False
