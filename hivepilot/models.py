@@ -24,6 +24,27 @@ def _dedup_ordered(value: list[str] | None) -> list[str] | None:
 
 RunnerKind = str
 
+# Reasoning-effort levels accepted by `Role.effort` (hivepilot/roles.py) and
+# `TaskStep.effort` below. Shared here (rather than duplicated) so both
+# pydantic models validate against the exact same set. The Claude-runner
+# translation of each level to a `MAX_THINKING_TOKENS` value lives in
+# `hivepilot.runners.claude_runner` (the only runner that currently reads
+# `effort` at all) -- this tuple only defines which strings are legal, it
+# carries no token values itself.
+EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "max")
+
+
+def validate_effort(value: str | None) -> str | None:
+    """Shared field-validator body for the optional `effort` field on
+    `Role` (hivepilot.roles), `TaskStep`, and `RunnerDefinition` below.
+    `None` means "no effort declared" (byte-identical to pre-effort
+    behaviour) and is always allowed; any non-`None` value must be one of
+    `EFFORT_LEVELS`."""
+    if value is not None and value not in EFFORT_LEVELS:
+        raise ValueError(f"effort must be one of {EFFORT_LEVELS} or None, got {value!r}")
+    return value
+
+
 # Built-in kinds, for docs/help/typing only — NOT enforced at runtime; see RunnerRegistry.
 #
 # NOTE: this tuple must stay a subset of the *actually registered* kinds in
@@ -72,12 +93,23 @@ class RunnerDefinition(BaseModel):
     kind: RunnerKind
     command: str | None = None
     model: str | None = None
+    # Reasoning-effort level (Claude runner only -- see `EFFORT_LEVELS` /
+    # `hivepilot.runners.claude_runner.EFFORT_TOKEN_MAP`). None (default)
+    # means no effort declared -- byte-identical to pre-effort behaviour.
+    # Populated from the resolved role's `Role.effort` by `resolve_runner`
+    # (hivepilot/roles.py) at each orchestrator call site.
+    effort: str | None = None
     agent: str | None = None
     append_prompt: str | None = None
     timeout_seconds: int | None = None
     host: str | None = None  # SSH host/alias to run this agent on (None = local)
     env: dict[str, str] = Field(default_factory=dict)
     options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("effort")
+    @classmethod
+    def _validate_effort(cls, v: str | None) -> str | None:
+        return validate_effort(v)
 
 
 class TaskStep(BaseModel):
@@ -105,11 +137,22 @@ class TaskStep(BaseModel):
     # and gated by each skill's optional `min_role` -- see
     # `hivepilot/services/config_validation.py`.
     skills: list[str] | None = None
+    # Reasoning-effort level (Claude runner only -- see `EFFORT_LEVELS` /
+    # `hivepilot.runners.claude_runner.EFFORT_TOKEN_MAP`). A step-level value
+    # wins over the resolved role's `Role.effort` (see
+    # `ClaudeRunner._resolve_effort`). None (default) means no override at
+    # this step -- byte-identical to pre-effort behaviour.
+    effort: str | None = None
 
     @field_validator("skills")
     @classmethod
     def _dedup_skills(cls, v: list[str] | None) -> list[str] | None:
         return _dedup_ordered(v)
+
+    @field_validator("effort")
+    @classmethod
+    def _validate_effort(cls, v: str | None) -> str | None:
+        return validate_effort(v)
 
     @model_validator(mode="after")
     def validate_fields(self) -> TaskStep:

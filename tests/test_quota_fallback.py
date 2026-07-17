@@ -73,7 +73,7 @@ def test_developer_quota_error_falls_back_to_codex():
 
     with (
         patch("hivepilot.roles.get_role") as mock_get_role,
-        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
         patch("hivepilot.roles.resolve_host", return_value=None),
         patch("hivepilot.services.state_service.record_step"),
     ):
@@ -106,7 +106,7 @@ def test_non_quota_error_does_not_fallback():
 
     with (
         patch("hivepilot.roles.get_role") as mock_get_role,
-        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
         patch("hivepilot.roles.resolve_host", return_value=None),
         patch("hivepilot.services.state_service.record_step"),
     ):
@@ -156,7 +156,7 @@ def test_quota_deferred_step_with_allow_failure_propagates_not_swallowed(monkeyp
 
     with (
         patch("hivepilot.roles.get_role") as mock_get_role,
-        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
         patch("hivepilot.roles.resolve_host", return_value=None),
         patch("hivepilot.services.state_service.record_step") as mock_record_step,
     ):
@@ -194,7 +194,7 @@ def test_non_developer_role_does_not_fallback():
 
     with (
         patch("hivepilot.roles.get_role") as mock_get_role,
-        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
         patch("hivepilot.roles.resolve_host", return_value=None),
         patch("hivepilot.services.state_service.record_step"),
     ):

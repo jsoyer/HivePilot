@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pydantic
 import pytest
 
 from hivepilot.models import (
@@ -195,3 +196,40 @@ def test_pipeline_stage_skills_defaults_to_none() -> None:
 def test_pipeline_stage_skills_preserves_order_and_dedups() -> None:
     stage = PipelineStage(name="x", task="t", skills=["z", "y", "z"])
     assert stage.skills == ["z", "y"]
+
+
+# ---------------------------------------------------------------------------
+# Reasoning-effort knob — RunnerDefinition.effort / TaskStep.effort
+# (Claude-runner MAX_THINKING_TOKENS translation lives in
+# hivepilot.runners.claude_runner; this module only validates the level string)
+# ---------------------------------------------------------------------------
+
+
+def test_runner_definition_effort_accepts_valid_level() -> None:
+    definition = RunnerDefinition(kind="claude", effort="high")
+    assert definition.effort == "high"
+
+
+def test_runner_definition_effort_rejects_invalid_level() -> None:
+    with pytest.raises(pydantic.ValidationError):
+        RunnerDefinition(kind="claude", effort="bogus")
+
+
+def test_runner_definition_effort_defaults_to_none() -> None:
+    definition = RunnerDefinition(kind="claude")
+    assert definition.effort is None
+
+
+def test_task_step_effort_accepts_valid_level() -> None:
+    step = TaskStep(name="x", runner="claude", effort="max")
+    assert step.effort == "max"
+
+
+def test_task_step_effort_rejects_invalid_level() -> None:
+    with pytest.raises(pydantic.ValidationError):
+        TaskStep(name="x", runner="claude", effort="bogus")
+
+
+def test_task_step_effort_defaults_to_none() -> None:
+    step = TaskStep(name="x", runner="claude")
+    assert step.effort is None

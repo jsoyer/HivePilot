@@ -399,3 +399,174 @@ def test_build_prompt_governance_repo_empty_when_not_configured(
     out = _runner()._build_prompt(payload, "See {GOVERNANCE_REPO}/AGENT-GOVERNANCE.md", None)
     assert "{GOVERNANCE_REPO}" not in out
     assert "/AGENT-GOVERNANCE.md" in out
+
+
+# ---------------------------------------------------------------------------
+# Reasoning-effort knob (MAX_THINKING_TOKENS) — ClaudeRunner._resolve_effort /
+# _effort_env_overlay, and both env-injection points (_build_invocation's own
+# env AND the bwrap-sandbox env_overlay in run()/capture()).
+# ---------------------------------------------------------------------------
+
+
+def _effort_payload(tmp_path: Path, step_effort: str | None = None) -> RunnerPayload:
+    pf = tmp_path / "p.md"
+    pf.write_text("do it", encoding="utf-8")
+    return RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude", prompt_file=str(pf), effort=step_effort),
+        metadata={},
+        secrets={},
+    )
+
+
+def _effort_runner(definition_effort: str | None = None) -> ClaudeRunner:
+    return ClaudeRunner(
+        RunnerDefinition(name="claude", kind="claude", command="claude", effort=definition_effort),
+        settings,
+    )
+
+
+class TestReasoningEffortRunPath:
+    """`run()` path: MAX_THINKING_TOKENS threading through `_build_invocation`'s
+    env (both plain and — separately — the bwrap-sandbox env_overlay)."""
+
+    def test_role_effort_high_sets_max_thinking_tokens(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path)
+        runner = _effort_runner(definition_effort="high")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=0)
+            runner.run(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "24000"
+
+    def test_role_effort_max_sets_max_thinking_tokens(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path)
+        runner = _effort_runner(definition_effort="max")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=0)
+            runner.run(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "63999"
+
+    def test_no_effort_anywhere_leaves_max_thinking_tokens_absent(self, tmp_path: Path) -> None:
+        """THE critical regression guard: no effort declared on the role
+        (RunnerDefinition.effort=None) nor the step (TaskStep.effort=None)
+        must leave MAX_THINKING_TOKENS entirely absent from the subprocess
+        env -- byte-identical to every pre-effort config."""
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path)
+        runner = _effort_runner(definition_effort=None)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=0)
+            runner.run(payload)
+        env = m.call_args.kwargs["env"]
+        assert "MAX_THINKING_TOKENS" not in env
+
+    def test_step_effort_overrides_definition_effort(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path, step_effort="max")
+        runner = _effort_runner(definition_effort="low")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=0)
+            runner.run(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "63999"
+
+
+class TestReasoningEffortCapturePath:
+    """`capture()` path: same MAX_THINKING_TOKENS threading, independent
+    subprocess-invocation code path from `run()`."""
+
+    def test_role_effort_high_sets_max_thinking_tokens(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path)
+        runner = _effort_runner(definition_effort="high")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="OUT", returncode=0)
+            runner.capture(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "24000"
+
+    def test_role_effort_max_sets_max_thinking_tokens(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path)
+        runner = _effort_runner(definition_effort="max")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="OUT", returncode=0)
+            runner.capture(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "63999"
+
+    def test_no_effort_anywhere_leaves_max_thinking_tokens_absent(self, tmp_path: Path) -> None:
+        """Same critical regression guard as the run() path, for capture()."""
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path)
+        runner = _effort_runner(definition_effort=None)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="OUT", returncode=0)
+            runner.capture(payload)
+        env = m.call_args.kwargs["env"]
+        assert "MAX_THINKING_TOKENS" not in env
+
+    def test_step_effort_overrides_definition_effort(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path, step_effort="max")
+        runner = _effort_runner(definition_effort="low")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="OUT", returncode=0)
+            runner.capture(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "63999"
+
+
+class TestReasoningEffortSandboxOverlay:
+    """Regression guard for injection point #2: effort must ALSO survive
+    into the bwrap-sandboxed `env_overlay` (`intentional_env`) path, not
+    just `_build_invocation`'s own env — these are two separate env dicts
+    in this file (see `_apply_sandbox`). Without this, effort would
+    silently vanish whenever `dev_sandbox == "bwrap"` AND permission_mode
+    is elevated (bypassPermissions/acceptEdits) — the developer role's
+    typical config."""
+
+    def test_effort_survives_bwrap_sandboxed_env(self, tmp_path: Path, monkeypatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(
+                name="s",
+                runner="claude",
+                prompt_file=str(pf),
+                metadata={"permission_mode": "bypassPermissions"},
+            ),
+            metadata={},
+            secrets={},
+        )
+        runner = _effort_runner(definition_effort="high")
+        monkeypatch.setattr(runner.settings, "dev_sandbox", "bwrap", raising=False)
+        with (
+            patch(
+                "hivepilot.runners.claude_runner.wrap_bwrap", side_effect=lambda argv, workdir: argv
+            ),
+            patch("hivepilot.runners.claude_runner.subprocess.run") as m,
+        ):
+            m.return_value = MagicMock(returncode=0)
+            runner.run(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "24000"

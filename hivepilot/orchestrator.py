@@ -252,7 +252,7 @@ def _find_gating_step(
         from hivepilot.roles import get_role, resolve_host, resolve_runner
 
         try:
-            runner_kind, role_model = resolve_runner(task.role, policy)
+            runner_kind, role_model, role_effort = resolve_runner(task.role, policy)
             role_options: dict[str, str] = {}
             role_perm = get_role(task.role).permission_mode
             if role_perm:
@@ -262,6 +262,7 @@ def _find_gating_step(
                 kind=cast(RunnerKind, runner_kind),
                 command=None,
                 model=role_model,
+                effort=role_effort,
                 host=resolve_host(task.role, policy),
                 options=role_options,
             )
@@ -1148,7 +1149,7 @@ class Orchestrator:
             answer = ""
             try:
                 target_role = get_role(target_role_key)
-                runner_kind, role_model = resolve_runner(target_role_key, policy)
+                runner_kind, role_model, role_effort = resolve_runner(target_role_key, policy)
                 role_perm = target_role.permission_mode
                 role_options: dict[str, str] = {}
                 if role_perm:
@@ -1158,6 +1159,7 @@ class Orchestrator:
                     kind=cast(RunnerKind, runner_kind),
                     command=None,
                     model=role_model,
+                    effort=role_effort,
                     host=resolve_host(target_role_key, policy),
                     options=role_options,
                 )
@@ -1308,7 +1310,7 @@ class Orchestrator:
         )
 
         # 4. Invoke target role's runner for rebuttal
-        runner_kind, role_model = resolve_runner(target_role_key, policy)
+        runner_kind, role_model, role_effort = resolve_runner(target_role_key, policy)
         role_perm = target_role.permission_mode
         role_options: dict[str, str] = {}
         if role_perm:
@@ -1318,6 +1320,7 @@ class Orchestrator:
             kind=cast(RunnerKind, runner_kind),
             command=None,
             model=role_model,
+            effort=role_effort,
             host=resolve_host(target_role_key, policy),
             options=role_options,
         )
@@ -1382,7 +1385,9 @@ class Orchestrator:
         elif simulate:
             resolution_output = f"[simulated resolution from {challenger_name}] ACCEPT: Satisfied."
         else:
-            ch_runner_kind, ch_role_model = resolve_runner(challenger_role_key, policy)
+            ch_runner_kind, ch_role_model, ch_role_effort = resolve_runner(
+                challenger_role_key, policy
+            )
             ch_role = get_role(challenger_role_key)
             ch_role_perm = ch_role.permission_mode
             ch_role_options: dict[str, str] = {}
@@ -1393,6 +1398,7 @@ class Orchestrator:
                 kind=cast(RunnerKind, ch_runner_kind),
                 command=None,
                 model=ch_role_model,
+                effort=ch_role_effort,
                 host=resolve_host(challenger_role_key, policy),
                 options=ch_role_options,
             )
@@ -2089,7 +2095,7 @@ class Orchestrator:
             policy = None
 
         if cos_role is not None:
-            runner_kind, role_model = resolve_runner(cos_role_key, policy)
+            runner_kind, role_model, role_effort = resolve_runner(cos_role_key, policy)
             role_perm = cos_role.permission_mode
             role_options: dict[str, str] = {}
             if role_perm:
@@ -2099,6 +2105,7 @@ class Orchestrator:
                 kind=cast(RunnerKind, runner_kind),
                 command=None,
                 model=role_model,
+                effort=role_effort,
                 host=resolve_host(cos_role_key, policy),
                 options=role_options,
             )
@@ -2327,7 +2334,9 @@ class Orchestrator:
             )
         project = self._project(project_name)
         policy = policy_service.get_policy(project_name)
-        runner_kind, _ = resolve_runner(role_name, policy)  # also enforces allowed_runners
+        runner_kind, _, role_effort = resolve_runner(
+            role_name, policy
+        )  # also enforces allowed_runners
         debate_host = resolve_host(role_name, policy)
         vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
 
@@ -2360,6 +2369,7 @@ class Orchestrator:
                     kind=cast(RunnerKind, brain_runner),
                     command=None,
                     model=brain_model,
+                    effort=role_effort,
                     host=debate_host,
                 )
                 output = self.registry.capture_definition(rdef, payload)
@@ -2679,7 +2689,7 @@ class Orchestrator:
                             from hivepilot.models import RunnerDefinition, RunnerKind
                             from hivepilot.roles import get_role, resolve_host, resolve_runner
 
-                            runner_kind, role_model = resolve_runner(task.role, policy)
+                            runner_kind, role_model, role_effort = resolve_runner(task.role, policy)
                             role_options: dict[str, str] = {}
                             role_perm = get_role(task.role).permission_mode
                             if role_perm:
@@ -2689,6 +2699,7 @@ class Orchestrator:
                                 kind=cast(RunnerKind, runner_kind),
                                 command=None,
                                 model=role_model,
+                                effort=role_effort,
                                 host=resolve_host(task.role, policy),
                                 options=role_options,
                             )
@@ -2891,6 +2902,7 @@ class Orchestrator:
                                         kind=cast(RunnerKind, _next_kind),
                                         command=None,
                                         model=role_model,
+                                        effort=role_effort,
                                         host=resolve_host(task.role, policy),
                                         options=role_options,
                                     )

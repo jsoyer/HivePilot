@@ -251,6 +251,26 @@ Precedence (first wins): step `metadata.permission_mode` → runner
 gated), `bypassPermissions` (full autonomy), `plan`, `default`. Unset = no flag
 (safe for read-only planning agents).
 
+### Reasoning effort (Claude runner only)
+
+`effort: low|medium|high|max` can be set on a role (`roles.yaml` — `Role.effort`)
+or on an individual task step (`tasks.yaml` — `TaskStep.effort`); a step-level
+value wins over the role's when both are set. It is the only reasoning-depth
+lever HivePilot exposes for Claude besides model choice, and is translated to
+the `MAX_THINKING_TOKENS` environment variable on the `claude` subprocess:
+
+| Effort | `MAX_THINKING_TOKENS` |
+|---|---|
+| `low` | 4000 |
+| `medium` | 12000 |
+| `high` | 24000 |
+| `max` | 63999 |
+
+This knob is **Claude-runner-only** — every other runner (codex, gemini,
+opencode, cursor, ...) ignores `effort` entirely. When no `effort` is declared
+anywhere (the default), `MAX_THINKING_TOKENS` is never set — behaviour is
+byte-identical to before this knob existed (the CLI's own default applies).
+
 ### Usage capture (tokens/cost/actual-model) — opt-in
 
 `HIVEPILOT_CLAUDE_CAPTURE_USAGE` (default `false`) enables per-step token/cost/
