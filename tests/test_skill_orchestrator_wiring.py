@@ -95,8 +95,8 @@ def _make_orchestrator(tmp_path: Path, *, skill_registry: dict[str, SkillSpec]) 
     ):
         orch = Orchestrator()
 
-    orch.plugins.get_skill.side_effect = lambda n: skill_registry.get(n)
-    orch.registry._definition_for.side_effect = lambda key: RunnerDefinition(
+    orch.plugins.get_skill.side_effect = lambda n: skill_registry.get(n)  # type: ignore[attr-defined]
+    orch.registry._definition_for.side_effect = lambda key: RunnerDefinition(  # type: ignore[attr-defined]
         name=key, kind="claude", command="claude"
     )
     return orch
