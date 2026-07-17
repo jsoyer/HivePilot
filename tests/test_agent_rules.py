@@ -74,12 +74,23 @@ class TestGetRulesForRole:
             assert isinstance(rules, list), f"Expected list for role '{role_name}'"
             assert len(rules) > 0, f"Expected non-empty list for role '{role_name}'"
 
-    def test_unknown_role_raises_key_error(self):
-        """Design choice: unknown role raises KeyError (mirrors roles.get_role behaviour)."""
-        from hivepilot.agent_rules import get_rules_for_role
+    def test_unknown_role_returns_cross_cutting_floor(self):
+        """Sprint 2 (roles-model-effort-config-owned PRD) changed this from
+        KeyError to a safe return: a role absent from ROLE_RULES (e.g. a
+        business role not loaded under the reduced generic-only code
+        defaults) must never crash a caller that only wants its rule
+        manifest. A security review of the first Sprint 2 cut correctly
+        flagged returning `[]` as fail-OPEN: it silently dropped the
+        CROSS_CUTTING_RULES enforced policy floor (privacy-by-design,
+        detection-fabric, EU-sovereign, no-raw-prompt-logging) that every
+        known role already inherits. Corrected expectation:
+        `get_rules_for_role(...) == list(CROSS_CUTTING_RULES)` -- fail-safe
+        means inheriting the enforced minimum, not returning a policy-free
+        empty list. `roles.get_role` (a different function) still raises
+        KeyError for a genuinely unknown role."""
+        from hivepilot.agent_rules import CROSS_CUTTING_RULES, get_rules_for_role
 
-        with pytest.raises(KeyError):
-            get_rules_for_role("nonexistent_role")
+        assert get_rules_for_role("nonexistent_role") == list(CROSS_CUTTING_RULES)
 
     def test_returns_ordered_list_of_strings(self):
         from hivepilot.agent_rules import get_rules_for_role
