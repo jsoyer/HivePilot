@@ -122,17 +122,24 @@ is to scaffold the config you need before you can install an agent CLI into
 it, so hard-failing there would be a chicken-and-egg regression on a fresh
 machine or in CI.
 
-> **Known gap: default role mappings depend on OPTIONAL plugin binaries.**
-> The shipped default role mappings (`hivepilot/roles.py`) route `ceo` /
-> `cto` / `ciso` to `runner="opencode"` and `documentation` to
-> `runner="gemini"` — both are OPTIONAL, PATH-gated plugin agent kinds from
-> the table above, **not** part of the mandatory set. On a host where the
-> `opencode` or `gemini` binary isn't on `PATH` (or its enable flag was
-> turned off), a task using one of these default roles fails at dispatch
-> with `RunnerPluginUnavailableError`. The mandatory-agent check `init` /
-> `doctor` runs only guarantees a **built-in** agent (`claude`/`codex`/
-> `vibe`) is present — it does **not** guarantee `opencode` or `gemini` are
-> installed. If you use these default roles, install the corresponding CLI
+> **Roles are operator-owned config, not a code default.**
+> (roles-model-effort-config-owned PRD, Sprint 2) The engine's code-owned
+> `_DEFAULT_ROLES` fallback (`hivepilot/roles.py`) ships with exactly ONE
+> role: `developer -> claude` — a mandatory, built-in agent kind, never a
+> PATH-gated plugin. A deployment with no `roles.yaml` at all therefore no
+> longer risks a dispatch-time `RunnerPluginUnavailableError` from an
+> optional plugin binary it never installed.
+>
+> The full "company" roster — `ceo`/`cto`/`ciso` -> `opencode`,
+> `documentation` -> `gemini`, `reviewer` -> `codex`, `chief_of_staff`/`qa`
+> -> `cursor` — is **not** a code default any more. It ships as a
+> restorable, NOT-auto-loaded template at
+> [`examples/roles.yaml`](../../examples/roles.yaml): copy it to your
+> active `roles.yaml` (see `hivepilot/config.py`'s
+> `Settings.resolve_config_path` chain) to opt in. Because that's an
+> operator's own explicit choice — not something the engine loads by
+> default — a host missing `opencode`/`gemini` only fails at dispatch if
+> *you* configured a role to depend on it; install the corresponding CLI
 > (see the table above) or repoint the role at a different runner kind in
 > your own `roles.yaml`.
 

@@ -111,6 +111,67 @@ agent-capable runner (`claude`, plus every `PromptCliRunner`-based kind —
 (`supported_modes == {"api"}`, it has no CLI binary at all, so `mode: cli`
 on `openrouter` fails the same way).
 
+### Model + reasoning effort (`model` / `effort`)
+
+Both a pipeline and each of its stages can set a `model` (a plain string,
+runner-specific) and an `effort` — a closed set of reasoning-effort levels:
+`low` | `medium` | `high` | `xhigh` | `max` (`hivepilot.models.EffortLevel`).
+Both default to `None` — a pipeline/stage that sets neither dispatches
+byte-identically to before these fields existed.
+
+**Precedence** (`hivepilot.roles.resolve_stage_dispatch`):
+
+```
+policy.role_overrides  >  stage  >  role  >  runner-default
+```
+
+`stage.model`/`stage.effort` are themselves already resolved against the
+pipeline-wide default first (`stage > pipeline`, mirroring `mode`'s own
+`resolve_mode` precedence — see `hivepilot.models.resolve_stage_model` /
+`resolve_effort`), and that stage-resolved value is what feeds into the
+chain above. A per-project policy's `role_overrides[role].model` /
+`.effort` (see [CONFIG.md](CONFIG.md)) always wins — it is the security
+control that must never be short-circuited by a stage or role author.
+
+```yaml
+# pipelines.yaml
+company:
+  description: "..."
+  effort: high              # pipeline-wide default reasoning effort
+  stages:
+    - name: draft
+      task: developer       # role "developer" -> claude; inherits effort: high
+      model: claude-opus    # stage-level model override, this stage only
+      effort: low            # stage-level effort override, this stage only
+    - name: review
+      task: reviewer         # role "reviewer" -> codex, role.model "gpt-5.5"
+                              # no stage model/effort set -> falls back to the
+                              # role's own model ("gpt-5.5") and the pipeline
+                              # default effort ("high")
+```
+
+**Per-runner effort mapping.** `effort` is an internal HivePilot concept —
+each runner maps it (or ignores it) on its own:
+
+- **Claude** (`ClaudeRunner`) injects the resolved level as the
+  `MAX_THINKING_TOKENS` environment variable on the `claude` subprocess
+  (`hivepilot.runners.claude_runner.EFFORT_TOKEN_MAP`): `low` → 4000,
+  `medium` → 12000, `high` → 24000, `xhigh` → 40000, `max` → 63999. When no
+  effort resolves anywhere in the chain, `MAX_THINKING_TOKENS` is left unset
+  (byte-identical to a pre-`effort` run). This is a real reasoning-effort
+  knob, **not** a no-op.
+- **Codex** (`CodexRunner`) maps it to the `-c model_reasoning_effort=<level>`
+  CLI flag; when no effort resolves anywhere in the chain, it still defaults
+  to `medium` (byte-identical to the pre-`effort`-field hardcoded flag).
+  `xhigh` is passed through literally.
+- **Every other runner** (`gemini`/`opencode`/`cursor`/`vibe`/`ollama` and the
+  other prompt-cli plugin kinds, `shell`, `container`, IaC runners, etc.) has
+  no reasoning-effort concept and treats `effort` as a safe no-op — the value
+  is read but never turned into an argument or env var.
+
+See [CONFIG.md](CONFIG.md#reasoning-effort) for the same mapping from the
+config angle and [RUNBOOK.md](RUNBOOK.md) for the ops-facing table.
+
 ## Telegram — remote command & control
 
 Enable: `pip install -e ".[notifications]"`, then set
