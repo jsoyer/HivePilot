@@ -215,10 +215,14 @@ class TmuxRunner:
             session=session_name,
         )
         env_file = self._write_env_file(payload)
-        fd, exit_file = tempfile.mkstemp(prefix="hivepilot-tmux-exit-", suffix=".txt")
-        os.close(fd)
-        wait_channel = f"{session_name}-done"
+        # exit_file is created INSIDE the try so a failure during/after its
+        # mkstemp still runs the finally (which cleans env_file, created just
+        # above); the None-guard skips cleanup when mkstemp never returned.
+        exit_file: str | None = None
         try:
+            fd, exit_file = tempfile.mkstemp(prefix="hivepilot-tmux-exit-", suffix=".txt")
+            os.close(fd)
+            wait_channel = f"{session_name}-done"
             project_path = shlex.quote(str(payload.project.path))
             wrapped_cmd = (
                 f"cd {project_path}; set -a; source {shlex.quote(env_file)}; set +a; "
@@ -233,7 +237,8 @@ class TmuxRunner:
         finally:
             self._kill_session(session_name)
             self._cleanup_env_file(env_file)
-            self._cleanup_env_file(exit_file)
+            if exit_file is not None:
+                self._cleanup_env_file(exit_file)
         logger.info(
             "tmux_runner.end",
             project=payload.project_name,
@@ -376,9 +381,13 @@ class TmuxRunner:
                     f"via the sourced env file"
                 )
         fd, path = tempfile.mkstemp(prefix="hivepilot-tmux-env-", suffix=".sh")
-        os.chmod(path, 0o600)
         try:
             with os.fdopen(fd, "w") as fh:
+                # chmod via the live fd, inside the try: mkstemp already creates
+                # the file 0600, and doing it here (not between mkstemp and the
+                # try) guarantees any failure still hits the except that removes
+                # the secret-bearing file rather than leaking it.
+                os.fchmod(fh.fileno(), 0o600)
                 for key, value in overlay.items():
                     fh.write(f"export {key}={shlex.quote(str(value))}\n")
         except Exception:

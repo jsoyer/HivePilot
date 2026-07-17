@@ -56,6 +56,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from typing import Any
 
 from hivepilot.config import Settings
@@ -73,6 +74,19 @@ _BW_BINARY = "bw"
 # The env var carrying the unlocked-vault session token. Its VALUE is never
 # logged or surfaced — only its NAME appears in a fail-closed error.
 _SESSION_ENV = "BW_SESSION"
+
+# Serializes this process's `bw` invocations so the two-step
+# `config server` + `get item` sequence is ATOMIC. `bw` has no per-invocation
+# `--server` flag, so the server is set via GLOBAL, persisted CLI state; without
+# this lock two concurrent vaultwarden resolves could interleave as
+# "config server URL-A" -> "config server URL-B" -> "get (against B)" and fetch
+# from the wrong server. RESIDUAL (inherent to `bw`, degrades closed): because
+# that server setting is global, running this self-hosted backend concurrently
+# with the cloud `bitwarden` backend in ONE process is unsupported — after this
+# backend runs the CLI stays pointed at the self-hosted server, so a later cloud
+# `bw get` hits the wrong server and fails closed. Isolate the two providers in
+# separate processes if you need both.
+_BW_CLI_LOCK = threading.Lock()
 
 
 def _extract_secret_value(payload: Any) -> str | None:
@@ -152,20 +166,25 @@ class VaultwardenBackend:
         # `__context__` so a caller walking the exception chain can't resurface
         # the original, token/value-bearing error.
         try:
-            # Point the CLI at the self-hosted server first (no per-invocation
-            # --server flag exists on `bw get`). Session-independent.
-            subprocess.run(
-                [_BW_BINARY, "config", "server", server_url],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            proc = subprocess.run(
-                [_BW_BINARY, "get", "item", item, "--response", "--session", session],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            # Hold the CLI lock across BOTH steps so the server-pin and the
+            # fetch can't be split by another provider/thread's `bw` call (see
+            # _BW_CLI_LOCK). Only the subprocess calls need serializing; the
+            # JSON parse below runs outside the lock.
+            with _BW_CLI_LOCK:
+                # Point the CLI at the self-hosted server first (no
+                # per-invocation --server flag exists on `bw get`).
+                subprocess.run(
+                    [_BW_BINARY, "config", "server", server_url],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                proc = subprocess.run(
+                    [_BW_BINARY, "get", "item", item, "--response", "--session", session],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
             payload = json.loads(proc.stdout)
         except Exception as exc:
             logger.warning(
