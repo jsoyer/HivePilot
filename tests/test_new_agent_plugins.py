@@ -11,15 +11,11 @@ Covers:
 - With the flag on (default True) and the binary present, each new kind
   (`pi`, `qwen-code`, `kimi-cli`) resolves via the REAL `PluginManager` to
   its runner class.
-- KNOWN GAP (see this sprint's Agent Notes): `hivepilot.registry.
-  _OPTIONAL_AGENT_PLUGIN_KINDS` is a hardcoded map that today only lists
-  the kinds Sprint 2 migrated OUT of `_BUILTIN_RUNNERS` (gemini/opencode/
-  ollama); `hivepilot/registry.py` is OUTSIDE this sprint's file
-  boundaries, so pi/qwen-code/kimi-cli are NOT added to it here. Practical
-  effect documented below: `register()` gating is fully correct, but
-  `resolve_runner_class` currently falls through to the same plain,
-  generic `KeyError` a genuinely-unknown kind gets — NOT the more
-  actionable `RunnerPluginUnavailableError` gemini/opencode/ollama get.
+- Inactive-kind resolution (flag off or binary absent) raises the actionable
+  `RunnerPluginUnavailableError` — naming the enable flag + required binary —
+  NOT a bare `KeyError`. `hivepilot.registry._OPTIONAL_AGENT_PLUGIN_KINDS` was
+  extended in Sprint 3 to include pi/qwen-code/kimi-cli, matching the
+  gemini/opencode/ollama behavior Sprint 2 established.
 - The built argv for each new runner matches its confirmed non-interactive
   invocation (esp. kimi-cli: prompt via `-p` on argv, never stdin).
 - `qwen-code` in `mode: api` routes through the existing OpenAI-compat
@@ -165,31 +161,32 @@ class TestResolutionViaRealPluginManager:
         assert kind not in RUNNER_MAP
 
 
-class TestResolutionGapForNewKindsKnownIssue:
-    """KNOWN GAP (see Sprint 3 Agent Notes): documents CURRENT, real
-    behavior — not the ideal acceptance-criteria behavior. `resolve_runner_class`
-    only raises the actionable `RunnerPluginUnavailableError` for kinds listed
-    in `hivepilot.registry._OPTIONAL_AGENT_PLUGIN_KINDS`, which is OUTSIDE this
-    sprint's file boundaries and was not extended to include pi/qwen-code/
-    kimi-cli. So today, an inactive new kind raises the SAME plain `KeyError`
-    a genuinely-unknown kind gets. This is flagged as a follow-up in Agent
-    Notes; a future patch extending that map would upgrade this to the
-    actionable error, matching gemini/opencode/ollama's behavior."""
+class TestInactiveKindRaisesActionableError:
+    """Acceptance criterion #2 + INVARIANT "Plugin PATH Gate" postcondition:
+    resolving an inactive new kind (flag off or binary absent) yields the
+    actionable `RunnerPluginUnavailableError` (naming the enable flag + required
+    binary), NOT a bare `KeyError`. `hivepilot.registry._OPTIONAL_AGENT_PLUGIN_KINDS`
+    was extended in Sprint 3 to include pi/qwen-code/kimi-cli, so they now match
+    gemini/opencode/ollama's actionable-error behavior."""
 
     @pytest.mark.parametrize("stem,kind,runner_cls,flag_name,binary", _PLUGIN_SPECS)
-    def test_inactive_kind_currently_raises_plain_keyerror(
+    def test_inactive_kind_raises_actionable_error(
         self, stem, kind, runner_cls, flag_name, binary, monkeypatch
     ) -> None:
         from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RunnerPluginUnavailableError
 
         monkeypatch.setattr(plugins_mod.settings, "base_dir", REPO_ROOT, raising=False)
         monkeypatch.setattr(settings, flag_name, False, raising=False)
         RUNNER_MAP.pop(kind, None)
         plugins_mod.PluginManager()
 
-        with pytest.raises(KeyError) as exc_info:
+        with pytest.raises(RunnerPluginUnavailableError) as exc_info:
             resolve_runner_class(kind)
-        assert "Unknown runner kind" in str(exc_info.value)
+        # The actionable error names both the enable flag and the required binary.
+        msg = str(exc_info.value)
+        assert f"HIVEPILOT_{flag_name.upper()}" in msg
+        assert repr(binary) in msg
 
 
 # ---------------------------------------------------------------------------
