@@ -153,7 +153,9 @@ class TestRebuttalFlowAccept:
         prior_chunks: list[str] = ["## Aliénor (CEO) (planning)\nSome CEO output here."]
 
         with (
-            patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
+            patch(
+                "hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5", None)
+            ),
             patch("hivepilot.roles.resolve_host", return_value=None),
             patch(
                 "hivepilot.roles.get_role",
@@ -254,7 +256,9 @@ class TestRebuttalFlowEscalation:
         prior_chunks: list[str] = ["## Aliénor (CEO) (planning)\nCEO output."]
 
         with (
-            patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
+            patch(
+                "hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5", None)
+            ),
             patch("hivepilot.roles.resolve_host", return_value=None),
             patch(
                 "hivepilot.roles.get_role",
@@ -503,7 +507,9 @@ class TestEscalationContext:
         prior_chunks: list[str] = ["## Aliénor (CEO) (planning)\nCEO output."]
 
         with (
-            patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
+            patch(
+                "hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5", None)
+            ),
             patch("hivepilot.roles.resolve_host", return_value=None),
             patch(
                 "hivepilot.roles.get_role",
@@ -577,7 +583,9 @@ class TestSimulateMode:
         prior_chunks: list[str] = ["## Aliénor (CEO) (planning)\nCEO output."]
 
         with (
-            patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5")),
+            patch(
+                "hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-5", None)
+            ),
             patch("hivepilot.roles.resolve_host", return_value=None),
             patch(
                 "hivepilot.roles.get_role",

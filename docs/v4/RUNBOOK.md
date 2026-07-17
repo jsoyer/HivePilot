@@ -250,6 +250,25 @@ stage halts the pipeline.
 
 Per-project runner/model overrides live in `policies.yaml` under `role_overrides`.
 
+#### Reasoning effort (`effort`, Claude runner only)
+
+A role (or an individual step in `tasks.yaml`, which wins over the role when
+both are set) may declare `effort: low|medium|high|max`. This is translated by
+the Claude runner into the `MAX_THINKING_TOKENS` environment variable on the
+`claude` subprocess:
+
+| Effort | `MAX_THINKING_TOKENS` |
+|---|---|
+| `low` | 4000 |
+| `medium` | 12000 |
+| `high` | 24000 |
+| `max` | 63999 |
+
+Other runners (codex, gemini, opencode, cursor, ...) ignore `effort` entirely.
+No `effort` declared (the default) means `MAX_THINKING_TOKENS` is never set —
+byte-identical to before this knob existed. See `docs/v4/CONFIG.md` §"Reasoning
+effort" for the full precedence/behaviour writeup.
+
 ### Context routing (`context_routing_mode`)
 
 `HIVEPILOT_CONTEXT_ROUTING_MODE` (`full` | `keyed`, default `full`) controls how

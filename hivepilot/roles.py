@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from hivepilot.models import validate_effort
 
 if TYPE_CHECKING:
     from hivepilot.config import Settings
@@ -63,6 +65,18 @@ class Role(BaseModel):
     # Task name that direct-agent commands (/ask <agent>, /dev, etc.) run for
     # this role. None means the role has no direct-command task (e.g. auditor).
     command_task: str | None = None
+    # Reasoning-effort knob (Claude runner only -- see
+    # hivepilot.models.EFFORT_LEVELS / hivepilot.runners.claude_runner
+    # .EFFORT_TOKEN_MAP for the token-count translation). None (default)
+    # means no effort declared for this role -- byte-identical to pre-effort
+    # behaviour. A TaskStep.effort override (if set) wins over this at
+    # ClaudeRunner._resolve_effort time.
+    effort: str | None = None
+
+    @field_validator("effort")
+    @classmethod
+    def _validate_effort(cls, v: str | None) -> str | None:
+        return validate_effort(v)
 
 
 # NOTE (Sprint 2, runner-defaults-plugins-mode PRD): `runner="opencode"` /
@@ -275,16 +289,23 @@ def refresh_roles() -> None:
 ROLES: dict[str, Role] = load_roles()
 
 
-def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, str | None]:
-    """Resolve the effective (runner_kind, model) for *role_name*.
+def resolve_runner(
+    role_name: str, policy: object | None = None
+) -> tuple[str, str | None, str | None]:
+    """Resolve the effective (runner_kind, model, effort) for *role_name*.
 
     Defaults come from the role binding (ROLES); a per-project policy may override
     runner/model (``role_overrides``) and constrain runners (``allowed_runners``).
+    ``effort`` is always the role's own ``Role.effort`` -- there is no
+    policy-level ``role_overrides[...].effort`` override (out of scope; only
+    ``Role.effort`` / ``TaskStep.effort`` are the two supported knobs, the
+    latter resolved by the Claude runner itself at dispatch time).
     Raises if the role has no runner or the resolved runner is not allowed.
     """
     role = ROLES[role_name]
     runner = role.runner
     model = role.model or (role.models[0] if role.models else None)
+    effort = role.effort
     if policy is not None:
         override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
         runner = override.get("runner", runner)
@@ -296,7 +317,7 @@ def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, s
             )
     if not runner:
         raise RuntimeError(f"Role '{role_name}' has no runner binding.")
-    return runner, model
+    return runner, model, effort
 
 
 def resolve_host(role_name: str, policy: object | None = None) -> str | None:

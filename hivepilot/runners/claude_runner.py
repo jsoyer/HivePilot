@@ -67,6 +67,19 @@ def _resolve_skill_text(text: str, catalog: dict[str, dict[str, Any]]) -> str:
 # used for short capture/debate turns, not long headless coding sessions.
 _ANTHROPIC_API_MAX_TOKENS = 4096
 
+# Effort -> MAX_THINKING_TOKENS map (reasoning-effort knob). `effort` is the
+# only depth lever HivePilot exposes for Claude besides model choice. A
+# role/step with no `effort` declared performs NO injection at all (see
+# `_resolve_effort`/`_effort_env_overlay`) -- this map only fires when effort
+# is explicitly set, so every existing zero-effort config stays byte-
+# identical to pre-effort behaviour.
+EFFORT_TOKEN_MAP: dict[str, int] = {
+    "low": 4000,
+    "medium": 12000,
+    "high": 24000,
+    "max": 63999,
+}
+
 
 def _insert_output_format_json(argv: list[str]) -> list[str]:
     """Return a copy of *argv* with ``--output-format json`` inserted right
@@ -267,7 +280,39 @@ class ClaudeRunner(BaseRunner):
             args.extend(["--permission-mode", permission_mode])
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
+        env = {**env, **self._effort_env_overlay(payload)}
         return args, env
+
+    def _resolve_effort(self, payload: RunnerPayload) -> str | None:
+        """Resolve the effective reasoning-effort level for *payload*: an
+        explicit step-level override wins over the runner definition's (role's)
+        resolved effort, mirroring `_resolve_model`'s precedence shape. `None`
+        means no effort declared anywhere -- MAX_THINKING_TOKENS is left unset
+        (unchanged CLI default), never invented.
+        """
+        return payload.step.effort or self.definition.effort
+
+    def _effort_env_overlay(self, payload: RunnerPayload) -> dict[str, str]:
+        """Return `{"MAX_THINKING_TOKENS": "<tokens>"}` when *payload* resolves
+        to a known effort level, else `{}` (no-op — nothing injected). Uses
+        `.get()` defensively rather than indexing: an effort string that
+        somehow isn't a recognized `EFFORT_TOKEN_MAP` key (shouldn't happen
+        given upstream pydantic validation in `hivepilot.models.validate_effort`,
+        but defended anyway per this module's existing defensive style, e.g.
+        `_apply_sandbox`'s try/except fallback) is logged and skipped rather
+        than raising or injecting a garbage value.
+        """
+        effort = self._resolve_effort(payload)
+        if effort is None:
+            return {}
+        tokens = EFFORT_TOKEN_MAP.get(effort)
+        if tokens is None:
+            logger.warning(
+                "claude_runner.effort.unknown_level_skipped",
+                effort=effort,
+            )
+            return {}
+        return {"MAX_THINKING_TOKENS": str(tokens)}
 
     def _permission_mode(self, payload: RunnerPayload) -> str | None:
         """Resolve the effective permission mode for *payload* (same logic as _build_invocation)."""
@@ -375,7 +420,10 @@ class ClaudeRunner(BaseRunner):
         )
         # gather_overrides produces the project/definition/secrets overlay WITHOUT
         # inheriting os.environ — safe to layer on top of the scrubbed base env.
-        env_overlay = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
+        env_overlay = {
+            **gather_overrides(payload.project.env, self.definition.env, payload.secrets),
+            **self._effort_env_overlay(payload),
+        }
         argv, run_env = _apply_sandbox(
             argv,
             run_env,
@@ -426,7 +474,10 @@ class ClaudeRunner(BaseRunner):
         )
         # gather_overrides produces the project/definition/secrets overlay WITHOUT
         # inheriting os.environ — safe to layer on top of the scrubbed base env.
-        env_overlay = gather_overrides(payload.project.env, self.definition.env, payload.secrets)
+        env_overlay = {
+            **gather_overrides(payload.project.env, self.definition.env, payload.secrets),
+            **self._effort_env_overlay(payload),
+        }
         argv, run_env = _apply_sandbox(
             argv,
             run_env,

@@ -7,6 +7,7 @@ Covers:
 - Each role's model_profile is a valid claude_profiles key in model_profiles.yaml
 - list_roles() returns roles ordered by their pipeline position (order field)
 - get_role() returns the expected Role instance with correct fields
+- Role.effort / resolve_runner's 3-tuple (runner, model, effort) return
 """
 
 from __future__ import annotations
@@ -278,3 +279,78 @@ class TestRoleModel:
         from hivepilot.roles import Role
 
         assert issubclass(Role, BaseModel)
+
+
+# ---------------------------------------------------------------------------
+# Reasoning-effort knob — Role.effort + resolve_runner's 3-tuple return
+# ---------------------------------------------------------------------------
+
+
+class TestRoleEffort:
+    """Role.effort is an optional string validated against EFFORT_LEVELS
+    (hivepilot.models), shared with TaskStep.effort — see hivepilot/models.py."""
+
+    def _base_kwargs(self) -> dict:
+        return {
+            "name": "x",
+            "title": "X",
+            "prompt_file": Path("x.md"),
+            "model_profile": "coding",
+            "inputs": [],
+            "outputs": [],
+            "can_block": False,
+            "order": 99,
+        }
+
+    def test_role_effort_accepts_valid_level(self):
+        from hivepilot.roles import Role
+
+        role = Role(**self._base_kwargs(), effort="high")
+        assert role.effort == "high"
+
+    def test_role_effort_rejects_invalid_level(self):
+        import pydantic
+
+        from hivepilot.roles import Role
+
+        with pytest.raises(pydantic.ValidationError):
+            Role(**self._base_kwargs(), effort="bogus")
+
+    def test_role_effort_defaults_to_none(self):
+        from hivepilot.roles import Role
+
+        role = Role(**self._base_kwargs())
+        assert role.effort is None
+
+
+class TestResolveRunnerEffort:
+    """resolve_runner() now returns a 3-tuple (runner_kind, model, effort)."""
+
+    def test_resolve_runner_returns_three_tuple(self):
+        from hivepilot.roles import resolve_runner
+
+        result = resolve_runner("developer")
+        assert len(result) == 3
+
+    def test_resolve_runner_no_effort_yields_none(self):
+        """The built-in `developer` role declares no effort -- resolve_runner's
+        3rd element must be None, never invented (regression guard: every
+        existing role binding stays byte-identical)."""
+        from hivepilot.roles import resolve_runner
+
+        runner_kind, model, effort = resolve_runner("developer")
+        assert runner_kind == "claude"
+        assert effort is None
+
+    def test_resolve_runner_returns_roles_effort(self, monkeypatch):
+        """A role with an explicit `effort` yields it as resolve_runner's 3rd
+        tuple element."""
+        from hivepilot.roles import ROLES, Role, resolve_runner
+
+        original = ROLES["developer"]
+        effortful = original.model_copy(update={"effort": "high"})
+        monkeypatch.setitem(ROLES, "developer", effortful)
+
+        runner_kind, model, effort = resolve_runner("developer")
+        assert effort == "high"
+        assert isinstance(effortful, Role)
