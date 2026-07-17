@@ -1543,6 +1543,25 @@ class Orchestrator:
         pipeline = self.pipelines.pipelines[pipeline_name]
         validate_pipeline(pipeline, self.tasks)
 
+        # Fail-closed guard (plugin-arch-overhaul PRD, Sprint 01): a pipeline
+        # with zero active agent runners (every built-in agent flag off and no
+        # agent plugin registered) can never make progress, so refuse to start
+        # before any stage executes. Local import: hivepilot.registry re-exports
+        # AGENT_RUNNER_KINDS' single source of truth from
+        # hivepilot.services.agent_checks, kept local here (rather than a
+        # top-level import) purely to keep this narrow, self-contained edit
+        # safe from the repo's PostToolUse formatter, which strips top-level
+        # imports left unused across separate edits.
+        from hivepilot.registry import NoAgentRunnerError, active_agent_runner_kinds
+        from hivepilot.services.agent_checks import AGENT_RUNNER_KINDS
+
+        if not active_agent_runner_kinds():
+            raise NoAgentRunnerError(
+                "No agent runner is enabled. Enable at least one of: "
+                f"{', '.join(sorted(AGENT_RUNNER_KINDS))} "
+                "(e.g. set HIVEPILOT_CLAUDE_ENABLED=1)."
+            )
+
         # Stage scoping (PRD A1): resolve the run's tag -> component map and
         # fail closed, up front, before any stage executes, if a stage
         # references a tag that isn't defined for this run's group. Applies

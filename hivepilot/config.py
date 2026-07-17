@@ -280,7 +280,19 @@ class Settings(BaseSettings):
     obsidian_enabled: bool = True
     onepassword_enabled: bool = True
     rtk_enabled: bool = True
-    sample_enabled: bool = True
+    sample_enabled: bool = False
+    # Demo skill plugin (plugins/sample_skill.py) — opt-IN, dormant by
+    # default. env: HIVEPILOT_SAMPLE_SKILL_ENABLED
+    sample_skill_enabled: bool = False
+    # Built-in agent runners are individually disable-able (plugin-arch-overhaul
+    # Sprint 01). Default True — turning one off removes it from RUNNER_MAP via
+    # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
+    # (shell/terraform/kubectl/…) stay unconditional and get no flag.
+    # env: HIVEPILOT_CLAUDE_ENABLED / _CODEX_ENABLED / _VIBE_ENABLED / _OPENROUTER_ENABLED
+    claude_enabled: bool = True
+    codex_enabled: bool = True
+    vibe_enabled: bool = True
+    openrouter_enabled: bool = True
     # Sprint 2 (runner-defaults-plugins-mode PRD): gemini/opencode/ollama
     # moved OUT of hivepilot.registry._BUILTIN_RUNNERS and into default-on,
     # PATH-gated plugins (plugins/gemini.py / plugins/opencode.py /
