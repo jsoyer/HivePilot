@@ -250,24 +250,28 @@ stage halts the pipeline.
 
 Per-project runner/model overrides live in `policies.yaml` under `role_overrides`.
 
-#### Reasoning effort (`effort`, Claude runner only)
+#### Reasoning effort (`effort`)
 
-A role (or an individual step in `tasks.yaml`, which wins over the role when
-both are set) may declare `effort: low|medium|high|max`. This is translated by
-the Claude runner into the `MAX_THINKING_TOKENS` environment variable on the
-`claude` subprocess:
+`effort: low|medium|high|xhigh|max` resolves through the unified precedence
+`policy > stage/pipeline > role > runner-default` (a per-step `TaskStep.effort`
+is a fallback that never overrides a stage/policy value). The resolved level
+drives **two** runners:
 
-| Effort | `MAX_THINKING_TOKENS` |
-|---|---|
-| `low` | 4000 |
-| `medium` | 12000 |
-| `high` | 24000 |
-| `max` | 63999 |
+- **Claude** — `MAX_THINKING_TOKENS` env var:
 
-Other runners (codex, gemini, opencode, cursor, ...) ignore `effort` entirely.
-No `effort` declared (the default) means `MAX_THINKING_TOKENS` is never set —
-byte-identical to before this knob existed. See `docs/v4/CONFIG.md` §"Reasoning
-effort" for the full precedence/behaviour writeup.
+  | Effort | `MAX_THINKING_TOKENS` |
+  |---|---|
+  | `low` | 4000 |
+  | `medium` | 12000 |
+  | `high` | 24000 |
+  | `xhigh` | 40000 |
+  | `max` | 63999 |
+
+- **Codex** — `-c model_reasoning_effort=<level>` (default `medium`).
+
+Other runners (gemini, opencode, cursor, ...) ignore `effort`. No `effort`
+declared (the default) is byte-identical to each runner's pre-unification
+behaviour. See `docs/v4/CONFIG.md` §"Reasoning effort" for the full writeup.
 
 ### Context routing (`context_routing_mode`)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hivepilot.config import settings
-from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+from hivepilot.models import EffortLevel, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
 
@@ -408,7 +408,7 @@ def test_build_prompt_governance_repo_empty_when_not_configured(
 # ---------------------------------------------------------------------------
 
 
-def _effort_payload(tmp_path: Path, step_effort: str | None = None) -> RunnerPayload:
+def _effort_payload(tmp_path: Path, step_effort: EffortLevel | None = None) -> RunnerPayload:
     pf = tmp_path / "p.md"
     pf.write_text("do it", encoding="utf-8")
     return RunnerPayload(
@@ -421,7 +421,7 @@ def _effort_payload(tmp_path: Path, step_effort: str | None = None) -> RunnerPay
     )
 
 
-def _effort_runner(definition_effort: str | None = None) -> ClaudeRunner:
+def _effort_runner(definition_effort: EffortLevel | None = None) -> ClaudeRunner:
     return ClaudeRunner(
         RunnerDefinition(name="claude", kind="claude", command="claude", effort=definition_effort),
         settings,
@@ -469,7 +469,14 @@ class TestReasoningEffortRunPath:
         env = m.call_args.kwargs["env"]
         assert "MAX_THINKING_TOKENS" not in env
 
-    def test_step_effort_overrides_definition_effort(self, tmp_path: Path) -> None:
+    def test_definition_effort_is_authoritative_over_step(self, tmp_path: Path) -> None:
+        """Unified precedence: `RunnerDefinition.effort` (the orchestrator's
+        authoritative `policy > stage > role` result) WINS over a per-step
+        `TaskStep.effort` — a step must never silently override a stage- or
+        policy-mandated effort. (This deliberately reconciles the two
+        independently-shipped effort systems: the earlier per-role/step knob let
+        the step win; the unified `resolve_runner_effort` makes the definition
+        authoritative and treats the step as a fallback only.)"""
         from unittest.mock import MagicMock, patch
 
         payload = _effort_payload(tmp_path, step_effort="max")
@@ -478,7 +485,34 @@ class TestReasoningEffortRunPath:
             m.return_value = MagicMock(returncode=0)
             runner.run(payload)
         env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "4000"
+
+    def test_step_effort_applies_as_fallback_when_definition_none(self, tmp_path: Path) -> None:
+        """A per-step `TaskStep.effort` still drives Claude when nothing was
+        resolved upstream (`RunnerDefinition.effort is None`) — the step's
+        primary use is preserved."""
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path, step_effort="max")
+        runner = _effort_runner(definition_effort=None)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=0)
+            runner.run(payload)
+        env = m.call_args.kwargs["env"]
         assert env["MAX_THINKING_TOKENS"] == "63999"
+
+    def test_effort_xhigh_maps_to_40000(self, tmp_path: Path) -> None:
+        """The unified superset level `xhigh` maps to the token budget between
+        `high` (24000) and `max` (63999)."""
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path)
+        runner = _effort_runner(definition_effort="xhigh")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=0)
+            runner.run(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "40000"
 
 
 class TestReasoningEffortCapturePath:
@@ -519,11 +553,26 @@ class TestReasoningEffortCapturePath:
         env = m.call_args.kwargs["env"]
         assert "MAX_THINKING_TOKENS" not in env
 
-    def test_step_effort_overrides_definition_effort(self, tmp_path: Path) -> None:
+    def test_definition_effort_is_authoritative_over_step(self, tmp_path: Path) -> None:
+        """capture() path: same unified precedence as run() — the
+        orchestrator-resolved `RunnerDefinition.effort` wins over the step."""
         from unittest.mock import MagicMock, patch
 
         payload = _effort_payload(tmp_path, step_effort="max")
         runner = _effort_runner(definition_effort="low")
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout="OUT", returncode=0)
+            runner.capture(payload)
+        env = m.call_args.kwargs["env"]
+        assert env["MAX_THINKING_TOKENS"] == "4000"
+
+    def test_step_effort_applies_as_fallback_when_definition_none(self, tmp_path: Path) -> None:
+        """capture() path: step effort still applies when nothing was resolved
+        upstream (`RunnerDefinition.effort is None`)."""
+        from unittest.mock import MagicMock, patch
+
+        payload = _effort_payload(tmp_path, step_effort="max")
+        runner = _effort_runner(definition_effort=None)
         with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
             m.return_value = MagicMock(stdout="OUT", returncode=0)
             runner.capture(payload)

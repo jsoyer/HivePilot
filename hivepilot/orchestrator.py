@@ -14,13 +14,16 @@ import questionary
 
 from hivepilot.config import settings
 from hivepilot.models import (
+    EffortLevel,
     Group,
     PipelineStage,
     ProjectConfig,
     RunnerDefinition,
     TaskConfig,
     TaskStep,
+    resolve_effort,
     resolve_mode,
+    resolve_stage_model,
 )
 
 try:
@@ -249,10 +252,14 @@ def _find_gating_step(
         from typing import cast
 
         from hivepilot.models import RunnerKind
-        from hivepilot.roles import get_role, resolve_host, resolve_runner
+        from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
 
         try:
-            runner_kind, role_model, role_effort = resolve_runner(task.role, policy)
+            # No pipeline stage is available at this static, pre-execution
+            # probe (called once per task start, before any stage context
+            # exists) — resolves identically to `resolve_runner` (stage_model/
+            # stage_effort default None).
+            runner_kind, role_model, _role_effort = resolve_stage_dispatch(task.role, policy)
             role_options: dict[str, str] = {}
             role_perm = get_role(task.role).permission_mode
             if role_perm:
@@ -262,7 +269,7 @@ def _find_gating_step(
                 kind=cast(RunnerKind, runner_kind),
                 command=None,
                 model=role_model,
-                effort=role_effort,
+                effort=_role_effort,
                 host=resolve_host(task.role, policy),
                 options=role_options,
             )
@@ -690,6 +697,8 @@ class Orchestrator:
         prior_context: str | None = None,
         mode: str = "cli",
         stage_skills: list[str] | None = None,
+        stage_model: str | None = None,
+        stage_effort: EffortLevel | None = None,
     ) -> list[RunResult]:
         """Public entry point. Delegates to `_run_task_body` inside a run-scope
         (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-secrets
@@ -700,7 +709,15 @@ class Orchestrator:
         ``mode`` is the pipeline/stage-resolved execution mode (see
         ``resolve_mode``); it is injected into each step's runner dispatch and
         validated against the runner's ``supported_modes``. Defaults to
-        ``"cli"`` for a plain task run, keeping existing behaviour unchanged."""
+        ``"cli"`` for a plain task run, keeping existing behaviour unchanged.
+
+        ``stage_model``/``stage_effort`` are the pipeline/stage-resolved
+        model + reasoning-effort defaults (see ``resolve_stage_model``/
+        ``resolve_effort``) — threaded through to each role-driven step's
+        runner dispatch via ``hivepilot.roles.resolve_stage_dispatch``.
+        Default ``None`` for a plain task run, keeping existing behaviour
+        byte-identical (same "stage over role over runner-default" precedence
+        ``stage_skills`` already follows)."""
         self._enter_run_scope()
         try:
             return self._run_task_body(
@@ -714,6 +731,8 @@ class Orchestrator:
                 prior_context=prior_context,
                 mode=mode,
                 stage_skills=stage_skills,
+                stage_model=stage_model,
+                stage_effort=stage_effort,
             )
         finally:
             self._exit_run_scope()
@@ -731,6 +750,8 @@ class Orchestrator:
         prior_context: str | None = None,
         mode: str = "cli",
         stage_skills: list[str] | None = None,
+        stage_model: str | None = None,
+        stage_effort: EffortLevel | None = None,
     ) -> list[RunResult]:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
@@ -876,6 +897,8 @@ class Orchestrator:
                     prior_context=prior_context,
                     mode=mode,
                     stage_skills=stage_skills,
+                    stage_model=stage_model,
+                    stage_effort=stage_effort,
                 ): project
                 for project in immediate_projects
             }
@@ -1080,7 +1103,7 @@ class Orchestrator:
         from typing import cast
 
         from hivepilot.models import RunnerKind, TaskStep
-        from hivepilot.roles import get_role, resolve_host, resolve_runner
+        from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
         from hivepilot.runners.base import RunnerPayload
 
         if depth >= settings.max_request_depth:
@@ -1149,7 +1172,12 @@ class Orchestrator:
             answer = ""
             try:
                 target_role = get_role(target_role_key)
-                runner_kind, role_model, role_effort = resolve_runner(target_role_key, policy)
+                # No specific PipelineStage is resolvable for the TARGET role
+                # here (`stage` above is the actor's own stage, not the
+                # target's) — resolves identically to `resolve_runner`.
+                runner_kind, role_model, req_effort = resolve_stage_dispatch(
+                    target_role_key, policy
+                )
                 role_perm = target_role.permission_mode
                 role_options: dict[str, str] = {}
                 if role_perm:
@@ -1159,7 +1187,7 @@ class Orchestrator:
                     kind=cast(RunnerKind, runner_kind),
                     command=None,
                     model=role_model,
-                    effort=role_effort,
+                    effort=req_effort,
                     host=resolve_host(target_role_key, policy),
                     options=role_options,
                 )
@@ -1258,7 +1286,7 @@ class Orchestrator:
         from typing import cast
 
         from hivepilot.models import RunnerKind, TaskStep
-        from hivepilot.roles import get_role, resolve_host, resolve_runner
+        from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
         from hivepilot.runners.base import RunnerPayload
 
         # 1. Resolve target role key
@@ -1309,8 +1337,15 @@ class Orchestrator:
             "Keep your response concise (under 200 words)."
         )
 
-        # 4. Invoke target role's runner for rebuttal
-        runner_kind, role_model, role_effort = resolve_runner(target_role_key, policy)
+        # 4. Invoke target role's runner for rebuttal (the target's own
+        # upstream stage's model/effort override this dispatch — see
+        # `resolve_stage_dispatch`).
+        runner_kind, role_model, rebuttal_effort = resolve_stage_dispatch(
+            target_role_key,
+            policy,
+            stage_model=target_stage.model,
+            stage_effort=target_stage.effort,
+        )
         role_perm = target_role.permission_mode
         role_options: dict[str, str] = {}
         if role_perm:
@@ -1320,7 +1355,7 @@ class Orchestrator:
             kind=cast(RunnerKind, runner_kind),
             command=None,
             model=role_model,
-            effort=role_effort,
+            effort=rebuttal_effort,
             host=resolve_host(target_role_key, policy),
             options=role_options,
         )
@@ -1385,8 +1420,13 @@ class Orchestrator:
         elif simulate:
             resolution_output = f"[simulated resolution from {challenger_name}] ACCEPT: Satisfied."
         else:
-            ch_runner_kind, ch_role_model, ch_role_effort = resolve_runner(
-                challenger_role_key, policy
+            # The challenger's OWN stage's model/effort override this
+            # dispatch — mirrors the target dispatch above.
+            ch_runner_kind, ch_role_model, ch_effort = resolve_stage_dispatch(
+                challenger_role_key,
+                policy,
+                stage_model=challenger_stage.model,
+                stage_effort=challenger_stage.effort,
             )
             ch_role = get_role(challenger_role_key)
             ch_role_perm = ch_role.permission_mode
@@ -1398,7 +1438,7 @@ class Orchestrator:
                 kind=cast(RunnerKind, ch_runner_kind),
                 command=None,
                 model=ch_role_model,
-                effort=ch_role_effort,
+                effort=ch_effort,
                 host=resolve_host(challenger_role_key, policy),
                 options=ch_role_options,
             )
@@ -1767,6 +1807,12 @@ class Orchestrator:
                 # "cli" default) and propagate it into every step's dispatch.
                 mode=resolve_mode(pipeline, stage),
                 stage_skills=list(stage.skills) if stage.skills else None,
+                # Resolve the stage's model/effort defaults (stage over
+                # pipeline, None otherwise) and propagate them into every
+                # role-driven step's dispatch (see `resolve_stage_dispatch`,
+                # which layers a policy `role_overrides` entry OVER these).
+                stage_model=resolve_stage_model(pipeline, stage),
+                stage_effort=resolve_effort(pipeline, stage),
                 prior_context=_route_prior_context(
                     role=consuming_role,
                     prior_chunks=prior_chunks,
@@ -2069,7 +2115,7 @@ class Orchestrator:
         from typing import cast
 
         from hivepilot.models import RunnerKind, TaskStep
-        from hivepilot.roles import get_role, resolve_host, resolve_runner
+        from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
         from hivepilot.runners.base import RunnerPayload
 
         row = state_service.get_approval(run_id)
@@ -2095,7 +2141,9 @@ class Orchestrator:
             policy = None
 
         if cos_role is not None:
-            runner_kind, role_model, role_effort = resolve_runner(cos_role_key, policy)
+            # No pipeline stage exists at this out-of-band, paused-approval
+            # entry point — resolves identically to `resolve_runner`.
+            runner_kind, role_model, hc_effort = resolve_stage_dispatch(cos_role_key, policy)
             role_perm = cos_role.permission_mode
             role_options: dict[str, str] = {}
             if role_perm:
@@ -2105,7 +2153,7 @@ class Orchestrator:
                 kind=cast(RunnerKind, runner_kind),
                 command=None,
                 model=role_model,
-                effort=role_effort,
+                effort=hc_effort,
                 host=resolve_host(cos_role_key, policy),
                 options=role_options,
             )
@@ -2443,6 +2491,8 @@ class Orchestrator:
         approved_step_index: int | None = None,
         mode: str = "cli",
         stage_skills: list[str] | None = None,
+        stage_model: str | None = None,
+        stage_effort: EffortLevel | None = None,
     ) -> str | None:
         """Thin OpenTelemetry-tracing wrapper around `_execute_task_body`.
 
@@ -2490,6 +2540,8 @@ class Orchestrator:
                     approved_step_index=approved_step_index,
                     mode=mode,
                     stage_skills=stage_skills,
+                    stage_model=stage_model,
+                    stage_effort=stage_effort,
                 )
             except StepApprovalPending:
                 _task_span.set_attribute("hivepilot.task.status", "paused")
@@ -2522,6 +2574,8 @@ class Orchestrator:
         approved_step_index: int | None = None,
         mode: str = "cli",
         stage_skills: list[str] | None = None,
+        stage_model: str | None = None,
+        stage_effort: EffortLevel | None = None,
     ) -> str | None:
         """Execute *task*'s steps for *project*.
 
@@ -2537,6 +2591,15 @@ class Orchestrator:
         that was already approved (so its own gate isn't re-triggered) — any
         LATER destructive step in the same task still gates normally,
         re-pausing the run (see ``StepApprovalPending``).
+
+        ``stage_model``/``stage_effort`` (roles-model-effort-config-owned
+        PRD, Sprint 1) are the pipeline/stage-resolved model + reasoning-
+        effort defaults for THIS task's role-driven steps (see
+        ``resolve_stage_model``/``resolve_effort`` in ``run_pipeline``) —
+        threaded into ``hivepilot.roles.resolve_stage_dispatch`` alongside
+        ``policy`` at each role-based dispatch site below. Both default to
+        ``None`` for a plain (non-pipeline) task run, which resolves
+        byte-identically to before these fields existed.
         """
         logger.info("task.start", project=project.path.name, task=task_name)
         metadata = {"extra_prompt": extra_prompt or "", "prior_context": prior_context or ""}
@@ -2687,9 +2750,18 @@ class Orchestrator:
                             from typing import cast
 
                             from hivepilot.models import RunnerDefinition, RunnerKind
-                            from hivepilot.roles import get_role, resolve_host, resolve_runner
+                            from hivepilot.roles import (
+                                get_role,
+                                resolve_host,
+                                resolve_stage_dispatch,
+                            )
 
-                            runner_kind, role_model, role_effort = resolve_runner(task.role, policy)
+                            runner_kind, role_model, resolved_effort = resolve_stage_dispatch(
+                                task.role,
+                                policy,
+                                stage_model=stage_model,
+                                stage_effort=stage_effort,
+                            )
                             role_options: dict[str, str] = {}
                             role_perm = get_role(task.role).permission_mode
                             if role_perm:
@@ -2699,7 +2771,7 @@ class Orchestrator:
                                 kind=cast(RunnerKind, runner_kind),
                                 command=None,
                                 model=role_model,
-                                effort=role_effort,
+                                effort=resolved_effort,
                                 host=resolve_host(task.role, policy),
                                 options=role_options,
                             )
@@ -2963,7 +3035,7 @@ class Orchestrator:
                                         kind=cast(RunnerKind, _next_kind),
                                         command=None,
                                         model=role_model,
-                                        effort=role_effort,
+                                        effort=resolved_effort,
                                         host=resolve_host(task.role, policy),
                                         options=role_options,
                                     )

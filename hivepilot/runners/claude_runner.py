@@ -14,7 +14,13 @@ import requests
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.plugins import SkillSpec
-from hivepilot.runners.base import BaseRunner, RunnerPayload, UsageInfo, set_last_usage
+from hivepilot.runners.base import (
+    BaseRunner,
+    RunnerPayload,
+    UsageInfo,
+    resolve_runner_effort,
+    set_last_usage,
+)
 from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.utils.env import gather_overrides, merge_environments
@@ -72,11 +78,14 @@ _ANTHROPIC_API_MAX_TOKENS = 4096
 # role/step with no `effort` declared performs NO injection at all (see
 # `_resolve_effort`/`_effort_env_overlay`) -- this map only fires when effort
 # is explicitly set, so every existing zero-effort config stays byte-
-# identical to pre-effort behaviour.
+# identical to pre-effort behaviour. Must cover every `EffortLevel`
+# (hivepilot.models); `"xhigh"` is the HivePilot superset level between `high`
+# and `max`, mapped to 40000 tokens (in the 24000..63999 gap).
 EFFORT_TOKEN_MAP: dict[str, int] = {
     "low": 4000,
     "medium": 12000,
     "high": 24000,
+    "xhigh": 40000,
     "max": 63999,
 }
 
@@ -284,13 +293,18 @@ class ClaudeRunner(BaseRunner):
         return args, env
 
     def _resolve_effort(self, payload: RunnerPayload) -> str | None:
-        """Resolve the effective reasoning-effort level for *payload*: an
-        explicit step-level override wins over the runner definition's (role's)
-        resolved effort, mirroring `_resolve_model`'s precedence shape. `None`
-        means no effort declared anywhere -- MAX_THINKING_TOKENS is left unset
-        (unchanged CLI default), never invented.
+        """Resolve the effective reasoning-effort level for *payload* — the
+        value fed to `MAX_THINKING_TOKENS` via `_effort_env_overlay`.
+
+        Delegates to the shared `hivepilot.runners.base.resolve_runner_effort`
+        so Claude and Codex resolve effort identically: the orchestrator-
+        resolved `RunnerDefinition.effort` (authoritative `policy > stage >
+        role` result) wins; a per-step `TaskStep.effort` applies only as a
+        fallback when nothing was resolved upstream. `None` means no effort
+        declared anywhere -- MAX_THINKING_TOKENS is left unset (unchanged CLI
+        default), never invented.
         """
-        return payload.step.effort or self.definition.effort
+        return resolve_runner_effort(self.definition, payload.step)
 
     def _effort_env_overlay(self, payload: RunnerPayload) -> dict[str, str]:
         """Return `{"MAX_THINKING_TOKENS": "<tokens>"}` when *payload* resolves

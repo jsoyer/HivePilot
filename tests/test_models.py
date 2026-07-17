@@ -212,7 +212,7 @@ def test_runner_definition_effort_accepts_valid_level() -> None:
 
 def test_runner_definition_effort_rejects_invalid_level() -> None:
     with pytest.raises(pydantic.ValidationError):
-        RunnerDefinition(kind="claude", effort="bogus")
+        RunnerDefinition(kind="claude", effort="bogus")  # type: ignore[arg-type]
 
 
 def test_runner_definition_effort_defaults_to_none() -> None:
@@ -227,7 +227,7 @@ def test_task_step_effort_accepts_valid_level() -> None:
 
 def test_task_step_effort_rejects_invalid_level() -> None:
     with pytest.raises(pydantic.ValidationError):
-        TaskStep(name="x", runner="claude", effort="bogus")
+        TaskStep(name="x", runner="claude", effort="bogus")  # type: ignore[arg-type]
 
 
 def test_task_step_effort_defaults_to_none() -> None:
