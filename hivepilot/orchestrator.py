@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import math
 import subprocess
 import threading
 from collections.abc import Iterable
@@ -512,7 +513,14 @@ def _parse_verdict(raw: str) -> Verdict:
         return Verdict(decision=None, confidence=None)
 
     confidence_raw = data.get("confidence")
-    if not isinstance(confidence_raw, (int, float)) or isinstance(confidence_raw, bool):
+    if (
+        not isinstance(confidence_raw, (int, float))
+        or isinstance(confidence_raw, bool)
+        or not math.isfinite(confidence_raw)
+    ):
+        # Non-numeric, bool, or non-finite (NaN/Infinity, which json.loads
+        # accepts by default) confidence is untrustworthy -> no confident
+        # decision. A garbage response must never become MAX confidence.
         return Verdict(decision=None, confidence=None)
     confidence = max(0.0, min(1.0, float(confidence_raw)))
 

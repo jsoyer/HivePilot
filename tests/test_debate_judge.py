@@ -135,6 +135,30 @@ class TestFlagOffByteIdentical:
         # simulate=True + judge off => zero real runner calls of any kind
         orch.registry.capture_definition.assert_not_called()
 
+    def test_flag_off_real_brains_make_exactly_two_capture_calls(self, monkeypatch) -> None:
+        """With real brains (simulate=False) and the judge OFF, there must be
+        exactly 2 `capture_definition` calls (one per brain) and NO 3rd judge
+        call — the flag-off path spawns no judge runner."""
+        from hivepilot.models import ProjectConfig
+
+        assert settings.enable_debate_judge is False  # sprint invariant
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        monkeypatch.setattr(orch, "_project", lambda name: ProjectConfig(path=Path("/tmp/p")))
+        monkeypatch.setattr(orch, "_resolve_secrets", lambda *a, **k: {})
+        monkeypatch.setattr("hivepilot.services.debate_service.DebateService", _FakeDebate)
+
+        orch.registry.capture_definition.side_effect = ["brain one output", "brain two output"]
+
+        with patch("hivepilot.orchestrator.state_service.record_interaction"):
+            orch.run_debate(project_name="p", role_name="ceo", topic="adopt X?", simulate=False)
+
+        # exactly 2 brain calls, NO judge call
+        assert orch.registry.capture_definition.call_count == 2
+        assert _FakeDebate.captured["decision"].startswith("Synthesis of 2 model proposals")
+        assert _FakeDebate.captured["confidence"] is None
+
 
 # ---------------------------------------------------------------------------
 # Judge enabled — real synthesis (mocked capture_definition)
@@ -336,3 +360,117 @@ class TestDebateResultConfidence:
         result = svc.synthesize(topic="t", positions=positions)
         assert "adopt" in result.decision.lower()
         assert result.confidence is None
+
+
+# ---------------------------------------------------------------------------
+# _parse_verdict — direct unit tests of the fail-safe parse contract.
+# This is the security-relevant core: a malformed/garbage judge response must
+# NEVER become a confident (or fabricated) decision.
+# ---------------------------------------------------------------------------
+
+
+class TestParseVerdict:
+    def test_valid_json_produces_decision_and_confidence(self) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict('{"decision": "Ship it", "confidence": 0.8}')
+        assert v.decision == "Ship it"
+        assert v.confidence == 0.8
+
+    def test_fenced_json_block_is_stripped_and_parsed(self) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict('```json\n{"decision": "Ship it", "confidence": 0.5}\n```')
+        assert v.decision == "Ship it"
+        assert v.confidence == 0.5
+
+    def test_per_role_stance_is_parsed_when_valid(self) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict(
+            '{"decision": "d", "confidence": 0.5, "per_role_stance": {"ceo": "favor"}}'
+        )
+        assert v.per_role_stance == {"ceo": "favor"}
+
+    def test_invalid_per_role_stance_is_dropped_not_fatal(self) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict('{"decision": "d", "confidence": 0.5, "per_role_stance": [1, 2]}')
+        assert v.decision == "d"
+        assert v.per_role_stance is None
+
+    @pytest.mark.parametrize("raw", ["", "   ", "\n\t "])
+    def test_empty_or_whitespace_returns_no_decision(self, raw: str) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict(raw)
+        assert v.decision is None
+        assert v.confidence is None
+
+    def test_non_json_garbage_returns_no_decision(self) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict("this is not json at all")
+        assert v.decision is None
+        assert v.confidence is None
+
+    @pytest.mark.parametrize("raw", ["[1, 2]", '"hello"', "42"])
+    def test_non_object_json_returns_no_decision(self, raw: str) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict(raw)
+        assert v.decision is None
+        assert v.confidence is None
+
+    def test_missing_decision_key_returns_no_decision(self) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict('{"confidence": 0.9}')
+        assert v.decision is None
+        assert v.confidence is None
+
+    @pytest.mark.parametrize("decision", [None, "", "   "])
+    def test_null_or_empty_decision_returns_no_decision(self, decision) -> None:
+        import json
+
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict(json.dumps({"decision": decision, "confidence": 0.9}))
+        assert v.decision is None
+        assert v.confidence is None
+
+    def test_missing_confidence_returns_no_decision(self) -> None:
+        # Contract: confidence is REQUIRED — a decision without a numeric
+        # confidence is not a confident decision, so the whole verdict is void.
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict('{"decision": "Ship it"}')
+        assert v.decision is None
+        assert v.confidence is None
+
+    def test_bool_confidence_is_not_accepted(self) -> None:
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict('{"decision": "Ship it", "confidence": true}')
+        assert v.decision is None
+        assert v.confidence is None
+
+    @pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+    def test_non_finite_confidence_returns_no_decision(self, token: str) -> None:
+        # json.loads accepts bare NaN/Infinity tokens by default; a non-finite
+        # confidence must NOT be clamped into a (max) value — it is untrusted.
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict('{"decision": "Ship it", "confidence": %s}' % token)
+        assert v.decision is None
+        assert v.confidence is None
+
+    @pytest.mark.parametrize(("raw_conf", "expected"), [(1.5, 1.0), (-0.3, 0.0), (5, 1.0)])
+    def test_out_of_range_confidence_is_clamped(self, raw_conf, expected: float) -> None:
+        import json
+
+        from hivepilot.orchestrator import _parse_verdict
+
+        v = _parse_verdict(json.dumps({"decision": "Ship it", "confidence": raw_conf}))
+        assert v.decision == "Ship it"
+        assert v.confidence == expected
