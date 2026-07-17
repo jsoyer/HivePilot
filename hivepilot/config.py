@@ -113,6 +113,16 @@ class Settings(BaseSettings):
     # load once at PluginManager construction, no live reload).
     # env: HIVEPILOT_PLUGINS_DISABLED
     plugins_disabled: list[str] = Field(default_factory=list)
+    # Phase 26b Approach A — URL of a JSON "plugin index" document (name/
+    # description/author/homepage/install-hint/version/checksum) that
+    # `plugins search`/`info` fetch and display (hivepilot/services/
+    # plugin_index.py). METADATA ONLY: the index is never used to download
+    # or execute plugin code — installation stays on the operator's own
+    # pip/git path (see docs/v4/PLUGINS.md "Trust model"). Empty (default)
+    # means no index is configured; `plugins search`/`info` then fail fast
+    # with a friendly message instead of making any network call.
+    # env: HIVEPILOT_PLUGINS_INDEX_URL
+    plugins_index_url: str = ""
     discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
     api_host: str = "127.0.0.1"
     api_port: int = 8045

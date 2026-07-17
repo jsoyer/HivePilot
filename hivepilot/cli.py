@@ -3156,6 +3156,116 @@ def plugins_tui() -> None:
     PluginManagerApp().run()
 
 
+@plugins_app.command("search")
+def plugins_search(
+    query: str = typer.Argument("", help="Substring to match against plugin name/description"),
+) -> None:
+    """Search the configured plugin discovery INDEX (Phase 26b Approach A).
+
+    METADATA ONLY — see docs/v4/PLUGINS.md "Trust model": this fetches a
+    small JSON document (name/description/install-hint/checksum) from
+    `HIVEPILOT_PLUGINS_INDEX_URL` and displays it. It never downloads or
+    executes plugin code; installation stays on your own `pip install` /
+    `git clone` (see `plugins info <name>` for the exact command).
+    """
+    from rich.console import Console
+    from rich.markup import escape as rich_escape
+    from rich.table import Table
+
+    from hivepilot.services.plugin_index import fetch_index, format_install_hint, search_index
+
+    try:
+        entries = fetch_index()
+    except RuntimeError as exc:
+        typer.echo(f"plugins search: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    matches = search_index(entries, query)
+
+    console = Console(width=200)
+    table = Table(title="Plugin Index")
+    table.add_column("name")
+    table.add_column("version")
+    table.add_column("description")
+    table.add_column("install")
+    for entry in matches:
+        # Every index field is ATTACKER-CONTROLLED (compromised/MITM'd index
+        # host) — escape before it ever reaches rich's Table renderer, which
+        # otherwise interprets `[...]` as markup (style injection, or a
+        # crash on unbalanced tags) even when Rich's own color output is
+        # suppressed for a non-terminal. See plugin_index.py's parse-time
+        # control-char stripping for the other half of this defense.
+        table.add_row(
+            rich_escape(entry.name),
+            rich_escape(entry.version or "-"),
+            rich_escape(entry.description),
+            rich_escape(format_install_hint(entry.install)),
+        )
+    if not matches:
+        table.add_row("-", "-", "-", "-")
+    console.print(table)
+
+
+@plugins_app.command("info")
+def plugins_info(
+    name: str = typer.Argument(..., help="Plugin name as listed in the index"),
+) -> None:
+    """Show full index metadata for one plugin: description, author,
+    homepage, contributes, checksum, and the exact install command to run
+    yourself (Phase 26b Approach A).
+
+    METADATA ONLY — this command never installs anything for you (see
+    docs/v4/PLUGINS.md "Trust model"). It only prints the `pip install` /
+    `git clone` command the operator should run through their own trusted
+    path.
+    """
+    from rich.console import Console
+    from rich.markup import escape as rich_escape
+    from rich.table import Table
+
+    from hivepilot.services.plugin_index import fetch_index, format_install_hint
+
+    try:
+        entries = fetch_index()
+    except RuntimeError as exc:
+        typer.echo(f"plugins info: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    entry = next((e for e in entries if e.name.lower() == name.lower()), None)
+    if entry is None:
+        typer.echo(f"plugins info: no plugin named {name!r} found in the index", err=True)
+        raise typer.Exit(1)
+
+    orchestrator = Orchestrator()
+    installed = any(record.name == entry.name for record in orchestrator.plugins.loaded)
+
+    # Every index field is ATTACKER-CONTROLLED (compromised/MITM'd index
+    # host) — escape before it ever reaches rich's Table renderer. See
+    # plugin_index.py's parse-time control-char stripping for the other
+    # half of this defense, and `format_install_hint`'s own allow-list
+    # validation for the install command specifically.
+    console = Console(width=200)
+    table = Table(title=f"Plugin: {rich_escape(entry.name)}")
+    table.add_column("field")
+    table.add_column("value")
+    table.add_row("name", rich_escape(entry.name))
+    table.add_row("version", rich_escape(entry.version or "-"))
+    table.add_row("description", rich_escape(entry.description))
+    table.add_row("author", rich_escape(entry.author or "-"))
+    table.add_row("homepage", rich_escape(entry.homepage or "-"))
+    table.add_row(
+        "contributes",
+        rich_escape(", ".join(entry.contributes) if entry.contributes else "-"),
+    )
+    table.add_row("checksum", rich_escape(entry.checksum or "-"))
+    table.add_row("installed locally", "yes" if installed else "no")
+    table.add_row(
+        "install command",
+        rich_escape(f"To install, run: {format_install_hint(entry.install)}"),
+    )
+    console.print(table)
+
+
 @skills_app.command("list")
 def skills_list() -> None:
     """List every registered plugin-contributed skill (skill-plugin-type PRD,

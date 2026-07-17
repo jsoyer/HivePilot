@@ -1689,6 +1689,41 @@ disappears from this table's "loaded" list after restart — re-enable it via
 the TUI at all; it complements `plugins_enabled` (the master on/off switch
 for ALL plugin loading) with a per-plugin skip list.
 
+## Discovering plugins (Phase 26b Approach A — index-based marketplace)
+
+```bash
+export HIVEPILOT_PLUGINS_INDEX_URL=https://example.com/hivepilot-plugin-index.json
+hivepilot plugins search           # list every plugin in the index
+hivepilot plugins search hugo      # case-insensitive substring match on name+description
+hivepilot plugins info hugo        # full metadata for one plugin, by name
+```
+
+**The trust model is unchanged.** These two commands fetch a single JSON
+document — the "plugin index" — a list of entries with `name`,
+`description`, `author`, `homepage`, `install` (`{"type": "pip"|"git",
+"target": ...}`), `version`, `checksum`, and `contributes`. That document is
+**inert metadata**, nothing more: `hivepilot` never downloads, imports, or
+executes any plugin code as part of `search` or `info`, and neither command
+runs an install for you. `plugins info <name>` prints the exact command
+(`pip install <package>` or `git clone <url>`) for you to run yourself,
+through the same trusted path described in "Trust model" above (your own
+`pip`/`git`, not a HivePilot-initiated fetch of code) — plus the entry's
+`checksum` so you can verify what you installed matches what the index
+advertised. See `hivepilot/services/plugin_index.py`.
+
+- **`HIVEPILOT_PLUGINS_INDEX_URL`** (`settings.plugins_index_url`, default
+  `""`) — the index URL. When unset, `search`/`info` print a friendly
+  "no plugin index configured" message and exit non-zero **without making
+  any network call**.
+- **Fail-safe by design** — a network error, timeout, non-200 response, or
+  invalid JSON from the index never crashes the CLI or leaks a raw
+  response body/traceback; it's turned into a short, friendly stderr
+  message + a non-zero exit. A malformed individual entry inside an
+  otherwise-valid index is skipped (logged) rather than failing the whole
+  fetch.
+- `plugins info <name>` also notes whether that plugin is already present
+  in your local **Loaded Plugins** inventory (`plugins list`), by name.
+
 Requires the `dashboard`/`full` extra (`pip install "hivepilot[dashboard]"`
 — ships `textual`); without it, and without the env var set, the command
 prints a message and exits instead of crashing.
