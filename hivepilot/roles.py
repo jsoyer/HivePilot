@@ -65,6 +65,15 @@ class Role(BaseModel):
     # Task name that direct-agent commands (/ask <agent>, /dev, etc.) run for
     # this role. None means the role has no direct-command task (e.g. auditor).
     command_task: str | None = None
+    # Reasoning-effort knob — the ROLE tier of the unified
+    # ``policy > stage > role > runner-default`` precedence (see
+    # ``resolve_stage_dispatch`` and ``hivepilot.models.EffortLevel``). A
+    # stage- or policy-level effort outranks this; ``None`` (default) means no
+    # effort declared for this role, so dispatch stays byte-identical to a
+    # pre-effort config. Validated as a closed ``EffortLevel`` literal — the
+    # Claude runner maps the resolved level to ``MAX_THINKING_TOKENS`` and the
+    # Codex runner to ``-c model_reasoning_effort=<level>``.
+    effort: EffortLevel | None = None
 
 
 # NOTE (Sprint 2, runner-defaults-plugins-mode PRD): `runner="opencode"` /
@@ -277,40 +286,39 @@ def refresh_roles() -> None:
 ROLES: dict[str, Role] = load_roles()
 
 
-def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, str | None]:
-    """Resolve the effective (runner_kind, model) for *role_name*.
+def resolve_runner(
+    role_name: str, policy: object | None = None
+) -> tuple[str, str | None, EffortLevel | None]:
+    """Resolve the effective ``(runner_kind, model, effort)`` for *role_name*.
 
     Defaults come from the role binding (ROLES); a per-project policy may override
     runner/model (``role_overrides``) and constrain runners (``allowed_runners``).
+    ``effort`` is the role's own ``Role.effort`` — the ROLE tier of the unified
+    ``policy > stage > role > runner-default`` precedence (see
+    ``resolve_stage_dispatch``, which layers stage/policy effort over this).
     Raises if the role has no runner or the resolved runner is not allowed.
-
-    Unchanged implementation (roles-model-effort-config-owned PRD, Sprint 1) —
-    kept standalone, rather than reimplemented on top of
-    ``resolve_stage_dispatch``, so every existing caller (and every existing
-    test that patches ``hivepilot.roles.resolve_runner`` directly) keeps
-    working byte-identically. ``resolve_stage_dispatch`` below delegates BACK
-    to this function whenever it has no stage override to apply.
     """
     role = ROLES[role_name]
     runner = role.runner
     model = role.model or (role.models[0] if role.models else None)
+    effort: EffortLevel | None = role.effort
     if policy is not None:
         override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
         runner = override.get("runner", runner)
         model = override.get("model", model)
         allowed = getattr(policy, "allowed_runners", None)
         # Fail-closed: an explicit empty list ([]) means "deny every runner",
-        # NOT "no constraint". Only `None` (absent) means unconstrained. Using a
-        # plain truthiness check here would treat [] as falsy and skip the gate
-        # entirely (fail-OPEN) — the same sentinel/falsy class of bug as an
-        # unknown-role `-1` inverting a `<` comparison.
+        # NOT "no constraint". Only `None` (absent) means unconstrained. A plain
+        # truthiness check would treat [] as falsy and skip the gate entirely
+        # (fail-OPEN) — the same sentinel/falsy class of bug as an unknown-role
+        # `-1` inverting a `<` comparison.
         if allowed is not None and runner not in allowed:
             raise RuntimeError(
                 f"Role '{role_name}' resolves to runner '{runner}', not in allowed_runners {allowed}."
             )
     if not runner:
         raise RuntimeError(f"Role '{role_name}' has no runner binding.")
-    return runner, model
+    return runner, model, effort
 
 
 def resolve_stage_dispatch(
@@ -320,78 +328,53 @@ def resolve_stage_dispatch(
     stage_effort: EffortLevel | None = None,
 ) -> tuple[str, str | None, EffortLevel | None]:
     """Resolve the effective ``(runner_kind, model, effort)`` for *role_name*
-    within an (optional) pipeline stage, applying the precedence:
+    within an (optional) pipeline stage, applying the UNIFIED precedence:
 
         policy.role_overrides  >  stage  >  role  >  runner-default
 
-    - ``runner``: the role's own binding, overridable by a policy
-      ``role_overrides[role].runner`` entry. A stage never sets a runner in
-      this sprint — only ``model``/``effort`` — so there is no stage layer
-      for this element.
-    - ``model``: the role's own binding (``role.model`` or the first entry of
-      ``role.models``) as the base; *stage_model* (already resolved against
-      the pipeline default by the caller — see
-      ``hivepilot.models.resolve_stage_model``) overrides it; a policy
-      ``role_overrides[role].model`` entry outranks BOTH, because policy is
-      the security control that must never be short-circuited by a stage
-      author.
-    - ``effort``: ``None`` by default (roles have no effort concept of their
-      own); *stage_effort* (already resolved against the pipeline default —
-      see ``hivepilot.models.resolve_effort``) overrides it; a policy
-      ``role_overrides[role].effort`` entry outranks both. ``None`` reaching
-      a runner means "use that runner's own unset-default" (e.g.
-      ``CodexRunner`` falls back to ``"medium"``).
+    Both the stage- and role-level effort systems collapse into this single
+    chain (they were reconciled from two independently-shipped mechanisms — the
+    stage/pipeline model+effort knob and the per-role/step Claude effort knob):
 
-    ``allowed_runners`` is still enforced fail-closed against the FINAL
-    resolved runner, exactly as before this helper existed.
+    - ``runner``: the role's binding, overridable by policy
+      ``role_overrides[role].runner`` (a stage never sets a runner here).
+    - ``model``: role binding base; *stage_model* (already resolved against the
+      pipeline default — see ``hivepilot.models.resolve_stage_model``) overrides
+      it; policy ``role_overrides[role].model`` outranks BOTH.
+    - ``effort``: the ROLE's own ``Role.effort`` is the base (via
+      ``resolve_runner`` — role IS a real fallback tier, not "no concept");
+      *stage_effort* (see ``hivepilot.models.resolve_effort``) overrides it;
+      policy ``role_overrides[role].effort`` outranks both. ``None`` reaching a
+      runner means "use that runner's own unset-default" (e.g. ``CodexRunner``
+      falls back to ``"medium"``; the Claude runner injects no
+      ``MAX_THINKING_TOKENS``).
 
-    Raises if the role has no runner or the resolved runner is not allowed.
+    Policy is the top security control and must never be short-circuited by a
+    stage author — hence it is re-applied LAST, on top of the stage layer, even
+    though ``resolve_runner`` already baked it into ``model``.
 
-    When *stage_model* and *stage_effort* are BOTH ``None`` (no stage
-    override at all — the exact shape a plain ``resolve_runner`` call has),
-    this delegates entirely to ``resolve_runner`` for the ``(runner, model)``
-    pair — the SAME code path every existing caller/test already exercises —
-    and only independently resolves ``effort`` from a policy override (a
-    stage-less call has no other source for it). This keeps the "stage sets
-    nothing" case byte-identical, including for tests that mock
-    ``resolve_runner`` directly rather than the ROLES registry.
+    Implemented entirely on top of ``resolve_runner`` (which owns the base
+    resolution AND the fail-closed ``allowed_runners`` gate against the FINAL
+    runner), so this shares one code path with every direct caller/test — when
+    *stage_model*/*stage_effort* are both ``None`` the result is byte-identical
+    to ``resolve_runner`` (the policy re-apply is idempotent).
     """
-    if stage_model is None and stage_effort is None:
-        runner, model = resolve_runner(role_name, policy)
-        effort: EffortLevel | None = None
-        if policy is not None:
-            override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
-            effort = override.get("effort")
-        return runner, model, effort
+    runner, model, effort = resolve_runner(role_name, policy)
 
-    role = ROLES[role_name]
-    runner = role.runner
-    model = role.model or (role.models[0] if role.models else None)
-    effort = None
-
-    # Stage layer.
+    # Stage layer — overrides the role base (but never policy, re-applied below).
     if stage_model is not None:
         model = stage_model
     if stage_effort is not None:
         effort = stage_effort
 
-    # Policy layer — outranks the stage layer above for every field it sets.
+    # Policy layer — top of precedence. `resolve_runner` already applied
+    # policy.model; re-apply here so a stage_model cannot outrank policy.
     if policy is not None:
         override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
-        runner = override.get("runner", runner)
-        model = override.get("model", model)
-        effort = override.get("effort", effort)
-        allowed = getattr(policy, "allowed_runners", None)
-        # Fail-closed: an explicit empty list ([]) means "deny every runner",
-        # NOT "no constraint". Only `None` (absent) means unconstrained. Mirrors
-        # the identical gate in `resolve_runner` — the parity test
-        # `test_allowed_runners_gate_parity_*` asserts the two paths agree.
-        if allowed is not None and runner not in allowed:
-            raise RuntimeError(
-                f"Role '{role_name}' resolves to runner '{runner}', not in allowed_runners {allowed}."
-            )
-    if not runner:
-        raise RuntimeError(f"Role '{role_name}' has no runner binding.")
+        if "model" in override:
+            model = override["model"]
+        if "effort" in override:
+            effort = override["effort"]
     return runner, model, effort
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -22,15 +22,39 @@ def _dedup_ordered(value: list[str] | None) -> list[str] | None:
     return result
 
 
-# Closed set of reasoning-effort levels a role/stage/policy can request
-# (roles-model-effort-config-owned PRD, Sprint 1). Deliberately a closed
-# `Literal` (not a plain `str`, unlike `RunnerKind`) — effort is an internal
-# HivePilot concept mapped per-runner (e.g. Codex's `model_reasoning_effort`),
-# not an external, ever-growing plugin-contributed namespace, so a typo should
-# fail loudly at config-load time rather than silently reach a runner.
+# THE single reasoning-effort type — the one definition used everywhere a
+# role/stage/policy/step can request an effort level (RunnerDefinition,
+# TaskStep, PipelineStage, PipelineConfig here; Role in hivepilot/roles.py).
+# This reconciles two independently-shipped effort systems (the stage/pipeline
+# model+effort knob and the per-role/step Claude effort knob) into ONE closed
+# set. Deliberately a closed `Literal` (not a plain `str`, unlike `RunnerKind`)
+# — effort is an internal HivePilot concept mapped per-runner (Claude ->
+# `MAX_THINKING_TOKENS`, Codex -> `-c model_reasoning_effort=<level>`), not an
+# external plugin-contributed namespace, so a typo fails loudly at config-load
+# time. `"xhigh"` is a HivePilot superset level between `high` and `max` (the
+# Claude runner maps it to a token budget in that gap; the Codex runner passes
+# the literal string through).
 EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
 
 RunnerKind = str
+
+# The legal effort strings as a tuple, DERIVED from `EffortLevel` so there is a
+# single source of truth (pydantic validates the `EffortLevel`-typed fields
+# directly; this tuple + `validate_effort` are the programmatic guard for any
+# non-pydantic caller, and the Claude-runner token-budget map in
+# `hivepilot.runners.claude_runner.EFFORT_TOKEN_MAP` must cover exactly it).
+EFFORT_LEVELS: tuple[str, ...] = get_args(EffortLevel)
+
+
+def validate_effort(value: str | None) -> str | None:
+    """Programmatic guard for an effort level outside a pydantic field.
+    `None` means "no effort declared" (byte-identical to pre-effort behaviour)
+    and is always allowed; any non-`None` value must be one of `EFFORT_LEVELS`
+    (i.e. a valid `EffortLevel`)."""
+    if value is not None and value not in EFFORT_LEVELS:
+        raise ValueError(f"effort must be one of {EFFORT_LEVELS} or None, got {value!r}")
+    return value
+
 
 # Built-in kinds, for docs/help/typing only — NOT enforced at runtime; see RunnerRegistry.
 #
@@ -80,13 +104,15 @@ class RunnerDefinition(BaseModel):
     kind: RunnerKind
     command: str | None = None
     model: str | None = None
-    # Resolved reasoning-effort level (roles-model-effort-config-owned PRD,
-    # Sprint 1) — carries the orchestrator's `policy > stage > role >
-    # runner-default` precedence result (see
+    # Resolved reasoning-effort level — carries the orchestrator's authoritative
+    # `policy > stage > role > runner-default` precedence result (see
     # `hivepilot.roles.resolve_stage_dispatch`) through to the runner. `None`
     # means "no effort configured anywhere in the chain"; each runner decides
-    # its own unset-default (e.g. `CodexRunner` falls back to `"medium"`).
-    # Runners with no effort concept (most CLIs) simply ignore this field.
+    # its own unset-default (Codex falls back to `"medium"`; Claude injects no
+    # `MAX_THINKING_TOKENS`). Runners with no effort concept ignore this field.
+    # This is the value each runner treats as authoritative — a per-step
+    # `TaskStep.effort` only applies as a fallback when this is `None` (see
+    # `hivepilot.runners.base.resolve_runner_effort`).
     effort: EffortLevel | None = None
     agent: str | None = None
     append_prompt: str | None = None
@@ -121,6 +147,13 @@ class TaskStep(BaseModel):
     # and gated by each skill's optional `min_role` -- see
     # `hivepilot/services/config_validation.py`.
     skills: list[str] | None = None
+    # Per-step reasoning-effort override. In the unified precedence this is a
+    # FALLBACK beneath the orchestrator-resolved `RunnerDefinition.effort`
+    # (policy > stage > role): it only takes effect when nothing was resolved
+    # upstream, so a step can never silently override a stage- or policy-
+    # mandated effort (see `hivepilot.runners.base.resolve_runner_effort`).
+    # None (default) means no override -- byte-identical to pre-effort behaviour.
+    effort: EffortLevel | None = None
 
     @field_validator("skills")
     @classmethod
