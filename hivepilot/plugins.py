@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata as metadata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Callable, NamedTuple, TypedDict
 
@@ -13,12 +13,32 @@ logger = get_logger(__name__)
 
 PLUGIN_ENTRY_POINT_GROUP = "hivepilot.plugins"
 
+# The closed set of values `PluginRecord.source` may take:
+# - "local-file": discovered by `_scan_local_plugins` scanning `plugins/*.py`
+# - "entry-point": discovered via the `hivepilot.plugins` entry-point group
+# - "explicit-entry": the single `settings.plugins_entry` module-path pin
+#   (`HIVEPILOT_PLUGINS_ENTRY`) — an arbitrary `module:attr` import that
+#   bypasses both discovery mechanisms above, distinct from "local-file"
+#   even though it's often used to point at a file under `plugins/` (see
+#   `PluginManager.__init__`)
+# - "built-in": reserved for a future non-plugin baseline record; not
+#   currently produced by any loader in this module
+PLUGIN_RECORD_SOURCES = ("local-file", "entry-point", "explicit-entry", "built-in")
+
 
 @dataclass(slots=True)
 class PluginRecord:
     name: str
     source: str
     location: str
+    # Contribution-type -> sorted list of names THIS plugin registered,
+    # e.g. {"runners": ["hugo"], "notifiers": ["obsidian"], "hooks":
+    # ["before_step"]}. Populated by `PluginManager.__init__` as each
+    # plugin's `register()` result is applied — a contribution rolled back
+    # due to a collision (see the atomic rollback block below) is never
+    # recorded here. Defaults to an empty dict for backward compatibility
+    # (e.g. hand-constructed `PluginRecord`s in tests/fixtures).
+    contributions: dict[str, list[str]] = field(default_factory=dict)
 
 
 # Valid `HealthStatus.status` values a health check may report.
@@ -421,14 +441,18 @@ class PluginManager:
                 explicit_entry in settings.plugins_disabled
                 or explicit_module_name in settings.plugins_disabled
             ):
-                logger.info("plugins.skipped_disabled", name=explicit_entry, source="local-file")
+                logger.info(
+                    "plugins.skipped_disabled", name=explicit_entry, source="explicit-entry"
+                )
             else:
                 for fn in load_plugins(entry=explicit_entry):
                     local.append(
                         (
                             fn,
                             PluginRecord(
-                                name=explicit_entry, source="local-file", location=explicit_entry
+                                name=explicit_entry,
+                                source="explicit-entry",
+                                location=explicit_entry,
                             ),
                         )
                     )
@@ -473,6 +497,19 @@ class PluginManager:
             health = hooks.pop("health", None)
             panels = hooks.pop("panels", None)
             skills = hooks.pop("skills", None)
+            # Declared unconditionally (not just inside the `if` below) so
+            # `record.contributions` can be populated from these lists further
+            # down regardless of which contribution types this plugin
+            # declared — a plugin contributing ONLY lifecycle hooks (no
+            # runners/notifiers/secrets/health/panels/skills) never enters
+            # the `if` block below at all, and these must still exist (as
+            # empty lists) for that case.
+            applied_runners: list[str] = []
+            applied_notifiers: list[str] = []
+            applied_secrets: list[str] = []
+            applied_health: list[str] = []
+            applied_panels: list[str] = []
+            applied_skills: list[str] = []
             if runners or notifiers or secrets or health or panels or skills:
                 from hivepilot.registry import (
                     RUNNER_MAP,
@@ -496,12 +533,6 @@ class PluginManager:
                 # instance's `self.health` / `self.panels` / `self.skills`) before
                 # re-raising, so an aborted plugin never leaves orphaned, untracked
                 # registrations behind.
-                applied_runners: list[str] = []
-                applied_notifiers: list[str] = []
-                applied_secrets: list[str] = []
-                applied_health: list[str] = []
-                applied_panels: list[str] = []
-                applied_skills: list[str] = []
                 try:
                     for kind, cls in (runners or {}).items():
                         was_present = kind in RUNNER_MAP
@@ -627,8 +658,40 @@ class PluginManager:
                 if notifiers:
                     self.declared_notifiers.update(notifiers)
 
+            # Whatever keys remain in `hooks` after the six contribution
+            # types above were popped out are lifecycle-hook names
+            # (`before_step`/`after_step`/`on_pipeline_end`/`on_error`/etc.) —
+            # not collision-checked (multiple plugins may each contribute a
+            # callable under the same hook name; every one runs), so no
+            # rollback bookkeeping is needed for these, unlike the six above.
+            applied_hooks = sorted(hooks)
             for hook_name, hook_callable in hooks.items():
                 self.hooks.setdefault(hook_name, []).append(hook_callable)
+
+            # Per-plugin attribution (Phase 26a): record, on THIS plugin's
+            # own PluginRecord, exactly which names it contributed per
+            # contribution type. Only entries that survived the atomic
+            # collision-rollback above (i.e. are still in `applied_*`) are
+            # credited — a plugin whose registration was rolled back never
+            # reaches this line at all (the `except` block above re-raises,
+            # aborting the whole `PluginManager()` construction), so there is
+            # nothing further to guard here.
+            contributions: dict[str, list[str]] = {}
+            if applied_runners:
+                contributions["runners"] = sorted(applied_runners)
+            if applied_notifiers:
+                contributions["notifiers"] = sorted(applied_notifiers)
+            if applied_secrets:
+                contributions["secrets"] = sorted(applied_secrets)
+            if applied_health:
+                contributions["health"] = sorted(applied_health)
+            if applied_panels:
+                contributions["panels"] = sorted(applied_panels)
+            if applied_skills:
+                contributions["skills"] = sorted(applied_skills)
+            if applied_hooks:
+                contributions["hooks"] = applied_hooks
+            record.contributions = contributions
 
             self.loaded.append(record)
 

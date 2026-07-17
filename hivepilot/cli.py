@@ -2803,6 +2803,34 @@ def _health_badge(status: str) -> str:
     return f"[{color}]{status}[/{color}]" if color else status
 
 
+# Rendering order for the per-plugin "contributes" column in `plugins list`'s
+# Loaded Plugins table — mirrors the six `register()` contribution-type keys
+# `PluginManager` pops (`hivepilot/plugins.py`) plus lifecycle `hooks`, in a
+# stable, deterministic order (not insertion order of the underlying dict).
+_CONTRIBUTION_RENDER_ORDER = (
+    "runners",
+    "notifiers",
+    "secrets",
+    "health",
+    "panels",
+    "skills",
+    "hooks",
+)
+
+
+def _format_contributions(contributions: dict[str, list[str]]) -> str:
+    """Render a `PluginRecord.contributions` dict as a compact one-line
+    summary, e.g. `"runners: hugo · hooks: before_step"` — `"-"` when the
+    plugin contributed nothing attributable (e.g. its `register()` returned
+    `{}`, or the record predates Phase 26a attribution)."""
+    parts = [
+        f"{kind}: {', '.join(contributions[kind])}"
+        for kind in _CONTRIBUTION_RENDER_ORDER
+        if contributions.get(kind)
+    ]
+    return " · ".join(parts) if parts else "-"
+
+
 def _print_health_table(
     console: Console, plugins: PluginManager, *, title: str = "Health"
 ) -> dict[str, HealthStatus]:
@@ -2835,7 +2863,11 @@ def plugins_list() -> None:
     v1 simplification: this is an inventory (what's loaded, from where) plus a
     separate list of what runner kinds / notifier names / secrets backends are
     currently registered (built-in vs. plugin-contributed, inferred by
-    membership) — not a full join between the two. See docs/v4/PLUGINS.md.
+    membership) — not a full join between the runner/notifier/secrets
+    taxonomy tables and the Loaded Plugins table. The **Loaded Plugins**
+    table itself DOES carry real per-plugin attribution (Phase 26a) via
+    `PluginRecord.contributions` — see the "contributes" column below.
+    See docs/v4/PLUGINS.md.
     """
     from rich.console import Console
     from rich.table import Table
@@ -2856,10 +2888,13 @@ def plugins_list() -> None:
     plugins_table.add_column("name")
     plugins_table.add_column("source")
     plugins_table.add_column("location")
+    plugins_table.add_column("contributes")
     for record in orchestrator.plugins.loaded:
-        plugins_table.add_row(record.name, record.source, record.location)
+        plugins_table.add_row(
+            record.name, record.source, record.location, _format_contributions(record.contributions)
+        )
     if not orchestrator.plugins.loaded:
-        plugins_table.add_row("-", "-", "-")
+        plugins_table.add_row("-", "-", "-", "-")
     console.print(plugins_table)
 
     # Sprint 5 (runner-defaults-plugins-mode PRD): the agent taxonomy gets its

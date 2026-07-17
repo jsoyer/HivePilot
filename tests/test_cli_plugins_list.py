@@ -188,3 +188,74 @@ def test_plugins_list_includes_loaded_plugin_record(monkeypatch) -> None:
     assert "my_plugin" in result.output
     assert "local-file" in result.output
     assert "plugins/my_plugin.py" in result.output
+
+
+class TestPluginsListContributionAttribution:
+    """Phase 26a: the Loaded Plugins table gains a per-plugin `contributes`
+    column, sourced from `PluginRecord.contributions` — distinct from (and
+    additive to) the existing #198 built-in-vs-plugin taxonomy tables."""
+
+    def test_plugin_with_contributions_shows_attributed_names(self, monkeypatch) -> None:
+        record = PluginRecord(
+            name="hugo",
+            source="local-file",
+            location="plugins/hugo.py",
+            contributions={"runners": ["hugo"], "health": ["hugo"]},
+        )
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = [record]
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "runners: hugo" in result.output
+        assert "health: hugo" in result.output
+
+    def test_plugin_with_no_contributions_shows_placeholder(self, monkeypatch) -> None:
+        record = PluginRecord(name="inert", source="local-file", location="plugins/inert.py")
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = [record]
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "inert" in result.output
+
+    def test_explicit_entry_source_is_rendered(self, monkeypatch) -> None:
+        """A plugin loaded via the `plugins_entry` pin renders its distinct
+        `source="explicit-entry"` value (not `local-file`)."""
+        record = PluginRecord(
+            name="my_pkg:register", source="explicit-entry", location="my_pkg:register"
+        )
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = [record]
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "explicit-entry" in result.output
+
+
+def test_plugins_list_taxonomy_tables_still_render(monkeypatch) -> None:
+    """Regression (#198): the built-in-vs-plugin taxonomy tables (Agent
+    Runners / Other Runner Kinds / Notifiers / Secrets Backends) still render
+    alongside the new per-plugin `contributes` column."""
+    mock_orch = MagicMock()
+    mock_orch.plugins.loaded = []
+    monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["plugins", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "Agent Runners" in result.output
+    assert "Other Runner Kinds" in result.output
+    assert "Notifiers" in result.output
+    assert "Secrets Backends" in result.output
+    assert "Loaded Plugins" in result.output

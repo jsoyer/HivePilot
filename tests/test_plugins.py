@@ -358,3 +358,146 @@ class TestLoadPluginsByPath:
         monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
         loaded = plugins_mod.load_plugins()  # must not raise
         assert len(loaded) == 1  # ok loaded, broken skipped
+
+
+class TestPluginContributionAttribution:
+    """Phase 26a: `PluginRecord.contributions` attributes, to the SPECIFIC
+    plugin that won the registration, exactly which names it contributed per
+    contribution type (runners/notifiers/secrets/health/panels/skills) plus
+    lifecycle hook names — respecting the atomic collision-rollback
+    semantics already covered by `TestPluginHealthSurface` /
+    `tests/test_secrets_plugin.py` / `tests/test_plugin_loading_mechanisms.py`
+    (a contribution rolled back due to a collision is never credited, since
+    the whole `PluginManager()` construction aborts before `record.
+    contributions` is ever set for the colliding plugin).
+    """
+
+    def test_runner_and_hook_contributions_are_attributed(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "combo.py").write_text(
+            """
+class ComboRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def _before_step(**kwargs):
+    return None
+
+
+def register():
+    return {"runners": {"combo-kind": ComboRunner}, "before_step": _before_step}
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        record = next(r for r in pm.loaded if r.name == "combo")
+        assert record.contributions == {"runners": ["combo-kind"], "hooks": ["before_step"]}
+
+    def test_plugin_contributing_nothing_attributable_has_empty_contributions(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "empty.py").write_text("def register():\n    return {}\n", encoding="utf-8")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        record = next(r for r in pm.loaded if r.name == "empty")
+        assert record.contributions == {}
+
+    def test_colliding_contribution_is_not_credited_and_aborts_construction(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A single plugin declaring a runner that succeeds AND one that
+        collides with a builtin (`claude`) never reaches the point where
+        `record.contributions` is populated — the atomic rollback pops the
+        successful entry back out of `RUNNER_MAP` and re-raises BEFORE this
+        plugin's record is even appended to `PluginManager.loaded`, so it can
+        never be "half credited" for the entry that did succeed."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP, RunnerKindCollisionError
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "partial.py").write_text(
+            """
+class FreshRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+class CollidingRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    # 'fresh-kind' registers first, then 'claude' collides with the builtin.
+    return {"runners": {"fresh-kind": FreshRunner, "claude": CollidingRunner}}
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        with pytest.raises(RunnerKindCollisionError):
+            plugins_mod.PluginManager()
+
+        # The rolled-back entry never made it into RUNNER_MAP either — the
+        # same evidence used elsewhere in this suite that a colliding
+        # plugin's contribution is never partially applied, and therefore
+        # never partially credited on a PluginRecord that doesn't even exist
+        # (the constructor raised before `self.loaded.append(record)`).
+        assert "fresh-kind" not in RUNNER_MAP
+
+    def test_all_six_contribution_types_are_attributed_via_bundled_plugins(
+        self, monkeypatch
+    ) -> None:
+        """Exercise real bundled plugins (hugo=runner+health,
+        obsidian=notifier+hooks+health, infisical=secrets+health,
+        sample=hooks+panels) through the real `_scan_local_plugins` discovery
+        path — `settings.base_dir` already defaults to the repo root for
+        every test (see `tests/conftest.py::_isolate_config_resolution`), so
+        no monkeypatch of `base_dir` is needed here; only make sure the
+        plugins under test are enabled regardless of the developer's local
+        `.env` overrides."""
+        from hivepilot import plugins as plugins_mod
+
+        for flag in ("hugo_enabled", "obsidian_enabled", "infisical_enabled", "sample_enabled"):
+            monkeypatch.setattr(plugins_mod.settings, flag, True, raising=False)
+
+        pm = plugins_mod.PluginManager()
+        by_name = {r.name: r for r in pm.loaded}
+
+        assert by_name["hugo"].contributions == {"runners": ["hugo"], "health": ["hugo"]}
+        assert by_name["obsidian"].contributions == {
+            "notifiers": ["obsidian"],
+            "hooks": ["on_error", "on_pipeline_end"],
+            "health": ["obsidian"],
+        }
+        assert by_name["infisical"].contributions == {
+            "secrets": ["infisical"],
+            "health": ["infisical"],
+        }
+        assert by_name["sample"].contributions == {
+            "hooks": ["after_step", "before_step"],
+            "panels": ["sample_stats"],
+        }
