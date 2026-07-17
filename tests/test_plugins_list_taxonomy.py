@@ -174,6 +174,12 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         assert "HIVEPILOT_CODEX_ENABLED" in result.output
         assert "HIVEPILOT_VIBE_ENABLED" in result.output
         assert "HIVEPILOT_OPENROUTER_ENABLED" in result.output
+        # openrouter is the one built-in API-only kind (_api_only_agent_kinds
+        # == frozenset({"openrouter"})); with it active, its row renders the
+        # "API-only" status. This is the positive counterpart to
+        # test_openrouter_disabled_renders_inactive_not_api_only below.
+        assert "openrouter" in RUNNER_MAP
+        assert "API-only" in result.output
 
     def test_builtin_kind_disabled_renders_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Simulates `codex_enabled=False` by removing `codex` from the real
@@ -195,8 +201,49 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         result = runner.invoke(app, ["plugins", "list"])
 
         assert result.exit_code == 0, result.output
-        assert "inactive" in result.output
+        # Row-scoped: a bare `"inactive" in output` would also pass on the
+        # uninstalled optional-plugin agent kinds (gemini/ollama/...), which
+        # legitimately render `inactive` too -- so isolate codex's own row
+        # (lowercase "codex" appears only in that row's kind cell; the enable
+        # flag uses uppercase HIVEPILOT_CODEX_ENABLED) and assert IT flipped.
+        codex_rows = [line for line in result.output.splitlines() if "codex" in line]
+        assert codex_rows, f"codex row not found in Agent Runners table:\n{result.output}"
+        assert any("inactive" in line for line in codex_rows), (
+            f"codex row did not render 'inactive':\n{codex_rows}"
+        )
         assert "HIVEPILOT_CODEX_ENABLED" in result.output
+
+    def test_openrouter_disabled_renders_inactive_not_api_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression guard for the EXACT branch cli.py fixes. openrouter is
+        the sole built-in API-only agent kind (_api_only_agent_kinds ==
+        frozenset({"openrouter"})). The old code set status via
+        `"API-only" if kind in _api_only_agent_kinds else "active"` --
+        UNCONDITIONALLY, so a disabled openrouter (absent from RUNNER_MAP)
+        wrongly rendered "API-only". The fix checks RUNNER_MAP membership
+        FIRST. With openrouter removed and no plugins loaded (loaded=[]), NO
+        row is API-only -- the optional-plugin loop never emits that status --
+        so "API-only" must be entirely absent while openrouter's row shows
+        `inactive`. `conftest.py`'s autouse map-isolation fixture restores
+        RUNNER_MAP afterwards, so this mutation never leaks."""
+        assert "openrouter" in RUNNER_MAP
+        monkeypatch.delitem(RUNNER_MAP, "openrouter")
+
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = []
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "HIVEPILOT_OPENROUTER_ENABLED" in result.output
+        assert "API-only" not in result.output, (
+            "disabled openrouter must render 'inactive', not 'API-only' "
+            f"(branch-ordering regression):\n{result.output}"
+        )
+        assert "inactive" in result.output
 
 
 if __name__ == "__main__":
