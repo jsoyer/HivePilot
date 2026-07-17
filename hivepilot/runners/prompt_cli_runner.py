@@ -358,7 +358,16 @@ class PromptCliRunner(BaseRunner):
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
 
         if provider == "openai":
-            endpoint = env.get("OPENAI_API_BASE", "https://api.openai.com/v1")
+            # OPENAI_BASE_URL is the official openai-python SDK convention
+            # (Sprint 3, runner-defaults-plugins-mode PRD: qwen-code's
+            # OpenAI-compat mode:api needs a custom base_url); OPENAI_API_BASE
+            # is kept as a fallback for backward compat with any existing
+            # caller already relying on it. Neither set -> unchanged default.
+            endpoint = (
+                env.get("OPENAI_BASE_URL")
+                or env.get("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
             api_key = env.get("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY missing.")
@@ -502,3 +511,86 @@ class VibeRunner(PromptCliRunner):
 @dataclass
 class OllamaRunner(PromptCliRunner):
     command_name: str = "ollama run codellama"
+
+
+@dataclass
+class PiRunner(PromptCliRunner):
+    """`pi` coding agent (npm i -g @earendil-works/pi-coding-agent).
+
+    Non-interactive: `pi -p "<prompt>" --model <model> --approve`. `--approve`
+    is the long form of `pi`'s `-a`/`--approve` auto-approve flag — it skips
+    tool-call permission prompts, so (like the other auto-approving CLIs
+    here) running `pi` OUTSIDE a sandboxed worktree/container is NOT
+    recommended for autonomous use. Auth is via whichever provider env var
+    `pi`'s own config expects (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) —
+    no runner-specific handling needed, `merge_environments` already
+    forwards them like any other env var.
+    """
+
+    command_name: str = "pi"
+    prompt_flag: str | None = "-p"
+    cli_flags: tuple[str, ...] = ("--approve",)
+
+
+@dataclass
+class QwenCodeRunner(PromptCliRunner):
+    """Alibaba `qwen-code` CLI (npm i -g @qwen-code/qwen-code).
+
+    Non-interactive: `qwen -p "<prompt>" -m <model> --approval-mode yolo`.
+    `qwen3-coder-plus` is the confirmed default model for this CLI — unlike
+    the base `PromptCliRunner._build_cli_args`, which only ever emits
+    `--model`/`model_flag` when a model is explicitly set on the step or
+    runner definition (no fallback), `qwen-code` needs `-m qwen3-coder-plus`
+    present even with nothing configured. Rather than duplicating
+    `_build_cli_args`, `__post_init__` fills in `self.definition.model`
+    with the default (immutably, via `model_copy` — mirrors
+    `OpenRouterRunner.__post_init__`) whenever the caller left it unset, so
+    the SAME base-class model-resolution logic every other subclass uses
+    picks it up unchanged.
+
+    OpenAI-compatible auth (`OPENAI_API_KEY` + `OPENAI_BASE_URL`): in
+    `mode: api` this reuses the EXISTING `_run_api` `provider == "openai"`
+    branch with a custom base_url (see that branch's `OPENAI_BASE_URL`
+    lookup). `__post_init__` also defaults `options["api_provider"]` to
+    `"openai"` and `options["api_model"]` to the same resolved model, so
+    `mode: api` works out of the box with zero extra config — matching the
+    same "no config needed for the default case" contract the CLI mode gets.
+    Both defaults only apply when the caller hasn't already set them.
+    """
+
+    command_name: str = "qwen"
+    prompt_flag: str | None = "-p"
+    model_flag: str = "-m"
+    cli_flags: tuple[str, ...] = ("--approval-mode", "yolo")
+    default_model: ClassVar[str] = "qwen3-coder-plus"
+
+    def __post_init__(self) -> None:
+        model = self.definition.model or self.default_model
+        options = dict(self.definition.options)
+        options.setdefault("api_provider", "openai")
+        options.setdefault("api_model", model)
+        self.definition = self.definition.model_copy(update={"model": model, "options": options})
+
+
+@dataclass
+class KimiCliRunner(PromptCliRunner):
+    """Moonshot `kimi-cli` (uv tool install kimi-cli).
+
+    Non-interactive: `kimi --print --yolo -m <model> -p "<prompt>"`.
+    `--yolo` auto-approves tool calls (same sandboxed-worktree caution as
+    the other auto-approving CLIs here). Auth via `KIMI_API_KEY` (forwarded
+    like any other env var — no special runner handling needed).
+
+    CRITICAL: `kimi` reads the prompt from `-p` on argv, NEVER from stdin —
+    it detects a non-TTY stdin and silently skips it. `PromptCliRunner`
+    never pipes the prompt to stdin in the first place (every subclass's
+    prompt always lands on argv — via `prompt_flag` when set, or as a bare
+    trailing positional otherwise; `subprocess.run` is never called with
+    `input=`), so setting `prompt_flag = "-p"` here is sufficient; no extra
+    stdin-avoidance logic is needed.
+    """
+
+    command_name: str = "kimi"
+    cli_flags: tuple[str, ...] = ("--print", "--yolo")
+    model_flag: str = "-m"
+    prompt_flag: str | None = "-p"

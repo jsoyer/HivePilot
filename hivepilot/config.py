@@ -293,6 +293,15 @@ class Settings(BaseSettings):
     gemini_enabled: bool = True
     opencode_enabled: bool = True
     ollama_enabled: bool = True
+    # Sprint 3 (runner-defaults-plugins-mode PRD): three brand-new agent
+    # kinds (never previously built-in) added directly as default-on,
+    # PATH-gated plugins (plugins/pi.py / plugins/qwen_code.py /
+    # plugins/kimi_cli.py) — same opt-OUT + shutil.which gating pattern as
+    # the three flags above.
+    # env: HIVEPILOT_PI_ENABLED / _QWEN_CODE_ENABLED / _KIMI_CLI_ENABLED
+    pi_enabled: bool = True
+    qwen_code_enabled: bool = True
+    kimi_cli_enabled: bool = True
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:
