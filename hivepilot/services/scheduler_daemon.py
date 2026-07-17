@@ -77,6 +77,7 @@ class SchedulerDaemon:
 
     def _tick(self) -> None:
         self._run_due_schedules()
+        self._run_drift_scans()
         self._process_deferred_rows()
 
     def _run_due_schedules(self) -> None:
@@ -93,6 +94,37 @@ class SchedulerDaemon:
                 run_entry(sched, orch)
             except Exception:  # noqa: BLE001
                 logger.exception("scheduler_daemon.run_entry_error", extra={"schedule": sched})
+
+    def _run_drift_scans(self) -> None:
+        """Phase 20 D3 — scan due IaC projects for drift and alert.
+
+        Cheap no-op when disabled (the common case): `load_drift_config`
+        early-returns a disabled default without touching the state DB. Each
+        due project's scan is wrapped in its own try/except so one project's
+        failure (or a bug in `run_drift_scan` itself) can never stop the tick
+        or block the remaining due projects / the deferred-row pass below.
+        """
+        from hivepilot.services.drift_schedule import (
+            due_drift_projects,
+            load_drift_config,
+            run_drift_scan,
+        )
+
+        cfg = load_drift_config()
+        if not cfg.enabled:
+            return
+        try:
+            due = due_drift_projects(cfg)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler_daemon.due_drift_projects_error")
+            return
+        for project_name in due:
+            try:
+                run_drift_scan(cfg, project_name)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "scheduler_daemon.run_drift_scan_error", extra={"project": project_name}
+                )
 
     def _process_deferred_rows(self) -> None:
         """Fetch and re-run all past-due deferred rows (those with a context blob)."""

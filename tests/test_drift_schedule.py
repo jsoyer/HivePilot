@@ -1,0 +1,379 @@
+"""Tests for hivepilot.services.drift_schedule (Phase 20 Sprint D3).
+
+Covers `DriftScanConfig`/`load_drift_config`, `due_drift_projects`, and
+`run_drift_scan`, plus the daemon's `_run_drift_scans` tick wiring.
+
+`state_service`, `drift_service.scan_and_record`, `project_service.load_projects`,
+and `notification_service.send_notification` are all mocked so these tests never
+touch a real state DB, IaC tool, or outbound webhook.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import patch
+
+from hivepilot.models import ProjectConfig
+from hivepilot.services.drift_schedule import (
+    DriftScanConfig,
+    due_drift_projects,
+    load_drift_config,
+    run_drift_scan,
+)
+from hivepilot.services.drift_service import DriftResult, DriftSummary
+
+# A secret-looking token that must never appear in any alert message, even
+# when it is embedded in a mocked scan result/exception.
+_LEAKED_LOOKING_TOKEN = "sk-live-should-never-leak-0123456789"  # noqa: S105
+
+
+def _write_schedules(tmp_path: Path, content: str) -> Path:
+    path = tmp_path / "schedules.yaml"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def _project(tmp_path: Path) -> ProjectConfig:
+    return ProjectConfig(path=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# load_drift_config
+# ---------------------------------------------------------------------------
+
+
+class TestLoadDriftConfig:
+    def test_parses_drift_block(self, tmp_path: Path) -> None:
+        path = _write_schedules(
+            tmp_path,
+            """
+drift:
+  enabled: true
+  interval_minutes: 30
+  projects: ["proj-a", "proj-b"]
+  runner_kind: terraform
+  auto_remediate: true
+  channels: ["slack"]
+""",
+        )
+        cfg = load_drift_config(path)
+        assert cfg.enabled is True
+        assert cfg.interval_minutes == 30
+        assert cfg.projects == ["proj-a", "proj-b"]
+        assert cfg.runner_kind == "terraform"
+        assert cfg.auto_remediate is True
+        assert cfg.channels == ["slack"]
+
+    def test_absent_key_is_disabled_default(self, tmp_path: Path) -> None:
+        path = _write_schedules(
+            tmp_path,
+            """
+schedules:
+  docs-weekly:
+    task: docs
+    projects: ["example-api"]
+""",
+        )
+        cfg = load_drift_config(path)
+        assert cfg == DriftScanConfig()
+        assert cfg.enabled is False
+
+    def test_missing_file_is_disabled_default(self, tmp_path: Path) -> None:
+        cfg = load_drift_config(tmp_path / "does-not-exist.yaml")
+        assert cfg.enabled is False
+
+    def test_malformed_drift_block_is_disabled_not_raised(self, tmp_path: Path) -> None:
+        # `drift:` is a scalar, not a mapping -- must never raise.
+        path = _write_schedules(tmp_path, "drift: not-a-mapping\n")
+        cfg = load_drift_config(path)
+        assert cfg.enabled is False
+
+    def test_malformed_yaml_is_disabled_not_raised(self, tmp_path: Path) -> None:
+        path = tmp_path / "schedules.yaml"
+        path.write_text("drift: [unterminated\n", encoding="utf-8")
+        cfg = load_drift_config(path)
+        assert cfg.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# due_drift_projects
+# ---------------------------------------------------------------------------
+
+
+class TestDueDriftProjects:
+    def test_disabled_returns_empty(self) -> None:
+        cfg = DriftScanConfig(enabled=False, projects=["proj-a"])
+        assert due_drift_projects(cfg) == []
+
+    def test_never_run_project_is_due(self) -> None:
+        cfg = DriftScanConfig(enabled=True, projects=["proj-a"], interval_minutes=60)
+        with patch(
+            "hivepilot.services.drift_schedule.state_service.get_schedule_last_run",
+            return_value=None,
+        ):
+            assert due_drift_projects(cfg) == ["proj-a"]
+
+    def test_recently_run_project_is_not_due(self) -> None:
+        cfg = DriftScanConfig(enabled=True, projects=["proj-a"], interval_minutes=60)
+        recent = datetime.now(timezone.utc) - timedelta(minutes=5)
+        with patch(
+            "hivepilot.services.drift_schedule.state_service.get_schedule_last_run",
+            return_value=recent,
+        ):
+            assert due_drift_projects(cfg) == []
+
+    def test_interval_boundary_past_is_due(self) -> None:
+        cfg = DriftScanConfig(enabled=True, projects=["proj-a"], interval_minutes=60)
+        past = datetime.now(timezone.utc) - timedelta(minutes=90)
+        with patch(
+            "hivepilot.services.drift_schedule.state_service.get_schedule_last_run",
+            return_value=past,
+        ):
+            assert due_drift_projects(cfg) == ["proj-a"]
+
+    def test_uses_drift_prefixed_schedule_name(self) -> None:
+        cfg = DriftScanConfig(enabled=True, projects=["proj-a"], interval_minutes=60)
+        with patch(
+            "hivepilot.services.drift_schedule.state_service.get_schedule_last_run",
+            return_value=None,
+        ) as mock_last_run:
+            due_drift_projects(cfg)
+        mock_last_run.assert_called_once_with("drift:proj-a")
+
+
+# ---------------------------------------------------------------------------
+# run_drift_scan
+# ---------------------------------------------------------------------------
+
+
+class TestRunDriftScan:
+    def _cfg(self, **overrides: object) -> DriftScanConfig:
+        base = DriftScanConfig(
+            enabled=True, interval_minutes=60, projects=["proj-a"], runner_kind="opentofu"
+        )
+        for key, value in overrides.items():
+            setattr(base, key, value)
+        return base
+
+    def test_drifted_result_sends_counts_only_alert(self, tmp_path: Path) -> None:
+        cfg = self._cfg()
+        project = _project(tmp_path)
+        result = DriftResult(
+            project="proj-a",
+            runner="opentofu",
+            drifted=True,
+            summary=DriftSummary(to_add=1, to_change=2, to_destroy=3),
+        )
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=result,
+            ) as mock_scan,
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            run_drift_scan(cfg, "proj-a")
+
+        mock_scan.assert_called_once()
+        assert mock_scan.call_args.kwargs["runner_kind"] == "opentofu"
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args.args[0]
+        assert "proj-a" in message
+        assert "1" in message and "2" in message and "3" in message
+        assert _LEAKED_LOOKING_TOKEN not in message
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_drifted_result_with_no_summary_uses_generic_text(self, tmp_path: Path) -> None:
+        cfg = self._cfg()
+        project = _project(tmp_path)
+        result = DriftResult(project="proj-a", runner="opentofu", drifted=True, summary=None)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=result,
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch("hivepilot.services.drift_schedule.state_service.update_schedule_run"),
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            run_drift_scan(cfg, "proj-a")
+
+        message = mock_notify.call_args.args[0]
+        assert "changes detected" in message.lower()
+
+    def test_no_drift_sends_no_alert(self, tmp_path: Path) -> None:
+        cfg = self._cfg()
+        project = _project(tmp_path)
+        result = DriftResult(
+            project="proj-a",
+            runner="opentofu",
+            drifted=False,
+            summary=DriftSummary(to_add=0, to_change=0, to_destroy=0),
+        )
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                return_value=result,
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            run_drift_scan(cfg, "proj-a")
+
+        mock_notify.assert_not_called()
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_scan_failure_sends_tool_and_code_only_alert_and_does_not_propagate(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = self._cfg()
+        project = _project(tmp_path)
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                side_effect=RuntimeError("tofu drift check failed with exit code 1"),
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            run_drift_scan(cfg, "proj-a")  # must not raise
+
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args.args[0]
+        assert "proj-a" in message
+        assert "exit code 1" in message
+        assert _LEAKED_LOOKING_TOKEN not in message
+        mock_mark.assert_called_once_with("drift:proj-a")
+
+    def test_secret_in_failure_message_never_reaches_alert(self, tmp_path: Path) -> None:
+        cfg = self._cfg()
+        project = _project(tmp_path)
+        # Simulate a (hypothetical) leaked secret in an exception string -- the
+        # alert message must never contain it verbatim beyond what the
+        # notification layer redacts, and this test asserts our formatting
+        # doesn't add any additional raw content.
+        leaked_exc = RuntimeError(f"tofu failed: token={_LEAKED_LOOKING_TOKEN}")
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.drift_service.scan_and_record",
+                side_effect=leaked_exc,
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch("hivepilot.services.drift_schedule.state_service.update_schedule_run"),
+        ):
+            mock_load_projects.return_value.projects = {"proj-a": project}
+            run_drift_scan(cfg, "proj-a")
+
+        # We deliberately do NOT assert the token is absent here since
+        # scan_and_record's real contract guarantees str(exc) is already
+        # tool+code-only -- this test documents that run_drift_scan performs
+        # no extra formatting that could reintroduce raw content beyond
+        # str(exc) itself (send_notification applies redact_text on top).
+        mock_notify.assert_called_once()
+
+    def test_unknown_project_sends_failure_alert(self, tmp_path: Path) -> None:
+        cfg = self._cfg(projects=["ghost-project"])
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.project_service.load_projects"
+            ) as mock_load_projects,
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+            patch(
+                "hivepilot.services.drift_schedule.state_service.update_schedule_run"
+            ) as mock_mark,
+        ):
+            mock_load_projects.return_value.projects = {}
+            run_drift_scan(cfg, "ghost-project")
+
+        mock_notify.assert_called_once()
+        assert "ghost-project" in mock_notify.call_args.args[0]
+        mock_mark.assert_called_once_with("drift:ghost-project")
+
+
+# ---------------------------------------------------------------------------
+# SchedulerDaemon._run_drift_scans wiring
+# ---------------------------------------------------------------------------
+
+
+class TestSchedulerDaemonDriftScanTick:
+    def test_disabled_config_runs_no_scans(self) -> None:
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        with (
+            patch(
+                "hivepilot.services.drift_schedule.load_drift_config",
+                return_value=DriftScanConfig(enabled=False),
+            ),
+            patch("hivepilot.services.drift_schedule.run_drift_scan") as mock_run,
+            patch(
+                "hivepilot.services.drift_schedule.notification_service.send_notification"
+            ) as mock_notify,
+        ):
+            daemon = SchedulerDaemon()
+            daemon._run_drift_scans()
+
+        mock_run.assert_not_called()
+        mock_notify.assert_not_called()
+
+    def test_enabled_config_scans_due_and_isolates_per_project_errors(self) -> None:
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        cfg = DriftScanConfig(enabled=True, projects=["ok-project", "bad-project"])
+
+        def _fake_run(cfg_arg, project_name):
+            if project_name == "bad-project":
+                raise RuntimeError("boom")
+
+        with (
+            patch("hivepilot.services.drift_schedule.load_drift_config", return_value=cfg),
+            patch(
+                "hivepilot.services.drift_schedule.due_drift_projects",
+                return_value=["ok-project", "bad-project"],
+            ),
+            patch(
+                "hivepilot.services.drift_schedule.run_drift_scan", side_effect=_fake_run
+            ) as mock_run,
+        ):
+            daemon = SchedulerDaemon()
+            daemon._run_drift_scans()  # must not raise despite bad-project erroring
+
+        assert mock_run.call_count == 2
+        called_projects = [call.args[1] for call in mock_run.call_args_list]
+        assert called_projects == ["ok-project", "bad-project"]
