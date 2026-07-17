@@ -843,3 +843,146 @@ class TestDoublePauseNoStepRunsTwice:
         mock_apply1.capture.assert_called_once()
         mock_apply2.capture.assert_called_once()
         assert result == "prep output\napply1 output\napply2 output"
+
+
+# ---------------------------------------------------------------------------
+# Regression: STAGE-level skills must survive a destructive-step approval
+# pause + `run_approved` resume (bug report).
+# ---------------------------------------------------------------------------
+
+
+class TestStageSkillsPersistAcrossApprovalResume:
+    """A STAGE-level skill (`PipelineStage.skills`, threaded into
+    `_execute_task` as `stage_skills`) must still be applied when a
+    require_approval/destructive step pauses the task and is later resumed
+    via `run_approved`. Root cause of the bug: the step-checkpoint
+    `checkpoint_meta` never persisted `stage_skills`, and `run_approved`
+    never re-threaded it back into the resumed `_execute_task` call, so it
+    silently defaulted to `None` on resume -- even though the ORIGINAL
+    (pre-pause) call had it. Step-level `step.skills` are unaffected (they
+    live on the `TaskStep`, reconstructed fresh from `task.steps` on every
+    call -- never lost)."""
+
+    def test_stage_skills_persist_across_destructive_step_approval_resume(
+        self, tmp_path: Path
+    ) -> None:
+        from hivepilot.models import RunnerDefinition
+        from hivepilot.orchestrator import Orchestrator, StepApprovalPending
+        from hivepilot.plugins import SkillSpec
+        from hivepilot.runners.claude_runner import _SKILL_SCRATCH_DIR_KEY
+
+        skill: SkillSpec = {
+            "name": "demo",
+            "description": "demo skill",
+            "provider": "sample",
+            "files": {"SKILL.md": "# Demo\nDo the thing."},
+            "system_prompt": "Follow the demo skill.",
+        }
+
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("do the thing", encoding="utf-8")
+        # A SINGLE step that requires approval regardless of runner kind
+        # (`step.require_approval=True` -- see `step_requires_approval`) and
+        # declares NO skill of its own -- only the enclosing stage's skill
+        # (threaded in as `stage_skills`) should apply here.
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[
+                TaskStep(
+                    name="apply",
+                    runner="claude",
+                    prompt_file=str(prompt_file),
+                    require_approval=True,
+                    skills=None,
+                )
+            ],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+
+        with (
+            patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
+            patch(
+                "hivepilot.orchestrator.load_tasks", return_value=MagicMock(tasks={}, runners={})
+            ),
+            patch("hivepilot.orchestrator.load_pipelines", return_value=MagicMock(pipelines={})),
+            patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
+            patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
+        ):
+            orch = Orchestrator()
+        orch.plugins.get_skill.side_effect = lambda n: {"demo": skill}.get(n)  # type: ignore[attr-defined]
+        orch.registry._definition_for.side_effect = lambda key: RunnerDefinition(  # type: ignore[attr-defined]
+            name=key, kind="claude", command="claude"
+        )
+        orch.projects = MagicMock(projects={"p": project})
+        orch.tasks = MagicMock(tasks={"x": task})
+
+        # --- Original run: pauses at the (only, require_approval) step,
+        #     carrying the stage-level skill in via `stage_skills`. ---
+        with (
+            patch("hivepilot.orchestrator.settings") as mock_settings,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.state_service.record_approval_request") as mock_approval,
+            patch("hivepilot.orchestrator.notification_service.send_approval_keyboard"),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            mock_settings.worktree_isolation = False
+            mock_settings.stage_cache_enabled = False
+            mock_settings.dev_batch_size = 0
+            with pytest.raises(StepApprovalPending):
+                orch._execute_task(
+                    project=project,
+                    task_name="x",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=False,
+                    run_id=42,
+                    stage_skills=["demo"],
+                )
+
+        mock_approval.assert_called_once()
+        checkpoint_meta = mock_approval.call_args.args[3]
+        assert checkpoint_meta["kind"] == "step_checkpoint"
+
+        # --- Resume via `run_approved`, exactly as production does: the
+        #     ONLY state carried across the pause is `checkpoint_meta`,
+        #     persisted to the approval row and reloaded via
+        #     `state_service.get_approval` -- we round-trip it through JSON
+        #     for realism, exactly like the real approval row does. ---
+        approval_row = {
+            "status": "pending",
+            "project": "p",
+            "task": "x",
+            "metadata": json.dumps(checkpoint_meta),
+        }
+        seen: dict[str, object] = {}
+
+        def _recorder(_self: object, runner_key: str, payload: object) -> str:
+            seen["payload"] = payload
+            return "ok"
+
+        with (
+            patch("hivepilot.orchestrator.settings") as mock_settings,
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval_row),
+            patch("hivepilot.orchestrator.state_service.update_approval"),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=None),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch.object(Orchestrator, "_capture_or_execute", _recorder),
+        ):
+            mock_settings.worktree_isolation = False
+            mock_settings.stage_cache_enabled = False
+            mock_settings.dev_batch_size = 0
+            result = orch.run_approved(run_id=42, approve=True, approver="me")
+
+        assert result.success is True, result.detail
+        assert "payload" in seen, "the resumed step never reached the runner"
+        scratch = seen["payload"].metadata.get(_SKILL_SCRATCH_DIR_KEY)  # type: ignore[attr-defined]
+        assert scratch is not None, (
+            "stage-level skill was dropped across the destructive-step "
+            "approval resume: the scratch dir was never materialised for "
+            "the resumed step's payload"
+        )

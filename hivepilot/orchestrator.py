@@ -2207,6 +2207,7 @@ class Orchestrator:
         _resume_outputs = metadata.get("resume_outputs") if _is_step_checkpoint else None
         _approved_step_index = _resume_from_step if _is_step_checkpoint else None
         _dry_run = metadata.get("dry_run", True) if _is_step_checkpoint else True
+        _stage_skills = metadata.get("stage_skills") if _is_step_checkpoint else None
 
         # Phase 21 Sprint 3 -- CVE gate defense-in-depth. `require_approval`
         # and `block_on_severity` are independent gates in `_run_task_body`
@@ -2248,6 +2249,7 @@ class Orchestrator:
                 resume_from_step=_resume_from_step,
                 resume_outputs=_resume_outputs,
                 approved_step_index=_approved_step_index,
+                stage_skills=_stage_skills,
             )
         except StepApprovalPending as exc:
             # A LATER step in the same task also requires approval —
@@ -2792,6 +2794,9 @@ class Orchestrator:
                                         "resume_from_step": step_idx,
                                         "step_name": step.name,
                                         "resume_outputs": list(outputs),
+                                        "stage_skills": list(stage_skills)
+                                        if stage_skills
+                                        else None,
                                     }
                                     state_service.record_approval_request(
                                         run_id, project.path.name, task_name, checkpoint_meta
