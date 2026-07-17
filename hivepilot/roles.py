@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 import yaml
 from pydantic import BaseModel
 
+from hivepilot.models import EffortLevel
+
 if TYPE_CHECKING:
     from hivepilot.config import Settings
 
@@ -281,6 +283,13 @@ def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, s
     Defaults come from the role binding (ROLES); a per-project policy may override
     runner/model (``role_overrides``) and constrain runners (``allowed_runners``).
     Raises if the role has no runner or the resolved runner is not allowed.
+
+    Unchanged implementation (roles-model-effort-config-owned PRD, Sprint 1) —
+    kept standalone, rather than reimplemented on top of
+    ``resolve_stage_dispatch``, so every existing caller (and every existing
+    test that patches ``hivepilot.roles.resolve_runner`` directly) keeps
+    working byte-identically. ``resolve_stage_dispatch`` below delegates BACK
+    to this function whenever it has no stage override to apply.
     """
     role = ROLES[role_name]
     runner = role.runner
@@ -297,6 +306,84 @@ def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, s
     if not runner:
         raise RuntimeError(f"Role '{role_name}' has no runner binding.")
     return runner, model
+
+
+def resolve_stage_dispatch(
+    role_name: str,
+    policy: object | None = None,
+    stage_model: str | None = None,
+    stage_effort: EffortLevel | None = None,
+) -> tuple[str, str | None, EffortLevel | None]:
+    """Resolve the effective ``(runner_kind, model, effort)`` for *role_name*
+    within an (optional) pipeline stage, applying the precedence:
+
+        policy.role_overrides  >  stage  >  role  >  runner-default
+
+    - ``runner``: the role's own binding, overridable by a policy
+      ``role_overrides[role].runner`` entry. A stage never sets a runner in
+      this sprint — only ``model``/``effort`` — so there is no stage layer
+      for this element.
+    - ``model``: the role's own binding (``role.model`` or the first entry of
+      ``role.models``) as the base; *stage_model* (already resolved against
+      the pipeline default by the caller — see
+      ``hivepilot.models.resolve_stage_model``) overrides it; a policy
+      ``role_overrides[role].model`` entry outranks BOTH, because policy is
+      the security control that must never be short-circuited by a stage
+      author.
+    - ``effort``: ``None`` by default (roles have no effort concept of their
+      own); *stage_effort* (already resolved against the pipeline default —
+      see ``hivepilot.models.resolve_effort``) overrides it; a policy
+      ``role_overrides[role].effort`` entry outranks both. ``None`` reaching
+      a runner means "use that runner's own unset-default" (e.g.
+      ``CodexRunner`` falls back to ``"medium"``).
+
+    ``allowed_runners`` is still enforced fail-closed against the FINAL
+    resolved runner, exactly as before this helper existed.
+
+    Raises if the role has no runner or the resolved runner is not allowed.
+
+    When *stage_model* and *stage_effort* are BOTH ``None`` (no stage
+    override at all — the exact shape a plain ``resolve_runner`` call has),
+    this delegates entirely to ``resolve_runner`` for the ``(runner, model)``
+    pair — the SAME code path every existing caller/test already exercises —
+    and only independently resolves ``effort`` from a policy override (a
+    stage-less call has no other source for it). This keeps the "stage sets
+    nothing" case byte-identical, including for tests that mock
+    ``resolve_runner`` directly rather than the ROLES registry.
+    """
+    if stage_model is None and stage_effort is None:
+        runner, model = resolve_runner(role_name, policy)
+        effort: EffortLevel | None = None
+        if policy is not None:
+            override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
+            effort = override.get("effort")
+        return runner, model, effort
+
+    role = ROLES[role_name]
+    runner = role.runner
+    model = role.model or (role.models[0] if role.models else None)
+    effort = None
+
+    # Stage layer.
+    if stage_model is not None:
+        model = stage_model
+    if stage_effort is not None:
+        effort = stage_effort
+
+    # Policy layer — outranks the stage layer above for every field it sets.
+    if policy is not None:
+        override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
+        runner = override.get("runner", runner)
+        model = override.get("model", model)
+        effort = override.get("effort", effort)
+        allowed = getattr(policy, "allowed_runners", None)
+        if allowed and runner not in allowed:
+            raise RuntimeError(
+                f"Role '{role_name}' resolves to runner '{runner}', not in allowed_runners {allowed}."
+            )
+    if not runner:
+        raise RuntimeError(f"Role '{role_name}' has no runner binding.")
+    return runner, model, effort
 
 
 def resolve_host(role_name: str, policy: object | None = None) -> str | None:

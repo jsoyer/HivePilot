@@ -108,6 +108,22 @@ def apply_skill_if_supported(
     return apply_skill(payload, skills)
 
 
+def resolve_runner_effort(definition: RunnerDefinition, step: TaskStep) -> str | None:
+    """Resolve the effective reasoning-effort level for a step.
+
+    An explicit per-step override (``step.metadata["effort"]``) wins over the
+    runner definition's own ``effort`` (set by the orchestrator's
+    ``policy > stage > role > runner-default`` precedence — see
+    ``hivepilot.roles.resolve_stage_dispatch``). Returns ``None`` when neither
+    is set.
+
+    Generic, runner-agnostic accessor: a runner with no effort concept (most
+    CLIs) can safely ignore the return value entirely — this helper never
+    raises and never invents a value.
+    """
+    return step.metadata.get("effort") or definition.effort
+
+
 def validate_runner_mode(kind: str, supported_modes: frozenset[str], mode: str) -> None:
     """Fail closed when *mode* is not in *supported_modes* for runner *kind*.
 

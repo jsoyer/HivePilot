@@ -14,7 +14,13 @@ import requests
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.plugins import SkillSpec
-from hivepilot.runners.base import BaseRunner, RunnerPayload, UsageInfo, set_last_usage
+from hivepilot.runners.base import (
+    BaseRunner,
+    RunnerPayload,
+    UsageInfo,
+    resolve_runner_effort,
+    set_last_usage,
+)
 from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.utils.env import gather_overrides, merge_environments
@@ -213,6 +219,22 @@ class ClaudeRunner(BaseRunner):
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
         knowledge_context = self._build_knowledge_context(payload)
         return self._build_prompt(payload, prompt_text, knowledge_context)
+
+    def _resolve_effort(self, payload: RunnerPayload) -> str | None:
+        """Resolve the effective effort level for *payload* (see
+        ``hivepilot.runners.base.resolve_runner_effort``).
+
+        Documented no-op: as of this writing the ``claude`` CLI (Claude Code)
+        has NO reasoning-effort flag equivalent to Codex's
+        ``-c model_reasoning_effort=<level>`` — its thinking budget is
+        controlled via the ``MAX_THINKING_TOKENS`` environment variable or
+        interactive slash commands, neither of which is a ``--print``-mode
+        CLI arg. The resolved value is still read here (so a future CLI flag
+        can be wired in one place without touching any caller) but is never
+        turned into an argv entry — ``_build_invocation`` never emits
+        anything for it, matching every other runner with no effort concept.
+        """
+        return resolve_runner_effort(self.definition, payload.step)
 
     def _mode(self, payload: RunnerPayload) -> str:
         """Resolve the effective execution mode for *payload*.

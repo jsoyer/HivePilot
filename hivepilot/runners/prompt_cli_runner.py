@@ -9,7 +9,13 @@ import requests
 
 from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
-from hivepilot.runners.base import BaseRunner, RunnerPayload, UsageInfo, set_last_usage
+from hivepilot.runners.base import (
+    BaseRunner,
+    RunnerPayload,
+    UsageInfo,
+    resolve_runner_effort,
+    set_last_usage,
+)
 from hivepilot.utils.env import merge_environments
 from hivepilot.utils.logging import get_logger
 from hivepilot.utils.remote import build_invocation
@@ -57,6 +63,25 @@ class PromptCliRunner(BaseRunner):
             obsidian_vault=obsidian_vault,
         )
 
+    def _resolve_effort(self, payload: RunnerPayload) -> str | None:
+        """Resolve the effective effort level for *payload* (see
+        ``hivepilot.runners.base.resolve_runner_effort``): a step-level
+        override wins over the runner definition's own resolved ``effort``.
+        Returns ``None`` when neither is set — subclasses with an effort
+        concept (e.g. ``CodexRunner``) supply their own unset-default."""
+        return resolve_runner_effort(self.definition, payload.step)
+
+    def _effort_cli_flags(self, payload: RunnerPayload) -> list[str]:
+        """Extra CLI args encoding the resolved effort level.
+
+        Base implementation is a documented no-op: most CLIs wired here
+        (gemini/opencode/vibe/ollama/pi/qwen-code/kimi-cli/cursor) have no
+        reasoning-effort concept and simply ignore whatever effort value is
+        configured — this never raises for them. Subclasses that DO support
+        an effort flag (``CodexRunner``) override this hook.
+        """
+        return []
+
     def _build_cli_args(self, payload: RunnerPayload, prompt_text: str) -> list[str]:
         command_str = self.definition.command or self.command_name
         if not command_str:
@@ -67,6 +92,7 @@ class PromptCliRunner(BaseRunner):
         if subcommand:
             args.append(subcommand)
         args.extend(opts.get("cli_flags", list(self.cli_flags)))
+        args.extend(self._effort_cli_flags(payload))
         model = payload.step.metadata.get("model") or self.definition.model
         if model:
             args.extend([opts.get("model_flag", self.model_flag), model])
@@ -478,7 +504,17 @@ class PromptCliRunner(BaseRunner):
 class CodexRunner(PromptCliRunner):
     command_name: str = "codex"
     cli_subcommand: str | None = "exec"
-    cli_flags: tuple[str, ...] = ("-c", "model_reasoning_effort=medium")
+    # The `-c model_reasoning_effort=<level>` flag is now built dynamically
+    # by `_effort_cli_flags` (below) from the resolved `effort` (stage > role
+    # > policy precedence — see `hivepilot.roles.resolve_stage_dispatch`)
+    # instead of a fixed tuple. `"medium"` remains the default when nothing
+    # is configured anywhere in that chain, so a stage that sets no `effort`
+    # dispatches byte-identically to before this field existed.
+    cli_flags: tuple[str, ...] = ()
+
+    def _effort_cli_flags(self, payload: RunnerPayload) -> list[str]:
+        effort = self._resolve_effort(payload) or "medium"
+        return ["-c", f"model_reasoning_effort={effort}"]
 
 
 @dataclass

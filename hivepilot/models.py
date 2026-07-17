@@ -22,6 +22,14 @@ def _dedup_ordered(value: list[str] | None) -> list[str] | None:
     return result
 
 
+# Closed set of reasoning-effort levels a role/stage/policy can request
+# (roles-model-effort-config-owned PRD, Sprint 1). Deliberately a closed
+# `Literal` (not a plain `str`, unlike `RunnerKind`) — effort is an internal
+# HivePilot concept mapped per-runner (e.g. Codex's `model_reasoning_effort`),
+# not an external, ever-growing plugin-contributed namespace, so a typo should
+# fail loudly at config-load time rather than silently reach a runner.
+EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
+
 RunnerKind = str
 
 # Built-in kinds, for docs/help/typing only — NOT enforced at runtime; see RunnerRegistry.
@@ -72,6 +80,14 @@ class RunnerDefinition(BaseModel):
     kind: RunnerKind
     command: str | None = None
     model: str | None = None
+    # Resolved reasoning-effort level (roles-model-effort-config-owned PRD,
+    # Sprint 1) — carries the orchestrator's `policy > stage > role >
+    # runner-default` precedence result (see
+    # `hivepilot.roles.resolve_stage_dispatch`) through to the runner. `None`
+    # means "no effort configured anywhere in the chain"; each runner decides
+    # its own unset-default (e.g. `CodexRunner` falls back to `"medium"`).
+    # Runners with no effort concept (most CLIs) simply ignore this field.
+    effort: EffortLevel | None = None
     agent: str | None = None
     append_prompt: str | None = None
     timeout_seconds: int | None = None
@@ -169,6 +185,17 @@ class PipelineStage(BaseModel):
     # pipeline-level default" (see `PipelineConfig.mode` / `resolve_mode`);
     # an explicit value overrides the pipeline default for this stage only.
     mode: Literal["cli", "api"] | None = None
+    # Stage-level model + reasoning-effort overrides (roles-model-effort-
+    # config-owned PRD, Sprint 1). Both default to None -- "inherit the
+    # pipeline-level default (`PipelineConfig.model`/`.effort`), which itself
+    # falls back to the role binding" -- so a pipeline that sets neither
+    # dispatches byte-identically to before these fields existed. See
+    # `resolve_stage_model`/`resolve_effort` for the pipeline-vs-stage
+    # precedence, and `hivepilot.roles.resolve_stage_dispatch` for the full
+    # `policy > stage > role > runner-default` chain the orchestrator applies
+    # on top of these two resolved values.
+    model: str | None = None
+    effort: EffortLevel | None = None
     pause_before: bool = False  # pause pipeline for human plan approval before this stage
     commits_vault: bool = False  # stage triggers a vault changelog commit after execution
     # Stage scoping (PRD A1): restrict this stage to a subset of the run's
@@ -200,6 +227,14 @@ class PipelineConfig(BaseModel):
     # (claude / prompt-cli) through the provider's HTTP API instead. A stage
     # may override this via `PipelineStage.mode` (see `resolve_mode`).
     mode: Literal["cli", "api"] = "cli"
+    # Pipeline-wide default model + reasoning-effort — the same "stage
+    # overrides pipeline overrides nothing" shape as `mode`/`resolve_mode`,
+    # except there is no hardcoded non-None fallback (unlike `mode`'s
+    # `"cli"`): a pipeline that sets neither leaves both fully unset, which
+    # `hivepilot.roles.resolve_stage_dispatch` then falls back to the role
+    # binding / runner-default for.
+    model: str | None = None
+    effort: EffortLevel | None = None
     stages: list[PipelineStage] = Field(default_factory=list)
 
 
@@ -212,6 +247,30 @@ def resolve_mode(pipeline: PipelineConfig, stage: PipelineStage) -> Literal["cli
     stage's agent runners take their CLI path or their provider-API path.
     """
     return stage.mode or pipeline.mode or "cli"
+
+
+def resolve_stage_model(pipeline: PipelineConfig, stage: PipelineStage) -> str | None:
+    """Resolve the pipeline/stage-level model default for *stage*.
+
+    Precedence: an explicit ``stage.model`` wins over the pipeline-wide
+    ``pipeline.model``; ``None`` when neither is set (the orchestrator then
+    falls back to the role binding / policy override via
+    ``hivepilot.roles.resolve_stage_dispatch``). Mirrors ``resolve_mode``'s
+    stage-over-pipeline precedence, minus a hardcoded final default.
+    """
+    return stage.model or pipeline.model
+
+
+def resolve_effort(pipeline: PipelineConfig, stage: PipelineStage) -> EffortLevel | None:
+    """Resolve the pipeline/stage-level reasoning-effort default for *stage*.
+
+    Precedence: an explicit ``stage.effort`` wins over the pipeline-wide
+    ``pipeline.effort``; ``None`` when neither is set. This is only the
+    pipeline-vs-stage layer -- the orchestrator threads this result into
+    ``hivepilot.roles.resolve_stage_dispatch`` as ``stage_effort``, where a
+    policy ``role_overrides`` entry can still outrank it.
+    """
+    return stage.effort or pipeline.effort
 
 
 class ProjectsFile(BaseModel):
