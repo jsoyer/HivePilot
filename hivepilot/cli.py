@@ -3069,8 +3069,19 @@ def plugins_list() -> None:
     agents_table.add_column("status")
     agents_table.add_column("enable flag")
     for kind in _builtin_agent_kinds:
-        status = "API-only" if kind in _api_only_agent_kinds else "active"
-        agents_table.add_row(kind, "built-in", status, "-")
+        # Sprint 05 (plugin-arch-overhaul PRD): built-in agent kinds are now
+        # individually disable-able (Sprint 01 -- claude_enabled/codex_enabled/
+        # vibe_enabled/openrouter_enabled gate hivepilot.registry._BUILTIN_RUNNERS'
+        # registration loop). Reflect that live in RUNNER_MAP membership, exactly
+        # like every plugin agent kind below, instead of assuming a built-in is
+        # always active.
+        if kind not in RUNNER_MAP:
+            status = "inactive"
+        elif kind in _api_only_agent_kinds:
+            status = "API-only"
+        else:
+            status = "active"
+        agents_table.add_row(kind, "built-in", status, f"HIVEPILOT_{kind.upper()}_ENABLED")
     for kind in sorted(_OPTIONAL_AGENT_PLUGIN_KINDS):
         flag_name, _binary = _OPTIONAL_AGENT_PLUGIN_KINDS[kind]
         status = "active" if kind in RUNNER_MAP else "inactive"
