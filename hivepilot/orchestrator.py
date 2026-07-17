@@ -77,6 +77,7 @@ from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from hivepilot.roles import Role
+    from hivepilot.services.debate_service import Position
 
 logger = get_logger(__name__)
 
@@ -419,6 +420,112 @@ def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
         if prefix in RUNNER_MAP:
             return prefix, rest
     return default_runner, entry
+
+
+# ---------------------------------------------------------------------------
+# Debate synthesis judge (Debate Judge & Consensus PRD, Sprint 1)
+#
+# `Verdict` and `Orchestrator._adjudicate` are a STABLE shared contract reused
+# as-is by Sprint 2 — do not change the shape or parsing rules without
+# documenting the change (see the sprint's Agent Notes for the full contract).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """A judge's synthesis of a debate's positions.
+
+    ``decision`` is ``None`` (never a fabricated string) when the judge's raw
+    output was empty, malformed, non-JSON, or missing a confident decision —
+    callers MUST treat ``decision is None`` as "no confident decision" and
+    fall back to the templated/majority-stance path.
+    """
+
+    decision: str | None
+    confidence: float | None
+    per_role_stance: dict[str, str] | None = None
+
+
+# Judge synthesis prompt (Sprint 1 contract — Sprint 2 reuses this verbatim
+# unless documented otherwise). Instructs the judge to return ONLY a JSON
+# object matching the `_parse_verdict` parse rules below.
+_JUDGE_PROMPT_TEMPLATE = (
+    "You are an impartial arbiter reviewing a multi-model debate.\n\n"
+    "TOPIC:\n{topic}\n\n"
+    "POSITIONS SUBMITTED:\n{positions_block}\n\n"
+    "Read every rationale carefully, weigh the arguments on their merits, and "
+    "synthesize ONE final decision.\n\n"
+    "Respond with ONLY a single JSON object -- no prose, no markdown code "
+    "fences -- matching exactly this shape:\n"
+    '{{"decision": "<final decision, one paragraph>", '
+    '"confidence": <float between 0.0 and 1.0>, '
+    '"per_role_stance": {{"<role>": "<one-line stance>"}}}}\n\n'
+    "If you cannot reach a confident decision, respond with "
+    '{{"decision": null, "confidence": 0.0}} -- never fabricate a decision you '
+    "are not confident about."
+)
+
+
+def _build_judge_prompt(topic: str, positions: list[Position]) -> str:
+    """Render the judge synthesis prompt for *positions* on *topic*."""
+    positions_block = "\n".join(f"- {p.role}: {p.rationale}" for p in positions)
+    return _JUDGE_PROMPT_TEMPLATE.format(topic=topic, positions_block=positions_block)
+
+
+def _parse_verdict(raw: str) -> Verdict:
+    """Parse the judge's raw text response into a :class:`Verdict`.
+
+    Parse rules (Sprint 1 contract):
+      * Empty/whitespace-only text -> no confident decision.
+      * Tolerates a ```json ... ``` fenced block around the JSON object.
+      * Non-JSON or a non-object JSON value -> no confident decision.
+      * ``decision`` must be a non-empty string after stripping; ``null``,
+        missing, or empty -> no confident decision.
+      * ``confidence`` must be an ``int``/``float`` (bool excluded); missing
+        or non-numeric -> no confident decision even if ``decision`` parsed.
+        A numeric value is clamped into ``[0.0, 1.0]``.
+      * ``per_role_stance``, when present, must be a ``dict[str, str]`` or it
+        is dropped (does not invalidate the rest of the verdict).
+
+    NEVER fabricates a decision: any of the above failures returns
+    ``Verdict(decision=None, confidence=None, per_role_stance=None)``.
+    """
+    text = raw.strip() if raw else ""
+    if not text:
+        return Verdict(decision=None, confidence=None)
+
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return Verdict(decision=None, confidence=None)
+
+    if not isinstance(data, dict):
+        return Verdict(decision=None, confidence=None)
+
+    decision = data.get("decision")
+    if not isinstance(decision, str) or not decision.strip():
+        return Verdict(decision=None, confidence=None)
+
+    confidence_raw = data.get("confidence")
+    if not isinstance(confidence_raw, (int, float)) or isinstance(confidence_raw, bool):
+        return Verdict(decision=None, confidence=None)
+    confidence = max(0.0, min(1.0, float(confidence_raw)))
+
+    per_role_stance: dict[str, str] | None = None
+    stance_raw = data.get("per_role_stance")
+    if isinstance(stance_raw, dict) and all(
+        isinstance(k, str) and isinstance(v, str) for k, v in stance_raw.items()
+    ):
+        per_role_stance = dict(stance_raw)
+
+    return Verdict(
+        decision=decision.strip(), confidence=confidence, per_role_stance=per_role_stance
+    )
 
 
 def _parse_components(text: str, valid: list[str]) -> list[str]:
@@ -2375,6 +2482,59 @@ class Orchestrator:
         finally:
             self._exit_run_scope()
 
+    def _adjudicate(
+        self,
+        positions: list[Position],
+        judge_def: RunnerDefinition,
+        *,
+        role_name: str,
+        topic: str,
+        project: ProjectConfig,
+        policy: policy_service.Policy | None,
+        simulate: bool = False,
+    ) -> Verdict:
+        """Synthesize *positions* into a single :class:`Verdict` via ONE judge
+        `capture_definition` call (Debate Judge & Consensus PRD, Sprint 1).
+
+        STABLE contract reused by Sprint 2 — see the module-level `Verdict` /
+        `_parse_verdict` docstrings for the exact shape and parse rules.
+
+        Reuses `_resolve_secrets` (same pattern as each brain call in
+        `_run_debate_body`) so the judge call inherits the SAME secret-masking
+        scope as the rest of the debate run. The judge's raw output is passed
+        through `redact_text` before parsing, so any leaked secret value is
+        masked before it can reach the decision/confidence/per_role_stance
+        that ends up in the ADR.
+
+        When *simulate* is True, short-circuits to a deterministic synthetic
+        verdict WITHOUT a real runner call — mirrors how each brain position
+        is synthesized under `simulate` in `_run_debate_body`.
+
+        Never fabricates a decision: a malformed/empty judge response returns
+        `Verdict(decision=None, confidence=None)`, which the caller MUST treat
+        as "no confident decision" (fall back to the templated/majority path).
+        """
+        prompt = _build_judge_prompt(topic, positions)
+        step = TaskStep(
+            name=f"{role_name}-judge",
+            runner=judge_def.kind,
+            prompt_file=None,
+        )
+        payload = RunnerPayload(
+            project_name=project.path.name,
+            project=project,
+            task_name=f"debate:{role_name}:judge",
+            step=step,
+            metadata={"extra_prompt": prompt, "prior_context": ""},
+            secrets=self._resolve_secrets(step, project, policy),
+        )
+        if simulate:
+            raw = f'{{"decision": "[simulated judge decision for: {topic}]", "confidence": 0.5}}'
+        else:
+            raw = self.registry.capture_definition(judge_def, payload)
+        raw = redact_text(raw) if raw else raw
+        return _parse_verdict(raw or "")
+
     def _run_debate_body(
         self,
         *,
@@ -2458,8 +2618,33 @@ class Orchestrator:
             f"Synthesis of {len(models)} model proposals ({', '.join(models)}) for: {topic}. "
             f"Each model's proposal is recorded; final arbitration by {role_name} / human review."
         )
+        confidence: float | None = None
+        if settings.enable_debate_judge:
+            judge_def = RunnerDefinition(
+                name=f"debate:{role_name}:judge",
+                kind=cast(RunnerKind, settings.judge_runner),
+                command=None,
+                model=settings.judge_model,
+                effort=role_effort,
+                host=debate_host,
+            )
+            verdict = self._adjudicate(
+                positions,
+                judge_def,
+                role_name=role_name,
+                topic=topic,
+                project=project,
+                policy=policy,
+                simulate=simulate,
+            )
+            # Never fabricate: only override the templated decision when the
+            # judge produced a confident one (see `_parse_verdict` parse rules).
+            if verdict.decision is not None:
+                decision = verdict.decision
+                confidence = verdict.confidence
+
         adr = DebateService(vault_path, dry_run=dry_run).run(
-            topic=topic, positions=positions, decision=decision
+            topic=topic, positions=positions, decision=decision, confidence=confidence
         )
         notification_service.stream_agent_turn(
             actor=f"{role.display_name or role_name} ({role.title})",

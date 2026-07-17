@@ -396,6 +396,21 @@ class Settings(BaseSettings):
     max_request_depth: int = 2  # recursion depth cap (requests from answers)
     max_requests_per_run: int = 20  # global budget per pipeline run
 
+    # ---- Debate synthesis judge (Debate Judge & Consensus PRD, Sprint 1) ----
+    # Opt-in LLM arbiter that synthesizes a debate's model positions into a
+    # real decision + confidence, replacing the templated `decision=` string
+    # `Orchestrator._run_debate_body` builds today. Defaults False — the
+    # flags-off path is byte-identical to pre-Sprint-1 behaviour (templated
+    # decision, majority-stance fallback in DebateService untouched).
+    # env: HIVEPILOT_ENABLE_DEBATE_JUDGE
+    enable_debate_judge: bool = False
+    # Runner kind used for the ONE judge `capture_definition` call (see
+    # `Orchestrator._adjudicate`). env: HIVEPILOT_JUDGE_RUNNER
+    judge_runner: str = "claude"
+    # Model passed to the judge RunnerDefinition; None lets the runner use its
+    # own default. env: HIVEPILOT_JUDGE_MODEL
+    judge_model: str | None = None
+
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
     def _coerce_notification_chat_id(cls, v: object) -> object:
