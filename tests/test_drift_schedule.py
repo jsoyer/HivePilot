@@ -164,28 +164,13 @@ class TestDueDriftProjects:
 
 
 class TestDueDriftProjectsRealDb:
-    """Reviewer-flagged VERIFY item: does `get_schedule_last_run` return a
-    naive datetime that raises `TypeError` when compared against an
-    aware `datetime.now(timezone.utc)` on tick 2+? Uses the real (per-test
-    isolated, see conftest `_isolate_state_db`) state DB -- no mocking."""
+    """Reviewer-flagged VERIFY item (now FIXED at the source in
+    `state_service.get_schedule_last_run`, see its docstring/comment): does
+    `get_schedule_last_run` return a naive datetime that raises `TypeError`
+    when compared against an aware `datetime.now(timezone.utc)` on tick 2+?
+    Uses the real (per-test isolated, see conftest `_isolate_state_db`)
+    state DB -- no mocking."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "PRE-EXISTING SHARED-CODE BUG (out of scope for D3): "
-            "state_service.get_schedule_last_run() parses SQLite's "
-            "CURRENT_TIMESTAMP via datetime.fromisoformat(), which yields a "
-            "NAIVE datetime (no tzinfo). due_drift_projects (mirroring "
-            "schedule_service.due_schedules() exactly, by design) then "
-            "compares `last_run + timedelta(...)` against "
-            "`datetime.now(timezone.utc)` (AWARE), raising "
-            "`TypeError: can't compare offset-naive and offset-aware "
-            "datetimes` on every tick AFTER a project's first real stamp. "
-            "This affects due_schedules() too -- not introduced by D3. "
-            "strict=True: if this test ever XPASSes, the upstream bug was "
-            "fixed and this xfail must be removed. See D3 review VERIFY 3."
-        ),
-    )
     def test_due_calc_after_a_real_stamp_does_not_raise(self) -> None:
         state_service.update_schedule_run("drift:demo")
         last_run = state_service.get_schedule_last_run("drift:demo")
@@ -195,6 +180,37 @@ class TestDueDriftProjectsRealDb:
         # Must not raise TypeError (naive vs aware datetime comparison).
         due = due_drift_projects(cfg)
         # Just stamped, interval is 60min -- must not be due yet.
+        assert due == []
+
+
+class TestDueSchedulesRealDbRegression:
+    """Regression test for the SHIPPED `schedule_service.due_schedules()`
+    path -- proves the tz-aware `get_schedule_last_run` fix un-breaks the
+    pre-existing production scheduler (not just the new drift-scan due-calc).
+    Exercises the real `get_schedule_last_run` return value; only
+    `load_schedules` is mocked (to avoid depending on the repo's actual
+    schedules.yaml contents)."""
+
+    def test_due_schedules_excludes_just_run_entry_without_raising(self) -> None:
+        from hivepilot.services.schedule_service import ScheduleEntry, due_schedules
+
+        entry = ScheduleEntry(
+            name="demo-sched",
+            task="dev",
+            projects=["proj-a"],
+            interval_minutes=60,
+            enabled=True,
+        )
+        state_service.update_schedule_run(entry.name)
+
+        with patch(
+            "hivepilot.services.schedule_service.load_schedules",
+            return_value={entry.name: entry},
+        ):
+            # Must not raise TypeError; must exclude the just-run entry
+            # (interval hasn't elapsed).
+            due = due_schedules()
+
         assert due == []
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -451,7 +451,15 @@ def get_schedule_last_run(name: str) -> datetime | None:
             db.ph("SELECT last_run FROM schedule_runs WHERE name=?"), (name,)
         ).fetchone()
     if row and row["last_run"]:
-        return datetime.fromisoformat(row["last_run"])
+        dt = datetime.fromisoformat(row["last_run"])
+        # SQLite's CURRENT_TIMESTAMP (written by update_schedule_run) is UTC
+        # but stored/parsed as a NAIVE datetime -- attach UTC tzinfo so every
+        # caller (schedule_service.due_schedules(), drift_schedule's
+        # due_drift_projects(), cli.py's `schedule list`) can safely compare/
+        # subtract this against an aware `datetime.now(timezone.utc)` without
+        # a "can't compare offset-naive and offset-aware datetimes" TypeError.
+        # Leave an already-aware value untouched.
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     return None
 
 

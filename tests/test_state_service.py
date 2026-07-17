@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import timedelta, timezone
 
 from hivepilot.services import db, state_service
 from hivepilot.services.state_service import (
+    get_schedule_last_run,
     get_steps_for_run,
     init_db,
     list_recent_interactions,
     record_interaction,
     record_run_start,
     record_step,
+    update_schedule_run,
 )
 
 # ---------------------------------------------------------------------------
@@ -402,3 +405,41 @@ class TestRecordStepUsage:
         assert rows[0]["input_tokens"] is None
         assert rows[0]["output_tokens"] is None
         assert rows[0]["cost_usd"] is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 20 D3 review — get_schedule_last_run must return a tz-aware UTC
+# datetime (was returning a NAIVE datetime parsed from SQLite's
+# CURRENT_TIMESTAMP, which raised TypeError when compared/subtracted against
+# an aware `datetime.now(timezone.utc)` in schedule_service.due_schedules()
+# and drift_schedule.due_drift_projects() -- see D3 review VERIFY 3).
+# ---------------------------------------------------------------------------
+
+
+class TestGetScheduleLastRunTzAware:
+    def test_returns_none_when_never_run(self) -> None:
+        assert get_schedule_last_run("never-run-schedule") is None
+
+    def test_returns_tz_aware_utc_datetime_after_a_stamp(self) -> None:
+        update_schedule_run("demo-schedule")
+        last_run = get_schedule_last_run("demo-schedule")
+        assert last_run is not None
+        assert last_run.tzinfo is not None
+        assert last_run.utcoffset() == timedelta(0)
+        assert last_run.tzinfo == timezone.utc or last_run.utcoffset() == timezone.utc.utcoffset(
+            None
+        )
+
+    def test_comparable_against_aware_now_without_raising(self) -> None:
+        """Regression: the exact comparison shape used by
+        schedule_service.due_schedules() and drift_schedule.due_drift_projects()
+        must not raise TypeError."""
+        from datetime import datetime
+
+        update_schedule_run("demo-schedule-2")
+        last_run = get_schedule_last_run("demo-schedule-2")
+        assert last_run is not None
+        next_run_time = last_run + timedelta(minutes=60)
+        now = datetime.now(timezone.utc)
+        # Must not raise "can't compare offset-naive and offset-aware datetimes"
+        assert (next_run_time <= now) is False
