@@ -337,7 +337,7 @@ def test_skill_reapplied_to_quota_fallback_runner(tmp_path: Path, monkeypatch) -
 
     with (
         patch("hivepilot.roles.get_role") as mock_get_role,
-        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
         patch("hivepilot.roles.resolve_host", return_value=None),
         patch("hivepilot.services.state_service.record_step"),
     ):
@@ -480,7 +480,7 @@ def test_mode_and_skill_reapplied_to_quota_fallback_runner(
 
     with (
         patch("hivepilot.roles.get_role") as mock_get_role,
-        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
         patch("hivepilot.roles.resolve_host", return_value=None),
         patch("hivepilot.services.state_service.record_step"),
     ):
@@ -566,7 +566,7 @@ def test_mode_api_step_fails_closed_when_fallback_is_cli_only(
 
     with (
         patch("hivepilot.roles.get_role") as mock_get_role,
-        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6")),
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
         patch("hivepilot.roles.resolve_host", return_value=None),
         patch("hivepilot.services.state_service.record_step"),
     ):
