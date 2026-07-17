@@ -113,25 +113,34 @@ on `openrouter` fails the same way).
 
 ### Model + reasoning effort (`model` / `effort`)
 
-Both a pipeline and each of its stages can set a `model` (a plain string,
-runner-specific) and an `effort` — a closed set of reasoning-effort levels:
-`low` | `medium` | `high` | `xhigh` | `max` (`hivepilot.models.EffortLevel`).
-Both default to `None` — a pipeline/stage that sets neither dispatches
-byte-identically to before these fields existed.
+Both a pipeline and each of its stages can *declare* a `model` (a plain
+string, runner-specific) and an `effort` — a closed set of reasoning-effort
+levels: `low` | `medium` | `high` | `xhigh` | `max`
+(`hivepilot.models.EffortLevel`). These raw fields — `PipelineStage.model` /
+`.effort` and `PipelineConfig.model` / `.effort` — both default to `None`; a
+pipeline/stage that sets neither dispatches byte-identically to before these
+fields existed. The **effective** model/effort actually handed to a runner
+is never read straight off these raw fields — it is produced by a two-stage
+resolution:
 
-**Precedence** (`hivepilot.roles.resolve_stage_dispatch`):
+1. **Pipeline vs. stage.** `hivepilot.models.resolve_stage_model` /
+   `resolve_effort` resolve the raw `stage.model`/`.effort` against the raw
+   `pipeline.model`/`.effort` (`stage > pipeline`, mirroring `mode`'s own
+   `resolve_mode` precedence), producing a *stage-resolved* value that is
+   still `None` if neither field was set anywhere.
+2. **Role vs. policy.** `hivepilot.roles.resolve_stage_dispatch` takes that
+   stage-resolved value (as its `stage_model`/`stage_effort` arguments) and
+   layers it into the full precedence chain below to produce the final,
+   effective dispatch model/effort:
 
 ```
-policy.role_overrides  >  stage  >  role  >  runner-default
+policy.role_overrides  >  stage (pipeline-resolved)  >  role  >  runner-default
 ```
 
-`stage.model`/`stage.effort` are themselves already resolved against the
-pipeline-wide default first (`stage > pipeline`, mirroring `mode`'s own
-`resolve_mode` precedence — see `hivepilot.models.resolve_stage_model` /
-`resolve_effort`), and that stage-resolved value is what feeds into the
-chain above. A per-project policy's `role_overrides[role].model` /
-`.effort` (see [CONFIG.md](CONFIG.md)) always wins — it is the security
-control that must never be short-circuited by a stage or role author.
+A per-project policy's `role_overrides[role].model` / `.effort` (see
+[CONFIG.md](CONFIG.md)) always wins over both the stage-resolved value and
+the role's own binding — it is the security control that must never be
+short-circuited by a stage or role author.
 
 ```yaml
 # pipelines.yaml

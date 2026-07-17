@@ -29,12 +29,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import yaml
 from pydantic import BaseModel
 
-from hivepilot.models import EffortLevel
+from hivepilot.models import EffortLevel, validate_effort
 
 if TYPE_CHECKING:
     from hivepilot.config import Settings
@@ -281,7 +281,11 @@ def resolve_stage_dispatch(
         if "model" in override:
             model = override["model"]
         if "effort" in override:
-            effort = override["effort"]
+            # `validate_effort` raises ValueError for anything outside
+            # EFFORT_LEVELS (the exact `get_args(EffortLevel)` set), so the
+            # cast only narrows a value already proven to be a legal
+            # EffortLevel — no unchecked type-safety hole.
+            effort = cast("EffortLevel", validate_effort(override["effort"]))
     return runner, model, effort
 
 
