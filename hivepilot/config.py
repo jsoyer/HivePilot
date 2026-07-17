@@ -334,6 +334,13 @@ class Settings(BaseSettings):
     # content only (pre-existing `extra_prompt` content, e.g. from mem0, is
     # never truncated). env: HIVEPILOT_OBSIDIAN_RECALL_MAX_BYTES
     obsidian_recall_max_bytes: int = 4000
+    # Sprint 03 (plugin-arch-overhaul PRD) — brand-new `kind: "tmux"`
+    # execution-wrapper runner (runs each step inside a dedicated tmux
+    # session for live attach/observe) added directly as a default-on,
+    # PATH-gated plugin (plugins/tmux.py) — same opt-OUT + shutil.which
+    # gating pattern as rtk_enabled/herdr_enabled/hugo_enabled.
+    # env: HIVEPILOT_TMUX_ENABLED
+    tmux_enabled: bool = True
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:
