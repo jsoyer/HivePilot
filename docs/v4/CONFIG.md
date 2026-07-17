@@ -135,6 +135,92 @@ acme-release-gate:
   gated by the same explicit-blocking-verdict check as `promote_pr`, and (when
   both flags are set) `promote_pr` always runs before `merge_pr`.
 
+## Skills (`skills:` field + CLI commands)
+
+A task step (`tasks.yaml`, `TaskStep.skills`) or a pipeline stage
+(`pipelines.yaml`, `PipelineStage.skills`) may optionally declare a `skills:`
+list — plugin-contributed content (see "Skills" in `docs/v4/PLUGINS.md`) a
+runner MAY apply to its own invocation. Absent (`None`) by default: a config
+that never references `skills` behaves byte-identically to before this field
+existed. When present, it is an ordered list of skill names, deduped on
+parse (`b, a, b, c` -> `b, a, c`):
+
+```yaml
+# tasks.yaml
+acme-developer:
+  role: developer
+  steps:
+    - name: implementation
+      runner: claude
+      prompt_file: prompts/agents/developer.md
+      skills: [sample-skill]        # applied by runners that implement apply_skill
+```
+
+```yaml
+# pipelines.yaml
+pipelines:
+  default:
+    stages:
+      - name: Implementation
+        task: acme-developer
+        skills: [sample-skill]      # same field, one level up (per-stage)
+```
+
+**Fail-closed cross-reference.** `hivepilot config validate` cross-checks
+every `skills:` entry against the live skill catalog
+(`PluginManager.list_skills()`): an unregistered name is a hard error
+("references unknown skill '\<name\>'"), and a skill declaring `min_role`
+requires the referencing step/stage's resolved role (the owning task's
+`role:`) to satisfy it — never a silent pass on an unrecognized role on
+either side of that comparison. See "Skills" in `docs/v4/PLUGINS.md` for the
+full contract, and note that **a runner without `apply_skill` support
+silently ignores every skill it is handed** — declaring `skills:` on a step
+whose runner doesn't implement that optional contract has no effect (no
+error, either), the same fail-open-by-design tolerance `applies_to` mismatch
+handling has at the runner level.
+
+### Attaching skills to a pipeline stage (`hivepilot stage ...`)
+
+Guided, validated mutation commands (same family as `hivepilot task set-role`
+/ `hivepilot role wire` — round-trip YAML writer, dry-run support, refuse
+rather than write on any validation failure):
+
+```bash
+hivepilot stage attach-skill <pipeline> <stage> <skill>   # append (idempotent, deduped)
+hivepilot stage detach-skill <pipeline> <stage> <skill>   # remove (no-op if already absent)
+```
+
+Both commands:
+
+- Refuse (exit `1`, write nothing) when *pipeline* or *stage* is unknown,
+  listing the valid names.
+- Refuse (exit `1`, write nothing) when the prospective result would fail
+  `hivepilot config validate` — an unknown *skill* name is caught here via
+  the SAME fail-closed cross-reference check described above (reused via
+  `apply_and_validate`, never reimplemented in the CLI layer).
+- Are idempotent: attaching an already-present skill, or detaching an
+  already-absent one, prints "No changes." and exits `0` without writing.
+- Support `--dry-run` to print the unified diff without writing.
+- Never leave a stage with `skills: []` — `detach-skill` drops the key
+  entirely once its last skill is removed, so a fully-detached stage
+  round-trips byte-identical to one that never had any skill attached.
+
+```bash
+hivepilot stage attach-skill default Implementation sample-skill
+# Skill 'sample-skill' attached to pipeline 'default' stage 'Implementation'.
+
+hivepilot stage detach-skill default Implementation sample-skill
+# Skill 'sample-skill' detached from pipeline 'default' stage 'Implementation'.
+```
+
+Inspect what's actually registered (and therefore attachable) with:
+
+```bash
+hivepilot skills list
+```
+
+See "`skills list`" in `docs/v4/PLUGINS.md` for its output columns.
+
 ## Runner non-interactive invocation
 
 Each CLI runner is invoked headlessly (so real runs don't hang); overridable via

@@ -44,6 +44,8 @@ task_app = typer.Typer(help="Manage tasks.yaml entries")
 app.add_typer(task_app, name="task")
 role_app = typer.Typer(help="Manage roles.yaml entries")
 app.add_typer(role_app, name="role")
+stage_app = typer.Typer(help="Manage pipelines.yaml stage entries")
+app.add_typer(stage_app, name="stage")
 telegram_app = typer.Typer(help="Telegram bot")
 app.add_typer(telegram_app, name="telegram")
 caddy_app = typer.Typer(help="Caddy reverse proxy management")
@@ -62,6 +64,8 @@ obsidian_app = typer.Typer(help="Obsidian vault integration")
 app.add_typer(obsidian_app, name="obsidian")
 plugins_app = typer.Typer(help="Inspect loaded plugins")
 app.add_typer(plugins_app, name="plugins")
+skills_app = typer.Typer(help="Inspect plugin-contributed skills")
+app.add_typer(skills_app, name="skills")
 scan_app = typer.Typer(help="Supply-chain security scanning (SBOM + vulnerability scan)")
 app.add_typer(scan_app, name="scan")
 drift_app = typer.Typer(help="Infrastructure drift detection")
@@ -1343,6 +1347,156 @@ def role_wire(
         typer.echo(result.diff or "No changes.")
         raise typer.Exit(0)
     typer.echo(f"Role {role!r} field {field!r} set to {value!r}.")
+
+
+def _resolve_raw_pipeline_stage(pipeline: str, stage: str):
+    """Validate *pipeline*/*stage* exist (pydantic-normalized, matching every
+    other guided-mutation command's pre-check style -- see `task_set_role` /
+    `role_wire` above) and return the matching RAW round-trip stage entry
+    from pipelines.yaml. Exits 1 with a helpful message listing valid names
+    when either is unknown, or when the pydantic-normalized view and the raw
+    round-trip map have drifted (mirrors the defensive raw-map re-check
+    every other Sprint 3 command performs)."""
+    from hivepilot.services.project_service import load_pipelines
+
+    pipelines = load_pipelines().pipelines
+    if pipeline not in pipelines:
+        typer.echo(f"Error: unknown pipeline {pipeline!r}.", err=True)
+        valid = ", ".join(sorted(pipelines)) or "(none configured)"
+        typer.echo(f"Valid pipelines: {valid}", err=True)
+        raise typer.Exit(1)
+
+    stage_names = [s.name for s in pipelines[pipeline].stages]
+    if stage not in stage_names:
+        typer.echo(f"Error: unknown stage {stage!r} in pipeline {pipeline!r}.", err=True)
+        valid = ", ".join(stage_names) or "(none configured)"
+        typer.echo(f"Valid stages: {valid}", err=True)
+        raise typer.Exit(1)
+
+    raw = _load_raw_config_file("pipelines.yaml")
+    raw_pipeline = (raw.get("pipelines") or {}).get(pipeline)
+    if isinstance(raw_pipeline, dict):
+        for entry in raw_pipeline.get("stages") or []:
+            if isinstance(entry, dict) and entry.get("name") == stage:
+                return entry
+    typer.echo(
+        f"Error: pipeline {pipeline!r} stage {stage!r} not found in the on-disk pipelines.yaml.",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+@stage_app.command("attach-skill")
+def stage_attach_skill(
+    pipeline: str = typer.Argument(..., help="Pipeline name"),
+    stage: str = typer.Argument(..., help="Stage name"),
+    skill: str = typer.Argument(..., help="Skill name to attach"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print diff, write nothing"),
+) -> None:
+    """Attach a plugin-contributed skill to a pipelines.yaml stage's
+    `skills` list (`PipelineStage.skills` -- ordered, deduped).
+
+    Does NOT re-check *skill* against the registered skill catalog itself --
+    that fail-closed cross-reference (unknown skill -> hard error, plus the
+    optional `min_role` gate) is entirely REUSED from
+    `hivepilot.services.config_validation.validate_config`, which
+    `apply_and_validate` already runs against the prospective pipelines.yaml
+    before ever writing it. An unknown skill therefore refuses the write and
+    prints that validator's "references unknown skill '<name>'" error,
+    same as any other cross-reference violation this command family guards
+    against.
+    """
+    from hivepilot.services.config_writer import apply_and_validate
+
+    raw_stage = _resolve_raw_pipeline_stage(pipeline, stage)
+    existing_skills = list(raw_stage.get("skills") or [])
+    if skill in existing_skills:
+        typer.echo(
+            f"Skill {skill!r} already attached to pipeline {pipeline!r} stage {stage!r}. "
+            "No changes."
+        )
+        raise typer.Exit(0)
+
+    def mutate(data):
+        stages = ((data.get("pipelines") or {}).get(pipeline) or {}).get("stages") or []
+        for entry in stages:
+            if isinstance(entry, dict) and entry.get("name") == stage:
+                current = list(entry.get("skills") or [])
+                current.append(skill)
+                entry["skills"] = current
+                return data
+        # Defensive: apply_and_validate reloads its own copy of the raw map
+        # -- re-check membership rather than trust the pre-check above never
+        # goes stale, so this never silently no-ops (mirrors task_set_role /
+        # role_wire's identical guard).
+        typer.echo(
+            f"Error: pipeline {pipeline!r} stage {stage!r} not found in the on-disk "
+            "pipelines.yaml.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    result = apply_and_validate("pipelines.yaml", mutate, dry_run=dry_run, base_dir=None)
+    if result.errors:
+        for error in result.errors:
+            typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1)
+    if dry_run:
+        typer.echo(result.diff or "No changes.")
+        raise typer.Exit(0)
+    typer.echo(f"Skill {skill!r} attached to pipeline {pipeline!r} stage {stage!r}.")
+
+
+@stage_app.command("detach-skill")
+def stage_detach_skill(
+    pipeline: str = typer.Argument(..., help="Pipeline name"),
+    stage: str = typer.Argument(..., help="Stage name"),
+    skill: str = typer.Argument(..., help="Skill name to detach"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print diff, write nothing"),
+) -> None:
+    """Detach a skill from a pipelines.yaml stage's `skills` list. A no-op
+    (exit 0, writes nothing) when the skill is already absent. An empty
+    `skills` list is dropped entirely rather than left as `skills: []`, so a
+    fully-detached stage round-trips byte-identical to one that never had
+    any skill attached (`PipelineStage.skills` defaults to `None`)."""
+    from hivepilot.services.config_writer import apply_and_validate
+
+    raw_stage = _resolve_raw_pipeline_stage(pipeline, stage)
+    existing_skills = list(raw_stage.get("skills") or [])
+    if skill not in existing_skills:
+        typer.echo(
+            f"Skill {skill!r} already absent from pipeline {pipeline!r} stage {stage!r}. "
+            "No changes."
+        )
+        raise typer.Exit(0)
+
+    def mutate(data):
+        stages = ((data.get("pipelines") or {}).get(pipeline) or {}).get("stages") or []
+        for entry in stages:
+            if isinstance(entry, dict) and entry.get("name") == stage:
+                remaining = [s for s in (entry.get("skills") or []) if s != skill]
+                if remaining:
+                    entry["skills"] = remaining
+                else:
+                    entry.pop("skills", None)
+                return data
+        # Defensive: same re-check as stage_attach_skill's mutate() above.
+        typer.echo(
+            f"Error: pipeline {pipeline!r} stage {stage!r} not found in the on-disk "
+            "pipelines.yaml.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    result = apply_and_validate("pipelines.yaml", mutate, dry_run=dry_run, base_dir=None)
+    if result.errors:
+        for error in result.errors:
+            typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1)
+    if dry_run:
+        typer.echo(result.diff or "No changes.")
+        raise typer.Exit(0)
+    typer.echo(f"Skill {skill!r} detached from pipeline {pipeline!r} stage {stage!r}.")
 
 
 @telegram_app.command("start")
@@ -2949,6 +3103,40 @@ def plugins_tui() -> None:
         raise typer.BadParameter("textual not installed. run `pip install textual`.") from exc
 
     PluginManagerApp().run()
+
+
+@skills_app.command("list")
+def skills_list() -> None:
+    """List every registered plugin-contributed skill (skill-plugin-type PRD,
+    Sprint 5): name, description, contributing plugin's `provider`, and
+    which runner kinds it `applies_to` ("any" when unset -- see
+    `hivepilot/plugins.py`'s `SkillSpec` docstring).
+
+    Mirrors `plugins list`'s rendering style. Sourced from
+    `PluginManager.list_skills()`, which is never-raise-free of side
+    effects beyond the `PluginManager()` construction itself.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    orchestrator = Orchestrator()
+    console = Console(width=200)
+
+    skills_table = Table(title="Skills")
+    skills_table.add_column("name")
+    skills_table.add_column("description")
+    skills_table.add_column("provider")
+    skills_table.add_column("applies_to")
+    skills = orchestrator.plugins.list_skills()
+    for skill in skills:
+        applies_to = skill.get("applies_to")
+        applies_to_display = ", ".join(applies_to) if applies_to else "any"
+        skills_table.add_row(
+            skill["name"], skill["description"], skill["provider"], applies_to_display
+        )
+    if not skills:
+        skills_table.add_row("-", "-", "-", "-")
+    console.print(skills_table)
 
 
 if __name__ == "__main__":
