@@ -29,6 +29,37 @@ plugin runner/notifier executes with the same process environment and
 Master switch: `settings.plugins_enabled: bool = True` (`hivepilot/config.py`).
 Set to `False` to disable both discovery mechanisms; built-ins are unaffected.
 
+## Plugin inventory
+
+This repo ships **19** local-file plugins under `plugins/*.py` (excluding
+`plugins/__init__.py`). Every one follows the uniform gating model below —
+see "Gating model" further down for the full opt-in/opt-out contract.
+
+| plugin | file | contributes | enable flag | default |
+|---|---|---|---|---|
+| `gemini` | `plugins/gemini.py` | runner (agent) | `gemini_enabled` | ON (+ PATH) |
+| `opencode` | `plugins/opencode.py` | runner (agent) | `opencode_enabled` | ON (+ PATH) |
+| `ollama` | `plugins/ollama.py` | runner (agent) | `ollama_enabled` | ON (+ PATH) |
+| `pi` | `plugins/pi.py` | runner (agent) | `pi_enabled` | ON (+ PATH) |
+| `qwen_code` | `plugins/qwen_code.py` | runner (agent, kind `qwen-code`) | `qwen_code_enabled` | ON (+ PATH) |
+| `kimi_cli` | `plugins/kimi_cli.py` | runner (agent, kind `kimi-cli`) | `kimi_cli_enabled` | ON (+ PATH) |
+| `rtk` | `plugins/rtk.py` | runner (infra, shell-fallback) + health | `rtk_enabled` | ON |
+| `herdr` | `plugins/herdr.py` | runner (infra, multiplexer) + health | `herdr_enabled` | ON |
+| `hugo` | `plugins/hugo.py` | runner (infra, static-site) + health | `hugo_enabled` | ON (+ PATH) |
+| `tmux` | `plugins/tmux.py` | runner (infra, execution-wrapper) + health | `tmux_enabled` | ON |
+| `bitwarden` | `plugins/bitwarden.py` | secrets + health | `bitwarden_enabled` | ON |
+| `vaultwarden` | `plugins/vaultwarden.py` | secrets + health | `vaultwarden_enabled` | ON |
+| `infisical` | `plugins/infisical.py` | secrets | `infisical_enabled` | ON |
+| `onepassword` | `plugins/onepassword.py` | secrets | `onepassword_enabled` | ON |
+| `obsidian` | `plugins/obsidian.py` | notifier + hooks (`before_step`/`after_step`/`on_pipeline_end`/`on_error`) + health | `obsidian_enabled` (+ `obsidian_recall_enabled` for `before_step`/`after_step` specifically) | ON |
+| `headroom` | `plugins/headroom.py` | hook (`before_step`, context compression) | `headroom_enabled` | OFF (opt-in) |
+| `mem0` | `plugins/mem0.py` | hooks (`before_step`/`after_step`, memory recall/store) | `mem0_enabled` | OFF (opt-in) |
+| `sample` | `plugins/sample.py` | hooks + panel (demo) | `sample_enabled` | OFF (opt-in) |
+| `sample_skill` | `plugins/sample_skill.py` | skill (demo) | `sample_skill_enabled` | OFF (opt-in) |
+
+Run `hivepilot plugins list` for the live, currently-active view (see
+"Inspecting loaded plugins" below) — this table is the static reference.
+
 ## Agent runner taxonomy: built-in vs. plugin
 
 Coding-agent runner kinds ship in two tiers, both dispatched through the same
@@ -36,8 +67,16 @@ Coding-agent runner kinds ship in two tiers, both dispatched through the same
 runner class is registered from, and whether it can ever be absent.
 
 **Built-in agent kinds** — `{claude, codex, vibe, openrouter}`
-(`hivepilot.registry._BUILTIN_RUNNERS`) are unconditionally registered at
-import time, no `PATH` check — always present in `RUNNER_MAP`.
+(`hivepilot.registry._BUILTIN_RUNNERS`) are registered at import time, no
+`PATH` check — but each is individually opt-out-able via its own
+`<kind>_enabled` flag (default `True` for all four —
+`claude_enabled`/`codex_enabled`/`vibe_enabled`/`openrouter_enabled`,
+plugin-arch-overhaul Sprint 01): the registration loop skips a kind whose
+flag is `False`, so it is simply **absent** from `RUNNER_MAP`, exactly like
+a disabled plugin agent kind below — a config that still references it
+resolves to a `KeyError` naming the currently available kinds. `hivepilot
+plugins list`'s **Agent Runners** table tags a disabled built-in `inactive`,
+same as a disabled plugin agent kind.
 
 | kind | binary | notes |
 |---|---|---|
@@ -128,6 +167,81 @@ runner/notifier/hook/secret/panel/health. Toggle e.g. `rtk` off with
 `HIVEPILOT_RTK_ENABLED=false`.
 
 See "TUI plugin manager" below for the interactive `space` toggle.
+
+## Gating model — everything is opt-in/opt-out, nothing mandatory
+
+Every plugin this repo ships follows the SAME uniform gating shape, so an
+operator only ever has to learn it once:
+
+1. **Central master switch** — `settings.plugins_enabled` (default `True`).
+   `False` disables ALL plugin discovery/loading (local-file, entry-point,
+   and the explicit `plugins_entry` pin) in one step; built-ins are
+   unaffected.
+2. **Per-plugin enable flag** — every bundled plugin has its own
+   `<name>_enabled` boolean (env `HIVEPILOT_<NAME>_ENABLED`), checked as the
+   FIRST line of that plugin's `register()`, which early-returns `{}`
+   (contributing nothing — no runner/notifier/secrets backend/health
+   check/hook) when its flag is `False`. Two flavors:
+   - **opt-out** (default `True`) — current/shipped behavior, e.g.
+     `tmux_enabled`, `bitwarden_enabled`, `vaultwarden_enabled`,
+     `obsidian_enabled`, `hugo_enabled`, `rtk_enabled`, `herdr_enabled`,
+     `infisical_enabled`, `onepassword_enabled`, every built-in agent flag
+     (`claude_enabled`/`codex_enabled`/`vibe_enabled`/`openrouter_enabled`)
+     and every optional PATH-gated agent-plugin flag
+     (`gemini_enabled`/`opencode_enabled`/`ollama_enabled`/`pi_enabled`/
+     `qwen_code_enabled`/`kimi_cli_enabled`).
+   - **opt-in / dormant** (default `False`) — demo/context plugins that
+     should never activate unasked: `sample_enabled`, `sample_skill_enabled`,
+     `headroom_enabled`, `mem0_enabled`.
+3. **Per-plugin skip list** — `settings.plugins_disabled` (env
+   `HIVEPILOT_PLUGINS_DISABLED`) names individual plugins to skip even when
+   both switches above are `True`/on — checked BEFORE the plugin module is
+   even loaded, in all three load paths (local-file, entry-point, explicit
+   pin). See "Agent runner taxonomy" above for the full list + per-plugin
+   detail table.
+4. **Runtime/PATH gating (agent + tmux/hugo/rtk/herdr-style runner
+   plugins only)** — some plugins ALSO require a CLI binary on `PATH`
+   (`shutil.which`), evaluated once at `PluginManager()` construction
+   (process start). A plugin whose binary is absent still LOADS (its
+   `register()` still runs and contributes its kind/health check into the
+   registries) but that kind resolves to an actionable
+   `RunnerPluginUnavailableError` at dispatch time, or — for non-agent
+   runner plugins like `tmux`/`rtk`/`herdr` — degrades to a raw-shell
+   fallback instead of failing outright. `hivepilot plugins list` /
+   `hivepilot plugins health` both surface current activation.
+
+**Nothing is mandatory at the plugin layer.** The only hard requirement
+anywhere in HivePilot is the **built-in agent CLI** floor (`hivepilot`
+needs at least one of `claude`/`codex`/`vibe` on `PATH` to run a pipeline —
+see "Agent runner taxonomy" above and "Fail-closed startup" below); every
+plugin, including every optional agent kind, is individually toggleable
+without affecting that floor.
+
+## Fail-closed startup — the zero-agent-runner guard
+
+`Orchestrator.run_pipeline` (`hivepilot/orchestrator.py`,
+`_run_pipeline_body`) refuses to start a pipeline run — raising
+`hivepilot.registry.NoAgentRunnerError` **before any stage executes** — when
+`hivepilot.registry.active_agent_runner_kinds()` is empty, i.e. every
+built-in agent flag is off AND no agent plugin (built-in or PATH-gated
+plugin) is currently registered in `RUNNER_MAP`. This is a genuine
+fail-CLOSED gate, not a warn-only check:
+
+- The error message names only the enable-able kind names (the full
+  `hivepilot.services.agent_checks.AGENT_RUNNER_KINDS` set) plus a one-line
+  hint (e.g. `HIVEPILOT_CLAUDE_ENABLED=1`) — never a config value or secret.
+- It trips at the very top of `_run_pipeline_body`, right after
+  `validate_pipeline(...)` and before `run_task`/any runner is ever invoked
+  — no partial work, no half-executed stage.
+- `hivepilot init` and `hivepilot doctor` deliberately stay **warn-only**
+  (never a hard failure) when no mandatory agent CLI is found — `init`'s
+  whole job is to scaffold the config an operator needs before installing an
+  agent CLI, so hard-failing there would be a chicken-and-egg regression on
+  a fresh machine or in CI. The hard fail-closed behavior is scoped
+  specifically to actually *running* a pipeline, where proceeding with zero
+  agent runners can never make progress.
+- Check current activation any time with `hivepilot plugins list` (the
+  **Agent Runners** table) — see "Inspecting loaded plugins" below.
 
 ## Authoring a plugin
 
@@ -734,6 +848,59 @@ the runner cannot execute at all.
 Disable it the same way as any other bundled plugin: `HIVEPILOT_HUGO_ENABLED=false`,
 or add `"hugo"` to `HIVEPILOT_PLUGINS_DISABLED`.
 
+### Example: the `tmux` runner (`plugins/tmux.py`)
+
+Ships in this repo as a reference **execution-wrapper** runner plugin
+(Sprint 03 of the plugin-arch-overhaul PRD) — same category as
+`plugins/herdr.py` above: it runs each pipeline step *inside a dedicated,
+deterministically-named tmux session* instead of a plain `subprocess.run`,
+so a human can `tmux attach -t <session>` and watch a step execute live, and
+the full scrollback is captured as the step's result. Opt-out by default
+(`tmux_enabled`, default `True`, env `HIVEPILOT_TMUX_ENABLED`).
+
+Execution model when `tmux` is on `PATH`: `new-session -d` (idle shell) ->
+`send-keys` the wrapped command -> `wait-for` a completion signal the
+wrapped command itself fires -> `capture-pane -S -` (full scrollback) ->
+`kill-session` (always, in a `finally`, so a failed step never leaks a
+lingering session). The session name derives ONLY from stable payload
+identifiers (project/task/step names) — no timestamp/random — so re-running
+the same step reuses/collides with the same session name deterministically.
+
+**Graceful fallback.** When `shutil.which("tmux")` finds nothing, the runner
+degrades to a raw `["bash", "-lc", <command>]` `subprocess.run` — same
+behavior as `plugins/rtk.py`/`plugins/herdr.py` — so a pipeline referencing
+`kind: tmux` keeps working (without the live-attach/full-scrollback
+benefit) on a host without `tmux` installed.
+
+```yaml
+# roles.yaml
+runners:
+  attended-build:
+    kind: tmux
+    command: "cd {project_path} && npm run build"
+```
+
+```yaml
+# tasks.yaml
+steps:
+  - name: build
+    runner: attended-build
+```
+
+**Env/secrets.** Reaches the session via a private (`0600`) temp env file
+the wrapped command `source`s first — mirrors `plugins/herdr.py`'s security
+posture: no secret value ever appears on a `subprocess.run`/`tmux send-keys`
+argv (which would be visible to any other user via `ps`).
+
+**Health check** — `register()["health"]["tmux"]` reports `ok` when `tmux`
+is on `PATH`, `degraded` ("tmux not found; using shell fallback") otherwise
+— never `error` for a missing binary, since the raw-shell fallback still
+lets the runner execute; only an unexpected internal exception reports
+`error` (the exception TYPE name only, never a message/value).
+
+Disable it the same way as any other bundled plugin: `HIVEPILOT_TMUX_ENABLED=false`,
+or add `"tmux"` to `HIVEPILOT_PLUGINS_DISABLED`.
+
 ### Example: the `headroom` plugin (`plugins/headroom.py`)
 
 Ships in this repo as a reference `before_step` hook plugin that compresses a
@@ -981,9 +1148,12 @@ plugin sends off-machine).
 
 ### Example: the `obsidian` plugin (`plugins/obsidian.py`)
 
-Ships in this repo as a reference plugin that is BOTH a notifier and a pair
-of lifecycle hooks — logging pipeline activity into the Obsidian vault. Both
-surfaces append to the SAME daily journal note:
+Ships in this repo as a reference plugin that is a notifier, a pair of
+journaling lifecycle hooks, AND (Sprint 02 of the plugin-arch-overhaul PRD) a
+`before_step`/`after_step` pair that turns the vault into a lightweight
+"brain" — recalling relevant notes into the prompt before a step runs, then
+recording the step's outcome back into the vault after it finishes. All four
+hooks + the notifier append to the SAME daily journal note:
 
 ```
 12 - HivePilot/Runs/YYYY-MM-DD.md
@@ -995,6 +1165,25 @@ surfaces append to the SAME daily journal note:
 - Hooks `on_pipeline_end` / `on_error`: append a structured run-report block
   (`run_id`, `pipeline`, `status` or `stage`, and a UTC timestamp) to the same
   journal.
+- Hook `before_step` (`recall`, Sprint 02) — the vault "brain" read side:
+  searches the vault for notes relevant to the current task/role/step name
+  and injects bounded excerpts into `RunnerPayload.metadata["extra_prompt"]`
+  — same field, same append-not-overwrite discipline as `plugins/mem0.py`'s
+  `recall`/`store` contract, with the vault standing in for mem0's memory
+  store. Gated by BOTH `obsidian_enabled` and `obsidian_recall_enabled`
+  (default `True`/opt-out). Reads note TEXT ONLY — any `${secret:NAME}`
+  token found in a matched excerpt is stripped, never resolved/forwarded,
+  before injection. The injected block alone is hard-capped to
+  `settings.obsidian_recall_max_bytes` (default `4000`; pre-existing
+  `extra_prompt` content, e.g. from `mem0`, is never truncated). Idempotent
+  per task (a shared `metadata` dict is only recalled-for once). Never
+  raises — a broken/misconfigured vault is a silent no-op.
+- Hook `after_step` (`store`, Sprint 02) — the vault "brain" write side:
+  appends a structured step-outcome entry (task/role/step/status + a
+  one-line summary of the step's output) to the same daily journal note the
+  notifier/`on_pipeline_end`/`on_error` already write to. Same
+  `obsidian_enabled` gate; honors the run's `dry_run` flag (unlike `recall`,
+  which is read-only so `dry_run` doesn't apply to it).
 
 It targets `settings.obsidian_vault` (`hivepilot/config.py`), resolved lazily
 inside each function — no vault path is cached at import time. All file I/O
@@ -1022,6 +1211,8 @@ Configuration and failure behavior:
 ```yaml
 # .env / environment
 HIVEPILOT_OBSIDIAN_VAULT=/path/to/your/Vault
+HIVEPILOT_OBSIDIAN_RECALL_ENABLED=true       # default true; gates recall/store independently
+HIVEPILOT_OBSIDIAN_RECALL_MAX_BYTES=4000     # cap on the injected recall block
 ```
 
 ```python
@@ -1169,6 +1360,110 @@ env:
   DATABASE_URL: ${secret:DATABASE_URL}
 ```
 
+### Example: the `bitwarden` secrets provider (`plugins/bitwarden.py`)
+
+Ships in this repo as a first-party **secrets provider** plugin (Sprint 04
+of the plugin-arch-overhaul PRD) — structural sibling of
+`plugins/infisical.py`/`plugins/onepassword.py` above: same `secrets`
+provider type, `register()` returns
+`{"secrets": {"bitwarden": BitwardenBackend()}, "health": {"bitwarden": health}}`,
+loaded into `SECRETS_MAP` under the same fail-closed collision trust model.
+Opt-out by default (`bitwarden_enabled`, default `True`, env
+`HIVEPILOT_BITWARDEN_ENABLED`).
+
+**Access path — the official `bw` CLI (an EXTERNAL tool, never a Python
+dependency).** Unlike the infisical/onepassword backends (Python SDKs), this
+one shells out to the official Bitwarden command-line client, discovered
+lazily via `shutil.which("bw")` — the plugin loads regardless; only
+*resolving* a secret fails if `bw` is absent. A value is addressed by its
+Bitwarden item id or name (`bw get item <id-or-name> --response --session
+<token>`), reading `.data.login.password` (falling back to `.data.notes` for
+secure-note items). The session token is read **explicitly** from the
+`BW_SESSION` environment variable — this plugin never relies on an ambient,
+already-unlocked vault.
+
+**Fail-closed (HARD).** `resolve()` raises `RuntimeError` if `bw` isn't on
+`PATH`, if `BW_SESSION` is unset, if the CLI errors, or if no usable value is
+found. Every error names ONLY the item + provider (`bitwarden`) — **never**
+the fetched secret value and **never** the `BW_SESSION` token — so a stage
+with `on_error: closed` aborts rather than proceeding with a half-resolved
+config.
+
+```bash
+# .env / environment
+HIVEPILOT_BITWARDEN_ENABLED=true
+export BW_SESSION="$(bw unlock --raw)"   # set out-of-band, never in config/env files
+```
+
+```yaml
+# secrets.yaml (or the `secrets:` block of a project config)
+secrets:
+  DATABASE_URL:
+    source: bitwarden
+    item: database-url   # the Bitwarden item id or name
+```
+
+```yaml
+# ... elsewhere in a config, the resolved value is referenced by name:
+env:
+  DATABASE_URL: ${secret:DATABASE_URL}
+```
+
+**Health check** — `register()["health"]["bitwarden"]` reports `error` when
+the `bw` CLI isn't on `PATH`, `degraded` ("not configured") when `bw` is
+present but `BW_SESSION` is unset, `ok` ("configured") when both are
+present — never the session token or a resolved value.
+
+### Example: the `vaultwarden` secrets provider (`plugins/vaultwarden.py`)
+
+The self-hosted sibling of `bitwarden` above (Sprint 04) — targets a
+self-hosted, Bitwarden-compatible [Vaultwarden](https://github.com/dani-garcia/vaultwarden)
+server instead of the Bitwarden cloud endpoint. Same `secrets` provider
+type, same official `bw` CLI, same fail-closed trust model; `register()`
+returns
+`{"secrets": {"vaultwarden": VaultwardenBackend()}, "health": {"vaultwarden": health}}`.
+Opt-out by default (`vaultwarden_enabled`, default `True`, env
+`HIVEPILOT_VAULTWARDEN_ENABLED`).
+
+**Deviation — server targeting.** Because a Vaultwarden deployment lives at
+an operator-chosen URL, `resolve()` first points the `bw` CLI at that server
+via `bw config server <url>` (from `settings.vaultwarden_server_url` — there
+is no per-invocation `--server` flag on `bw get`) before running the same
+`bw get item ... --session <token>` fetch `bitwarden` uses. This mutates the
+CLI's persisted server setting; idempotent for a stable
+`vaultwarden_server_url`.
+
+**Fail-closed (HARD).** `resolve()` raises `RuntimeError` if `bw` isn't on
+`PATH`, if `BW_SESSION` is unset, if `vaultwarden_server_url` isn't
+configured, if the CLI errors, or if no usable value is found — same
+never-leak-the-value/token discipline as `bitwarden` above.
+
+```bash
+# .env / environment
+HIVEPILOT_VAULTWARDEN_ENABLED=true
+HIVEPILOT_VAULTWARDEN_SERVER_URL=https://vaultwarden.example.com
+export BW_SESSION="$(bw unlock --raw)"   # set out-of-band, never in config/env files
+```
+
+```yaml
+# secrets.yaml (or the `secrets:` block of a project config)
+secrets:
+  DATABASE_URL:
+    source: vaultwarden
+    item: database-url   # the Vaultwarden item id or name
+```
+
+```yaml
+# ... elsewhere in a config, the resolved value is referenced by name:
+env:
+  DATABASE_URL: ${secret:DATABASE_URL}
+```
+
+**Health check** — `register()["health"]["vaultwarden"]` reports the same
+`bw`-CLI-presence / `BW_SESSION`-presence status as `bitwarden` — never the
+session token, never the server URL's credentials (it has none; the URL
+itself is not a secret).
+
 ### Example: the `sample_skill` plugin (`plugins/sample_skill.py`)
 
 Ships in this repo as the reference **skill** plugin — the minimal
@@ -1280,12 +1575,16 @@ Prints six tables:
   handling" below) is never credited to the plugin that lost.
 - **Agent Runners** — the coding-agent taxonomy from "Agent runner taxonomy"
   above, sourced live from the registry: every built-in agent kind
-  (`claude`/`codex`/`vibe` tagged `built-in`+`active`, `openrouter` tagged
-  `built-in`+`API-only`), plus every plugin agent kind
-  (`gemini`/`opencode`/`ollama`/`pi`/`qwen-code`/`kimi-cli`) tagged `plugin`
-  and `active` (currently in `RUNNER_MAP` — flag on + binary on `PATH`) or
-  `inactive` (flag off, or binary absent), each with its `HIVEPILOT_<NAME>_
-  ENABLED` enable-flag env var so an inactive row is immediately actionable.
+  (`claude`/`codex`/`vibe`/`openrouter`) tagged `built-in`, plus every plugin
+  agent kind (`gemini`/`opencode`/`ollama`/`pi`/`qwen-code`/`kimi-cli`)
+  tagged `plugin`. Status is derived from real `RUNNER_MAP` membership for
+  BOTH tiers (Sprint 05 — a built-in kind is no longer assumed always
+  active): `active` when currently registered (`openrouter` renders
+  `API-only` instead, since it never spawns a CLI subprocess), `inactive`
+  when its `<kind>_enabled` flag is `False` (built-ins) or its flag is
+  `False`/binary absent (plugin agents) — each row carries its own
+  `HIVEPILOT_<KIND>_ENABLED` env var (including the built-ins) so an
+  inactive row is immediately actionable.
 - **Other Runner Kinds** — every remaining (non-agent) kind currently in
   `RUNNER_MAP` — `shell`, `langchain`, `internal`, `container`, `cursor`, the
   IaC runners, etc. — labeled `built-in` or `plugin` by membership in

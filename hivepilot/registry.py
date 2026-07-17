@@ -23,12 +23,31 @@ from hivepilot.runners.prompt_cli_runner import CodexRunner, VibeRunner
 from hivepilot.runners.puppet_runner import PuppetRunner
 from hivepilot.runners.salt_runner import SaltRunner
 from hivepilot.runners.shell_runner import ShellRunner
+from hivepilot.services.agent_checks import AGENT_RUNNER_KINDS
 
 RUNNER_MAP: Dict[str, Type[BaseRunner]] = {}
 
 
+def active_agent_runner_kinds() -> set[str]:
+    """Registered runner kinds that are 'agent' kinds (per AGENT_RUNNER_KINDS).
+    Intersection of RUNNER_MAP with the canonical agent-kind set — includes any
+    agent plugin that registered itself (gemini/opencode/pi/…), excludes infra
+    runners. Used by the fail-closed run_pipeline guard.
+    """
+    return {kind for kind in RUNNER_MAP if kind in AGENT_RUNNER_KINDS}
+
+
 class RunnerKindCollisionError(RuntimeError):
     pass
+
+
+class NoAgentRunnerError(RuntimeError):
+    """Raised by PipelineOrchestrator.run_pipeline when NO agent runner kind is
+    active in RUNNER_MAP (every built-in agent flag off and no agent plugin
+    registered). Fail-closed guard (plugin-arch-overhaul Sprint 01): a pipeline
+    with zero agent runners can never make progress, so we refuse to start.
+    Message lists only enable-able kind names — never config values or secrets.
+    """
 
 
 class RunnerPluginUnavailableError(RuntimeError):
@@ -207,7 +226,8 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "puppet": PuppetRunner,
 }
 for _kind, _cls in _BUILTIN_RUNNERS.items():
-    RunnerRegistry.register(_kind, _cls)
+    if getattr(settings, f"{_kind}_enabled", True):
+        RunnerRegistry.register(_kind, _cls)
 
 
 # ---------------------------------------------------------------------------

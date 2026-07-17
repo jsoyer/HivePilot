@@ -490,7 +490,8 @@ def register():
         assert by_name["hugo"].contributions == {"runners": ["hugo"], "health": ["hugo"]}
         assert by_name["obsidian"].contributions == {
             "notifiers": ["obsidian"],
-            "hooks": ["on_error", "on_pipeline_end"],
+            # Sprint 02 added recall(before_step)/store(after_step) hooks.
+            "hooks": ["after_step", "before_step", "on_error", "on_pipeline_end"],
             "health": ["obsidian"],
         }
         assert by_name["infisical"].contributions == {
