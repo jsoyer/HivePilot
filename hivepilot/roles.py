@@ -299,7 +299,12 @@ def resolve_runner(role_name: str, policy: object | None = None) -> tuple[str, s
         runner = override.get("runner", runner)
         model = override.get("model", model)
         allowed = getattr(policy, "allowed_runners", None)
-        if allowed and runner not in allowed:
+        # Fail-closed: an explicit empty list ([]) means "deny every runner",
+        # NOT "no constraint". Only `None` (absent) means unconstrained. Using a
+        # plain truthiness check here would treat [] as falsy and skip the gate
+        # entirely (fail-OPEN) — the same sentinel/falsy class of bug as an
+        # unknown-role `-1` inverting a `<` comparison.
+        if allowed is not None and runner not in allowed:
             raise RuntimeError(
                 f"Role '{role_name}' resolves to runner '{runner}', not in allowed_runners {allowed}."
             )
@@ -377,7 +382,11 @@ def resolve_stage_dispatch(
         model = override.get("model", model)
         effort = override.get("effort", effort)
         allowed = getattr(policy, "allowed_runners", None)
-        if allowed and runner not in allowed:
+        # Fail-closed: an explicit empty list ([]) means "deny every runner",
+        # NOT "no constraint". Only `None` (absent) means unconstrained. Mirrors
+        # the identical gate in `resolve_runner` — the parity test
+        # `test_allowed_runners_gate_parity_*` asserts the two paths agree.
+        if allowed is not None and runner not in allowed:
             raise RuntimeError(
                 f"Role '{role_name}' resolves to runner '{runner}', not in allowed_runners {allowed}."
             )

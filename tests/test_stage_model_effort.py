@@ -230,6 +230,96 @@ class TestResolveStageDispatchPrecedence:
         assert model == "gpt-5.5"
 
 
+class TestAllowedRunnersFailClosedOnEmptyList:
+    """Regression: `allowed_runners=[]` MUST deny every runner (fail-closed),
+    not silently allow all. `None` (absent) is the only "unconstrained" value.
+    Both dispatch paths — `resolve_runner` and the no-stage delegate branch of
+    `resolve_stage_dispatch`, AND the stage-override branch — must agree, so a
+    future change to one gate cannot silently diverge from the other."""
+
+    def test_empty_allowed_runners_denies_via_resolve_runner(self) -> None:
+        from hivepilot.roles import resolve_runner
+
+        policy = Policy(allowed_runners=[])
+        with pytest.raises(RuntimeError, match="allowed_runners"):
+            resolve_runner("developer", policy)
+
+    def test_empty_allowed_runners_denies_via_resolve_stage_dispatch_no_stage(
+        self,
+    ) -> None:
+        # No stage args -> delegate branch (routes through resolve_runner).
+        from hivepilot.roles import resolve_stage_dispatch
+
+        policy = Policy(allowed_runners=[])
+        with pytest.raises(RuntimeError, match="allowed_runners"):
+            resolve_stage_dispatch("developer", policy)
+
+    def test_empty_allowed_runners_denies_via_resolve_stage_dispatch_with_stage(
+        self,
+    ) -> None:
+        # Stage override present -> the SECOND, independent gate at roles.py:~382.
+        from hivepilot.roles import resolve_stage_dispatch
+
+        policy = Policy(allowed_runners=[])
+        with pytest.raises(RuntimeError, match="allowed_runners"):
+            resolve_stage_dispatch("developer", policy, stage_model="whatever")
+
+    def test_none_allowed_runners_is_unconstrained(self) -> None:
+        """`None` must remain "no constraint" — the developer role resolves
+        cleanly through every path."""
+        from hivepilot.roles import resolve_runner, resolve_stage_dispatch
+
+        policy = Policy(allowed_runners=None)
+        assert resolve_runner("developer", policy)[0] == "claude"
+        assert resolve_stage_dispatch("developer", policy)[0] == "claude"
+        assert resolve_stage_dispatch("developer", policy, stage_model="m")[0] == "claude"
+
+    def test_populated_allowed_runners_allows_listed_runner(self) -> None:
+        """Sanity: a non-empty allowlist that INCLUDES the resolved runner
+        still permits it (guards against an over-broad fix that denies all)."""
+        from hivepilot.roles import resolve_runner, resolve_stage_dispatch
+
+        policy = Policy(allowed_runners=["claude"])
+        assert resolve_runner("developer", policy)[0] == "claude"
+        assert resolve_stage_dispatch("developer", policy, stage_model="m")[0] == "claude"
+
+    def test_both_gates_agree_across_the_allowed_runners_matrix(self) -> None:
+        """Parity: for every `allowed_runners` value, `resolve_runner` and BOTH
+        branches of `resolve_stage_dispatch` reach the SAME allow/deny verdict —
+        so the duplicated gate logic cannot silently diverge."""
+        from hivepilot.roles import resolve_runner, resolve_stage_dispatch
+
+        cases = [
+            (None, True),  # unconstrained -> allow
+            ([], False),  # explicit deny-all -> deny
+            (["claude"], True),  # allowlist includes resolved runner -> allow
+            (["opencode"], False),  # allowlist excludes it -> deny
+        ]
+
+        def _verdict(fn) -> bool:
+            try:
+                fn()
+                return True
+            except RuntimeError:
+                return False
+
+        for allowed, should_allow in cases:
+            policy = Policy(allowed_runners=allowed)
+            v_runner = _verdict(lambda p=policy: resolve_runner("developer", p))
+            v_disp_nostage = _verdict(lambda p=policy: resolve_stage_dispatch("developer", p))
+            v_disp_stage = _verdict(
+                lambda p=policy: resolve_stage_dispatch("developer", p, stage_model="m")
+            )
+            assert v_runner == should_allow, (allowed, "resolve_runner")
+            assert v_disp_nostage == should_allow, (allowed, "dispatch/no-stage")
+            assert v_disp_stage == should_allow, (allowed, "dispatch/stage")
+            # All three paths must agree with each other, not just with the flag.
+            assert v_runner == v_disp_nostage == v_disp_stage, (
+                allowed,
+                "gate divergence between dispatch paths",
+            )
+
+
 # ---------------------------------------------------------------------------
 # Effort propagation — CodexRunner / ClaudeRunner / other prompt-cli runners
 # ---------------------------------------------------------------------------
