@@ -13,6 +13,11 @@ Covers:
   `-c model_reasoning_effort=<level>` (defaulting to `"medium"` when unset —
   byte-identical to the pre-Sprint-1 hardcoded tuple); `ClaudeRunner` and
   other prompt-cli runners treat effort as a documented no-op (never crash).
+- Follow-up fix: `options["cli_flags"]` is an operator escape hatch that on
+  origin/main REPLACED the fixed effort tuple wholesale (no effort flag at
+  all). `_effort_cli_flags` preserves that when no effort is resolved
+  anywhere, while an explicit stage/role/policy effort still always wins
+  (`TestCodexCliFlagsEscapeHatchPrecedence`).
 - Orchestrator dispatch: a stage that sets neither `model` nor `effort`
   dispatches byte-identically to before these fields existed; a stage that
   DOES set them propagates into the runner definition actually used.
@@ -288,6 +293,145 @@ class TestCodexEffortPropagation:
         args = mock_run.call_args.args[0]
         idx = args.index("-c")
         assert args[idx + 1] == "model_reasoning_effort=xhigh"
+
+
+class TestCodexCliFlagsEscapeHatchPrecedence:
+    """Follow-up fix (post-Sprint-1): `options["cli_flags"]` is an operator
+    escape hatch that on origin/main REPLACED the fixed
+    `("-c", "model_reasoning_effort=medium")` tuple wholesale — an operator
+    using it got NO effort flag at all. `_effort_cli_flags` must preserve
+    that behavior when no effort is resolved anywhere, while still letting
+    an EXPLICIT stage/role/policy effort win (more specific config).
+
+    Covers all four rows of the effort-resolved x cli_flags-set matrix.
+    """
+
+    def test_no_effort_no_cli_flags_override_emits_default_medium(self, tmp_path: Path) -> None:
+        """Row 1: nothing configured anywhere -> byte-identical default."""
+        from hivepilot.config import settings
+
+        runner = CodexRunner(RunnerDefinition(kind="codex", command="codex"), settings)
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
+            runner.run(_payload(tmp_path))
+        args = mock_run.call_args.args[0]
+        assert args == [
+            "codex",
+            "exec",
+            "-c",
+            "model_reasoning_effort=medium",
+            "do the thing",
+        ]
+
+    def test_no_effort_with_cli_flags_override_emits_no_effort_flag(self, tmp_path: Path) -> None:
+        """Row 2 (the regression this follow-up fixes): an operator who set
+        `options["cli_flags"]` fully owns the flag surface, as on
+        origin/main — NO `model_reasoning_effort` flag is injected, and the
+        full argv matches exactly what origin/main would have produced for
+        the same `options["cli_flags"]`."""
+        from hivepilot.config import settings
+
+        runner = CodexRunner(
+            RunnerDefinition(kind="codex", command="codex", options={"cli_flags": ["--foo"]}),
+            settings,
+        )
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
+            runner.run(_payload(tmp_path))
+        args = mock_run.call_args.args[0]
+        assert args == ["codex", "exec", "--foo", "do the thing"]
+        assert not any("model_reasoning_effort" in str(a) for a in args)
+
+    def test_effort_resolved_without_cli_flags_override_emits_resolved_effort(
+        self, tmp_path: Path
+    ) -> None:
+        """Row 3: a stage/role/policy effort with no `cli_flags` override
+        emits that resolved effort (already covered by
+        `TestCodexEffortPropagation.test_definition_effort_is_used`; kept
+        here to document the full four-row matrix in one place)."""
+        from hivepilot.config import settings
+
+        runner = CodexRunner(
+            RunnerDefinition(kind="codex", command="codex", effort="high"), settings
+        )
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
+            runner.run(_payload(tmp_path))
+        args = mock_run.call_args.args[0]
+        assert args == [
+            "codex",
+            "exec",
+            "-c",
+            "model_reasoning_effort=high",
+            "do the thing",
+        ]
+
+    def test_no_effort_with_cli_flags_already_containing_effort_emits_exactly_one(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression guard: no effort resolved anywhere, but the operator's
+        own `options["cli_flags"]` already spells out a
+        `model_reasoning_effort=` entry — `_effort_cli_flags` must NOT add a
+        second one. Since no effort is resolved, `_effort_cli_flags` returns
+        `[]` (row 2), so the operator's own single entry is the only one in
+        the final argv — exactly ONE `model_reasoning_effort` entry, no
+        ambiguous duplicate/last-wins pair."""
+        from hivepilot.config import settings
+
+        runner = CodexRunner(
+            RunnerDefinition(
+                kind="codex",
+                command="codex",
+                options={"cli_flags": ["-c", "model_reasoning_effort=high"]},
+            ),
+            settings,
+        )
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
+            runner.run(_payload(tmp_path))
+        args = mock_run.call_args.args[0]
+        effort_entries = [a for a in args if str(a).startswith("model_reasoning_effort=")]
+        assert effort_entries == ["model_reasoning_effort=high"]
+        assert args == [
+            "codex",
+            "exec",
+            "-c",
+            "model_reasoning_effort=high",
+            "do the thing",
+        ]
+
+    def test_effort_resolved_with_cli_flags_override_wins_over_operator_flags(
+        self, tmp_path: Path
+    ) -> None:
+        """Row 4: an EXPLICIT stage/role/policy effort is more specific
+        config than the operator's `options["cli_flags"]` escape hatch, so
+        it still wins and is appended — even when the operator's own
+        `cli_flags` already contains a (now-stale) `model_reasoning_effort`
+        entry, the explicit one is appended LAST, so `codex`'s own
+        last-value-wins `-c` semantics resolve the pair unambiguously in
+        favor of the explicit, more-specific value."""
+        from hivepilot.config import settings
+
+        runner = CodexRunner(
+            RunnerDefinition(
+                kind="codex",
+                command="codex",
+                effort="xhigh",
+                options={"cli_flags": ["-c", "model_reasoning_effort=high"]},
+            ),
+            settings,
+        )
+        with patch("hivepilot.runners.prompt_cli_runner.subprocess.run") as mock_run:
+            runner.run(_payload(tmp_path))
+        args = mock_run.call_args.args[0]
+        effort_entries = [a for a in args if str(a).startswith("model_reasoning_effort=")]
+        assert effort_entries == ["model_reasoning_effort=high", "model_reasoning_effort=xhigh"]
+        assert effort_entries[-1] == "model_reasoning_effort=xhigh"
+        assert args == [
+            "codex",
+            "exec",
+            "-c",
+            "model_reasoning_effort=high",
+            "-c",
+            "model_reasoning_effort=xhigh",
+            "do the thing",
+        ]
 
 
 class TestNonEffortRunnersIgnoreEffortSafely:

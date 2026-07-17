@@ -505,15 +505,36 @@ class CodexRunner(PromptCliRunner):
     command_name: str = "codex"
     cli_subcommand: str | None = "exec"
     # The `-c model_reasoning_effort=<level>` flag is now built dynamically
-    # by `_effort_cli_flags` (below) from the resolved `effort` (stage > role
-    # > policy precedence — see `hivepilot.roles.resolve_stage_dispatch`)
-    # instead of a fixed tuple. `"medium"` remains the default when nothing
-    # is configured anywhere in that chain, so a stage that sets no `effort`
-    # dispatches byte-identically to before this field existed.
+    # by `_effort_cli_flags` (below) from the resolved `effort` (policy >
+    # stage > role > runner-default precedence — see
+    # `hivepilot.roles.resolve_stage_dispatch`) instead of a fixed tuple.
+    # `"medium"` remains the default when nothing is configured anywhere in
+    # that chain AND the operator hasn't taken over the flag surface via
+    # `options["cli_flags"]`, so a stage that sets no `effort` dispatches
+    # byte-identically to before this field existed.
     cli_flags: tuple[str, ...] = ()
 
     def _effort_cli_flags(self, payload: RunnerPayload) -> list[str]:
-        effort = self._resolve_effort(payload) or "medium"
+        """Build the `-c model_reasoning_effort=<level>` flag pair.
+
+        On origin/main (pre-Sprint-1), `cli_flags` was the fixed tuple
+        `("-c", "model_reasoning_effort=medium")`, emitted via
+        `opts.get("cli_flags", list(self.cli_flags))` in `_build_cli_args` —
+        so an operator who set `options["cli_flags"]` REPLACED that tuple
+        entirely and got NO effort flag at all. To stay byte-identical to
+        that behavior when nothing is configured via stage/role/policy, we
+        must likewise emit nothing here if the operator has taken over the
+        flag surface via `options["cli_flags"]`.
+
+        An EXPLICIT effort resolved from stage/role/policy is more specific
+        configuration than a bare `options["cli_flags"]` escape hatch, so it
+        always wins and is emitted regardless of `options["cli_flags"]`.
+        """
+        effort = self._resolve_effort(payload)
+        if effort is None:
+            if "cli_flags" in self.definition.options:
+                return []
+            effort = "medium"
         return ["-c", f"model_reasoning_effort={effort}"]
 
 
