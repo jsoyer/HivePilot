@@ -118,8 +118,10 @@ class InitOutcome:
     validated_target: Path
     # Presence verdict for the mandatory agent CLIs (claude/codex/vibe). The
     # CLI layer (`hivepilot.cli.init_config`) decides what to do with this --
-    # hard-fail when `any_ok` is False, warn-but-continue when `claude_ok` is
-    # False -- keeping this module's functions plain and exit-free.
+    # warn (never hard-fail) regardless of which/how-many are present, since
+    # `init` scaffolds the config you need before you can install an agent
+    # CLI in the first place -- keeping this module's functions plain and
+    # exit-free.
     mandatory_agents: MandatoryAgentReport
 
 

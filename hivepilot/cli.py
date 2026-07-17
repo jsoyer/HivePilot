@@ -2499,31 +2499,40 @@ def workers(
 
 
 def _handle_mandatory_agent_verdict(report: agent_checks.MandatoryAgentReport) -> None:
-    """Hard-fail `hivepilot init` when no mandatory agent CLI is on PATH;
-    warn-but-continue when only a non-claude one is present.
+    """Warn (never hard-fail) `hivepilot init` when a mandatory agent CLI is
+    missing from PATH.
 
-    `claude` is the strongest/most-tested prerequisite -- see
-    `hivepilot.services.agent_checks`.
+    `init`'s whole job is to scaffold a working config so you have somewhere
+    to install an agent CLI *into* -- hard-failing here is a
+    chicken-and-egg regression (you can't have `claude`/`codex`/`vibe` on
+    PATH before running `init` on a fresh machine or in CI). Run-time
+    enforcement (before an actual pipeline run) is a separate concern and is
+    not affected by this function -- see `hivepilot.services.agent_checks`
+    for where the mandatory set is defined.
+
+    Emits a stronger warning when none of claude/codex/vibe are present, a
+    softer one when only a non-claude agent is present. `claude` is the
+    strongest/most-tested prerequisite.
     """
     from hivepilot.services import agent_checks
 
     if not report.any_ok:
         typer.echo("")
-        typer.echo("ERROR: no mandatory agent CLI found on PATH.", err=True)
+        typer.echo("WARNING: no mandatory agent CLI found on PATH.")
         typer.echo(
-            f"  HivePilot requires at least one of: {', '.join(agent_checks.MANDATORY_AGENTS)}.",
-            err=True,
+            "  HivePilot needs at least one of: "
+            f"{', '.join(agent_checks.MANDATORY_AGENTS)} to run pipelines "
+            "-- install one before running `hivepilot run`."
         )
-        typer.echo("  `claude` is the primary/most-tested prerequisite.", err=True)
-        typer.echo("  Install hints:", err=True)
+        typer.echo("  `claude` is the primary/most-tested prerequisite.")
+        typer.echo("  Install hints:")
         typer.echo(
             "    claude : https://docs.claude.com/en/docs/claude-code "
-            "(npm i -g @anthropic-ai/claude-code)",
-            err=True,
+            "(npm i -g @anthropic-ai/claude-code)"
         )
-        typer.echo("    codex  : npm i -g @openai/codex", err=True)
-        typer.echo("    vibe   : see your package manager or vibe's install docs", err=True)
-        raise typer.Exit(1)
+        typer.echo("    codex  : npm i -g @openai/codex")
+        typer.echo("    vibe   : see your package manager or vibe's install docs")
+        return
 
     if not report.claude_ok:
         typer.echo("")
