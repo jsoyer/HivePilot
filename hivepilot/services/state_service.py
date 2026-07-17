@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
 from hivepilot.services import db
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    # Import-time only: avoids a circular import, since
+    # `drift_service.scan_and_record` imports this module at runtime.
+    from hivepilot.services.drift_service import DriftResult
 
 try:
     from hivepilot.services import metrics as _metrics  # noqa: F401
@@ -222,6 +227,24 @@ def init_db() -> None:
                 status TEXT,
                 detail TEXT,
                 last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # Phase 20 D2: persist IaC drift-scan results (history + baseline).
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS drift_scans (
+                id {pk},
+                project TEXT NOT NULL,
+                runner TEXT NOT NULL,
+                drifted INTEGER NOT NULL,
+                to_add INTEGER,
+                to_change INTEGER,
+                to_destroy INTEGER,
+                status TEXT NOT NULL,
+                detail TEXT,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -575,3 +598,99 @@ def list_audit_log(limit: int = 100) -> list[dict[str, Any]]:
             db.ph("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?"), (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Drift-scan persistence (Phase 20 D2)
+# ---------------------------------------------------------------------------
+
+
+def record_drift_scan(result: "DriftResult", *, tenant: str = "default") -> int:
+    """Persist a single `drift_service.DriftResult` and return the new row id.
+
+    `status` is derived from *result*: `'error'` when `result.error` is set,
+    else `'drift'` when `result.drifted`, else `'ok'`. `to_add`/`to_change`/
+    `to_destroy` are taken from `result.summary` when present, else stored as
+    NULL. `detail` is the redacted error message (defense-in-depth choke
+    point, same idiom as `record_step`/`complete_run` — D1's `detect_drift`
+    already only raises tool+code-only messages, but this table must never
+    become the exception to that discipline) or NULL when there's no error.
+    """
+    init_db()
+    # Choke point: same rationale as record_step/complete_run — `detail` may
+    # carry `str(exc)` from a failed drift check.
+    from hivepilot.services.config_provenance import redact_text
+
+    if result.error is not None:
+        status = "error"
+    elif result.drifted:
+        status = "drift"
+    else:
+        status = "ok"
+    detail = redact_text(result.error) if result.error is not None else None
+    summary = result.summary
+    with db.connect() as conn:
+        row_id = db.insert_returning_id(
+            conn,
+            "INSERT INTO drift_scans "
+            "(project, runner, drifted, to_add, to_change, to_destroy, status, detail, tenant) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                result.project,
+                result.runner,
+                int(result.drifted),
+                summary.to_add if summary is not None else None,
+                summary.to_change if summary is not None else None,
+                summary.to_destroy if summary is not None else None,
+                status,
+                detail,
+                tenant,
+            ),
+        )
+        logger.info(
+            "state.drift_scan",
+            row_id=row_id,
+            project=result.project,
+            runner=result.runner,
+            status=status,
+            tenant=tenant,
+        )
+        return row_id
+
+
+def get_recent_drift_scans(
+    project: str | None = None, *, limit: int = 50, tenant: str | None = None
+) -> list[dict[str, Any]]:
+    """Return recent drift-scan rows, newest first (then id descending for
+    determinism among same-timestamp rows), optionally filtered by
+    *project* and/or *tenant*."""
+    init_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if project is not None:
+        clauses.append("project=?")
+        params.append(project)
+    if tenant is not None:
+        clauses.append("tenant=?")
+        params.append(tenant)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"SELECT * FROM drift_scans{where} ORDER BY checked_at DESC, id DESC LIMIT ?"
+    params.append(limit)
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_drift_baseline(project: str, *, tenant: str = "default") -> dict[str, Any] | None:
+    """Return the most-recent no-drift (`status='ok'`) scan for *project*
+    within *tenant*, or `None` when there isn't one."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            db.ph(
+                "SELECT * FROM drift_scans WHERE project=? AND tenant=? AND status='ok' "
+                "ORDER BY checked_at DESC, id DESC LIMIT 1"
+            ),
+            (project, tenant),
+        ).fetchone()
+    return dict(row) if row else None

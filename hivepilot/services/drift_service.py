@@ -261,3 +261,60 @@ def detect_drift(
     # Any other exit code: tool name + exit code ONLY — never proc.stdout/
     # proc.stderr, which can echo resolved secret values.
     raise RuntimeError(f"{binary} drift check failed with exit code {proc.returncode}")
+
+
+def scan_and_record(
+    project: ProjectConfig,
+    *,
+    runner_kind: str = "opentofu",
+    definition: RunnerDefinition | None = None,
+    timeout: int = _DEFAULT_DRIFT_TIMEOUT,
+    secrets: dict[str, str] | None = None,
+    tenant: str = "default",
+) -> DriftResult:
+    """Run `detect_drift` and persist the outcome via
+    `state_service.record_drift_scan` (Phase 20 D2).
+
+    On success, the returned `DriftResult` is recorded and returned as-is.
+    On `detect_drift` raising (`RuntimeError`/`ValueError` — the only
+    exceptions it raises, see its docstring), a `DriftResult` with
+    `error=str(exc)` is built and recorded too, so operational failures
+    (missing binary, timeout, unexpected exit code, unknown/unsupported
+    runner kind) remain visible in drift history rather than vanishing
+    silently — the exception is then re-raised so callers see the same
+    failure they would have from `detect_drift` directly. `str(exc)` here is
+    already tool+code-only per `detect_drift`'s anti-leak guarantee, and
+    `record_drift_scan` redacts `detail` before persisting regardless
+    (defense-in-depth), so no captured secret material can reach storage.
+    """
+    # Local import: avoids a hard import-time dependency from this module
+    # (imported by lightweight callers, e.g. CLI drift commands) on the full
+    # state/DB stack, and mirrors the lazy-import idiom used throughout
+    # state_service.py's own redaction choke points.
+    from hivepilot.services import state_service
+
+    # Path("/").name == "" — mirror detect_drift's own project-label
+    # fallback so an error row's `project` column is never an empty string.
+    project_label = project.path.name or str(project.path)
+
+    try:
+        result = detect_drift(
+            project,
+            runner_kind=runner_kind,
+            definition=definition,
+            timeout=timeout,
+            secrets=secrets,
+        )
+    except (RuntimeError, ValueError) as exc:
+        error_result = DriftResult(
+            project=project_label,
+            runner=runner_kind,
+            drifted=False,
+            summary=None,
+            error=str(exc),
+        )
+        state_service.record_drift_scan(error_result, tenant=tenant)
+        raise
+
+    state_service.record_drift_scan(result, tenant=tenant)
+    return result
