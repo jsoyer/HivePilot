@@ -37,7 +37,7 @@ from hivepilot.observability.tracing import (
     use_context,
 )
 from hivepilot.pipelines import write_stage_artifact
-from hivepilot.plugins import PluginManager
+from hivepilot.plugins import PluginManager, SkillSpec
 from hivepilot.registry import RunnerRegistry
 from hivepilot.runners.base import (
     RunnerPayload,
@@ -2703,18 +2703,24 @@ class Orchestrator:
                         # enclosing pipeline stage's `PipelineStage.skills` (threaded in via
                         # `stage_skills` when this task run originated from a pipeline stage,
                         # see `run_pipeline` / `resolve_mode`'s sibling threading of `mode`) --
-                        # to registered `SkillSpec`s, and enrich `payload` via the existing
-                        # `apply_skill_if_supported` choke point. A step/stage that declares
-                        # no skills never enters this block -- byte-identical to before this
+                        # to registered `SkillSpec`s. Materialisation against a concrete
+                        # runner (via `apply_skill_if_supported`) happens below, in
+                        # `_prepare_payload_for` -- a step/stage that declares no skills
+                        # never populates `_resolved_skills`, which keeps that step of
+                        # `_prepare_payload_for` a no-op -- byte-identical to before this
                         # wiring (see `hivepilot.runners.base.apply_skill_if_supported`).
                         _skill_names: list[str] = list(step.skills or [])
                         for _stage_skill_name in stage_skills or []:
                             if _stage_skill_name not in _skill_names:
                                 _skill_names.append(_stage_skill_name)
+                        # Hoisted so it is still in scope at the developer-role
+                        # quota-fallback loop further down -- a quota error can
+                        # substitute a DIFFERENT-kind runner there, which must have
+                        # skills re-applied to it via `_prepare_payload_for`. Empty
+                        # when no skills are declared, which keeps that path a
+                        # no-op -- byte-identical to before this fix.
+                        _resolved_skills: list[SkillSpec] = []
                         if _skill_names:
-                            from hivepilot.registry import resolve_runner_class
-
-                            _resolved_skills = []
                             for _skill_name in _skill_names:
                                 _skill_spec = self.plugins.get_skill(_skill_name)
                                 if _skill_spec is None:
@@ -2729,35 +2735,90 @@ class Orchestrator:
                                     )
                                     continue
                                 _resolved_skills.append(_skill_spec)
-                            if _resolved_skills:
-                                _skill_runner_cls = resolve_runner_class(runner_def.kind)
-                                _skill_runner = _skill_runner_cls(runner_def, settings)
-                                payload = apply_skill_if_supported(
-                                    _skill_runner, payload, _resolved_skills
-                                )
-                        # Resolve the effective execution mode for this step and
-                        # validate it against the runner's declared capabilities
-                        # BEFORE any dispatch, so a mode:api step on a cli-only
-                        # runner fails closed here — no subprocess, no HTTP call.
-                        # Only inject when a non-cli mode is actually in effect,
-                        # keeping the default (cli) path byte-identical: the
-                        # runner would compute the same value from step.metadata/
-                        # options anyway, and we never write a redundant "cli".
-                        _effective_mode = _resolve_effective_mode(step, mode)
-                        if _effective_mode != "cli":
+
+                        # Per-attempt payload preparation (mode resolution/
+                        # validation/injection + skill re-materialisation),
+                        # applied fresh to EACH runner actually attempted -- the
+                        # original `runner_def` below and, on a quota error, every
+                        # developer-role fallback substituted in the loop further
+                        # down. `_base_payload` is the clean, unmaterialised
+                        # snapshot of `payload` taken BEFORE any per-kind
+                        # enrichment; `_prepare_payload_for` always starts from
+                        # IT -- never from a previously-prepared `payload` -- so:
+                        #   * a fallback of a DIFFERENT kind is mode-validated
+                        #     against ITS OWN `supported_modes`, fail-closed, on
+                        #     every attempt (not just the first) -- a mode:api
+                        #     step never silently reaches a cli-only fallback;
+                        #   * a fallback's skill materialisation never inherits
+                        #     the original runner's kind-specific artifacts
+                        #     (e.g. a claude scratch dir / appended system
+                        #     prompt);
+                        #   * `_base_payload` itself is never mutated -- each
+                        #     attempt gets its own independently-derived copy
+                        #     (`dataclasses.replace`), so concurrent/retried
+                        #     attempts can never see each other's mutations.
+                        _base_payload = payload
+
+                        def _prepare_payload_for(_rd: RunnerDefinition) -> RunnerPayload:
+                            """Return a fresh, per-attempt payload for runner
+                            definition *_rd*: effective mode resolved and
+                            validated against `_rd`'s `supported_modes`
+                            (fail-closed -- raises `RunnerModeUnsupportedError`
+                            for an unsupported combination) and injected into a
+                            fresh step copy when non-default, then any resolved
+                            skills re-applied via `apply_skill_if_supported`.
+                            Always derived from `_base_payload`, never from a
+                            prior attempt's prepared payload.
+                            """
+                            from dataclasses import replace as _dc_replace
+
                             from hivepilot.registry import resolve_runner_class
 
-                            _runner_cls = resolve_runner_class(runner_def.kind)
-                            validate_runner_mode(
-                                str(runner_def.kind),
-                                getattr(_runner_cls, "supported_modes", frozenset({"cli"})),
-                                _effective_mode,
-                            )
-                            if step.metadata.get("mode") != _effective_mode:
-                                step = step.model_copy(
-                                    update={"metadata": {**step.metadata, "mode": _effective_mode}}
+                            _prepared = _base_payload
+                            # Resolve the effective execution mode for this step
+                            # and validate it against the runner's declared
+                            # capabilities BEFORE any dispatch, so a mode:api
+                            # step on a cli-only runner fails closed here -- no
+                            # subprocess, no HTTP call. Only inject when a
+                            # non-cli mode is actually in effect, keeping the
+                            # default (cli) path byte-identical: the runner
+                            # would compute the same value from
+                            # step.metadata/options anyway, and we never write a
+                            # redundant "cli".
+                            _mode = _resolve_effective_mode(_base_payload.step, mode)
+                            if _mode != "cli":
+                                _mode_runner_cls = resolve_runner_class(_rd.kind)
+                                validate_runner_mode(
+                                    str(_rd.kind),
+                                    getattr(
+                                        _mode_runner_cls, "supported_modes", frozenset({"cli"})
+                                    ),
+                                    _mode,
                                 )
-                                payload.step = step
+                                if _prepared.step.metadata.get("mode") != _mode:
+                                    _mode_step = _prepared.step.model_copy(
+                                        update={
+                                            "metadata": {**_prepared.step.metadata, "mode": _mode}
+                                        }
+                                    )
+                                    _prepared = _dc_replace(_prepared, step=_mode_step)
+                            if _resolved_skills:
+                                _skill_runner_cls = resolve_runner_class(_rd.kind)
+                                _skill_runner = _skill_runner_cls(_rd, settings)
+                                _prepared = apply_skill_if_supported(
+                                    _skill_runner, _prepared, _resolved_skills
+                                )
+                            return _prepared
+
+                        payload = _prepare_payload_for(runner_def)
+                        if payload.step is not step:
+                            # Keep the outer `step` variable in sync with the
+                            # mode-injected copy -- mirrors the pre-refactor
+                            # behaviour where `step` itself was reassigned, so
+                            # the destructive-approval gate check and logging
+                            # below (which read `step` directly) see the same
+                            # metadata the runner will actually receive.
+                            step = payload.step
                         if (
                             runner_def.kind == "container"
                             and policy
@@ -2894,6 +2955,31 @@ class Orchestrator:
                                         host=resolve_host(task.role, policy),
                                         options=role_options,
                                     )
+                                    # Re-prepare the payload (mode
+                                    # validation/injection + skill
+                                    # re-materialisation) for the substituted
+                                    # runner -- a DIFFERENT kind from the one
+                                    # `payload` was prepared for above. Always
+                                    # derived fresh from `_base_payload` (see
+                                    # `_prepare_payload_for`), never from the
+                                    # ORIGINAL runner's already-prepared
+                                    # `payload`, so:
+                                    #   * a mode:api step whose fallback kind
+                                    #     is cli-only fails closed HERE
+                                    #     (`RunnerModeUnsupportedError`)
+                                    #     instead of silently dispatching in
+                                    #     cli mode -- this is NOT a quota
+                                    #     error, so it propagates immediately
+                                    #     rather than triggering another
+                                    #     fallback attempt;
+                                    #   * a declared skill is never left inert
+                                    #     on the fallback -- it's re-applied
+                                    #     against the clean base, never the
+                                    #     original runner's kind-specific
+                                    #     materialisation (e.g. a claude
+                                    #     scratch dir / appended system
+                                    #     prompt).
+                                    payload = _prepare_payload_for(_runner_def_to_try)
                                 finally:
                                     _sem.release()
 
