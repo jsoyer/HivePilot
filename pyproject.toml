@@ -23,6 +23,12 @@ dependencies = [
   "requests>=2.31,<3.0",
   "ruamel.yaml>=0.18",
 ]
+# NOTE: the bitwarden/vaultwarden secrets backends (plugins/bitwarden.py /
+# plugins/vaultwarden.py) shell out to the official Bitwarden `bw` CLI. That is
+# an optional EXTERNAL command-line tool the operator installs separately — it
+# is deliberately NOT a Python dependency and must never be added here. The
+# plugins discover it lazily via `shutil.which("bw")` and degrade gracefully
+# (health "error", resolve() fail-closed) when it is absent.
 
 [project.scripts]
 hivepilot = "hivepilot.cli:app"

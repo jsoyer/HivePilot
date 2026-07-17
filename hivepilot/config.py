@@ -341,6 +341,20 @@ class Settings(BaseSettings):
     # gating pattern as rtk_enabled/herdr_enabled/hugo_enabled.
     # env: HIVEPILOT_TMUX_ENABLED
     tmux_enabled: bool = True
+    # Sprint 04 (plugin-arch-overhaul) — bitwarden/vaultwarden secrets backends.
+    # Two first-party `secrets` provider plugins (plugins/bitwarden.py /
+    # plugins/vaultwarden.py) that shell out to the official Bitwarden `bw` CLI
+    # (an optional EXTERNAL tool, never a Python dependency). Same opt-OUT +
+    # fail-closed pattern as infisical/onepassword: resolve() raises naming ONLY
+    # the item + provider (never the secret value or the BW_SESSION token).
+    # `bitwarden` targets the Bitwarden cloud endpoint; `vaultwarden` targets a
+    # self-hosted Bitwarden-compatible server via `vaultwarden_server_url`
+    # (`bw config server <url>`). Session is read from the BW_SESSION env var.
+    # env: HIVEPILOT_BITWARDEN_ENABLED / _VAULTWARDEN_ENABLED /
+    #      _VAULTWARDEN_SERVER_URL
+    bitwarden_enabled: bool = True
+    vaultwarden_enabled: bool = True
+    vaultwarden_server_url: str | None = None
     # Phase 24b.2b — operator-supplied price-map override, merged OVER
     # `hivepilot.services.pricing.DEFAULT_PRICE_MAP` (per-model merge, not a
     # wholesale replacement — see `pricing._effective_price_map`). Shape:
