@@ -2,9 +2,15 @@
 Tests for YAML-backed role loading (roles.yaml → load_roles()).
 
 Covers:
-- load_roles() parses roles.yaml and produces roles matching _DEFAULT_ROLES
-- Missing roles.yaml triggers graceful fallback to _DEFAULT_ROLES
-- prompt_file Path is resolved identically to the built-in defaults
+- load_roles() parses the active roles.yaml and produces the full 8-role
+  "company" roster it defines (Sprint 2, roles-model-effort-config-owned
+  PRD: the active roles.yaml -- whether the repo-root one or a real
+  deployment's XDG-config override -- is an EXISTING, unchanged config that
+  must keep working; it is no longer required to mirror the code-owned
+  `_DEFAULT_ROLES` fallback, which Sprint 2 reduced to just `developer`).
+- Missing roles.yaml triggers graceful fallback to the (now reduced)
+  _DEFAULT_ROLES.
+- prompt_file Path is resolved correctly for every loaded role.
 """
 
 from __future__ import annotations
@@ -12,37 +18,48 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+# The full "company" roster every currently-active roles.yaml on this
+# project defines (repo-root roles.yaml, or a real deployment's XDG
+# override) -- independent of the code-owned _DEFAULT_ROLES fallback.
+EXPECTED_ROLE_NAMES = {
+    "ceo",
+    "chief_of_staff",
+    "cto",
+    "developer",
+    "reviewer",
+    "ciso",
+    "qa",
+    "documentation",
+}
+
 
 class TestLoadRolesFromYaml:
-    """load_roles() with the real roles.yaml must match the built-in defaults."""
+    """load_roles() with the real roles.yaml must produce the full roster.
 
-    def test_load_roles_from_yaml_matches_defaults(self):
-        from hivepilot.roles import _DEFAULT_ROLES, load_roles
+    Sprint 2 note: previously this compared `load_roles()` 1:1 against
+    `_DEFAULT_ROLES` (both were, by design, kept identical). Sprint 2
+    deliberately decouples them -- `_DEFAULT_ROLES` is now a minimal
+    generic-only fallback, while an existing, unchanged roles.yaml keeps
+    shipping the full business roster. These tests now assert against the
+    roster directly (mirroring tests/test_roles.py's EXPECTED_ROLE_NAMES)
+    instead of `_DEFAULT_ROLES`.
+    """
+
+    def test_load_roles_from_yaml_has_expected_roster(self):
+        from hivepilot.roles import load_roles
 
         loaded = load_roles()
 
-        assert set(loaded.keys()) == set(_DEFAULT_ROLES.keys()), (
-            f"Loaded role keys {set(loaded.keys())} != default keys {set(_DEFAULT_ROLES.keys())}"
+        assert set(loaded.keys()) == EXPECTED_ROLE_NAMES, (
+            f"Loaded role keys {set(loaded.keys())} != expected {EXPECTED_ROLE_NAMES}"
         )
 
-        for name, default_role in _DEFAULT_ROLES.items():
-            loaded_role = loaded[name]
-            assert loaded_role.name == default_role.name, f"{name}: name mismatch"
-            assert loaded_role.title == default_role.title, f"{name}: title mismatch"
-            assert loaded_role.display_name == default_role.display_name, (
-                f"{name}: display_name mismatch"
-            )
-            assert loaded_role.model_profile == default_role.model_profile, (
-                f"{name}: model_profile mismatch"
-            )
-            assert loaded_role.runner == default_role.runner, f"{name}: runner mismatch"
-            assert loaded_role.model == default_role.model, f"{name}: model mismatch"
-            assert loaded_role.models == default_role.models, f"{name}: models mismatch"
-            assert loaded_role.can_block == default_role.can_block, f"{name}: can_block mismatch"
-            assert loaded_role.order == default_role.order, f"{name}: order mismatch"
-            assert loaded_role.permission_mode == default_role.permission_mode, (
-                f"{name}: permission_mode mismatch"
-            )
+        dev = loaded["developer"]
+        assert dev.name == "developer"
+        assert dev.title == "Developer"
+        assert dev.model_profile == "coding"
+        assert dev.runner == "claude"
+        assert dev.permission_mode == "bypassPermissions"
 
     def test_load_roles_returns_eight_roles(self):
         from hivepilot.roles import load_roles
@@ -50,14 +67,14 @@ class TestLoadRolesFromYaml:
         loaded = load_roles()
         assert len(loaded) == 8
 
-    def test_load_roles_inputs_outputs_match_defaults(self):
-        from hivepilot.roles import _DEFAULT_ROLES, load_roles
+    def test_load_roles_inputs_outputs_are_non_trivial(self):
+        from hivepilot.roles import load_roles
 
         loaded = load_roles()
-        for name, default_role in _DEFAULT_ROLES.items():
-            loaded_role = loaded[name]
-            assert loaded_role.inputs == default_role.inputs, f"{name}: inputs mismatch"
-            assert loaded_role.outputs == default_role.outputs, f"{name}: outputs mismatch"
+        for name in EXPECTED_ROLE_NAMES:
+            role = loaded[name]
+            assert isinstance(role.inputs, list)
+            assert isinstance(role.outputs, list)
 
 
 class TestAbsentFileFallback:
@@ -114,22 +131,23 @@ class TestAbsentFileFallback:
             config_module.settings = original_settings
 
         assert result is not None
-        assert len(result) == 8
+        # Sprint 2 (roles-model-effort-config-owned PRD): the code-owned
+        # fallback was reduced from the full 8-role roster to a single
+        # generic `developer` role. Old expectation: `len(result) == 8`.
+        assert len(result) == 1
+        assert set(result) == {"developer"}
 
 
 class TestPromptFileResolution:
-    """Resolved prompt_file paths must be identical between YAML-loaded and defaults."""
+    """Resolved prompt_file paths must be correct for every loaded role."""
 
-    def test_prompt_file_resolves_identically(self):
-        from hivepilot.roles import _DEFAULT_ROLES, load_roles
+    def test_prompt_file_resolves_under_prompts_dir(self):
+        from hivepilot.roles import _PROMPTS_DIR, load_roles
 
         loaded = load_roles()
         for name, loaded_role in loaded.items():
-            default_role = _DEFAULT_ROLES[name]
-            assert loaded_role.prompt_file == default_role.prompt_file, (
-                f"Role '{name}': prompt_file mismatch.\n"
-                f"  loaded:  {loaded_role.prompt_file}\n"
-                f"  default: {default_role.prompt_file}"
+            assert loaded_role.prompt_file == _PROMPTS_DIR / f"{name}.md", (
+                f"Role '{name}': prompt_file mismatch, got {loaded_role.prompt_file}"
             )
 
     def test_prompt_files_are_absolute_paths(self):
