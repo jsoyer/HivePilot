@@ -1035,6 +1035,16 @@ async def _cmd_debate(update, context) -> None:
         return
     project = args[0]
     topic = " ".join(args[1:])
+
+    from hivepilot.roles import ROLES  # local import: current, possibly-refreshed dict
+
+    if "ceo" not in ROLES:
+        await update.message.reply_text(
+            "Debate role 'ceo' is not configured on this deployment. "
+            "Define it in roles.yaml -- see examples/roles.yaml for a template."
+        )
+        return
+
     await update.message.reply_text(
         f"\u23f3 CEO debate on `{project}`\u2026", parse_mode="Markdown"
     )

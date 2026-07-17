@@ -306,6 +306,21 @@ def test_cmd_debate_calls_run_debate() -> None:
     assert "ADR.md" in update.message.reply_text.call_args.args[0]
 
 
+def test_cmd_debate_degrades_when_ceo_role_absent() -> None:
+    update, ctx = _make_update(), _make_context(["acme", "adopt", "X"])
+    orch = MagicMock()
+    with (
+        patch.object(telegram_bot, "_require_allowed", return_value=True),
+        patch.object(telegram_bot, "_get_orch", return_value=orch),
+        patch("hivepilot.roles.ROLES", {}),
+    ):
+        asyncio.run(telegram_bot._cmd_debate(update, ctx))
+    orch.run_debate.assert_not_called()
+    out = update.message.reply_text.call_args.args[0]
+    assert "not configured" in out
+    assert "examples/roles.yaml" in out
+
+
 def test_cmd_steps_queries_state() -> None:
     update, ctx = _make_update(), _make_context(["7"])
     rows = [{"status": "success", "step": "ceo intake", "timestamp": "t", "detail": "ok"}]
