@@ -226,11 +226,19 @@ class TestFailClosedRoleValidation:
 
 
 class TestAgentRulesSafeForAbsentRole:
-    def test_unknown_role_returns_empty_list_not_keyerror(self):
-        from hivepilot.agent_rules import get_rules_for_role
+    def test_unknown_role_returns_cross_cutting_floor_not_keyerror(self):
+        """An unknown role must never raise KeyError, but it also must never
+        drop the enforced CROSS_CUTTING_RULES policy floor (privacy-by-design,
+        detection-fabric, EU-sovereign, no-raw-prompt-logging). Returning []
+        for an unknown role would be fail-open (security regression); the
+        correct fail-safe behavior is to inherit the same floor every known
+        role already gets."""
+        from hivepilot.agent_rules import CROSS_CUTTING_RULES, get_rules_for_role
 
         rules = get_rules_for_role("this_role_does_not_exist")
-        assert rules == []
+        assert rules == list(CROSS_CUTTING_RULES)
+        for rule in CROSS_CUTTING_RULES:
+            assert rule in rules
 
     def test_known_role_still_returns_rules(self):
         from hivepilot.agent_rules import get_rules_for_role

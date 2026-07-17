@@ -6,10 +6,11 @@ Rule files are referenced BY PATH only — content is never copied here.
 This prevents drift: the canonical source is always the authoritative version.
 
 Design:
-- Unknown role → empty list (fail-safe; Sprint 2 of the
-  roles-model-effort-config-owned PRD made this lookup safe for a role that
-  isn't loaded, e.g. a business role absent under the reduced generic-only
-  defaults).
+- Unknown role → CROSS_CUTTING_RULES floor, never an empty list (fail-safe;
+  Sprint 2 of the roles-model-effort-config-owned PRD made this lookup safe
+  for a role that isn't loaded, e.g. a business role absent under the
+  reduced generic-only defaults, without dropping the enforced policy
+  minimum every known role already inherits).
 - CROSS_CUTTING_RULES: enforced statements that every role inherits.
   These are short natural-language policy statements, NOT file paths.
 - ROLE_RULES: role-name → ordered list of absolute file paths to read.
@@ -196,9 +197,15 @@ def get_rules_for_role(role_name: str) -> list[str]:
     Fail-safe lookup (roles-model-effort-config-owned PRD, Sprint 2): a role
     absent from ``ROLE_RULES`` (e.g. a business role like "ceo" that isn't
     loaded in a deployment relying on the reduced generic-only defaults)
-    returns an empty list instead of raising ``KeyError``. Callers that want
-    to assert a role is genuinely known should check ``hivepilot.roles.ROLES``
-    directly; this function's job is only to hand back whatever rule
-    manifest exists for a role, never to crash the caller.
+    returns the ``CROSS_CUTTING_RULES`` floor instead of raising
+    ``KeyError``. This is fail-safe, not fail-open: every known role already
+    inherits this enforced policy minimum (privacy-by-design,
+    detection-fabric, EU-sovereign, no-raw-prompt-logging), so an unknown
+    role must inherit it too rather than fall through with zero policy
+    coverage. A fresh ``list(...)`` copy is returned so callers cannot
+    mutate the module-level constant. Callers that want to assert a role is
+    genuinely known should check ``hivepilot.roles.ROLES`` directly; this
+    function's job is only to hand back a rule manifest for a role, never to
+    crash the caller and never to return an empty, policy-free list.
     """
-    return ROLE_RULES.get(role_name, [])
+    return ROLE_RULES.get(role_name, list(CROSS_CUTTING_RULES))
