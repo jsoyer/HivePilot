@@ -3,7 +3,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import requests
 
@@ -21,6 +21,11 @@ logger = get_logger(__name__)
 class PromptCliRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
+    # Agent runner: supports both the CLI binary (default) and the provider
+    # HTTP API (mode: api → `_run_api`). Inherited by all prompt-cli subclasses
+    # (codex / gemini / opencode / vibe / ollama / cursor). ClassVar so
+    # @dataclass does not treat it as an instance field.
+    supported_modes: ClassVar[frozenset[str]] = frozenset({"cli", "api"})
     command_name: str = ""
     # Per-CLI non-interactive invocation (overridable via definition.options):
     cli_subcommand: str | None = None  # e.g. codex 'exec', opencode 'run'

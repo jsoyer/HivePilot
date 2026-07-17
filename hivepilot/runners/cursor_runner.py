@@ -19,6 +19,10 @@ from hivepilot.runners.prompt_cli_runner import PromptCliRunner
 
 @dataclass
 class CursorRunner(PromptCliRunner):
+    # cli-only override: PromptCliRunner advertises cli+api, but the
+    # cursor-agent path is CLI-only in HivePilot — a resolved mode:api must
+    # fail closed at orchestrator validation rather than take the API path.
+    supported_modes = frozenset({"cli"})
     command_name: str = "cursor-agent"
     cli_flags: tuple[str, ...] = ("--print",)
 

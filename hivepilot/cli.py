@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from hivepilot.plugins import HealthStatus, PluginManager
-    from hivepilot.services import init_service
+    from hivepilot.services import agent_checks, init_service
 
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
@@ -312,6 +312,29 @@ def doctor() -> None:
             typer.echo(f"  {_binary:<14}: {'found at ' + _found if _found else 'NOT FOUND'}")
     except Exception as _exc:  # noqa: BLE001
         typer.echo(f"  (could not inspect runners: {_exc})")
+
+    typer.echo("\n=== Mandatory agent CLIs ===")
+    from hivepilot.services.agent_checks import MANDATORY_AGENTS, check_mandatory_agents
+
+    _report = check_mandatory_agents()
+    for _agent_name in MANDATORY_AGENTS:
+        _status = "found" if _agent_name in _report.present else "NOT FOUND"
+        typer.echo(f"  {_agent_name:<12}: {_status}")
+    if _report.any_ok:
+        _verdict = (
+            "PASS (claude present)"
+            if _report.claude_ok
+            else f"PASS with WARNING (claude missing; using {', '.join(_report.present)})"
+        )
+    else:
+        _verdict = "FAIL (none of claude/codex/vibe found -- run `hivepilot init` for details)"
+    typer.echo(f"  verdict     : {_verdict}")
+
+    typer.echo("\n=== OpenRouter (optional, API-only agent) ===")
+    typer.echo(
+        "  OPENROUTER_API_KEY: "
+        + ("set" if os.environ.get("OPENROUTER_API_KEY") else "(not set) -- optional")
+    )
 
     typer.echo("\n=== Optional Python extras ===")
     for dep in (
@@ -2475,6 +2498,52 @@ def workers(
         typer.echo(f"{w['status']:<11} {w['url']}  (seen {w.get('last_seen')})")
 
 
+def _handle_mandatory_agent_verdict(report: agent_checks.MandatoryAgentReport) -> None:
+    """Warn (never hard-fail) `hivepilot init` when a mandatory agent CLI is
+    missing from PATH.
+
+    `init`'s whole job is to scaffold a working config so you have somewhere
+    to install an agent CLI *into* -- hard-failing here is a
+    chicken-and-egg regression (you can't have `claude`/`codex`/`vibe` on
+    PATH before running `init` on a fresh machine or in CI). Run-time
+    enforcement (before an actual pipeline run) is a separate concern and is
+    not affected by this function -- see `hivepilot.services.agent_checks`
+    for where the mandatory set is defined.
+
+    Emits a stronger warning when none of claude/codex/vibe are present, a
+    softer one when only a non-claude agent is present. `claude` is the
+    strongest/most-tested prerequisite.
+    """
+    from hivepilot.services import agent_checks
+
+    if not report.any_ok:
+        typer.echo("")
+        typer.echo("WARNING: no mandatory agent CLI found on PATH.")
+        typer.echo(
+            "  HivePilot needs at least one of: "
+            f"{', '.join(agent_checks.MANDATORY_AGENTS)} to run pipelines "
+            "-- install one before running `hivepilot run`."
+        )
+        typer.echo("  `claude` is the primary/most-tested prerequisite.")
+        typer.echo("  Install hints:")
+        typer.echo(
+            "    claude : https://docs.claude.com/en/docs/claude-code "
+            "(npm i -g @anthropic-ai/claude-code)"
+        )
+        typer.echo("    codex  : npm i -g @openai/codex")
+        typer.echo("    vibe   : see your package manager or vibe's install docs")
+        return
+
+    if not report.claude_ok:
+        typer.echo("")
+        typer.echo(
+            "WARNING: 'claude' not found on PATH "
+            f"(present: {', '.join(report.present)}). "
+            "`claude` is the strongest/most-tested agent CLI -- some features "
+            "may be less reliable without it."
+        )
+
+
 def _print_init_outcome(outcome: init_service.InitOutcome) -> None:
     if outcome.mode == "clone":
         if outcome.synced_files:
@@ -2596,6 +2665,7 @@ def init_config(
     )
 
     _print_init_outcome(outcome)
+    _handle_mandatory_agent_verdict(outcome.mandatory_agents)
 
 
 @app.command("validate")

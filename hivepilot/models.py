@@ -159,6 +159,10 @@ class ProjectConfig(BaseModel):
 class PipelineStage(BaseModel):
     name: str
     task: str
+    # Execution mode for this stage's agent runners. None means "inherit the
+    # pipeline-level default" (see `PipelineConfig.mode` / `resolve_mode`);
+    # an explicit value overrides the pipeline default for this stage only.
+    mode: Literal["cli", "api"] | None = None
     pause_before: bool = False  # pause pipeline for human plan approval before this stage
     commits_vault: bool = False  # stage triggers a vault changelog commit after execution
     # Stage scoping (PRD A1): restrict this stage to a subset of the run's
@@ -184,7 +188,24 @@ class PipelineStage(BaseModel):
 
 class PipelineConfig(BaseModel):
     description: str
+    # Pipeline-wide default execution mode for agent runners. `cli` (the
+    # default) drives each agent through its command-line binary — byte-
+    # identical to pre-mode behaviour. `api` routes API-capable agent runners
+    # (claude / prompt-cli) through the provider's HTTP API instead. A stage
+    # may override this via `PipelineStage.mode` (see `resolve_mode`).
+    mode: Literal["cli", "api"] = "cli"
     stages: list[PipelineStage] = Field(default_factory=list)
+
+
+def resolve_mode(pipeline: PipelineConfig, stage: PipelineStage) -> Literal["cli", "api"]:
+    """Resolve the effective execution mode for *stage* within *pipeline*.
+
+    Precedence: an explicit ``stage.mode`` wins over the pipeline-wide
+    ``pipeline.mode``, which in turn falls back to the ``"cli"`` default. This
+    is the single source of truth the orchestrator uses to decide whether a
+    stage's agent runners take their CLI path or their provider-API path.
+    """
+    return stage.mode or pipeline.mode or "cli"
 
 
 class ProjectsFile(BaseModel):

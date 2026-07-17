@@ -16,6 +16,9 @@ from hivepilot.services.github_service import (
 class InternalRunner(BaseRunner):
     definition: RunnerDefinition
     settings: Settings
+    # cli-only: non-agent runner; a resolved mode:api fails closed at
+    # orchestrator validation (BaseRunner.supported_modes).
+    supported_modes = frozenset({"cli"})
 
     def run(self, payload: RunnerPayload) -> None:
         action = payload.step.metadata.get("action") or self.definition.options.get("action")
