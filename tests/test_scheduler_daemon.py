@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -221,3 +222,113 @@ class TestSchedulerDaemonDeferredProcessing:
             ).fetchone()
         assert row[0] == "dead"
         assert row[1] == 3
+
+
+class TestSchedulerDaemonHotReload:
+    """Phase 26b — opt-in (`settings.plugins_hot_reload`) mtime-based plugin
+    hot-reload wiring on `SchedulerDaemon`. Uses the daemon's OWN dedicated,
+    long-lived `PluginManager` (`daemon._hot_reload_manager`), NOT the ad-hoc
+    one each per-schedule/per-deferred-row `Orchestrator()` construction
+    builds fresh (see `scheduler_daemon.py` module/method docstrings) — the
+    real lifecycle finding from Phase 26b Step 0.
+    """
+
+    def _write_runner_plugin(self, plugin_dir, filename: str, kind: str) -> None:
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / filename).write_text(
+            "class FixtureRunner:\n"
+            "    def __init__(self, definition, settings):\n        pass\n"
+            "    def run(self, payload):\n        return None\n"
+            f"def register():\n    return {{'runners': {{'{kind}': FixtureRunner}}}}\n",
+            encoding="utf-8",
+        )
+
+    def test_opt_in_off_never_constructs_hot_reload_manager(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", False, raising=False)
+
+        daemon = SchedulerDaemon()
+        assert daemon._hot_reload_manager is None
+
+        daemon._maybe_hot_reload_plugins()
+
+        assert daemon._hot_reload_manager is None
+
+    def test_opt_in_on_lazily_constructs_then_reloads_on_change(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.config import settings
+        from hivepilot.registry import RUNNER_MAP
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", True, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        daemon = SchedulerDaemon()
+        assert daemon._hot_reload_manager is None
+
+        # First call: lazily constructs the dedicated manager (baseline
+        # snapshot only, nothing to reload yet since there's no prior state).
+        daemon._maybe_hot_reload_plugins()
+        assert daemon._hot_reload_manager is not None
+
+        # A plugin file appears on disk after the baseline was captured.
+        self._write_runner_plugin(tmp_path / "plugins", "a.py", kind="fixture-daemon-a")
+
+        daemon._maybe_hot_reload_plugins()
+
+        assert "fixture-daemon-a" in RUNNER_MAP
+
+    def test_failing_reload_does_not_crash_tick(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+        from hivepilot.plugins import ReloadResult
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", True, raising=False)
+
+        daemon = SchedulerDaemon()
+        daemon._maybe_hot_reload_plugins()  # lazily construct
+        assert daemon._hot_reload_manager is not None
+
+        bad_manager = MagicMock()
+        bad_manager.plugins_changed_on_disk.return_value = True
+        bad_manager.reload.return_value = ReloadResult(ok=False, error="boom")
+        daemon._hot_reload_manager = bad_manager
+
+        daemon._maybe_hot_reload_plugins()  # must not raise
+
+        bad_manager.reload.side_effect = RuntimeError("kaboom")
+        daemon._maybe_hot_reload_plugins()  # must not raise even on a raising reload()
+
+    def test_sighup_forces_reload_regardless_of_disk_change(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+        from hivepilot.plugins import ReloadResult
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", True, raising=False)
+
+        daemon = SchedulerDaemon()
+        daemon._maybe_hot_reload_plugins()  # lazily construct
+        manager = daemon._hot_reload_manager
+        assert manager is not None
+
+        manager.plugins_changed_on_disk = MagicMock(return_value=False)  # type: ignore[method-assign]
+        manager.reload = MagicMock(return_value=ReloadResult(ok=True))  # type: ignore[method-assign]
+
+        daemon._handle_sighup(signal.SIGHUP, None)
+
+        manager.reload.assert_called_once()
+
+    def test_sighup_is_noop_and_logged_when_opt_in_off(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", False, raising=False)
+
+        daemon = SchedulerDaemon()
+        daemon._handle_sighup(signal.SIGHUP, None)  # must not raise
+
+        assert daemon._hot_reload_manager is None

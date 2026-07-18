@@ -356,7 +356,22 @@ def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
                 spec = importlib.util.spec_from_file_location(f"hivepilot_plugin_{file.stem}", file)
                 if spec and spec.loader:
                     module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
+                    module.__file__ = str(file)
+                    # Compile+exec the source directly instead of
+                    # `spec.loader.exec_module(module)`: the default
+                    # `SourceFileLoader` consults/writes a `__pycache__/*.pyc`
+                    # bytecode cache keyed by the source file's mtime, and
+                    # mtime resolution on many filesystems is coarse enough
+                    # (whole seconds on some) that two rapid edits to the SAME
+                    # plugin file — exactly what `PluginManager.reload()`
+                    # (Phase 26b) must pick up — can share an mtime and
+                    # silently serve STALE cached bytecode, defeating hot-reload
+                    # entirely. Compiling the CURRENT on-disk text every time
+                    # bypasses that cache, guaranteeing every scan (initial
+                    # load or reload) sees the file's real current content.
+                    source = file.read_text(encoding="utf-8")
+                    code = compile(source, str(file), "exec")
+                    exec(code, module.__dict__)  # noqa: S102 — this repo's own plugin file, by design
                     if hasattr(module, "register"):
                         found.append(
                             (
@@ -419,8 +434,244 @@ def load_entry_point_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
     return found
 
 
+@dataclass
+class ReloadResult:
+    """Result of a `PluginManager.reload()` call (Phase 26b hot-reload).
+
+    `ok=False` means the LIVE plugin state -- every `RUNNER_MAP`/
+    `NOTIFIER_MAP`/`SECRETS_MAP` entry this manager owns, plus its own
+    instance dicts (`hooks`/`declared_notifiers`/`health`/`panels`/`skills`)
+    -- was left COMPLETELY untouched: a broken/colliding candidate set never
+    replaces a working one (staging-then-commit, see `PluginManager.reload`).
+    `error` is a short, kind/tool-level message (exception type + str()) --
+    never a raw traceback, and never plugin secret content, since every
+    exception this can wrap is either one of this module's own collision
+    errors (kind/name/class-name text only) or an import-time error whose
+    message is a module path, not plugin runtime data.
+
+    `added`/`removed`/`updated` are PLUGIN NAMES (`PluginRecord.name`), not
+    individual contribution names -- `added`/`removed` are membership deltas
+    against the plugin set from BEFORE this reload; `updated` is every
+    plugin name present in BOTH the before and after sets. A local-file
+    plugin is always re-exec'd on scan (see `_scan_local_plugins`), so it is
+    always "re-registered" on every reload whether or not its source
+    actually changed -- `plugins_changed_on_disk()` is what should gate
+    WHETHER to call `reload()` at all, not this field.
+    """
+
+    ok: bool
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+def _snapshot_plugin_dir() -> dict[str, float]:
+    """mtime snapshot of every non-underscore-prefixed `plugins/*.py` file,
+    keyed by absolute path string.
+
+    Pure `Path.glob`/`os.stat` -- no watchdog/inotify dependency, matching
+    the "no new dependency" constraint. Independent of
+    `settings.plugins_enabled`/`plugins_disabled`: this is a purely
+    filesystem-level signal ("did the directory change"), not a load-time
+    decision -- `plugins_changed_on_disk()` must answer accurately regardless
+    of whether a caller is currently loading plugins at all.
+    """
+    plugin_dir = settings.base_dir / "plugins"
+    if not plugin_dir.exists():
+        return {}
+    return {
+        str(f): f.stat().st_mtime
+        for f in sorted(plugin_dir.glob("*.py"))
+        if not f.stem.startswith("_")
+    }
+
+
+@dataclass
+class _StagedPluginState:
+    """Staging area for one full plugin scan+register pass (`_load_into`).
+
+    Populated WITHOUT mutating the process-global `RUNNER_MAP`/
+    `NOTIFIER_MAP`/`SECRETS_MAP` (`runner_map`/`notifier_map`/`secrets_map`
+    below hold only the entries THIS pass intends to commit) nor any live
+    `PluginManager` instance's own dicts -- `PluginManager._commit` is the
+    ONLY place that ever touches real state, and only once a whole pass has
+    succeeded without raising (staging-then-commit).
+    """
+
+    loaded: list[PluginRecord] = field(default_factory=list)
+    hooks: dict[str, list[Any]] = field(
+        default_factory=lambda: {"before_step": [], "after_step": []}
+    )
+    declared_notifiers: dict[str, Callable[[str], None]] = field(default_factory=dict)
+    health: dict[str, Callable[..., Any]] = field(default_factory=dict)
+    panels: dict[str, PanelSpec] = field(default_factory=dict)
+    skills: dict[str, SkillSpec] = field(default_factory=dict)
+    plugins: list[Callable[..., Any]] = field(default_factory=list)
+    runner_map: dict[str, Any] = field(default_factory=dict)
+    notifier_map: dict[str, Callable[[str], None]] = field(default_factory=dict)
+    secrets_map: dict[str, Any] = field(default_factory=dict)
+
+
+def _stage_kind(
+    kind: str,
+    obj: Any,
+    *,
+    live_map: dict[str, Any],
+    owned_kinds: frozenset[str],
+    staged: dict[str, Any],
+    collision_cls: type[Exception],
+    label: str,
+) -> None:
+    """Register `obj` under `kind` into the STAGING dict `staged`, applying
+    the same collision rule `RunnerRegistry.register`/`NotifierRegistry.
+    register`/`SecretsRegistry.register` do against the LIVE global map --
+    but without ever mutating `live_map` itself.
+
+    A kind already present in `staged` (an earlier plugin in THIS pass
+    claimed it) is a collision unless it's the exact same object. A kind
+    already present in `live_map` is a collision unless it's the exact same
+    object, OR `kind` is in `owned_kinds` -- a kind THIS manager itself
+    registered on a PREVIOUS load/reload and is now legitimately replacing
+    (the live entry is stale-but-still-there only because staging never
+    mutates it; `_commit` is what actually swaps it).
+    """
+    current = staged.get(kind)
+    if current is None and kind in live_map and kind not in owned_kinds:
+        current = live_map[kind]
+    if current is not None and current is not obj:
+        raise collision_cls(
+            f"{label} {kind!r} is already registered to "
+            f"{getattr(current, '__name__', type(current).__name__)}; refusing to "
+            f"silently replace it with {getattr(obj, '__name__', type(obj).__name__)}"
+        )
+    staged[kind] = obj
+
+
 class PluginManager:
     def __init__(self) -> None:
+        staged = self._load_into(
+            owned_runner_kinds=frozenset(),
+            owned_notifier_names=frozenset(),
+            owned_secret_names=frozenset(),
+        )
+        self._commit(staged)
+
+    # ------------------------------------------------------------------
+    # Hot-reload (Phase 26b)
+    # ------------------------------------------------------------------
+
+    def reload(self) -> ReloadResult:
+        """Atomically re-scan+re-register this manager's plugin set.
+
+        Staging-then-commit: `_load_into` builds an entirely new candidate
+        state WITHOUT touching any live global (`RUNNER_MAP`/`NOTIFIER_MAP`/
+        `SECRETS_MAP`) or this instance's own dicts. If it raises -- a kind/
+        name collision, or the `settings.plugins_entry` explicit-entry pin
+        raising on import (the one load path that is NOT fail-isolated, see
+        `load_plugins`) -- the LIVE state is left COMPLETELY untouched and
+        `ReloadResult(ok=False, error=...)` is returned. If it succeeds,
+        `_commit` applies it atomically: only the `RUNNER_MAP`/
+        `NOTIFIER_MAP`/`SECRETS_MAP` kinds THIS manager itself previously
+        owned are removed (never a builtin, never a kind owned by some other
+        manager/caller -- see `_stage_kind`'s `owned_kinds` handling), before
+        the staged kinds are added; every instance dict is replaced wholesale.
+
+        Concurrency: `_commit` is a short, ordered sequence of dict
+        mutations, each individually atomic under the GIL. `reload()` is
+        meant to be called from a single-threaded context only -- the
+        scheduler daemon's own tick or its SIGHUP handler -- and is NEVER
+        called concurrently with pipeline dispatch in this codebase. A run
+        already holding a resolved runner *instance* (constructed before
+        this reload) is unaffected by a later reload swapping `RUNNER_MAP`'s
+        *class* entry -- it keeps executing with the instance it already has;
+        only a NEW `resolve_runner_class()` lookup after commit sees the
+        change.
+        """
+        before_names = {record.name for record in self.loaded}
+        try:
+            staged = self._load_into(
+                owned_runner_kinds=self._owned_runner_kinds,
+                owned_notifier_names=self._owned_notifier_names,
+                owned_secret_names=self._owned_secret_names,
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad candidate must never touch live state
+            logger.warning("plugins.reload_failed", error=str(exc))
+            return ReloadResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+        self._commit(staged)
+
+        after_names = {record.name for record in self.loaded}
+        result = ReloadResult(
+            ok=True,
+            added=sorted(after_names - before_names),
+            removed=sorted(before_names - after_names),
+            updated=sorted(after_names & before_names),
+        )
+        logger.info(
+            "plugins.reloaded",
+            added=result.added,
+            removed=result.removed,
+            updated=result.updated,
+        )
+        return result
+
+    def plugins_changed_on_disk(self) -> bool:
+        """True if `plugins/*.py` (added/removed/modified) differs from the
+        snapshot taken at the last successful load/reload. Pure mtime
+        comparison -- safe to poll on every scheduler tick."""
+        return _snapshot_plugin_dir() != self._plugin_dir_snapshot
+
+    def _commit(self, staged: _StagedPluginState) -> None:
+        """Apply a successfully-staged pass to live state. Only ever called
+        with a `staged` that `_load_into` produced WITHOUT raising -- see
+        `__init__`/`reload()`. Never raises itself: every collision was
+        already resolved during staging.
+        """
+        from hivepilot.registry import RUNNER_MAP, SECRETS_MAP
+        from hivepilot.services.notification_service import NOTIFIER_MAP
+
+        for kind in getattr(self, "_owned_runner_kinds", frozenset()):
+            RUNNER_MAP.pop(kind, None)
+        RUNNER_MAP.update(staged.runner_map)
+        self._owned_runner_kinds: frozenset[str] = frozenset(staged.runner_map)
+
+        for name in getattr(self, "_owned_notifier_names", frozenset()):
+            NOTIFIER_MAP.pop(name, None)
+        NOTIFIER_MAP.update(staged.notifier_map)
+        self._owned_notifier_names: frozenset[str] = frozenset(staged.notifier_map)
+
+        for name in getattr(self, "_owned_secret_names", frozenset()):
+            SECRETS_MAP.pop(name, None)
+        SECRETS_MAP.update(staged.secrets_map)
+        self._owned_secret_names: frozenset[str] = frozenset(staged.secrets_map)
+
+        self.loaded: list[PluginRecord] = staged.loaded
+        self.hooks: dict[str, list[Any]] = staged.hooks
+        self.declared_notifiers: dict[str, Callable[[str], None]] = staged.declared_notifiers
+        self.health: dict[str, Callable[..., Any]] = staged.health
+        self.panels: dict[str, PanelSpec] = staged.panels
+        self.skills: dict[str, SkillSpec] = staged.skills
+        self.plugins = staged.plugins
+        self._plugin_dir_snapshot: dict[str, float] = _snapshot_plugin_dir()
+
+    def _load_into(
+        self,
+        *,
+        owned_runner_kinds: frozenset[str],
+        owned_notifier_names: frozenset[str],
+        owned_secret_names: frozenset[str],
+    ) -> _StagedPluginState:
+        """Scan+register one full plugin set into a fresh `_StagedPluginState`
+        -- the SINGLE load code path shared by `__init__` (called with empty
+        `owned_*` sets, i.e. every live kind is a real collision, exactly the
+        pre-hot-reload `__init__` behavior) and `reload()` (called with this
+        manager's CURRENT ownership, so re-claiming its own previously-owned
+        kinds is never a collision). Never mutates a live global or `self`;
+        raises on any kind/name collision exactly like the pre-hot-reload
+        `__init__` did (see `_stage_kind`), so `reload()` can catch it and
+        discard the whole candidate state untouched.
+        """
         local = _scan_local_plugins()
         explicit_entry = settings.__dict__.get("plugins_entry")
         # The master switch disables ALL plugin loading, including the explicit
@@ -458,26 +709,11 @@ class PluginManager:
                     )
         entry_point = load_entry_point_plugins()
 
-        self.loaded: list[PluginRecord] = []
-        self.hooks: dict[str, list[Any]] = {"before_step": [], "after_step": []}
-        self.declared_notifiers: dict[str, Callable[[str], None]] = {}
-        # name -> health-check callable, collected the same way as
-        # runners/notifiers/secrets (popped out of a plugin's declared
-        # hooks). Per-manager instance dict — no process-global map needed,
-        # health is scoped to this PluginManager the same way `self.hooks` is.
-        self.health: dict[str, Callable[..., Any]] = {}
-        # name -> PanelSpec, collected the same way as health (popped out of
-        # a plugin's declared hooks, collision-checked, scoped to this
-        # PluginManager instance — no process-global map needed).
-        self.panels: dict[str, PanelSpec] = {}
-        # name -> SkillSpec, collected the same way as panels (popped out of
-        # a plugin's declared hooks, collision-checked, scoped to this
-        # PluginManager instance — no process-global map needed).
-        self.skills: dict[str, SkillSpec] = {}
+        staged = _StagedPluginState()
         # Back-compat: flat list of discovered callables (mirrors the pre-Sprint-2
         # `load_plugins()`-derived attribute), regardless of whether calling
         # `register()` on them below succeeds.
-        self.plugins = [fn for fn, _ in local + entry_point]
+        staged.plugins = [fn for fn, _ in local + entry_point]
 
         for register_fn, record in local + entry_point:
             try:
@@ -515,51 +751,72 @@ class PluginManager:
                     RUNNER_MAP,
                     SECRETS_MAP,
                     RunnerKindCollisionError,
-                    RunnerRegistry,
                     SecretsBackendCollisionError,
-                    SecretsRegistry,
                 )
                 from hivepilot.services.notification_service import (
                     NOTIFIER_MAP,
                     NotifierKindCollisionError,
-                    NotifierRegistry,
                 )
 
                 # A kind/name collision is a hard stop and propagates uncaught
                 # (unlike an isolated broken plugin, which is logged and skipped).
-                # Register this one plugin's runners+notifiers+secrets+health+panels+skills
+                # Stage this one plugin's runners+notifiers+secrets+health+panels+skills
                 # atomically: if any entry collides, roll back the entries THIS
-                # plugin already added (to the process-global maps, or to this
-                # instance's `self.health` / `self.panels` / `self.skills`) before
-                # re-raising, so an aborted plugin never leaves orphaned, untracked
-                # registrations behind.
+                # plugin already staged (into `staged.runner_map`/`notifier_map`/
+                # `secrets_map`/`health`/`panels`/`skills`) before re-raising, so
+                # an aborted plugin never leaves orphaned, untracked staged
+                # entries behind for the rest of this pass.
                 try:
                     for kind, cls in (runners or {}).items():
-                        was_present = kind in RUNNER_MAP
-                        RunnerRegistry.register(kind, cls)
+                        was_present = kind in staged.runner_map
+                        _stage_kind(
+                            kind,
+                            cls,
+                            live_map=RUNNER_MAP,
+                            owned_kinds=owned_runner_kinds,
+                            staged=staged.runner_map,
+                            collision_cls=RunnerKindCollisionError,
+                            label="Runner kind",
+                        )
                         if not was_present:
                             applied_runners.append(kind)
                     for notifier_name, notifier_fn in (notifiers or {}).items():
-                        was_present = notifier_name in NOTIFIER_MAP
-                        NotifierRegistry.register(notifier_name, notifier_fn)
+                        was_present = notifier_name in staged.notifier_map
+                        _stage_kind(
+                            notifier_name,
+                            notifier_fn,
+                            live_map=NOTIFIER_MAP,
+                            owned_kinds=owned_notifier_names,
+                            staged=staged.notifier_map,
+                            collision_cls=NotifierKindCollisionError,
+                            label="Notifier",
+                        )
                         if not was_present:
                             applied_notifiers.append(notifier_name)
                     for secret_name, secret_backend in (secrets or {}).items():
-                        was_present = secret_name in SECRETS_MAP
-                        SecretsRegistry.register(secret_name, secret_backend)
+                        was_present = secret_name in staged.secrets_map
+                        _stage_kind(
+                            secret_name,
+                            secret_backend,
+                            live_map=SECRETS_MAP,
+                            owned_kinds=owned_secret_names,
+                            staged=staged.secrets_map,
+                            collision_cls=SecretsBackendCollisionError,
+                            label="Secrets backend",
+                        )
                         if not was_present:
                             applied_secrets.append(secret_name)
                     for health_name, health_fn in (health or {}).items():
-                        if health_name in self.health:
+                        if health_name in staged.health:
                             raise HealthNameCollisionError(
                                 f"health check '{health_name}' is already registered; "
                                 "refusing to silently replace it"
                             )
-                        self.health[health_name] = health_fn
+                        staged.health[health_name] = health_fn
                         applied_health.append(health_name)
                     for panel_spec in panels or []:
                         panel_name = panel_spec["name"]
-                        if panel_name in self.panels:
+                        if panel_name in staged.panels:
                             raise PanelNameCollisionError(
                                 f"panel '{panel_name}' is already registered; "
                                 "refusing to silently replace it"
@@ -583,7 +840,7 @@ class PluginManager:
                                 f"{min_role!r}; must be a string, one of "
                                 f"{sorted(token_service.ROLE_RANKS)}"
                             )
-                        self.panels[panel_name] = {
+                        staged.panels[panel_name] = {
                             "name": panel_name,
                             "title": panel_spec["title"],
                             "fetch": panel_spec["fetch"],
@@ -592,7 +849,7 @@ class PluginManager:
                         applied_panels.append(panel_name)
                     for skill_spec in skills or []:
                         skill_name = skill_spec["name"]
-                        if skill_name in self.skills:
+                        if skill_name in staged.skills:
                             raise SkillNameCollisionError(
                                 f"skill '{skill_name}' is already registered; "
                                 "refusing to silently replace it"
@@ -629,7 +886,7 @@ class PluginManager:
                                     f"{sorted(token_service.ROLE_RANKS)}"
                                 )
                             skill_entry["min_role"] = min_role
-                        self.skills[skill_name] = skill_entry
+                        staged.skills[skill_name] = skill_entry
                         applied_skills.append(skill_name)
                 except (
                     RunnerKindCollisionError,
@@ -642,21 +899,21 @@ class PluginManager:
                     SkillInvalidMinRoleError,
                 ):
                     for kind in applied_runners:
-                        RUNNER_MAP.pop(kind, None)
+                        staged.runner_map.pop(kind, None)
                     for notifier_name in applied_notifiers:
-                        NOTIFIER_MAP.pop(notifier_name, None)
+                        staged.notifier_map.pop(notifier_name, None)
                     for secret_name in applied_secrets:
-                        SECRETS_MAP.pop(secret_name, None)
+                        staged.secrets_map.pop(secret_name, None)
                     for health_name in applied_health:
-                        self.health.pop(health_name, None)
+                        staged.health.pop(health_name, None)
                     for panel_name in applied_panels:
-                        self.panels.pop(panel_name, None)
+                        staged.panels.pop(panel_name, None)
                     for skill_name in applied_skills:
-                        self.skills.pop(skill_name, None)
+                        staged.skills.pop(skill_name, None)
                     raise
 
                 if notifiers:
-                    self.declared_notifiers.update(notifiers)
+                    staged.declared_notifiers.update(notifiers)
 
             # Whatever keys remain in `hooks` after the six contribution
             # types above were popped out are lifecycle-hook names
@@ -666,7 +923,7 @@ class PluginManager:
             # rollback bookkeeping is needed for these, unlike the six above.
             applied_hooks = sorted(hooks)
             for hook_name, hook_callable in hooks.items():
-                self.hooks.setdefault(hook_name, []).append(hook_callable)
+                staged.hooks.setdefault(hook_name, []).append(hook_callable)
 
             # Per-plugin attribution (Phase 26a): record, on THIS plugin's
             # own PluginRecord, exactly which names it contributed per
@@ -674,8 +931,8 @@ class PluginManager:
             # collision-rollback above (i.e. are still in `applied_*`) are
             # credited — a plugin whose registration was rolled back never
             # reaches this line at all (the `except` block above re-raises,
-            # aborting the whole `PluginManager()` construction), so there is
-            # nothing further to guard here.
+            # aborting the whole `_load_into` pass), so there is nothing
+            # further to guard here.
             contributions: dict[str, list[str]] = {}
             if applied_runners:
                 contributions["runners"] = sorted(applied_runners)
@@ -693,7 +950,9 @@ class PluginManager:
                 contributions["hooks"] = applied_hooks
             record.contributions = contributions
 
-            self.loaded.append(record)
+            staged.loaded.append(record)
+
+        return staged
 
     def run_hook(self, hook_name: str, **kwargs: Any) -> None:
         for hook in self.hooks.get(hook_name, []):
