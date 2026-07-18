@@ -70,6 +70,8 @@ scan_app = typer.Typer(help="Supply-chain security scanning (SBOM + vulnerabilit
 app.add_typer(scan_app, name="scan")
 drift_app = typer.Typer(help="Infrastructure drift detection")
 app.add_typer(drift_app, name="drift")
+playbooks_app = typer.Typer(help="Multi-agent collaboration playbook templates")
+app.add_typer(playbooks_app, name="playbooks")
 logger = get_logger(__name__)
 
 
@@ -2397,6 +2399,77 @@ def templates_cmd(
 
     else:
         typer.echo(f"Unknown action: {action!r}. Use list, list-remote, or pull.", err=True)
+
+
+# ---------------------------------------------------------------------------
+# Multi-agent collaboration playbooks (Phase 16)
+# ---------------------------------------------------------------------------
+
+
+@playbooks_app.command("list")
+def playbooks_list_cmd() -> None:
+    """List the built-in multi-agent collaboration playbook templates."""
+    from hivepilot.scaffold.playbooks import list_playbooks
+
+    typer.echo("Multi-agent collaboration playbooks:")
+    for playbook in list_playbooks():
+        typer.echo(f"  {playbook.name:<24} {playbook.title}")
+        typer.echo(f"  {'':<24} {playbook.description}")
+        typer.echo(f"  {'':<24} Flow: {playbook.flow_summary}")
+        typer.echo("")
+
+
+@playbooks_app.command("show")
+def playbooks_show_cmd(
+    name: str = typer.Argument(..., help="Playbook name"),
+) -> None:
+    """Show a playbook's flow summary, README, and the files it provides."""
+    from hivepilot.scaffold.playbooks import get_playbook
+
+    playbook = get_playbook(name)
+    if playbook is None:
+        typer.echo(f"Unknown playbook: {name!r}. Run `hivepilot playbooks list`.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"{playbook.title}  ({playbook.name})")
+    typer.echo(playbook.description)
+    typer.echo("")
+    typer.echo(f"Flow: {playbook.flow_summary}")
+    typer.echo("")
+    typer.echo("Files:")
+    for rel in sorted(playbook.files):
+        typer.echo(f"  {rel}")
+    typer.echo("")
+    typer.echo(playbook.files["README.md"])
+
+
+@playbooks_app.command("scaffold")
+def playbooks_scaffold_cmd(
+    name: str = typer.Argument(..., help="Playbook name"),
+    target: Path = typer.Option(
+        Path("."), "--target", "-t", help="Deployment config directory to scaffold into"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite existing playbook files instead of refusing"
+    ),
+) -> None:
+    """Scaffold a playbook's config fragments into <target>/playbooks/<name>/."""
+    from hivepilot.scaffold.playbooks import get_playbook, scaffold_playbook
+
+    if get_playbook(name) is None:
+        typer.echo(f"Unknown playbook: {name!r}. Run `hivepilot playbooks list`.", err=True)
+        raise typer.Exit(1)
+
+    try:
+        written = scaffold_playbook(name, target, force=force)
+    except FileExistsError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        typer.echo("Pass --force to overwrite existing files.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Scaffolded playbook {name!r} ({len(written)} file(s)):")
+    for path in written:
+        typer.echo(f"  {path}")
 
 
 # ---------------------------------------------------------------------------
