@@ -419,7 +419,7 @@ def _run_async_task(
     `state_service.complete_run`'s `detail` -- only a short, safe summary
     (exception TYPE name, never its message).
     """
-    from hivepilot.orchestrator import StepApprovalPending
+    from hivepilot.orchestrator import RunCancelled, StepApprovalPending
     from hivepilot.services.config_provenance import redact_text
     from hivepilot.services.quota import QuotaDeferredError
 
@@ -476,6 +476,14 @@ def _run_async_task(
         # request and left the run paused -- do NOT overwrite that status
         # (mirrors `_run_task_body`'s own StepApprovalPending handling).
         pass
+    except RunCancelled:
+        # The step loop already marked the run CANCELLED (+ finished_at) via
+        # `state_service.complete_run` before raising -- mirrors
+        # StepApprovalPending's "already recorded its own terminal state,
+        # don't overwrite it" handling immediately above. Do NOT call
+        # complete_run again -- the run must resolve to a terminal status
+        # exactly once.
+        pass
     except QuotaDeferredError:
         state_service.complete_run(run_id, "deferred")
     except Exception as exc:  # noqa: BLE001 -- never surface raw exception text
@@ -529,6 +537,57 @@ def create_run(
 
     async_run_service.submit_run(run_id, _work)
     return NewRunResponse(run_id=run_id, status=initial_status)
+
+
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard PRD, Sprint 4 -- stop/cancel an in-flight
+# async run. `/v1`-only (like `POST /v1/runs` above), not dual-registered on
+# `app` -- a distinct HTTP method+path pairing from every other route in
+# this file, so FastAPI dispatches by method+path with no route collision.
+#
+# **FAIL-CLOSED IS THE WHOLE POINT (see INVARIANTS.md "Write Endpoints
+# Fail-Closed" / "Async Run Handle"):** `async_run_service.request_cancel`
+# is the single source of truth for "is this run actually cancellable right
+# now" -- it returns `False` for an unknown run_id, a run that was never
+# async, OR a run that's already reached a terminal status (popped from the
+# in-flight registry by `submit_run`'s own `finally`). Every one of those
+# maps to `409`, NEVER a false-success `202`. Tenant-checked EXACTLY like
+# `POST /v1/approvals/{run_id}` (`handle_approval` above): 404 if the run
+# row doesn't exist, 403 for a non-admin caller whose tenant doesn't match
+# the run's tenant, admin bypasses the tenant check entirely.
+# ---------------------------------------------------------------------------
+
+
+class CancelRunResponse(BaseModel):
+    run_id: int
+    status: str
+
+
+@v1.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+def cancel_run(
+    run_id: int,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> CancelRunResponse:
+    """Request cooperative cancellation of an in-flight async run. The run
+    resolves to `RunStatus.CANCELLED` at its NEXT step boundary (see
+    `Orchestrator._execute_task_body`'s step loop) -- this endpoint itself
+    never blocks on that, it only flips the cooperative flag and returns.
+    """
+    row = state_service.get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if caller.role != "admin":
+        row_tenant = row.get("tenant", "default")
+        if row_tenant != caller.tenant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant cancel not allowed",
+            )
+    if not async_run_service.request_cancel(run_id):
+        # Unknown to the registry (never async, or already terminal) --
+        # fail-closed: never report false success.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="not cancellable")
+    return CancelRunResponse(run_id=run_id, status="cancelling")
 
 
 @v1.get("/approvals")

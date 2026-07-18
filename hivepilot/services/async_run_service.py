@@ -10,12 +10,11 @@ Owns a lazily-constructed `ThreadPoolExecutor` (mirrors `api_service.py`'s
 `_get_orchestrator()` lazy-singleton pattern) and an in-flight registry of
 `run_id -> threading.Event` cancellation flags.
 
-`request_cancel`/`is_cancel_requested` are the API surface a later sprint
-wires real cooperative cancellation through -- see the "Async Run Handle"
-invariant, which is verified by
-`grep -q 'request_cancel' hivepilot/services/async_run_service.py`. This
-sprint only creates the `Event` per in-flight run and exposes set/check;
-nothing in this sprint's worker checks it yet.
+`request_cancel`/`is_cancel_requested` are the API surface real cooperative
+cancellation is wired through (Mirador actionable dashboard PRD, Sprint 4 --
+`POST /v1/runs/{run_id}/cancel` + `Orchestrator._execute_task_body`'s step
+loop) -- see the "Async Run Handle" invariant, verified by
+`grep -q 'request_cancel' hivepilot/services/async_run_service.py`.
 
 Side-effect-free at import time: no thread pool is constructed and no
 thread is started merely by importing this module.
@@ -50,19 +49,27 @@ def _get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
-def request_cancel(run_id: int) -> None:
+def request_cancel(run_id: int) -> bool:
     """Signal cooperative cancellation for *run_id*, if it's currently
-    in-flight.
+    in-flight (Mirador actionable dashboard PRD, Sprint 4 --
+    `POST /v1/runs/{run_id}/cancel`).
 
-    No-op if *run_id* isn't (or is no longer) registered -- never raises.
-    A later sprint wires actual mid-run cancellation checks against this
-    Event; this sprint only exposes the set/check surface (see module
-    docstring).
+    Returns `True` iff *run_id* was found in the in-flight registry and its
+    `Event` was set -- the caller (the cancel endpoint) uses this as the
+    single source of truth for "is this run actually cancellable right
+    now", mapping `False` to a `409`, never a false-success response.
+
+    Returns `False` for an unknown, never-submitted, or already-terminal
+    (popped from the registry in `submit_run`'s `finally`) *run_id* -- never
+    raises, lock-safe. An empty/absent registry entry is exactly the
+    fail-closed case this must never silently treat as success.
     """
     with _registry_lock:
         event = _registry.get(run_id)
-    if event is not None:
-        event.set()
+    if event is None:
+        return False
+    event.set()
+    return True
 
 
 def is_cancel_requested(run_id: int) -> bool:

@@ -4,15 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunSummary } from '@/lib/mirador-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchRuns, createRun, useRoleMock } = vi.hoisted(() => ({
+const { fetchRuns, createRun, cancelRun, useRoleMock } = vi.hoisted(() => ({
   fetchRuns: vi.fn(),
   createRun: vi.fn(),
+  cancelRun: vi.fn(),
   useRoleMock: vi.fn(),
 }))
 
 vi.mock('@/lib/mirador-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
-  return { ...actual, fetchRuns, createRun }
+  return { ...actual, fetchRuns, createRun, cancelRun }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -60,7 +61,9 @@ function mount() {
 beforeEach(() => {
   fetchRuns.mockReset()
   createRun.mockReset()
+  cancelRun.mockReset()
   useRoleMock.mockReset()
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -275,6 +278,126 @@ describe('RunsView', () => {
     const form = container.querySelector('form') as HTMLFormElement
     await act(async () => {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const alert = container.querySelector('[role="alert"]')
+    expect(alert?.textContent).toMatch(/insufficient role/i)
+  })
+
+  it('CRITICAL: hides the Stop button when the caller ranks below run', async () => {
+    fetchRuns.mockResolvedValue([SAMPLE_RUN])
+    mockRole('read', 0)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[aria-label="Stop run 7"]')).toBeNull()
+  })
+
+  it('CRITICAL: shows a Stop button for a running run when the caller has a run-rank token', async () => {
+    fetchRuns.mockResolvedValue([SAMPLE_RUN])
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[aria-label="Stop run 7"]')).not.toBeNull()
+  })
+
+  it('does not show a Stop button for a non-running run even with a run-rank token', async () => {
+    fetchRuns.mockResolvedValue([{ ...SAMPLE_RUN, status: 'success' }])
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[aria-label="Stop run 7"]')).toBeNull()
+  })
+
+  it('CRITICAL: requires confirmation before calling cancelRun', async () => {
+    fetchRuns.mockResolvedValue([SAMPLE_RUN])
+    mockRole('run', 1)
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const stopButton = container.querySelector('[aria-label="Stop run 7"]') as HTMLButtonElement
+    await act(async () => {
+      stopButton.click()
+      await Promise.resolve()
+    })
+
+    expect(window.confirm).toHaveBeenCalledTimes(1)
+    expect(cancelRun).not.toHaveBeenCalled()
+  })
+
+  it('CRITICAL: calling Stop after confirming invokes cancelRun and refreshes the list', async () => {
+    fetchRuns.mockResolvedValueOnce([SAMPLE_RUN]).mockResolvedValueOnce([
+      { ...SAMPLE_RUN, status: 'cancelled' },
+    ])
+    mockRole('run', 1)
+    cancelRun.mockResolvedValue({ run_id: 7, status: 'cancelling' })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const stopButton = container.querySelector('[aria-label="Stop run 7"]') as HTMLButtonElement
+    await act(async () => {
+      stopButton.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(cancelRun).toHaveBeenCalledWith(7)
+    expect(fetchRuns).toHaveBeenCalledTimes(2)
+  })
+
+  it('CRITICAL: renders a cancelled run distinctly, not folded into the generic secondary bucket', async () => {
+    fetchRuns.mockResolvedValue([{ ...SAMPLE_RUN, status: 'cancelled' }])
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('cancelled')
+    const badge = Array.from(container.querySelectorAll('span')).find(
+      (el) => el.textContent === 'cancelled',
+    )
+    expect(badge).toBeDefined()
+    // 'destructive' variant styling (distinguishes it from the plain
+    // 'secondary' bucket every other/unknown status falls into).
+    expect(badge?.className).toMatch(/destructive/)
+  })
+
+  it('shows an inline "insufficient role" message on a 403 from cancelRun', async () => {
+    fetchRuns.mockResolvedValue([SAMPLE_RUN])
+    mockRole('run', 1)
+    const { ApiForbiddenError } = await import('@/lib/api')
+    cancelRun.mockRejectedValue(new ApiForbiddenError())
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const stopButton = container.querySelector('[aria-label="Stop run 7"]') as HTMLButtonElement
+    await act(async () => {
+      stopButton.click()
       await Promise.resolve()
       await Promise.resolve()
     })

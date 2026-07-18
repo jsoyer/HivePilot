@@ -455,3 +455,26 @@ export interface NewRunResult {
 export function createRun(body: NewRunInput): Promise<NewRunResult> {
   return postJson<NewRunResult>('/v1/runs', body)
 }
+
+// ---------------------------------------------------------------------------
+// POST /v1/runs/{run_id}/cancel -- Mirador actionable dashboard PRD, Sprint 4.
+// Shape transcribed from `hivepilot/services/api_service.py`'s
+// `CancelRunResponse`/`cancel_run` -- read that before changing anything
+// here. Requires a `run`-rank token (same gate `POST /v1/runs` already
+// uses); `postJson` already defaults to `on403: 'forbidden'`. The endpoint
+// responds 202 immediately (`status: 'cancelling'`) -- it only flips a
+// cooperative flag, it does not wait for the run to actually stop; `RunsView`
+// relies on its existing poll loop to observe the eventual `cancelled`
+// status transition. A `409` (run not cancellable -- unknown/already-terminal
+// run_id) surfaces as a thrown error from `apiFetch`, same as any other
+// non-2xx response -- callers must handle it, never assume success.
+// ---------------------------------------------------------------------------
+
+export interface CancelRunResult {
+  run_id: number
+  status: string
+}
+
+export function cancelRun(runId: number): Promise<CancelRunResult> {
+  return postJson<CancelRunResult>(`/v1/runs/${runId}/cancel`, {})
+}

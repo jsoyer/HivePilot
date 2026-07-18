@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
-import { createRun, fetchRuns, type RunSummary } from '@/lib/mirador-api'
+import { cancelRun, createRun, fetchRuns, type RunSummary } from '@/lib/mirador-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 
@@ -27,6 +27,7 @@ function formatTimestamp(value: string | null | undefined): string {
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' {
   if (status === 'success') return 'default'
   if (status === 'failed') return 'destructive'
+  if (status === 'cancelled') return 'destructive'
   return 'secondary'
 }
 
@@ -156,6 +157,68 @@ function NewRunForm({ onCreated }: NewRunFormProps) {
   )
 }
 
+interface StopButtonProps {
+  run: RunSummary
+  onStopped: () => void
+}
+
+/**
+ * Stop control for a single `status === 'running'` row (`POST /v1/runs/
+ * {run_id}/cancel`) -- only rendered by the parent when `useRole().can('run')`
+ * (defense-in-depth; the server enforces the same `run` role regardless of
+ * what the client shows, see `cancel_run` in `api_service.py`). Requires
+ * confirmation before sending the request. Cancellation is cooperative and
+ * best-effort: the run resolves to `cancelled` at its NEXT step boundary, not
+ * immediately -- this component doesn't wait for that, it relies on
+ * `RunsView`'s existing poll loop (and an immediate `onStopped` refresh) to
+ * surface the eventual status transition. A `409` (the run already reached a
+ * terminal status between this row rendering and the click -- a race with the
+ * poll loop, not a bug) surfaces as an inline error, never a crash.
+ */
+function StopButton({ run, onStopped }: StopButtonProps) {
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleStop() {
+    if (!window.confirm(`Stop run #${run.id} (${run.task} on ${run.project})?`)) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      await cancelRun(run.id)
+      onStopped()
+    } catch (err) {
+      setError(
+        err instanceof ApiForbiddenError
+          ? 'Insufficient role — your token can no longer stop this run.'
+          : describeApiError(err),
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Button
+        size="sm"
+        variant="destructive"
+        disabled={submitting}
+        onClick={() => {
+          void handleStop()
+        }}
+        aria-label={`Stop run ${run.id}`}
+      >
+        {submitting ? 'Stopping…' : 'Stop'}
+      </Button>
+      {error && (
+        <div role="alert" className="text-sm text-destructive">
+          {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
  * Runs tab — `GET /v1/runs` (tenant-filtered for non-admin roles, see
  * `list_runs` in `api_service.py`), polled every `POLL_INTERVAL_MS` so
@@ -188,6 +251,10 @@ export function RunsView() {
   }, [])
 
   function handleCreated() {
+    setRefreshKey((key) => key + 1)
+  }
+
+  function handleStopped() {
     setRefreshKey((key) => key + 1)
   }
 
@@ -246,6 +313,7 @@ export function RunsView() {
                 <TableHead>Status</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead>Finished</TableHead>
+                {canRun && <TableHead>Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody className="block sm:table-row-group">
@@ -277,6 +345,13 @@ export function RunsView() {
                     <span className="mr-1 font-medium sm:hidden">Finished:</span>
                     {formatTimestamp(run.finished_at)}
                   </TableCell>
+                  {canRun && (
+                    <TableCell className="block pt-2 sm:table-cell sm:pt-2">
+                      {run.status === 'running' && (
+                        <StopButton run={run} onStopped={handleStopped} />
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

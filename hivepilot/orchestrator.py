@@ -50,6 +50,7 @@ from hivepilot.runners.base import (
     validate_runner_mode,
 )
 from hivepilot.services import (
+    async_run_service,
     knowledge_service,
     notification_service,
     policy_service,
@@ -167,6 +168,30 @@ class StepApprovalPending(Exception):  # noqa: N818 — mirrors QuotaDeferredErr
     handling, ``run_approved``) must catch it distinctly and must NOT treat
     it as a step/task failure (no `record_step(..., "failed", ...)`, no
     `complete_run(..., "failed", ...)`).
+    """
+
+
+class RunCancelled(Exception):  # noqa: N818 — mirrors StepApprovalPending/QuotaDeferredError naming
+    """Raised inside `_execute_task_body`'s step loop when cooperative
+    cancellation was requested for `run_id` (Mirador actionable dashboard
+    PRD, Sprint 4 -- `POST /v1/runs/{run_id}/cancel` ->
+    `async_run_service.request_cancel` -> checked via
+    `async_run_service.is_cancel_requested` at the top of each step
+    boundary).
+
+    Mirrors `StepApprovalPending`: by the time this is raised,
+    `state_service.complete_run(run_id, RunStatus.CANCELLED.value, ...)` has
+    ALREADY been called -- callers (`_run_async_task`) must catch it
+    distinctly and must NOT call `complete_run` again (no double-terminal-
+    status write, no overwriting CANCELLED with a later "success"/"failed").
+
+    Only ever raised on the async (`POST /v1/runs`) path: `run_id` is
+    threaded in there, and only `async_run_service.submit_run` populates the
+    in-flight cancellation registry `is_cancel_requested` checks against --
+    sync `run_task`/`_run_task_body` callers never register a run there, so
+    cancellation can never trigger for them (documented, not a bug: there is
+    no equivalent "stop" affordance for a synchronous run that already holds
+    the HTTP request open).
     """
 
 
@@ -2588,6 +2613,9 @@ class Orchestrator:
             except StepApprovalPending:
                 _task_span.set_attribute("hivepilot.task.status", "paused")
                 raise
+            except RunCancelled:
+                _task_span.set_attribute("hivepilot.task.status", "cancelled")
+                raise
             except QuotaDeferredError:
                 _task_span.set_attribute("hivepilot.task.status", "deferred")
                 raise
@@ -2759,6 +2787,29 @@ class Orchestrator:
                     # Already executed (and approved, where relevant) before
                     # the pause that led to this resumed call — never re-run.
                     continue
+                # Cooperative cancellation (Mirador actionable dashboard PRD,
+                # Sprint 4 — POST /v1/runs/{run_id}/cancel): checked at the
+                # top of each step boundary that's actually about to run, as
+                # cheaply as possible, BEFORE per-step secrets resolution —
+                # a step that's already executing always finishes first (no
+                # half-run step is ever left behind). `run_id` is only ever
+                # set on the async (POST /v1/runs) path; sync `run_task`
+                # callers pass no run_id here, so `is_cancel_requested`
+                # always resolves False for them (no registry entry to check
+                # against) — cancellation simply never triggers there.
+                if run_id is not None and async_run_service.is_cancel_requested(run_id):
+                    logger.info(
+                        "task.cancelled",
+                        project=project.path.name,
+                        task=task_name,
+                        step=step.name,
+                    )
+                    state_service.complete_run(
+                        run_id, RunStatus.CANCELLED.value, detail="cancelled by operator"
+                    )
+                    raise RunCancelled(
+                        f"Run {run_id} cancelled by operator before step '{step.name}'."
+                    )
                 secrets = self._resolve_secrets(step, _exec_project, policy)
                 payload = RunnerPayload(
                     project_name=_exec_project.path.name,

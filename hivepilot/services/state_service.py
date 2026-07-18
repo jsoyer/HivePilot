@@ -54,6 +54,18 @@ class RunStatus(str, Enum):
     APPROVAL = "approval"
     COMPLETE = "complete"
 
+    # --- terminal-by-operator states ---
+    # Mirador actionable dashboard PRD, Sprint 4 (`POST /v1/runs/{run_id}/
+    # cancel`): a run an operator cooperatively stopped mid-execution, at the
+    # next step boundary (see `Orchestrator._execute_task_body`'s step loop
+    # and `async_run_service.is_cancel_requested`). Terminal like COMPLETE/
+    # the failure states below -- `state_service.complete_run` sets
+    # `finished_at` for it exactly like every other terminal status. There is
+    # no separate "is this terminal" classification helper in this module to
+    # update -- `from_str` already handles it via the generic
+    # `cls(normalised)` value lookup below, no special-casing needed.
+    CANCELLED = "cancelled"
+
     # --- failure states ---
     RATE_LIMIT = "rate_limit"
     AUTH_EXPIRED = "auth_expired"
@@ -360,6 +372,19 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
             _metrics.runs_total.labels(status=status).inc()
         except Exception:  # noqa: BLE001
             pass
+
+
+def get_run(run_id: int) -> dict[str, Any] | None:
+    """Return the single `runs` row for *run_id*, or `None` if it doesn't
+    exist. Mirador actionable dashboard PRD, Sprint 4 -- `POST /v1/runs/
+    {run_id}/cancel` resolves the run's `tenant` through this, exactly like
+    `POST /v1/approvals/{run_id}`'s `state_service.get_approval` resolves
+    the approval row's tenant for its own tenant check.
+    """
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(db.ph("SELECT * FROM runs WHERE id=?"), (run_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[str, Any]]:
