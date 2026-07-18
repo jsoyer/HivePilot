@@ -10,6 +10,7 @@ Field matching is case-insensitive. Unknown / unstructured text is kept in
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -216,6 +217,35 @@ def parse_agent_report(text: str) -> AgentReport:  # noqa: C901
         raw=text,
         challenge=challenge,
     )
+
+
+def report_confidence_value(report: AgentReport) -> float | None:
+    """Coerce an :class:`AgentReport`'s free-text ``confidence`` field into a
+    finite float in ``[0.0, 1.0]``, or ``None`` on empty/unparseable/
+    non-finite input (Debate Judge & Consensus PRD, Sprint 3).
+
+    ``AgentReport.confidence`` is parsed as a raw, unvalidated STRING (see
+    the module docstring) -- this helper is the fail-closed boundary for any
+    consumer that gates a decision on confidence: a malformed value (empty,
+    non-numeric text, ``"nan"``, ``"inf"``) must never be silently treated as
+    "confident" -- it MUST surface as ``None`` so a null-guarded gate (e.g.
+    ``git_service.is_blocking``) blocks rather than fails open.
+
+    A valid finite number is clamped into ``[0.0, 1.0]`` -- e.g. a stray
+    ``"1.5"`` becomes ``1.0`` rather than ``None`` -- the SAME clamp rule
+    ``orchestrator._parse_verdict`` applies to judge-verdict confidence, kept
+    consistent across the codebase's two independent confidence sources.
+    """
+    raw = (report.confidence or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return max(0.0, min(1.0, value))
 
 
 def parse_agent_requests(text: str) -> list[tuple[str, str]]:

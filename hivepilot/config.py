@@ -425,6 +425,12 @@ class Settings(BaseSettings):
     # threshold, or `decision != "ACCEPT"` escalates via
     # `notification_service.stream_needs_human` (fail TOWARD human review,
     # never fail open). env: HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD
+    #
+    # Also consumed by `git_service.is_blocking`/`perform_git_actions`
+    # (Debate Judge & Consensus PRD, Sprint 3) as the SAME fail-closed
+    # threshold for the promote_pr/merge_pr PR gate: only active when
+    # `enable_debate_judge` or `enable_challenge_arbiter` is True (see
+    # `Orchestrator._governing_verdict`/`_register_verdict`).
     judge_confidence_threshold: float = 0.5
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
