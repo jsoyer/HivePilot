@@ -317,7 +317,7 @@ _ES_TASKS_YAML = """\
 # Merge these entries into the top-level `tasks:` key of your tasks.yaml.
 tasks:
   explore-synthesize-explore-architecture:
-    role: explorer
+    role: explorer-architecture
     description: Investigate the architecture angle of the objective.
     steps:
       - name: explore-architecture
@@ -330,7 +330,7 @@ tasks:
       create_pr: false
 
   explore-synthesize-explore-tests:
-    role: explorer
+    role: explorer-tests
     description: Investigate the test-coverage angle of the objective.
     steps:
       - name: explore-tests
@@ -343,7 +343,7 @@ tasks:
       create_pr: false
 
   explore-synthesize-explore-deps:
-    role: explorer
+    role: explorer-deps
     description: Investigate the dependency/integration angle of the objective.
     steps:
       - name: explore-deps
@@ -375,9 +375,19 @@ _ES_ROLES_YAML = """\
 # prompt_file paths are relative to prompts/agents/ — copy this playbook's
 # prompts/ directory into your deployment's prompts/agents/ directory
 # (or point prompt_file at wherever you place them).
+#
+# Three per-angle Explorer roles (NOT one shared `explorer` role) — each
+# declares a single `outputs` key. This matters under
+# `context_routing_mode="keyed"` (opt-in): the orchestrator maps a stage's
+# whole output blob to EVERY key its producing role declares (when the
+# stage's output has no `## KEY` section headers). A single role sharing
+# all three keys would have each successive Explore stage clobber the
+# others' keys, so by the time Synthesize runs, all three would resolve to
+# the last explorer's output. Three single-key roles make the fan-in
+# correct under both `full` (prior_chunks) and `keyed` routing.
 roles:
-  - name: explorer
-    display_name: "Explorer"
+  - name: explorer-architecture
+    display_name: "Explorer (Architecture)"
     title: "Explorer"
     prompt_file: "explorer.md"
     model_profile: "coding"
@@ -385,7 +395,31 @@ roles:
       - objective
     outputs:
       - architecture_findings
+    can_block: false
+    order: 1
+    runner: "claude"
+
+  - name: explorer-tests
+    display_name: "Explorer (Tests)"
+    title: "Explorer"
+    prompt_file: "explorer.md"
+    model_profile: "coding"
+    inputs:
+      - objective
+    outputs:
       - test_findings
+    can_block: false
+    order: 1
+    runner: "claude"
+
+  - name: explorer-deps
+    display_name: "Explorer (Dependencies)"
+    title: "Explorer"
+    prompt_file: "explorer.md"
+    model_profile: "coding"
+    inputs:
+      - objective
+    outputs:
       - deps_findings
     can_block: false
     order: 1
@@ -461,12 +495,12 @@ Synthesizer agent merges their findings into a single report.
 ## Flow
 
 ```
-                +--------------------------+
-                |  Explore Architecture     | --> architecture_findings
-Objective ----->+  Explore Tests            | --> test_findings          --> Synthesize --> synthesis_report
-                |  Explore Dependencies     | --> deps_findings
-                +--------------------------+
-                 (each stage = the `explorer` role, read-only investigation)
+                +----------------------------------------------+
+                |  Explore Architecture  (explorer-architecture) | --> architecture_findings
+Objective ----->+  Explore Tests         (explorer-tests)        | --> test_findings          --> Synthesize --> synthesis_report
+                |  Explore Dependencies  (explorer-deps)          | --> deps_findings
+                +----------------------------------------------+
+                 (three distinct, single-output Explorer roles — read-only investigation)
 ```
 
 Stages run in this order today (**Explore Architecture -> Explore Tests ->
@@ -476,14 +510,28 @@ others' outputs, so they can be reordered freely. The Synthesize stage's
 task consumes all three explorer outputs (`architecture_findings`,
 `test_findings`, `deps_findings`) as its inputs.
 
+Each Explore stage is bound to its OWN role (`explorer-architecture` /
+`explorer-tests` / `explorer-deps`), not a single role shared across all
+three. This is deliberate, not incidental: under the opt-in
+`context_routing_mode="keyed"`, the orchestrator maps a stage's whole
+output blob to every key its producing role declares when the output has
+no `## KEY` section headers. A single `explorer` role declaring all three
+output keys would have each successive Explore stage silently clobber the
+previous ones' keys, so by Synthesize time every key would resolve to the
+last explorer's output — losing the Architecture and Tests findings. Three
+single-output-key roles make the fan-in correct under both the default
+`full` (prior_chunks) routing and the opt-in `keyed` routing.
+
 ## Files provided
 
 - `pipeline.yaml` — the `explore-synthesize` pipeline (4 stages).
 - `tasks.yaml` — three `explore-synthesize-explore-*` tasks + one
   `explore-synthesize-synthesize` task.
-- `roles.yaml` — `explorer` (can_block: false, read-only investigation) and
+- `roles.yaml` — `explorer-architecture`, `explorer-tests`, `explorer-deps`
+  (each can_block: false, read-only investigation, single output key) and
   `synthesizer`.
-- `prompts/explorer.md`, `prompts/synthesizer.md`.
+- `prompts/explorer.md` (shared by all three Explorer roles),
+  `prompts/synthesizer.md`.
 
 ## Wiring instructions
 

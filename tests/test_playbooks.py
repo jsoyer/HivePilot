@@ -8,6 +8,14 @@ Covers:
 - The key correctness test: every playbook's scaffolded pipeline.yaml /
   tasks.yaml / roles.yaml PARSES VALID against the real pydantic models
   (PipelineConfig / TaskConfig / Role) — not just "is valid YAML".
+- explore-synthesize's fan-in: the three Explore stages must be bound to
+  THREE DISJOINT single-output-key roles (not one role sharing all three
+  keys), so the fan-in resolves correctly under `context_routing_mode=
+  "keyed"` (where the orchestrator maps a stage's whole output blob to
+  EVERY key its producing role declares) as well as under the default
+  `full` routing.
+- prompt_file cross-references: every role/step prompt_file must correspond
+  to a `prompts/<basename>` file the playbook actually ships.
 """
 
 from __future__ import annotations
@@ -207,3 +215,125 @@ def test_scaffolded_pipeline_stages_reference_tasks_defined_in_tasks_yaml(
         role = task_def.get("role")
         if role is not None:
             assert role in role_names, f"task references unknown role: {role}"
+
+
+# ---------------------------------------------------------------------------
+# explore-synthesize fan-in correctness — the MUST-FIX regression test.
+#
+# A single shared `explorer` role declaring the union of all three output
+# keys is WRONG under `context_routing_mode="keyed"`: the orchestrator maps
+# a stage's whole output blob to every key its producing role declares (when
+# the stage output has no `## KEY` section headers), so each successive
+# Explore stage would clobber the previous ones' keys and Synthesize would
+# only ever see the last explorer's output under all three keys. This test
+# proves the fix structurally (three disjoint single-key roles) WITHOUT
+# needing the orchestrator: it would FAIL against the old union-on-one-role
+# design and PASS against the corrected per-angle-role design.
+# ---------------------------------------------------------------------------
+
+
+def test_explore_synthesize_explorer_roles_are_disjoint_single_key_outputs(
+    tmp_path: Path,
+) -> None:
+    scaffold_playbook("explore-synthesize", tmp_path)
+    base = tmp_path / "playbooks" / "explore-synthesize"
+
+    roles_raw = yaml.safe_load((base / "roles.yaml").read_text(encoding="utf-8"))
+    tasks_raw = yaml.safe_load((base / "tasks.yaml").read_text(encoding="utf-8"))
+    pipeline_raw = yaml.safe_load((base / "pipeline.yaml").read_text(encoding="utf-8"))
+
+    roles: dict[str, Role] = {}
+    for entry in roles_raw["roles"]:
+        entry = dict(entry)
+        entry["prompt_file"] = Path(entry["prompt_file"])
+        role = Role(**entry)
+        roles[role.name] = role
+
+    tasks: dict[str, TaskConfig] = {
+        name: TaskConfig(**task_def) for name, task_def in tasks_raw["tasks"].items()
+    }
+
+    (pipeline_def,) = pipeline_raw["pipelines"].values()
+    explore_stage_names = {
+        "Explore Architecture",
+        "Explore Tests",
+        "Explore Dependencies",
+    }
+    explore_stages = [s for s in pipeline_def["stages"] if s["name"] in explore_stage_names]
+    assert len(explore_stages) == 3, "expected exactly 3 Explore stages"
+
+    synthesize_task = tasks["explore-synthesize-synthesize"]
+    synthesizer_role = roles[synthesize_task.role]
+
+    producing_roles = []
+    for stage in explore_stages:
+        task = tasks[stage["task"]]
+        assert task.role is not None
+        role = roles[task.role]
+        producing_roles.append(role)
+
+    # Each Explore stage must be bound to its OWN role -- not one role
+    # shared across all three stages.
+    role_names = [r.name for r in producing_roles]
+    assert len(set(role_names)) == 3, (
+        f"Explore stages must each use a distinct role, got: {role_names}"
+    )
+
+    # Each producing role must declare exactly ONE output key (the disjoint,
+    # single-key shape that survives keyed-context fan-in without clobbering).
+    for role in producing_roles:
+        assert len(role.outputs) == 1, (
+            f"role {role.name!r} must declare exactly one output key for "
+            f"safe keyed-routing fan-in, got: {role.outputs}"
+        )
+
+    # The three single output keys must be pairwise disjoint...
+    output_keys = [role.outputs[0] for role in producing_roles]
+    assert len(set(output_keys)) == 3, f"explorer output keys must be disjoint: {output_keys}"
+
+    # ...and their union must be exactly what the synthesizer role consumes.
+    assert set(output_keys) == set(synthesizer_role.inputs), (
+        "the union of Explore-stage output keys must equal the synthesizer's inputs"
+    )
+
+
+# ---------------------------------------------------------------------------
+# prompt_file cross-reference — the MINOR-FIX gap.
+#
+# A typo'd prompt_file would otherwise ship a playbook whose config parses
+# fine but references a prompt file the bundle doesn't actually contain.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", PLAYBOOK_NAMES)
+def test_prompt_file_cross_references_exist_in_playbook_files(tmp_path: Path, name: str) -> None:
+    scaffold_playbook(name, tmp_path)
+    base = tmp_path / "playbooks" / name
+    playbook = get_playbook(name)
+    assert playbook is not None
+
+    prompt_basenames_shipped = {
+        Path(rel).name for rel in playbook.files if rel.startswith("prompts/")
+    }
+    assert prompt_basenames_shipped, "playbook must ship at least one prompt file"
+
+    roles_raw = yaml.safe_load((base / "roles.yaml").read_text(encoding="utf-8"))
+    for entry in roles_raw["roles"]:
+        basename = Path(entry["prompt_file"]).name
+        assert basename in prompt_basenames_shipped, (
+            f"role {entry['name']!r} references prompt_file {entry['prompt_file']!r} "
+            f"but the playbook only ships: {sorted(prompt_basenames_shipped)}"
+        )
+
+    tasks_raw = yaml.safe_load((base / "tasks.yaml").read_text(encoding="utf-8"))
+    for task_name, task_def in tasks_raw["tasks"].items():
+        for step in task_def.get("steps", []):
+            prompt_file = step.get("prompt_file")
+            if prompt_file is None:
+                continue
+            basename = Path(prompt_file).name
+            assert basename in prompt_basenames_shipped, (
+                f"task {task_name!r} step {step['name']!r} references prompt_file "
+                f"{prompt_file!r} but the playbook only ships: "
+                f"{sorted(prompt_basenames_shipped)}"
+            )
