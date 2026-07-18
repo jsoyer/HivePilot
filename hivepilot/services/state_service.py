@@ -248,6 +248,29 @@ def init_db() -> None:
             )
             """
         )
+        # Debate Judge & Consensus PRD, Sprint 3: persist debate-judge /
+        # challenge-arbiter Verdicts (redacted) for later review (PRD 2).
+        # Sibling to `interactions` -- same run_id FK/CASCADE shape. Only
+        # structured, non-secret fields are dedicated columns (decision,
+        # confidence, kind); any free-text `summary` is redacted before
+        # INSERT, same choke-point pattern as `record_interaction` below.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS verdicts (
+                id {pk},
+                run_id INTEGER,
+                project TEXT,
+                task TEXT,
+                role TEXT,
+                kind TEXT,
+                decision TEXT,
+                confidence REAL,
+                summary TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+            )
+            """
+        )
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:
@@ -440,6 +463,72 @@ def list_recent_interactions(limit: int = 50, run_id: int | None = None) -> list
         else:
             rows = conn.execute(
                 db.ph("SELECT * FROM interactions ORDER BY id DESC LIMIT ?"), (limit,)
+            ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def record_verdict(
+    *,
+    run_id: int | None,
+    project: str | None,
+    task: str | None,
+    role: str | None,
+    kind: str,
+    decision: str | None,
+    confidence: float | None,
+    summary: str | None = None,
+) -> int:
+    """Persist a debate-judge / challenge-arbiter :class:`Verdict` (Debate
+    Judge & Consensus PRD, Sprint 3). ``kind`` is ``"debate"``
+    (``Orchestrator._adjudicate``) or ``"challenge"``
+    (``Orchestrator._adjudicate_challenge``) -- see the module-level
+    ``Verdict`` dataclass in ``orchestrator.py`` for the contract this
+    mirrors.
+
+    Only structured, non-secret fields are dedicated columns (``decision``,
+    ``confidence``, ``kind``); any free-text ``summary`` is routed through
+    ``redact_text`` before INSERT -- same choke-point pattern as
+    ``record_interaction``/``record_step`` above, since a judge's raw
+    rationale can echo a resolved ``${secret:NAME}`` value and must never
+    reach SQLite unredacted.
+    """
+    init_db()
+    from hivepilot.services.config_provenance import redact_text
+
+    summary = redact_text(summary) if summary is not None else None
+    with db.connect() as conn:
+        verdict_id = db.insert_returning_id(
+            conn,
+            db.ph(
+                "INSERT INTO verdicts "
+                "(run_id, project, task, role, kind, decision, confidence, summary) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (run_id, project, task, role, kind, decision, confidence, summary),
+        )
+        logger.info(
+            "state.verdict",
+            verdict_id=verdict_id,
+            kind=kind,
+            run_id=run_id,
+            decision=decision,
+            confidence=confidence,
+        )
+        return verdict_id
+
+
+def list_recent_verdicts(limit: int = 50, run_id: int | None = None) -> list[dict[str, Any]]:
+    """Read back persisted verdicts (redacted summary), newest first."""
+    init_db()
+    with db.connect() as conn:
+        if run_id is not None:
+            rows = conn.execute(
+                db.ph("SELECT * FROM verdicts WHERE run_id=? ORDER BY id DESC LIMIT ?"),
+                (run_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                db.ph("SELECT * FROM verdicts ORDER BY id DESC LIMIT ?"), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
 

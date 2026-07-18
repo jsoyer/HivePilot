@@ -58,12 +58,18 @@ class DebateResult:
         The synthesized (or provided) decision.
     consequences:
         Positive/negative consequences, including dissent summary.
+    confidence:
+        Optional confidence score (``0.0``-``1.0``) attached to *decision*.
+        ``None`` (the default) means no confidence was supplied — e.g. the
+        templated/majority-stance decision path (Debate Judge & Consensus PRD,
+        Sprint 1's opt-in judge is the only current producer of a real value).
     """
 
     topic: str
     positions: tuple[Position, ...]
     decision: str
     consequences: str
+    confidence: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +116,7 @@ class DebateService:
         positions: list[Position],
         decision: str | None = None,
         consequences: str | None = None,
+        confidence: float | None = None,
     ) -> DebateResult:
         """Synthesize a debate into a DebateResult.
 
@@ -126,6 +133,10 @@ class DebateService:
         consequences:
             Explicit consequences text.  When ``None``, a short summary is
             derived by listing any dissenting positions.
+        confidence:
+            Optional confidence score attached to *decision* (opt-in judge
+            path only). ``None`` leaves :attr:`DebateResult.confidence` unset —
+            the majority-stance path (``decision=None``) is untouched.
 
         Returns
         -------
@@ -146,6 +157,7 @@ class DebateService:
             positions=tuple(positions),
             decision=resolved_decision,
             consequences=resolved_consequences,
+            confidence=confidence,
         )
 
     def to_adr(
@@ -169,7 +181,9 @@ class DebateService:
         Returns
         -------
         dict or None
-            The emit dict from :meth:`ObsidianService.write_adr`, or
+            The emit dict from :meth:`ObsidianService.write_adr`, plus a
+            ``confidence`` key when *result.confidence* is not ``None`` (the
+            emit shape is otherwise byte-identical to pre-Sprint-1 behaviour).
             ``None`` if no vault is configured.
         """
         if self._obsidian is None:
@@ -182,7 +196,7 @@ class DebateService:
         )
         options = [f"{p.role}: {p.stance}" for p in result.positions]
 
-        return self._obsidian.write_adr(
+        emit = self._obsidian.write_adr(
             title=result.topic,
             context=context,
             options=options,
@@ -191,6 +205,9 @@ class DebateService:
             security_impact=security_impact,
             review_date=review_date,
         )
+        if result.confidence is not None:
+            emit = {**emit, "confidence": result.confidence}
+        return emit
 
     def run(
         self,
@@ -198,6 +215,7 @@ class DebateService:
         positions: list[Position],
         decision: str | None = None,
         consequences: str | None = None,
+        confidence: float | None = None,
         security_impact: str = "None identified",
         review_date: str = "",
     ) -> dict[str, Any] | None:
@@ -215,6 +233,9 @@ class DebateService:
             Explicit decision (``None`` -> majority-stance rule).
         consequences:
             Explicit consequences (``None`` -> auto-derived from dissent).
+        confidence:
+            Optional confidence score attached to *decision* (opt-in judge
+            path only).
         security_impact:
             Security implications of the decision.
         review_date:
@@ -229,6 +250,7 @@ class DebateService:
             positions=positions,
             decision=decision,
             consequences=consequences,
+            confidence=confidence,
         )
         return self.to_adr(result, security_impact=security_impact, review_date=review_date)
 

@@ -419,6 +419,43 @@ class Settings(BaseSettings):
     max_request_depth: int = 2  # recursion depth cap (requests from answers)
     max_requests_per_run: int = 20  # global budget per pipeline run
 
+    # ---- Debate synthesis judge (Debate Judge & Consensus PRD, Sprint 1) ----
+    # Opt-in LLM arbiter that synthesizes a debate's model positions into a
+    # real decision + confidence, replacing the templated `decision=` string
+    # `Orchestrator._run_debate_body` builds today. Defaults False — the
+    # flags-off path is byte-identical to pre-Sprint-1 behaviour (templated
+    # decision, majority-stance fallback in DebateService untouched).
+    # env: HIVEPILOT_ENABLE_DEBATE_JUDGE
+    enable_debate_judge: bool = False
+    # Runner kind used for the ONE judge `capture_definition` call (see
+    # `Orchestrator._adjudicate`). env: HIVEPILOT_JUDGE_RUNNER
+    judge_runner: str = "claude"
+    # Model passed to the judge RunnerDefinition; None lets the runner use its
+    # own default. env: HIVEPILOT_JUDGE_MODEL
+    judge_model: str | None = None
+
+    # ---- Independent challenge arbiter (Debate Judge & Consensus PRD, Sprint 2) ----
+    # Opt-in THIRD-party judge that adjudicates a challenge/rebuttal pair
+    # instead of letting the challenger self-grade the resolution. Defaults
+    # False — the flags-off path is byte-identical to pre-Sprint-2 behaviour
+    # (challenger's own runner is re-invoked for the ACCEPT/MAINTAIN check,
+    # see `Orchestrator._run_rebuttal_round`).
+    # env: HIVEPILOT_ENABLE_CHALLENGE_ARBITER
+    enable_challenge_arbiter: bool = False
+    # Minimum verdict confidence, in [0.0, 1.0], required to accept an
+    # arbiter ACCEPT verdict without escalating to a human. Any verdict with
+    # `decision is None`, `confidence is None`, `confidence` below this
+    # threshold, or `decision != "ACCEPT"` escalates via
+    # `notification_service.stream_needs_human` (fail TOWARD human review,
+    # never fail open). env: HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD
+    #
+    # Also consumed by `git_service.is_blocking`/`perform_git_actions`
+    # (Debate Judge & Consensus PRD, Sprint 3) as the SAME fail-closed
+    # threshold for the promote_pr/merge_pr PR gate: only active when
+    # `enable_debate_judge` or `enable_challenge_arbiter` is True (see
+    # `Orchestrator._governing_verdict`/`_register_verdict`).
+    judge_confidence_threshold: float = 0.5
+
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
     def _coerce_notification_chat_id(cls, v: object) -> object:

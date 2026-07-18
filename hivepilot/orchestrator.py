@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import math
 import subprocess
 import threading
 from collections.abc import Iterable
@@ -77,6 +78,7 @@ from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from hivepilot.roles import Role
+    from hivepilot.services.debate_service import Position
 
 logger = get_logger(__name__)
 
@@ -421,6 +423,165 @@ def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
     return default_runner, entry
 
 
+# ---------------------------------------------------------------------------
+# Debate synthesis judge (Debate Judge & Consensus PRD, Sprint 1)
+#
+# `Verdict` and `Orchestrator._adjudicate` are a STABLE shared contract reused
+# as-is by Sprint 2 — do not change the shape or parsing rules without
+# documenting the change (see the sprint's Agent Notes for the full contract).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """A judge's synthesis of a debate's positions.
+
+    ``decision`` is ``None`` (never a fabricated string) when the judge's raw
+    output was empty, malformed, non-JSON, or missing a confident decision —
+    callers MUST treat ``decision is None`` as "no confident decision" and
+    fall back to the templated/majority-stance path.
+    """
+
+    decision: str | None
+    confidence: float | None
+    per_role_stance: dict[str, str] | None = None
+
+
+# Judge synthesis prompt (Sprint 1 contract — Sprint 2 reuses this verbatim
+# unless documented otherwise). Instructs the judge to return ONLY a JSON
+# object matching the `_parse_verdict` parse rules below.
+_JUDGE_PROMPT_TEMPLATE = (
+    "You are an impartial arbiter reviewing a multi-model debate.\n\n"
+    "TOPIC:\n{topic}\n\n"
+    "POSITIONS SUBMITTED:\n{positions_block}\n\n"
+    "Read every rationale carefully, weigh the arguments on their merits, and "
+    "synthesize ONE final decision.\n\n"
+    "Respond with ONLY a single JSON object -- no prose, no markdown code "
+    "fences -- matching exactly this shape:\n"
+    '{{"decision": "<final decision, one paragraph>", '
+    '"confidence": <float between 0.0 and 1.0>, '
+    '"per_role_stance": {{"<role>": "<one-line stance>"}}}}\n\n'
+    "If you cannot reach a confident decision, respond with "
+    '{{"decision": null, "confidence": 0.0}} -- never fabricate a decision you '
+    "are not confident about."
+)
+
+
+def _build_judge_prompt(topic: str, positions: list[Position]) -> str:
+    """Render the judge synthesis prompt for *positions* on *topic*."""
+    positions_block = "\n".join(f"- {p.role}: {p.rationale}" for p in positions)
+    return _JUDGE_PROMPT_TEMPLATE.format(topic=topic, positions_block=positions_block)
+
+
+def _parse_verdict(raw: str) -> Verdict:
+    """Parse the judge's raw text response into a :class:`Verdict`.
+
+    Parse rules (Sprint 1 contract):
+      * Empty/whitespace-only text -> no confident decision.
+      * Tolerates a ```json ... ``` fenced block around the JSON object.
+      * Non-JSON or a non-object JSON value -> no confident decision.
+      * ``decision`` must be a non-empty string after stripping; ``null``,
+        missing, or empty -> no confident decision.
+      * ``confidence`` must be an ``int``/``float`` (bool excluded); missing
+        or non-numeric -> no confident decision even if ``decision`` parsed.
+        A numeric value is clamped into ``[0.0, 1.0]``.
+      * ``per_role_stance``, when present, must be a ``dict[str, str]`` or it
+        is dropped (does not invalidate the rest of the verdict).
+
+    NEVER fabricates a decision: any of the above failures returns
+    ``Verdict(decision=None, confidence=None, per_role_stance=None)``.
+    """
+    text = raw.strip() if raw else ""
+    if not text:
+        return Verdict(decision=None, confidence=None)
+
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return Verdict(decision=None, confidence=None)
+
+    if not isinstance(data, dict):
+        return Verdict(decision=None, confidence=None)
+
+    decision = data.get("decision")
+    if not isinstance(decision, str) or not decision.strip():
+        return Verdict(decision=None, confidence=None)
+
+    confidence_raw = data.get("confidence")
+    if (
+        not isinstance(confidence_raw, (int, float))
+        or isinstance(confidence_raw, bool)
+        or not math.isfinite(confidence_raw)
+    ):
+        # Non-numeric, bool, or non-finite (NaN/Infinity, which json.loads
+        # accepts by default) confidence is untrustworthy -> no confident
+        # decision. A garbage response must never become MAX confidence.
+        return Verdict(decision=None, confidence=None)
+    confidence = max(0.0, min(1.0, float(confidence_raw)))
+
+    per_role_stance: dict[str, str] | None = None
+    stance_raw = data.get("per_role_stance")
+    if isinstance(stance_raw, dict) and all(
+        isinstance(k, str) and isinstance(v, str) for k, v in stance_raw.items()
+    ):
+        per_role_stance = dict(stance_raw)
+
+    return Verdict(
+        decision=decision.strip(), confidence=confidence, per_role_stance=per_role_stance
+    )
+
+
+# ---------------------------------------------------------------------------
+# Independent challenge arbiter (Debate Judge & Consensus PRD, Sprint 2)
+#
+# Opt-in (`settings.enable_challenge_arbiter`) THIRD-party judge for the
+# challenge/rebuttal resolution check in `Orchestrator._run_rebuttal_round`,
+# reusing the Sprint 1 `Verdict` / `_parse_verdict` contract as-is. The judge
+# is never the challenger and never the target — it adjudicates independently
+# so neither party self-grades the outcome.
+# ---------------------------------------------------------------------------
+
+_CHALLENGE_ARBITER_PROMPT_TEMPLATE = (
+    "You are an impartial arbiter adjudicating a challenge between two colleagues. "
+    "You are independent of both — you are neither the challenger nor the target.\n\n"
+    "TARGET ({target_name})'S PRIOR OUTPUT:\n{prior_output}\n\n"
+    "CHALLENGE from {challenger_name}:\n{challenge_point}\n\n"
+    "TARGET'S REBUTTAL:\n{rebuttal_output}\n\n"
+    "Weigh the challenge against the rebuttal on their merits and decide whether "
+    "the rebuttal adequately resolves the challenge.\n\n"
+    "Respond with ONLY a single JSON object -- no prose, no markdown code "
+    "fences -- matching exactly this shape:\n"
+    '{{"decision": "ACCEPT" or "DEFEND", "confidence": <float between 0.0 and 1.0>}}\n\n'
+    '"ACCEPT" means the rebuttal adequately resolves the challenge. "DEFEND" means '
+    "the challenge stands and should be escalated for human review. If you cannot "
+    'reach a confident decision, respond with {{"decision": null, "confidence": 0.0}} '
+    "-- never fabricate a decision you are not confident about."
+)
+
+
+def _build_challenge_arbiter_prompt(
+    *,
+    target_name: str,
+    challenger_name: str,
+    challenge_point: str,
+    prior_output: str,
+    rebuttal_output: str,
+) -> str:
+    """Render the challenge-arbiter resolution prompt (Sprint 2 contract)."""
+    return _CHALLENGE_ARBITER_PROMPT_TEMPLATE.format(
+        target_name=target_name,
+        challenger_name=challenger_name,
+        challenge_point=challenge_point[:2000],
+        prior_output=(prior_output[:2000] if prior_output else "(not available)"),
+        rebuttal_output=rebuttal_output[:2000],
+    )
+
+
 def _parse_components(text: str, valid: list[str]) -> list[str]:
     """Extract the component subset an agent selected via a ``COMPONENTS:`` line,
     intersected with the *valid* component set. Returns ``[]`` if none matched
@@ -679,6 +840,14 @@ class Orchestrator:
         # against it. See _enter_run_scope / _exit_run_scope.
         self._run_scope_lock = threading.Lock()
         self._run_scope_depth = 0
+        # Fail-closed PR-gate aggregate (Debate Judge & Consensus PRD, Sprint 3).
+        # The most-blocking Verdict seen so far THIS run — see
+        # `_register_verdict` and the `perform_git_actions` call site in
+        # `_execute_task_body`. Reset per outermost run (see
+        # `_enter_run_scope`) so a stale verdict from a prior unrelated
+        # run_task/run_pipeline/run_debate call never leaks into this one.
+        self._verdict_lock = threading.Lock()
+        self._governing_verdict: Verdict | None = None
 
     def _load(self) -> None:
         self.projects = load_projects()
@@ -695,6 +864,35 @@ class Orchestrator:
     def _enter_run_scope(self) -> None:
         with self._run_scope_lock:
             self._run_scope_depth += 1
+            entering_outermost = self._run_scope_depth == 1
+        if entering_outermost:
+            with self._verdict_lock:
+                self._governing_verdict = None
+
+    def _register_verdict(self, verdict: "Verdict | None") -> None:
+        """Track the most-blocking :class:`Verdict` seen so far this run
+        (Debate Judge & Consensus PRD, Sprint 3) — fail-closed aggregate for
+        the `perform_git_actions` PR gate: "if more than one verdict applies,
+        the most-blocking wins."
+
+        Once ANY registered verdict is blocking (per `git_service.is_blocking`
+        at the configured `settings.judge_confidence_threshold`), it becomes
+        STICKY — a later approving verdict from an unrelated stage/challenge
+        never erases an earlier one that failed the gate. A no-op on `None`
+        (nothing to register) — the gate's own `is_blocking(None, ...)` call
+        already fails closed on "no verdict reached the gate" without this
+        method needing to do anything.
+        """
+        if verdict is None:
+            return
+        from hivepilot.services.git_service import is_blocking
+
+        with self._verdict_lock:
+            if self._governing_verdict is not None and is_blocking(
+                self._governing_verdict, settings.judge_confidence_threshold
+            ):
+                return  # already blocking — stays blocking (sticky)
+            self._governing_verdict = verdict
 
     def _exit_run_scope(self) -> None:
         """Exit a run_task/run_pipeline scope; clear the resolved-secrets
@@ -1291,6 +1489,7 @@ class Orchestrator:
         policy: policy_service.Policy | None,
         project_name: str,
         simulate: bool,
+        run_id: int | None = None,
     ) -> None:
         """Execute one bounded rebuttal round after a ⚔️ challenge.
 
@@ -1421,71 +1620,97 @@ class Orchestrator:
             point=f"[REBUTTAL] {rebuttal_output}",
         )
 
-        # 5. Re-invoke challenger with the rebuttal → resolution check
-        challenger_role_key: str | None = None
-        challenger_task_cfg2 = self.tasks.tasks.get(challenger_stage.task)
-        if challenger_task_cfg2 and challenger_task_cfg2.role:
-            challenger_role_key = challenger_task_cfg2.role
-
-        resolution_prompt = (
-            f"You are {challenger_name}. You challenged {target_agent_name} and they responded.\n\n"
-            f"YOUR ORIGINAL CHALLENGE:\n{challenge_point}\n\n"
-            f"THEIR REBUTTAL:\n{rebuttal_output[:2000]}\n\n"
-            "Respond with exactly one of:\n"
-            "- ACCEPT: <brief acknowledgement — you are satisfied with their defence>\n"
-            "- MAINTAIN: <brief statement of why you still disagree — this will be escalated for human review>\n\n"
-            "Keep your response concise (under 100 words)."
-        )
-
-        if challenger_role_key is None:
-            # No role for challenger — default to ACCEPT to avoid blocking
-            resolution_output = "ACCEPT: Unable to determine challenger role for resolution check."
-        elif simulate:
-            resolution_output = f"[simulated resolution from {challenger_name}] ACCEPT: Satisfied."
-        else:
-            # The challenger's OWN stage's model/effort override this
-            # dispatch — mirrors the target dispatch above.
-            ch_runner_kind, ch_role_model, ch_effort = resolve_stage_dispatch(
-                challenger_role_key,
-                policy,
-                stage_model=challenger_stage.model,
-                stage_effort=challenger_stage.effort,
-            )
-            ch_role = get_role(challenger_role_key)
-            ch_role_perm = ch_role.permission_mode
-            ch_role_options: dict[str, str] = {}
-            if ch_role_perm:
-                ch_role_options["permission_mode"] = ch_role_perm
-            ch_runner_def = RunnerDefinition(
-                name=f"resolution:{challenger_role_key}",
-                kind=cast(RunnerKind, ch_runner_kind),
-                command=None,
-                model=ch_role_model,
-                effort=ch_effort,
-                host=resolve_host(challenger_role_key, policy),
-                options=ch_role_options,
-            )
-            ch_step = TaskStep(
-                name=f"resolution:{challenger_role_key}",
-                runner=ch_runner_kind,
-                prompt_file=(
-                    str(ch_role.prompt_file)
-                    if ch_role.prompt_file and ch_role.prompt_file.exists()
-                    else ""
-                ),
-            )
-            ch_payload = RunnerPayload(
-                project_name=project_name,
+        # 5+6. Resolution check — either an INDEPENDENT third-party judge
+        # arbiter (Sprint 2, opt-in via `enable_challenge_arbiter`) or the
+        # pre-Sprint-2 default: the challenger's OWN runner is re-invoked to
+        # self-adjudicate ACCEPT/MAINTAIN. The arbiter path never lets either
+        # the challenger or the target self-grade the outcome, and fails
+        # TOWARD human escalation on any ambiguous/malformed/erroring verdict
+        # (see `_resolve_challenge_via_arbiter` — never fails open).
+        if settings.enable_challenge_arbiter:
+            is_escalated, resolution_output = self._resolve_challenge_via_arbiter(
+                challenger_name=challenger_name,
+                target_agent_name=target_agent_name,
+                challenge_point=challenge_point,
+                prior_output=prior_output,
+                rebuttal_output=rebuttal_output,
                 project=rebuttal_project,
-                task_name=f"resolution:{challenger_role_key}",
-                step=ch_step,
-                metadata={"extra_prompt": resolution_prompt, "prior_context": ""},
-                secrets={},
+                policy=policy,
+                simulate=simulate,
+                run_id=run_id,
             )
-            resolution_output = self.registry.capture_definition(ch_runner_def, ch_payload)
+        else:
+            # 5. Re-invoke challenger with the rebuttal → resolution check
+            challenger_role_key: str | None = None
+            challenger_task_cfg2 = self.tasks.tasks.get(challenger_stage.task)
+            if challenger_task_cfg2 and challenger_task_cfg2.role:
+                challenger_role_key = challenger_task_cfg2.role
 
-        # 6. Determine outcome and stream final icon
-        is_escalated = resolution_output.strip().upper().startswith("MAINTAIN")
+            resolution_prompt = (
+                f"You are {challenger_name}. You challenged {target_agent_name} and they responded.\n\n"
+                f"YOUR ORIGINAL CHALLENGE:\n{challenge_point}\n\n"
+                f"THEIR REBUTTAL:\n{rebuttal_output[:2000]}\n\n"
+                "Respond with exactly one of:\n"
+                "- ACCEPT: <brief acknowledgement — you are satisfied with their defence>\n"
+                "- MAINTAIN: <brief statement of why you still disagree — this will be escalated for human review>\n\n"
+                "Keep your response concise (under 100 words)."
+            )
+
+            if challenger_role_key is None:
+                # No role for challenger — default to ACCEPT to avoid blocking
+                resolution_output = (
+                    "ACCEPT: Unable to determine challenger role for resolution check."
+                )
+            elif simulate:
+                resolution_output = (
+                    f"[simulated resolution from {challenger_name}] ACCEPT: Satisfied."
+                )
+            else:
+                # The challenger's OWN stage's model/effort override this
+                # dispatch — mirrors the target dispatch above.
+                ch_runner_kind, ch_role_model, ch_effort = resolve_stage_dispatch(
+                    challenger_role_key,
+                    policy,
+                    stage_model=challenger_stage.model,
+                    stage_effort=challenger_stage.effort,
+                )
+                ch_role = get_role(challenger_role_key)
+                ch_role_perm = ch_role.permission_mode
+                ch_role_options: dict[str, str] = {}
+                if ch_role_perm:
+                    ch_role_options["permission_mode"] = ch_role_perm
+                ch_runner_def = RunnerDefinition(
+                    name=f"resolution:{challenger_role_key}",
+                    kind=cast(RunnerKind, ch_runner_kind),
+                    command=None,
+                    model=ch_role_model,
+                    effort=ch_effort,
+                    host=resolve_host(challenger_role_key, policy),
+                    options=ch_role_options,
+                )
+                ch_step = TaskStep(
+                    name=f"resolution:{challenger_role_key}",
+                    runner=ch_runner_kind,
+                    prompt_file=(
+                        str(ch_role.prompt_file)
+                        if ch_role.prompt_file and ch_role.prompt_file.exists()
+                        else ""
+                    ),
+                )
+                ch_payload = RunnerPayload(
+                    project_name=project_name,
+                    project=rebuttal_project,
+                    task_name=f"resolution:{challenger_role_key}",
+                    step=ch_step,
+                    metadata={"extra_prompt": resolution_prompt, "prior_context": ""},
+                    secrets={},
+                )
+                resolution_output = self.registry.capture_definition(ch_runner_def, ch_payload)
+
+            # 6. Determine outcome
+            is_escalated = resolution_output.strip().upper().startswith("MAINTAIN")
+
+        # Stream final icon (shared by both resolution paths)
         if is_escalated:
             notification_service.stream_needs_human(
                 actor=challenger_name,
@@ -1517,6 +1742,130 @@ class Orchestrator:
 
         # 7. Append resolution note to prior_chunks for downstream context
         prior_chunks.append(f"## Challenge Resolution\n{resolution_note}")
+
+    def _resolve_challenge_via_arbiter(
+        self,
+        *,
+        challenger_name: str,
+        target_agent_name: str,
+        challenge_point: str,
+        prior_output: str,
+        rebuttal_output: str,
+        project: ProjectConfig,
+        policy: policy_service.Policy | None,
+        simulate: bool,
+        run_id: int | None = None,
+    ) -> tuple[bool, str]:
+        """Resolve a challenge/rebuttal pair via the INDEPENDENT challenge
+        arbiter (Debate Judge & Consensus PRD, Sprint 2).
+
+        Returns ``(is_escalated, resolution_output)`` — *resolution_output* is
+        a human-readable summary of the verdict, in the same "text blob"
+        shape the self-adjudication path produces, for `stream_needs_human` /
+        `stream_resolved` / `log_challenge_interaction` to consume unchanged.
+
+        FAILS TOWARD HUMAN ESCALATION — ``is_escalated`` is True (never a
+        silent ACCEPT) whenever ANY of the following holds:
+          * the arbiter call itself raised (network/runner error);
+          * ``verdict.decision is None`` (empty/malformed/non-JSON response);
+          * ``verdict.confidence is None``;
+          * ``verdict.confidence < settings.judge_confidence_threshold``;
+          * ``verdict.decision`` is not ``"ACCEPT"`` (e.g. ``"DEFEND"``).
+
+        Only an explicit, confident ``"ACCEPT"`` at/above the configured
+        threshold resolves the challenge without a human.
+        """
+        from typing import cast
+
+        from hivepilot.models import RunnerKind
+
+        judge_def = RunnerDefinition(
+            name="challenge:arbiter",
+            kind=cast(RunnerKind, settings.judge_runner),
+            command=None,
+            model=settings.judge_model,
+        )
+        try:
+            verdict = self._adjudicate_challenge(
+                target_agent_name=target_agent_name,
+                challenger_name=challenger_name,
+                challenge_point=challenge_point,
+                prior_output=prior_output,
+                rebuttal_output=rebuttal_output,
+                judge_def=judge_def,
+                project=project,
+                policy=policy,
+                simulate=simulate,
+            )
+        except Exception as exc:  # never let a broken judge crash the pipeline
+            logger.warning("challenge_arbiter.error", error=redact_text(str(exc)))
+            # Sprint 3: a failed arbiter call must register as BLOCKING for the
+            # fail-closed PR gate — never silently keep a prior approving
+            # verdict governing (see `_register_verdict`'s "sticky" rule).
+            failure_verdict = Verdict(decision=None, confidence=None)
+            self._register_verdict(failure_verdict)
+            self._persist_challenge_verdict(
+                run_id=run_id,
+                project=project,
+                target_agent_name=target_agent_name,
+                challenger_name=challenger_name,
+                verdict=failure_verdict,
+            )
+            return (
+                True,
+                f"MAINTAIN: Independent judge call failed ({redact_text(str(exc))[:200]}) — "
+                "escalated to human review.",
+            )
+
+        accepted = (
+            verdict.decision is not None
+            and verdict.decision.strip().upper() == "ACCEPT"
+            and verdict.confidence is not None
+            and verdict.confidence >= settings.judge_confidence_threshold
+        )
+        resolution_output = (
+            f"{'ACCEPT' if accepted else 'MAINTAIN'}: independent judge verdict — "
+            f"decision={verdict.decision!r}, confidence={verdict.confidence!r} "
+            f"(threshold={settings.judge_confidence_threshold})."
+        )
+        # Sprint 3: feed the fail-closed PR-gate aggregate + persist (redacted)
+        # for later review — best-effort, never lets a persistence hiccup
+        # break challenge resolution.
+        self._register_verdict(verdict)
+        self._persist_challenge_verdict(
+            run_id=run_id,
+            project=project,
+            target_agent_name=target_agent_name,
+            challenger_name=challenger_name,
+            verdict=verdict,
+        )
+        return not accepted, resolution_output
+
+    def _persist_challenge_verdict(
+        self,
+        *,
+        run_id: int | None,
+        project: ProjectConfig,
+        target_agent_name: str,
+        challenger_name: str,
+        verdict: "Verdict",
+    ) -> None:
+        """Best-effort persistence of a challenge-arbiter Verdict (Sprint 3).
+        Never raises — a persistence hiccup must not break challenge
+        resolution (see `_resolve_challenge_via_arbiter`'s call sites)."""
+        try:
+            state_service.record_verdict(
+                run_id=run_id,
+                project=project.path.name,
+                task=None,
+                role=target_agent_name,
+                kind="challenge",
+                decision=verdict.decision,
+                confidence=verdict.confidence,
+                summary=f"challenge from {challenger_name} against {target_agent_name}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verdict.persist_failed", kind="challenge", error=str(exc))
 
     def run_pipeline(
         self,
@@ -1966,6 +2315,7 @@ class Orchestrator:
                             policy=_rebuttal_policy,
                             project_name=_rebuttal_project_name,
                             simulate=simulate,
+                            run_id=run_id,
                         )
                     except Exception as _rebuttal_exc:  # noqa: BLE001
                         logger.warning(
@@ -2398,6 +2748,123 @@ class Orchestrator:
         finally:
             self._exit_run_scope()
 
+    def _adjudicate(
+        self,
+        positions: list[Position],
+        judge_def: RunnerDefinition,
+        *,
+        role_name: str,
+        topic: str,
+        project: ProjectConfig,
+        policy: policy_service.Policy | None,
+        simulate: bool = False,
+    ) -> Verdict:
+        """Synthesize *positions* into a single :class:`Verdict` via ONE judge
+        `capture_definition` call (Debate Judge & Consensus PRD, Sprint 1).
+
+        STABLE contract reused by Sprint 2 — see the module-level `Verdict` /
+        `_parse_verdict` docstrings for the exact shape and parse rules.
+
+        Reuses `_resolve_secrets` (same pattern as each brain call in
+        `_run_debate_body`) so the judge call inherits the SAME secret-masking
+        scope as the rest of the debate run. The judge's raw output is passed
+        through `redact_text` before parsing, so any leaked secret value is
+        masked before it can reach the decision/confidence/per_role_stance
+        that ends up in the ADR.
+
+        When *simulate* is True, short-circuits to a deterministic synthetic
+        verdict WITHOUT a real runner call — mirrors how each brain position
+        is synthesized under `simulate` in `_run_debate_body`.
+
+        Never fabricates a decision: a malformed/empty judge response returns
+        `Verdict(decision=None, confidence=None)`, which the caller MUST treat
+        as "no confident decision" (fall back to the templated/majority path).
+        """
+        prompt = _build_judge_prompt(topic, positions)
+        step = TaskStep(
+            name=f"{role_name}-judge",
+            runner=judge_def.kind,
+            prompt_file=None,
+        )
+        payload = RunnerPayload(
+            project_name=project.path.name,
+            project=project,
+            task_name=f"debate:{role_name}:judge",
+            step=step,
+            metadata={"extra_prompt": prompt, "prior_context": ""},
+            secrets=self._resolve_secrets(step, project, policy),
+        )
+        if simulate:
+            raw = f'{{"decision": "[simulated judge decision for: {topic}]", "confidence": 0.5}}'
+        else:
+            raw = self.registry.capture_definition(judge_def, payload)
+        raw = redact_text(raw) if raw else raw
+        return _parse_verdict(raw or "")
+
+    def _adjudicate_challenge(
+        self,
+        *,
+        target_agent_name: str,
+        challenger_name: str,
+        challenge_point: str,
+        prior_output: str,
+        rebuttal_output: str,
+        judge_def: RunnerDefinition,
+        project: ProjectConfig,
+        policy: policy_service.Policy | None,
+        simulate: bool = False,
+    ) -> Verdict:
+        """Adjudicate a challenge/rebuttal pair into a single :class:`Verdict`
+        via ONE INDEPENDENT judge `capture_definition` call (Debate Judge &
+        Consensus PRD, Sprint 2).
+
+        The judge is a THIRD role — never *challenger_name*, never
+        *target_agent_name* — so the ACCEPT/DEFEND resolution is never
+        self-graded by either party. Reuses the Sprint 1 `Verdict` /
+        `_parse_verdict` contract as-is (see `_adjudicate`'s docstring).
+
+        Reuses `_resolve_secrets` (same pattern as `_adjudicate`) so the judge
+        call inherits the SAME secret-masking scope as the rest of the run —
+        the judge's raw output is passed through `redact_text` before parsing,
+        so any leaked secret value is masked before it can reach the verdict
+        that gets logged/persisted (Judge Reuses Secret Scope invariant).
+
+        When *simulate* is True, short-circuits to a deterministic synthetic
+        ACCEPT verdict WITHOUT a real runner call — mirrors `_adjudicate`'s
+        simulate branch.
+
+        Never fabricates a decision: a malformed/empty judge response returns
+        `Verdict(decision=None, confidence=None)`, which the caller MUST treat
+        as "no confident decision" and escalate to human review — a judge
+        error must fail TOWARD a human, never toward a silent ACCEPT.
+        """
+        prompt = _build_challenge_arbiter_prompt(
+            target_name=target_agent_name,
+            challenger_name=challenger_name,
+            challenge_point=challenge_point,
+            prior_output=prior_output,
+            rebuttal_output=rebuttal_output,
+        )
+        step = TaskStep(
+            name="challenge-arbiter",
+            runner=judge_def.kind,
+            prompt_file=None,
+        )
+        payload = RunnerPayload(
+            project_name=project.path.name,
+            project=project,
+            task_name="challenge:arbiter",
+            step=step,
+            metadata={"extra_prompt": prompt, "prior_context": ""},
+            secrets=self._resolve_secrets(step, project, policy),
+        )
+        if simulate:
+            raw = '{"decision": "ACCEPT", "confidence": 0.9}'
+        else:
+            raw = self.registry.capture_definition(judge_def, payload)
+        raw = redact_text(raw) if raw else raw
+        return _parse_verdict(raw or "")
+
     def _run_debate_body(
         self,
         *,
@@ -2481,8 +2948,50 @@ class Orchestrator:
             f"Synthesis of {len(models)} model proposals ({', '.join(models)}) for: {topic}. "
             f"Each model's proposal is recorded; final arbitration by {role_name} / human review."
         )
+        confidence: float | None = None
+        if settings.enable_debate_judge:
+            judge_def = RunnerDefinition(
+                name=f"debate:{role_name}:judge",
+                kind=cast(RunnerKind, settings.judge_runner),
+                command=None,
+                model=settings.judge_model,
+                effort=role_effort,
+                host=debate_host,
+            )
+            verdict = self._adjudicate(
+                positions,
+                judge_def,
+                role_name=role_name,
+                topic=topic,
+                project=project,
+                policy=policy,
+                simulate=simulate,
+            )
+            # Never fabricate: only override the templated decision when the
+            # judge produced a confident one (see `_parse_verdict` parse rules).
+            if verdict.decision is not None:
+                decision = verdict.decision
+                confidence = verdict.confidence
+            # Sprint 3: feed the fail-closed PR-gate aggregate (see
+            # `_register_verdict`) and persist (redacted) for later review —
+            # best-effort, never lets a persistence hiccup break the debate.
+            self._register_verdict(verdict)
+            try:
+                state_service.record_verdict(
+                    run_id=None,
+                    project=project.path.name,
+                    task=None,
+                    role=role_name,
+                    kind="debate",
+                    decision=verdict.decision,
+                    confidence=verdict.confidence,
+                    summary=f"debate judge synthesis for: {topic}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("verdict.persist_failed", kind="debate", error=str(exc))
+
         adr = DebateService(vault_path, dry_run=dry_run).run(
-            topic=topic, positions=positions, decision=decision
+            topic=topic, positions=positions, decision=decision, confidence=confidence
         )
         notification_service.stream_agent_turn(
             actor=f"{role.display_name or role_name} ({role.title})",
@@ -3193,6 +3702,18 @@ class Orchestrator:
                     # gate promote_pr/merge_pr on THIS stage's own verdict — see
                     # git_service._agent_verdict_blocked for why this is required.
                     task_result=task_result,
+                    # Sprint 3: additionally fail-closed-gate on the most-blocking
+                    # debate-judge/challenge-arbiter Verdict registered so far
+                    # THIS run (see `_register_verdict`) — a None/empty/
+                    # low-confidence/non-approval verdict blocks promote/merge
+                    # exactly like an explicit blocking `status:` does. Only
+                    # active when either judge feature is opt-in enabled;
+                    # flags-off is byte-identical to pre-Sprint-3 behaviour.
+                    verdict=self._governing_verdict,
+                    judge_gate_enabled=(
+                        settings.enable_debate_judge or settings.enable_challenge_arbiter
+                    ),
+                    confidence_threshold=settings.judge_confidence_threshold,
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)
