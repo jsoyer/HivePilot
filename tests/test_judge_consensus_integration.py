@@ -54,11 +54,10 @@ def _make_pipeline_by_name(*stage_names: str) -> PipelineConfig:
     return PipelineConfig(description="test pipeline", stages=stages)
 
 
-def _make_orchestrator_with_pipeline(pipeline: PipelineConfig):
-    from hivepilot.models import PipelinesFile
+def _build_orchestrator(pipelines_file):
+    """Construct an Orchestrator against a given PipelinesFile with the
+    proven-working patch set (shared by both orchestrator factories below)."""
     from hivepilot.orchestrator import Orchestrator
-
-    pipelines_file = PipelinesFile(pipelines={"test-pipe": pipeline})
 
     with (
         patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
@@ -68,9 +67,14 @@ def _make_orchestrator_with_pipeline(pipeline: PipelineConfig):
         patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
         patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
     ):
-        orch = Orchestrator()
+        return Orchestrator()
 
-    return orch
+
+def _make_orchestrator_with_pipeline(pipeline: PipelineConfig):
+    from hivepilot.models import PipelinesFile
+
+    pipelines_file = PipelinesFile(pipelines={"test-pipe": pipeline})
+    return _build_orchestrator(pipelines_file)
 
 
 def _make_pipeline(*stage_defs: tuple[str, str]) -> PipelineConfig:
@@ -81,22 +85,10 @@ def _make_pipeline(*stage_defs: tuple[str, str]) -> PipelineConfig:
 def _make_orchestrator():
     """Two-stage (planning/review) orchestrator for challenge/rebuttal scenarios."""
     from hivepilot.models import PipelinesFile
-    from hivepilot.orchestrator import Orchestrator
 
     pipeline = _make_pipeline(("planning", "plan-task"), ("review", "review-task"))
     pipelines_file = PipelinesFile(pipelines={"test-pipe": pipeline})
-
-    with (
-        patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
-        patch("hivepilot.orchestrator.load_tasks", return_value=MagicMock(tasks={}, runners={})),
-        patch("hivepilot.orchestrator.load_pipelines", return_value=pipelines_file),
-        patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
-        patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
-        patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
-    ):
-        orch = Orchestrator()
-
-    return orch
+    return _build_orchestrator(pipelines_file)
 
 
 def _wire_stages(orch) -> tuple[PipelineStage, PipelineStage]:
