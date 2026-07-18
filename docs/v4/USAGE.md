@@ -226,6 +226,67 @@ On by default — turn it off with `HIVEPILOT_TELEGRAM_STREAM_LIVE=false`.
 See [ARCHITECTURE.md](ARCHITECTURE.md), [AGENTS.md](AGENTS.md), [CONFIG.md](CONFIG.md), [DEPLOYMENT-EXAMPLE.md](DEPLOYMENT-EXAMPLE.md).
 
 
+## Debate judge, challenge arbiter & the fail-closed PR gate (opt-in)
+
+Two independent, **opt-in** LLM adjudicators can sit on top of the CEO debate
+and the reviewer/developer challenge/rebuttal flow, and — once either is
+enabled — a **fail-closed** gate governs `promote_pr`/`merge_pr`. Both flags
+default off; with both off, behaviour is byte-identical to the pre-existing
+templated/self-adjudicated paths.
+
+| Setting | Env var | Default |
+|---|---|---|
+| `enable_debate_judge` | `HIVEPILOT_ENABLE_DEBATE_JUDGE` | `false` |
+| `judge_runner` | `HIVEPILOT_JUDGE_RUNNER` | `claude` |
+| `judge_model` | `HIVEPILOT_JUDGE_MODEL` | *(none — runner default)* |
+| `enable_challenge_arbiter` | `HIVEPILOT_ENABLE_CHALLENGE_ARBITER` | `false` |
+| `judge_confidence_threshold` | `HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD` | `0.5` |
+
+**The flow:**
+
+- **Debate judge** (`enable_debate_judge`) — after a CEO debate's model
+  positions are collected, one extra LLM call (`judge_runner`/`judge_model`,
+  default the `claude` runner) scores the debate into a real
+  `decision` + `confidence`, replacing the templated "Synthesis of N model
+  proposals…" text that gets written into the ADR. A malformed, empty, or
+  unparseable judge response is **never fabricated into a decision** — it
+  silently falls back to the templated/majority-stance path instead.
+- **Challenge arbiter** (`enable_challenge_arbiter`) — when a reviewer
+  challenges the developer (or any target/challenger pair) mid-pipeline, a
+  **third, neutral role** (never the challenger, never the target) adjudicates
+  the rebuttal `ACCEPT`/`DEFEND`, instead of letting the challenger self-grade
+  its own resolution.
+
+**Fail-closed PR-gate semantics:** once either flag is on, `promote_pr` and
+`merge_pr` require an explicit approval verdict (`ACCEPT`/`ACCEPTED`/
+`APPROVE`/`APPROVED`, case-insensitive) at `confidence >= judge_confidence_threshold`.
+Anything else — an absent verdict, an empty/unparseable decision, a
+non-approval decision, or a missing/low confidence — **blocks** promotion.
+`create_pr` is **never gated**, so a human can always see the (draft) PR and
+its report even when promotion is blocked.
+
+**Human escalation is always preserved.** `MAINTAIN`/`DEFEND`, low confidence,
+or an arbiter call that errors out all route to 🙋 human escalation
+(`stream_needs_human`) — the judge/arbiter never silently overrules a human,
+and `NEEDS_HUMAN` stays first-class blocking for the PR gate.
+
+**Worked example:**
+
+```bash
+export HIVEPILOT_ENABLE_DEBATE_JUDGE=true
+export HIVEPILOT_ENABLE_CHALLENGE_ARBITER=true
+export HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD=0.7
+```
+
+- Arbiter returns `{"decision": "ACCEPT", "confidence": 0.9}` → resolved, no
+  human ping, and (if this was the run's governing verdict) `promote_pr`
+  proceeds.
+- Arbiter returns `{"decision": "DEFEND", "confidence": 0.95}` → escalates to
+  🙋 human review, and `promote_pr`/`merge_pr` are skipped for this run even
+  if every other stage succeeded.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md), [CONFIG.md](CONFIG.md).
+
 ## Plan checkpoint (validation du plan avant le dev)
 
 Une étape de pipeline marquée `pause_before: true` met le pipeline **en pause
