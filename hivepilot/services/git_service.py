@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import math
 import subprocess
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 from git import GitCommandError, Repo  # type: ignore
 
@@ -12,7 +13,61 @@ from hivepilot.config import settings
 from hivepilot.models import GitActions, ProjectConfig
 from hivepilot.utils.logging import get_logger
 
+if TYPE_CHECKING:
+    # Import-only (never at runtime): `orchestrator.py` imports
+    # `perform_git_actions`/`isolated_worktree` FROM this module, so a
+    # top-level `from hivepilot.orchestrator import Verdict` here would be a
+    # circular import. `is_blocking` below duck-types on the verdict's
+    # `.decision`/`.confidence` attributes at runtime instead.
+    from hivepilot.orchestrator import Verdict
+
 logger = get_logger(__name__)
+
+# Explicit APPROVE whitelist for the fail-closed judge/arbiter PR gate (Debate
+# Judge & Consensus PRD, Sprint 3). Unlike `_BLOCKING_VERDICTS` below (a
+# blacklist -- safe there because a `can_block` role's free-text status
+# vocabulary is heterogeneous and mostly means "proceed"), a judge/arbiter
+# Verdict has ONE narrow, controlled decision vocabulary (see
+# `orchestrator._adjudicate_challenge`'s prompt: "ACCEPT" or "DEFEND"), so a
+# WHITELIST is both safe and correct here: only an explicit approval decision
+# proceeds, and everything else -- DEFEND, MAINTAIN, NEEDS_HUMAN, DECLINE, a
+# free-text synthesis paragraph, empty, or unparseable -- fails closed (blocks).
+_APPROVE_VERDICTS: frozenset[str] = frozenset({"ACCEPT", "ACCEPTED", "APPROVE", "APPROVED"})
+
+
+def is_blocking(verdict: "Verdict | None", threshold: float) -> bool:
+    """Fail-CLOSED default-deny gate for a judge/arbiter :class:`Verdict`.
+
+    Returns ``True`` (block) on ANY empty/``None``/missing/unparseable/
+    non-finite/below-threshold/non-approval verdict. Returns ``False``
+    (proceed) ONLY for an explicit approval decision (see
+    ``_APPROVE_VERDICTS``) with a present, finite confidence ``>=``
+    *threshold*.
+
+    Duck-types on ``verdict.decision``/``verdict.confidence`` (via
+    ``getattr``) rather than importing :class:`Verdict` at runtime, so this
+    module never actually imports ``orchestrator.py`` (see the
+    ``TYPE_CHECKING`` import above) -- avoiding a circular import, since
+    ``orchestrator.py`` imports ``perform_git_actions`` FROM this module.
+
+    Null-guards run BEFORE any ``.strip()``/``>=`` comparison, and
+    ``confidence == 0.0`` is a valid (not falsy-empty) value -- there is no
+    "0.0-is-falsy" hole. Non-finite confidence (``NaN``/``inf``, which a
+    judge's raw JSON can smuggle in) is explicitly rejected via
+    ``math.isfinite`` -- never treated as "confident enough".
+    """
+    decision = getattr(verdict, "decision", None)
+    confidence = getattr(verdict, "confidence", None)
+    approved = (
+        verdict is not None
+        and isinstance(decision, str)
+        and decision.strip().upper() in _APPROVE_VERDICTS
+        and isinstance(confidence, (int, float))
+        and not isinstance(confidence, bool)
+        and math.isfinite(confidence)
+        and confidence >= threshold
+    )
+    return not approved
 
 
 @contextmanager
@@ -209,7 +264,26 @@ def perform_git_actions(
     project: ProjectConfig,
     git: GitActions,
     task_result: str | None = None,
+    verdict: "Verdict | None" = None,
+    judge_gate_enabled: bool = False,
+    confidence_threshold: float = 0.0,
 ) -> None:
+    """Perform the configured git actions for a completed task/stage.
+
+    ``verdict``/``judge_gate_enabled``/``confidence_threshold`` are additive
+    (Debate Judge & Consensus PRD, Sprint 3) and default to the pre-Sprint-3
+    values (``None``/``False``/``0.0``) -- when ``judge_gate_enabled`` is
+    ``False`` (the default), this function is BYTE-IDENTICAL to pre-Sprint-3
+    behaviour: only ``_agent_verdict_blocked(task_result)`` governs the gate.
+
+    When ``judge_gate_enabled`` is ``True``, the gate ALSO fails closed on
+    ``is_blocking(verdict, confidence_threshold)`` -- a missing/empty/
+    unparseable/low-confidence/non-approval judge or challenge-arbiter
+    ``Verdict`` blocks ``promote_pr``/``merge_pr`` exactly like an explicit
+    ``_BLOCKING_VERDICTS`` status does. Either condition blocking is
+    sufficient to block (OR, never AND) -- this is a strictly stricter
+    superset of the legacy gate, never a relaxation of it.
+    """
     repo = ensure_repo(project.path)
     branch = f"{git.branch_prefix}/{project_name}"
     if git.commit or git.push:
@@ -230,6 +304,8 @@ def perform_git_actions(
     # gated: opening (or keeping) the draft PR must still happen even when the
     # gate blocks, so a human can see the review report on the PR itself.
     blocked = _agent_verdict_blocked(task_result)
+    if judge_gate_enabled:
+        blocked = blocked or is_blocking(verdict, confidence_threshold)
     if git.promote_pr:
         if blocked:
             logger.warning("git.promote_skipped_blocked", project=project_name, branch=branch)
