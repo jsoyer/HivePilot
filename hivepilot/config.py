@@ -123,6 +123,19 @@ class Settings(BaseSettings):
     # with a friendly message instead of making any network call.
     # env: HIVEPILOT_PLUGINS_INDEX_URL
     plugins_index_url: str = ""
+    # Phase 26b — opt-in hot-reload of local-file plugins without a process
+    # restart. When True, SchedulerDaemon polls `plugins/*.py` mtimes each
+    # tick (`PluginManager.plugins_changed_on_disk()`) and, on a change,
+    # atomically re-scans+re-registers (`PluginManager.reload()`) via its
+    # OWN dedicated, long-lived PluginManager -- NOT the ad-hoc one each
+    # per-schedule/per-deferred-row `Orchestrator()` construction builds
+    # fresh (see `hivepilot/services/scheduler_daemon.py`). SIGHUP always
+    # forces an immediate reload attempt when this is enabled (a no-op,
+    # logged, when it is not). Default OFF: hot-reload mutates
+    # process-global RUNNER_MAP/NOTIFIER_MAP/SECRETS_MAP state at runtime,
+    # a behavior change an operator should opt into explicitly.
+    # env: HIVEPILOT_PLUGINS_HOT_RELOAD
+    plugins_hot_reload: bool = False
     discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
     api_host: str = "127.0.0.1"
     api_port: int = 8045

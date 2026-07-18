@@ -8,11 +8,14 @@ import signal
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import state_service
 from hivepilot.services.schedule_service import due_schedules, run_entry
+
+if TYPE_CHECKING:
+    from hivepilot.plugins import PluginManager, ReloadResult
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +42,23 @@ class SchedulerDaemon:
         self._check_interval = check_interval
         self._shutdown_timeout = shutdown_timeout
         self._stop_event = threading.Event()
+        # Phase 26b — opt-in hot-reload (`settings.plugins_hot_reload`). This
+        # is a DEDICATED, long-lived `PluginManager` owned by the daemon
+        # itself, lazily constructed on first use (`_ensure_hot_reload_manager`)
+        # — NOT the ad-hoc `PluginManager` each `Orchestrator()` construction
+        # below builds fresh per schedule-dispatch / per-deferred-row (see
+        # `_run_due_schedules` / `_rerun_deferred_row`: `Orchestrator()` is
+        # never cached here, so there is no single long-lived Orchestrator to
+        # attach reload to — reconciling with that real lifecycle is why this
+        # manager is a SEPARATE object; see `_ensure_hot_reload_manager`).
+        self._hot_reload_manager: PluginManager | None = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        """Start the daemon loop (blocking).  Handles SIGTERM / SIGINT cleanly."""
+        """Start the daemon loop (blocking).  Handles SIGTERM / SIGINT / SIGHUP."""
         from hivepilot.config import settings
         from hivepilot.observability.tracing import init_tracing
 
@@ -57,6 +70,14 @@ class SchedulerDaemon:
 
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
+        # SIGHUP is POSIX-only (no-op guard for Windows, which has no
+        # signal.SIGHUP). Always registered — not gated by
+        # `plugins_hot_reload` itself — so an operator sending SIGHUP always
+        # gets a clear log line either way (a forced reload attempt when hot-
+        # reload is enabled, or an explicit "not enabled" note when it isn't)
+        # rather than a silent, unexplained no-op.
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, self._handle_sighup)
 
         logger.info("scheduler_daemon.start", extra={"check_interval": self._check_interval})
         while not self._stop_event.is_set():
@@ -75,10 +96,88 @@ class SchedulerDaemon:
         logger.info("scheduler_daemon.signal_received", extra={"signum": signum})
         self._stop_event.set()
 
+    def _handle_sighup(self, signum: int, frame: Any) -> None:  # noqa: ANN401
+        """Classic reload idiom: SIGHUP forces an immediate `reload()`
+        attempt on the daemon's dedicated hot-reload manager, bypassing the
+        `plugins_changed_on_disk()` gate the regular tick uses (`_maybe_hot_
+        reload_plugins`). A no-op (logged) when `plugins_hot_reload` is off.
+        """
+        logger.info("scheduler_daemon.sighup_received")
+        manager = self._ensure_hot_reload_manager()
+        if manager is None:
+            return
+        self._apply_reload(manager)
+
     def _tick(self) -> None:
+        self._maybe_hot_reload_plugins()
         self._run_due_schedules()
         self._run_drift_scans()
         self._process_deferred_rows()
+
+    # ------------------------------------------------------------------
+    # Phase 26b — plugin hot-reload
+    # ------------------------------------------------------------------
+
+    def _ensure_hot_reload_manager(self) -> PluginManager | None:
+        """Return the daemon's dedicated hot-reload `PluginManager`,
+        constructing it lazily on first call. Returns `None` (and never
+        constructs anything) when `settings.plugins_hot_reload` is off — the
+        default, byte-identical-behavior state.
+
+        The FIRST call after enabling just captures a fresh baseline (there
+        is nothing meaningful to diff against yet), so it returns `None` too
+        — callers that need "an existing, ready-to-reload manager" check for
+        that; `_handle_sighup` treats a fresh construction as satisfying the
+        "force a reload" intent (the freshly-constructed manager already
+        reflects current disk state).
+        """
+        from hivepilot.config import settings
+
+        if not settings.plugins_hot_reload:
+            return None
+        if self._hot_reload_manager is None:
+            from hivepilot.plugins import PluginManager
+
+            self._hot_reload_manager = PluginManager()
+            logger.info("scheduler_daemon.hot_reload_enabled")
+            return None
+        return self._hot_reload_manager
+
+    def _apply_reload(self, manager: PluginManager) -> None:
+        """Call `manager.reload()` and log the outcome. Never raises — a
+        failing reload (whether `reload()` itself raises, which it should
+        not per its own contract, or returns `ok=False`) must only log, per
+        Phase 26b's "never crash the tick" requirement.
+        """
+        try:
+            result: ReloadResult = manager.reload()
+        except Exception:  # noqa: BLE001 — hot-reload must never crash the tick
+            logger.exception("scheduler_daemon.hot_reload_error")
+            return
+        if result.ok:
+            logger.info(
+                "scheduler_daemon.hot_reload_applied",
+                extra={"added": result.added, "removed": result.removed, "updated": result.updated},
+            )
+        else:
+            logger.warning("scheduler_daemon.hot_reload_failed", extra={"error": result.error})
+
+    def _maybe_hot_reload_plugins(self) -> None:
+        """Opt-in, mtime-gated hot-reload check, run once per tick. A failing
+        `plugins_changed_on_disk()` call or `reload()` call only logs — it
+        must never crash the tick (schedules/deferred-rows still run after).
+        """
+        manager = self._ensure_hot_reload_manager()
+        if manager is None:
+            return
+        try:
+            changed = manager.plugins_changed_on_disk()
+        except Exception:  # noqa: BLE001 — hot-reload must never crash the tick
+            logger.exception("scheduler_daemon.hot_reload_error")
+            return
+        if not changed:
+            return
+        self._apply_reload(manager)
 
     def _run_due_schedules(self) -> None:
         try:
@@ -88,7 +187,13 @@ class SchedulerDaemon:
             return
         if not schedules:
             return
-        orch = Orchestrator()
+        # Phase 26b — inject the daemon's shared hot-reload manager (`None`
+        # when `plugins_hot_reload` is off, which is IDENTICAL to calling
+        # `Orchestrator()` with no args: the default path is byte-for-byte
+        # unchanged). See `Orchestrator.__init__`'s docstring for why a
+        # fresh, un-injected `PluginManager()` here would self-collide once
+        # hot-reload is on.
+        orch = Orchestrator(plugins=self._hot_reload_manager)
         for sched in schedules:
             try:
                 run_entry(sched, orch)
@@ -103,6 +208,16 @@ class SchedulerDaemon:
         due project's scan is wrapped in its own try/except so one project's
         failure (or a bug in `run_drift_scan` itself) can never stop the tick
         or block the remaining due projects / the deferred-row pass below.
+
+        `due_drift_projects`/`load_drift_config`/`run_drift_scan` are
+        imported LOCALLY (not at module level) deliberately: the existing
+        `tests/test_drift_schedule.py` suite patches these by name on
+        `hivepilot.services.drift_schedule` (`patch("hivepilot.services.
+        drift_schedule.run_drift_scan", ...)`) around a call to
+        `daemon._run_drift_scans()` -- a module-level `from ... import ...`
+        here would bind a reference at IMPORT time that a later patch on the
+        SOURCE module can no longer reach ("patch where used, not where
+        defined"), silently un-mocking every one of those tests.
         """
         from hivepilot.services.drift_schedule import (
             due_drift_projects,
@@ -120,7 +235,11 @@ class SchedulerDaemon:
             return
         for project_name in due:
             try:
-                run_drift_scan(cfg, project_name)
+                # Phase 26b — thread the shared hot-reload manager through
+                # to `_attempt_remediation`'s `Orchestrator()` construction
+                # (only reachable when `cfg.auto_remediate` is on AND drift
+                # was detected). Same rationale as `_run_due_schedules` above.
+                run_drift_scan(cfg, project_name, plugins=self._hot_reload_manager)
             except Exception:  # noqa: BLE001
                 logger.exception(
                     "scheduler_daemon.run_drift_scan_error", extra={"project": project_name}
@@ -167,7 +286,9 @@ class SchedulerDaemon:
             extra={"row_id": row_id, "task": task_name, "projects": project_names},
         )
         try:
-            orch = Orchestrator()
+            # Phase 26b — see `_run_due_schedules` above for why the shared
+            # hot-reload manager (`None` when opt-in is off) is injected here.
+            orch = Orchestrator(plugins=self._hot_reload_manager)
             orch.run_task(
                 task_name=task_name,
                 project_names=project_names,

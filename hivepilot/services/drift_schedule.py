@@ -46,6 +46,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
@@ -53,6 +54,9 @@ from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator, StepApprovalPending
 from hivepilot.services import drift_service, notification_service, project_service, state_service
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from hivepilot.plugins import PluginManager
 
 logger = get_logger(__name__)
 
@@ -147,7 +151,9 @@ def due_drift_projects(cfg: DriftScanConfig) -> list[str]:
     return due
 
 
-def _attempt_remediation(cfg: DriftScanConfig, project_name: str) -> None:
+def _attempt_remediation(
+    cfg: DriftScanConfig, project_name: str, *, plugins: PluginManager | None = None
+) -> None:
     """Kick off gated auto-remediation for *project_name* (Phase 20 D4).
 
     NEVER applies infrastructure directly -- always routes through
@@ -189,7 +195,7 @@ def _attempt_remediation(cfg: DriftScanConfig, project_name: str) -> None:
         )
         return
 
-    orch = Orchestrator()
+    orch = Orchestrator(plugins=plugins)
 
     if not orch.remediation_gate_present(project_name, cfg.remediate_task):
         notification_service.send_notification(
@@ -241,8 +247,18 @@ def _attempt_remediation(cfg: DriftScanConfig, project_name: str) -> None:
     )
 
 
-def run_drift_scan(cfg: DriftScanConfig, project_name: str) -> None:
+def run_drift_scan(
+    cfg: DriftScanConfig, project_name: str, *, plugins: PluginManager | None = None
+) -> None:
     """Scan *project_name* for drift and alert if needed.
+
+    `plugins` (Phase 26b) is threaded straight through to `_attempt_
+    remediation`'s `Orchestrator(plugins=...)` -- see `Orchestrator.__init__`
+    and `scheduler_daemon.py`'s `_run_drift_scans` for why the caller (the
+    scheduler daemon, when `plugins_hot_reload` is on) injects its ONE
+    shared `PluginManager` here instead of letting `_attempt_remediation`
+    build a fresh, self-colliding one. `None` (the default, every other
+    caller) is unchanged prior behavior.
 
     Stamps the `drift:<project_name>` last-run marker in a `finally` block so
     it fires regardless of outcome -- success, a known-safe scan failure
@@ -291,6 +307,6 @@ def run_drift_scan(cfg: DriftScanConfig, project_name: str) -> None:
         )
 
         if cfg.auto_remediate:
-            _attempt_remediation(cfg, project_name)
+            _attempt_remediation(cfg, project_name, plugins=plugins)
     finally:
         state_service.update_schedule_run(schedule_name)

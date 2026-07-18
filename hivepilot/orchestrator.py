@@ -645,7 +645,28 @@ class RunResult:
 
 
 class Orchestrator:
-    def __init__(self) -> None:
+    def __init__(self, plugins: PluginManager | None = None) -> None:
+        # Phase 26b — optional shared PluginManager injection. Default
+        # (`None`) preserves EXACT prior behavior for every existing caller
+        # (CLI, API server, tests, `drift_schedule.py`): `_load()` builds a
+        # fresh, independent `PluginManager()` per `Orchestrator()`, same as
+        # before this param existed.
+        #
+        # When a caller passes one explicitly (the scheduler daemon's
+        # `plugins_hot_reload` path — see `scheduler_daemon.py`), `_load()`
+        # REUSES it instead of constructing a second one. This matters
+        # because `RUNNER_MAP`/`NOTIFIER_MAP`/`SECRETS_MAP`
+        # (`hivepilot.registry`/`hivepilot.services.notification_service`)
+        # are process-global: a SECOND, independent `PluginManager()` that
+        # re-scans the SAME `plugins/*.py` a first one already registered
+        # runner/notifier/secrets kinds for would see those kinds already
+        # live but (having its own, empty ownership) NOT owned by it, and
+        # raise a collision — breaking dispatch. Injecting one shared
+        # manager into every `Orchestrator()` a caller constructs means
+        # exactly one `PluginManager` ever registers into those globals, and
+        # a later `reload()` on that shared manager genuinely changes what
+        # subsequent dispatches see (not just observability).
+        self._injected_plugins = plugins
         self._load()
         # Reentrancy guard for the resolved-secrets masking registry
         # (config_provenance._SECRET_VALUES): run_pipeline calls run_task once
@@ -664,7 +685,9 @@ class Orchestrator:
         self.tasks = load_tasks()
         self.pipelines = load_pipelines()
         self.registry = RunnerRegistry(self.tasks.runners)
-        self.plugins = PluginManager()
+        self.plugins = (
+            self._injected_plugins if self._injected_plugins is not None else PluginManager()
+        )
 
     def refresh(self) -> None:
         self._load()
