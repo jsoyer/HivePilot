@@ -411,6 +411,22 @@ class Settings(BaseSettings):
     # own default. env: HIVEPILOT_JUDGE_MODEL
     judge_model: str | None = None
 
+    # ---- Independent challenge arbiter (Debate Judge & Consensus PRD, Sprint 2) ----
+    # Opt-in THIRD-party judge that adjudicates a challenge/rebuttal pair
+    # instead of letting the challenger self-grade the resolution. Defaults
+    # False — the flags-off path is byte-identical to pre-Sprint-2 behaviour
+    # (challenger's own runner is re-invoked for the ACCEPT/MAINTAIN check,
+    # see `Orchestrator._run_rebuttal_round`).
+    # env: HIVEPILOT_ENABLE_CHALLENGE_ARBITER
+    enable_challenge_arbiter: bool = False
+    # Minimum verdict confidence, in [0.0, 1.0], required to accept an
+    # arbiter ACCEPT verdict without escalating to a human. Any verdict with
+    # `decision is None`, `confidence is None`, `confidence` below this
+    # threshold, or `decision != "ACCEPT"` escalates via
+    # `notification_service.stream_needs_human` (fail TOWARD human review,
+    # never fail open). env: HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD
+    judge_confidence_threshold: float = 0.5
+
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
     def _coerce_notification_chat_id(cls, v: object) -> object:
