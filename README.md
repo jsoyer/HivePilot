@@ -10,10 +10,10 @@ a CEO dual-model debate, full interaction visibility, and remote control.
 
 - **The chain**: CEO → Chief of Staff → CTO → Developer → Reviewer → CISO → QA → Documentation → Report → CEO Approval. Each stage is bound to a **role** that resolves to a **runner + model** (`opencode`/qwen·kimi·glm, `claude`, `codex`, `gemini`, `cursor`), overridable per project.
 - **Code review & PRs**: the **developer (claude)** opens a PR; the **reviewer (codex)** reviews it; a human merges. **Documentation/QA** run on **gemini**.
-- **CEO debate → ADR**: dual-model (qwen + kimi) positions synthesized into an Architecture Decision Record.
+- **CEO debate → ADR**: dual-model (qwen + kimi) positions synthesized into an Architecture Decision Record, with an optional independent LLM judge/arbiter scoring the debate and adjudicating challenges — see [Usage](docs/v4/USAGE.md#debate-judge-challenge-arbiter--the-fail-closed-pr-gate-opt-in).
 - **Visibility**: interactions store (SQLite) + Obsidian notes + Mermaid timeline + Telegram + Textual dashboard.
 - **Remote control via Telegram**: `/runpipeline`, `/debate`, `/steps`, `/interactions`, `/approve` … command and monitor the agents from your phone.
-- **Safety**: `--simulate` (preview, no real calls), per-project approval gates, prompt-injection validation, container isolation, lightweight core (langchain/torch/boto3 optional).
+- **Safety**: `--simulate` (preview, no real calls), per-project approval gates, prompt-injection validation, container isolation, lightweight core (langchain/torch/boto3 optional), and an opt-in fail-closed judge/arbiter gate on PR promotion (blocks `promote_pr`/`merge_pr` on any absent/low-confidence/non-approval verdict).
 
 📖 **V4 docs:** [Architecture](docs/v4/ARCHITECTURE.md) · [The agent company](docs/v4/AGENTS.md) · [Usage (CLI & Telegram)](docs/v4/USAGE.md) · [Configuration](docs/v4/CONFIG.md) · [Example deployment](docs/v4/DEPLOYMENT-EXAMPLE.md)
 
