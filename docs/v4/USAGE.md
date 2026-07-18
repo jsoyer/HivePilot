@@ -285,6 +285,54 @@ export HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD=0.7
   🙋 human review, and `promote_pr`/`merge_pr` are skipped for this run even
   if every other stage succeeded.
 
+**Per-pipeline opt-in via `debate:`.** The flags above are the fleet-wide
+floor; an individual `pipelines.yaml` pipeline (or one of its stages) can
+additionally opt itself into debate/consensus via a `debate:` block, without
+touching global config — see "Debate / consensus per-pipeline override" in
+[CONFIG.md](CONFIG.md) for the full field reference. The enable semantics
+are **OR, strengthen-only**: a pipeline can turn the judge/arbiter **ON**
+even when the global floor is off, but a pipeline (or stage) can **never**
+turn OFF a gate the operator mandated globally — a `debate: {enable_judge:
+false}` in a pipeline is simply ignored when `enable_debate_judge=true`
+fleet-wide. This is the same fail-closed guarantee as the global flags
+themselves: no `debate:` block can weaken the gate below the operator's
+floor, and `confidence_threshold` is validated to `(0, 1]` at config-load
+time — `0` or an absent-but-required threshold never silently disables the
+gate.
+
+**Worked example — one pipeline opted further in, one left untouched:**
+
+```yaml
+# pipelines.yaml
+pipelines:
+  release:
+    description: "high-stakes release pipeline — extra scrutiny"
+    debate:
+      enable_judge: true
+      enable_arbiter: true
+      confidence_threshold: 0.8   # stricter than the fleet-wide default
+    stages:
+      - name: plan
+        task: ceo-plan
+      - name: review
+        task: developer-review
+
+  docs-only:
+    description: "low-stakes docs pipeline — no debate: block at all"
+    stages:
+      - name: write-docs
+        task: documentation-task
+```
+
+With the global floor at its defaults (`enable_debate_judge=false`,
+`enable_challenge_arbiter=false`), `release` runs with the judge and arbiter
+both active at `confidence_threshold=0.8`, while `docs-only` behaves exactly
+as if this whole feature didn't exist — no judge call, no arbiter call, no
+gate. Flip `HIVEPILOT_ENABLE_CHALLENGE_ARBITER=true` fleet-wide and
+`docs-only` gains the arbiter too (the floor always applies), while
+`release`'s own `confidence_threshold=0.8` keeps governing its own gate
+regardless.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md), [CONFIG.md](CONFIG.md).
 
 ## Plan checkpoint (validation du plan avant le dev)
