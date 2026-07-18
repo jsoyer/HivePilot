@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
 
-// Mirador wires five real data views (Analytics/Cost/Health/Mem0/Approvals) — mock
+// Mirador wires six real data views (Analytics/Cost/Health/Mem0/Approvals/Runs) — mock
 // every endpoint they call so this test exercises the shell (tabs, default
 // view, switching) without depending on network behavior. Each view's own
 // loading/error/empty/data states are covered by its dedicated test file.
@@ -68,10 +68,10 @@ afterEach(() => {
 })
 
 describe('Mirador', () => {
-  it('renders the Mirador title and all five tabs', () => {
+  it('renders the Mirador title and all six tabs', () => {
     expect(container.textContent).toContain('Mirador')
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals'])
+    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals', 'Runs'])
   })
 
   it('shows the real Analytics view by default', async () => {
@@ -160,7 +160,16 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     })
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals', 'RTK Status', 'Secure Panel'])
+    expect(tabs).toEqual([
+      'Analytics',
+      'Cost',
+      'Health',
+      'Mem0',
+      'Approvals',
+      'Runs',
+      'RTK Status',
+      'Secure Panel',
+    ])
   })
 
   it('switches to a dynamic panel tab and renders its data via PanelRenderer', async () => {
@@ -245,6 +254,6 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     })
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals'])
+    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals', 'Runs'])
   })
 })

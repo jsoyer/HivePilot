@@ -9,6 +9,7 @@ import { CostView } from './views/CostView'
 import { HealthView } from './views/HealthView'
 import { Mem0View } from './views/Mem0View'
 import { PanelView } from './views/PanelView'
+import { RunsView } from './views/RunsView'
 
 const BUILTIN_TABS = [
   { value: 'analytics', label: 'Analytics', Panel: AnalyticsView },
@@ -19,6 +20,10 @@ const BUILTIN_TABS = [
   // Approve/Deny controls inside gate themselves on useRole().can('approve')
   // — see ApprovalsView.
   { value: 'approvals', label: 'Approvals', Panel: ApprovalsView },
+  // Mirador actionable dashboard PRD, Sprint 3: read-only for any token,
+  // the New Run form inside gates itself on useRole().can('run') — see
+  // RunsView.
+  { value: 'runs', label: 'Runs', Panel: RunsView },
 ] as const
 
 /** A dynamic panel tab's `value` — prefixed so it can never collide with a

@@ -15,7 +15,15 @@ from pydantic import BaseModel, field_validator
 
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
-from hivepilot.services import analytics_service, chatops_service, state_service, token_service
+from hivepilot.services import (
+    analytics_service,
+    async_run_service,
+    chatops_service,
+    notification_service,
+    policy_service,
+    state_service,
+    token_service,
+)
 from hivepilot.services.metrics import registry, run_duration_seconds
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 
@@ -166,6 +174,30 @@ def require_role(required: str):
     return dependency
 
 
+def _validate_extra_prompt(v: str | None) -> str | None:
+    """Shared `extra_prompt` validation for every run-triggering request
+    body (`RunRequest` for sync `POST /v1/run`, `NewRunRequest` for async
+    `POST /v1/runs`, Mirador actionable dashboard PRD Sprint 3). A single
+    helper -- not duplicated per model -- so both apply byte-for-byte the
+    same length check / sanitize / injection-detection behavior; extracted
+    verbatim from `RunRequest`'s own prior validator with no behavior
+    change for existing `RunRequest` callers.
+    """
+    if v is None:
+        return None
+    if len(v) > MAX_PROMPT_LEN:
+        raise ValueError(
+            f"extra_prompt exceeds maximum allowed length of {MAX_PROMPT_LEN} characters"
+        )
+    cleaned = sanitize_prompt(v)
+    hits = check_prompt_injection(cleaned)
+    if hits:
+        from hivepilot.utils.logging import get_logger
+
+        get_logger(__name__).warning("prompt_injection.detected", patterns=hits)
+    return cleaned
+
+
 class RunRequest(BaseModel):
     task: str
     projects: list[str]
@@ -175,19 +207,24 @@ class RunRequest(BaseModel):
     @field_validator("extra_prompt", mode="before")
     @classmethod
     def validate_extra_prompt(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        if len(v) > MAX_PROMPT_LEN:
-            raise ValueError(
-                f"extra_prompt exceeds maximum allowed length of {MAX_PROMPT_LEN} characters"
-            )
-        cleaned = sanitize_prompt(v)
-        hits = check_prompt_injection(cleaned)
-        if hits:
-            from hivepilot.utils.logging import get_logger
+        return _validate_extra_prompt(v)
 
-            get_logger(__name__).warning("prompt_injection.detected", patterns=hits)
-        return cleaned
+
+class NewRunRequest(BaseModel):
+    """Body for `POST /v1/runs` (Mirador actionable dashboard PRD, Sprint 3)
+    -- the async, single-project counterpart to `RunRequest`. Reuses
+    `_validate_extra_prompt` (see above) so its `extra_prompt` handling is
+    identical to `RunRequest`'s, never a weaker reimplementation."""
+
+    task: str
+    project: str
+    extra_prompt: str | None = None
+    auto_git: bool = False
+
+    @field_validator("extra_prompt", mode="before")
+    @classmethod
+    def validate_extra_prompt(cls, v: str | None) -> str | None:
+        return _validate_extra_prompt(v)
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +354,181 @@ def list_runs(caller: token_service.TokenEntry = Depends(require_role("run"))):
     if caller.role == "admin":
         return state_service.list_recent_runs()
     return state_service.list_recent_runs(tenant=caller.tenant)
+
+
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard PRD, Sprint 3 -- async run trigger.
+#
+# `POST /v1/runs` records a run row and returns its id immediately (202,
+# <500ms); the pipeline itself executes on a background thread via
+# `hivepilot.services.async_run_service.submit_run`. This is deliberately
+# `/v1/runs` only (NOT dual-registered on `app` like every other endpoint in
+# this file) -- a distinct HTTP method+path pairing from `GET /v1/runs`
+# (`list_runs` above), so FastAPI dispatches by method with no route
+# collision.
+#
+# **THE CRUX (exactly one run row per trigger, no dropped run-level gate):**
+# `Orchestrator.run_task`/`_run_task_body` ALWAYS creates its own run row via
+# `state_service.record_run_start` and drives it to terminal -- calling it
+# here would create a SECOND row and leave the row THIS endpoint pre-creates
+# stuck at whatever initial status it started with. Instead, this endpoint
+# owns run-row creation itself (like `_run_task_body` owns it) and calls the
+# same per-project execution primitive `_run_task_body` calls,
+# `Orchestrator._execute_task`, which accepts a caller-supplied `run_id` and
+# does NOT create a row.
+#
+# Because this endpoint owns row creation, it can pick the correct INITIAL
+# status synchronously, before ever creating the row: `policy.
+# require_approval` is a config-only check (no I/O), so `create_run` below
+# evaluates it up front and creates the row with status "pending" instead of
+# "running" when true -- mirroring `_run_task_body`'s
+# `require_approval`-first branch (lines ~791-814) without ever needing to
+# "downgrade" a running row afterward. The (potentially slow) CVE-gate scan
+# and the run itself both happen in the background worker
+# (`_run_async_task` below), which mirrors `_run_task_body`'s remaining
+# if/elif/else branches (CVE gate at ~815-836, else-execute at ~837-853) in
+# the same order, so no run-level gate is weaker than sync `POST /v1/run`.
+# ---------------------------------------------------------------------------
+
+
+class NewRunResponse(BaseModel):
+    run_id: int
+    status: str
+
+
+def _run_async_task(
+    *,
+    orch: Orchestrator,
+    run_id: int,
+    project: Any,
+    task_name: str,
+    task: Any,
+    extra_prompt: str | None,
+    auto_git: bool,
+    policy: Any,
+) -> None:
+    """The background work `POST /v1/runs` submits via `async_run_service.
+    submit_run`. Mirrors `Orchestrator._run_task_body`'s per-project
+    require_approval / CVE-gate / execute branches -- EXCEPT run-row
+    creation, which the caller (`create_run` below) already owns. Drives
+    `run_id` to a terminal status exactly once (or leaves it `pending` for
+    an approval, mirroring `_run_task_body`'s own approval branch, which
+    also never calls `complete_run`).
+
+    Never surfaces raw exception text / `capture()` output to
+    `state_service.complete_run`'s `detail` -- only a short, safe summary
+    (exception TYPE name, never its message).
+    """
+    from hivepilot.orchestrator import StepApprovalPending
+    from hivepilot.services.config_provenance import redact_text
+    from hivepilot.services.quota import QuotaDeferredError
+
+    try:
+        if policy.require_approval:
+            approval_meta = {
+                "task": task_name,
+                "project": project.path.name,
+                "extra_prompt": extra_prompt,
+                "auto_git": auto_git,
+            }
+            state_service.record_approval_request(
+                run_id, project.path.name, task_name, approval_meta
+            )
+            notification_service.send_approval_keyboard(
+                run_id=run_id, project=project.path.name, task=task_name
+            )
+            return
+
+        severity = policy.block_on_severity
+        if severity:
+            cve_block_detail = orch._cve_gate_block_detail(project, policy.scan_tool, severity)
+            if cve_block_detail is not None:
+                state_service.complete_run(run_id, "failed", cve_block_detail)
+                notification_service.send_notification(
+                    f"⛔ {project.path.name}: {task_name} blocked by CVE gate"
+                )
+                return
+
+        try:
+            from hivepilot.services.notion_service import on_run_start
+
+            on_run_start(run_id=run_id, project=project.path.name, task=task_name)
+        except Exception:  # noqa: BLE001
+            pass
+        notification_service.send_notification(f"Starting {task_name} on {project.path.name}")
+
+        detail = orch._execute_task(
+            project=project,
+            task_name=task_name,
+            task=task,
+            extra_prompt=extra_prompt,
+            auto_git=auto_git,
+            run_id=run_id,
+            policy=policy,
+            simulate=False,
+            dry_run=False,
+        )
+        detail = redact_text(detail) if detail else detail
+        state_service.complete_run(run_id, "success", "run completed")
+        notification_service.send_notification(f"✅ {project.path.name}: {task_name} completed")
+    except StepApprovalPending:
+        # A mid-task step-approval gate already recorded its own approval
+        # request and left the run paused -- do NOT overwrite that status
+        # (mirrors `_run_task_body`'s own StepApprovalPending handling).
+        pass
+    except QuotaDeferredError:
+        state_service.complete_run(run_id, "deferred")
+    except Exception as exc:  # noqa: BLE001 -- never surface raw exception text
+        state_service.complete_run(run_id, "failed", f"run failed: {type(exc).__name__}")
+
+
+@v1.post("/runs", status_code=status.HTTP_202_ACCEPTED)
+def create_run(
+    body: NewRunRequest,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> NewRunResponse:
+    """Trigger a single-project run asynchronously. Returns immediately with
+    `{run_id, status}` -- the pipeline executes on a background thread (see
+    `_run_async_task` above). `caller.tenant` is recorded on the run row,
+    exactly like `list_runs`/`pending_approvals` scope by it.
+    """
+    orch = _get_orchestrator()
+
+    if body.task not in orch.tasks.tasks:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown task")
+    task = orch.tasks.tasks[body.task]
+
+    try:
+        project = orch._project(body.project)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown project"
+        ) from None
+
+    try:
+        policy = policy_service.enforce_policy(project.path.name, auto_git=body.auto_git)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    initial_status = "pending" if policy.require_approval else "running"
+    run_id = state_service.record_run_start(
+        project.path.name, body.task, status=initial_status, tenant=caller.tenant
+    )
+
+    def _work() -> None:
+        _run_async_task(
+            orch=orch,
+            run_id=run_id,
+            project=project,
+            task_name=body.task,
+            task=task,
+            extra_prompt=body.extra_prompt,
+            auto_git=body.auto_git,
+            policy=policy,
+        )
+
+    async_run_service.submit_run(run_id, _work)
+    return NewRunResponse(run_id=run_id, status=initial_status)
 
 
 @v1.get("/approvals")

@@ -402,3 +402,56 @@ export function postApproval(runId: number, action: ApprovalActionInput): Promis
   const body: ApprovalActionBody = { approver: 'web', approve: action.approve, reason: action.reason }
   return postJson<ApprovalActionResult>(`/v1/approvals/${runId}`, body)
 }
+
+// ---------------------------------------------------------------------------
+// GET /v1/runs, POST /v1/runs — Mirador actionable dashboard PRD, Sprint 3.
+// Shapes transcribed from `hivepilot/services/state_service.py`'s `runs`
+// table (`CREATE TABLE ... runs`, columns: id/project/task/status/detail/
+// started_at/finished_at/tenant) and `hivepilot/services/api_service.py`'s
+// `list_runs`/`NewRunRequest`/`create_run` — read those before changing
+// anything here.
+//
+// `GET /v1/runs` requires a `run`-rank token (same gate `GET /v1/approvals`
+// already uses) -- `fetchRuns` opts into `on403: 'forbidden'`.
+// `POST /v1/runs` requires `run` too (`postJson` already defaults to
+// `on403: 'forbidden'`) and responds 202 immediately -- the pipeline itself
+// executes on a background thread server-side (see `create_run`'s
+// docstring), so this call resolves fast regardless of how long the run
+// takes; `RunsView` polls `GET /v1/runs` to observe status transitions.
+//
+// `detail` is untrusted free text (same caveat as `Approval.metadata` /
+// `RunResult.detail` elsewhere in this app) — never render it.
+// ---------------------------------------------------------------------------
+
+export interface RunSummary {
+  id: number
+  project: string
+  task: string
+  status: string
+  started_at: string
+  finished_at?: string | null
+  tenant?: string
+  /** Untrusted free text (redacted server-side, but still opaque to the
+   * UI's trust model) — never render this. */
+  detail?: string | null
+}
+
+export function fetchRuns(): Promise<RunSummary[]> {
+  return apiFetch<RunSummary[]>('/v1/runs', { on403: 'forbidden' })
+}
+
+export interface NewRunInput {
+  task: string
+  project: string
+  extra_prompt?: string
+  auto_git?: boolean
+}
+
+export interface NewRunResult {
+  run_id: number
+  status: string
+}
+
+export function createRun(body: NewRunInput): Promise<NewRunResult> {
+  return postJson<NewRunResult>('/v1/runs', body)
+}
