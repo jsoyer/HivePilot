@@ -15,13 +15,16 @@ import questionary
 
 from hivepilot.config import settings
 from hivepilot.models import (
+    EffectiveDebateConfig,
     EffortLevel,
     Group,
+    PipelineConfig,
     PipelineStage,
     ProjectConfig,
     RunnerDefinition,
     TaskConfig,
     TaskStep,
+    resolve_debate_config,
     resolve_effort,
     resolve_mode,
     resolve_stage_model,
@@ -869,27 +872,57 @@ class Orchestrator:
             with self._verdict_lock:
                 self._governing_verdict = None
 
-    def _register_verdict(self, verdict: "Verdict | None") -> None:
+    def _effective_debate(
+        self,
+        stage: "PipelineStage | None",
+        pipeline: "PipelineConfig | None",
+    ) -> EffectiveDebateConfig:
+        """Resolve the effective debate/consensus config for *stage* within
+        *pipeline* (debate-judge-pipeline-yaml PRD, Sprint 2) — the SINGLE
+        choke point every debate-judge / challenge-arbiter / fail-closed-gate
+        call site in this module goes through, instead of reading
+        `settings.enable_debate_judge` / `enable_challenge_arbiter` /
+        `judge_runner` / `judge_model` / `judge_confidence_threshold`
+        directly. See `resolve_debate_config` for the strengthen-only
+        precedence over the global settings floor.
+
+        `stage`/`pipeline` are `None` for a plain (non-pipeline) task run or
+        a standalone `run_debate` call — resolves to the floor only, byte-
+        identical to pre-Sprint-2 behaviour.
+        """
+        return resolve_debate_config(pipeline=pipeline, stage=stage)
+
+    def _register_verdict(
+        self, verdict: "Verdict | None", *, confidence_threshold: float | None = None
+    ) -> None:
         """Track the most-blocking :class:`Verdict` seen so far this run
         (Debate Judge & Consensus PRD, Sprint 3) — fail-closed aggregate for
         the `perform_git_actions` PR gate: "if more than one verdict applies,
         the most-blocking wins."
 
         Once ANY registered verdict is blocking (per `git_service.is_blocking`
-        at the configured `settings.judge_confidence_threshold`), it becomes
-        STICKY — a later approving verdict from an unrelated stage/challenge
-        never erases an earlier one that failed the gate. A no-op on `None`
-        (nothing to register) — the gate's own `is_blocking(None, ...)` call
-        already fails closed on "no verdict reached the gate" without this
-        method needing to do anything.
+        at *confidence_threshold* — the caller's own resolved
+        `EffectiveDebateConfig.confidence_threshold`, see `_effective_debate`;
+        defaults to the floor-only threshold when the caller has no
+        pipeline/stage context of its own), it becomes STICKY — a later
+        approving verdict from an unrelated stage/challenge never erases an
+        earlier one that failed the gate. A no-op on `None` (nothing to
+        register) — the gate's own `is_blocking(None, ...)` call already
+        fails closed on "no verdict reached the gate" without this method
+        needing to do anything.
         """
         if verdict is None:
             return
         from hivepilot.services.git_service import is_blocking
 
+        threshold = (
+            confidence_threshold
+            if confidence_threshold is not None
+            else self._effective_debate(None, None).confidence_threshold
+        )
         with self._verdict_lock:
             if self._governing_verdict is not None and is_blocking(
-                self._governing_verdict, settings.judge_confidence_threshold
+                self._governing_verdict, threshold
             ):
                 return  # already blocking — stays blocking (sticky)
             self._governing_verdict = verdict
@@ -920,6 +953,8 @@ class Orchestrator:
         stage_skills: list[str] | None = None,
         stage_model: str | None = None,
         stage_effort: EffortLevel | None = None,
+        stage: "PipelineStage | None" = None,
+        pipeline: "PipelineConfig | None" = None,
     ) -> list[RunResult]:
         """Public entry point. Delegates to `_run_task_body` inside a run-scope
         (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-secrets
@@ -938,7 +973,14 @@ class Orchestrator:
         runner dispatch via ``hivepilot.roles.resolve_stage_dispatch``.
         Default ``None`` for a plain task run, keeping existing behaviour
         byte-identical (same "stage over role over runner-default" precedence
-        ``stage_skills`` already follows)."""
+        ``stage_skills`` already follows).
+
+        ``stage``/``pipeline`` are the raw enclosing `PipelineStage`/
+        `PipelineConfig` objects (debate-judge-pipeline-yaml PRD, Sprint 2) —
+        threaded through to `_execute_task_body`'s `_effective_debate` call
+        for the dual-model-debate judge and the fail-closed verdict gate.
+        Both default `None` for a plain (non-pipeline) task run, resolving to
+        the settings floor only — byte-identical to pre-Sprint-2 behaviour."""
         self._enter_run_scope()
         try:
             return self._run_task_body(
@@ -954,6 +996,8 @@ class Orchestrator:
                 stage_skills=stage_skills,
                 stage_model=stage_model,
                 stage_effort=stage_effort,
+                stage=stage,
+                pipeline=pipeline,
             )
         finally:
             self._exit_run_scope()
@@ -973,6 +1017,8 @@ class Orchestrator:
         stage_skills: list[str] | None = None,
         stage_model: str | None = None,
         stage_effort: EffortLevel | None = None,
+        stage: "PipelineStage | None" = None,
+        pipeline: "PipelineConfig | None" = None,
     ) -> list[RunResult]:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
@@ -1120,6 +1166,8 @@ class Orchestrator:
                     stage_skills=stage_skills,
                     stage_model=stage_model,
                     stage_effort=stage_effort,
+                    stage=stage,
+                    pipeline=pipeline,
                 ): project
                 for project in immediate_projects
             }
@@ -1490,8 +1538,15 @@ class Orchestrator:
         project_name: str,
         simulate: bool,
         run_id: int | None = None,
+        pipeline: "PipelineConfig | None" = None,
     ) -> None:
         """Execute one bounded rebuttal round after a ⚔️ challenge.
+
+        *pipeline* is the enclosing `PipelineConfig` (debate-judge-pipeline-
+        yaml PRD, Sprint 2), used alongside *challenger_stage* to resolve the
+        effective debate/consensus config via `_effective_debate` — `None`
+        (a call site outside a live pipeline run, e.g. a direct test call)
+        resolves to the floor only, byte-identical to pre-Sprint-2 behaviour.
 
         Flow:
           1. Resolve target role from *challenge_target* display name.
@@ -1621,13 +1676,16 @@ class Orchestrator:
         )
 
         # 5+6. Resolution check — either an INDEPENDENT third-party judge
-        # arbiter (Sprint 2, opt-in via `enable_challenge_arbiter`) or the
-        # pre-Sprint-2 default: the challenger's OWN runner is re-invoked to
-        # self-adjudicate ACCEPT/MAINTAIN. The arbiter path never lets either
-        # the challenger or the target self-grade the outcome, and fails
-        # TOWARD human escalation on any ambiguous/malformed/erroring verdict
-        # (see `_resolve_challenge_via_arbiter` — never fails open).
-        if settings.enable_challenge_arbiter:
+        # arbiter (Sprint 2, opt-in via `enable_challenge_arbiter` — resolved
+        # per-stage/pipeline via `_effective_debate`, see debate-judge-
+        # pipeline-yaml PRD Sprint 2) or the pre-Sprint-2 default: the
+        # challenger's OWN runner is re-invoked to self-adjudicate ACCEPT/
+        # MAINTAIN. The arbiter path never lets either the challenger or the
+        # target self-grade the outcome, and fails TOWARD human escalation on
+        # any ambiguous/malformed/erroring verdict (see
+        # `_resolve_challenge_via_arbiter` — never fails open).
+        _debate_config = self._effective_debate(challenger_stage, pipeline)
+        if _debate_config.enable_arbiter:
             is_escalated, resolution_output = self._resolve_challenge_via_arbiter(
                 challenger_name=challenger_name,
                 target_agent_name=target_agent_name,
@@ -1637,6 +1695,7 @@ class Orchestrator:
                 project=rebuttal_project,
                 policy=policy,
                 simulate=simulate,
+                debate_config=_debate_config,
                 run_id=run_id,
             )
         else:
@@ -1754,10 +1813,15 @@ class Orchestrator:
         project: ProjectConfig,
         policy: policy_service.Policy | None,
         simulate: bool,
+        debate_config: EffectiveDebateConfig,
         run_id: int | None = None,
     ) -> tuple[bool, str]:
         """Resolve a challenge/rebuttal pair via the INDEPENDENT challenge
         arbiter (Debate Judge & Consensus PRD, Sprint 2).
+
+        *debate_config* is the caller's (`_run_rebuttal_round`'s) already-
+        resolved `EffectiveDebateConfig` — the runner/model/confidence
+        threshold this arbiter call uses (see `_effective_debate`).
 
         Returns ``(is_escalated, resolution_output)`` — *resolution_output* is
         a human-readable summary of the verdict, in the same "text blob"
@@ -1769,7 +1833,7 @@ class Orchestrator:
           * the arbiter call itself raised (network/runner error);
           * ``verdict.decision is None`` (empty/malformed/non-JSON response);
           * ``verdict.confidence is None``;
-          * ``verdict.confidence < settings.judge_confidence_threshold``;
+          * ``verdict.confidence < debate_config.confidence_threshold``;
           * ``verdict.decision`` is not ``"ACCEPT"`` (e.g. ``"DEFEND"``).
 
         Only an explicit, confident ``"ACCEPT"`` at/above the configured
@@ -1781,9 +1845,9 @@ class Orchestrator:
 
         judge_def = RunnerDefinition(
             name="challenge:arbiter",
-            kind=cast(RunnerKind, settings.judge_runner),
+            kind=cast(RunnerKind, debate_config.runner),
             command=None,
-            model=settings.judge_model,
+            model=debate_config.model,
         )
         try:
             verdict = self._adjudicate_challenge(
@@ -1803,7 +1867,9 @@ class Orchestrator:
             # fail-closed PR gate — never silently keep a prior approving
             # verdict governing (see `_register_verdict`'s "sticky" rule).
             failure_verdict = Verdict(decision=None, confidence=None)
-            self._register_verdict(failure_verdict)
+            self._register_verdict(
+                failure_verdict, confidence_threshold=debate_config.confidence_threshold
+            )
             self._persist_challenge_verdict(
                 run_id=run_id,
                 project=project,
@@ -1821,17 +1887,17 @@ class Orchestrator:
             verdict.decision is not None
             and verdict.decision.strip().upper() == "ACCEPT"
             and verdict.confidence is not None
-            and verdict.confidence >= settings.judge_confidence_threshold
+            and verdict.confidence >= debate_config.confidence_threshold
         )
         resolution_output = (
             f"{'ACCEPT' if accepted else 'MAINTAIN'}: independent judge verdict — "
             f"decision={verdict.decision!r}, confidence={verdict.confidence!r} "
-            f"(threshold={settings.judge_confidence_threshold})."
+            f"(threshold={debate_config.confidence_threshold})."
         )
         # Sprint 3: feed the fail-closed PR-gate aggregate + persist (redacted)
         # for later review — best-effort, never lets a persistence hiccup
         # break challenge resolution.
-        self._register_verdict(verdict)
+        self._register_verdict(verdict, confidence_threshold=debate_config.confidence_threshold)
         self._persist_challenge_verdict(
             run_id=run_id,
             project=project,
@@ -2213,6 +2279,12 @@ class Orchestrator:
                     max_chars=settings.max_prior_context_chars,
                     stage_name=stage.name,
                 ),
+                # debate-judge-pipeline-yaml PRD, Sprint 2: thread the raw
+                # stage/pipeline through to `_execute_task_body`'s
+                # `_effective_debate` resolution (dual-model-debate judge +
+                # fail-closed verdict gate).
+                stage=stage,
+                pipeline=pipeline,
             )
             results.extend(
                 [
@@ -2316,6 +2388,7 @@ class Orchestrator:
                             project_name=_rebuttal_project_name,
                             simulate=simulate,
                             run_id=run_id,
+                            pipeline=pipeline,
                         )
                     except Exception as _rebuttal_exc:  # noqa: BLE001
                         logger.warning(
@@ -2725,6 +2798,7 @@ class Orchestrator:
         dry_run: bool = True,
         simulate: bool = False,
         prior_context: str | None = None,
+        debate_config: "EffectiveDebateConfig | None" = None,
     ) -> dict | None:
         """Public entry point. Delegates to `_run_debate_body` inside a
         run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
@@ -2734,7 +2808,15 @@ class Orchestrator:
         leak resolved secret values into the registry across invocations. When
         nested inside a role-driven `run_task` call, the shared depth counter
         means this inner scope's exit does NOT clear prematurely — the outer
-        run_task's own sinks still see the registry populated."""
+        run_task's own sinks still see the registry populated.
+
+        ``debate_config`` is the caller's already-resolved
+        `EffectiveDebateConfig` (debate-judge-pipeline-yaml PRD, Sprint 2 —
+        see `_effective_debate`), e.g. `_execute_task_body`'s pipeline/stage
+        resolution for a role-driven dual-model debate task. `None` (a
+        standalone `run_debate` call, e.g. cli.py's `debate` command) resolves
+        to the floor only inside `_run_debate_body`, byte-identical to pre-
+        Sprint-2 behaviour."""
         self._enter_run_scope()
         try:
             return self._run_debate_body(
@@ -2744,6 +2826,7 @@ class Orchestrator:
                 dry_run=dry_run,
                 simulate=simulate,
                 prior_context=prior_context,
+                debate_config=debate_config,
             )
         finally:
             self._exit_run_scope()
@@ -2874,15 +2957,22 @@ class Orchestrator:
         dry_run: bool = True,
         simulate: bool = False,
         prior_context: str | None = None,
+        debate_config: "EffectiveDebateConfig | None" = None,
     ) -> dict | None:
         """Run a dual-model debate for *role_name*: capture each model's position,
-        synthesize via DebateService, and write an ADR. Returns the ADR emit dict."""
+        synthesize via DebateService, and write an ADR. Returns the ADR emit dict.
+
+        ``debate_config`` — see `run_debate`'s docstring. `None` resolves to
+        the floor only via `_effective_debate(None, None)`."""
         from typing import cast
 
         from hivepilot.models import RunnerKind, TaskStep
         from hivepilot.roles import get_role, resolve_host, resolve_runner
         from hivepilot.services.debate_service import DebateService, Position
 
+        effective = (
+            debate_config if debate_config is not None else self._effective_debate(None, None)
+        )
         role = get_role(role_name)
         models = list(role.models or ([role.model] if role.model else []))
         if len(models) < 2:
@@ -2949,12 +3039,12 @@ class Orchestrator:
             f"Each model's proposal is recorded; final arbitration by {role_name} / human review."
         )
         confidence: float | None = None
-        if settings.enable_debate_judge:
+        if effective.enable_judge:
             judge_def = RunnerDefinition(
                 name=f"debate:{role_name}:judge",
-                kind=cast(RunnerKind, settings.judge_runner),
+                kind=cast(RunnerKind, effective.runner),
                 command=None,
-                model=settings.judge_model,
+                model=effective.model,
                 effort=role_effort,
                 host=debate_host,
             )
@@ -2975,7 +3065,7 @@ class Orchestrator:
             # Sprint 3: feed the fail-closed PR-gate aggregate (see
             # `_register_verdict`) and persist (redacted) for later review —
             # best-effort, never lets a persistence hiccup break the debate.
-            self._register_verdict(verdict)
+            self._register_verdict(verdict, confidence_threshold=effective.confidence_threshold)
             try:
                 state_service.record_verdict(
                     run_id=None,
@@ -3044,6 +3134,8 @@ class Orchestrator:
         stage_skills: list[str] | None = None,
         stage_model: str | None = None,
         stage_effort: EffortLevel | None = None,
+        stage: "PipelineStage | None" = None,
+        pipeline: "PipelineConfig | None" = None,
     ) -> str | None:
         """Thin OpenTelemetry-tracing wrapper around `_execute_task_body`.
 
@@ -3093,6 +3185,8 @@ class Orchestrator:
                     stage_skills=stage_skills,
                     stage_model=stage_model,
                     stage_effort=stage_effort,
+                    stage=stage,
+                    pipeline=pipeline,
                 )
             except StepApprovalPending:
                 _task_span.set_attribute("hivepilot.task.status", "paused")
@@ -3127,6 +3221,8 @@ class Orchestrator:
         stage_skills: list[str] | None = None,
         stage_model: str | None = None,
         stage_effort: EffortLevel | None = None,
+        stage: "PipelineStage | None" = None,
+        pipeline: "PipelineConfig | None" = None,
     ) -> str | None:
         """Execute *task*'s steps for *project*.
 
@@ -3151,9 +3247,22 @@ class Orchestrator:
         ``policy`` at each role-based dispatch site below. Both default to
         ``None`` for a plain (non-pipeline) task run, which resolves
         byte-identically to before these fields existed.
+
+        ``stage``/``pipeline`` (debate-judge-pipeline-yaml PRD, Sprint 2) are
+        the raw enclosing ``PipelineStage``/``PipelineConfig`` objects,
+        resolved into an ``EffectiveDebateConfig`` via ``_effective_debate``
+        below — the single source the dual-model-debate judge call
+        (``run_debate``) and the fail-closed verdict gate
+        (``perform_git_actions``) both read instead of the global
+        ``settings.enable_debate_judge``/``enable_challenge_arbiter``/
+        ``judge_runner``/``judge_model``/``judge_confidence_threshold``
+        directly. Both default ``None`` for a plain (non-pipeline) task run,
+        resolving to the settings floor only — byte-identical to pre-
+        Sprint-2 behaviour.
         """
         logger.info("task.start", project=project.path.name, task=task_name)
         metadata = {"extra_prompt": extra_prompt or "", "prior_context": prior_context or ""}
+        effective_debate = self._effective_debate(stage, pipeline)
         if task.engine != "native":
             from hivepilot.engines import run_engine
 
@@ -3198,6 +3307,7 @@ class Orchestrator:
                     dry_run=dry_run,
                     simulate=simulate,
                     prior_context=prior_context,
+                    debate_config=effective_debate,
                 )
                 if run_id:
                     state_service.record_step(run_id, f"{task.role}-debate", "success")
@@ -3711,9 +3821,9 @@ class Orchestrator:
                     # flags-off is byte-identical to pre-Sprint-3 behaviour.
                     verdict=self._governing_verdict,
                     judge_gate_enabled=(
-                        settings.enable_debate_judge or settings.enable_challenge_arbiter
+                        effective_debate.enable_judge or effective_debate.enable_arbiter
                     ),
-                    confidence_threshold=settings.judge_confidence_threshold,
+                    confidence_threshold=effective_debate.confidence_threshold,
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)
