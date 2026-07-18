@@ -819,6 +819,14 @@ class Orchestrator:
         # against it. See _enter_run_scope / _exit_run_scope.
         self._run_scope_lock = threading.Lock()
         self._run_scope_depth = 0
+        # Fail-closed PR-gate aggregate (Debate Judge & Consensus PRD, Sprint 3).
+        # The most-blocking Verdict seen so far THIS run — see
+        # `_register_verdict` and the `perform_git_actions` call site in
+        # `_execute_task_body`. Reset per outermost run (see
+        # `_enter_run_scope`) so a stale verdict from a prior unrelated
+        # run_task/run_pipeline/run_debate call never leaks into this one.
+        self._verdict_lock = threading.Lock()
+        self._governing_verdict: Verdict | None = None
 
     def _load(self) -> None:
         self.projects = load_projects()
@@ -833,6 +841,35 @@ class Orchestrator:
     def _enter_run_scope(self) -> None:
         with self._run_scope_lock:
             self._run_scope_depth += 1
+            entering_outermost = self._run_scope_depth == 1
+        if entering_outermost:
+            with self._verdict_lock:
+                self._governing_verdict = None
+
+    def _register_verdict(self, verdict: "Verdict | None") -> None:
+        """Track the most-blocking :class:`Verdict` seen so far this run
+        (Debate Judge & Consensus PRD, Sprint 3) — fail-closed aggregate for
+        the `perform_git_actions` PR gate: "if more than one verdict applies,
+        the most-blocking wins."
+
+        Once ANY registered verdict is blocking (per `git_service.is_blocking`
+        at the configured `settings.judge_confidence_threshold`), it becomes
+        STICKY — a later approving verdict from an unrelated stage/challenge
+        never erases an earlier one that failed the gate. A no-op on `None`
+        (nothing to register) — the gate's own `is_blocking(None, ...)` call
+        already fails closed on "no verdict reached the gate" without this
+        method needing to do anything.
+        """
+        if verdict is None:
+            return
+        from hivepilot.services.git_service import is_blocking
+
+        with self._verdict_lock:
+            if self._governing_verdict is not None and is_blocking(
+                self._governing_verdict, settings.judge_confidence_threshold
+            ):
+                return  # already blocking — stays blocking (sticky)
+            self._governing_verdict = verdict
 
     def _exit_run_scope(self) -> None:
         """Exit a run_task/run_pipeline scope; clear the resolved-secrets
@@ -1429,6 +1466,7 @@ class Orchestrator:
         policy: policy_service.Policy | None,
         project_name: str,
         simulate: bool,
+        run_id: int | None = None,
     ) -> None:
         """Execute one bounded rebuttal round after a ⚔️ challenge.
 
@@ -1576,6 +1614,7 @@ class Orchestrator:
                 project=rebuttal_project,
                 policy=policy,
                 simulate=simulate,
+                run_id=run_id,
             )
         else:
             # 5. Re-invoke challenger with the rebuttal → resolution check
@@ -1692,6 +1731,7 @@ class Orchestrator:
         project: ProjectConfig,
         policy: policy_service.Policy | None,
         simulate: bool,
+        run_id: int | None = None,
     ) -> tuple[bool, str]:
         """Resolve a challenge/rebuttal pair via the INDEPENDENT challenge
         arbiter (Debate Judge & Consensus PRD, Sprint 2).
@@ -1736,6 +1776,18 @@ class Orchestrator:
             )
         except Exception as exc:  # never let a broken judge crash the pipeline
             logger.warning("challenge_arbiter.error", error=redact_text(str(exc)))
+            # Sprint 3: a failed arbiter call must register as BLOCKING for the
+            # fail-closed PR gate — never silently keep a prior approving
+            # verdict governing (see `_register_verdict`'s "sticky" rule).
+            failure_verdict = Verdict(decision=None, confidence=None)
+            self._register_verdict(failure_verdict)
+            self._persist_challenge_verdict(
+                run_id=run_id,
+                project=project,
+                target_agent_name=target_agent_name,
+                challenger_name=challenger_name,
+                verdict=failure_verdict,
+            )
             return (
                 True,
                 f"MAINTAIN: Independent judge call failed ({redact_text(str(exc))[:200]}) — "
@@ -1753,7 +1805,44 @@ class Orchestrator:
             f"decision={verdict.decision!r}, confidence={verdict.confidence!r} "
             f"(threshold={settings.judge_confidence_threshold})."
         )
+        # Sprint 3: feed the fail-closed PR-gate aggregate + persist (redacted)
+        # for later review — best-effort, never lets a persistence hiccup
+        # break challenge resolution.
+        self._register_verdict(verdict)
+        self._persist_challenge_verdict(
+            run_id=run_id,
+            project=project,
+            target_agent_name=target_agent_name,
+            challenger_name=challenger_name,
+            verdict=verdict,
+        )
         return not accepted, resolution_output
+
+    def _persist_challenge_verdict(
+        self,
+        *,
+        run_id: int | None,
+        project: ProjectConfig,
+        target_agent_name: str,
+        challenger_name: str,
+        verdict: "Verdict",
+    ) -> None:
+        """Best-effort persistence of a challenge-arbiter Verdict (Sprint 3).
+        Never raises — a persistence hiccup must not break challenge
+        resolution (see `_resolve_challenge_via_arbiter`'s call sites)."""
+        try:
+            state_service.record_verdict(
+                run_id=run_id,
+                project=project.path.name,
+                task=None,
+                role=target_agent_name,
+                kind="challenge",
+                decision=verdict.decision,
+                confidence=verdict.confidence,
+                summary=f"challenge from {challenger_name} against {target_agent_name}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verdict.persist_failed", kind="challenge", error=str(exc))
 
     def run_pipeline(
         self,
@@ -2203,6 +2292,7 @@ class Orchestrator:
                             policy=_rebuttal_policy,
                             project_name=_rebuttal_project_name,
                             simulate=simulate,
+                            run_id=run_id,
                         )
                     except Exception as _rebuttal_exc:  # noqa: BLE001
                         logger.warning(
@@ -2859,6 +2949,23 @@ class Orchestrator:
             if verdict.decision is not None:
                 decision = verdict.decision
                 confidence = verdict.confidence
+            # Sprint 3: feed the fail-closed PR-gate aggregate (see
+            # `_register_verdict`) and persist (redacted) for later review —
+            # best-effort, never lets a persistence hiccup break the debate.
+            self._register_verdict(verdict)
+            try:
+                state_service.record_verdict(
+                    run_id=None,
+                    project=project.path.name,
+                    task=None,
+                    role=role_name,
+                    kind="debate",
+                    decision=verdict.decision,
+                    confidence=verdict.confidence,
+                    summary=f"debate judge synthesis for: {topic}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("verdict.persist_failed", kind="debate", error=str(exc))
 
         adr = DebateService(vault_path, dry_run=dry_run).run(
             topic=topic, positions=positions, decision=decision, confidence=confidence
@@ -3572,6 +3679,18 @@ class Orchestrator:
                     # gate promote_pr/merge_pr on THIS stage's own verdict — see
                     # git_service._agent_verdict_blocked for why this is required.
                     task_result=task_result,
+                    # Sprint 3: additionally fail-closed-gate on the most-blocking
+                    # debate-judge/challenge-arbiter Verdict registered so far
+                    # THIS run (see `_register_verdict`) — a None/empty/
+                    # low-confidence/non-approval verdict blocks promote/merge
+                    # exactly like an explicit blocking `status:` does. Only
+                    # active when either judge feature is opt-in enabled;
+                    # flags-off is byte-identical to pre-Sprint-3 behaviour.
+                    verdict=self._governing_verdict,
+                    judge_gate_enabled=(
+                        settings.enable_debate_judge or settings.enable_challenge_arbiter
+                    ),
+                    confidence_threshold=settings.judge_confidence_threshold,
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)
