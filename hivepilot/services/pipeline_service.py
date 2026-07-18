@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from hivepilot.models import PipelineConfig, TasksFile
 
 
@@ -10,6 +12,41 @@ def validate_pipeline(pipeline: PipelineConfig, tasks: TasksFile) -> None:
                 f"Pipeline stage '{stage.name}' references missing task '{stage.task}'"
             )
     validate_roles(tasks)
+    validate_debate_config(pipeline)
+
+
+def _validate_confidence_threshold(value: float | None, *, where: str) -> None:
+    """Defense-in-depth re-check of `DebateConfig.confidence_threshold`.
+
+    `DebateConfig`'s own pydantic field validator already rejects an
+    out-of-range value at YAML-load time (see hivepilot/models.py) -- this is
+    a second, independent guard at the point `validate_pipeline` is called
+    (before any stage executes), so a value that somehow slipped past model
+    construction (e.g. via `model_construct`) still fails closed here rather
+    than silently reaching the fail-closed PR gate as a bad threshold. Absent
+    (`None`) is always valid -- it means "inherit the global floor", never
+    "no threshold" / "always pass".
+    """
+    if value is None:
+        return
+    if not math.isfinite(value) or not (0 < value <= 1):
+        raise ValueError(
+            f"{where} debate.confidence_threshold must be a finite number in (0, 1], got {value!r}"
+        )
+
+
+def validate_debate_config(pipeline: PipelineConfig) -> None:
+    """Fail closed on an out-of-range `debate.confidence_threshold` at both
+    the pipeline level and every stage level. See `_validate_confidence_threshold`
+    for why this re-checks what `DebateConfig`'s pydantic validator already
+    enforces at construction time."""
+    if pipeline.debate is not None:
+        _validate_confidence_threshold(pipeline.debate.confidence_threshold, where="Pipeline")
+    for stage in pipeline.stages:
+        if stage.debate is not None:
+            _validate_confidence_threshold(
+                stage.debate.confidence_threshold, where=f"Pipeline stage '{stage.name}'"
+            )
 
 
 def validate_roles(tasks: TasksFile) -> None:
