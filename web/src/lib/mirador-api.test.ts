@@ -19,6 +19,8 @@ import {
   fetchPanels,
   fetchPluginsHealth,
   fetchStepFailures,
+  postJson,
+  whoami,
 } from './mirador-api'
 
 beforeEach(() => {
@@ -99,5 +101,24 @@ describe('mirador-api fetch wrappers', () => {
     await fetchPanel('weird name/slash')
     const [url] = apiFetchMock.mock.calls[0] as [string]
     expect(url).toBe('/v1/panels/weird%20name%2Fslash')
+  })
+
+  it('whoami calls GET /v1/whoami', async () => {
+    await whoami()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/whoami')
+  })
+
+  it('postJson POSTs to path with JSON content-type, a stringified body, and on403: "forbidden"', async () => {
+    // postJson delegates to apiFetch, which is what actually surfaces a 403
+    // as ApiForbiddenError (see api.test.ts's "with on403: 'forbidden'..."
+    // coverage) — this asserts postJson passes through the exact
+    // method/headers/body/on403 shape that makes that guarantee hold.
+    await postJson('/v1/approvals/42', { approve: true, reason: 'looks good' })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/approvals/42', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve: true, reason: 'looks good' }),
+      on403: 'forbidden',
+    })
   })
 })

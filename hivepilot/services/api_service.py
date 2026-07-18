@@ -263,6 +263,28 @@ async def readyz():
     return {"ready": True, "checks": checks}
 
 
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard (PRD mirador-actionable-dashboard, Sprint 1)
+# ---------------------------------------------------------------------------
+
+
+@v1.get("/whoami")
+@app.get("/whoami")
+def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> dict[str, str]:
+    """Let the caller introspect its own RBAC role/tenant.
+
+    Gated at the lowest rank (`read`, the floor every valid token
+    satisfies), so any authenticated caller can always resolve its own
+    identity — this is what powers the Mirador web client's `useRole()`
+    (`web/src/lib/role-context.tsx`), which fail-closed gates action
+    controls app-wide (unknown/null role -> `can()` false for everything).
+
+    Returns ONLY `{role, tenant}` — never the token hash, note, expiry, or
+    any other `TokenEntry` field.
+    """
+    return {"role": caller.role, "tenant": caller.tenant}
+
+
 @v1.post("/run", dependencies=[Depends(require_role("run"))])
 @app.post("/run", dependencies=[Depends(require_role("run"))])
 def run_task(request: RunRequest):

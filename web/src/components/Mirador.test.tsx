@@ -34,6 +34,10 @@ const mocks = vi.hoisted(() => ({
   fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
+  // Mirador now wraps its tree in RoleProvider (Sprint 1), which fetches
+  // whoami() once on mount — mock it out like every other data source above
+  // so this test exercises the shell only, not a real network call.
+  whoami: vi.fn().mockResolvedValue({ role: 'admin', tenant: 'default' }),
 }))
 
 vi.mock('@/lib/mirador-api', async (importOriginal) => {

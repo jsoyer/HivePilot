@@ -290,3 +290,42 @@ export function fetchPanels(): Promise<PanelsResponse> {
 export function fetchPanel(name: string): Promise<PanelData> {
   return apiFetch<PanelData>(`/v1/panels/${encodeURIComponent(name)}`, { on403: 'forbidden' })
 }
+
+// ---------------------------------------------------------------------------
+// GET /v1/whoami — Mirador actionable dashboard PRD, Sprint 1. Resolves the
+// calling token's own role/tenant; backs `useRole()` (`@/lib/role-context`),
+// which fail-closed gates action controls app-wide (unknown/null role ->
+// `can()` false for everything). Ranked the same as the backend's
+// `ROLE_RANKS` (`hivepilot/services/token_service.py`): read < run <
+// approve < admin.
+// ---------------------------------------------------------------------------
+
+export type Role = 'read' | 'run' | 'approve' | 'admin'
+
+export interface WhoAmI {
+  role: Role
+  tenant: string
+}
+
+export function whoami(): Promise<WhoAmI> {
+  return apiFetch<WhoAmI>('/v1/whoami')
+}
+
+// ---------------------------------------------------------------------------
+// postJson — generic POST helper for downstream sprints (S2-S5: approve/
+// deny actions, async run triggers, plugin toggles, ...). Every action
+// endpoint those sprints add requires a role STRICTLY higher than the token
+// gate's own `read` floor check, so — like `fetchMemories`/`fetchPanel`
+// above — this always opts into `on403: 'forbidden'`: a 403 here means the
+// token is valid but under-privileged for this one action, not that the
+// token itself should be cleared (see `ApiForbiddenError` in `./api`).
+// ---------------------------------------------------------------------------
+
+export function postJson<T>(path: string, body: unknown): Promise<T> {
+  return apiFetch<T>(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    on403: 'forbidden',
+  })
+}
