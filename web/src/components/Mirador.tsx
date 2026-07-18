@@ -4,6 +4,7 @@ import { fetchPanels } from '@/lib/mirador-api'
 import { RoleProvider } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AnalyticsView } from './views/AnalyticsView'
+import { ApprovalsView } from './views/ApprovalsView'
 import { CostView } from './views/CostView'
 import { HealthView } from './views/HealthView'
 import { Mem0View } from './views/Mem0View'
@@ -14,6 +15,10 @@ const BUILTIN_TABS = [
   { value: 'cost', label: 'Cost', Panel: CostView },
   { value: 'health', label: 'Health', Panel: HealthView },
   { value: 'mem0', label: 'Mem0', Panel: Mem0View },
+  // Mirador actionable dashboard PRD, Sprint 2: read-only for any token,
+  // Approve/Deny controls inside gate themselves on useRole().can('approve')
+  // — see ApprovalsView.
+  { value: 'approvals', label: 'Approvals', Panel: ApprovalsView },
 ] as const
 
 /** A dynamic panel tab's `value` — prefixed so it can never collide with a

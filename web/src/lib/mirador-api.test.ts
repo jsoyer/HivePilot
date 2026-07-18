@@ -14,7 +14,9 @@ import {
   fetchAnalyticsSummary,
   fetchAnalyticsTrends,
   fetchApprovalLatency,
+  fetchApprovals,
   fetchMemories,
+  postApproval,
   fetchPanel,
   fetchPanels,
   fetchPluginsHealth,
@@ -118,6 +120,27 @@ describe('mirador-api fetch wrappers', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approve: true, reason: 'looks good' }),
+      on403: 'forbidden',
+    })
+  })
+
+  it('fetchApprovals calls GET /v1/approvals and opts into on403: "forbidden"', async () => {
+    // GET /v1/approvals requires `run` server-side, so a lower-rank token 403s
+    // listing — the wrapper opts into on403:'forbidden' so ApprovalsView can
+    // show a graceful message instead of clearing the token.
+    await fetchApprovals()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/approvals', { on403: 'forbidden' })
+  })
+
+  it('postApproval POSTs {approver:"web", approve, reason} to /v1/approvals/{run_id}', async () => {
+    // Asserts the exact ApprovalAction body contract (approver injected as
+    // "web") + path + on403 — the raw request shape the view-level mock cannot
+    // verify. postJson is real here; only apiFetch is mocked.
+    await postApproval(42, { approve: false, reason: 'not this time' })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/approvals/42', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approver: 'web', approve: false, reason: 'not this time' }),
       on403: 'forbidden',
     })
   })

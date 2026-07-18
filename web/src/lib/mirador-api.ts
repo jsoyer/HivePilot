@@ -329,3 +329,76 @@ export function postJson<T>(path: string, body: unknown): Promise<T> {
     on403: 'forbidden',
   })
 }
+
+// ---------------------------------------------------------------------------
+// GET /v1/approvals, POST /v1/approvals/{run_id} — Mirador actionable
+// dashboard PRD, Sprint 2. Shapes transcribed from `hivepilot/services/
+// state_service.py`'s `approvals` table (`CREATE TABLE ... approvals`,
+// columns: run_id/project/task/metadata/status/requested_at/approved_by/
+// approved_at/tenant) and `hivepilot/services/api_service.py`'s
+// `pending_approvals` / `ApprovalAction` / `handle_approval` — read those
+// before changing anything here.
+//
+// Role gates (from `api_service.py`, NOT just the token gate's `read`
+// floor): `GET /v1/approvals` requires `run`, so a plain `read` token 403s
+// fetching the list itself — `fetchApprovals` therefore opts into
+// `on403: 'forbidden'` exactly like `fetchMemories`/`fetchPanel` above, and
+// `ApprovalsView` special-cases that error into a graceful message instead
+// of clearing the token. `POST /v1/approvals/{run_id}` requires `approve`
+// (`postJson` already defaults to `on403: 'forbidden'`).
+//
+// `metadata` is a raw JSON-TEXT column populated by whatever pipeline stage
+// requested the approval (see `orchestrator.py`'s `record_approval_request`
+// call sites — it can carry an `extra_prompt`/`planning_context` excerpt,
+// i.e. untrusted free text, the same class of field as `RunResult.detail`/
+// `capture()` output elsewhere in this app). `ApprovalsView` must NEVER
+// render it — only the typed, structural fields below.
+// ---------------------------------------------------------------------------
+
+export interface Approval {
+  run_id: number
+  project: string
+  task: string
+  status: string
+  requested_at: string
+  tenant?: string
+  approved_by?: string | null
+  approved_at?: string | null
+  /** Raw JSON text — untrusted, opaque to the UI. Never render this. */
+  metadata?: string
+}
+
+export function fetchApprovals(): Promise<Approval[]> {
+  return apiFetch<Approval[]>('/v1/approvals', { on403: 'forbidden' })
+}
+
+export interface ApprovalActionInput {
+  approve: boolean
+  reason?: string
+}
+
+/** POST body sent to `/v1/approvals/{run_id}` — matches `ApprovalAction` in
+ * `api_service.py` (`approver: str = "api"`, `approve: bool = True`,
+ * `reason: str | None = None`). The web UI always identifies itself as
+ * `approver: "web"`. */
+export interface ApprovalActionBody {
+  approver: 'web'
+  approve: boolean
+  reason?: string
+}
+
+/** The endpoint responds `{"result": <RunResult.__dict__>}` — `RunResult`
+ * carries a `detail` field that is untrusted/unredacted free text (same
+ * caveat as `Approval.metadata` above); this type only surfaces `success`,
+ * which is all `ApprovalsView` needs (it never renders `detail`). */
+export interface ApprovalActionResult {
+  result: {
+    success: boolean
+    skipped?: boolean
+  }
+}
+
+export function postApproval(runId: number, action: ApprovalActionInput): Promise<ApprovalActionResult> {
+  const body: ApprovalActionBody = { approver: 'web', approve: action.approve, reason: action.reason }
+  return postJson<ApprovalActionResult>(`/v1/approvals/${runId}`, body)
+}
