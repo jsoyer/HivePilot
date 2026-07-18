@@ -550,6 +550,10 @@ def _stage_kind(
 
 class PluginManager:
     def __init__(self) -> None:
+        # Reentrancy guard for `reload()` -- see that method's docstring.
+        # Never touched during `__init__` itself (which never calls
+        # `reload()`), but initialized here so the attribute always exists.
+        self._reload_in_progress = False
         staged = self._load_into(
             owned_runner_kinds=frozenset(),
             owned_notifier_names=frozenset(),
@@ -587,34 +591,54 @@ class PluginManager:
         *class* entry -- it keeps executing with the instance it already has;
         only a NEW `resolve_runner_class()` lookup after commit sees the
         change.
+
+        Reentrancy guard: Python signal handlers run on the main thread
+        BETWEEN bytecode instructions, so a SIGHUP delivered WHILE a reload
+        is already mid-flight (inside `_load_into`/`_commit`) could re-enter
+        this method on the SAME instance. Without a guard, the OUTER call's
+        now-stale local `staged`/`before_names` would resume executing AFTER
+        the inner, reentrant call already committed -- its own `_commit()`
+        would then stomp `self._owned_runner_kinds`/etc. with the outer
+        (older) values, corrupting ownership bookkeeping for the NEXT
+        reload. `self._reload_in_progress` makes a reentrant call a fast,
+        logged no-op instead: the reload already in flight supersedes it.
         """
-        before_names = {record.name for record in self.loaded}
-        try:
-            staged = self._load_into(
-                owned_runner_kinds=self._owned_runner_kinds,
-                owned_notifier_names=self._owned_notifier_names,
-                owned_secret_names=self._owned_secret_names,
+        if self._reload_in_progress:
+            logger.warning("plugins.reload_skipped_reentrant")
+            return ReloadResult(
+                ok=False, error="reload already in progress; reentrant call skipped"
             )
-        except Exception as exc:  # noqa: BLE001 — a bad candidate must never touch live state
-            logger.warning("plugins.reload_failed", error=str(exc))
-            return ReloadResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        self._reload_in_progress = True
+        try:
+            before_names = {record.name for record in self.loaded}
+            try:
+                staged = self._load_into(
+                    owned_runner_kinds=self._owned_runner_kinds,
+                    owned_notifier_names=self._owned_notifier_names,
+                    owned_secret_names=self._owned_secret_names,
+                )
+            except Exception as exc:  # noqa: BLE001 — a bad candidate must never touch live state
+                logger.warning("plugins.reload_failed", error=str(exc))
+                return ReloadResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
-        self._commit(staged)
+            self._commit(staged)
 
-        after_names = {record.name for record in self.loaded}
-        result = ReloadResult(
-            ok=True,
-            added=sorted(after_names - before_names),
-            removed=sorted(before_names - after_names),
-            updated=sorted(after_names & before_names),
-        )
-        logger.info(
-            "plugins.reloaded",
-            added=result.added,
-            removed=result.removed,
-            updated=result.updated,
-        )
-        return result
+            after_names = {record.name for record in self.loaded}
+            result = ReloadResult(
+                ok=True,
+                added=sorted(after_names - before_names),
+                removed=sorted(before_names - after_names),
+                updated=sorted(after_names & before_names),
+            )
+            logger.info(
+                "plugins.reloaded",
+                added=result.added,
+                removed=result.removed,
+                updated=result.updated,
+            )
+            return result
+        finally:
+            self._reload_in_progress = False
 
     def plugins_changed_on_disk(self) -> bool:
         """True if `plugins/*.py` (added/removed/modified) differs from the

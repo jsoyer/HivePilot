@@ -7,6 +7,7 @@ import signal
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 
@@ -332,3 +333,204 @@ class TestSchedulerDaemonHotReload:
         daemon._handle_sighup(signal.SIGHUP, None)  # must not raise
 
         assert daemon._hot_reload_manager is None
+
+
+class TestSchedulerDaemonSharedManagerInjection:
+    """MUST-FIX (adversarial review): when `plugins_hot_reload` is ON, the
+    daemon's dedicated hot-reload `PluginManager` registers runner/notifier/
+    secrets kinds into the process-global maps. If `_run_due_schedules` /
+    `_rerun_deferred_row` each construct a FRESH, un-injected `Orchestrator()`
+    (-> a fresh `PluginManager()` with empty ownership), that fresh manager
+    re-scans the SAME `plugins/*.py`, sees those kinds already live but NOT
+    owned by it, and raises a collision -- breaking dispatch every tick for
+    the rest of the process's life. The fix: inject the daemon's ONE shared
+    manager into every `Orchestrator()` it constructs
+    (`Orchestrator(plugins=self._hot_reload_manager)`) so exactly one
+    PluginManager ever registers into the globals.
+
+    These tests exercise the REAL (unmocked) `Orchestrator()` construction
+    path -- not `patch("...Orchestrator", ...)` like the deferred-row tests
+    above -- since the bug lives inside `PluginManager.__init__`, which a
+    mocked `Orchestrator` would hide entirely.
+    """
+
+    def _write_minimal_valid_config(self, base_dir) -> None:
+        """`Orchestrator._load()` reads `projects.yaml`/`tasks.yaml` (both
+        REQUIRE their top-level key per `ProjectsFile`/`TasksFile` -- an
+        empty/missing file fails pydantic validation) -- write the smallest
+        schema-valid files so real `Orchestrator()` construction succeeds
+        far enough to reach `PluginManager()` (the thing under test here),
+        without needing any real project/task content.
+        """
+        (base_dir / "projects.yaml").write_text("projects: {}\n", encoding="utf-8")
+        (base_dir / "tasks.yaml").write_text("tasks: {}\n", encoding="utf-8")
+        (base_dir / "pipelines.yaml").write_text("pipelines: {}\n", encoding="utf-8")
+
+    def _write_combo_plugin(self, plugin_dir, filename: str, kind: str) -> None:
+        """A plugin contributing a RUNNER + NOTIFIER + SECRETS kind together
+        -- the real production shape (1Password/Infisical/bitwarden/
+        vaultwarden-style secrets plugins, obsidian/rtk-style notifiers) that
+        triggers the self-collision when a second, independent
+        `PluginManager()` re-scans the same file.
+        """
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / filename).write_text(
+            "class FixtureRunner:\n"
+            "    def __init__(self, definition, settings):\n        pass\n"
+            "    def run(self, payload):\n        return None\n"
+            "def _notify(msg):\n    pass\n"
+            "class _Secrets:\n"
+            "    def resolve(self, ref, settings):\n        return 'x'\n"
+            "def register():\n"
+            f"    return {{'runners': {{'{kind}': FixtureRunner}}, "
+            f"'notifiers': {{'{kind}': _notify}}, "
+            f"'secrets': {{'{kind}': _Secrets()}}}}\n",
+            encoding="utf-8",
+        )
+
+    def _spy_orchestrator(self, daemon_mod, monkeypatch):
+        """Wrap the REAL `Orchestrator` class so we can capture the kwargs it
+        was constructed with AND detect whether construction itself raised
+        (e.g. a `*KindCollisionError` from a self-colliding `PluginManager()`)
+        -- without needing that exception to propagate all the way out of
+        the calling daemon method, since some call sites (`_rerun_deferred_row`)
+        wrap the `Orchestrator()` call in their own broad `except Exception`.
+        """
+        real_cls = daemon_mod.Orchestrator
+        captured: dict[str, Any] = {"kwargs": None, "raised": False}
+
+        def _spy(*args: Any, **kwargs: Any) -> Any:
+            captured["kwargs"] = kwargs
+            try:
+                return real_cls(*args, **kwargs)
+            except Exception:
+                captured["raised"] = True
+                raise
+
+        monkeypatch.setattr(daemon_mod, "Orchestrator", _spy)
+        return captured
+
+    def test_due_schedule_dispatch_reuses_shared_manager_no_collision(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The exact production scenario: construct the daemon's shared
+        hot-reload manager (registering a combo plugin's kinds), THEN run
+        `_run_due_schedules` -- it must NOT raise a collision. This test
+        FAILS on the pre-fix code (`orch = Orchestrator()`, ignoring the
+        already-populated globals) and PASSES once `_run_due_schedules`
+        injects `self._hot_reload_manager`.
+        """
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.config import settings
+        from hivepilot.registry import RUNNER_MAP
+        from hivepilot.services import scheduler_daemon as daemon_mod
+        from hivepilot.services.schedule_service import ScheduleEntry
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", True, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        self._write_minimal_valid_config(tmp_path)
+        self._write_combo_plugin(tmp_path / "plugins", "combo.py", kind="fixture-combo")
+
+        daemon = daemon_mod.SchedulerDaemon()
+        daemon._maybe_hot_reload_plugins()  # constructs + registers the ONE shared manager
+        assert daemon._hot_reload_manager is not None
+        assert "fixture-combo" in RUNNER_MAP
+
+        fake_schedule = ScheduleEntry(name="s", task="dev", projects=[])
+        monkeypatch.setattr(daemon_mod, "due_schedules", lambda: [fake_schedule])
+        monkeypatch.setattr(daemon_mod, "run_entry", lambda entry, orch: True)
+        captured = self._spy_orchestrator(daemon_mod, monkeypatch)
+
+        daemon._run_due_schedules()  # must NOT raise a *KindCollisionError
+
+        assert captured["raised"] is False
+        assert captured["kwargs"] == {"plugins": daemon._hot_reload_manager}
+
+    def test_deferred_row_dispatch_reuses_shared_manager_no_collision(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Same scenario as above, exercised via `_rerun_deferred_row` (the
+        other real, un-injected `Orchestrator()` construction site named by
+        the review). `_rerun_deferred_row` wraps `Orchestrator()` in its own
+        broad `except Exception` (a failed re-run is a normal, expected
+        outcome it retries/dead-letters) -- so the collision would otherwise
+        be silently swallowed as "task rerun failed" instead of surfacing as
+        the registry-integrity bug it actually is. The `_spy_orchestrator`
+        wrapper detects that swallowed raise directly.
+        """
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.config import settings
+        from hivepilot.registry import RUNNER_MAP
+        from hivepilot.services import scheduler_daemon as daemon_mod
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", True, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        self._write_minimal_valid_config(tmp_path)
+        self._write_combo_plugin(tmp_path / "plugins", "combo.py", kind="fixture-combo2")
+
+        daemon = daemon_mod.SchedulerDaemon()
+        daemon._maybe_hot_reload_plugins()
+        assert daemon._hot_reload_manager is not None
+        assert "fixture-combo2" in RUNNER_MAP
+
+        captured = self._spy_orchestrator(daemon_mod, monkeypatch)
+
+        row = {
+            "id": 1,
+            "task": "dev",
+            "projects": "[]",
+            "attempt": 0,
+            "max_attempts": 3,
+        }
+        # `_rerun_deferred_row` writes to the state DB on completion --
+        # isolated to a tmp DB by the conftest autouse `_isolate_state_db`
+        # fixture, same as every other test in this module.
+        daemon._rerun_deferred_row(row, {"task": "dev"})  # must not raise
+
+        assert captured["raised"] is False
+        assert captured["kwargs"] == {"plugins": daemon._hot_reload_manager}
+
+    def test_drift_scan_remediation_reuses_shared_manager(self, tmp_path, monkeypatch) -> None:
+        """`_run_drift_scans` threads the shared manager through
+        `run_drift_scan` -> `_attempt_remediation` -> `Orchestrator(plugins=...)`.
+        Verified at the thinnest possible seam: `run_drift_scan` itself is
+        stubbed to capture its call kwargs (the deeper `Orchestrator`
+        threading through `drift_schedule.py` is covered by
+        `test_drift_schedule.py`'s own remediation tests).
+
+        Patched on `hivepilot.services.drift_schedule` (the SOURCE module),
+        not on `scheduler_daemon` -- `_run_drift_scans` imports these names
+        LOCALLY on every call (see its docstring), matching the existing
+        `test_drift_schedule.py` suite's own patch convention.
+        """
+        import hivepilot.services.drift_schedule as drift_schedule_mod
+        from hivepilot.config import settings
+        from hivepilot.services import scheduler_daemon as daemon_mod
+        from hivepilot.services.drift_schedule import DriftScanConfig
+
+        monkeypatch.setattr(settings, "plugins_hot_reload", True, raising=False)
+
+        daemon = daemon_mod.SchedulerDaemon()
+        daemon._maybe_hot_reload_plugins()  # lazily construct the shared manager
+        manager = daemon._hot_reload_manager
+        assert manager is not None
+
+        cfg = DriftScanConfig(
+            enabled=True,
+            auto_remediate=True,
+            remediate_task="remediate",
+            channels=[],
+        )
+        monkeypatch.setattr(drift_schedule_mod, "due_drift_projects", lambda cfg: ["proj-x"])
+        monkeypatch.setattr(drift_schedule_mod, "load_drift_config", lambda: cfg)
+
+        captured_kwargs: dict = {}
+
+        def _fake_run_drift_scan(cfg_arg, project_name, **kwargs):
+            captured_kwargs.update(kwargs)
+
+        monkeypatch.setattr(drift_schedule_mod, "run_drift_scan", _fake_run_drift_scan)
+
+        daemon._run_drift_scans()
+
+        assert captured_kwargs.get("plugins") is manager

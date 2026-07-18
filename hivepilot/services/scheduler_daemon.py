@@ -187,7 +187,13 @@ class SchedulerDaemon:
             return
         if not schedules:
             return
-        orch = Orchestrator()
+        # Phase 26b — inject the daemon's shared hot-reload manager (`None`
+        # when `plugins_hot_reload` is off, which is IDENTICAL to calling
+        # `Orchestrator()` with no args: the default path is byte-for-byte
+        # unchanged). See `Orchestrator.__init__`'s docstring for why a
+        # fresh, un-injected `PluginManager()` here would self-collide once
+        # hot-reload is on.
+        orch = Orchestrator(plugins=self._hot_reload_manager)
         for sched in schedules:
             try:
                 run_entry(sched, orch)
@@ -202,6 +208,16 @@ class SchedulerDaemon:
         due project's scan is wrapped in its own try/except so one project's
         failure (or a bug in `run_drift_scan` itself) can never stop the tick
         or block the remaining due projects / the deferred-row pass below.
+
+        `due_drift_projects`/`load_drift_config`/`run_drift_scan` are
+        imported LOCALLY (not at module level) deliberately: the existing
+        `tests/test_drift_schedule.py` suite patches these by name on
+        `hivepilot.services.drift_schedule` (`patch("hivepilot.services.
+        drift_schedule.run_drift_scan", ...)`) around a call to
+        `daemon._run_drift_scans()` -- a module-level `from ... import ...`
+        here would bind a reference at IMPORT time that a later patch on the
+        SOURCE module can no longer reach ("patch where used, not where
+        defined"), silently un-mocking every one of those tests.
         """
         from hivepilot.services.drift_schedule import (
             due_drift_projects,
@@ -219,7 +235,11 @@ class SchedulerDaemon:
             return
         for project_name in due:
             try:
-                run_drift_scan(cfg, project_name)
+                # Phase 26b — thread the shared hot-reload manager through
+                # to `_attempt_remediation`'s `Orchestrator()` construction
+                # (only reachable when `cfg.auto_remediate` is on AND drift
+                # was detected). Same rationale as `_run_due_schedules` above.
+                run_drift_scan(cfg, project_name, plugins=self._hot_reload_manager)
             except Exception:  # noqa: BLE001
                 logger.exception(
                     "scheduler_daemon.run_drift_scan_error", extra={"project": project_name}
@@ -266,7 +286,9 @@ class SchedulerDaemon:
             extra={"row_id": row_id, "task": task_name, "projects": project_names},
         )
         try:
-            orch = Orchestrator()
+            # Phase 26b — see `_run_due_schedules` above for why the shared
+            # hot-reload manager (`None` when opt-in is off) is injected here.
+            orch = Orchestrator(plugins=self._hot_reload_manager)
             orch.run_task(
                 task_name=task_name,
                 project_names=project_names,
