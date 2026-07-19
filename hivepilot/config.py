@@ -3,10 +3,10 @@ from __future__ import annotations
 import math
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 def _xdg_config_dir() -> Path:
@@ -114,6 +114,38 @@ class Settings(BaseSettings):
     # load once at PluginManager construction, no live reload).
     # env: HIVEPILOT_PLUGINS_DISABLED
     plugins_disabled: list[str] = Field(default_factory=list)
+    # Multi-directory plugin search: additional directories `_scan_local_plugins`
+    # (hivepilot/plugins.py) scans for local-file plugins AFTER `base_dir/plugins`
+    # (scanned first, always). Lets a deployment that overrides `base_dir` (e.g. a
+    # config repo, to load its OWN `plugins/*.py`) ALSO load the engine's shipped
+    # `plugins/*.py`, instead of one shadowing the other. Scanned in list order;
+    # a module stem already loaded from an earlier directory (base_dir first, then
+    # each entry here in order) is skipped rather than raising a collision — see
+    # `_scan_local_plugins`'s dedup-by-stem, first-wins rule. A directory that
+    # doesn't exist is silently skipped, not an error. Additive/opt-in: empty
+    # (default) is byte-identical to pre-existing behaviour.
+    # env: HIVEPILOT_PLUGINS_EXTRA_DIRS — os.pathsep-separated list of directory
+    # paths (":" on POSIX, ";" on Windows), e.g.
+    # HIVEPILOT_PLUGINS_EXTRA_DIRS=/opt/hivepilot/plugins:/srv/config/plugins
+    # Deliberately NOT the JSON-array convention `plugins_disabled` above uses —
+    # a directory list reads more naturally PATH/PYTHONPATH-style. `NoDecode`
+    # stops pydantic-settings' default complex-type JSON decoding from ever
+    # seeing this env value, so the "before" validator below always receives
+    # the raw string.
+    plugins_extra_dirs: Annotated[list[Path], NoDecode] = Field(default_factory=list)
+
+    @field_validator("plugins_extra_dirs", mode="before")
+    @classmethod
+    def _parse_plugins_extra_dirs(cls, v: object) -> object:
+        # Unset/empty -> [] (never a single Path("")). A list already (e.g.
+        # constructed directly in Python/tests, or reload of an already-parsed
+        # value) passes through unchanged for pydantic to coerce element-wise.
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            return [part for part in v.split(os.pathsep) if part]
+        return v
+
     # Phase 26b Approach A — URL of a JSON "plugin index" document (name/
     # description/author/homepage/install-hint/version/checksum) that
     # `plugins search`/`info` fetch and display (hivepilot/services/

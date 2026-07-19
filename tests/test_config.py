@@ -4,6 +4,7 @@ Tests for hivepilot.config — verifies new obsidian_vault setting.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -245,6 +246,47 @@ class TestPluginsDisabled:
     def test_is_list_of_str_type(self) -> None:
         s = Settings()
         assert isinstance(s.plugins_disabled, list)
+
+
+# ---------------------------------------------------------------------------
+# Multi-directory plugin search — plugins_extra_dirs
+# ---------------------------------------------------------------------------
+
+
+class TestPluginsExtraDirs:
+    """`plugins_extra_dirs` is an opt-in list of additional directories
+    `_scan_local_plugins` (hivepilot/plugins.py) scans AFTER `base_dir/plugins`
+    — lets a config repo that overrides `base_dir` (to load its own
+    `plugins/*.py`) also load the engine's shipped `plugins/*.py`, instead of
+    having to choose one or the other. Populated from
+    HIVEPILOT_PLUGINS_EXTRA_DIRS as an os.pathsep-separated path list —
+    deliberately NOT the JSON-array convention `plugins_disabled` above uses,
+    since a directory list reads more naturally PATH/PYTHONPATH-style."""
+
+    def test_default_is_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_PLUGINS_EXTRA_DIRS", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.plugins_extra_dirs == []
+
+    def test_env_override_pathsep_separated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "HIVEPILOT_PLUGINS_EXTRA_DIRS",
+            os.pathsep.join(["/opt/hivepilot/plugins", "/srv/config/plugins"]),
+        )
+        s = Settings()
+        assert s.plugins_extra_dirs == [
+            Path("/opt/hivepilot/plugins"),
+            Path("/srv/config/plugins"),
+        ]
+
+    def test_empty_env_value_is_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_PLUGINS_EXTRA_DIRS", "")
+        s = Settings()
+        assert s.plugins_extra_dirs == []
+
+    def test_is_list_of_path_type(self) -> None:
+        s = Settings()
+        assert isinstance(s.plugins_extra_dirs, list)
 
 
 # ---------------------------------------------------------------------------

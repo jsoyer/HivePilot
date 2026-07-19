@@ -27,6 +27,42 @@ Plugins load from three sources. All three are gated by the master switch `plugi
 - **entry-point** (`source="entry-point"`): any installed package that declares an entry point in the `hivepilot.plugins` group, discovered via `importlib.metadata.entry_points(group="hivepilot.plugins")`.
 - **explicit-entry** (`source="explicit-entry"`): a single pinned `module:attr` target set via the `HIVEPILOT_PLUGINS_ENTRY` environment variable.
 
+### Multi-directory local-file search (`plugins_extra_dirs`)
+
+`<base_dir>/plugins/` is always scanned first. Additional directories can be
+scanned afterward via `settings.plugins_extra_dirs` (env `HIVEPILOT_PLUGINS_EXTRA_DIRS`,
+an `os.pathsep`-separated list of directory paths — `:` on POSIX, `;` on
+Windows). This is the fix for a specific deployment gap: a config repo that
+sets `HIVEPILOT_BASE_DIR` to its own directory (to load its own
+`plugins/vendored_skills.py`, say) can no longer see the engine's shipped
+`plugins/*.py` — they live under the engine repo, which is no longer
+`base_dir`. `plugins_extra_dirs` lets that same deployment point back at the
+engine's `plugins/` directory too, so it gets BOTH sets of plugins instead of
+having to choose one.
+
+```bash
+# .env
+HIVEPILOT_PLUGINS_EXTRA_DIRS=/opt/hivepilot/plugins:/srv/config-repo/plugins
+```
+
+Rules:
+
+- Directories are scanned in order: `base_dir/plugins` first, then each
+  `plugins_extra_dirs` entry in the order listed.
+- **Dedup by module stem, first-wins**: if the same `<name>.py` stem appears
+  in more than one scanned directory, only the FIRST occurrence loads — later
+  ones are skipped (logged at info level), never a collision error. Since
+  `base_dir/plugins` is always scanned first, it always wins over any extra
+  directory, so a deployment's own `base_dir/plugins` can deliberately
+  override a same-named shipped plugin.
+- A `plugins_extra_dirs` entry that doesn't exist on disk is silently
+  skipped — same as a missing `base_dir/plugins` always has been.
+- `plugins_enabled` and `plugins_disabled` apply identically across every
+  scanned directory — a disabled plugin is skipped regardless of which
+  directory it was found in.
+- Additive/opt-in: empty (the default) is byte-identical to the
+  single-directory scan that existed before this setting.
+
 Entry-point declaration in `pyproject.toml`:
 
 ```toml
