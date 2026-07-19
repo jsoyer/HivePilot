@@ -25,7 +25,7 @@ from hivepilot.services import (
     token_service,
 )
 from hivepilot.services.metrics import registry, run_duration_seconds
-from hivepilot.ui.plugin_manager import persist_plugins_disabled
+from hivepilot.ui.plugin_persist import persist_plugins_disabled
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 
 app = FastAPI(
@@ -980,7 +980,7 @@ def plugins_health_endpoint() -> dict[str, Any]:
 # Mirador actionable dashboard PRD, Sprint 5 -- POST /v1/plugins/{name}/toggle
 # (admin-only). Enable/disable a plugin from the web Health tab by upserting
 # `HIVEPILOT_PLUGINS_DISABLED` in the `.env` file `Settings` reads from (see
-# `hivepilot.ui.plugin_manager.persist_plugins_disabled`, reused as-is --
+# `hivepilot.ui.plugin_persist.persist_plugins_disabled`, reused as-is --
 # this endpoint only inlines the flip logic `PluginManagerApp.toggle_selected`
 # already established for the TUI's `space` binding, it never imports the
 # Textual app class itself).
