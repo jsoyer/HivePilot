@@ -389,8 +389,11 @@ class PluginManagerApp(App):
             now_disabled = True
 
         updated = sorted(current)
-        settings.plugins_disabled = updated
+        # Persist to .env first; only mutate in-memory settings once the write
+        # succeeds, so a failing persist can't diverge settings.plugins_disabled
+        # from .env (mirrors toggle_plugin_endpoint in api_service.py).
         persist_plugins_disabled(updated)
+        settings.plugins_disabled = updated
 
         old_row = self._rows[row_index]
         new_status = "disabled" if now_disabled else "enabled"

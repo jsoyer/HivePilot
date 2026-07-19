@@ -972,7 +972,8 @@ def plugins_health_endpoint() -> dict[str, Any]:
         "plugins": [
             {"name": name, "status": health.status, "detail": health.detail}
             for name, health in sorted(results.items())
-        ]
+        ],
+        "disabled": sorted(settings.plugins_disabled),
     }
 
 

@@ -264,7 +264,7 @@ class TestPluginsHealthContract:
         resp = api_client.get("/v1/plugins/health", headers=_auth(read_token))
         assert resp.status_code == 200
         data = resp.json()
-        assert set(data.keys()) == {"plugins"}
+        assert set(data.keys()) == {"plugins", "disabled"}
         assert len(data["plugins"]) == 1
         assert set(data["plugins"][0].keys()) == {"name", "status", "detail"}
 

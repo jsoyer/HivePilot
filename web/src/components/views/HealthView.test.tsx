@@ -31,6 +31,12 @@ const health: PluginsHealthResponse = {
     { name: 'mem0', status: 'degraded', detail: 'self-hosted, slow' },
     { name: 'obsidian', status: 'error', detail: 'vault path missing' },
   ],
+  disabled: [],
+}
+
+const healthWithDisabled: PluginsHealthResponse = {
+  ...health,
+  disabled: ['tmux'],
 }
 
 function mockRole(role: Role | null, rank: number) {
@@ -94,7 +100,7 @@ describe('HealthView', () => {
   })
 
   it('shows an empty state when no plugins are registered', async () => {
-    fetchPluginsHealth.mockResolvedValue({ plugins: [] } satisfies PluginsHealthResponse)
+    fetchPluginsHealth.mockResolvedValue({ plugins: [], disabled: [] } satisfies PluginsHealthResponse)
 
     await act(async () => {
       mount()
@@ -221,5 +227,63 @@ describe('HealthView', () => {
 
     const alert = container.querySelector('[role="alert"]')
     expect(alert?.textContent).toMatch(/insufficient role/i)
+  })
+
+  // -------------------------------------------------------------------------
+  // Follow-up: re-enable disabled plugins from the web (Health tab)
+  // -------------------------------------------------------------------------
+
+  it('renders a disabled plugin with an admin "Enable" toggle', async () => {
+    fetchPluginsHealth.mockResolvedValue(healthWithDisabled)
+    mockRole('admin', 3)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('tmux')
+    expect(container.textContent).toMatch(/disabled plugins/i)
+    expect(container.querySelector('button[aria-label="Enable tmux"]')).not.toBeNull()
+  })
+
+  it('clicking a disabled plugin\'s Enable toggle calls togglePlugin and shows the restart badge', async () => {
+    fetchPluginsHealth.mockResolvedValue(healthWithDisabled)
+    mockRole('admin', 3)
+    togglePlugin.mockResolvedValue({ name: 'tmux', disabled: false, restart_required: true })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const enableButton = container.querySelector(
+      'button[aria-label="Enable tmux"]',
+    ) as HTMLButtonElement
+    const tmuxRow = enableButton.closest('li') as HTMLElement
+
+    await act(async () => {
+      enableButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(togglePlugin).toHaveBeenCalledWith('tmux')
+    expect(tmuxRow.textContent).toMatch(/restart required/i)
+    expect(container.querySelector('button[aria-label="Disable tmux"]')).not.toBeNull()
+  })
+
+  it('CRITICAL: non-admin does not see the re-enable toggle for a disabled plugin', async () => {
+    fetchPluginsHealth.mockResolvedValue(healthWithDisabled)
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('tmux')
+    expect(container.querySelector('button[aria-label="Enable tmux"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="Disable tmux"]')).toBeNull()
   })
 })

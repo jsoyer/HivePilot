@@ -601,7 +601,7 @@ class TestPluginsHealthEndpoint:
         raw, _ = add_token("read")
         resp = api_client.get("/plugins/health", headers=_auth(raw))
         assert resp.status_code == 200
-        assert resp.json() == {"plugins": []}
+        assert resp.json() == {"plugins": [], "disabled": []}
 
     def test_raising_check_surfaces_as_error_not_500(
         self, api_client, tmp_tokens_file, monkeypatch
@@ -632,6 +632,31 @@ class TestPluginsHealthEndpoint:
         assert "disk on fire" not in entry["detail"]
         # ...only the exception type name is surfaced.
         assert "RuntimeError" in entry["detail"]
+
+    def test_disabled_field_reflects_settings_plugins_disabled(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """`disabled` is a plain readback of `settings.plugins_disabled`,
+        independent of `check_all()`'s (enabled-only) result -- proves the
+        Health tab's re-enable rows (Mirador PRD follow-up) get their data
+        from the right source, not from whatever `check_all()` happens to
+        return."""
+        from types import SimpleNamespace
+
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(plugins=SimpleNamespace(check_all=lambda: {})),
+        )
+        monkeypatch.setattr(settings, "plugins_disabled", ["zeta", "rtk"])
+
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/plugins/health", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["disabled"] == ["rtk", "zeta"]
 
     def test_mem0_health_detail_never_leaks_api_key(self, monkeypatch):
         """Regression guard for the sprint's 'no secret in any detail'
