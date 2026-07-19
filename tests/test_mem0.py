@@ -67,6 +67,20 @@ from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
+from hivepilot.services import config_provenance
+
+_LEAK_TEST_SECRET_MARKER = "MEM0-RECALL-LEAK-TEST-SECRET-9f13c2ad-DO-NOT-LEAK"
+
+
+@pytest.fixture(autouse=True)
+def _clean_secret_registry_for_leak_tests():
+    """Mirrors `tests/test_store_hook_redaction.py`'s `_clean_secret_registry`
+    fixture — keeps the global secret-value registry hermetic across tests in
+    this module."""
+    config_provenance.clear_secret_values()
+    yield
+    config_provenance.clear_secret_values()
+
 
 REPO_ROOT = Path(__file__).parent.parent
 MEM0_PLUGIN_PATH = REPO_ROOT / "plugins" / "mem0.py"
@@ -360,6 +374,41 @@ class TestRecallInjectsMemories:
             mem0_module.recall(payload=payload)
 
         assert payload.metadata[mem0_module._ORIGINAL_EXTRA_PROMPT_KEY] == "original instructions"
+
+
+class TestRecallSearchQueryNeverLeaksSecrets:
+    """Defense-in-depth invariant: `recall()`'s off-machine `client.search`
+    call is keyed ONLY off `payload.task_name` / the step name / `_memory_key`
+    (see `plugins/mem0.py::recall`, ~line 405: `query = f"{payload.task_name}
+    {step_name}".strip() or key`) — never off `payload.metadata["extra_prompt"]`
+    or `prior_context`. Those fields legitimately still carry RAW resolved
+    secrets at `before_step` time (the runner needs them un-redacted to build
+    its prompt; see `Orchestrator._execute_task`'s `before_step` hook copy,
+    which strips `secrets={}` but intentionally leaves `metadata` alone so
+    `recall` can mutate `metadata["extra_prompt"]` in place). If a future
+    change makes `recall` search on prompt content instead of task identity,
+    a raw secret would silently leave the process via the mem0 `search` call
+    — this test locks that it currently does not."""
+
+    def test_recall_search_query_never_leaks_secret_from_extra_prompt(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        config_provenance.register_secret_value(_LEAK_TEST_SECRET_MARKER)
+        payload = _payload(
+            tmp_path,
+            extra_prompt=f"deploy using token {_LEAK_TEST_SECRET_MARKER}",
+            prior_context=f"previous step output contained {_LEAK_TEST_SECRET_MARKER}",
+        )
+        mock_client = MagicMock()
+        mock_client.search.return_value = []
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.recall(payload=payload)
+
+        assert mock_client.search.called
+        call = mock_client.search.call_args
+        assert _LEAK_TEST_SECRET_MARKER not in str(call.args)
+        assert _LEAK_TEST_SECRET_MARKER not in str(call.kwargs)
 
 
 class TestRecallIdempotency:
