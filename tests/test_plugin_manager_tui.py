@@ -108,7 +108,7 @@ def test_plugin_rows_attributes_panel_by_module_hint() -> None:
 def test_plugin_rows_falls_back_to_unknown_when_attribution_unavailable() -> None:
     """If neither real attribution (`record.contributions`, empty here) nor
     the module-hint fallback can be derived, show the noted placeholder —
-    documented in docs/v4/PLUGINS.md."""
+    documented in docs/PLUGINS.md."""
     record = PluginRecord(
         name="mystery", source="entry-point", location="unrelated_pkg:register (dist==1.0)"
     )

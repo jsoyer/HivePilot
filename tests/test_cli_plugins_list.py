@@ -5,7 +5,7 @@ Covers:
 - the command exits 0 and lists the built-in runner kinds and notifiers
 - a loaded `PluginRecord` (name/source/location) is listed when present
 
-v1 simplification (see docs/v4/PLUGINS.md): this is an inventory (what's
+v1 simplification (see docs/PLUGINS.md): this is an inventory (what's
 loaded, from where) plus a separate list of what runner kinds / notifier
 names are currently registered (built-in vs. plugin, inferred by membership)
 — not a full join between the two.

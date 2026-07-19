@@ -3,7 +3,7 @@
 Two importable workflows that wire HivePilot's event webhook + HTTP API into an
 external approval loop — approve/deny plans without opening Telegram.
 
-See also: [`docs/v4/INTEGRATIONS.md`](../../docs/v4/INTEGRATIONS.md).
+See also: [`docs/INTEGRATIONS.md`](../../docs/INTEGRATIONS.md).
 
 ## Files
 - **`hivepilot-events.json`** — receives HivePilot lifecycle events

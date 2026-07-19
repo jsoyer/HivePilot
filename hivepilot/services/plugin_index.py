@@ -5,7 +5,7 @@ plugins available for the operator to install: name, description, author,
 homepage, an install hint (pip package name or git URL), version, and
 checksum.
 
-CRITICAL trust-model invariant (see docs/v4/PLUGINS.md "Trust model" —
+CRITICAL trust-model invariant (see docs/PLUGINS.md "Trust model" —
 "There is no network fetch of plugin CODE, ever."): this module fetches
 METADATA ONLY. It never downloads, imports, or executes plugin code.
 Installation stays on the operator's own `pip install` / `git clone` —
@@ -137,7 +137,7 @@ def fetch_index(url: str | None = None, *, timeout: int = 10) -> list[PluginInde
 
     METADATA ONLY. Performs a single GET of a JSON document describing
     available plugins; installation stays on the operator's own trusted
-    pip/git path (see module docstring + docs/v4/PLUGINS.md "Trust model").
+    pip/git path (see module docstring + docs/PLUGINS.md "Trust model").
 
     Fail-safe: raises `RuntimeError` with a short, friendly reason — never
     the raw response body/exception text (which could leak internal
