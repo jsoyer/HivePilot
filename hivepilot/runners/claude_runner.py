@@ -729,6 +729,9 @@ class ClaudeRunner(BaseRunner):
             sections.append(f"Repository instructions file: {payload.project.claude_md}")
         if knowledge_context:
             sections.append(f"Knowledge context:\n{knowledge_context}")
+        lessons_context = self._build_lessons_context(payload)
+        if lessons_context:
+            sections.append(f"Lessons learned:\n{lessons_context}")
         # Volatile sections last (user-specific, per-run context).
         extra = payload.metadata.get("extra_prompt")
         if extra:
@@ -774,3 +777,19 @@ class ClaudeRunner(BaseRunner):
         if not files:
             return None
         return build_context(payload.project.path, [Path(file) for file in files])
+
+    def _build_lessons_context(self, payload: RunnerPayload) -> str:
+        """Return the stable 'Lessons learned' block for this step's
+        project/role/task (Auto-Learning Lessons Loop PRD, Sprint 3) --
+        see `knowledge_service.build_lessons_context` for the fail-closed
+        gate/ranking contract. ``role`` comes from ``payload.metadata``
+        (``Orchestrator._execute_task_body`` threads ``task.role`` in
+        there for exactly this purpose) -- ``None`` when unavailable
+        (non-role task, or a payload built by a call site that predates
+        this Sprint), which degrades retrieval to project+task keying
+        rather than crashing.
+        """
+        from hivepilot.services.knowledge_service import build_lessons_context
+
+        role = payload.metadata.get("role")
+        return build_lessons_context(payload.project_name, role, payload.task_name)

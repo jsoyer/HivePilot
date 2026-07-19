@@ -36,9 +36,11 @@ Design invariants:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
+from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, RunnerKind, TaskStep
 from hivepilot.runners.base import RunnerPayload
 
@@ -60,11 +62,39 @@ class Lesson:
     distiller cited, echoed back so `record_lesson` can persist them as the
     `lessons` table's FK columns. There is deliberately NO `score`/
     `confidence` field here: this module never trusts an LLM self-report as
-    the validation score (Sprint 3's job, from real outcome signal).
+    the validation score (Sprint 3's job, from real outcome signal). See
+    `ValidatedLesson` (Sprint 3) for the DISTINCT type `retrieve_lessons`
+    returns -- keeping that a separate dataclass (rather than adding
+    `id`/`score` fields here) preserves this invariant as something
+    `hasattr(candidate, "score")` can still assert False on, not just "score
+    happens to be None".
     """
 
     text: str
     category: str | None
+    source_verdict_id: int | None = None
+    source_interaction_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ValidatedLesson:
+    """A VALIDATED lesson read back from the `lessons` table (Sprint 3) --
+    ready for ranking/injection into a future run's prompt.
+
+    Deliberately a SEPARATE type from `Lesson` (the distillation
+    CANDIDATE): `retrieve_lessons` only ever builds these from an
+    already-persisted, already-`validated=1` row (`state_service.
+    list_ranked_lessons`), so ``score`` here is ALWAYS the real,
+    outcome-derived value `validate_lesson` computed and
+    `update_lesson_validation` persisted -- never the distiller's own
+    self-report (`Lesson` has no such field to leak from in the first
+    place).
+    """
+
+    id: int
+    text: str
+    category: str | None
+    score: float | None
     source_verdict_id: int | None = None
     source_interaction_id: int | None = None
 
@@ -322,3 +352,135 @@ def distill_lessons(
     raw = capture_fn(distiller_def, payload)
     raw = redact_text(raw) if raw else raw
     return parse_distilled_lessons(raw or "")
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 -- fail-closed validation gate + scored retrieval
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OutcomeSignal:
+    """The REAL, post-hoc outcome signal a distilled lesson CANDIDATE is
+    validated against (Auto-Learning Lessons Loop PRD, Sprint 3) --
+    NEVER the distiller's own self-report (see `Lesson`'s docstring for why
+    that field doesn't even exist on the candidate).
+
+    Every field defaults to its DENY value (``False`` / ``False`` /
+    ``None``) -- this is deliberate and is the core anti-poisoning
+    property of this module: an *absent* or *empty* ``OutcomeSignal``
+    (e.g. a run that produced no verdicts, no resolved challenge, and
+    wasn't itself successful) is indistinguishable, on purpose, from "no
+    real signal happened" and MUST be treated as DENY by `validate_lesson`
+    -- never as "no constraint -> allow". This is the same failure class
+    tracked project-wide as an empty-value-fail-open gate (a `[]`/`None`
+    sentinel silently inverting a security check); this dataclass exists
+    specifically so "empty" has one unambiguous shape instead of leaking
+    into ad-hoc `None`/missing-key checks scattered across callers.
+
+    Always built from actual `runs`/`verdicts`/`interactions` rows (see
+    `Orchestrator._build_lesson_outcome_signal`) -- never from the
+    distiller's `capture_fn` response.
+    """
+
+    run_success: bool = False
+    resolved_challenge: bool = False
+    max_verdict_confidence: float | None = None
+
+
+def validate_lesson(lesson: Lesson, outcome_signal: OutcomeSignal | None) -> tuple[bool, float]:
+    """Validate *lesson* against *outcome_signal* and return
+    ``(validated, score)``.
+
+    Score is computed EXCLUSIVELY from *outcome_signal* -- this function
+    doesn't even look at anything the distiller self-reported (`Lesson`
+    has no `score`/`confidence` field to read in the first place, by
+    design). The score is the MAX of whichever real signals are present:
+      * ``run_success=True``        -> candidate score ``1.0``
+      * ``resolved_challenge=True``  -> candidate score ``1.0``
+      * ``max_verdict_confidence``, when a finite value in ``[0, 1]`` ->
+        that confidence value itself (the actual judge/arbiter confidence
+        for a resolved challenge on this run)
+
+    FAIL-CLOSED (the core security property of this Sprint -- see
+    `OutcomeSignal`'s docstring): *outcome_signal* being ``None``, or
+    carrying no positive signal at all (every field at its DENY default),
+    quarantines the lesson -- returns ``(False, 0.0)``. Absent/empty
+    signal is treated as DENY, never as "no constraint -> allow" (the
+    empty-value-fail-open bug class this module exists to avoid).
+
+    ``validated`` is ``True`` only when the computed score is
+    ``>= settings.lesson_min_score`` -- itself fail-closed-validated to a
+    finite value in ``(0.0, 1.0]`` at `Settings` construction (see
+    `Settings._validate_lesson_min_score`), so this gate can never be
+    silently defeated by a misconfigured floor of ``0``.
+    """
+    if outcome_signal is None:
+        return False, 0.0
+
+    candidate_scores: list[float] = []
+    if outcome_signal.run_success:
+        candidate_scores.append(1.0)
+    if outcome_signal.resolved_challenge:
+        candidate_scores.append(1.0)
+    confidence = outcome_signal.max_verdict_confidence
+    if confidence is not None and math.isfinite(confidence) and 0.0 <= confidence <= 1.0:
+        candidate_scores.append(confidence)
+
+    if not candidate_scores:
+        # No real signal at all (every field at its DENY default) -- DENY,
+        # never "no constraint -> allow". This is the explicit
+        # empty-value-fail-open guard.
+        return False, 0.0
+
+    score = max(candidate_scores)
+    validated = score >= settings.lesson_min_score
+    return validated, score
+
+
+def retrieve_lessons(
+    project: str,
+    role: str | None = None,
+    task: str | None = None,
+    *,
+    limit: int = 5,
+    semantic: bool = False,
+) -> list[ValidatedLesson]:
+    """Retrieve VALIDATED lessons for *project* (optionally narrowed by
+    *role*/*task*), ranked by score (desc) then recency (desc), capped at
+    *limit* (Auto-Learning Lessons Loop PRD, Sprint 3).
+
+    ``semantic=False`` (the only path implemented this Sprint) is a plain,
+    dependency-free SQLite read via `state_service.list_ranked_lessons` --
+    no `mem0`/`FAISS`/`langchain` import anywhere on this path, so the core
+    lessons loop keeps working with those optional dependencies absent.
+    ``semantic=True`` is a deliberate Sprint 4 seam: it raises
+    `NotImplementedError` rather than silently falling back to keyword
+    ranking, so a caller that flips it on early gets a loud signal instead
+    of a quietly-wrong result.
+
+    Only ever returns rows with ``validated=1`` -- `state_service.
+    list_ranked_lessons` hard-codes that filter (no toggle), so an
+    unvalidated candidate can never leak into this path regardless of what
+    a caller passes.
+    """
+    if semantic:
+        raise NotImplementedError(
+            "Semantic lesson retrieval lands in Sprint 4 of the "
+            "auto-learning-lessons-loop PRD -- not implemented yet."
+        )
+
+    from hivepilot.services import state_service
+
+    rows = state_service.list_ranked_lessons(project, role=role, task=task, limit=limit)
+    return [
+        ValidatedLesson(
+            id=row["id"],
+            text=row.get("text") or "",
+            category=row.get("category"),
+            score=row.get("score"),
+            source_verdict_id=row.get("source_verdict_id"),
+            source_interaction_id=row.get("source_interaction_id"),
+        )
+        for row in rows
+    ]

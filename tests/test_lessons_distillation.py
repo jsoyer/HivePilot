@@ -18,6 +18,14 @@ Covers:
   `capture_definition` call site in `orchestrator.py`).
 - `record_lesson` redacts BOTH `text` and `category` before INSERT (a
   direct API caller's unredacted `category` can't bypass masking).
+- `Orchestrator._build_lesson_outcome_signal` (Sprint 3 post-review
+  hardening): a REJECTED challenge verdict (`decision="DEFEND"`/
+  `"MAINTAIN"`) contributes NOTHING regardless of its confidence; an
+  `"ACCEPT"` verdict below `lesson_min_score` does not resolve either
+  (matches what `_resolve_challenge_via_arbiter` persists for an
+  escalated-to-human run); only a genuine `"ACCEPT"` at/above the floor
+  sets `resolved_challenge`/`max_verdict_confidence`; `run_success` is
+  independent of challenge outcome entirely.
 """
 
 from __future__ import annotations
@@ -31,7 +39,9 @@ import pytest
 import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch resolution
 from hivepilot.config import settings
 from hivepilot.models import PipelineConfig, PipelineStage, ProjectConfig, TaskConfig, TaskStep
+from hivepilot.orchestrator import RunResult
 from hivepilot.services import config_provenance, state_service
+from hivepilot.services.lessons_service import Lesson, OutcomeSignal, validate_lesson
 
 # ---------------------------------------------------------------------------
 # Helpers (mirrors tests/test_verdict_run_correlation.py)
@@ -96,7 +106,7 @@ class TestDistillAndPersistLessons:
         orch.registry = mock_registry
         return orch
 
-    def test_persists_lessons_redacted_with_validated_false(self) -> None:
+    def test_persists_lessons_redacted_and_validated_from_real_outcome(self) -> None:
         # Register a secret VALUE so `redact_text` has something to mask —
         # mirrors how a real run would have registered it via
         # `_resolve_secrets` earlier in the same run scope (S1's run-scope
@@ -123,8 +133,6 @@ class TestDistillAndPersistLessons:
             confidence=0.8,
         )
 
-        from hivepilot.orchestrator import RunResult
-
         orch._distill_and_persist_lessons(
             run_id=run_id,
             project=project,
@@ -144,11 +152,19 @@ class TestDistillAndPersistLessons:
         # Redacted: the live secret value must never reach the persisted row.
         assert "sk-live-supersecret" not in row["text"]
         assert row["text"].startswith("Never hardcode")
-        # Sprint 2 never sets validated=True, and the distiller's own
-        # self-reported score/confidence (0.99 / 1.0 in the JSON above) must
-        # NEVER be trusted as the persisted score/confidence.
-        assert row["validated"] == 0
-        assert row["score"] is None
+        # Sprint 3: `_distill_and_persist_lessons` now also validates each
+        # candidate against the run's REAL outcome signal right after
+        # persisting it — this run's `RunResult.success=True` is real
+        # positive signal, so the candidate is validated with score 1.0.
+        # Critically, that score is NOT the distiller's self-reported 0.99/
+        # 1.0 (`score`/`confidence` in the JSON above) — those keys are
+        # never even read (see `lessons_service.Lesson`/`parse_distilled_
+        # lessons`) — and the recorded "debate" verdict (confidence=0.8)
+        # does NOT contribute either: `_build_lesson_outcome_signal` scopes
+        # verdict-confidence signal to `kind == "challenge"` only.
+        assert row["validated"] == 1
+        assert row["score"] == 1.0
+        assert row["score"] != 0.99
         assert row["confidence"] is None
 
     def test_malformed_distiller_output_persists_nothing(self) -> None:
@@ -166,8 +182,6 @@ class TestDistillAndPersistLessons:
             decision="adopt",
             confidence=0.8,
         )
-
-        from hivepilot.orchestrator import RunResult
 
         orch._distill_and_persist_lessons(
             run_id=run_id,
@@ -195,8 +209,6 @@ class TestDistillAndPersistLessons:
             confidence=0.8,
         )
 
-        from hivepilot.orchestrator import RunResult
-
         orch._distill_and_persist_lessons(
             run_id=run_id,
             project=project,
@@ -220,8 +232,6 @@ class TestDistillAndPersistLessons:
         orch.registry = mock_registry
         project = ProjectConfig(path=Path("/tmp/lessons-p7"))
         run_id = state_service.record_run_start("lessons-p7", "my-task")
-
-        from hivepilot.orchestrator import RunResult
 
         orch._distill_and_persist_lessons(
             run_id=run_id,
@@ -293,6 +303,122 @@ class TestDistillAndPersistLessons:
         rows = state_service.list_lessons("lessons-p6", validated_only=False)
         row = next(r for r in rows if r["id"] == lesson_id)
         assert row["category"] is None
+
+
+# ---------------------------------------------------------------------------
+# `_build_lesson_outcome_signal` — Sprint 3 post-review hardening: only a
+# GENUINE, at/above-floor ACCEPT challenge verdict counts as positive signal.
+# A REJECTED verdict (MAINTAIN/DEFEND) must never contribute, at any
+# confidence — that confidence means "how sure the work is BAD".
+# ---------------------------------------------------------------------------
+
+
+class TestBuildLessonOutcomeSignal:
+    def _orch(self) -> "hivepilot.orchestrator.Orchestrator":
+        return _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+
+    @pytest.fixture(autouse=True)
+    def _reset_lesson_min_score(self) -> Iterator[None]:
+        original = settings.lesson_min_score
+        yield
+        settings.lesson_min_score = original
+
+    def test_rejected_defend_verdict_contributes_nothing(self) -> None:
+        """A REJECTED challenge verdict (`decision="DEFEND"`) at HIGH
+        confidence must contribute NEITHER `resolved_challenge` NOR
+        `max_verdict_confidence` -- this is THE anti-poisoning fail-open
+        this Sprint exists to close: without this guard, a lesson
+        distilled from a BLOCKED run would validate and leak into every
+        future project:role:task prompt."""
+        orch = self._orch()
+        signal = orch._build_lesson_outcome_signal(
+            result=RunResult("p", "developer", False, "blocked"),
+            verdicts=[{"kind": "challenge", "decision": "DEFEND", "confidence": 0.9}],
+            interactions=[],
+        )
+        assert signal == OutcomeSignal(
+            run_success=False, resolved_challenge=False, max_verdict_confidence=None
+        )
+        # End-to-end: the resulting signal must quarantine the candidate.
+        lesson = Lesson(text="Do the risky thing.", category="general")
+        validated, score = validate_lesson(lesson, signal)
+        assert validated is False
+        assert score == 0.0
+
+    def test_rejected_maintain_verdict_contributes_nothing(self) -> None:
+        """Same guard for the sibling rejection decision `"MAINTAIN"`."""
+        orch = self._orch()
+        signal = orch._build_lesson_outcome_signal(
+            result=RunResult("p", "developer", False, "blocked"),
+            verdicts=[{"kind": "challenge", "decision": "MAINTAIN", "confidence": 0.95}],
+            interactions=[],
+        )
+        assert signal == OutcomeSignal(
+            run_success=False, resolved_challenge=False, max_verdict_confidence=None
+        )
+
+    def test_accept_below_floor_does_not_resolve(self) -> None:
+        """An `"ACCEPT"` verdict BELOW `lesson_min_score` is exactly what
+        `_resolve_challenge_via_arbiter` persists even when the challenge
+        was actually escalated to a human (its own `accepted` check uses
+        the SAME floor) -- must not count as a resolved challenge."""
+        settings.lesson_min_score = 0.5
+        orch = self._orch()
+        signal = orch._build_lesson_outcome_signal(
+            result=RunResult("p", "developer", False, "blocked"),
+            verdicts=[{"kind": "challenge", "decision": "ACCEPT", "confidence": 0.3}],
+            interactions=[],
+        )
+        assert signal == OutcomeSignal(
+            run_success=False, resolved_challenge=False, max_verdict_confidence=None
+        )
+        lesson = Lesson(text="Do the risky thing.", category="general")
+        validated, score = validate_lesson(lesson, signal)
+        assert validated is False
+
+    def test_accept_at_or_above_floor_resolves_with_its_own_confidence(self) -> None:
+        """A GENUINE, at/above-floor `"ACCEPT"` sets BOTH
+        `resolved_challenge=True` AND carries its own confidence through as
+        `max_verdict_confidence` (0.7 here, not silently dropped or
+        rounded) -- proven at the `OutcomeSignal` level. `validate_lesson`
+        then validates the resulting lesson; its score is 1.0 because
+        `resolved_challenge=True` is itself a full-confidence signal there
+        (unrelated to this fix -- pre-existing `validate_lesson` behavior),
+        so this does not re-assert the raw 0.7 as the final persisted
+        score, only that it was genuinely computed and carried by the
+        builder."""
+        settings.lesson_min_score = 0.5
+        orch = self._orch()
+        signal = orch._build_lesson_outcome_signal(
+            result=RunResult("p", "developer", False, "unrelated to this signal"),
+            verdicts=[{"kind": "challenge", "decision": "ACCEPT", "confidence": 0.7}],
+            interactions=[],
+        )
+        assert signal == OutcomeSignal(
+            run_success=False, resolved_challenge=True, max_verdict_confidence=0.7
+        )
+        lesson = Lesson(text="Do the risky thing.", category="general")
+        validated, score = validate_lesson(lesson, signal)
+        assert validated is True
+        assert score == 1.0
+
+    def test_successful_run_validates_regardless_of_challenge_outcome(self) -> None:
+        """`run_success` is a fully independent signal: a successful run's
+        lesson validates even alongside a REJECTED challenge verdict in the
+        SAME run (the rejected verdict itself still contributes nothing)."""
+        orch = self._orch()
+        signal = orch._build_lesson_outcome_signal(
+            result=RunResult("p", "developer", True, "ok"),
+            verdicts=[{"kind": "challenge", "decision": "DEFEND", "confidence": 0.9}],
+            interactions=[],
+        )
+        assert signal == OutcomeSignal(
+            run_success=True, resolved_challenge=False, max_verdict_confidence=None
+        )
+        lesson = Lesson(text="Do the risky thing.", category="general")
+        validated, score = validate_lesson(lesson, signal)
+        assert validated is True
+        assert score == 1.0
 
 
 # ---------------------------------------------------------------------------
