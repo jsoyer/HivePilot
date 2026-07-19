@@ -192,6 +192,7 @@ export interface PluginHealthEntry {
 
 export interface PluginsHealthResponse {
   plugins: PluginHealthEntry[]
+  disabled: string[]
 }
 
 export function fetchPluginsHealth(): Promise<PluginsHealthResponse> {

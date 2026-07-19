@@ -31,6 +31,12 @@ interface PluginToggleProps {
   name: string
   toggled: ToggleState | undefined
   onToggled: (name: string, result: ToggleState) => void
+  /** Seed the control as already-disabled (button reads "Enable" on first
+   * render) for rows sourced from `data.disabled` -- see `HealthView`'s
+   * disabled-plugins section below. Ignored once `toggled` is set (a local
+   * toggle result always wins over the seed). Defaults to `false` for the
+   * enabled-plugin rows, which start from "Disable". */
+  initialDisabled?: boolean
 }
 
 /**
@@ -41,14 +47,13 @@ interface PluginToggleProps {
  *
  * `check_all()` (what `GET /v1/plugins/health` returns) only lists currently
  * REGISTERED (i.e. enabled) plugins -- a plugin already disabled via
- * `settings.plugins_disabled` is never registered, so it never appears as a
- * row here in the first place. The primary flow this control supports is
- * therefore "disable a currently-enabled plugin"; re-enabling a
- * previously-disabled one (still supported server-side via the union
- * allowlist) has no row to click until the process restarts and the plugin
- * either loads or doesn't.
+ * `settings.plugins_disabled` is never registered, so it never appears in
+ * `data.plugins`. `GET /v1/plugins/health`'s `disabled` field closes that
+ * gap: `HealthView` renders those names as their own seeded-disabled rows
+ * (`initialDisabled`), so re-enabling a previously-disabled plugin (already
+ * supported server-side via the union allowlist) has a row to click too.
  */
-function PluginToggle({ name, toggled, onToggled }: PluginToggleProps) {
+function PluginToggle({ name, toggled, onToggled, initialDisabled = false }: PluginToggleProps) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -69,7 +74,7 @@ function PluginToggle({ name, toggled, onToggled }: PluginToggleProps) {
     }
   }
 
-  const isDisabled = toggled?.disabled ?? false
+  const isDisabled = toggled?.disabled ?? initialDisabled
 
   return (
     <div className="flex flex-col gap-1">
@@ -131,31 +136,59 @@ export function HealthView() {
       <CardContent>
         <AsyncSection
           state={health}
-          isEmpty={(data) => data.plugins.length === 0}
+          isEmpty={(data) => data.plugins.length === 0 && data.disabled.length === 0}
           emptyMessage="No plugins registered."
         >
           {(data) => (
-            <ul className="flex flex-col gap-2">
-              {data.plugins.map((plugin) => (
-                <li
-                  key={plugin.name}
-                  className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2"
-                >
-                  <span className="font-medium">{plugin.name}</span>
-                  <Badge variant={STATUS_VARIANT[plugin.status]}>{plugin.status}</Badge>
-                  {plugin.detail && (
-                    <span className="text-sm text-muted-foreground">{plugin.detail}</span>
-                  )}
-                  {canAdmin && (
-                    <PluginToggle
-                      name={plugin.name}
-                      toggled={toggled[plugin.name]}
-                      onToggled={handleToggled}
-                    />
-                  )}
-                </li>
-              ))}
-            </ul>
+            <div className="flex flex-col gap-4">
+              <ul className="flex flex-col gap-2">
+                {data.plugins.map((plugin) => (
+                  <li
+                    key={plugin.name}
+                    className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2"
+                  >
+                    <span className="font-medium">{plugin.name}</span>
+                    <Badge variant={STATUS_VARIANT[plugin.status]}>{plugin.status}</Badge>
+                    {plugin.detail && (
+                      <span className="text-sm text-muted-foreground">{plugin.detail}</span>
+                    )}
+                    {canAdmin && (
+                      <PluginToggle
+                        name={plugin.name}
+                        toggled={toggled[plugin.name]}
+                        onToggled={handleToggled}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {data.disabled.length > 0 && (
+                <div className="flex flex-col gap-2 border-t border-border pt-4">
+                  <h3 className="text-sm font-semibold text-muted-foreground">
+                    Disabled plugins
+                  </h3>
+                  <ul className="flex flex-col gap-2">
+                    {data.disabled.map((name) => (
+                      <li
+                        key={name}
+                        className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-2"
+                      >
+                        <span className="font-medium">{name}</span>
+                        <Badge variant="outline">disabled</Badge>
+                        {canAdmin && (
+                          <PluginToggle
+                            name={name}
+                            toggled={toggled[name]}
+                            onToggled={handleToggled}
+                            initialDisabled
+                          />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
         </AsyncSection>
       </CardContent>

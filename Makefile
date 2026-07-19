@@ -1,4 +1,4 @@
-.PHONY: help install dev lint format typecheck test check docker-build docker-doctor clean
+.PHONY: help install dev lint format typecheck test check docker-build docker-doctor clean webui ci-local
 
 VENV ?= .venv
 PY := $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
@@ -48,3 +48,14 @@ clean: ## Remove caches/build artifacts (keeps .venv, .env, state.db)
 	rm -rf .mypy_cache .pytest_cache .ruff_cache
 	find . -type d -name "__pycache__" -not -path "./.venv/*" -exec rm -rf {} +
 	rm -rf *.egg-info
+
+webui: ## Build the Mirador web UI and fail if committed static/ is stale (mirrors CI)
+	cd web && npm ci && npm run build
+	git diff --exit-code hivepilot/webui/static
+
+ci-local: ## Reproduce the full CI gate locally: lint + typecheck + tests + web build/staleness
+	$(RUFF) check .
+	$(RUFF) format --check .
+	$(MYPY) hivepilot tests
+	$(PYTEST) -q
+	$(MAKE) webui
