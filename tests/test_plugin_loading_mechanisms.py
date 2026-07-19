@@ -461,3 +461,89 @@ class TestDeclaredNotifiersCollection:
 
         assert "fixture-notifier" in pm.declared_notifiers
         assert "notifiers" not in pm.hooks
+
+
+class TestPluginsExtraDirs:
+    """`plugins_extra_dirs` (multi-directory plugin search) lets
+    `_scan_local_plugins` scan additional directories AFTER `base_dir/plugins`
+    — e.g. a config repo overriding `base_dir` to load its own plugins can
+    ALSO load the engine's shipped `plugins/*.py`, instead of one shadowing
+    the other. Order: `base_dir/plugins` first, then each `plugins_extra_dirs`
+    entry in order; a module stem already loaded from an earlier directory is
+    skipped (first-wins dedup) rather than raising a collision."""
+
+    def test_extra_dir_plugin_is_discovered_and_registered(self, tmp_path, monkeypatch) -> None:
+        base_dir = tmp_path / "base"
+        extra_dir = tmp_path / "extra"
+        _write_local_plugin(base_dir / "plugins", "base_only.py", kind="base-only-kind")
+        _write_local_plugin(extra_dir, "extra_only.py", kind="extra-only-kind")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [extra_dir], raising=False)
+
+        pm = PluginManager()
+
+        assert "base-only-kind" in RUNNER_MAP
+        assert "extra-only-kind" in RUNNER_MAP
+        assert any(r.name == "base_only" and r.source == "local-file" for r in pm.loaded)
+        assert any(r.name == "extra_only" and r.source == "local-file" for r in pm.loaded)
+
+    def test_dedup_by_stem_base_dir_wins_over_extra_dir(self, tmp_path, monkeypatch) -> None:
+        base_dir = tmp_path / "base"
+        extra_dir = tmp_path / "extra"
+        # Same stem ("shared.py") in both dirs, registering DIFFERENT kinds so
+        # the winner is unambiguous from RUNNER_MAP contents alone.
+        _write_local_plugin(base_dir / "plugins", "shared.py", kind="base-shared-kind")
+        _write_local_plugin(extra_dir, "shared.py", kind="extra-shared-kind")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [extra_dir], raising=False)
+
+        pm = PluginManager()
+
+        assert "base-shared-kind" in RUNNER_MAP
+        assert "extra-shared-kind" not in RUNNER_MAP
+        assert sum(1 for r in pm.loaded if r.name == "shared") == 1
+        assert any(
+            r.name == "shared" and r.location == str(base_dir / "plugins" / "shared.py")
+            for r in pm.loaded
+        )
+
+    def test_nonexistent_extra_dir_is_silently_skipped(self, tmp_path, monkeypatch) -> None:
+        base_dir = tmp_path / "base"
+        missing_dir = tmp_path / "does-not-exist"
+        _write_local_plugin(base_dir / "plugins", "base_only.py", kind="base-only-kind-2")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "plugins_extra_dirs", [missing_dir], raising=False
+        )
+
+        pm = PluginManager()  # must not raise
+
+        assert "base-only-kind-2" in RUNNER_MAP
+        assert any(r.name == "base_only" for r in pm.loaded)
+
+    def test_plugins_disabled_still_skips_plugin_in_extra_dir(self, tmp_path, monkeypatch) -> None:
+        base_dir = tmp_path / "base"
+        extra_dir = tmp_path / "extra"
+        _write_local_plugin(extra_dir, "vendored.py", kind="vendored-kind")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [extra_dir], raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_disabled", ["vendored"], raising=False)
+
+        pm = PluginManager()
+
+        assert "vendored-kind" not in RUNNER_MAP
+        assert not any(r.name == "vendored" for r in pm.loaded)
+
+    def test_empty_plugins_extra_dirs_is_regression_identical(self, tmp_path, monkeypatch) -> None:
+        # No plugins_extra_dirs configured (the field's own default, []) must
+        # behave exactly like every pre-existing test in this module that
+        # never touches it — base_dir/plugins scanning alone, untouched.
+        _write_local_plugin(tmp_path / "plugins", "solo.py", kind="solo-kind")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+
+        pm = PluginManager()
+
+        assert "solo-kind" in RUNNER_MAP
+        assert len(pm.loaded) == 1
+        assert pm.loaded[0].name == "solo"

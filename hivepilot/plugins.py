@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata as metadata
 from dataclasses import dataclass, field
 from importlib import import_module
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, TypedDict
 
 from hivepilot.config import settings
@@ -379,8 +380,98 @@ class SkillInvalidMinRoleError(RuntimeError):
 # safer.
 
 
+def _load_plugin_module(file: Path) -> Any | None:
+    """Compile+exec a single local-file plugin from `file`, returning its
+    module object, or `None` if it has no `register` attribute.
+
+    Extracted from `_scan_local_plugins` (which now calls this once per
+    directory) — behavior is unchanged: load by file path (so it works
+    regardless of cwd / sys.path — the installed `hivepilot` binary and the
+    Telegram bot don't have the project root on sys.path → `import plugins.x`
+    would fail), and compile the CURRENT on-disk source directly rather than
+    `spec.loader.exec_module(module)`, bypassing the `__pycache__/*.pyc` mtime
+    cache so `PluginManager.reload()` (Phase 26b) always sees a file's real
+    current content even across rapid same-second edits.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(f"hivepilot_plugin_{file.stem}", file)
+    if not (spec and spec.loader):
+        return None
+    module = importlib.util.module_from_spec(spec)
+    module.__file__ = str(file)
+    source = file.read_text(encoding="utf-8")
+    code = compile(source, str(file), "exec")
+    exec(code, module.__dict__)  # noqa: S102 — this repo's own plugin file, by design
+    return module if hasattr(module, "register") else None
+
+
+def _scan_plugin_dir(
+    plugin_dir: Path, *, seen_stems: set[str]
+) -> list[tuple[Callable[..., Any], PluginRecord]]:
+    """Scan a single directory for local-file plugins (`*.py`, non-`_`-prefixed,
+    not in `settings.plugins_disabled`, and not already loaded from an earlier
+    directory — see `seen_stems`). Mutates `seen_stems` in place with every
+    stem this call attempts (whether it ultimately loads or is skipped as
+    broken), so a later directory never re-attempts the same name.
+    """
+    found: list[tuple[Callable[..., Any], PluginRecord]] = []
+    if not plugin_dir.exists():
+        return found
+
+    for file in sorted(plugin_dir.glob("*.py")):
+        if file.stem.startswith("_"):
+            continue
+        if file.stem in seen_stems:
+            # Dedup by module stem, first-wins: an earlier directory in scan
+            # order (base_dir/plugins, then plugins_extra_dirs in order)
+            # already claimed this name — e.g. a config repo's plugins/
+            # overriding a shipped plugin of the same stem. Skip silently
+            # (info-level log only), never a collision error: unlike a
+            # runner-kind/notifier-name collision (a hard stop across two
+            # DIFFERENT plugins), this is the SAME logical plugin name
+            # shadowed by directory precedence, working as designed.
+            logger.info(
+                "plugins.skipped_duplicate_stem",
+                name=file.stem,
+                source="local-file",
+                directory=str(plugin_dir),
+            )
+            continue
+        seen_stems.add(file.stem)
+        if file.stem in settings.plugins_disabled:
+            # Skip BEFORE the module is even exec'd (and therefore before
+            # register() could ever be invoked) — a disabled plugin
+            # contributes no runners/notifiers/hooks and has no side
+            # effects from its own module body either.
+            logger.info("plugins.skipped_disabled", name=file.stem, source="local-file")
+            continue
+        try:
+            module = _load_plugin_module(file)
+            if module is not None:
+                found.append(
+                    (
+                        module.register,
+                        PluginRecord(name=file.stem, source="local-file", location=str(file)),
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001 — a broken plugin must not kill a run
+            logger.warning("plugins.load_failed", file=str(file), error=str(exc))
+    return found
+
+
 def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
-    """Scan `plugins/` directory for local-file plugins.
+    """Scan `base_dir/plugins`, then each directory in `settings.plugins_extra_dirs`
+    (in order), for local-file plugins.
+
+    `base_dir/plugins` is always scanned FIRST — a deployment that points
+    `base_dir` at its own config repo (to load its own `plugins/*.py`) can
+    still reach the engine's shipped `plugins/*.py` via `plugins_extra_dirs`,
+    without one shadowing the other. A module stem already loaded from an
+    earlier directory is skipped rather than re-loaded or raising a collision
+    (dedup by stem, first-wins — `base_dir/plugins` always wins over any
+    extra dir). A `plugins_extra_dirs` entry that doesn't exist on disk is
+    silently skipped, same as a missing `base_dir/plugins` always has been.
 
     Returns each successfully-loaded plugin's `register` callable paired with
     a `PluginRecord` describing where it came from.
@@ -388,54 +479,11 @@ def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
     found: list[tuple[Callable[..., Any], PluginRecord]] = []
     if not settings.plugins_enabled:
         return found
-    plugin_dir = settings.base_dir / "plugins"
-    if plugin_dir.exists():
-        import importlib.util
 
-        for file in sorted(plugin_dir.glob("*.py")):
-            if file.stem.startswith("_"):
-                continue
-            if file.stem in settings.plugins_disabled:
-                # Skip BEFORE the module is even exec'd (and therefore before
-                # register() could ever be invoked) — a disabled plugin
-                # contributes no runners/notifiers/hooks and has no side
-                # effects from its own module body either.
-                logger.info("plugins.skipped_disabled", name=file.stem, source="local-file")
-                continue
-            # Load by file path so it works regardless of cwd / sys.path
-            # (the installed `hivepilot` binary and the Telegram bot don't have
-            # the project root on sys.path → `import plugins.x` would fail).
-            try:
-                spec = importlib.util.spec_from_file_location(f"hivepilot_plugin_{file.stem}", file)
-                if spec and spec.loader:
-                    module = importlib.util.module_from_spec(spec)
-                    module.__file__ = str(file)
-                    # Compile+exec the source directly instead of
-                    # `spec.loader.exec_module(module)`: the default
-                    # `SourceFileLoader` consults/writes a `__pycache__/*.pyc`
-                    # bytecode cache keyed by the source file's mtime, and
-                    # mtime resolution on many filesystems is coarse enough
-                    # (whole seconds on some) that two rapid edits to the SAME
-                    # plugin file — exactly what `PluginManager.reload()`
-                    # (Phase 26b) must pick up — can share an mtime and
-                    # silently serve STALE cached bytecode, defeating hot-reload
-                    # entirely. Compiling the CURRENT on-disk text every time
-                    # bypasses that cache, guaranteeing every scan (initial
-                    # load or reload) sees the file's real current content.
-                    source = file.read_text(encoding="utf-8")
-                    code = compile(source, str(file), "exec")
-                    exec(code, module.__dict__)  # noqa: S102 — this repo's own plugin file, by design
-                    if hasattr(module, "register"):
-                        found.append(
-                            (
-                                module.register,
-                                PluginRecord(
-                                    name=file.stem, source="local-file", location=str(file)
-                                ),
-                            )
-                        )
-            except Exception as exc:  # noqa: BLE001 — a broken plugin must not kill a run
-                logger.warning("plugins.load_failed", file=str(file), error=str(exc))
+    seen_stems: set[str] = set()
+    found.extend(_scan_plugin_dir(settings.base_dir / "plugins", seen_stems=seen_stems))
+    for extra_dir in settings.plugins_extra_dirs:
+        found.extend(_scan_plugin_dir(extra_dir, seen_stems=seen_stems))
     return found
 
 
