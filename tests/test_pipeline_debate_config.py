@@ -318,3 +318,164 @@ class TestValidatePipelineDebateThreshold:
         pipeline = PipelineConfig(description="d", stages=[stage])
         tasks = TasksFile(tasks={"real-task": TaskConfig(description="d")})
         validate_pipeline(pipeline, tasks)  # must not raise
+
+
+class TestReviewFacetParsing:
+    """`reviewers` / `review_target` ride the existing `DebateConfig` --
+    adversarial-review-thin-layer PRD, Sprint 1. No parallel `ReviewConfig`."""
+
+    def test_reviewers_and_review_target_absent_by_default(self) -> None:
+        cfg = DebateConfig()
+        assert cfg.reviewers is None
+        assert cfg.review_target is None
+
+    def test_reviewers_and_review_target_parse(self) -> None:
+        cfg = DebateConfig(reviewers=["alice", "bob"], review_target="github_pr")
+        assert cfg.reviewers == ["alice", "bob"]
+        assert cfg.review_target == "github_pr"
+
+    def test_review_target_internal_parses(self) -> None:
+        cfg = DebateConfig(reviewers=["alice"], review_target="internal")
+        assert cfg.review_target == "internal"
+
+    def test_invalid_review_target_literal_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            DebateConfig.model_validate({"review_target": "bogus"})
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t", "\n"])
+    def test_blank_reviewer_name_rejected(self, blank: str) -> None:
+        with pytest.raises(ValidationError):
+            DebateConfig(reviewers=["alice", blank])
+
+    def test_review_target_with_explicit_empty_reviewers_rejected_at_load(self) -> None:
+        with pytest.raises(ValidationError):
+            DebateConfig(review_target="github_pr", reviewers=[])
+
+    def test_review_target_with_unset_reviewers_allowed_at_load(self) -> None:
+        # reviewers=None ("unset" / inherit) is NOT the same as reviewers=[]
+        # ("explicitly no reviewers") -- only the latter conflicts with a
+        # review_target at load time. The unset case is caught later, at
+        # resolve time, if it never gets filled in by any layer (see
+        # TestReviewFacetFailClosed below).
+        cfg = DebateConfig(review_target="internal")
+        assert cfg.review_target == "internal"
+        assert cfg.reviewers is None
+
+
+class TestResolveReviewFacetPrecedence:
+    def test_review_unset_everywhere_is_regression_safe(self) -> None:
+        # No reviewers/review_target anywhere -> behaviorally identical to
+        # pre-review `EffectiveDebateConfig` output (byte-identical on the
+        # five pre-existing fields; the two new fields resolve to their
+        # dormant defaults).
+        floor = _FakeFloor(
+            enable_debate_judge=True,
+            judge_runner="claude",
+            judge_model="opus",
+            judge_confidence_threshold=0.6,
+        )
+        pipeline = PipelineConfig(description="d")
+        stage = PipelineStage(name="s", task="t")
+        result = resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+        assert result == EffectiveDebateConfig(
+            enable_judge=True,
+            enable_arbiter=False,
+            runner="claude",
+            model="opus",
+            confidence_threshold=0.6,
+            reviewers=[],
+            review_target=None,
+        )
+
+    def test_pipeline_reviewers_and_target_used_when_stage_unset(self) -> None:
+        floor = _FakeFloor()
+        pipeline = PipelineConfig(
+            description="d", debate=DebateConfig(reviewers=["alice"], review_target="internal")
+        )
+        stage = PipelineStage(name="s", task="t")
+        result = resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+        assert result.reviewers == ["alice"]
+        assert result.review_target == "internal"
+
+    def test_stage_reviewers_and_target_override_pipeline(self) -> None:
+        floor = _FakeFloor()
+        pipeline = PipelineConfig(
+            description="d", debate=DebateConfig(reviewers=["alice"], review_target="internal")
+        )
+        stage = PipelineStage(
+            name="s",
+            task="t",
+            debate=DebateConfig(reviewers=["carol", "dave"], review_target="github_pr"),
+        )
+        result = resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+        assert result.reviewers == ["carol", "dave"]
+        assert result.review_target == "github_pr"
+
+    def test_stage_review_target_inherits_pipeline_reviewers_when_stage_unset(self) -> None:
+        floor = _FakeFloor()
+        pipeline = PipelineConfig(description="d", debate=DebateConfig(reviewers=["alice"]))
+        stage = PipelineStage(name="s", task="t", debate=DebateConfig(review_target="github_pr"))
+        result = resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+        assert result.reviewers == ["alice"]
+        assert result.review_target == "github_pr"
+
+
+class TestReviewFacetFailClosed:
+    """A resolved `review_target` with an empty resolved `reviewers` list
+    must never be treated as a permissive/valid effective config."""
+
+    def test_pipeline_review_target_with_no_reviewers_anywhere_raises(self) -> None:
+        # Independently valid at load (reviewers is None/"unset", not an
+        # explicit []), but resolves to zero reviewers anywhere in the
+        # chain -- the resolve-time guard must catch this.
+        floor = _FakeFloor()
+        pipeline = PipelineConfig(description="d", debate=DebateConfig(review_target="github_pr"))
+        stage = PipelineStage(name="s", task="t")
+        with pytest.raises(ValueError, match="reviewers"):
+            resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+
+    def test_cross_block_empty_stage_reviewers_blocks_pipeline_review_target(self) -> None:
+        # Each `debate:` block is independently valid at load time (pipeline
+        # sets only review_target, stage sets only an explicit empty
+        # reviewers list) -- the per-block model validator cannot see this
+        # cross-block combination. resolve_debate_config must still block it.
+        floor = _FakeFloor()
+        pipeline = PipelineConfig(description="d", debate=DebateConfig(review_target="github_pr"))
+        stage = PipelineStage(name="s", task="t", debate=DebateConfig(reviewers=[]))
+        with pytest.raises(ValueError, match="reviewers"):
+            resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+
+    def test_review_target_none_with_empty_reviewers_does_not_raise(self) -> None:
+        floor = _FakeFloor()
+        pipeline = PipelineConfig(description="d")
+        stage = PipelineStage(name="s", task="t")
+        result = resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+        assert result.review_target is None
+        assert result.reviewers == []
+
+    def test_stage_empty_reviewers_shadows_pipeline_reviewers_and_blocks(self) -> None:
+        # Pipeline supplies BOTH review_target and a non-empty reviewers list;
+        # the stage explicitly nulls reviewers with []. The resolver selects
+        # reviewers by an explicit `is not None` check (NOT an `or`-fallback),
+        # so the stage's explicit [] correctly shadows the pipeline list ->
+        # empty -> block. This is the exact empty-value-fail-open the resolver
+        # is designed to defeat (a naive `stage or pipeline` would fall through
+        # to ["alice"] and silently allow a review-less merge).
+        floor = _FakeFloor()
+        pipeline = PipelineConfig(
+            description="d",
+            debate=DebateConfig(review_target="github_pr", reviewers=["alice"]),
+        )
+        stage = PipelineStage(name="s", task="t", debate=DebateConfig(reviewers=[]))
+        with pytest.raises(ValueError, match="reviewers"):
+            resolve_debate_config(floor=floor, pipeline=pipeline, stage=stage)
+
+    def test_space_padded_reviewer_name_is_accepted_as_non_empty(self) -> None:
+        # The blank-check uses strip() only to DETECT emptiness; a non-blank
+        # but space-padded name is a real reviewer and must pass load, so
+        # `review_target` + such a name is a valid, non-empty config (it can
+        # never later resolve to an empty reviewers list). Locks validator/
+        # resolver normalization consistency.
+        cfg = DebateConfig(reviewers=[" alice "], review_target="github_pr")
+        assert len(cfg.reviewers) == 1
+        assert cfg.reviewers[0].strip() == "alice"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol, get_args
 
@@ -229,12 +229,40 @@ class ProjectConfig(BaseModel):
 # pipeline/stage `False`/absent can never override a floor `True`), and the
 # confidence threshold must be validated `(0, 1]` at load time so a bad value
 # (0, negative, >1, NaN, inf) is rejected before it can ever reach the gate.
+# ---- Adversarial review facet (adversarial-review-thin-layer PRD, Sprint 1) ----
+# Review is NOT a parallel concept -- it rides the existing `debate:` block
+# because a review round IS a debate round from the orchestrator's point of
+# view (same runner/model dispatch, same stage/pipeline override shape).
+# Two fields ride along on `DebateConfig`: `reviewers` (who participates) and
+# `review_target` (what they review -- an internal artifact vs. a GitHub
+# PR). There is deliberately NO `Settings`/global floor for review (unlike
+# `enable_judge`/`enable_challenge_arbiter`): review is purely a per-
+# pipeline/per-stage opt-in facet, so `DebateFloor` and `Settings`
+# (`hivepilot/config.py`) are untouched by this sprint -- the floor-
+# controlled OR-strengthen precedence in `resolve_debate_config` stays
+# scoped to the judge/arbiter enable flags only.
+#
+# FAIL-CLOSED: a `review_target` requesting a review with zero reviewers is
+# the same "empty-value-fail-open" bug class as `confidence_threshold`/
+# `enable_judge` above. Guarded twice: (1) at load, `DebateConfig` rejects a
+# `review_target` set alongside an explicit `reviewers: []` in the SAME
+# block (model validator below); (2) at resolve time, because (1) cannot see
+# a cross-layer combination (e.g. pipeline sets `review_target` while stage
+# independently sets `reviewers: []`), `resolve_debate_config` re-checks the
+# fully resolved values and raises if `review_target` is set but the
+# resolved `reviewers` list is empty.
 class DebateConfig(BaseModel):
     enable_judge: bool | None = None
     enable_arbiter: bool | None = None
     runner: str | None = None
     model: str | None = None
     confidence_threshold: float | None = None
+    # Adversarial review facet (Sprint 1). Both default to None -- dormant,
+    # byte-identical to pre-review behaviour. See the module comment above
+    # for the "review rides the debate block" design decision and the
+    # fail-closed contract.
+    reviewers: list[str] | None = None
+    review_target: Literal["internal", "github_pr"] | None = None
 
     @field_validator("confidence_threshold")
     @classmethod
@@ -262,6 +290,43 @@ class DebateConfig(BaseModel):
                 "(omit the key to inherit the pipeline/floor value)"
             )
         return v
+
+    @field_validator("reviewers")
+    @classmethod
+    def _reject_blank_reviewer(cls, v: list[str] | None) -> list[str] | None:
+        # A blank/whitespace-only reviewer name is the same class of typo as
+        # a blank runner/model above -- reject it at load rather than let it
+        # silently participate (or silently fail to resolve to anyone) later.
+        if v is None:
+            return None
+        for name in v:
+            if not name.strip():
+                raise ValueError(
+                    "debate.reviewers must not contain blank/whitespace-only names "
+                    "(use a real reviewer identifier, or omit/empty the entry instead)"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def _reject_review_target_without_reviewers(self) -> DebateConfig:
+        # Catches the SAME-BLOCK case only (e.g. one YAML `debate:` block sets
+        # both `review_target: github_pr` and `reviewers: []`). A cross-block
+        # combination -- e.g. pipeline sets `review_target`, stage
+        # independently sets `reviewers: []` -- can't be seen here since each
+        # `DebateConfig` instance validates in isolation; that case is caught
+        # at resolve time by `resolve_debate_config` instead (see there).
+        if (
+            self.review_target is not None
+            and self.reviewers is not None
+            and len(self.reviewers) == 0
+        ):
+            raise ValueError(
+                "debate.review_target requires at least one reviewer: "
+                "reviewers=[] together with a review_target set is rejected at load "
+                "(fail-closed) -- list at least one reviewer, or omit `reviewers` "
+                "entirely to inherit from a lower layer"
+            )
+        return self
 
 
 # ---- Lessons-loop YAML config (per-pipeline-lessons-yaml PRD, Sprint 1) ----
@@ -461,6 +526,11 @@ class EffectiveDebateConfig:
     runner: str
     model: str | None
     confidence_threshold: float
+    # Adversarial review facet (Sprint 1). Defaulted so every pre-existing
+    # call site / test that constructs an `EffectiveDebateConfig` without
+    # naming these two fields keeps working byte-identically.
+    reviewers: list[str] = field(default_factory=list)
+    review_target: str | None = None
 
 
 def resolve_debate_config(
@@ -488,6 +558,21 @@ def resolve_debate_config(
       every present value was already validated to `(0, 1]` at YAML-load
       time by `DebateConfig`'s field validator, so the resolved value here is
       ALWAYS finite and `> 0` -- absence never degrades to `0`/`None`-as-allow.
+    - ``reviewers``: first non-None list wins -- ``stage.debate.reviewers``
+      overrides ``pipeline.debate.reviewers`` overrides ``[]`` (no
+      reviewers). There is deliberately NO `DebateFloor`/`Settings` floor for
+      review (see the module comment above `DebateConfig`): review is a pure
+      per-pipeline/per-stage opt-in facet, not a global gate like the judge/
+      arbiter enable flags.
+    - ``review_target``: same "stage overrides pipeline" first-non-None-wins
+      chain, no floor, ``None`` (no review requested) when unset anywhere.
+
+    FAIL-CLOSED (reviewers/review_target): a resolved ``review_target`` with
+    an empty resolved ``reviewers`` list raises `ValueError`. `DebateConfig`'s
+    model validator already rejects this within a single YAML block; this
+    resolve-time check is the backstop for the cross-block case (e.g.
+    pipeline sets `review_target`, stage independently zeroes out
+    `reviewers`) that the per-block validator cannot see.
 
     ``floor`` defaults to the live `hivepilot.config.settings` singleton
     (imported lazily, only when the caller doesn't supply one, to keep this
@@ -526,6 +611,39 @@ def resolve_debate_config(
         or (pipeline_debate and pipeline_debate.confidence_threshold)
         or floor.judge_confidence_threshold
     )
+    reviewers = (
+        stage_debate.reviewers
+        if stage_debate is not None and stage_debate.reviewers is not None
+        else (
+            pipeline_debate.reviewers
+            if pipeline_debate is not None and pipeline_debate.reviewers is not None
+            else []
+        )
+    )
+    review_target = (
+        stage_debate.review_target
+        if stage_debate is not None and stage_debate.review_target is not None
+        else (
+            pipeline_debate.review_target
+            if pipeline_debate is not None and pipeline_debate.review_target is not None
+            else None
+        )
+    )
+
+    if review_target is not None and not reviewers:
+        # Fail-closed backstop: a review was requested (review_target set)
+        # but no reviewer ever got attached anywhere in the resolved chain.
+        # `DebateConfig`'s model validator already blocks this within a
+        # single block; this catches the cross-block case it structurally
+        # cannot see (see the module comment above `DebateConfig`).
+        raise ValueError(
+            f"resolved review_target={review_target!r} but the resolved reviewers list "
+            "is empty (fail-closed): a review_target requires at least one reviewer at "
+            "the pipeline or stage level. This can happen even when each individual "
+            "`debate:` block is independently valid (e.g. pipeline sets review_target, "
+            "stage independently sets reviewers=[]) -- set `reviewers` wherever "
+            "`review_target` is set, or at a layer beneath it."
+        )
 
     return EffectiveDebateConfig(
         enable_judge=enable_judge,
@@ -533,6 +651,8 @@ def resolve_debate_config(
         runner=runner,
         model=model,
         confidence_threshold=confidence_threshold,
+        reviewers=reviewers,
+        review_target=review_target,
     )
 
 
