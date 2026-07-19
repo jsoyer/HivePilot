@@ -74,9 +74,7 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "shell",
     "langchain",
     "internal",
-    "codex",
     "container",
-    "cursor",
     "vibe",
     # Sprint 2 (runner-defaults-plugins-mode PRD): the only new built-in
     # agent kind (API-only). gemini/opencode/ollama were removed from this
@@ -86,6 +84,10 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     # so listing them here would violate this tuple's own documented
     # invariant (see the NOTE above and
     # tests/test_models.py::test_known_runner_kinds_all_have_runner_map_entries).
+    # codex-cursor-plugins migration: codex/cursor removed from this tuple
+    # for the same reason — they moved OUT of RUNNER_MAP's built-in
+    # registration and into default-on, PATH-gated plugins (plugins/codex.py
+    # / plugins/cursor.py); see tests/test_codex.py / tests/test_cursor.py.
     "openrouter",
     "terraform",
     "opentofu",

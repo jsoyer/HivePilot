@@ -21,13 +21,22 @@ MANDATORY_AGENTS = ("claude", "codex", "vibe")
 # hivepilot.registry (active_agent_runner_kinds / _BUILTIN_RUNNERS gating) and
 # hivepilot.orchestrator (fail-closed run_pipeline guard). Built-in agent kinds
 # + the optional, PATH-gated agent-plugin kinds (gemini/opencode/ollama/pi/
-# qwen-code/kimi-cli/antigravity). Infra runners (shell/terraform/kubectl/…) are NOT agents
-# and are deliberately absent. Keep in sync with registry._OPTIONAL_AGENT_PLUGIN_KINDS
-# and _BUILTIN_RUNNERS' agent entries — do not re-list this literal anywhere else.
+# qwen-code/kimi-cli/antigravity/codex/cursor). Infra runners (shell/terraform/kubectl/…)
+# are NOT agents and are deliberately absent. Keep in sync with
+# registry._OPTIONAL_AGENT_PLUGIN_KINDS and _BUILTIN_RUNNERS' agent entries —
+# do not re-list this literal anywhere else.
+#
+# `cursor` was added here by the codex-cursor-plugins migration (it was
+# previously a hardcoded _BUILTIN_RUNNERS entry but, unlike codex, had never
+# been added to this set — a pre-existing gap that meant a pipeline running
+# ONLY the `cursor` agent tripped the fail-closed NoAgentRunnerError guard
+# even though `cursor` was fully registered and dispatchable; fixed here as
+# part of moving it to a gated plugin, alongside every other agent kind).
 AGENT_RUNNER_KINDS: frozenset[str] = frozenset(
     {
         "claude",
         "codex",
+        "cursor",
         "vibe",
         "openrouter",
         "gemini",

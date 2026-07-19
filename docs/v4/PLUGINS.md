@@ -38,7 +38,7 @@ the full confirm-then-run contract.
 
 ## Plugin inventory
 
-This repo ships **21** local-file plugins under `plugins/*.py` (excluding
+This repo ships **23** local-file plugins under `plugins/*.py` (excluding
 `plugins/__init__.py`). Every one follows the uniform gating model below —
 see "Gating model" further down for the full opt-in/opt-out contract.
 
@@ -51,6 +51,8 @@ see "Gating model" further down for the full opt-in/opt-out contract.
 | `qwen_code` | `plugins/qwen_code.py` | runner (agent, kind `qwen-code`) | `qwen_code_enabled` | ON (+ PATH) |
 | `kimi_cli` | `plugins/kimi_cli.py` | runner (agent, kind `kimi-cli`) | `kimi_cli_enabled` | ON (+ PATH) |
 | `antigravity` | `plugins/antigravity.py` | runner (agent, kind `antigravity`) | `antigravity_enabled` | ON (+ PATH) |
+| `codex` | `plugins/codex.py` | runner (agent) | `codex_enabled` | ON (+ PATH) |
+| `cursor` | `plugins/cursor.py` | runner (agent, binary `cursor-agent`) | `cursor_enabled` | ON (+ PATH) |
 | `rtk` | `plugins/rtk.py` | runner (infra, shell-fallback) + health | `rtk_enabled` | ON |
 | `herdr` | `plugins/herdr.py` | runner (infra, multiplexer) + health | `herdr_enabled` | ON |
 | `hugo` | `plugins/hugo.py` | runner (infra, static-site) + health | `hugo_enabled` | ON (+ PATH) |
@@ -75,11 +77,11 @@ Coding-agent runner kinds ship in two tiers, both dispatched through the same
 `RunnerRegistry` / `kind:` config field — the tier only affects *where* the
 runner class is registered from, and whether it can ever be absent.
 
-**Built-in agent kinds** — `{claude, codex, vibe, openrouter}`
+**Built-in agent kinds** — `{claude, vibe, openrouter}`
 (`hivepilot.registry._BUILTIN_RUNNERS`) are registered at import time, no
 `PATH` check — but each is individually opt-out-able via its own
-`<kind>_enabled` flag (default `True` for all four —
-`claude_enabled`/`codex_enabled`/`vibe_enabled`/`openrouter_enabled`,
+`<kind>_enabled` flag (default `True` for all three —
+`claude_enabled`/`vibe_enabled`/`openrouter_enabled`,
 plugin-arch-overhaul Sprint 01): the registration loop skips a kind whose
 flag is `False`, so it is simply **absent** from `RUNNER_MAP`, exactly like
 a disabled plugin agent kind below — a config that still references it
@@ -90,19 +92,20 @@ same as a disabled plugin agent kind.
 | kind | binary | notes |
 |---|---|---|
 | `claude` | `claude` | `mode: cli` and `mode: api` (Anthropic Messages API) |
-| `codex` | `codex` | `mode: cli` and `mode: api` |
 | `vibe` | `vibe` | `mode: cli` and `mode: api`; has no `--model` flag — the model comes from its own config / `MISTRAL_API_KEY` |
 | `openrouter` | — (API-only) | `supported_modes == {"api"}` — no CLI binary, never spawns a subprocess |
 
-**Plugin agent kinds** — `{gemini, opencode, ollama, pi, qwen-code, kimi-cli, antigravity}`
+**Plugin agent kinds** — `{gemini, opencode, ollama, pi, qwen-code, kimi-cli, antigravity, codex, cursor}`
 (one file per kind under `plugins/`, all following the same canonical
 gated-agent-plugin skeleton — see `plugins/gemini.py`'s module docstring)
 are registered into `RUNNER_MAP` only when BOTH its per-plugin enable flag is
-`True` (default: all seven default **ON**, opt-out) AND its CLI binary is found
+`True` (default: all nine default **ON**, opt-out) AND its CLI binary is found
 on `PATH` (`shutil.which`) at process start. Either condition failing means
 the kind is simply **absent** from `RUNNER_MAP` — a config that still
 references it resolves to the actionable `RunnerPluginUnavailableError`
-(naming the exact flag + binary), never a bare `KeyError`.
+(naming the exact flag + binary), never a bare `KeyError`. `codex`/`cursor`
+moved here from the built-in table above (codex-cursor-plugins migration) —
+note `cursor`'s binary is `cursor-agent`, NOT `cursor`.
 
 | kind | binary | enable flag | env override | install |
 |---|---|---|---|---|
@@ -113,6 +116,8 @@ references it resolves to the actionable `RunnerPluginUnavailableError`
 | `qwen-code` | `qwen` (binary `qwen`, kind `qwen-code` — deliberately diverges, like `ollama`'s pair) | `qwen_code_enabled` | `HIVEPILOT_QWEN_CODE_ENABLED` | `npm i -g @qwen-code/qwen-code` |
 | `kimi-cli` | `kimi` (binary `kimi`, kind `kimi-cli`) | `kimi_cli_enabled` | `HIVEPILOT_KIMI_CLI_ENABLED` | `uv tool install kimi-cli` |
 | `antigravity` | `agy` | `antigravity_enabled` | `HIVEPILOT_ANTIGRAVITY_ENABLED` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (or `hivepilot agents install antigravity`) |
+| `codex` | `codex` | `codex_enabled` | `HIVEPILOT_CODEX_ENABLED` | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` (or `hivepilot agents install codex`) |
+| `cursor` | `cursor-agent` (kind `cursor`, binary `cursor-agent` — deliberately diverges) | `cursor_enabled` | `HIVEPILOT_CURSOR_ENABLED` | `curl https://cursor.com/install -fsS \| bash` (or `hivepilot agents install cursor`) |
 
 **PATH-activation rule.** Activation is evaluated ONCE, at `PluginManager()`
 construction (process start): installing/removing a binary, or flipping its

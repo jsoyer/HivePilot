@@ -435,12 +435,15 @@ class TestRoleWire:
         # tmp_path with no plugins/ directory — so the real PluginManager
         # scan this command runs (see cli.py's role_wire "runner" field
         # validation) would never see it regardless of what's on the host's
-        # PATH. Use "codex" instead: a kind that stays unconditionally
+        # PATH. Use "claude" instead: a kind that stays unconditionally
         # built-in, so this test asserts what it actually means to (a valid
         # kind is accepted) without depending on plugin/environment specifics.
-        result = runner.invoke(app, ["role", "wire", "developer", "runner", "codex"])
+        # ("codex" no longer qualifies — the codex-cursor-plugins migration
+        # moved it OUT of _BUILTIN_RUNNERS into the same kind of PATH-gated
+        # plugin as "opencode" above.)
+        result = runner.invoke(app, ["role", "wire", "developer", "runner", "claude"])
         assert result.exit_code == 0, result.output
-        assert "runner: codex" in (config_dir / "roles.yaml").read_text()
+        assert "runner: claude" in (config_dir / "roles.yaml").read_text()
 
     def test_runner_invalid_kind_rejected(self, config_dir: Path) -> None:
         result = runner.invoke(app, ["role", "wire", "developer", "runner", "not-a-runner"])
