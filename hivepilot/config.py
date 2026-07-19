@@ -357,6 +357,15 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_DRIFT_GRAPH_SOURCE_ENABLED / _SECRETS_TRUST_GRAPH_SOURCE_ENABLED
     drift_graph_source_enabled: bool = False
     secrets_trust_graph_source_enabled: bool = False
+    # Two more opt-in `skill`-type plugins -- dormant by default, same
+    # pattern as sample_skill_enabled above. `shadcn` (plugins/shadcn.py)
+    # is a Mirador web accelerator (shadcn/ui + Tailwind conventions for
+    # web/); `improve` (plugins/improve.py) is a read-only auditor whose
+    # findings feed the review/lessons loop. Both required by
+    # tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag.
+    # env: HIVEPILOT_SHADCN_ENABLED / _IMPROVE_ENABLED
+    shadcn_enabled: bool = False
+    improve_enabled: bool = False
     # Built-in agent runners are individually disable-able (plugin-arch-overhaul
     # Sprint 01). Default True — turning one off removes it from RUNNER_MAP via
     # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
