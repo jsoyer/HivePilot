@@ -71,6 +71,7 @@ hivepilot interactive
 | [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Telegram/Slack/Discord/Notion/Linear/Obsidian/Caddy/n8n/SSH remote agents |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | Mirador dashboard (TUI + web) |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment, Kubernetes, multi-tenant, observability |
+| [docs/DEPLOY-PRODUCTION.md](docs/DEPLOY-PRODUCTION.md) | Fresh-Alpine → production runbook (Docker/Podman Compose or bare-metal + OpenRC) |
 
 ## Safety
 
