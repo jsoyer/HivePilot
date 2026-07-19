@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -32,7 +33,7 @@ from hivepilot.graph_sources.skills_source import (
 def _write_skill(root, rel_dir: str, *, name: str, description: str, tags: list[str] | None = None):
     skill_dir = root / rel_dir
     skill_dir.mkdir(parents=True, exist_ok=True)
-    front_matter = {"name": name, "description": description}
+    front_matter: dict[str, Any] = {"name": name, "description": description}
     if tags is not None:
         front_matter["tags"] = tags
     content = "---\n" + yaml.safe_dump(front_matter) + "---\nbody\n"

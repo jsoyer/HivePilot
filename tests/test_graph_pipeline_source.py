@@ -25,7 +25,14 @@ from hivepilot.graph_sources.pipeline_source import (
     _build_graph,
     _node_detail,
 )
-from hivepilot.models import PipelineConfig, PipelinesFile, PipelineStage, TaskConfig, TasksFile
+from hivepilot.models import (
+    PipelineConfig,
+    PipelinesFile,
+    PipelineStage,
+    TaskConfig,
+    TasksFile,
+    TaskStep,
+)
 from hivepilot.roles import Role
 
 _SECRET_VALUE = "sk-pipeline-secret-should-never-leak"  # noqa: S105 - test fixture value
@@ -43,7 +50,7 @@ def _tasks(
         f"task-{name}": TaskConfig(
             description="d",
             role=role,
-            steps=[{"name": step_name, "runner": "claude"}],
+            steps=[TaskStep(name=step_name, runner="claude")],
         )
         for name in stage_names
     }
@@ -193,10 +200,10 @@ class TestKeyedContextEdges:
         tasks = TasksFile(
             tasks={
                 "task-A": TaskConfig(
-                    description="d", role="role_a", steps=[{"name": "step-1", "runner": "claude"}]
+                    description="d", role="role_a", steps=[TaskStep(name="step-1", runner="claude")]
                 ),
                 "task-B": TaskConfig(
-                    description="d", role="role_b", steps=[{"name": "step-1", "runner": "claude"}]
+                    description="d", role="role_b", steps=[TaskStep(name="step-1", runner="claude")]
                 ),
             }
         )
@@ -241,10 +248,10 @@ class TestKeyedContextEdges:
         tasks = TasksFile(
             tasks={
                 "task-A": TaskConfig(
-                    description="d", role="role_a", steps=[{"name": "step-1", "runner": "claude"}]
+                    description="d", role="role_a", steps=[TaskStep(name="step-1", runner="claude")]
                 ),
                 "task-B": TaskConfig(
-                    description="d", role="role_b", steps=[{"name": "step-1", "runner": "claude"}]
+                    description="d", role="role_b", steps=[TaskStep(name="step-1", runner="claude")]
                 ),
             }
         )
