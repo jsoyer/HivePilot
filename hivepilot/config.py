@@ -584,6 +584,16 @@ class Settings(BaseSettings):
     notion_runs_database_id: str | None = None  # database where run logs are written
     obsidian_vault: Path = Path("obsidian-vault")
 
+    # Mirador Graph View PRD, Sprint 2: local host filesystem root the
+    # built-in `skills` graph source (`hivepilot/graph_sources/
+    # skills_source.py`) scans for `SKILL.md`/hooks/commands/agents. `None`
+    # (the default) means the source degrades to an empty graph -- never a
+    # crash, never an implicit path. Unlike `obsidian_vault` above (a
+    # relative default that always resolves to something), this has NO
+    # non-None default: an admin must opt in to which local directory this
+    # host-only scan is allowed to read.
+    graph_skills_scan_path: Path | None = None
+
     # Governance repository root (e.g. /path/to/shared-governance-repo or https URL)
     # Deployment-specific; leave None to disable governance file injection.
     governance_repo: str | None = Field(
