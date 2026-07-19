@@ -465,6 +465,16 @@ def store(**kwargs: Any) -> None:
             return
 
         content = "\n".join(content_parts)
+        # Defense-in-depth (auto-learning-lessons-loop PRD, Sprint 1): the
+        # orchestrator's `after_step` choke point (`hivepilot/orchestrator.py`)
+        # already redacts `output`/`extra_prompt`/`prior_context` before this
+        # hook fires, but `store()` must never rely SOLELY on the caller —
+        # a resolved `${secret:NAME}` value echoed into any of these fields
+        # must never reach the external mem0 store even if a future/other
+        # caller invokes `store()` directly without going through that choke.
+        from hivepilot.services.config_provenance import redact_text
+
+        content = redact_text(content)
         provenance = _provenance_metadata(payload, role)
         client.add(content, user_id=key, metadata=provenance)
         logger.info("plugin.mem0.stored", key=key, step=step_name, category=provenance["category"])

@@ -7,7 +7,7 @@ import subprocess
 import threading
 from collections.abc import Iterable
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -63,7 +63,7 @@ from hivepilot.services import (
 )
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
-from hivepilot.services.config_provenance import redact_text, register_secret_value
+from hivepilot.services.config_provenance import redact_text, redact_value, register_secret_value
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
 from hivepilot.services.interaction_service import (
     Interaction,
@@ -2824,6 +2824,8 @@ class Orchestrator:
         simulate: bool = False,
         prior_context: str | None = None,
         debate_config: "EffectiveDebateConfig | None" = None,
+        run_id: int | None = None,
+        task_name: str | None = None,
     ) -> dict | None:
         """Public entry point. Delegates to `_run_debate_body` inside a
         run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
@@ -2841,7 +2843,17 @@ class Orchestrator:
         resolution for a role-driven dual-model debate task. `None` (a
         standalone `run_debate` call, e.g. cli.py's `debate` command) resolves
         to the floor only inside `_run_debate_body`, byte-identical to pre-
-        Sprint-2 behaviour."""
+        Sprint-2 behaviour.
+
+        ``run_id``/``task_name`` (auto-learning-lessons-loop PRD, Sprint 1)
+        are the enclosing run's real id + task name, when this debate is
+        role-driven from inside `_execute_task_body` (mirrors how
+        `_resolve_challenge_via_arbiter` already threads `run_id` into
+        `_persist_challenge_verdict` for the challenge-arbiter path). Both
+        default to `None` for a standalone `run_debate` call (cli.py's
+        `debate` command / the ChatOps daemon), which persists the judge
+        verdict with `run_id=None` exactly as before — byte-identical for
+        callers outside a run context."""
         self._enter_run_scope()
         try:
             return self._run_debate_body(
@@ -2852,6 +2864,8 @@ class Orchestrator:
                 simulate=simulate,
                 prior_context=prior_context,
                 debate_config=debate_config,
+                run_id=run_id,
+                task_name=task_name,
             )
         finally:
             self._exit_run_scope()
@@ -2983,12 +2997,19 @@ class Orchestrator:
         simulate: bool = False,
         prior_context: str | None = None,
         debate_config: "EffectiveDebateConfig | None" = None,
+        run_id: int | None = None,
+        task_name: str | None = None,
     ) -> dict | None:
         """Run a dual-model debate for *role_name*: capture each model's position,
         synthesize via DebateService, and write an ADR. Returns the ADR emit dict.
 
         ``debate_config`` — see `run_debate`'s docstring. `None` resolves to
-        the floor only via `_effective_debate(None, None)`."""
+        the floor only via `_effective_debate(None, None)`.
+
+        ``run_id``/``task_name`` — see `run_debate`'s docstring; threaded
+        into the judge `record_verdict(...)` call below so a role-driven
+        debate's verdict correlates to the run/task that produced it,
+        instead of always persisting `run_id=None`."""
         from typing import cast
 
         from hivepilot.models import RunnerKind, TaskStep
@@ -3093,9 +3114,9 @@ class Orchestrator:
             self._register_verdict(verdict, confidence_threshold=effective.confidence_threshold)
             try:
                 state_service.record_verdict(
-                    run_id=None,
+                    run_id=run_id,
                     project=project.path.name,
-                    task=None,
+                    task=task_name,
                     role=role_name,
                     kind="debate",
                     decision=verdict.decision,
@@ -3336,6 +3357,8 @@ class Orchestrator:
                     simulate=simulate,
                     prior_context=prior_context,
                     debate_config=effective_debate,
+                    run_id=run_id,
+                    task_name=task_name,
                 )
                 if run_id:
                     state_service.record_step(run_id, f"{task.role}-debate", "success")
@@ -3676,8 +3699,37 @@ class Orchestrator:
                                 raise StepApprovalPending(
                                     f"Step '{step.name}' requires approval before executing."
                                 )
+                        # Hook-only-copy discipline (auto-learning-lessons-
+                        # loop PRD, Sprint 1) — but `secrets={}` ONLY, never
+                        # `metadata=redact_value(...)`, here: `before_step`
+                        # hooks (mem0 `recall`, obsidian `recall`) build
+                        # their query from task/step identity, never
+                        # `payload.secrets` — confirmed no shipped
+                        # `before_step` hook reads `.secrets` (only runner
+                        # `capture`/`run` methods do, against the REAL
+                        # `payload` passed to the registry below, not this
+                        # hook copy). Deliberately NOT overriding `metadata`
+                        # here (unlike `after_step`): `recall`'s entire
+                        # contract is mutating `payload.metadata[extra_prompt]`
+                        # IN PLACE so the runner's later prompt-build sees the
+                        # injected memories/vault context (see
+                        # `plugins/mem0.py`'s module docstring, "no copy is
+                        # made anywhere in between") — `dataclasses.replace`
+                        # without a `metadata=` override keeps the SAME dict
+                        # reference (shallow copy), so that live-mutation
+                        # contract survives; passing a redacted COPY of
+                        # metadata here would silently sever it and recalled
+                        # memories would stop reaching the agent's prompt.
+                        # `metadata` at this point is pre-step input context
+                        # (`extra_prompt`/`prior_context`), not a persistence
+                        # sink — nothing reads it externally before the
+                        # runner does, so redacting it buys no security value
+                        # here in exchange for that regression.
                         self.plugins.run_hook(
-                            "before_step", payload=payload, dry_run=dry_run, role=task.role
+                            "before_step",
+                            payload=replace(payload, secrets={}),
+                            dry_run=dry_run,
+                            role=task.role,
                         )
                         if simulate:
                             logger.info(
@@ -3795,12 +3847,47 @@ class Orchestrator:
                             )
                             _record_step_success(run_id, step.name, _provider, _model, _usage)
                         _step_span.set_attribute("hivepilot.step.status", "success")
+                        # Close the store()-redaction hole (auto-learning-
+                        # lessons-loop PRD, Sprint 1): `after_step` fans out
+                        # to persistence hooks (mem0 `store`, obsidian
+                        # `store`, future lesson-distillation sinks) that
+                        # were never in the resolved-secrets masking path —
+                        # `output` is the step's real captured result,
+                        # `payload.metadata`'s `extra_prompt`/`prior_context`
+                        # can both echo a resolved `${secret:NAME}` value
+                        # verbatim, and `payload.secrets` is the RAW
+                        # `{ENV_NAME: resolved_value}` map itself (the exact
+                        # values `register_secret_value` masks everywhere
+                        # else) — never redactable as text, so it is
+                        # unconditionally blanked rather than masked (opus
+                        # adversarial review: this is the leak class the
+                        # PRD's own next deliverable, lesson-distillation,
+                        # will read). Build a COPY, never mutate the shared
+                        # `payload`/`metadata` objects: `metadata` is the
+                        # SAME dict reused across every step in this task's
+                        # loop (see `payload = RunnerPayload(...,
+                        # metadata=metadata, ...)` above) and mutating it in
+                        # place would permanently corrupt the live prompt
+                        # content seen by LATER steps' `before_step`/runner
+                        # calls — not just this hook's view. `redact_value`
+                        # (`config_provenance.py`) recursively masks strings
+                        # nested inside dict/list/tuple and returns a fresh
+                        # container, so this also covers non-flat metadata
+                        # shapes the earlier top-level-strings-only pass
+                        # would have missed.
+                        _hook_output = outputs[-1] if outputs else None
+                        _redacted_output = (
+                            redact_text(_hook_output) if _hook_output else _hook_output
+                        )
+                        _hook_payload = replace(
+                            payload, metadata=redact_value(payload.metadata), secrets={}
+                        )
                         self.plugins.run_hook(
                             "after_step",
-                            payload=payload,
+                            payload=_hook_payload,
                             dry_run=dry_run,
                             role=task.role,
-                            output=outputs[-1] if outputs else None,
+                            output=_redacted_output,
                         )
                     except StepApprovalPending:
                         # Not a step failure — the run is already recorded as
