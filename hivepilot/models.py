@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, get_args
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 
 def _dedup_ordered(value: list[str] | None) -> list[str] | None:
@@ -244,6 +244,22 @@ class DebateConfig(BaseModel):
         if not math.isfinite(v) or not (0 < v <= 1):
             raise ValueError(
                 f"debate.confidence_threshold must be a finite number in (0, 1], got {v!r}"
+            )
+        return v
+
+    @field_validator("runner", "model")
+    @classmethod
+    def _reject_blank_override(cls, v: str | None, info: ValidationInfo) -> str | None:
+        # A present-but-blank runner/model ("" or whitespace-only) is falsy and
+        # would silently fall through to the pipeline/floor value in
+        # `resolve_debate_config` -- indistinguishable from "unset", which hides
+        # a config typo. Reject it at load so a present value is always
+        # meaningful (mirrors the confidence_threshold "reject at load"
+        # contract). Omit the key / use None to inherit the floor.
+        if v is not None and not v.strip():
+            raise ValueError(
+                f"debate.{info.field_name} must be a non-empty string when set "
+                "(omit the key to inherit the pipeline/floor value)"
             )
         return v
 

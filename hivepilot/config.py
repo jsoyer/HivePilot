@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -455,6 +456,24 @@ class Settings(BaseSettings):
     # `enable_debate_judge` or `enable_challenge_arbiter` is True (see
     # `Orchestrator._governing_verdict`/`_register_verdict`).
     judge_confidence_threshold: float = 0.5
+
+    @field_validator("judge_confidence_threshold")
+    @classmethod
+    def _validate_judge_confidence_threshold(cls, v: float) -> float:
+        # Fail closed on a misconfigured floor threshold. This mirrors the
+        # per-pipeline `DebateConfig.confidence_threshold` guard
+        # (models.py / pipeline_service.py): a floor value of 0 (or negative,
+        # >1, NaN, inf) supplied via HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD would
+        # otherwise reach `git_service.is_blocking(verdict, 0)` and approve any
+        # finite-confidence ACCEPT -- a fail-OPEN gate. Reject at startup so a
+        # bad env value stops the process instead of silently disabling the
+        # verdict->PR gate. Absent -> the 0.5 default (validated as in-range).
+        if not math.isfinite(v) or not (0 < v <= 1):
+            raise ValueError(
+                "judge_confidence_threshold (env HIVEPILOT_JUDGE_CONFIDENCE_THRESHOLD) "
+                f"must be a finite number in (0, 1], got {v!r}"
+            )
+        return v
 
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
