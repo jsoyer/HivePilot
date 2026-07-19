@@ -1480,26 +1480,50 @@ class Orchestrator:
         scoped to ``kind == "challenge"`` verdicts/interactions ONLY -- not
         e.g. a plain ``"debate"`` verdict, which reflects the debate
         judge's confidence in ITS OWN routing decision, not whether this
-        run's actual output held up under independent scrutiny. A resolved
-        challenge is real evidence the agent's work survived a direct
-        objection; a debate verdict is not. Two mechanisms persist a
-        resolved challenge, both covered here:
-          * the independent challenge ARBITER path
-            (`_resolve_challenge_via_arbiter` -> `_persist_challenge_verdict`)
-            persists a `kind="challenge"` verdict row with `decision`/
-            `confidence`;
-          * the SELF-adjudication path (`_run_rebuttal_round`) persists only
-            an `interactions` row (`action="challenge"`,
-            `summary="[RESOLUTION] ..."`) with no verdict row at all -- a
-            resolution that does NOT start with "MAINTAIN" is resolved.
+        run's actual output held up under independent scrutiny.
+
+        FAIL-CLOSED (post-review hardening -- CRITICAL fix): a challenge
+        verdict only ever counts as a GENUINE, positive resolution when
+        ALL of the following hold:
+          * ``decision`` is ``"ACCEPT"`` (a ``"MAINTAIN"``/``"DEFEND"``
+            verdict means the arbiter REJECTED the agent's work and the
+            run was blocked/escalated -- see
+            `tests/test_verdict_gate_failclosed.py` -- and must contribute
+            NOTHING, not even its `confidence`, which on a rejected
+            verdict means "how sure the work is BAD", not evidence a
+            lesson from it is trustworthy);
+          * ``confidence`` is a finite value in ``[0, 1]``;
+          * ``confidence >= settings.lesson_min_score`` -- an ``"ACCEPT"``
+            BELOW the floor is what `_resolve_challenge_via_arbiter`
+            persists even when the challenge was actually escalated to a
+            human (``accepted`` there requires the SAME floor check), so
+            without this an escalated run could still count as "resolved"
+            here.
+        A verdict failing any of those contributes neither to
+        `resolved_challenge` nor to `max_verdict_confidence` -- there is no
+        partial credit. The SELF-adjudication path (`_run_rebuttal_round`)
+        remains a separate, independent positive signal: it persists only
+        an `interactions` row (`action="challenge"`,
+        `summary="[RESOLUTION] ..."`) with no verdict row at all -- a
+        resolution that does NOT start with "MAINTAIN" is resolved.
         """
         from hivepilot.services import lessons_service
 
         challenge_verdicts = [v for v in verdicts if v.get("kind") == "challenge"]
-        resolved_via_verdict = any(
-            isinstance(v.get("decision"), str) and v["decision"].strip().upper() == "ACCEPT"
-            for v in challenge_verdicts
-        )
+        genuine_accept_confidences: list[float] = []
+        for v in challenge_verdicts:
+            decision = v.get("decision")
+            if not (isinstance(decision, str) and decision.strip().upper() == "ACCEPT"):
+                continue
+            confidence = v.get("confidence")
+            if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+                continue
+            if not (math.isfinite(confidence) and 0.0 <= confidence <= 1.0):
+                continue
+            if confidence < settings.lesson_min_score:
+                continue
+            genuine_accept_confidences.append(confidence)
+
         resolved_via_interaction = any(
             i.get("action") == "challenge"
             and isinstance(i.get("summary"), str)
@@ -1507,16 +1531,12 @@ class Orchestrator:
             and "MAINTAIN" not in i["summary"].upper()
             for i in interactions
         )
-        confidences = [
-            v["confidence"]
-            for v in challenge_verdicts
-            if isinstance(v.get("confidence"), (int, float))
-            and not isinstance(v.get("confidence"), bool)
-        ]
         return lessons_service.OutcomeSignal(
             run_success=bool(result.success),
-            resolved_challenge=resolved_via_verdict or resolved_via_interaction,
-            max_verdict_confidence=max(confidences) if confidences else None,
+            resolved_challenge=bool(genuine_accept_confidences) or resolved_via_interaction,
+            max_verdict_confidence=(
+                max(genuine_accept_confidences) if genuine_accept_confidences else None
+            ),
         )
 
     def _agent_name(self, stage: PipelineStage) -> str:
@@ -3476,18 +3496,25 @@ class Orchestrator:
         Sprint-2 behaviour.
         """
         logger.info("task.start", project=project.path.name, task=task_name)
-        metadata = {
+        metadata: dict[str, Any] = {
             "extra_prompt": extra_prompt or "",
             "prior_context": prior_context or "",
+        }
+        if settings.enable_lesson_distillation:
             # Auto-Learning Lessons Loop PRD, Sprint 3: the ONLY channel a
             # runner (ClaudeRunner/PromptCliRunner) can key its 'Lessons
             # learned' retrieval on -- RunnerPayload carries project_name/
             # task_name natively but has no dedicated role field, and this
             # SAME metadata dict is reused for every step of this task (see
             # the step loop below). None for a non-role task -- retrieval
-            # degrades to project+task keying only, never crashes.
-            "role": task.role,
-        }
+            # degrades to project+task keying only, never crashes. Gated on
+            # the flag (post-review fix, LOW): injection is the only
+            # consumer of this key, and a flag-off run must stay
+            # byte-identical for every metadata CONSUMER, not just the
+            # rendered prompt string -- e.g. the `after_step` hook fan-out
+            # passes this SAME dict to every plugin, so an unconditional
+            # extra key would leak into flag-off runs too.
+            metadata["role"] = task.role
         effective_debate = self._effective_debate(stage, pipeline)
         if task.engine != "native":
             from hivepilot.engines import run_engine
