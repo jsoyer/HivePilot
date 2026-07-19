@@ -264,6 +264,67 @@ class DebateConfig(BaseModel):
         return v
 
 
+# ---- Lessons-loop YAML config (per-pipeline-lessons-yaml PRD, Sprint 1) ----
+# Pure config-layer surface for the auto-learning lessons loop (see
+# `Settings.enable_lesson_distillation`/`.enable_semantic_lesson_retrieval`/
+# `.lesson_distill_runner`/`.lesson_distill_model`/`.lesson_min_score`/
+# `.lesson_inject_limit` in hivepilot/config.py -- the global floor that
+# `lessons_service.distill_lessons`/`retrieve_lessons` currently read
+# directly). This sprint only adds the pipeline-level YAML override surface +
+# the resolver that reconciles it with the global floor -- no consumption-
+# site wiring yet, so a `lessons:` block in pipelines.yaml is inert until a
+# later sprint threads `resolve_lessons_config` into those call sites.
+#
+# SECURITY: this is the "empty-value-fail-open" bug class HivePilot has hit
+# before (see error-registry). A `lessons:` block must never be able to turn
+# a global fail-closed gate OFF: the two enable flags are OR'd (strengthen-
+# only, a pipeline `False`/absent can never override a floor `True`), and
+# `min_score`/`inject_limit` must be validated at load time so a bad value
+# (0, negative, >1, NaN, inf for min_score; <1 for inject_limit) is rejected
+# before it can ever reach the distillation/retrieval gate.
+class LessonsConfig(BaseModel):
+    enable_distillation: bool | None = None
+    enable_semantic: bool | None = None
+    distill_runner: str | None = None
+    distill_model: str | None = None
+    min_score: float | None = None
+    inject_limit: int | None = None
+
+    @field_validator("min_score")
+    @classmethod
+    def _validate_min_score(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        if not math.isfinite(v) or not (0 < v <= 1):
+            raise ValueError(f"lessons.min_score must be a finite number in (0, 1], got {v!r}")
+        return v
+
+    @field_validator("inject_limit")
+    @classmethod
+    def _validate_inject_limit(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        if v < 1:
+            raise ValueError(f"lessons.inject_limit must be >= 1, got {v!r}")
+        return v
+
+    @field_validator("distill_runner", "distill_model")
+    @classmethod
+    def _reject_blank_override(cls, v: str | None, info: ValidationInfo) -> str | None:
+        # A present-but-blank runner/model ("" or whitespace-only) is falsy and
+        # would silently fall through to the floor value in
+        # `resolve_lessons_config` -- indistinguishable from "unset", which
+        # hides a config typo. Reject it at load so a present value is always
+        # meaningful (mirrors `DebateConfig._reject_blank_override`). Omit the
+        # key / use None to inherit the floor.
+        if v is not None and not v.strip():
+            raise ValueError(
+                f"lessons.{info.field_name} must be a non-empty string when set "
+                "(omit the key to inherit the pipeline/floor value)"
+            )
+        return v
+
+
 class PipelineStage(BaseModel):
     name: str
     task: str
@@ -331,6 +392,10 @@ class PipelineConfig(BaseModel):
     # Sprint 1). None -- dormant, byte-identical when absent. A stage's own
     # `debate` block overrides this per-field; see `resolve_debate_config`.
     debate: DebateConfig | None = None
+    # Pipeline-wide lessons-loop override (per-pipeline-lessons-yaml PRD,
+    # Sprint 1). None -- dormant, byte-identical when absent. See
+    # `resolve_lessons_config`.
+    lessons: LessonsConfig | None = None
 
 
 def resolve_mode(pipeline: PipelineConfig, stage: PipelineStage) -> Literal["cli", "api"]:
@@ -468,6 +533,101 @@ def resolve_debate_config(
         runner=runner,
         model=model,
         confidence_threshold=confidence_threshold,
+    )
+
+
+class LessonsFloor(Protocol):
+    """Structural type for the global lessons-loop config floor.
+
+    Satisfied by `hivepilot.config.Settings` (the real floor at runtime) and
+    by any lightweight test double exposing the same six attributes --
+    `resolve_lessons_config` never imports the real `Settings`/`settings`
+    module-level, only as a lazy default (see below), so it stays trivially
+    testable without touching global state.
+    """
+
+    enable_lesson_distillation: bool
+    enable_semantic_lesson_retrieval: bool
+    lesson_distill_runner: str
+    lesson_distill_model: str | None
+    lesson_min_score: float
+    lesson_inject_limit: int
+
+
+@dataclass(frozen=True)
+class EffectiveLessonsConfig:
+    """The fully-resolved lessons-loop config for one pipeline's run, after
+    reconciling the global settings floor with any pipeline-level `lessons:`
+    override via `resolve_lessons_config`."""
+
+    enable_distillation: bool
+    enable_semantic: bool
+    distill_runner: str
+    distill_model: str | None
+    min_score: float
+    inject_limit: int
+
+
+def resolve_lessons_config(
+    *,
+    floor: LessonsFloor | None = None,
+    pipeline: PipelineConfig | None,
+) -> EffectiveLessonsConfig:
+    """Resolve the effective lessons-loop config for *pipeline*, reconciling
+    the global settings floor with any YAML-level `lessons:` override.
+
+    Precedence (HYBRIDE, see per-pipeline-lessons-yaml PRD):
+
+    - ``enable_distillation`` / ``enable_semantic``: OR across floor +
+      pipeline.lessons -- STRENGTHEN-ONLY. A pipeline `False` or absent value
+      can never turn OFF a floor `True`; only an explicit `True` at either
+      layer can turn a floor `False` ON. This is the fail-closed invariant: a
+      `lessons:` block can only add gating, never remove it.
+    - ``distill_runner`` / ``distill_model`` / ``min_score`` / ``inject_limit``:
+      ``pipeline.lessons`` overrides the floor (``lesson_distill_runner``/
+      ``lesson_distill_model``/``lesson_min_score``/``lesson_inject_limit``),
+      first non-None wins -- same "pipeline overrides floor" shape as
+      `resolve_stage_model`/`resolve_effort`'s pipeline-vs-stage layer, minus
+      the stage tier (no `PipelineStage.lessons` exists).
+    - ``min_score`` / ``inject_limit`` were already validated at YAML-load
+      time by `LessonsConfig`'s field validators (`min_score` finite and in
+      `(0, 1]`, `inject_limit >= 1`), so the resolved values here can never
+      degrade to a `0`/negative sentinel that would silently allow-all or
+      disable the lesson-quality/injection floor.
+
+    ``floor`` defaults to the live `hivepilot.config.settings` singleton
+    (imported lazily, only when the caller doesn't supply one, to keep this
+    module import-time independent of `hivepilot.config`); pass an explicit
+    `floor` (e.g. a test double) for testability -- when one is passed, no
+    import of the real singleton ever happens.
+    """
+    if floor is None:
+        from hivepilot.config import settings as floor  # noqa: PLC0415
+
+    pipeline_lessons = pipeline.lessons if pipeline is not None else None
+
+    enable_distillation = bool(floor.enable_lesson_distillation) or bool(
+        pipeline_lessons and pipeline_lessons.enable_distillation
+    )
+    enable_semantic = bool(floor.enable_semantic_lesson_retrieval) or bool(
+        pipeline_lessons and pipeline_lessons.enable_semantic
+    )
+    distill_runner = (
+        pipeline_lessons and pipeline_lessons.distill_runner
+    ) or floor.lesson_distill_runner
+    distill_model = (
+        pipeline_lessons and pipeline_lessons.distill_model
+    ) or floor.lesson_distill_model
+    min_score = (pipeline_lessons and pipeline_lessons.min_score) or floor.lesson_min_score
+    inject_limit = (pipeline_lessons and pipeline_lessons.inject_limit) or floor.lesson_inject_limit
+
+    return EffectiveLessonsConfig(
+        enable_distillation=enable_distillation,
+        enable_semantic=enable_semantic,
+        distill_runner=distill_runner,
+        distill_model=distill_model,
+        min_score=min_score,
+        inject_limit=inject_limit,
     )
 
 

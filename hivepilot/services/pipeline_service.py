@@ -13,6 +13,7 @@ def validate_pipeline(pipeline: PipelineConfig, tasks: TasksFile) -> None:
             )
     validate_roles(tasks)
     validate_debate_config(pipeline)
+    validate_lessons_config(pipeline)
 
 
 def _validate_confidence_threshold(value: float | None, *, where: str) -> None:
@@ -47,6 +48,32 @@ def validate_debate_config(pipeline: PipelineConfig) -> None:
             _validate_confidence_threshold(
                 stage.debate.confidence_threshold, where=f"Pipeline stage '{stage.name}'"
             )
+
+
+def validate_lessons_config(pipeline: PipelineConfig) -> None:
+    """Fail closed on an out-of-range `lessons.min_score`/`inject_limit` at
+    the pipeline level. Defense-in-depth re-check of `LessonsConfig`'s own
+    pydantic field validators (see hivepilot/models.py) -- a value that
+    somehow slipped past model construction (e.g. via `model_construct`)
+    still fails closed here rather than silently reaching the distillation/
+    retrieval gate as an allow-all `min_score` or a disabled `inject_limit`
+    floor. Mirrors `validate_debate_config`'s shape (this config has no
+    stage-level tier, so there is only the pipeline-level check).
+    """
+    lessons = pipeline.lessons
+    if lessons is None:
+        return
+    if lessons.min_score is not None and (
+        not math.isfinite(lessons.min_score) or not (0 < lessons.min_score <= 1)
+    ):
+        raise ValueError(
+            f"Pipeline lessons.min_score must be a finite number in (0, 1], "
+            f"got {lessons.min_score!r}"
+        )
+    if lessons.inject_limit is not None and lessons.inject_limit < 1:
+        raise ValueError(
+            f"Pipeline lessons.inject_limit must be >= 1, got {lessons.inject_limit!r}"
+        )
 
 
 def validate_roles(tasks: TasksFile) -> None:
