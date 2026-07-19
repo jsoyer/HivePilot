@@ -457,6 +457,24 @@ HIVEPILOT_LLM_PRICE_MAP='{"claude-sonnet-4-6": {"input": 3.0, "output": 15.0}, "
 
 See `docs/v4/RUNBOOK.md` "Cost analytics" for the `GET /v1/analytics/cost` endpoint shape.
 
+### Auto-learning lessons loop (opt-in)
+
+Distills a completed run's verdicts/interactions/outcome into candidate
+lessons, validates each against the run's REAL outcome signal (fail-closed —
+never an LLM self-report), and injects only validated lessons into a future
+run's prompt. All flags default off/dormant — see "Auto-learning lessons
+loop (opt-in)" in [USAGE.md](USAGE.md) for the full distill → validate →
+inject flow, the anti-poisoning semantics, and the redaction guarantee.
+
+| Setting | Env var | Default |
+|---|---|---|
+| `enable_lesson_distillation` | `HIVEPILOT_ENABLE_LESSON_DISTILLATION` | `false` |
+| `lesson_distill_runner` | `HIVEPILOT_LESSON_DISTILL_RUNNER` | `claude` |
+| `lesson_distill_model` | `HIVEPILOT_LESSON_DISTILL_MODEL` | *(none — runner default)* |
+| `lesson_min_score` | `HIVEPILOT_LESSON_MIN_SCORE` | `0.5` (validated to `(0.0, 1.0]` at startup) |
+| `lesson_inject_limit` | `HIVEPILOT_LESSON_INJECT_LIMIT` | `5` |
+| `enable_semantic_lesson_retrieval` | `HIVEPILOT_ENABLE_SEMANTIC_LESSON_RETRIEVAL` | `false` — opt-in embedding re-rank of already-validated lessons (optional `hivepilot[langchain]` extra, lazy-imported); any failure or missing extra falls back to the plain SQLite `score DESC, created_at DESC` ranking |
+
 ## IaC runners (terraform / opentofu / pulumi)
 
 Three built-in runner **kinds** wrap the corresponding CLI binary directly

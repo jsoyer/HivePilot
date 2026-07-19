@@ -4092,6 +4092,16 @@ class Orchestrator:
                             dry_run=dry_run,
                             role=task.role,
                             output=_redacted_output,
+                            # Auto-Learning Lessons Loop PRD, Sprint 4: `run_id`
+                            # was already a local in this scope (see `if run_id:`
+                            # a few lines above) but was never threaded into this
+                            # call -- closes the "run_id omitted" TODO in
+                            # `plugins/mem0.py`'s `_provenance_metadata` docstring.
+                            # `run_hook` fans out via `**kwargs`, so every other
+                            # `after_step` hook (obsidian `store`, etc.) simply
+                            # ignores this new kwarg -- no signature change
+                            # required anywhere else.
+                            run_id=run_id,
                         )
                     except StepApprovalPending:
                         # Not a step failure — the run is already recorded as

@@ -22,8 +22,11 @@ Covers:
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -42,9 +45,11 @@ def _reset_lesson_settings() -> Iterator[None]:
     """Guarantee the opt-in flag + inject limit never leak between tests."""
     original_flag = settings.enable_lesson_distillation
     original_limit = settings.lesson_inject_limit
+    original_semantic_flag = settings.enable_semantic_lesson_retrieval
     yield
     settings.enable_lesson_distillation = original_flag
     settings.lesson_inject_limit = original_limit
+    settings.enable_semantic_lesson_retrieval = original_semantic_flag
 
 
 def _seed_validated_lesson(
@@ -132,9 +137,64 @@ class TestRetrieveLessonsRanking:
         lessons = retrieve_lessons("p", role="developer", task="t", limit=10)
         assert lessons == []
 
-    def test_semantic_true_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
-            retrieve_lessons("p", semantic=True)
+    def test_semantic_true_flag_off_falls_back_to_sqlite_ranking(self) -> None:
+        """Auto-Learning Lessons Loop PRD, Sprint 4: `semantic=True` alone is
+        not enough -- `settings.enable_semantic_lesson_retrieval` (default
+        False) gates the actual semantic attempt. With the flag off,
+        `semantic=True` must NEVER raise and must return the exact same
+        SQLite score+recency ranking as `semantic=False`."""
+        settings.enable_semantic_lesson_retrieval = False
+        _seed_validated_lesson(project="p", role="developer", task="t", text="low", score=0.5)
+        _seed_validated_lesson(project="p", role="developer", task="t", text="high", score=0.9)
+        lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=True)
+        assert [lesson.text for lesson in lessons] == ["high", "low"]
+
+    def test_semantic_true_flag_on_extras_absent_falls_back_no_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Even with the flag ON, a missing optional embedding extra (the
+        default/common case -- `hivepilot[langchain]` not installed) must
+        fall straight through to the SQLite ranking, never raise.
+
+        `conftest.py` stubs `langchain_community` (and `.embeddings`) as
+        MagicMocks in `sys.modules` for every test in this suite (so
+        orchestrator-level tests can import without the real dependency) --
+        that stub would falsely 'succeed' `_semantic_rerank`'s lazy import
+        and return MagicMock junk instead of exercising the real
+        `ImportError` path. Temporarily remove the stub entries so the
+        import genuinely fails (the package really isn't installed in this
+        test env), exercising `_semantic_rerank`'s own internal
+        try/except-ImportError branch for real -- mirrors
+        `test_knowledge_service.py`'s `_force_plain_context` pattern for the
+        identical conftest-stub problem."""
+        monkeypatch.delitem(sys.modules, "langchain_community", raising=False)
+        monkeypatch.delitem(sys.modules, "langchain_community.embeddings", raising=False)
+        settings.enable_semantic_lesson_retrieval = True
+        try:
+            _seed_validated_lesson(project="p", role="developer", task="t", text="low", score=0.5)
+            _seed_validated_lesson(project="p", role="developer", task="t", text="high", score=0.9)
+            lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=True)
+            assert [lesson.text for lesson in lessons] == ["high", "low"]
+        finally:
+            settings.enable_semantic_lesson_retrieval = False
+
+    def test_semantic_rerank_never_admits_unvalidated_candidate(self) -> None:
+        """Semantic re-ranking must only ever reorder ALREADY-VALIDATED rows
+        -- it must never surface an unvalidated candidate, flag on or off."""
+        settings.enable_semantic_lesson_retrieval = True
+        try:
+            _seed_validated_lesson(
+                project="p",
+                role="developer",
+                task="t",
+                text="candidate-only",
+                score=0.99,
+                validated=False,
+            )
+            lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=True)
+            assert lessons == []
+        finally:
+            settings.enable_semantic_lesson_retrieval = False
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +244,93 @@ class TestBuildLessonsContext:
             )
         text = build_lessons_context("p", "developer", "t")
         assert text.count("lesson-") == 2
+
+
+# ---------------------------------------------------------------------------
+# build_lessons_context: the semantic flag must actually REACH the
+# production injection path (Sprint 4 adversarial-sweep fix -- previously
+# `build_lessons_context` called `retrieve_lessons(...)` without
+# `semantic=...`, so `enable_semantic_lesson_retrieval` had ZERO effect on
+# real injected lessons even though it was documented as re-ranking them).
+# ---------------------------------------------------------------------------
+
+
+class TestBuildLessonsContextSemanticFlagWiring:
+    def test_semantic_flag_on_reaches_semantic_rerank(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hivepilot.services.lessons_service as lessons_service_module
+
+        settings.enable_lesson_distillation = True
+        settings.enable_semantic_lesson_retrieval = True
+        try:
+            spy = MagicMock(return_value=None)  # None -> falls back, doesn't alter ranking
+            monkeypatch.setattr(lessons_service_module, "_semantic_rerank", spy)
+            _seed_validated_lesson(
+                project="p", role="developer", task="t", text="Semantic-eligible lesson.", score=0.9
+            )
+
+            text = build_lessons_context("p", "developer", "t")
+
+            assert spy.called, (
+                "enable_semantic_lesson_retrieval=True must reach "
+                "_semantic_rerank via the production build_lessons_context path"
+            )
+            # The fallback (spy returns None) must still surface the lesson --
+            # this flag can only ever add re-ranking, never lose a lesson.
+            assert "Semantic-eligible lesson." in text
+        finally:
+            settings.enable_semantic_lesson_retrieval = False
+
+    def test_semantic_flag_off_never_reaches_semantic_rerank(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hivepilot.services.lessons_service as lessons_service_module
+
+        settings.enable_lesson_distillation = True
+        settings.enable_semantic_lesson_retrieval = False
+        spy = MagicMock(return_value=None)
+        monkeypatch.setattr(lessons_service_module, "_semantic_rerank", spy)
+        _seed_validated_lesson(
+            project="p", role="developer", task="t", text="SQLite-only lesson.", score=0.9
+        )
+
+        text = build_lessons_context("p", "developer", "t")
+
+        assert not spy.called, (
+            "enable_semantic_lesson_retrieval=False (the default) must never "
+            "reach _semantic_rerank, even when build_lessons_context passes "
+            "semantic=False through explicitly"
+        )
+        assert "SQLite-only lesson." in text
+
+    def test_retrieve_lessons_called_with_flag_value_as_semantic_kwarg(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct proof of the exact wiring fix: `build_lessons_context`
+        passes `semantic=settings.enable_semantic_lesson_retrieval` into
+        `retrieve_lessons` -- not a hardcoded `False`/omitted kwarg."""
+        import hivepilot.services.lessons_service as lessons_service_module
+
+        settings.enable_lesson_distillation = True
+        real_retrieve_lessons = lessons_service_module.retrieve_lessons
+        calls: list[dict[str, Any]] = []
+
+        def _spy_retrieve_lessons(*args: Any, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            return real_retrieve_lessons(*args, **kwargs)
+
+        monkeypatch.setattr(lessons_service_module, "retrieve_lessons", _spy_retrieve_lessons)
+
+        for flag_value in (True, False):
+            settings.enable_semantic_lesson_retrieval = flag_value
+            try:
+                calls.clear()
+                build_lessons_context("p", "developer", "t")
+                assert len(calls) == 1
+                assert calls[0]["semantic"] is flag_value
+            finally:
+                settings.enable_semantic_lesson_retrieval = False
 
 
 # ---------------------------------------------------------------------------

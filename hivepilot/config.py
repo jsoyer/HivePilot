@@ -502,6 +502,20 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_LESSON_INJECT_LIMIT
     lesson_inject_limit: int = 5
 
+    # ---- Auto-Learning Lessons Loop PRD, Sprint 4 (opt-in semantic rank) --
+    # Opt-in semantic re-ranking of ALREADY-VALIDATED lessons at retrieval
+    # time (`lessons_service.retrieve_lessons(..., semantic=True)`) using
+    # the SAME optional `hivepilot[langchain]` embedding extra
+    # `knowledge_service._embedding_context` already uses -- lazy-imported,
+    # never a hard dependency. Defaults False -- the core lessons loop
+    # (distill/validate/inject) stays fully dependency-free with this flag
+    # off, byte-identical to Sprint 3. Even when True, a missing extra or
+    # any embedding-time error falls back to the plain SQLite score+recency
+    # ranking (`state_service.list_ranked_lessons`) -- this flag can never
+    # turn a working retrieval into a crash.
+    # env: HIVEPILOT_ENABLE_SEMANTIC_LESSON_RETRIEVAL
+    enable_semantic_lesson_retrieval: bool = False
+
     @field_validator("lesson_min_score")
     @classmethod
     def _validate_lesson_min_score(cls, v: float) -> float:

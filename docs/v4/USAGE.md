@@ -335,6 +335,97 @@ regardless.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [CONFIG.md](CONFIG.md).
 
+## Auto-learning lessons loop (opt-in)
+
+HivePilot can distill a completed run's verdicts/interactions/outcomes into
+reusable **lessons**, validate each candidate against the run's REAL outcome
+(never an LLM's own self-report), and inject only the validated ones into a
+future run's prompt — closing a "learn from what actually happened" loop
+around the pipeline. Fully **opt-in**: every flag below defaults off/dormant,
+and the flags-off path is byte-identical to a HivePilot build that predates
+this feature entirely (no extra LLM call, no `lessons` rows, no prompt
+section).
+
+**Flags:**
+
+| Setting | Env var | Default |
+|---|---|---|
+| `enable_lesson_distillation` | `HIVEPILOT_ENABLE_LESSON_DISTILLATION` | `false` |
+| `lesson_distill_runner` | `HIVEPILOT_LESSON_DISTILL_RUNNER` | `claude` |
+| `lesson_distill_model` | `HIVEPILOT_LESSON_DISTILL_MODEL` | *(none — runner default)* |
+| `lesson_min_score` | `HIVEPILOT_LESSON_MIN_SCORE` | `0.5` |
+| `lesson_inject_limit` | `HIVEPILOT_LESSON_INJECT_LIMIT` | `5` |
+| `enable_semantic_lesson_retrieval` | `HIVEPILOT_ENABLE_SEMANTIC_LESSON_RETRIEVAL` | `false` |
+
+**The flow — distill → validate → inject:**
+
+1. **Distill** (`enable_lesson_distillation`) — at the end of each project's
+   task run, if the run produced at least one judge/arbiter verdict or agent
+   interaction (an outcome-only run with neither is skipped — not worth a
+   costed LLM call), ONE extra LLM call (`lesson_distill_runner`/
+   `lesson_distill_model`, default the `claude` runner) reviews the run's
+   verdicts, interactions, and outcome and proposes zero or more concise,
+   reusable lesson candidates as `text`/`category`. A malformed, empty, or
+   unparseable response — or a response with no usable `text` — **never
+   fabricates a lesson**: nothing is persisted on a doubt.
+2. **Validate (anti-poisoning gate)** — each candidate is immediately scored
+   against the SAME run's REAL outcome signal, never the distiller's own
+   self-report (any `score`/`confidence` an LLM includes in its distillation
+   response is parsed out and discarded — this module doesn't even read
+   those keys). The score is the max of whichever real signals actually
+   fired:
+   - the run itself succeeded (`RunResult.success=True`) → `1.0`
+   - a `"challenge"`-kind verdict was genuinely `ACCEPT`ed at/above
+     `lesson_min_score` (a `MAINTAIN`/`DEFEND` verdict, or an `ACCEPT` below
+     the floor, contributes nothing) → `1.0`
+   - that verdict's own `confidence`, when finite and in `[0, 1]`
+   A lesson is marked `validated=1` only when this real-signal score is
+   `>= lesson_min_score`. **Fail-closed**: an absent or empty outcome signal
+   (no success, no resolved challenge, no confidence at all) is treated as
+   DENY, never as "no constraint → allow" — every candidate is persisted
+   (so nothing is silently lost), but an unvalidated candidate can NEVER be
+   retrieved or injected; there is no toggle that surfaces it. `lesson_min_score`
+   itself is validated at startup to a finite value in `(0.0, 1.0]` — a
+   misconfigured `0` floor can't silently admit every candidate.
+3. **Inject** — a future run for the same `project`/`role`/`task` retrieves
+   only `validated=1` lessons, ranked by score (desc) then recency (desc),
+   capped at `lesson_inject_limit`, and renders them as a stable
+   `Lessons learned:` section in the agent's prompt — next to (not inside)
+   the existing `Knowledge context` section, for both the `claude` and
+   `api`/prompt-CLI runners. With `enable_lesson_distillation=false` (the
+   default), this section is never even queried — the prompt is
+   byte-identical to a lessons-loop-free build.
+
+**Redaction guarantee.** Secrets are masked before a lesson is ever
+persisted, and separately before the distillation prompt ever leaves the
+process (the egress choke point) — a resolved `${secret:NAME}` value sitting
+in a step's failure `detail` (which, unlike verdict/interaction summaries,
+is not pre-redacted upstream) is stripped from the FULL assembled prompt
+immediately before the `lesson_distill_runner` call, and the raw response is
+redacted again before being parsed and stored. **Residual limitation**
+(shared with every other sink in HivePilot): a plaintext secret sitting in
+an env value that was never registered via `${secret:NAME}` is not tracked
+by the redaction registry and can't be masked — same limitation as the
+`mem0`/`obsidian` store hooks and every other egress point in this codebase.
+Register real secrets through `${secret:NAME}` (see the Secrets sections in
+[CONFIG.md](CONFIG.md)) to get masking coverage.
+
+**Semantic retrieval is opt-in with a dependency-free SQLite fallback.**
+With `enable_semantic_lesson_retrieval=false` (the default), retrieval is a
+plain SQLite `score DESC, created_at DESC` read — no `langchain`/
+`sentence-transformers`/FAISS import anywhere on this path, so the core loop
+works with the optional `hivepilot[langchain]` extra completely absent. With
+the flag on, retrieval additionally re-ranks the ALREADY-VALIDATED candidate
+pool by embedding similarity (same optional embedding backend
+`knowledge_service`'s RAG path uses, lazy-imported) blended with the real
+validation score — it only ever reorders validated rows, it never widens the
+pool to admit an unvalidated one. Any failure on this path — the extra not
+installed, an embedding-call error, anything — silently falls back to the
+same plain SQLite ranking; this flag can never turn a working retrieval into
+a crash.
+
+See [CONFIG.md](CONFIG.md) for the flag reference table.
+
 ## Plan checkpoint (validation du plan avant le dev)
 
 Une étape de pipeline marquée `pause_before: true` met le pipeline **en pause

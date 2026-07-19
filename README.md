@@ -12,6 +12,7 @@ a CEO dual-model debate, full interaction visibility, and remote control.
 - **Code review & PRs**: the **developer (claude)** opens a PR; the **reviewer (codex)** reviews it; a human merges. **Documentation/QA** run on **gemini**.
 - **CEO debate → ADR**: dual-model (qwen + kimi) positions synthesized into an Architecture Decision Record, with an optional independent LLM judge/arbiter scoring the debate and adjudicating challenges — see [Usage](docs/v4/USAGE.md#debate-judge-challenge-arbiter--the-fail-closed-pr-gate-opt-in).
 - **Visibility**: interactions store (SQLite) + Obsidian notes + Mermaid timeline + Telegram + Textual dashboard.
+- **Auto-learning lessons loop** *(opt-in)*: distills a completed run's verdicts/interactions/outcome into candidate lessons, validates each against the run's real outcome (fail-closed — never an LLM self-report), and injects only validated lessons into a future run's prompt — see [Usage](docs/v4/USAGE.md#auto-learning-lessons-loop-opt-in).
 - **Remote control via Telegram**: `/runpipeline`, `/debate`, `/steps`, `/interactions`, `/approve` … command and monitor the agents from your phone.
 - **Safety**: `--simulate` (preview, no real calls), per-project approval gates, prompt-injection validation, container isolation, lightweight core (langchain/torch/boto3 optional), and an opt-in fail-closed judge/arbiter gate on PR promotion (blocks `promote_pr`/`merge_pr` on any absent/low-confidence/non-approval verdict).
 
