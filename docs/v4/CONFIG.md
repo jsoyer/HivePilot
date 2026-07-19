@@ -354,6 +354,91 @@ see USAGE.md) are the operator-level default every pipeline/stage `debate:`
 block resolves against — an operator can still mandate gating fleet-wide via
 the floor even if every individual pipeline's YAML is silent on `debate:`.
 
+### Per-pipeline lessons override (`lessons:`)
+
+A `lessons:` block on `PipelineConfig` (**pipeline-level only** — there is no
+per-stage `lessons:`; see "Why pipeline-level only" below) opts a single
+pipeline **into** the auto-learning lessons loop (see "Auto-learning lessons
+loop" in [USAGE.md](USAGE.md)), instead of only via the global `Settings`
+flags. Absent (the default — no `lessons:` key at all) is byte-identical to
+before this field existed: every value inherits the global floor.
+
+```yaml
+pipelines:
+  release:
+    description: "release pipeline with its own lessons loop tuning"
+    lessons:
+      enable_distillation: true    # bool | None, default None
+      enable_semantic: true        # bool | None, default None
+      distill_runner: codex        # str | None, default None
+      distill_model: gpt-5         # str | None, default None
+      min_score: 0.75              # float | None, default None — must be in (0, 1]
+      inject_limit: 3              # int | None, default None — must be >= 1
+    stages:
+      - name: release-review
+        task: release-review-task
+
+  docs-only:
+    description: "low-stakes docs pipeline — no lessons: block at all"
+    stages:
+      - name: write-docs
+        task: documentation-task
+```
+
+All six fields are optional and independently overridable; a block that sets
+only one field leaves the rest `None` ("inherit").
+
+**Precedence — resolved by `hivepilot.models.resolve_lessons_config`, the
+single source of truth also used by the orchestrator (`Orchestrator.
+_run_task_body`/`._execute_task_body`) and the injector
+(`knowledge_service.build_lessons_context`):**
+
+| Floor (`Settings`) | Pipeline (`lessons:`) | Effective |
+|---|---|---|
+| `enable_lesson_distillation=false` | absent / `enable_distillation: false` | **off** |
+| `enable_lesson_distillation=false` | `enable_distillation: true` | **on** (pipeline opts in) |
+| `enable_lesson_distillation=true` | absent / `enable_distillation: false` | **on** (floor wins — block can't turn it off) |
+| `enable_lesson_distillation=true` | `enable_distillation: true` | **on** |
+
+- **`enable_distillation` / `enable_semantic`** — **OR across floor +
+  pipeline, STRENGTHEN-ONLY.** A pipeline value of `false` (or absent) can
+  **never** turn OFF a global-floor `true`; only an explicit `true` at
+  either layer can turn a floor `false` ON. A `lessons:` block can only ADD
+  a pipeline's own distillation/injection, never remove operator-mandated
+  distillation (fail-closed by construction — the same "empty-value-
+  fail-open" bug class the `debate:` override above avoids).
+- **`distill_runner` / `distill_model` / `min_score` / `inject_limit`** —
+  **pipeline overrides the global floor**, first non-`None` value wins (same
+  shape as `debate:`'s `runner`/`model`/`confidence_threshold` resolution,
+  minus a stage tier — there is no `PipelineStage.lessons`).
+
+**Fail closed, never silently disables the gate:** `min_score` must be a
+finite number in `(0, 1]` and `inject_limit` must be `>= 1` — both **rejected
+at YAML-load time** (pydantic `field_validator`s on `LessonsConfig`,
+re-checked defense-in-depth by `hivepilot.services.pipeline_service.
+validate_lessons_config`). A present-but-blank `distill_runner`/
+`distill_model` (`""` or whitespace-only) is also rejected at load — it would
+otherwise be indistinguishable from "unset" and silently fall through to the
+floor, hiding a config typo. Loading a `pipelines.yaml` with a bad value
+raises immediately; absence (`None`) is always valid and always means
+"inherit the floor", never "no constraint".
+
+**Why pipeline-level only (no per-stage `lessons:`).** Unlike `debate:`,
+distillation happens **once per completed project run** (`Orchestrator.
+_run_task_body`, right next to `knowledge_service.append_feedback`) — not
+per-stage — so a stage-level override would have no distinct call site to
+attach to. Injection (`build_lessons_context`) is threaded per-`RunnerPayload`
+via the SAME pipeline-resolved `EffectiveLessonsConfig`, so every stage in a
+pipeline shares one consistent lessons policy for that run.
+
+**The global `Settings` flags remain the floor.** `enable_lesson_
+distillation`, `enable_semantic_lesson_retrieval`, `lesson_distill_runner`,
+`lesson_distill_model`, `lesson_min_score`, `lesson_inject_limit` (env vars
+`HIVEPILOT_ENABLE_LESSON_DISTILLATION` etc., see USAGE.md) are the
+operator-level default every pipeline's `lessons:` block resolves against —
+an operator can still mandate the loop fleet-wide via the floor even if every
+individual pipeline's YAML is silent on `lessons:`.
+
 ### Usage capture (tokens/cost/actual-model) — opt-in
 
 `HIVEPILOT_CLAUDE_CAPTURE_USAGE` (default `false`) enables per-step token/cost/

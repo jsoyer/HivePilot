@@ -426,6 +426,58 @@ a crash.
 
 See [CONFIG.md](CONFIG.md) for the flag reference table.
 
+**Per-pipeline opt-in via `lessons:`.** The flags above are the fleet-wide
+floor; an individual `pipelines.yaml` pipeline can additionally opt itself
+into (or further tune) the lessons loop via a `lessons:` block, without
+touching global config — see "Per-pipeline lessons override" in
+[CONFIG.md](CONFIG.md) for the full field reference. The enable semantics
+are **OR, strengthen-only**: a pipeline can turn distillation/semantic
+retrieval **ON** even when the global floor is off, but a pipeline can
+**never** turn OFF a gate the operator mandated globally — a `lessons:
+{enable_distillation: false}` in a pipeline is simply ignored when
+`enable_lesson_distillation=true` fleet-wide. `min_score`/`inject_limit`
+follow "pipeline overrides floor, first non-`None` wins", and are validated
+to `(0, 1]`/`>= 1` at config-load time — `0`, negative, or an absent-but-
+required value never silently disables the quality/injection floor. Unlike
+`debate:`, `lessons:` is **pipeline-level only** (no per-stage override) —
+distillation happens once per completed project run, not per stage, so
+every stage in a pipeline shares one consistent, pipeline-resolved lessons
+policy.
+
+**Worked example — one pipeline opted further in, one left untouched:**
+
+```yaml
+# pipelines.yaml
+pipelines:
+  release:
+    description: "release pipeline — wants its own distiller model + tighter bar"
+    lessons:
+      enable_distillation: true
+      distill_runner: codex
+      distill_model: gpt-5
+      min_score: 0.8
+    stages:
+      - name: plan
+        task: ceo-plan
+      - name: review
+        task: developer-review
+
+  docs-only:
+    description: "low-stakes docs pipeline — no lessons: block at all"
+    stages:
+      - name: write-docs
+        task: documentation-task
+```
+
+With the global floor at its defaults (`enable_lesson_distillation=false`),
+`release` distills, validates (`min_score=0.8`), and injects lessons scoped
+to its own project(s), while `docs-only` behaves exactly as if this whole
+feature didn't exist — no distiller call, no injected section. Flip
+`HIVEPILOT_ENABLE_LESSON_DISTILLATION=true` fleet-wide and `docs-only` gains
+the loop too (the floor always applies, at the default `lesson_min_score`),
+while `release`'s own `min_score=0.8`/`distill_runner=codex` keep governing
+its own run regardless.
+
 ## Plan checkpoint (validation du plan avant le dev)
 
 Une étape de pipeline marquée `pause_before: true` met le pipeline **en pause

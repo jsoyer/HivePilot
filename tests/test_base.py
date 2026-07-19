@@ -7,7 +7,45 @@ changing ``capture()``'s ``str`` return contract.
 
 from __future__ import annotations
 
-from hivepilot.runners.base import UsageInfo, pop_last_usage, set_last_usage
+from pathlib import Path
+
+from hivepilot.models import EffectiveLessonsConfig, ProjectConfig, TaskStep
+from hivepilot.runners.base import RunnerPayload, UsageInfo, pop_last_usage, set_last_usage
+
+
+def _payload(**overrides: object) -> RunnerPayload:
+    base = dict(
+        project_name="p",
+        project=ProjectConfig(path=Path(".")),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+    )
+    base.update(overrides)
+    return RunnerPayload(**base)  # type: ignore[arg-type]
+
+
+def test_runner_payload_lessons_defaults_to_none() -> None:
+    """Per-pipeline-lessons-yaml PRD, Sprint 2: `RunnerPayload.lessons` is
+    OPTIONAL and defaults to `None` -- backward-compatible for every
+    existing call site that doesn't pass it (falls back to the settings
+    floor at the consumption site, see `knowledge_service.
+    build_lessons_context`)."""
+    payload = _payload()
+    assert payload.lessons is None
+
+
+def test_runner_payload_accepts_explicit_effective_lessons_config() -> None:
+    effective = EffectiveLessonsConfig(
+        enable_distillation=True,
+        enable_semantic=False,
+        distill_runner="claude",
+        distill_model=None,
+        min_score=0.5,
+        inject_limit=5,
+    )
+    payload = _payload(lessons=effective)
+    assert payload.lessons is effective
 
 
 def test_usage_info_defaults_all_none() -> None:

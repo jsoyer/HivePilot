@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 
 from hivepilot.config import Settings
-from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+from hivepilot.models import EffectiveLessonsConfig, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.plugins import SkillSpec
 
 
@@ -17,6 +17,16 @@ class RunnerPayload:
     step: TaskStep
     metadata: dict[str, Any]
     secrets: dict[str, str] = field(default_factory=dict)
+    # Per-pipeline-lessons-yaml PRD, Sprint 2: the orchestrator's ONE
+    # per-run-resolved `EffectiveLessonsConfig` (see
+    # `hivepilot.models.resolve_lessons_config`), threaded down so
+    # `ClaudeRunner`/`PromptCliRunner` pass it into `knowledge_service.
+    # build_lessons_context` instead of that function re-reading the global
+    # settings floor directly. `None` (the default) is fully backward
+    # compatible -- every call site that predates this Sprint (or any
+    # non-pipeline `run_task` call) falls back to floor-only resolution at
+    # the consumption site, byte-identical to before this field existed.
+    lessons: EffectiveLessonsConfig | None = None
 
 
 class RunnerModeUnsupportedError(RuntimeError):
