@@ -31,7 +31,7 @@ Set to `False` to disable both discovery mechanisms; built-ins are unaffected.
 
 ## Plugin inventory
 
-This repo ships **19** local-file plugins under `plugins/*.py` (excluding
+This repo ships **20** local-file plugins under `plugins/*.py` (excluding
 `plugins/__init__.py`). Every one follows the uniform gating model below —
 see "Gating model" further down for the full opt-in/opt-out contract.
 
@@ -43,6 +43,7 @@ see "Gating model" further down for the full opt-in/opt-out contract.
 | `pi` | `plugins/pi.py` | runner (agent) | `pi_enabled` | ON (+ PATH) |
 | `qwen_code` | `plugins/qwen_code.py` | runner (agent, kind `qwen-code`) | `qwen_code_enabled` | ON (+ PATH) |
 | `kimi_cli` | `plugins/kimi_cli.py` | runner (agent, kind `kimi-cli`) | `kimi_cli_enabled` | ON (+ PATH) |
+| `antigravity` | `plugins/antigravity.py` | runner (agent, kind `antigravity`) | `antigravity_enabled` | ON (+ PATH) |
 | `rtk` | `plugins/rtk.py` | runner (infra, shell-fallback) + health | `rtk_enabled` | ON |
 | `herdr` | `plugins/herdr.py` | runner (infra, multiplexer) + health | `herdr_enabled` | ON |
 | `hugo` | `plugins/hugo.py` | runner (infra, static-site) + health | `hugo_enabled` | ON (+ PATH) |
@@ -85,11 +86,11 @@ same as a disabled plugin agent kind.
 | `vibe` | `vibe` | `mode: cli` and `mode: api`; has no `--model` flag — the model comes from its own config / `MISTRAL_API_KEY` |
 | `openrouter` | — (API-only) | `supported_modes == {"api"}` — no CLI binary, never spawns a subprocess |
 
-**Plugin agent kinds** — `{gemini, opencode, ollama, pi, qwen-code, kimi-cli}`
+**Plugin agent kinds** — `{gemini, opencode, ollama, pi, qwen-code, kimi-cli, antigravity}`
 (one file per kind under `plugins/`, all following the same canonical
 gated-agent-plugin skeleton — see `plugins/gemini.py`'s module docstring)
 are registered into `RUNNER_MAP` only when BOTH its per-plugin enable flag is
-`True` (default: all six default **ON**, opt-out) AND its CLI binary is found
+`True` (default: all seven default **ON**, opt-out) AND its CLI binary is found
 on `PATH` (`shutil.which`) at process start. Either condition failing means
 the kind is simply **absent** from `RUNNER_MAP` — a config that still
 references it resolves to the actionable `RunnerPluginUnavailableError`
@@ -103,6 +104,7 @@ references it resolves to the actionable `RunnerPluginUnavailableError`
 | `pi` | `pi` | `pi_enabled` | `HIVEPILOT_PI_ENABLED` | `npm i -g @earendil-works/pi-coding-agent` |
 | `qwen-code` | `qwen` (binary `qwen`, kind `qwen-code` — deliberately diverges, like `ollama`'s pair) | `qwen_code_enabled` | `HIVEPILOT_QWEN_CODE_ENABLED` | `npm i -g @qwen-code/qwen-code` |
 | `kimi-cli` | `kimi` (binary `kimi`, kind `kimi-cli`) | `kimi_cli_enabled` | `HIVEPILOT_KIMI_CLI_ENABLED` | `uv tool install kimi-cli` |
+| `antigravity` | `agy` | `antigravity_enabled` | `HIVEPILOT_ANTIGRAVITY_ENABLED` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (or `hivepilot agents install antigravity`) |
 
 **PATH-activation rule.** Activation is evaluated ONCE, at `PluginManager()`
 construction (process start): installing/removing a binary, or flipping its
