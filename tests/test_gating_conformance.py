@@ -249,6 +249,7 @@ class TestAgentRunnerKindsSingleSourceOfTruth:
                 "pi",
                 "qwen-code",
                 "kimi-cli",
+                "antigravity",
             }
         )
         assert AGENT_RUNNER_KINDS == expected

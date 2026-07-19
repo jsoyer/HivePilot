@@ -670,3 +670,31 @@ class KimiCliRunner(PromptCliRunner):
     cli_flags: tuple[str, ...] = ("--print", "--yolo")
     model_flag: str = "-m"
     prompt_flag: str | None = "-p"
+
+
+@dataclass
+class AntigravityRunner(PromptCliRunner):
+    """Google Antigravity CLI (`agy`) — installed via
+    `curl -fsSL https://antigravity.google/cli/install.sh | bash`
+    (see `hivepilot.services.agent_install`).
+
+    Non-interactive: `agy -p "<prompt>" --no-color --yes` (+ `--model <m>`
+    when a model is configured). `--no-color` gives clean, ANSI-free output
+    for log capture; `--yes` auto-approves confirmations so the agent can run
+    headlessly — same rationale as the other auto-approving CLIs wired here
+    (`kimi --yolo`, `pi --approve`, `qwen --approval-mode yolo`, the claude
+    developer role's bypassPermissions): a headless coding agent needs to
+    auto-approve to actually do work, so running it OUTSIDE a sandboxed
+    worktree/container is not recommended.
+
+    The more aggressive `--dangerously-skip-permissions` (auto-approves ALL
+    tool-permission requests, not just confirmations) is deliberately NOT
+    included as a default — an operator who wants that can add it via
+    `options["cli_flags"]` on the runner definition, which `_build_cli_args`
+    already lets override this tuple wholesale.
+    """
+
+    command_name: str = "agy"
+    prompt_flag: str | None = "-p"
+    model_flag: str = "--model"
+    cli_flags: tuple[str, ...] = ("--no-color", "--yes")
