@@ -579,28 +579,34 @@ def retrieve_lessons(
     *limit* (Auto-Learning Lessons Loop PRD, Sprint 3; semantic re-rank
     added Sprint 4).
 
-    The default path (``semantic=False``, or `settings.
-    enable_semantic_lesson_retrieval` False) is a plain, dependency-free
+    The default path (``semantic=False``) is a plain, dependency-free
     SQLite read via `state_service.list_ranked_lessons` -- no `mem0`/
     `FAISS`/`langchain` import anywhere on this path, so the core lessons
-    loop keeps working with those optional dependencies absent. This is
-    also the on-disk default (`enable_semantic_lesson_retrieval: bool =
-    False`), so flipping *semantic=True* at a call site does nothing until
-    an operator also opts in via config -- defense in depth, mirrors every
-    other opt-in flag in this loop.
+    loop keeps working with those optional dependencies absent.
 
-    ``semantic=True`` AND the flag on attempts `_semantic_rerank` first --
-    itself lazy-importing the optional embedding backend and wrapped so ANY
-    failure (extra not installed, embedding call errors, empty pool) falls
-    straight through to the SAME SQLite ranking below. NEVER crashes, NEVER
-    hard-imports langchain/mem0/faiss at module import time.
+    ``semantic`` is the ALREADY-RESOLVED decision, not a raw request. The
+    sole production caller (`knowledge_service.build_lessons_context`) passes
+    ``semantic=EffectiveLessonsConfig.enable_semantic``, which
+    `resolve_lessons_config` computed STRENGTHEN-ONLY across the global
+    `enable_semantic_lesson_retrieval` floor + any per-pipeline `lessons:`
+    override (per-pipeline-lessons-yaml PRD). This function therefore TRUSTS
+    the arg directly -- re-checking the raw global floor here would silently
+    defeat a per-pipeline opt-in (an inert-override, fail-closed but wrong).
+    Default-off is preserved because the resolved value is ``False`` unless
+    the floor OR a pipeline opted in.
+
+    ``semantic=True`` attempts `_semantic_rerank` first -- itself lazy-
+    importing the optional embedding backend and wrapped so ANY failure
+    (extra not installed, embedding call errors, empty pool) falls straight
+    through to the SAME SQLite ranking below. NEVER crashes, NEVER hard-
+    imports langchain/mem0/faiss at module import time.
 
     Semantic re-ranking ONLY ever reorders rows `state_service.
     list_ranked_lessons` already returned (hard-coded ``validated=1``
     filter, no toggle) -- it can reorder the validated pool, never expand
     it to include an unvalidated candidate.
     """
-    if semantic and settings.enable_semantic_lesson_retrieval:
+    if semantic:
         ranked = _semantic_rerank(project, role, task, limit)
         if ranked is not None:
             return ranked

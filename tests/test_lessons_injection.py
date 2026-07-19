@@ -137,16 +137,17 @@ class TestRetrieveLessonsRanking:
         lessons = retrieve_lessons("p", role="developer", task="t", limit=10)
         assert lessons == []
 
-    def test_semantic_true_flag_off_falls_back_to_sqlite_ranking(self) -> None:
-        """Auto-Learning Lessons Loop PRD, Sprint 4: `semantic=True` alone is
-        not enough -- `settings.enable_semantic_lesson_retrieval` (default
-        False) gates the actual semantic attempt. With the flag off,
-        `semantic=True` must NEVER raise and must return the exact same
-        SQLite score+recency ranking as `semantic=False`."""
-        settings.enable_semantic_lesson_retrieval = False
+    def test_semantic_false_returns_plain_sqlite_ranking(self) -> None:
+        """The dependency-free default path is now expressed as
+        ``semantic=False`` (per-pipeline-lessons-yaml PRD made the
+        ``semantic`` arg the ALREADY-RESOLVED decision -- `retrieve_lessons`
+        no longer re-reads the raw `enable_semantic_lesson_retrieval` floor,
+        so a resolved ``False`` is the sole "no re-rank" signal). It must
+        return the deterministic SQLite score+recency ranking without any
+        `mem0`/`FAISS`/`langchain` import."""
         _seed_validated_lesson(project="p", role="developer", task="t", text="low", score=0.5)
         _seed_validated_lesson(project="p", role="developer", task="t", text="high", score=0.9)
-        lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=True)
+        lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=False)
         assert [lesson.text for lesson in lessons] == ["high", "low"]
 
     def test_semantic_true_flag_on_extras_absent_falls_back_no_crash(
@@ -303,6 +304,43 @@ class TestBuildLessonsContextSemanticFlagWiring:
             "semantic=False through explicitly"
         )
         assert "SQLite-only lesson." in text
+
+    def test_pipeline_semantic_override_reaches_rerank_with_floor_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression (per-pipeline-lessons-yaml follow-up): a per-pipeline
+        ``lessons.enable_semantic=True`` must REACH `_semantic_rerank` even
+        when the global `enable_semantic_lesson_retrieval` floor is OFF --
+        previously `retrieve_lessons` re-gated on the raw floor, making the
+        strengthen-only override inert. The resolved `enable_semantic` is now
+        authoritative end-to-end through `build_lessons_context`."""
+        import hivepilot.services.lessons_service as lessons_service_module
+        from hivepilot.models import (
+            LessonsConfig,
+            PipelineConfig,
+            resolve_lessons_config,
+        )
+
+        settings.enable_lesson_distillation = True
+        settings.enable_semantic_lesson_retrieval = False  # floor OFF
+        resolved = resolve_lessons_config(
+            pipeline=PipelineConfig(description="d", lessons=LessonsConfig(enable_semantic=True))
+        )
+        assert resolved.enable_semantic is True  # strengthen-only OR
+
+        spy = MagicMock(return_value=None)  # None -> falls back, keeps ranking
+        monkeypatch.setattr(lessons_service_module, "_semantic_rerank", spy)
+        _seed_validated_lesson(
+            project="p", role="developer", task="t", text="Override lesson.", score=0.9
+        )
+
+        text = build_lessons_context("p", "developer", "t", effective=resolved)
+
+        assert spy.called, (
+            "per-pipeline enable_semantic=True must reach _semantic_rerank "
+            "even with the global floor OFF"
+        )
+        assert "Override lesson." in text  # fallback still surfaces the lesson
 
     def test_retrieve_lessons_called_with_flag_value_as_semantic_kwarg(
         self, monkeypatch: pytest.MonkeyPatch
