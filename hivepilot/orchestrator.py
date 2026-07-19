@@ -203,6 +203,24 @@ class RunCancelled(Exception):  # noqa: N818 — mirrors StepApprovalPending/Quo
     """
 
 
+class ReviewBlockedError(Exception):  # noqa: N818 — mirrors StepApprovalPending/RunCancelled naming
+    """Raised inside `_execute_task_body` when `review_target="internal"`
+    and the adversarial-review governing verdict (`self._governing_verdict`,
+    set by `_run_review` via `_register_verdict`) is blocking (Sprint 3,
+    adversarial-review-thin-layer-over-debate PRD).
+
+    `review_target="internal"` has no PR for `perform_git_actions` to gate,
+    so a blocking review verdict must halt STAGE/PIPELINE PROGRESSION itself
+    instead. This is a plain `Exception` (unlike `StepApprovalPending`/
+    `RunCancelled`/`QuotaDeferredError`, which are special-cased as non-
+    failures) -- it deliberately falls through `_execute_task`'s generic
+    `except Exception` handling and `run_task`'s ThreadPoolExecutor result
+    loop, which converts it into a failing `RunResult`, which in turn trips
+    `stage_failed` in the pipeline stage loop exactly like any other task
+    failure.
+    """
+
+
 def _resolve_runner_for_destructive_check(runner_def: RunnerDefinition) -> object | None:
     """Best-effort instantiate the runner class for *runner_def* purely to
     query the optional `is_destructive()` method (see `step_requires_approval`
@@ -4486,6 +4504,27 @@ class Orchestrator:
                     simulate=simulate,
                     run_id=run_id,
                 )
+                # Sprint 3: `review_target="internal"` has no PR to gate (the
+                # pipeline may never open one), so a blocking review verdict
+                # must halt STAGE PROGRESSION itself instead -- fail closed by
+                # raising `ReviewBlockedError`, which `_execute_task`'s
+                # generic `except Exception` handling converts into a failing
+                # `RunResult` (see `run_task`'s ThreadPoolExecutor loop),
+                # which in turn trips `stage_failed` in the pipeline stage
+                # loop. `review_target="github_pr"` is NOT handled here -- it
+                # flows through unchanged and is gated below instead, at
+                # `perform_git_actions` (see `judge_gate_enabled`).
+                if effective_debate.review_target == "internal":
+                    from hivepilot.services.git_service import is_blocking
+
+                    if is_blocking(self._governing_verdict, effective_debate.confidence_threshold):
+                        raise ReviewBlockedError(
+                            f"adversarial review blocked stage progression for "
+                            f"{project.path.name}/{task_name} (review_target=internal): "
+                            "the governing review verdict is blocking (missing/empty/"
+                            "low-confidence/non-approval) -- see the recorded review "
+                            "verdict for detail"
+                        )
 
             if auto_git:
                 perform_git_actions(
@@ -4499,12 +4538,21 @@ class Orchestrator:
                     # debate-judge/challenge-arbiter Verdict registered so far
                     # THIS run (see `_register_verdict`) — a None/empty/
                     # low-confidence/non-approval verdict blocks promote/merge
-                    # exactly like an explicit blocking `status:` does. Only
-                    # active when either judge feature is opt-in enabled;
-                    # flags-off is byte-identical to pre-Sprint-3 behaviour.
+                    # exactly like an explicit blocking `status:` does. Active
+                    # when either judge feature is opt-in enabled, OR when
+                    # `review_target="github_pr"` -- the adversarial-review
+                    # verdict must gate `promote_pr`/`merge_pr` on its own,
+                    # independent of judge/arbiter, otherwise a blocking review
+                    # verdict is silently ignored and the PR merges anyway
+                    # (fail-open — this is the Sprint 3 fix). `flags-off AND
+                    # review_target unset` is byte-identical to pre-Sprint-3
+                    # behaviour. `review_target="internal"` never reaches this
+                    # call while blocking -- see the `raise` above.
                     verdict=self._governing_verdict,
                     judge_gate_enabled=(
-                        effective_debate.enable_judge or effective_debate.enable_arbiter
+                        effective_debate.enable_judge
+                        or effective_debate.enable_arbiter
+                        or effective_debate.review_target == "github_pr"
                     ),
                     confidence_threshold=effective_debate.confidence_threshold,
                 )
