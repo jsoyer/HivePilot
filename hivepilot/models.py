@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal, Protocol, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -211,6 +213,41 @@ class ProjectConfig(BaseModel):
         return self
 
 
+# ---- Debate/consensus YAML config (debate-judge-pipeline-yaml PRD, Sprint 1) ----
+# Pure config-layer surface for the debate judge / challenge arbiter (see
+# `Settings.enable_debate_judge`/`.enable_challenge_arbiter`/`.judge_runner`/
+# `.judge_model`/`.judge_confidence_threshold` in hivepilot/config.py, the
+# fail-closed PR gate they feed via `Orchestrator._governing_verdict`). This
+# sprint only adds the pipeline/stage-level YAML override surface + the
+# resolver that reconciles it with the global floor — no orchestrator wiring
+# yet, so a `debate:` block in pipelines.yaml is inert until a later sprint
+# threads `resolve_debate_config` into the orchestrator.
+#
+# SECURITY: this is the "empty-value-fail-open" bug class HivePilot has hit
+# before (see error-registry). A `debate:` block must never be able to turn a
+# global fail-closed gate OFF: enable flags are OR'd (strengthen-only, a
+# pipeline/stage `False`/absent can never override a floor `True`), and the
+# confidence threshold must be validated `(0, 1]` at load time so a bad value
+# (0, negative, >1, NaN, inf) is rejected before it can ever reach the gate.
+class DebateConfig(BaseModel):
+    enable_judge: bool | None = None
+    enable_arbiter: bool | None = None
+    runner: str | None = None
+    model: str | None = None
+    confidence_threshold: float | None = None
+
+    @field_validator("confidence_threshold")
+    @classmethod
+    def _validate_confidence_threshold(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        if not math.isfinite(v) or not (0 < v <= 1):
+            raise ValueError(
+                f"debate.confidence_threshold must be a finite number in (0, 1], got {v!r}"
+            )
+        return v
+
+
 class PipelineStage(BaseModel):
     name: str
     task: str
@@ -245,6 +282,11 @@ class PipelineStage(BaseModel):
     # the identical semantics and `hivepilot/services/config_validation.py`
     # for the fail-closed cross-reference + `min_role` check.
     skills: list[str] | None = None
+    # Stage-level debate/consensus override (debate-judge-pipeline-yaml PRD,
+    # Sprint 1). None -- dormant, byte-identical when absent. See
+    # `resolve_debate_config` for the strengthen-only precedence over
+    # `PipelineConfig.debate` and the global settings floor.
+    debate: DebateConfig | None = None
 
     @field_validator("skills")
     @classmethod
@@ -269,6 +311,10 @@ class PipelineConfig(BaseModel):
     model: str | None = None
     effort: EffortLevel | None = None
     stages: list[PipelineStage] = Field(default_factory=list)
+    # Pipeline-wide debate/consensus override (debate-judge-pipeline-yaml PRD,
+    # Sprint 1). None -- dormant, byte-identical when absent. A stage's own
+    # `debate` block overrides this per-field; see `resolve_debate_config`.
+    debate: DebateConfig | None = None
 
 
 def resolve_mode(pipeline: PipelineConfig, stage: PipelineStage) -> Literal["cli", "api"]:
@@ -304,6 +350,109 @@ def resolve_effort(pipeline: PipelineConfig, stage: PipelineStage) -> EffortLeve
     policy ``role_overrides`` entry can still outrank it.
     """
     return stage.effort or pipeline.effort
+
+
+class DebateFloor(Protocol):
+    """Structural type for the global debate-config floor.
+
+    Satisfied by `hivepilot.config.Settings` (the real floor at runtime) and
+    by any lightweight test double exposing the same five attributes --
+    `resolve_debate_config` never imports the real `Settings`/`settings`
+    module-level, only as a lazy default (see below), so it stays trivially
+    testable without touching global state.
+    """
+
+    enable_debate_judge: bool
+    enable_challenge_arbiter: bool
+    judge_runner: str
+    judge_model: str | None
+    judge_confidence_threshold: float
+
+
+@dataclass(frozen=True)
+class EffectiveDebateConfig:
+    """The fully-resolved debate/consensus config for one stage's run,
+    after reconciling the global settings floor with any pipeline- and
+    stage-level `debate:` overrides via `resolve_debate_config`."""
+
+    enable_judge: bool
+    enable_arbiter: bool
+    runner: str
+    model: str | None
+    confidence_threshold: float
+
+
+def resolve_debate_config(
+    *,
+    floor: DebateFloor | None = None,
+    pipeline: PipelineConfig | None,
+    stage: PipelineStage | None,
+) -> EffectiveDebateConfig:
+    """Resolve the effective debate/consensus config for *stage* within
+    *pipeline*, reconciling the global settings floor with any YAML-level
+    `debate:` overrides.
+
+    Precedence (HYBRIDE, see debate-judge-pipeline-yaml PRD):
+
+    - ``enable_judge`` / ``enable_arbiter``: OR across floor + pipeline.debate
+      + stage.debate -- STRENGTHEN-ONLY. A pipeline/stage `False` or absent
+      value can never turn OFF a floor `True`; only an explicit `True` at any
+      layer can turn a floor `False` ON. This is the fail-closed invariant:
+      a `debate:` block can only add gating, never remove it.
+    - ``runner`` / ``model``: ``stage.debate`` overrides ``pipeline.debate``
+      overrides the floor (``judge_runner``/``judge_model``), first non-None
+      wins -- same "stage overrides pipeline overrides floor" shape as
+      `resolve_stage_model`/`resolve_effort`.
+    - ``confidence_threshold``: same override chain as runner/model, but
+      every present value was already validated to `(0, 1]` at YAML-load
+      time by `DebateConfig`'s field validator, so the resolved value here is
+      ALWAYS finite and `> 0` -- absence never degrades to `0`/`None`-as-allow.
+
+    ``floor`` defaults to the live `hivepilot.config.settings` singleton
+    (imported lazily, only when the caller doesn't supply one, to keep this
+    module import-time independent of `hivepilot.config`); pass an explicit
+    `floor` (e.g. a test double) for testability -- when one is passed, no
+    import of the real singleton ever happens.
+    """
+    if floor is None:
+        from hivepilot.config import settings as floor  # noqa: PLC0415
+
+    pipeline_debate = pipeline.debate if pipeline is not None else None
+    stage_debate = stage.debate if stage is not None else None
+
+    enable_judge = (
+        bool(floor.enable_debate_judge)
+        or bool(pipeline_debate and pipeline_debate.enable_judge)
+        or bool(stage_debate and stage_debate.enable_judge)
+    )
+    enable_arbiter = (
+        bool(floor.enable_challenge_arbiter)
+        or bool(pipeline_debate and pipeline_debate.enable_arbiter)
+        or bool(stage_debate and stage_debate.enable_arbiter)
+    )
+    runner = (
+        (stage_debate and stage_debate.runner)
+        or (pipeline_debate and pipeline_debate.runner)
+        or floor.judge_runner
+    )
+    model = (
+        (stage_debate and stage_debate.model)
+        or (pipeline_debate and pipeline_debate.model)
+        or floor.judge_model
+    )
+    confidence_threshold = (
+        (stage_debate and stage_debate.confidence_threshold)
+        or (pipeline_debate and pipeline_debate.confidence_threshold)
+        or floor.judge_confidence_threshold
+    )
+
+    return EffectiveDebateConfig(
+        enable_judge=enable_judge,
+        enable_arbiter=enable_arbiter,
+        runner=runner,
+        model=model,
+        confidence_threshold=confidence_threshold,
+    )
 
 
 class ProjectsFile(BaseModel):

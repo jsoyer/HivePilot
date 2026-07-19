@@ -292,6 +292,68 @@ When no `effort` is declared anywhere (the default), Claude sets no
 `MAX_THINKING_TOKENS` and Codex emits its `medium` default — byte-identical to
 the pre-unification behaviour of each runner.
 
+### Debate / consensus per-pipeline override (`debate:`)
+
+A `debate:` block on `PipelineConfig` (pipeline-wide) and/or `PipelineStage`
+(per-stage) opt-INTO the debate judge / challenge arbiter / fail-closed PR
+gate (see "Debate judge, challenge arbiter & the fail-closed PR gate" in
+[USAGE.md](USAGE.md)) **per pipeline**, instead of only via the global
+`Settings` flags. Absent (the default — no `debate:` key at all) is
+byte-identical to before this field existed: every value inherits the global
+floor.
+
+```yaml
+pipelines:
+  release:
+    description: "release pipeline with debate on"
+    debate:
+      enable_judge: true          # bool | None, default None
+      enable_arbiter: true        # bool | None, default None
+      runner: claude              # str | None, default None
+      model: claude-opus-4-6      # str | None, default None
+      confidence_threshold: 0.7   # float | None, default None — must be in (0, 1]
+    stages:
+      - name: release-review
+        task: release-review-task
+        debate:
+          confidence_threshold: 0.9   # this stage alone wants a stricter bar
+```
+
+All five fields are optional and independently overridable; a block that
+sets only one field leaves the rest `None` ("inherit").
+
+**Precedence — resolved by `hivepilot.models.resolve_debate_config`, the
+single source of truth also used by the orchestrator
+(`Orchestrator._effective_debate`):**
+
+- **`enable_judge` / `enable_arbiter`** — **OR across floor + pipeline +
+  stage, STRENGTHEN-ONLY.** A pipeline/stage value of `false` (or absent)
+  can **never** turn OFF a global-floor `true`; only an explicit `true` at
+  any layer can turn a floor `false` ON. A `debate:` block can only ADD
+  gating, never remove operator-mandated gating (fail-closed by
+  construction — see the "empty-value-fail-open" bug class this design
+  specifically avoids).
+- **`runner` / `model` / `confidence_threshold`** — **stage overrides
+  pipeline overrides the global floor**, first non-`None` value wins (same
+  shape as `model`/`effort` resolution above).
+
+**Threshold validation (fail closed, never silently disables the gate):**
+`confidence_threshold` must be a finite number in `(0, 1]` — `0`, negative,
+`> 1`, `NaN`, and `inf` are all **rejected at YAML-load time** (a pydantic
+`field_validator` on `DebateConfig`, re-checked defense-in-depth by
+`hivepilot.services.pipeline_service.validate_debate_config` for both the
+pipeline level and every stage level). Loading a `pipelines.yaml` with a bad
+threshold raises immediately — it can never reach the gate as a value that
+silently means "always pass". Absent (`None`) is always valid — it means
+"inherit the floor's `judge_confidence_threshold`", never "no threshold".
+
+**The global `Settings` flags remain the floor.** `enable_debate_judge`,
+`enable_challenge_arbiter`, `judge_runner`, `judge_model`,
+`judge_confidence_threshold` (env vars `HIVEPILOT_ENABLE_DEBATE_JUDGE` etc.,
+see USAGE.md) are the operator-level default every pipeline/stage `debate:`
+block resolves against — an operator can still mandate gating fleet-wide via
+the floor even if every individual pipeline's YAML is silent on `debate:`.
+
 ### Usage capture (tokens/cost/actual-model) — opt-in
 
 `HIVEPILOT_CLAUDE_CAPTURE_USAGE` (default `false`) enables per-step token/cost/
