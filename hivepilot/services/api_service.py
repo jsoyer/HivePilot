@@ -25,6 +25,7 @@ from hivepilot.services import (
     token_service,
 )
 from hivepilot.services.metrics import registry, run_duration_seconds
+from hivepilot.ui.plugin_manager import persist_plugins_disabled
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 
 app = FastAPI(
@@ -973,6 +974,84 @@ def plugins_health_endpoint() -> dict[str, Any]:
             for name, health in sorted(results.items())
         ]
     }
+
+
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard PRD, Sprint 5 -- POST /v1/plugins/{name}/toggle
+# (admin-only). Enable/disable a plugin from the web Health tab by upserting
+# `HIVEPILOT_PLUGINS_DISABLED` in the `.env` file `Settings` reads from (see
+# `hivepilot.ui.plugin_manager.persist_plugins_disabled`, reused as-is --
+# this endpoint only inlines the flip logic `PluginManagerApp.toggle_selected`
+# already established for the TUI's `space` binding, it never imports the
+# Textual app class itself).
+#
+# **Allowlist = UNION of `check_all()` (currently-registered/enabled
+# plugins) and `settings.plugins_disabled` (currently-disabled plugins).**
+# `check_all()` alone only lists ENABLED plugins -- a disabled plugin is
+# never registered in the first place, so it never appears there. Using
+# `check_all()` alone would make an already-disabled plugin permanently
+# un-re-enableable via this endpoint (a fail-closed 404 on the very request
+# meant to undo it). The union is therefore REQUIRED, not a convenience.
+#
+# **Fail-closed on an unknown name:** a name outside the union raises 404
+# BEFORE `persist_plugins_disabled` is ever called -- an invariant this
+# module's own tests assert on directly (a spied `persist_plugins_disabled`
+# must see `call_count == 0` for an unknown name). No `.env` write ever
+# happens for an unvalidated plugin name.
+#
+# **Concurrency:** `_plugin_toggle_lock` serializes the read-flip-persist
+# sequence below -- this is a core state-changing path (like
+# `_rate_lock`/`_orch_lock` above), so two concurrent toggles must not race
+# and silently lose one caller's write (last-writer-wins on the in-memory
+# read is fine; losing a write entirely is not).
+#
+# **No live reload.** `PluginManager` only scans/registers plugins once, at
+# `Orchestrator()` construction (see `hivepilot/ui/plugin_manager.py`'s
+# module docstring) -- this endpoint's effect is visible only after the API
+# process is restarted. The response's `restart_required: true` field and
+# the web UI's own copy make this explicit; there is no code path here that
+# could accidentally suggest otherwise.
+# ---------------------------------------------------------------------------
+
+_plugin_toggle_lock = threading.Lock()
+
+
+class PluginToggleResponse(BaseModel):
+    name: str
+    disabled: bool
+    restart_required: bool
+
+
+@v1.post("/plugins/{name}/toggle")
+@app.post("/plugins/{name}/toggle")
+def toggle_plugin_endpoint(
+    name: str,
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> PluginToggleResponse:
+    """Enable/disable a plugin (effective on next restart only). See the
+    module-level comment block just above for the allowlist-union,
+    fail-closed, and concurrency rationale.
+    """
+    known = set(_get_orchestrator().plugins.check_all().keys()) | set(settings.plugins_disabled)
+    if name not in known:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown plugin")
+
+    with _plugin_toggle_lock:
+        current = set(settings.plugins_disabled)
+        if name in current:
+            current.discard(name)
+        else:
+            current.add(name)
+        updated = sorted(current)
+        # Persist to .env FIRST; only mutate in-memory settings once the write
+        # succeeds. Otherwise a failing persist (permission/disk) would leave
+        # settings.plugins_disabled diverged from .env, and a later toggle would
+        # compute `current` from the corrupted in-memory value (code-review S5).
+        persist_plugins_disabled(updated)
+        settings.plugins_disabled = updated
+        disabled = name in current
+
+    return PluginToggleResponse(name=name, disabled=disabled, restart_required=True)
 
 
 def _get_mem0_client() -> Any | None:

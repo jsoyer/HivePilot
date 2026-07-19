@@ -478,3 +478,30 @@ export interface CancelRunResult {
 export function cancelRun(runId: number): Promise<CancelRunResult> {
   return postJson<CancelRunResult>(`/v1/runs/${runId}/cancel`, {})
 }
+
+// ---------------------------------------------------------------------------
+// POST /v1/plugins/{name}/toggle -- Mirador actionable dashboard PRD,
+// Sprint 5. Shape transcribed from `hivepilot/services/api_service.py`'s
+// `PluginToggleResponse`/`toggle_plugin_endpoint` -- read that before
+// changing anything here. Admin-only (a stricter gate than every other
+// action endpoint above, which require `run`/`approve`); `postJson` already
+// defaults to `on403: 'forbidden'`, so a non-admin token calling this just
+// throws `ApiForbiddenError` without being cleared.
+//
+// The change is effective on the API process's NEXT restart only -- plugins
+// are scanned/registered once, at `Orchestrator()` construction time (see
+// the backend endpoint's own docstring). `restart_required` is always
+// `true` in the response; `HealthView` surfaces that explicitly so an admin
+// never assumes the toggle took effect live.
+// ---------------------------------------------------------------------------
+
+export interface PluginToggleResult {
+  name: string
+  disabled: boolean
+  restart_required: boolean
+}
+
+export function togglePlugin(name: string): Promise<PluginToggleResult> {
+  return postJson<PluginToggleResult>(`/v1/plugins/${encodeURIComponent(name)}/toggle`, {})
+}
+
