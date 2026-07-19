@@ -429,7 +429,15 @@ def store(**kwargs: Any) -> None:
         output_val = kwargs.get("output")
         summary = ""
         if isinstance(output_val, str) and output_val.strip():
-            summary = output_val.strip().splitlines()[0][:200]
+            # Defense-in-depth (auto-learning-lessons-loop PRD, Sprint 1):
+            # the orchestrator's `after_step` choke point already redacts
+            # `output` before this hook fires, but `store()` must never rely
+            # SOLELY on the caller — a resolved `${secret:NAME}` value must
+            # never reach the vault note even if a future/other caller
+            # invokes `store()` directly without going through that choke.
+            from hivepilot.services.config_provenance import redact_text
+
+            summary = redact_text(output_val.strip()).splitlines()[0][:200]
 
         entry_lines = [
             f"### Step outcome — {_timestamp()}",

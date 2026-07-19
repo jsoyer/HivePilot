@@ -7,7 +7,7 @@ import subprocess
 import threading
 from collections.abc import Iterable
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -2824,6 +2824,8 @@ class Orchestrator:
         simulate: bool = False,
         prior_context: str | None = None,
         debate_config: "EffectiveDebateConfig | None" = None,
+        run_id: int | None = None,
+        task_name: str | None = None,
     ) -> dict | None:
         """Public entry point. Delegates to `_run_debate_body` inside a
         run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
@@ -2841,7 +2843,17 @@ class Orchestrator:
         resolution for a role-driven dual-model debate task. `None` (a
         standalone `run_debate` call, e.g. cli.py's `debate` command) resolves
         to the floor only inside `_run_debate_body`, byte-identical to pre-
-        Sprint-2 behaviour."""
+        Sprint-2 behaviour.
+
+        ``run_id``/``task_name`` (auto-learning-lessons-loop PRD, Sprint 1)
+        are the enclosing run's real id + task name, when this debate is
+        role-driven from inside `_execute_task_body` (mirrors how
+        `_resolve_challenge_via_arbiter` already threads `run_id` into
+        `_persist_challenge_verdict` for the challenge-arbiter path). Both
+        default to `None` for a standalone `run_debate` call (cli.py's
+        `debate` command / the ChatOps daemon), which persists the judge
+        verdict with `run_id=None` exactly as before — byte-identical for
+        callers outside a run context."""
         self._enter_run_scope()
         try:
             return self._run_debate_body(
@@ -2852,6 +2864,8 @@ class Orchestrator:
                 simulate=simulate,
                 prior_context=prior_context,
                 debate_config=debate_config,
+                run_id=run_id,
+                task_name=task_name,
             )
         finally:
             self._exit_run_scope()
@@ -2983,12 +2997,19 @@ class Orchestrator:
         simulate: bool = False,
         prior_context: str | None = None,
         debate_config: "EffectiveDebateConfig | None" = None,
+        run_id: int | None = None,
+        task_name: str | None = None,
     ) -> dict | None:
         """Run a dual-model debate for *role_name*: capture each model's position,
         synthesize via DebateService, and write an ADR. Returns the ADR emit dict.
 
         ``debate_config`` — see `run_debate`'s docstring. `None` resolves to
-        the floor only via `_effective_debate(None, None)`."""
+        the floor only via `_effective_debate(None, None)`.
+
+        ``run_id``/``task_name`` — see `run_debate`'s docstring; threaded
+        into the judge `record_verdict(...)` call below so a role-driven
+        debate's verdict correlates to the run/task that produced it,
+        instead of always persisting `run_id=None`."""
         from typing import cast
 
         from hivepilot.models import RunnerKind, TaskStep
@@ -3093,9 +3114,9 @@ class Orchestrator:
             self._register_verdict(verdict, confidence_threshold=effective.confidence_threshold)
             try:
                 state_service.record_verdict(
-                    run_id=None,
+                    run_id=run_id,
                     project=project.path.name,
-                    task=None,
+                    task=task_name,
                     role=role_name,
                     kind="debate",
                     decision=verdict.decision,
@@ -3336,6 +3357,8 @@ class Orchestrator:
                     simulate=simulate,
                     prior_context=prior_context,
                     debate_config=effective_debate,
+                    run_id=run_id,
+                    task_name=task_name,
                 )
                 if run_id:
                     state_service.record_step(run_id, f"{task.role}-debate", "success")
@@ -3795,12 +3818,39 @@ class Orchestrator:
                             )
                             _record_step_success(run_id, step.name, _provider, _model, _usage)
                         _step_span.set_attribute("hivepilot.step.status", "success")
+                        # Close the store()-redaction hole (auto-learning-
+                        # lessons-loop PRD, Sprint 1): `after_step` fans out
+                        # to persistence hooks (mem0 `store`, obsidian
+                        # `store`, future lesson-distillation sinks) that
+                        # were never in the resolved-secrets masking path —
+                        # `output` is the step's real captured result and
+                        # `payload.metadata`'s `extra_prompt`/`prior_context`
+                        # can both echo a resolved `${secret:NAME}` value
+                        # verbatim. Redact a COPY, never the shared `payload`/
+                        # `metadata` objects: `metadata` is the SAME dict
+                        # reused across every step in this task's loop (see
+                        # `payload = RunnerPayload(..., metadata=metadata,
+                        # ...)` above) and mutating it in place would
+                        # permanently corrupt the live prompt content seen by
+                        # LATER steps' `before_step`/runner calls — not just
+                        # this hook's view.
+                        _hook_output = outputs[-1] if outputs else None
+                        _redacted_output = (
+                            redact_text(_hook_output) if _hook_output else _hook_output
+                        )
+                        _hook_payload = payload
+                        if payload.metadata:
+                            _redacted_metadata = {
+                                _k: (redact_text(_v) if isinstance(_v, str) else _v)
+                                for _k, _v in payload.metadata.items()
+                            }
+                            _hook_payload = replace(payload, metadata=_redacted_metadata)
                         self.plugins.run_hook(
                             "after_step",
-                            payload=payload,
+                            payload=_hook_payload,
                             dry_run=dry_run,
                             role=task.role,
-                            output=outputs[-1] if outputs else None,
+                            output=_redacted_output,
                         )
                     except StepApprovalPending:
                         # Not a step failure — the run is already recorded as
