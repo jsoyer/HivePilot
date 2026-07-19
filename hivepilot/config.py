@@ -350,6 +350,15 @@ class Settings(BaseSettings):
     # opt-OUT + shutil.which gating pattern as rtk_enabled/pi_enabled/etc.
     # env: HIVEPILOT_HUGO_ENABLED
     hugo_enabled: bool = True
+    # S4 — brand-new `kind: "gh"` COMMAND runner (GitHub CLI, binary
+    # `gh`) added as a self-contained, default-on, PATH-gated plugin
+    # (plugins/gh.py) — same opt-OUT + shutil.which gating pattern as
+    # rtk_enabled/hugo_enabled/tmux_enabled. Unlike the agent-kind plugins
+    # above (antigravity/kimi-cli/qwen-code/…), `gh` is a plain command
+    # runner, never registered in AGENT_RUNNER_KINDS /
+    # _OPTIONAL_AGENT_PLUGIN_KINDS.
+    # env: HIVEPILOT_GH_ENABLED
+    gh_enabled: bool = True
     # Sprint 02 (plugin-arch-overhaul PRD) — obsidian "brain" recall sub-flags.
     # `obsidian_recall_enabled` gates the NEW `before_step` (`recall`) /
     # `after_step` (`store`) context-provider behavior independently of
