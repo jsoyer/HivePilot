@@ -12,6 +12,7 @@ of `tests/test_graph_no_secret.py`.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -273,6 +274,94 @@ class TestNoSecretValueLeak:
         raw_admin, _ = add_token("admin")
         skills_resp = api_client.get("/v1/graph/skills", headers=_auth(raw_admin))
         assert _SECRET_VALUE not in skills_resp.text
+
+
+# ---------------------------------------------------------------------------
+# `run-lineage` — the plugin-CONTRIBUTED graph source (Sprint 4's
+# `plugins/example_graph_source.py`), driven end to end through the real
+# API + a REAL `PluginManager` scan of the repo's own `plugins/` directory
+# (not a synthetic plugin file). Mirrors the fixture pattern in
+# `tests/test_graph_plugin_capability.py::isolated_graph_sources` and
+# `tests/test_example_graph_source.py::TestRealPluginManagerScan`.
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture()
+def isolated_graph_sources(monkeypatch):
+    """Fresh COPY of the module-global graph-source registry, seeded with
+    whatever built-ins are already registered — mirrors
+    `tests/test_graph_api.py::isolated_graph_sources` /
+    `tests/test_graph_plugin_capability.py::isolated_graph_sources` so a
+    plugin-contributed source registered by this test never leaks into
+    another test module."""
+    monkeypatch.setattr(graph_module, "_GRAPH_SOURCES", dict(graph_module._GRAPH_SOURCES))
+    return graph_module._GRAPH_SOURCES
+
+
+@pytest.fixture()
+def run_lineage_registered(monkeypatch, isolated_graph_sources):
+    """Opts in `example_graph_source_enabled` and drives a REAL
+    `PluginManager` scan of the repo's actual `plugins/` directory so
+    `run-lineage` registers through the genuine load path, exactly as it
+    would in production -- not a hand-written test-only plugin file."""
+    from hivepilot import plugins as plugins_mod
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "example_graph_source_enabled", True, raising=False)
+    monkeypatch.setattr(plugins_mod.settings, "base_dir", _REPO_ROOT, raising=False)
+    plugins_mod.PluginManager()
+    assert graph_module.get_graph_source("run-lineage") is not None
+
+
+def _record_lineage_run(tenant: str) -> int:
+    from hivepilot.services import state_service
+
+    run_id = state_service.record_run_start("gi-lineage-project", "gi-lineage-task", tenant=tenant)
+    state_service.record_step(run_id, "step-1", "success", provider="claude", model="sonnet")
+    return run_id
+
+
+class TestRunLineageGraphSourceIntegration:
+    def test_run_lineage_listed_in_sources_with_min_role_and_params(
+        self, api_client, tmp_tokens_file, run_lineage_registered
+    ):
+        raw, _ = add_token("admin")
+        resp = api_client.get("/v1/graph/sources", headers=_auth(raw))
+        assert resp.status_code == 200
+        by_name = {s["name"]: s for s in resp.json()["sources"]}
+        assert by_name["run-lineage"]["min_role"] == "read"
+        assert by_name["run-lineage"]["params"] == ["run"]
+
+    def test_tenant_b_cannot_see_tenant_a_run_gets_normalized_error_node_never_500(
+        self, api_client, tmp_tokens_file, run_lineage_registered
+    ):
+        run_id = _record_lineage_run(tenant="tenant-a")
+        raw_b, _ = add_token("read", tenant="tenant-b")
+
+        resp = api_client.get(f"/v1/graph/run-lineage?run={run_id}", headers=_auth(raw_b))
+
+        assert resp.status_code == 200  # never a 500 -- run_graph_fetch normalizes
+        body = resp.json()
+        assert body["nodes"][0]["kind"] == "error"
+        assert body["nodes"][0]["status"] == "error"
+        # No tenant-A run data (project/task/step names) ever reached the response.
+        dumped = json.dumps(body)
+        assert "gi-lineage-project" not in dumped
+        assert "gi-lineage-task" not in dumped
+        assert "step-1" not in dumped
+
+    def test_no_secret_value_in_run_lineage_response(
+        self, api_client, tmp_tokens_file, run_lineage_registered, patched_orchestrator
+    ):
+        run_id = _record_lineage_run(tenant="default")
+        raw, _ = add_token("read")
+
+        resp = api_client.get(f"/v1/graph/run-lineage?run={run_id}", headers=_auth(raw))
+
+        assert resp.status_code == 200
+        assert _SECRET_VALUE not in resp.text
 
 
 # ---------------------------------------------------------------------------

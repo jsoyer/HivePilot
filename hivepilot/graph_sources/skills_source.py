@@ -27,7 +27,6 @@ markdown/YAML front matter authored to be displayed.
 
 from __future__ import annotations
 
-import html
 from pathlib import Path
 from typing import Any
 
@@ -108,15 +107,18 @@ def _status_for(rel_path: str) -> str:
     return "active"
 
 
-def _truncate_escape(text: str, limit: int = _MAX_DESCRIPTION_LEN) -> str:
-    """Truncate *text* to *limit* chars then HTML-escape it -- front-matter
-    `description` content is source-authored/untrusted, same discipline as
-    every other `GraphDetail`/`PanelData` text section (see `hivepilot/
-    graph.py`'s module docstring)."""
+def _truncate(text: str, limit: int = _MAX_DESCRIPTION_LEN) -> str:
+    """Truncate *text* to *limit* chars -- front-matter `description` content
+    is plain display text rendered by the web UI's JSX-escaping renderer
+    (`web/src/components/views/PanelRenderer.tsx`), which already escapes
+    all text content; pre-escaping here would double-escape (e.g. `&` ->
+    `&amp;amp;`). Every other graph source (`plugins`, `pipeline`,
+    `run-lineage`) passes description/text content through unescaped for the
+    same reason -- this keeps `skills` consistent with them."""
     truncated = text[:limit]
     if len(text) > limit:
         truncated += "..."
-    return html.escape(truncated)
+    return truncated
 
 
 def _nearest_skill_dir(
@@ -263,9 +265,7 @@ def _node_detail(ctx: GraphContext, node_id: str) -> GraphDetail | None:  # noqa
         description = front_matter.get("description")
         description = description if isinstance(description, str) else ""
         sections.append(
-            PanelTextSection(
-                kind="text", content=_truncate_escape(description or "(no description)")
-            )
+            PanelTextSection(kind="text", content=_truncate(description or "(no description)"))
         )
     sections.append(PanelTableSection(kind="table", columns=["path"], rows=[[rel]]))
 

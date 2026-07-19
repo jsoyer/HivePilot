@@ -232,6 +232,28 @@ class TestSizeCap:
 
 
 # ---------------------------------------------------------------------------
+# Description passthrough — NOT html-escaped (renderer's job, not this
+# source's -- see `_truncate`'s docstring / FIX 1 in the Graph View
+# adversarial-sweep follow-up). `plugins`/`pipeline`/`run-lineage` sources do
+# not pre-escape either; `skills` must stay consistent with them.
+# ---------------------------------------------------------------------------
+
+
+class TestDescriptionNotHtmlEscaped:
+    def test_special_chars_passed_through_raw_not_escaped(self, ctx, scan_root):
+        raw_description = "<script>alert('x')</script> & \"quoted\" 'stuff'"
+        _write_skill(scan_root, "skillA", name="A", description=raw_description)
+        detail = _node_detail(ctx, "skill:skillA/SKILL.md")
+        assert detail is not None
+        text_section = next(s for s in detail.sections if s["kind"] == "text")
+        assert text_section["content"] == raw_description
+        # Explicitly NOT html-escaped -- double-escaping regression guard.
+        assert "&lt;" not in text_section["content"]
+        assert "&amp;" not in text_section["content"]
+        assert "&#x27;" not in text_section["content"]
+
+
+# ---------------------------------------------------------------------------
 # _node_detail
 # ---------------------------------------------------------------------------
 
