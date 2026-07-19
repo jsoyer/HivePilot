@@ -443,3 +443,51 @@ class TestGetScheduleLastRunTzAware:
         now = datetime.now(timezone.utc)
         # Must not raise "can't compare offset-naive and offset-aware datetimes"
         assert (next_run_time <= now) is False
+
+
+# ---------------------------------------------------------------------------
+# init_db() concurrency race — the S3 async-runs feature calls init_db() from
+# both a background worker thread and the request thread against the same
+# sqlite file. The check-then-ALTER pattern (`if not column_exists: ALTER
+# TABLE ... ADD COLUMN`) is a TOCTOU race: two threads can both observe the
+# column missing and both attempt the ALTER, and the loser raises
+# `sqlite3.OperationalError: duplicate column name`. init_db() must be safe
+# to call concurrently from multiple threads against a fresh (or existing)
+# DB file.
+# ---------------------------------------------------------------------------
+
+
+class TestInitDbConcurrency:
+    def test_concurrent_init_db_calls_do_not_raise_duplicate_column(self) -> None:
+        import threading
+
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(8)
+
+        def _worker() -> None:
+            try:
+                barrier.wait(timeout=5)
+                init_db()
+            except BaseException as exc:  # noqa: BLE001 - capture for assertion
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"init_db() raised under concurrency: {errors!r}"
+
+        # Schema must still be fully migrated after the concurrent race.
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "provider")
+            assert db.column_exists(conn, "steps", "model")
+            assert db.column_exists(conn, "steps", "input_tokens")
+            assert db.column_exists(conn, "steps", "output_tokens")
+            assert db.column_exists(conn, "steps", "cost_usd")
+            assert db.column_exists(conn, "retry_queue", "context")
+            assert db.column_exists(conn, "runs", "tenant")
+            assert db.column_exists(conn, "approvals", "tenant")
+            assert db.column_exists(conn, "audit_log", "tenant")
+            assert db.column_exists(conn, "tokens", "tenant")

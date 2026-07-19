@@ -1,18 +1,29 @@
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { fetchPanels } from '@/lib/mirador-api'
+import { RoleProvider } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AnalyticsView } from './views/AnalyticsView'
+import { ApprovalsView } from './views/ApprovalsView'
 import { CostView } from './views/CostView'
 import { HealthView } from './views/HealthView'
 import { Mem0View } from './views/Mem0View'
 import { PanelView } from './views/PanelView'
+import { RunsView } from './views/RunsView'
 
 const BUILTIN_TABS = [
   { value: 'analytics', label: 'Analytics', Panel: AnalyticsView },
   { value: 'cost', label: 'Cost', Panel: CostView },
   { value: 'health', label: 'Health', Panel: HealthView },
   { value: 'mem0', label: 'Mem0', Panel: Mem0View },
+  // Mirador actionable dashboard PRD, Sprint 2: read-only for any token,
+  // Approve/Deny controls inside gate themselves on useRole().can('approve')
+  // — see ApprovalsView.
+  { value: 'approvals', label: 'Approvals', Panel: ApprovalsView },
+  // Mirador actionable dashboard PRD, Sprint 3: read-only for any token,
+  // the New Run form inside gates itself on useRole().can('run') — see
+  // RunsView.
+  { value: 'runs', label: 'Runs', Panel: RunsView },
 ] as const
 
 /** A dynamic panel tab's `value` — prefixed so it can never collide with a
@@ -37,35 +48,41 @@ export function Mirador() {
   const pluginPanels = panelsState.status === 'success' ? panelsState.data.panels : []
 
   return (
-    <div className="min-h-screen bg-background p-6 text-foreground">
-      <header className="mb-6 flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Mirador</h1>
-        <Badge variant="secondary">HivePilot insight dashboard</Badge>
-      </header>
-      <Tabs defaultValue="analytics">
-        <TabsList>
-          {BUILTIN_TABS.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value}>
-              {tab.label}
-            </TabsTrigger>
+    // Mirador actionable dashboard PRD, Sprint 1: RoleProvider fetches the
+    // caller's own RBAC role (GET /v1/whoami) once on mount and exposes it
+    // app-wide via useRole() — see @/lib/role-context. Provider wrap only;
+    // no other logic changes here.
+    <RoleProvider>
+      <div className="min-h-screen bg-background p-6 text-foreground">
+        <header className="mb-6 flex items-center gap-3">
+          <h1 className="text-xl font-semibold">Mirador</h1>
+          <Badge variant="secondary">HivePilot insight dashboard</Badge>
+        </header>
+        <Tabs defaultValue="analytics">
+          <TabsList>
+            {BUILTIN_TABS.map((tab) => (
+              <TabsTrigger key={tab.value} value={tab.value}>
+                {tab.label}
+              </TabsTrigger>
+            ))}
+            {pluginPanels.map((panel) => (
+              <TabsTrigger key={panel.name} value={panelTabValue(panel.name)}>
+                {panel.title}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {BUILTIN_TABS.map(({ value, Panel }) => (
+            <TabsContent key={value} value={value} className="mt-4">
+              <Panel />
+            </TabsContent>
           ))}
           {pluginPanels.map((panel) => (
-            <TabsTrigger key={panel.name} value={panelTabValue(panel.name)}>
-              {panel.title}
-            </TabsTrigger>
+            <TabsContent key={panel.name} value={panelTabValue(panel.name)} className="mt-4">
+              <PanelView name={panel.name} title={panel.title} minRole={panel.min_role} />
+            </TabsContent>
           ))}
-        </TabsList>
-        {BUILTIN_TABS.map(({ value, Panel }) => (
-          <TabsContent key={value} value={value} className="mt-4">
-            <Panel />
-          </TabsContent>
-        ))}
-        {pluginPanels.map((panel) => (
-          <TabsContent key={panel.name} value={panelTabValue(panel.name)} className="mt-4">
-            <PanelView name={panel.name} title={panel.title} minRole={panel.min_role} />
-          </TabsContent>
-        ))}
-      </Tabs>
-    </div>
+        </Tabs>
+      </div>
+    </RoleProvider>
   )
 }

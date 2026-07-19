@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -54,6 +55,18 @@ class RunStatus(str, Enum):
     APPROVAL = "approval"
     COMPLETE = "complete"
 
+    # --- terminal-by-operator states ---
+    # Mirador actionable dashboard PRD, Sprint 4 (`POST /v1/runs/{run_id}/
+    # cancel`): a run an operator cooperatively stopped mid-execution, at the
+    # next step boundary (see `Orchestrator._execute_task_body`'s step loop
+    # and `async_run_service.is_cancel_requested`). Terminal like COMPLETE/
+    # the failure states below -- `state_service.complete_run` sets
+    # `finished_at` for it exactly like every other terminal status. There is
+    # no separate "is this terminal" classification helper in this module to
+    # update -- `from_str` already handles it via the generic
+    # `cls(normalised)` value lookup below, no special-casing needed.
+    CANCELLED = "cancelled"
+
     # --- failure states ---
     RATE_LIMIT = "rate_limit"
     AUTH_EXPIRED = "auth_expired"
@@ -96,6 +109,26 @@ class RunStatus(str, Enum):
         raise ValueError(f"Unknown status: {value!r}")
 
 
+def _add_column_if_missing(conn: Any, table: str, coldef: str) -> None:
+    """Idempotently add a column to *table*, race-safe under concurrent callers.
+
+    ``init_db()`` can be invoked concurrently from multiple threads (e.g. an
+    async-run background worker and the request thread) against the same
+    sqlite file. The ``column_exists`` check is kept as a fast-path guard to
+    avoid the exception on the common case, but the ``ALTER TABLE`` itself is
+    wrapped in a narrow try/except: if a racing caller wins and adds the
+    column first, sqlite raises ``OperationalError: duplicate column name``,
+    which is swallowed here. Any other ``OperationalError`` is re-raised.
+    """
+    if db.column_exists(conn, table, coldef.split()[0]):
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
 def init_db() -> None:
     pk = db.autoincrement_pk()
     with db.connect() as conn:
@@ -128,19 +161,14 @@ def init_db() -> None:
         # Idempotent migration (Phase 24b.1): persist provider/model per step.
         # Additive-only, same ALTER TABLE ... ADD COLUMN pattern as the
         # 'tenant' migrations below — safe to run against an existing DB.
-        if not db.column_exists(conn, "steps", "provider"):
-            conn.execute("ALTER TABLE steps ADD COLUMN provider TEXT")
-        if not db.column_exists(conn, "steps", "model"):
-            conn.execute("ALTER TABLE steps ADD COLUMN model TEXT")
+        _add_column_if_missing(conn, "steps", "provider TEXT")
+        _add_column_if_missing(conn, "steps", "model TEXT")
         # Idempotent migration (Phase 24b.2a): persist opt-in usage capture
         # (tokens/cost) per step, same additive ALTER TABLE ... ADD COLUMN
         # pattern as provider/model above — safe to run against an existing DB.
-        if not db.column_exists(conn, "steps", "input_tokens"):
-            conn.execute("ALTER TABLE steps ADD COLUMN input_tokens INTEGER")
-        if not db.column_exists(conn, "steps", "output_tokens"):
-            conn.execute("ALTER TABLE steps ADD COLUMN output_tokens INTEGER")
-        if not db.column_exists(conn, "steps", "cost_usd"):
-            conn.execute("ALTER TABLE steps ADD COLUMN cost_usd REAL")
+        _add_column_if_missing(conn, "steps", "input_tokens INTEGER")
+        _add_column_if_missing(conn, "steps", "output_tokens INTEGER")
+        _add_column_if_missing(conn, "steps", "cost_usd REAL")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS interactions (
@@ -208,17 +236,12 @@ def init_db() -> None:
             """
         )
         # Idempotent migration: add context column if missing
-        if not db.column_exists(conn, "retry_queue", "context"):
-            conn.execute("ALTER TABLE retry_queue ADD COLUMN context TEXT")
+        _add_column_if_missing(conn, "retry_queue", "context TEXT")
         # Idempotent multi-tenant migrations
-        if not db.column_exists(conn, "runs", "tenant"):
-            conn.execute("ALTER TABLE runs ADD COLUMN tenant TEXT DEFAULT 'default'")
-        if not db.column_exists(conn, "approvals", "tenant"):
-            conn.execute("ALTER TABLE approvals ADD COLUMN tenant TEXT DEFAULT 'default'")
-        if not db.column_exists(conn, "audit_log", "tenant"):
-            conn.execute("ALTER TABLE audit_log ADD COLUMN tenant TEXT DEFAULT 'default'")
-        if not db.column_exists(conn, "tokens", "tenant"):
-            conn.execute("ALTER TABLE tokens ADD COLUMN tenant TEXT DEFAULT 'default'")
+        _add_column_if_missing(conn, "runs", "tenant TEXT DEFAULT 'default'")
+        _add_column_if_missing(conn, "approvals", "tenant TEXT DEFAULT 'default'")
+        _add_column_if_missing(conn, "audit_log", "tenant TEXT DEFAULT 'default'")
+        _add_column_if_missing(conn, "tokens", "tenant TEXT DEFAULT 'default'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS workers (
@@ -383,6 +406,19 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
             _metrics.runs_total.labels(status=status).inc()
         except Exception:  # noqa: BLE001
             pass
+
+
+def get_run(run_id: int) -> dict[str, Any] | None:
+    """Return the single `runs` row for *run_id*, or `None` if it doesn't
+    exist. Mirador actionable dashboard PRD, Sprint 4 -- `POST /v1/runs/
+    {run_id}/cancel` resolves the run's `tenant` through this, exactly like
+    `POST /v1/approvals/{run_id}`'s `state_service.get_approval` resolves
+    the approval row's tenant for its own tenant check.
+    """
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(db.ph("SELECT * FROM runs WHERE id=?"), (run_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[str, Any]]:
