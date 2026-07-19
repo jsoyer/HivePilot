@@ -105,27 +105,44 @@ class GhRunner:
 
     def is_destructive(self, payload: RunnerPayload) -> bool:
         """Optional structural contract (getattr-discovered, like `capture` on
-        other runners): True when the resolved `gh` subcommand pair is a
-        known destructive/outward-irreversible operation. Resolved exactly
-        the same way `run` resolves the command, so the gate always agrees
-        with what would actually execute.
+        other runners): True when any CONSECUTIVE pair of resolved args is a
+        known destructive/outward-irreversible `gh` (group, subcommand)
+        operation. Resolved exactly the same way `run` resolves the command,
+        so the gate always agrees with what would actually execute.
+
+        Deliberately a sliding window over the WHOLE arg list rather than
+        just `args[0:2]`: `gh` accepts global flags before the subcommand
+        (`--repo`/`-R <owner/name>`, `--repo=<owner/name>`, `--hostname`,
+        …) and `-R`/`--repo` takes a value that is itself a non-flag token
+        — so `--repo owner/name pr merge 123` resolves to
+        `["--repo", "owner/name", "pr", "merge", "123"]`, and a leading-pair
+        check would read `("--repo", "owner/name")`, miss the actual
+        `("pr", "merge")` destructive pair, and let a step-approval bypass
+        through: `run()` would still execute the merge while this gate
+        silently returned `False`. Scanning every consecutive pair also
+        catches trailing-flag forms (`pr merge --auto 123`) for free.
+
+        This is a SECURITY gate, so over-gating is the correct failure mode:
+        a theoretical false positive (e.g. a flag VALUE that happens to
+        equal a destructive pair, such as `... --title pr --body merge
+        ...`) would route an otherwise-safe command through human approval
+        unnecessarily — acceptable — rather than the reverse (a destructive
+        op silently skipping approval).
 
         Fail-safe default: an empty or unparseable command resolves to
-        `False` (non-destructive). This gate is advisory over an
-        operator-authored command — it is not a security boundary — so
-        treating "can't tell" as non-destructive (rather than blocking every
-        malformed command behind approval) is an intentional, documented
-        tradeoff.
+        `False` (non-destructive) — nothing runs in that case (`run()`
+        raises on the same unresolvable command), so there is no
+        destructive-execution-without-approval risk to gate against. This
+        gate is advisory over an operator-authored command, not a security
+        boundary in itself — treating "can't tell" as non-destructive here
+        is an intentional, documented tradeoff.
         """
         try:
             args = self._resolve_args(payload)
         except ValueError as exc:
             logger.debug("gh_runner.is_destructive_unresolvable", error=str(exc))
             return False
-        if len(args) < 2:
-            return False
-        group, subcommand = args[0], args[1]
-        return (group, subcommand) in _DESTRUCTIVE_OPS
+        return any((args[i], args[i + 1]) in _DESTRUCTIVE_OPS for i in range(len(args) - 1))
 
     def _resolve_args(self, payload: RunnerPayload) -> list[str]:
         template = payload.step.command or self.definition.command

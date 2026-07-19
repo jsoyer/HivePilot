@@ -203,6 +203,37 @@ class TestIsDestructive:
             is False
         )
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "--repo owner/name pr merge 123",
+            "-R owner/name pr merge 123",
+            "--repo=owner/name pr merge 123",
+            "-R owner/name release delete v1",
+            "pr merge --auto 123",
+        ],
+    )
+    def test_destructive_pair_anywhere_in_args_is_detected(
+        self, command: str, tmp_path: Path
+    ) -> None:
+        """Regression: `is_destructive` must scan for a destructive
+        (group, subcommand) pair as consecutive tokens ANYWHERE in the
+        resolved args — not just args[0:2]. `gh` accepts global flags
+        (`--repo`/`-R`, taking a non-flag value token) before the
+        subcommand, and trailing flags after it; reading only the leading
+        pair lets `--repo owner/name pr merge 123` (or `-R ...`, or the
+        `--repo=X` form, or trailing-flag `pr merge --auto 123`) slip past
+        the gate as a false `False` while `run()` still executes the
+        destructive operation — a real step-approval bypass."""
+        assert self.runner.is_destructive(_payload(tmp_path, command=command)) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        ["pr create --title X", "issue list", "repo clone octo/hello"],
+    )
+    def test_leading_flags_do_not_cause_false_positive(self, command: str, tmp_path: Path) -> None:
+        assert self.runner.is_destructive(_payload(tmp_path, command=command)) is False
+
 
 class TestPluginManagerDiscoversGh:
     @pytest.fixture(autouse=True)
