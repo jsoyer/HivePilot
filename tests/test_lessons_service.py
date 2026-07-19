@@ -11,7 +11,13 @@ Covers:
   category default, self-reported score/confidence ignored).
 - `build_distiller_definition`: runner/model passthrough.
 - `distill_lessons`: builds ONE prompt, calls `capture_fn` exactly once,
-  redacts the raw response before parsing.
+  redacts the FULL PROMPT before it ever reaches `capture_fn` (egress choke
+  point — a HIGH-severity fix: `outcomes[].detail` is sourced from
+  `RunResult.detail`, a field known to reach other sinks in cleartext, so
+  without this a secret would be sent verbatim to the external distiller
+  model even though the response redaction never let it back into the DB),
+  redacts the raw response before parsing, and skips the `capture_fn` call
+  entirely when there's no verdict/interaction signal to distill from.
 """
 
 from __future__ import annotations
@@ -109,6 +115,14 @@ class TestBuildDistillerDefinition:
 
 
 class TestDistillLessons:
+    _SAMPLE_VERDICT = {
+        "id": 1,
+        "kind": "debate",
+        "decision": "adopt",
+        "confidence": 0.8,
+        "summary": "s",
+    }
+
     def test_calls_capture_fn_once_and_parses_result(self, monkeypatch) -> None:
         from hivepilot.services import config_provenance
 
@@ -124,7 +138,7 @@ class TestDistillLessons:
             project=project,
             role="developer",
             task="my-task",
-            verdicts=[],
+            verdicts=[self._SAMPLE_VERDICT],
             interactions=[],
             outcomes=[{"project": "p", "target": "developer", "success": True, "detail": "ok"}],
             distiller_def=distiller_def,
@@ -143,10 +157,84 @@ class TestDistillLessons:
         lessons = distill_lessons(
             run_id=None,
             project=project,
-            verdicts=[],
+            verdicts=[self._SAMPLE_VERDICT],
             interactions=[],
             outcomes=[],
             distiller_def=distiller_def,
             capture_fn=capture_fn,
         )
         assert lessons == []
+        # Confirms this is exercising the malformed-response parse path (not
+        # the no-signal short-circuit below) -- the call DID happen.
+        assert capture_fn.call_count == 1
+
+    def test_no_signal_skips_capture_fn_call(self) -> None:
+        """No verdicts AND no interactions -> the costed `capture_fn` call
+        is skipped entirely, even when outcomes are present (Sprint 2 review
+        finding, LOW: an outcome-only run has near-zero distillation
+        signal)."""
+        project = ProjectConfig(path=Path("/tmp/p"))
+        distiller_def = build_distiller_definition(runner="claude", model=None)
+        capture_fn = MagicMock(
+            return_value='[{"text": "Should never be reached.", "category": "x"}]'
+        )
+
+        lessons = distill_lessons(
+            run_id=1,
+            project=project,
+            verdicts=[],
+            interactions=[],
+            outcomes=[{"project": "p", "target": "developer", "success": True, "detail": "ok"}],
+            distiller_def=distiller_def,
+            capture_fn=capture_fn,
+        )
+
+        capture_fn.assert_not_called()
+        assert lessons == []
+
+    def test_prompt_is_redacted_before_reaching_capture_fn(self) -> None:
+        """HIGH-severity fix: `outcomes[].detail` (sourced from
+        `RunResult.detail`, NOT pre-redacted upstream) can carry a resolved
+        `${secret:NAME}` value. Before this fix only the *response* was
+        redacted -- the secret still left the trust boundary via the
+        *prompt* sent to `capture_fn` (i.e. to the external distiller
+        model). Assert the live secret literal never reaches `capture_fn`'s
+        payload at all."""
+        from hivepilot.services import config_provenance
+
+        config_provenance.clear_secret_values()
+        config_provenance.register_secret_value("sk-live-outcome-secret")
+        try:
+            project = ProjectConfig(path=Path("/tmp/p"))
+            distiller_def = build_distiller_definition(runner="claude", model=None)
+            captured_payloads: list = []
+
+            def _spy_capture(_definition, payload):
+                captured_payloads.append(payload)
+                return "[]"
+
+            distill_lessons(
+                run_id=1,
+                project=project,
+                role="developer",
+                task="my-task",
+                verdicts=[self._SAMPLE_VERDICT],
+                interactions=[],
+                outcomes=[
+                    {
+                        "project": "p",
+                        "target": "developer",
+                        "success": False,
+                        "detail": "step failed: leaked sk-live-outcome-secret in output",
+                    }
+                ],
+                distiller_def=distiller_def,
+                capture_fn=_spy_capture,
+            )
+
+            assert len(captured_payloads) == 1
+            prompt_sent = captured_payloads[0].metadata["extra_prompt"]
+            assert "sk-live-outcome-secret" not in prompt_sent
+            assert "REDACTED" in prompt_sent
+        finally:
+            config_provenance.clear_secret_values()

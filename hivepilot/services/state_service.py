@@ -623,11 +623,14 @@ def record_lesson(
     """Persist a distilled :class:`lessons_service.Lesson` candidate
     (Auto-Learning Lessons Loop PRD, Sprint 2) and return the new row id.
 
-    ``text`` is the only free-text field and is routed through
-    ``redact_text`` before INSERT -- same choke-point pattern as
-    ``record_verdict``'s ``summary``/``record_interaction``'s ``summary``,
-    since a distilled lesson can echo a resolved ``${secret:NAME}`` value
-    from the verdicts/interactions it was built from.
+    ``text`` AND ``category`` are the only free-text fields and are both
+    routed through ``redact_text`` before INSERT -- same choke-point pattern
+    as ``record_verdict``'s ``summary``/``record_interaction``'s
+    ``summary``, since a distilled lesson (or a direct API caller supplying
+    its own, unredacted ``category``) can echo a resolved ``${secret:NAME}``
+    value from the verdicts/interactions it was built from. Redacting only
+    ``text`` would leave ``category`` as a bypass for the same class of leak
+    this table exists to guard against.
 
     ``validated`` defaults to ``False`` -- Sprint 2's distillation path
     (``lessons_service.distill_lessons`` -> the orchestrator wiring) always
@@ -637,6 +640,7 @@ def record_lesson(
     from hivepilot.services.config_provenance import redact_text
 
     text = redact_text(text)
+    category = redact_text(category) if category is not None else None
     with db.connect() as conn:
         lesson_id = db.insert_returning_id(
             conn,

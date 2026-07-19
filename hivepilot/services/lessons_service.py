@@ -13,7 +13,20 @@ Design invariants:
   response returns ``[]`` -- nothing is ever stored on a doubt.
 - ONE `capture_definition` call per run (mirrors
   `Orchestrator._adjudicate`/`_adjudicate_challenge` in `orchestrator.py` --
-  same "build ONE prompt, make ONE runner call, parse the JSON" shape).
+  same "build ONE prompt, make ONE runner call, parse the JSON" shape). The
+  call is skipped entirely when there's no real signal to distill (no
+  verdicts AND no interactions) -- an outcome-only run isn't worth a costed
+  LLM call.
+- Redaction guards BOTH directions, not just persistence: the fully-assembled
+  prompt is passed through `redact_text` immediately before the `capture_fn`
+  call (egress choke point) -- `outcomes[].detail` in particular is sourced
+  from `RunResult.detail`, a field known to reach other sinks in cleartext
+  (see `hivepilot/orchestrator.py`'s `RunResult` choke-point comment), so
+  without this a resolved `${secret:NAME}` value could leave the trust
+  boundary via the prompt even though the (separately redacted) response
+  never echoed it back. The response is ALSO redacted after the call
+  (belt-and-suspenders, guards the persisted `lessons` row against anything
+  the distiller itself might echo).
 - Deliberately does NOT import `hivepilot.services.state_service` (avoids a
   circular import: `state_service.record_lesson` takes plain primitives, not
   a `Lesson`, precisely so this module and `state_service` never need to
@@ -245,10 +258,27 @@ def distill_lessons(
     `RunnerRegistry.capture_definition`) call.
 
     Mirrors `Orchestrator._adjudicate`'s shape exactly: build ONE prompt,
-    make ONE runner call, run the raw output through `redact_text` (S1's
-    run-scope masking choke point -- any resolved `${secret:NAME}` value an
-    agent echoed anywhere in the verdicts/interactions/outcomes text must be
-    masked before it can reach a parsed lesson), then parse.
+    make ONE runner call, parse the JSON response.
+
+    Skips the call entirely (returns ``[]``) when *verdicts* AND
+    *interactions* are both empty -- an outcome-only run has near-zero
+    signal to distill from, so a costed LLM call isn't warranted (Sprint 2
+    review finding, LOW).
+
+    Redacts the FULLY ASSEMBLED PROMPT via `redact_text` immediately before
+    the `capture_fn` call -- the egress choke point. This is deliberately
+    NOT the same as redacting individual fields going in: `outcomes[].detail`
+    is sourced from `RunResult.detail`, which is NOT pre-redacted upstream
+    (unlike `verdicts.summary`/`interactions.summary`, both already redacted
+    at `record_verdict`/`record_interaction` INSERT time) -- a resolved
+    `${secret:NAME}` value sitting in a step's failure detail would
+    otherwise be sent VERBATIM to the external `lesson_distill_runner`
+    model, i.e. leave the trust boundary, even though the (separately
+    redacted) response could never leak it back into the persisted
+    `lessons` row. Redacting the whole prompt string closes that regardless
+    of which field the secret came from. The raw response is ALSO run
+    through `redact_text` after the call (belt-and-suspenders, S1's
+    run-scope masking choke point) before parsing.
 
     *capture_fn* is injected by the caller (the orchestrator's own live
     `self.registry.capture_definition`, same registry instance used for the
@@ -264,6 +294,9 @@ def distill_lessons(
     """
     from hivepilot.services.config_provenance import redact_text
 
+    if not verdicts and not interactions:
+        return []
+
     prompt = build_distill_prompt(
         project=project.path.name if project else None,
         role=role,
@@ -272,6 +305,11 @@ def distill_lessons(
         interactions=interactions,
         outcomes=outcomes,
     )
+    # Egress choke point: redact the FULL prompt -- not just the response --
+    # before it ever reaches `capture_fn` (i.e. before it's sent to the
+    # external distiller model). See the docstring above for why this must
+    # be whole-prompt rather than per-field.
+    prompt = redact_text(prompt)
     step = TaskStep(name="lessons-distiller", runner=distiller_def.kind, prompt_file=None)
     payload = RunnerPayload(
         project_name=project.path.name,

@@ -16,6 +16,8 @@ Covers:
 - `simulate=True` / `dry_run=True` -> no distillation, zero persistence
   (both gate the real LLM call, same as `simulate` gates every other
   `capture_definition` call site in `orchestrator.py`).
+- `record_lesson` redacts BOTH `text` and `category` before INSERT (a
+  direct API caller's unredacted `category` can't bypass masking).
 """
 
 from __future__ import annotations
@@ -109,6 +111,17 @@ class TestDistillAndPersistLessons:
         orch = self._orch(distilled_json)
         project = ProjectConfig(path=Path("/tmp/lessons-p"))
         run_id = state_service.record_run_start("lessons-p", "my-task")
+        # Real signal for this run — the no-signal short-circuit (verdicts
+        # AND interactions both empty) must not swallow this call.
+        state_service.record_verdict(
+            run_id=run_id,
+            project="lessons-p",
+            task="my-task",
+            role="developer",
+            kind="debate",
+            decision="adopt",
+            confidence=0.8,
+        )
 
         from hivepilot.orchestrator import RunResult
 
@@ -142,6 +155,17 @@ class TestDistillAndPersistLessons:
         orch = self._orch("not valid json at all")
         project = ProjectConfig(path=Path("/tmp/lessons-p2"))
         run_id = state_service.record_run_start("lessons-p2", "my-task")
+        # Real signal so this exercises malformed-*response* parsing, not
+        # the (separately tested) no-signal short-circuit.
+        state_service.record_verdict(
+            run_id=run_id,
+            project="lessons-p2",
+            task="my-task",
+            role="developer",
+            kind="debate",
+            decision="adopt",
+            confidence=0.8,
+        )
 
         from hivepilot.orchestrator import RunResult
 
@@ -159,6 +183,17 @@ class TestDistillAndPersistLessons:
         orch = self._orch("[]")
         project = ProjectConfig(path=Path("/tmp/lessons-p3"))
         run_id = state_service.record_run_start("lessons-p3", "my-task")
+        # Real signal so this exercises the empty-array response parsing,
+        # not the (separately tested) no-signal short-circuit.
+        state_service.record_verdict(
+            run_id=run_id,
+            project="lessons-p3",
+            task="my-task",
+            role="developer",
+            kind="debate",
+            decision="adopt",
+            confidence=0.8,
+        )
 
         from hivepilot.orchestrator import RunResult
 
@@ -171,6 +206,32 @@ class TestDistillAndPersistLessons:
         )
 
         assert state_service.list_lessons("lessons-p3", validated_only=False) == []
+
+    def test_no_signal_skips_persistence_and_capture_call(self) -> None:
+        """Both `verdicts` AND `interactions` empty -> `_distill_and_persist_
+        lessons` never reaches `capture_fn` (mocked here as an
+        exception-raiser to prove it's genuinely never invoked) and persists
+        nothing, even with outcomes present (Sprint 2 review finding, LOW)."""
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        mock_registry = MagicMock()
+        mock_registry.capture_definition.side_effect = AssertionError(
+            "capture_fn must not be called when there is no verdict/interaction signal"
+        )
+        orch.registry = mock_registry
+        project = ProjectConfig(path=Path("/tmp/lessons-p7"))
+        run_id = state_service.record_run_start("lessons-p7", "my-task")
+
+        from hivepilot.orchestrator import RunResult
+
+        orch._distill_and_persist_lessons(
+            run_id=run_id,
+            project=project,
+            role="developer",
+            task_name="my-task",
+            result=RunResult("lessons-p7", "developer", True, "ok"),
+        )
+
+        assert state_service.list_lessons("lessons-p7", validated_only=False) == []
 
     def test_mark_lesson_used_increments_use_count(self) -> None:
         run_id = state_service.record_run_start("lessons-p4", "t")
@@ -187,6 +248,51 @@ class TestDistillAndPersistLessons:
         state_service.mark_lesson_used(lesson_id)
         rows = state_service.list_lessons("lessons-p4", validated_only=False)
         assert rows[0]["use_count"] == 1
+
+    def test_record_lesson_redacts_category_too(self) -> None:
+        """Defense-in-depth symmetry fix (LOW): `record_lesson` redacted
+        `text` but not `category` — a direct API caller (bypassing
+        `distill_lessons`'s own prompt/response redaction) could pass an
+        unredacted `category` containing a live secret and have it persist
+        verbatim. Both free-text columns must go through the same choke
+        point."""
+        config_provenance.register_secret_value("sk-live-category-secret")
+        try:
+            run_id = state_service.record_run_start("lessons-p5", "t")
+            lesson_id = state_service.record_lesson(
+                run_id=run_id,
+                project="lessons-p5",
+                role="developer",
+                task="t",
+                text="Clean text.",
+                score=None,
+                confidence=None,
+                category="leaked sk-live-category-secret in category",
+            )
+            rows = state_service.list_lessons("lessons-p5", validated_only=False)
+            row = next(r for r in rows if r["id"] == lesson_id)
+            assert "sk-live-category-secret" not in row["category"]
+            assert "REDACTED" in row["category"]
+        finally:
+            config_provenance.clear_secret_values()
+
+    def test_record_lesson_none_category_stays_none(self) -> None:
+        """`category` is optional -- `None` must pass through unchanged, not
+        crash `redact_text` or coerce to a string."""
+        run_id = state_service.record_run_start("lessons-p6", "t")
+        lesson_id = state_service.record_lesson(
+            run_id=run_id,
+            project="lessons-p6",
+            role="developer",
+            task="t",
+            text="A lesson.",
+            score=None,
+            confidence=None,
+            category=None,
+        )
+        rows = state_service.list_lessons("lessons-p6", validated_only=False)
+        row = next(r for r in rows if r["id"] == lesson_id)
+        assert row["category"] is None
 
 
 # ---------------------------------------------------------------------------
