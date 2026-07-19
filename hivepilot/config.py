@@ -347,6 +347,16 @@ class Settings(BaseSettings):
     # (every plugins/*.py stem must have a matching `<stem>_enabled` flag).
     # env: HIVEPILOT_EXAMPLE_GRAPH_SOURCE_ENABLED
     example_graph_source_enabled: bool = False
+    # Two more plugin-contributed `graph_sources` (Mirador GraphSources
+    # plugins sprint) -- opt-IN, dormant by default, same pattern as
+    # example_graph_source_enabled above. `drift` renders the IaC drift-scan
+    # history (plugins/drift_graph_source.py); `secrets-trust` renders which
+    # secret NAMES resolve via which provider/backend, never a value
+    # (plugins/secrets_trust_graph_source.py). Both required by
+    # tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag.
+    # env: HIVEPILOT_DRIFT_GRAPH_SOURCE_ENABLED / _SECRETS_TRUST_GRAPH_SOURCE_ENABLED
+    drift_graph_source_enabled: bool = False
+    secrets_trust_graph_source_enabled: bool = False
     # Built-in agent runners are individually disable-able (plugin-arch-overhaul
     # Sprint 01). Default True — turning one off removes it from RUNNER_MAP via
     # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
