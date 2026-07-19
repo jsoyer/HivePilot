@@ -72,6 +72,8 @@ drift_app = typer.Typer(help="Infrastructure drift detection")
 app.add_typer(drift_app, name="drift")
 playbooks_app = typer.Typer(help="Multi-agent collaboration playbook templates")
 app.add_typer(playbooks_app, name="playbooks")
+agents_app = typer.Typer(help="Agent CLI availability + guided install")
+app.add_typer(agents_app, name="agents")
 logger = get_logger(__name__)
 
 
@@ -337,6 +339,21 @@ def doctor() -> None:
     else:
         _verdict = "FAIL (none of claude/codex/vibe found -- run `hivepilot init` for details)"
     typer.echo(f"  verdict     : {_verdict}")
+
+    typer.echo("\n=== Install suggestions ===")
+    from hivepilot.services.agent_install import AGENT_INSTALL_SPECS, is_on_path
+
+    _any_suggestion = False
+    for _kind, _spec in AGENT_INSTALL_SPECS.items():
+        if is_on_path(_spec.binary):
+            continue
+        _any_suggestion = True
+        if _spec.command is not None:
+            typer.echo(f"  {_kind}: not found — run 'hivepilot agents install {_kind}'")
+        else:
+            typer.echo(f"  {_kind}: not found — see {_spec.docs_url}")
+    if not _any_suggestion:
+        typer.echo("  (all known agent CLIs found on PATH)")
 
     typer.echo("\n=== OpenRouter (optional, API-only agent) ===")
     typer.echo(
@@ -3371,6 +3388,88 @@ def skills_list() -> None:
     if not skills:
         skills_table.add_row("-", "-", "-", "-")
     console.print(skills_table)
+
+
+@agents_app.command("list")
+def agents_list() -> None:
+    """List agent CLI kinds: PATH status + guided-install availability.
+
+    Read-only -- never executes anything. Covers the canonical agent runner
+    kinds (`hivepilot.services.agent_checks.AGENT_RUNNER_KINDS`) plus every
+    kind with a guided-install `InstallSpec` (some install-only kinds --
+    e.g. `cursor`/`antigravity`/`gh` -- aren't full HivePilot runner kinds
+    but are still installable via `agents install`).
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.services.agent_checks import AGENT_RUNNER_KINDS
+    from hivepilot.services.agent_install import (
+        AGENT_INSTALL_SPECS,
+        get_install_spec,
+        is_on_path,
+    )
+
+    console = Console(width=200)
+    table = Table(title="Agent CLIs")
+    table.add_column("kind")
+    table.add_column("binary")
+    table.add_column("on PATH")
+    table.add_column("install")
+
+    for kind in sorted(set(AGENT_RUNNER_KINDS) | set(AGENT_INSTALL_SPECS)):
+        spec = get_install_spec(kind)
+        binary = spec.binary if spec is not None else kind
+        on_path = "✓" if is_on_path(binary) else "✗"
+        if spec is None:
+            install = "—"
+        elif spec.command is not None:
+            install = "pinned command"
+        else:
+            install = "docs only"
+        table.add_row(kind, binary, on_path, install)
+    console.print(table)
+
+
+@agents_app.command("install")
+def agents_install(
+    name: str = typer.Argument(..., help="Agent kind to install, e.g. claude, codex, cursor"),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help=(
+            "Skip the interactive y/N prompt once already interactive -- "
+            "still refused outside a real TTY, regardless of this flag."
+        ),
+    ),
+) -> None:
+    """Guided install for one agent CLI -- confirm-then-run, interactive only.
+
+    Delegates to `hivepilot.services.agent_install.propose_install`, which
+    decides for itself (via a real `isatty()` check) whether it is safe to
+    run anything. `--yes` maps ONLY to `assume_yes` (skips the y/N prompt
+    when the session is already interactive); it can never force a
+    non-interactive/scheduled caller (CI, cron, a pipeline run headlessly)
+    into executing an installer. Docs-only specs (no verified vendor
+    one-liner) never execute anything -- only point at `docs_url`.
+    """
+    from hivepilot.services.agent_install import get_install_spec, propose_install
+
+    spec = get_install_spec(name)
+    if spec is None:
+        typer.echo(f"agents install: unknown agent kind '{name}'", err=True)
+        typer.echo("Run `hivepilot agents list` to see known kinds.", err=True)
+        raise typer.Exit(1)
+
+    # CRITICAL INVARIANT: `interactive=None` here, always -- never True, never
+    # anything derived from something other than propose_install's own
+    # isatty() check. See agent_install.py's module docstring and the
+    # non-interactive-refusal tests in tests/test_cli_agents.py.
+    result = propose_install(spec, assume_yes=yes, interactive=None)
+    typer.echo(result.message)
+    if result.ran and result.exit_code not in (0, None):
+        raise typer.Exit(result.exit_code or 1)
 
 
 if __name__ == "__main__":
