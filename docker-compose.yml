@@ -1,9 +1,74 @@
+# Production deployment shape: the API server and the scheduler daemon run
+# as two containers from the same Alpine image (see Dockerfile), sharing a
+# single named volume for /data (config synced via `hivepilot config sync`
+# + state.db) so both processes see the same state.
+#
+# Quick start:
+#   cp .env.example .env   # then edit HIVEPILOT_CONFIG_REPO and secrets
+#   docker compose up -d --build
+#   docker compose exec hivepilot hivepilot config sync
+#   docker compose exec hivepilot hivepilot doctor
+#
+# For local development against a live checkout instead, see the `dev`
+# service below (bind-mounts the repo, matches the previous single-service
+# workflow).
+
 services:
   hivepilot:
     build:
       context: .
       dockerfile: Dockerfile
     image: hivepilot:latest
+    env_file:
+      - .env
+    environment:
+      HIVEPILOT_BASE_DIR: /data
+      HIVEPILOT_API_HOST: 0.0.0.0
+    volumes:
+      - hivepilot-data:/data
+    ports:
+      - "8045:8045"
+    command: ["api", "serve", "--host", "0.0.0.0", "--port", "8045"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "hivepilot", "doctor"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  scheduler:
+    image: hivepilot:latest
+    env_file:
+      - .env
+    environment:
+      HIVEPILOT_BASE_DIR: /data
+    volumes:
+      - hivepilot-data:/data
+    command: ["schedule", "daemon", "--interval", "30"]
+    restart: unless-stopped
+    depends_on:
+      - hivepilot
+    healthcheck:
+      test: ["CMD", "hivepilot", "doctor"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # Local development convenience service — bind-mounts the working tree and
+  # your host `~/.claude`/`gh` config, matching the pre-Alpine workflow. Not
+  # part of the production topology above; run with:
+  #   docker compose run --rm dev hivepilot doctor
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hivepilot:latest
+    # Production image runs as non-root `hivepilot`; the dev convenience
+    # service overrides back to root so the ~/.claude and ~/.config/gh
+    # bind mounts below (which target /root) behave as before.
+    user: root
     working_dir: /workspace
     env_file:
       - .env
@@ -14,4 +79,8 @@ services:
       - ${HOME}/dev:/workspace/dev
     stdin_open: true
     tty: true
-    command: ["hivepilot", "doctor"]
+    entrypoint: ["hivepilot"]
+    command: ["doctor"]
+
+volumes:
+  hivepilot-data:

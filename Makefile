@@ -1,4 +1,4 @@
-.PHONY: help install dev lint format typecheck test check docker-build docker-doctor clean webui ci-local
+.PHONY: help install dev lint format typecheck test check docker-build docker-run docker-doctor install-alpine clean webui ci-local
 
 VENV ?= .venv
 PY := $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
@@ -38,11 +38,17 @@ test: ## Run the test suite
 
 check: lint typecheck test ## Full CI-equivalent gate: lint + typecheck + test
 
-docker-build: ## Build the docker image via docker compose
-	docker compose build
+docker-build: ## Build the production Alpine image via docker compose
+	docker compose build hivepilot
+
+docker-run: ## Start the production API + scheduler services (detached)
+	docker compose up -d hivepilot scheduler
 
 docker-doctor: ## Run `hivepilot doctor` inside the docker compose service
-	docker compose run --rm hivepilot hivepilot doctor
+	docker compose run --rm dev hivepilot doctor
+
+install-alpine: ## Bare-metal install on a fresh Alpine host (apk + venv + pip)
+	sh scripts/install-alpine.sh
 
 clean: ## Remove caches/build artifacts (keeps .venv, .env, state.db)
 	rm -rf .mypy_cache .pytest_cache .ruff_cache
