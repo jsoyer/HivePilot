@@ -3,11 +3,22 @@ from __future__ import annotations
 import importlib.metadata as metadata
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Any, Callable, NamedTuple, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, TypedDict
 
 from hivepilot.config import settings
 from hivepilot.services import token_service
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    # Deferred to type-checking only: `hivepilot.graph` imports FROM this
+    # module (`PanelStatSection`/`PanelTableSection`/`PanelTextSection`/
+    # `normalize_panel_data`) at its own top level, so a runtime top-level
+    # import here would be circular. Every real (non-type-checking) use of
+    # `GraphSourceSpec`/`register_graph_source`/`GraphSourceNameCollisionError`
+    # below is a LAZY, function-local import instead — same pattern the
+    # `RUNNER_MAP`/`NOTIFIER_MAP`/`SECRETS_MAP` imports inside `_load_into`
+    # already use for their own circular-import-prone dependencies.
+    pass
 
 logger = get_logger(__name__)
 
@@ -326,6 +337,48 @@ class SkillInvalidMinRoleError(RuntimeError):
     """
 
 
+# Graph-source plugin capability (Mirador Graph View PRD, Sprint 4). A
+# plugin contributes Mirador graph sources via `register()["graph_sources"]
+# = [GraphSourceSpec, ...]`, EXACTLY the way `"panels"` -> `list[PanelSpec]`
+# works above. Unlike `PanelSpec`/`SkillSpec` (plain `TypedDict`s defined IN
+# this module), `GraphSourceSpec` is a real frozen dataclass defined in
+# `hivepilot/graph.py` (Sprint 1) — reused here, not redefined, to keep one
+# source of truth for the graph-native contract shared with the built-in
+# sources (`hivepilot/graph_sources/*.py`). A plugin constructs it via
+# `from hivepilot.graph import GraphSourceSpec` in its own `register()`.
+#
+# Registration mechanics mirror runners/notifiers/secrets (NOT panels/
+# skills' simpler wholesale-replace model): graph sources live in
+# `hivepilot.graph`'s own MODULE-GLOBAL `_GRAPH_SOURCES` registry (shared
+# with every built-in source, registered once at import time by
+# `hivepilot/graph_sources/__init__.py`), so a `PluginManager` must track
+# OWNERSHIP of the names it registers there — `self._owned_graph_source_names`,
+# threaded through `_load_into`'s `owned_graph_source_names` parameter and
+# `_stage_kind` exactly like `_owned_runner_kinds`/`_owned_notifier_names`/
+# `_owned_secret_names` already are. `_commit` tears down this manager's
+# OWN previously-owned names (via the proper `hivepilot.graph.
+# unregister_graph_source`, never a built-in, never another manager's/
+# plugin's name) BEFORE registering the freshly-staged set. This is what
+# makes a disabled+reloaded plugin's graph source actually disappear
+# (previously fail-open: nothing ever tore it down), and lets a still-
+# enabled plugin's re-`exec()`d module register a brand-new
+# `GraphSourceSpec` object under the same name on every `reload()` without
+# self-colliding (previously a hard `GraphSourceNameCollisionError` that
+# aborted the WHOLE plugin set's reload). A collision with a genuinely
+# DIFFERENT plugin's name, or a built-in's, still raises
+# `GraphSourceNameCollisionError` and rolls back atomically with this
+# plugin's other contributions — see the `except` block below.
+#
+# `min_role` is NOT rejected at registration time here (unlike
+# `PanelInvalidMinRoleError`/`SkillInvalidMinRoleError`): S1's own
+# `_resolve_graph_min_role_rank` (`hivepilot/services/api_service.py`)
+# already fails closed on an unrecognized `min_role` — treating it as
+# unsatisfiable by ANY role, including admin — at the point a source is
+# actually FETCHED, exactly like every built-in source's `min_role` is
+# enforced. Re-validating at registration time would be redundant, not
+# safer.
+
+
 def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
     """Scan `plugins/` directory for local-file plugins.
 
@@ -511,6 +564,14 @@ class _StagedPluginState:
     runner_map: dict[str, Any] = field(default_factory=dict)
     notifier_map: dict[str, Callable[[str], None]] = field(default_factory=dict)
     secrets_map: dict[str, Any] = field(default_factory=dict)
+    # `Any`, not `GraphSourceSpec` — mirrors `runner_map: dict[str, Any]` /
+    # `secrets_map: dict[str, Any]` above: `GraphSourceSpec` is only ever
+    # imported under `if TYPE_CHECKING:` at this module's top (real usage is
+    # always a lazy, function-local import to avoid a circular import with
+    # `hivepilot.graph` — see that block's comment), and a `@dataclass`
+    # field annotation is evaluated by tooling in a way `TYPE_CHECKING`-only
+    # names don't reliably resolve against.
+    graph_source_map: dict[str, Any] = field(default_factory=dict)
 
 
 def _stage_kind(
@@ -558,6 +619,7 @@ class PluginManager:
             owned_runner_kinds=frozenset(),
             owned_notifier_names=frozenset(),
             owned_secret_names=frozenset(),
+            owned_graph_source_names=frozenset(),
         )
         self._commit(staged)
 
@@ -616,6 +678,7 @@ class PluginManager:
                     owned_runner_kinds=self._owned_runner_kinds,
                     owned_notifier_names=self._owned_notifier_names,
                     owned_secret_names=self._owned_secret_names,
+                    owned_graph_source_names=self._owned_graph_source_names,
                 )
             except Exception as exc:  # noqa: BLE001 — a bad candidate must never touch live state
                 logger.warning("plugins.reload_failed", error=str(exc))
@@ -652,6 +715,7 @@ class PluginManager:
         `__init__`/`reload()`. Never raises itself: every collision was
         already resolved during staging.
         """
+        from hivepilot import graph as graph_module
         from hivepilot.registry import RUNNER_MAP, SECRETS_MAP
         from hivepilot.services.notification_service import NOTIFIER_MAP
 
@@ -670,6 +734,25 @@ class PluginManager:
         SECRETS_MAP.update(staged.secrets_map)
         self._owned_secret_names: frozenset[str] = frozenset(staged.secrets_map)
 
+        # Graph sources (Sprint 4 hot-reload fix): same ownership + teardown
+        # discipline as RUNNER_MAP/NOTIFIER_MAP/SECRETS_MAP above -- tear down
+        # ONLY the names THIS manager itself previously registered (never a
+        # built-in, never another manager's/plugin's name -- built-ins are
+        # registered once at import time by `hivepilot/graph_sources/
+        # __init__.py` and are never manager-owned) via the proper
+        # `unregister_graph_source`, THEN register the freshly-staged set.
+        # This is what makes a disabled+reloaded plugin's source actually
+        # disappear (was previously fail-open: `_commit` never tore it down),
+        # and lets a still-enabled plugin's re-exec'd module register a
+        # brand-new `GraphSourceSpec` object under the same name on every
+        # reload without self-colliding (was previously a hard `reload()`
+        # failure for the WHOLE plugin set).
+        for graph_name in getattr(self, "_owned_graph_source_names", frozenset()):
+            graph_module.unregister_graph_source(graph_name)
+        for graph_name, graph_spec in staged.graph_source_map.items():
+            graph_module.register_graph_source(graph_spec)
+        self._owned_graph_source_names: frozenset[str] = frozenset(staged.graph_source_map)
+
         self.loaded: list[PluginRecord] = staged.loaded
         self.hooks: dict[str, list[Any]] = staged.hooks
         self.declared_notifiers: dict[str, Callable[[str], None]] = staged.declared_notifiers
@@ -685,6 +768,7 @@ class PluginManager:
         owned_runner_kinds: frozenset[str],
         owned_notifier_names: frozenset[str],
         owned_secret_names: frozenset[str],
+        owned_graph_source_names: frozenset[str],
     ) -> _StagedPluginState:
         """Scan+register one full plugin set into a fresh `_StagedPluginState`
         -- the SINGLE load code path shared by `__init__` (called with empty
@@ -757,20 +841,23 @@ class PluginManager:
             health = hooks.pop("health", None)
             panels = hooks.pop("panels", None)
             skills = hooks.pop("skills", None)
+            graph_sources = hooks.pop("graph_sources", None)
             # Declared unconditionally (not just inside the `if` below) so
             # `record.contributions` can be populated from these lists further
             # down regardless of which contribution types this plugin
             # declared — a plugin contributing ONLY lifecycle hooks (no
-            # runners/notifiers/secrets/health/panels/skills) never enters
-            # the `if` block below at all, and these must still exist (as
-            # empty lists) for that case.
+            # runners/notifiers/secrets/health/panels/skills/graph_sources)
+            # never enters the `if` block below at all, and these must still
+            # exist (as empty lists) for that case.
             applied_runners: list[str] = []
             applied_notifiers: list[str] = []
             applied_secrets: list[str] = []
             applied_health: list[str] = []
             applied_panels: list[str] = []
             applied_skills: list[str] = []
-            if runners or notifiers or secrets or health or panels or skills:
+            applied_graph_sources: list[str] = []
+            if runners or notifiers or secrets or health or panels or skills or graph_sources:
+                from hivepilot import graph as graph_module
                 from hivepilot.registry import (
                     RUNNER_MAP,
                     SECRETS_MAP,
@@ -784,9 +871,10 @@ class PluginManager:
 
                 # A kind/name collision is a hard stop and propagates uncaught
                 # (unlike an isolated broken plugin, which is logged and skipped).
-                # Stage this one plugin's runners+notifiers+secrets+health+panels+skills
-                # atomically: if any entry collides, roll back the entries THIS
-                # plugin already staged (into `staged.runner_map`/`notifier_map`/
+                # Stage this one plugin's runners+notifiers+secrets+health+panels+
+                # skills+graph_sources atomically: if any entry collides, roll back
+                # the entries THIS plugin already staged (into `staged.runner_map`/
+                # `notifier_map`/
                 # `secrets_map`/`health`/`panels`/`skills`) before re-raising, so
                 # an aborted plugin never leaves orphaned, untracked staged
                 # entries behind for the rest of this pass.
@@ -912,6 +1000,30 @@ class PluginManager:
                             skill_entry["min_role"] = min_role
                         staged.skills[skill_name] = skill_entry
                         applied_skills.append(skill_name)
+                    for graph_spec in graph_sources or []:
+                        # Staged into a LOCAL dict first (`staged.graph_source_map`),
+                        # exactly like runners/notifiers/secrets above — NOT
+                        # registered directly into `hivepilot.graph`'s live
+                        # `_GRAPH_SOURCES` here. `_stage_kind` applies the same
+                        # collision rule against that staged dict AND the live
+                        # registry (bypassed for names in `owned_graph_source_names`
+                        # -- this manager's own previously-registered names, which
+                        # it may legitimately re-stage on `reload()` without a
+                        # self-collision; see `_commit`'s teardown-then-register).
+                        # A DIFFERENT plugin's/built-in's name still collides,
+                        # raising `GraphSourceNameCollisionError`.
+                        was_present = graph_spec.name in staged.graph_source_map
+                        _stage_kind(
+                            graph_spec.name,
+                            graph_spec,
+                            live_map=graph_module._GRAPH_SOURCES,
+                            owned_kinds=owned_graph_source_names,
+                            staged=staged.graph_source_map,
+                            collision_cls=graph_module.GraphSourceNameCollisionError,
+                            label="Graph source",
+                        )
+                        if not was_present:
+                            applied_graph_sources.append(graph_spec.name)
                 except (
                     RunnerKindCollisionError,
                     NotifierKindCollisionError,
@@ -921,6 +1033,7 @@ class PluginManager:
                     PanelInvalidMinRoleError,
                     SkillNameCollisionError,
                     SkillInvalidMinRoleError,
+                    graph_module.GraphSourceNameCollisionError,
                 ):
                     for kind in applied_runners:
                         staged.runner_map.pop(kind, None)
@@ -934,17 +1047,19 @@ class PluginManager:
                         staged.panels.pop(panel_name, None)
                     for skill_name in applied_skills:
                         staged.skills.pop(skill_name, None)
+                    for graph_name in applied_graph_sources:
+                        staged.graph_source_map.pop(graph_name, None)
                     raise
 
                 if notifiers:
                     staged.declared_notifiers.update(notifiers)
 
-            # Whatever keys remain in `hooks` after the six contribution
+            # Whatever keys remain in `hooks` after the seven contribution
             # types above were popped out are lifecycle-hook names
             # (`before_step`/`after_step`/`on_pipeline_end`/`on_error`/etc.) —
             # not collision-checked (multiple plugins may each contribute a
             # callable under the same hook name; every one runs), so no
-            # rollback bookkeeping is needed for these, unlike the six above.
+            # rollback bookkeeping is needed for these, unlike the seven above.
             applied_hooks = sorted(hooks)
             for hook_name, hook_callable in hooks.items():
                 staged.hooks.setdefault(hook_name, []).append(hook_callable)
@@ -970,6 +1085,8 @@ class PluginManager:
                 contributions["panels"] = sorted(applied_panels)
             if applied_skills:
                 contributions["skills"] = sorted(applied_skills)
+            if applied_graph_sources:
+                contributions["graph_sources"] = sorted(applied_graph_sources)
             if applied_hooks:
                 contributions["hooks"] = applied_hooks
             record.contributions = contributions

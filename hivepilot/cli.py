@@ -3053,9 +3053,10 @@ def _health_badge(status: str) -> str:
 
 
 # Rendering order for the per-plugin "contributes" column in `plugins list`'s
-# Loaded Plugins table — mirrors the six `register()` contribution-type keys
-# `PluginManager` pops (`hivepilot/plugins.py`) plus lifecycle `hooks`, in a
-# stable, deterministic order (not insertion order of the underlying dict).
+# Loaded Plugins table — mirrors the seven `register()` contribution-type
+# keys `PluginManager` pops (`hivepilot/plugins.py`) plus lifecycle `hooks`,
+# in a stable, deterministic order (not insertion order of the underlying
+# dict). `graph_sources` (Mirador Graph View PRD, Sprint 4) added here.
 _CONTRIBUTION_RENDER_ORDER = (
     "runners",
     "notifiers",
@@ -3063,6 +3064,7 @@ _CONTRIBUTION_RENDER_ORDER = (
     "health",
     "panels",
     "skills",
+    "graph_sources",
     "hooks",
 )
 

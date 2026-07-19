@@ -20,12 +20,15 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from hivepilot.plugins import PluginManager
 
 logger = get_logger(__name__)
 
@@ -267,3 +270,37 @@ def format_install_hint(install: dict[str, str]) -> str:
             return _UNSAFE_INSTALL_FALLBACK
         return f"git clone {target}"
     return _UNSAFE_INSTALL_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# Local plugin taxonomy — graph-source contributions (Mirador Graph View
+# PRD, Sprint 4). Distinct concept from the REMOTE marketplace index above
+# (`PluginIndexEntry`/`fetch_index`/`search_index`): this helper enumerates
+# what a plugin ALREADY LOADED in THIS process contributed, exactly like
+# `PluginRecord.contributions` (`hivepilot/plugins.py`, Phase 26a
+# attribution) already does for runners/notifiers/secrets/health/panels/
+# skills/hooks. Placed in this module per this sprint's declared file
+# boundaries; `hivepilot/cli.py`'s `plugins list` command (`_format_contributions`
+# / `_CONTRIBUTION_RENDER_ORDER`) is the natural consumer for a future
+# sprint to wire the "contributes" column's `graph_sources` entries through
+# — cli.py itself is OUTSIDE this sprint's file boundaries, so that final
+# rendering wire-up is not done here (see docs/v4/PLUGINS.md).
+# ---------------------------------------------------------------------------
+
+
+def graph_source_contributions(plugin_manager: "PluginManager") -> dict[str, list[str]]:
+    """Map plugin name -> sorted list of graph-source names it contributed.
+
+    Only plugins whose `PluginRecord.contributions` actually has a
+    `"graph_sources"` entry are included — mirrors `_format_contributions`'s
+    (`hivepilot/cli.py`) per-kind filtering (a plugin contributing nothing
+    attributable is simply absent, not present with an empty list). Reads
+    `plugin_manager.loaded` only — never re-scans or re-registers anything,
+    so calling this is always safe/side-effect-free, unconditionally, the
+    same way `PluginManager.check_all()` is.
+    """
+    return {
+        record.name: list(record.contributions["graph_sources"])
+        for record in plugin_manager.loaded
+        if record.contributions.get("graph_sources")
+    }
