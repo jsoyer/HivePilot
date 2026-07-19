@@ -49,9 +49,7 @@ without side effects.
 - **Stop / cancel a running pipeline** — halt an in-flight run.
 - **Toggle plugins on/off** — admin-gated, `POST /v1/plugins/{name}/toggle`. The
   health view can also re-enable a previously disabled plugin.
-- **View pipeline and skills graphs** — via `/v1/graph/*` sources. The pipeline
-  graph source is tenant-scoped; the skills graph source is admin-only and backed by
-  a local scan.
+- **View the Graph tab** — see [Graph view](#graph-view) below.
 - **View analytics** — see [Analytics](#analytics) below.
 
 ## Analytics
@@ -70,6 +68,50 @@ Claude usage) plus a configurable price map set via `HIVEPILOT_LLM_PRICE_MAP`. T
 default price map is indicative and dated, not a live pricing feed — override it for
 accurate cost figures. See [DEPLOYMENT.md](DEPLOYMENT.md) for how to run the API in
 a deployed environment.
+
+## Graph view
+
+The Graph tab renders slices of HivePilot's own state as a node/edge graph
+instead of a flat table, read-only. It is backed by the `GET /v1/graph/*`
+API:
+
+- `GET /v1/graph/sources` — lists every registered graph source
+  (`name`/`title`/`min_role`/`params`). Any authenticated `read`-floor
+  token sees the full list; a source's own `min_role` only gates fetching
+  its data, not the listing itself.
+- `GET /v1/graph/{source}` — a single source's full graph (nodes + edges +
+  an optional `layout_hint`).
+- `GET /v1/graph/{source}/node/{id}` — a single node's detail view, whose
+  `sections` reuse the exact same closed `stat`/`table`/`text` shapes a
+  Mirador panel's `PanelData` uses (see [PLUGINS.md](PLUGINS.md#dashboard-panels-plugins)),
+  so it renders through the same `PanelRenderer`.
+
+Built-in sources:
+
+| Source | `min_role` | Scope | Notes |
+|---|---|---|---|
+| `plugins` | `read` | tenant-free (plugin/role/runner ecosystem is process config, not tenant data) | the same loaded-plugin/role/runner-binding data `plugins list` shows, as a graph |
+| `pipeline` | `read` | tenant-scoped | requires `?pipeline=<name>`; renders the pipeline's stage DAG, each stage node coloured by its last run's outcome for the caller's tenant |
+| `skills` | `admin` | **local host FS scan, NOT tenant state** | scans `HIVEPILOT_GRAPH_SKILLS_SCAN_PATH` (`settings.graph_skills_scan_path`) for `SKILL.md` files on the machine the API process runs on — admin-gated for the same reason `GET /v1/memories` is |
+
+A plugin can contribute additional sources via the `graph_sources`
+capability — see [PLUGINS.md](PLUGINS.md#graph-sources) for the contract and
+the `run-lineage` example plugin.
+
+**Security posture:** every `/v1/graph/*` route is read-only (`GET` only,
+no side effects). The floor is a `read` bearer token; each source's own
+`min_role` is enforced AFTER the source is resolved (it's data-dependent,
+not a static route decorator), and an unrecognized `min_role` value is
+treated as the highest possible bar rather than failing open. Responses are
+tenant-scoped wherever the underlying data is tenant data (`pipeline`, and
+any plugin-contributed source touching run/step/verdict rows) — `skills` is
+the one built-in exception, since a local filesystem scan has no tenant
+concept. An unknown source, or a `node_detail` call the source doesn't
+support, is a `404`. A source whose `data()`/`node_detail()` raises, or
+returns a malformed shape, degrades to a normalized `kind="error"` node —
+never a `500`. No node, edge, or detail section in any `/v1/graph/*`
+response ever contains a secret VALUE — only names/presence/status, same
+discipline as plugin health and panel data.
 
 ## Dashboard panels (plugins)
 

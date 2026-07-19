@@ -14,9 +14,10 @@ Registration is applied **atomically per plugin**: everything a single plugin st
 | Health | `health` | `{name: Callable -> HealthStatus}`; result is normalized and the check never raises past the framework | Hard error on name collision |
 | Panels | `panels` | `list[PanelSpec]`, each `{name, title, fetch, min_role?}`; contributes tabs to the Mirador dashboard | Invalid `min_role` (not in `ROLE_RANKS`) is a fail-closed registration error |
 | Skills | `skills` | `list[SkillSpec]`, each `{name, description, provider, files, system_prompt?, applies_to?, min_role?}` | See [SKILLS.md](./SKILLS.md) |
+| Graph sources | `graph_sources` | `list[GraphSourceSpec]`, each `{name, data, node_detail?, title?, min_role?, params?}` → registered into `hivepilot.graph`'s module-global source registry via `register_graph_source()` | Name collision with a built-in or another plugin → `GraphSourceNameCollisionError`, rolled back atomically |
 | Lifecycle hooks | any other key | a callable (`before_step`, `after_step`, `on_pipeline_end`, `on_error`, …) | No collision check — every plugin's hook for a given name runs |
 
-Secrets contributions are covered in more depth in [SECURITY.md](./SECURITY.md); panels in [DASHBOARD.md](./DASHBOARD.md); skills in [SKILLS.md](./SKILLS.md).
+Secrets contributions are covered in more depth in [SECURITY.md](./SECURITY.md); panels and the graph view in [DASHBOARD.md](./DASHBOARD.md); skills in [SKILLS.md](./SKILLS.md).
 
 ## How plugins load
 
@@ -66,7 +67,7 @@ Hot-reload (`PluginManager.reload()`) is staging-then-commit: a full re-scan of 
 
 ## Shipped plugins (inventory)
 
-23 plugins ship under `plugins/*.py`.
+24 plugins ship under `plugins/*.py`.
 
 **Agent runners** (PATH-gated: flag AND binary must both be present):
 
@@ -115,6 +116,7 @@ Hot-reload (`PluginManager.reload()`) is staging-then-commit: a full re-scan of 
 | `mem0` | `before_step`/`after_step` memory recall/store | OFF |
 | `sample` | hooks + panel demo | OFF |
 | `sample_skill` | skill demo | OFF |
+| `example_graph_source` | graph source `run-lineage` (demo) | `example_graph_source_enabled`, OFF (opt-in) |
 
 `gh`, `hugo`, and the seven agent-runner kinds are PATH-gated — they only activate when their flag is on **and** the corresponding binary is found on `PATH`. Everything else in the table is flag-gated only.
 
@@ -182,6 +184,51 @@ Notes:
 - Gate optional behavior with a `<name>_enabled`-style flag read inside `register()` — returning `{}` is a clean no-op.
 - The `register()` contract is fixed: no arguments in, a `dict[str, Any]` out.
 - A name collision on `runners`, `notifiers`, `secrets`, `health`, or an invalid `min_role` on a `panels`/`skills` entry aborts the load for that plugin — nothing it contributes gets registered, and other plugins are unaffected.
+
+## Graph sources
+
+A plugin can contribute a node/edge graph to Mirador's Graph tab (see
+[DASHBOARD.md](./DASHBOARD.md#graph-view)) the same way it contributes a
+panel — via `register()["graph_sources"] = [GraphSourceSpec, ...]`.
+`GraphSourceSpec` is a frozen dataclass defined once in `hivepilot/graph.py`
+(reused by plugins, never redefined) with fields `name`, `data`,
+`node_detail?`, `title?`, `min_role?` (default `"read"`), `params?`.
+
+A plugin's staged `graph_sources` are committed under the SAME
+`_owned_*` ownership model `runners`/`notifiers`/`secrets` already use:
+disabling and reloading the plugin removes the source it contributed, and
+reloading a still-enabled plugin does not self-collide with its own
+previous registration.
+
+Collision and fail-closed behavior:
+
+- A name collision with a built-in source or another plugin's source raises
+  `GraphSourceNameCollisionError` — the plugin's ENTIRE registration is
+  rolled back atomically (same all-or-nothing rule as every other
+  contribution type).
+- Unlike `panels`/`skills`, `min_role` is **not** validated at registration
+  time. It is resolved fail-closed at fetch time by
+  `_resolve_graph_min_role_rank` (`hivepilot/services/api_service.py`): an
+  unrecognized role name is treated as the highest possible bar, so it is
+  unsatisfiable by any caller — including `admin` — rather than
+  accidentally failing open.
+- A disabled plugin contributes nothing; its module is never executed.
+- A `data()`/`node_detail()` call that raises is caught by
+  `run_graph_fetch`/`run_graph_node_detail` and normalized into a single
+  `kind="error"` node (or an error `GraphDetail`) — it never surfaces as a
+  500, and only the exception TYPE name is ever included, never its
+  message.
+
+`plugins list`'s per-plugin "contributes" column enumerates each plugin's
+graph sources too — `_CONTRIBUTION_RENDER_ORDER` includes `graph_sources`,
+and `plugin_index.graph_source_contributions(plugin_manager)` returns
+`{plugin_name: [source_name, ...]}` for the plugins that registered one.
+
+Reference implementation: `plugins/example_graph_source.py` contributes
+`run-lineage` (opt-in, default OFF via `example_graph_source_enabled`) — a
+`?run=<id>` query renders one run's lineage (run → steps → verdicts) as a
+DAG, read-only, tenant-scoped via `state_service` membership checks, and
+never includes a secret value.
 
 ## See also
 
