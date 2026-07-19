@@ -745,21 +745,77 @@ class TestStoreProvenanceMetadata:
         metadata = mock_client.add.call_args.kwargs["metadata"]
         assert "confidence" not in metadata
 
-    def test_store_omits_run_id_when_not_threaded(
-        self, mem0_module: ModuleType, tmp_path: Path
-    ) -> None:
-        """`run_id` isn't threaded into the `after_step` `run_hook(...)` call
-        by `Orchestrator._execute_task` today (only `payload`/`dry_run`/
-        `role`/`output` are) — a real, unavailable value must be OMITTED,
-        never sent as `None`."""
+    def test_store_omits_run_id_when_absent(self, mem0_module: ModuleType, tmp_path: Path) -> None:
+        """A caller that doesn't supply `run_id` at all must see it OMITTED
+        from the provenance metadata, never sent as `None`."""
         payload = _payload(tmp_path, extra_prompt="ask")
         mock_client = MagicMock()
 
         with patch.object(mem0_module, "_get_client", return_value=mock_client):
-            mem0_module.store(payload=payload, run_id=42)  # even if a caller passes it
+            mem0_module.store(payload=payload)
 
         metadata = mock_client.add.call_args.kwargs["metadata"]
         assert "run_id" not in metadata
+
+    def test_store_includes_run_id_when_threaded(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """Auto-Learning Lessons Loop PRD, Sprint 4: `Orchestrator.
+        _execute_task` now threads its own `run_id` local into the
+        `after_step` `run_hook(...)` call (see `hivepilot/orchestrator.py`),
+        so `store()` reads it straight off `kwargs.get("run_id")` and it
+        reaches the provenance metadata — closing the Sprint 1 TODO."""
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, run_id=42)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert metadata["run_id"] == 42
+
+    def test_store_omits_run_id_when_wrong_type(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """A non-int `run_id` (e.g. a bool, or a caller passing garbage) is
+        never fabricated into the metadata — real values only."""
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, run_id="not-an-int")
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert "run_id" not in metadata
+
+    def test_store_includes_confidence_when_threaded(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """Sprint 4: `confidence` stays an opt-in passthrough — a caller that
+        DOES supply a finite `[0, 1]` value sees it reach the metadata."""
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, confidence=0.87)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert metadata["confidence"] == 0.87
+
+    def test_store_omits_confidence_when_out_of_range(
+        self, mem0_module: ModuleType, tmp_path: Path
+    ) -> None:
+        """An out-of-`[0, 1]`-range (or non-finite) `confidence` is dropped,
+        never passed through as-is — same fail-closed discipline as
+        `lessons_service.validate_lesson`'s own confidence handling."""
+        payload = _payload(tmp_path, extra_prompt="ask")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, confidence=1.5)
+
+        metadata = mock_client.add.call_args.kwargs["metadata"]
+        assert "confidence" not in metadata
 
     def test_store_includes_step_name_when_present(
         self, mem0_module: ModuleType, tmp_path: Path

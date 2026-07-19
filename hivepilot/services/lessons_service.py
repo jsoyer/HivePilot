@@ -43,6 +43,9 @@ from typing import Any, Callable, cast
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, RunnerKind, TaskStep
 from hivepilot.runners.base import RunnerPayload
+from hivepilot.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # A capture function has the same shape as `RunnerRegistry.capture_definition`
 # -- injected by the caller (the orchestrator passes its own live,
@@ -438,6 +441,113 @@ def validate_lesson(lesson: Lesson, outcome_signal: OutcomeSignal | None) -> tup
     return validated, score
 
 
+# ---------------------------------------------------------------------------
+# Sprint 4 -- opt-in semantic re-ranking (dependency-free fallback)
+# ---------------------------------------------------------------------------
+
+# Over-fetch multiplier/cap for the semantic candidate pool: re-ranking needs
+# more validated rows on hand than *limit* to have anything meaningful to
+# reorder (a pool of exactly *limit* rows can only ever be re-sorted, not
+# actually widened). Capped so a huge *limit* can't force an unbounded
+# embedding batch.
+_SEMANTIC_POOL_MULTIPLIER = 4
+_SEMANTIC_POOL_CAP = 50
+# Blend weight for semantic similarity vs. the existing outcome-derived
+# `score` when combining into one ranking key -- semantic similarity never
+# fully overrides the real validation score, it nudges the ordering among
+# already-validated candidates.
+_SEMANTIC_SIMILARITY_WEIGHT = 0.6
+
+
+def _semantic_pool_size(limit: int) -> int:
+    return min(max(limit, 1) * _SEMANTIC_POOL_MULTIPLIER, _SEMANTIC_POOL_CAP)
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Plain-Python cosine similarity -- no `numpy`/`faiss` needed for a
+    handful of short lesson-text vectors, keeping this helper itself
+    dependency-free even when the embeddings backend IS available."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _semantic_rerank(
+    project: str, role: str | None, task: str | None, limit: int
+) -> list[ValidatedLesson] | None:
+    """Best-effort semantic re-rank of ALREADY-VALIDATED lessons.
+
+    Mirrors `knowledge_service._embedding_context`'s exact lazy-import +
+    fallback shape: the `langchain`/`sentence-transformers` import is
+    entirely INSIDE this function's try block -- never at module top, never
+    unconditional -- so importing `lessons_service` (and every test that
+    imports it) never requires the optional `hivepilot[langchain]` extra.
+
+    Returns ``None`` on ANY failure -- missing extra, embedding-call error,
+    or an empty candidate pool -- so `retrieve_lessons` falls through to the
+    plain `state_service.list_ranked_lessons` SQLite ranking (the unchanged
+    Sprint 3 core path). NEVER raises.
+
+    Re-ranks ONLY rows `state_service.list_ranked_lessons` already returned
+    (hard-coded ``validated=1`` filter) -- this function reorders an
+    already-validated pool, it never admits an unvalidated candidate and
+    never queries any other table.
+    """
+    try:
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+    except Exception:
+        return None
+
+    try:
+        from hivepilot.services import state_service
+
+        pool_size = _semantic_pool_size(limit)
+        rows = state_service.list_ranked_lessons(project, role=role, task=task, limit=pool_size)
+        if not rows:
+            return None
+
+        query_parts = [p for p in (project, role, task) if p]
+        query_text = ":".join(query_parts) if query_parts else "lessons"
+
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        query_vector = embeddings.embed_query(query_text)
+        lesson_texts = [row.get("text") or "" for row in rows]
+        lesson_vectors = embeddings.embed_documents(lesson_texts)
+
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for row, vector in zip(rows, lesson_vectors):
+            similarity = _cosine_similarity(query_vector, vector)
+            raw_score = row.get("score")
+            base_score = raw_score if isinstance(raw_score, (int, float)) else 0.0
+            combined = (
+                _SEMANTIC_SIMILARITY_WEIGHT * similarity
+                + (1 - _SEMANTIC_SIMILARITY_WEIGHT) * base_score
+            )
+            scored.append((combined, row))
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        top_rows = [row for _combined, row in scored[:limit]]
+        return [
+            ValidatedLesson(
+                id=row["id"],
+                text=row.get("text") or "",
+                category=row.get("category"),
+                score=row.get("score"),
+                source_verdict_id=row.get("source_verdict_id"),
+                source_interaction_id=row.get("source_interaction_id"),
+            )
+            for row in top_rows
+        ]
+    except Exception as exc:  # noqa: BLE001 -- semantic ranking is best-effort only
+        logger.warning("lessons.semantic_rerank_failed", error=str(exc))
+        return None
+
+
 def retrieve_lessons(
     project: str,
     role: str | None = None,
@@ -448,27 +558,34 @@ def retrieve_lessons(
 ) -> list[ValidatedLesson]:
     """Retrieve VALIDATED lessons for *project* (optionally narrowed by
     *role*/*task*), ranked by score (desc) then recency (desc), capped at
-    *limit* (Auto-Learning Lessons Loop PRD, Sprint 3).
+    *limit* (Auto-Learning Lessons Loop PRD, Sprint 3; semantic re-rank
+    added Sprint 4).
 
-    ``semantic=False`` (the only path implemented this Sprint) is a plain,
-    dependency-free SQLite read via `state_service.list_ranked_lessons` --
-    no `mem0`/`FAISS`/`langchain` import anywhere on this path, so the core
-    lessons loop keeps working with those optional dependencies absent.
-    ``semantic=True`` is a deliberate Sprint 4 seam: it raises
-    `NotImplementedError` rather than silently falling back to keyword
-    ranking, so a caller that flips it on early gets a loud signal instead
-    of a quietly-wrong result.
+    The default path (``semantic=False``, or `settings.
+    enable_semantic_lesson_retrieval` False) is a plain, dependency-free
+    SQLite read via `state_service.list_ranked_lessons` -- no `mem0`/
+    `FAISS`/`langchain` import anywhere on this path, so the core lessons
+    loop keeps working with those optional dependencies absent. This is
+    also the on-disk default (`enable_semantic_lesson_retrieval: bool =
+    False`), so flipping *semantic=True* at a call site does nothing until
+    an operator also opts in via config -- defense in depth, mirrors every
+    other opt-in flag in this loop.
 
-    Only ever returns rows with ``validated=1`` -- `state_service.
-    list_ranked_lessons` hard-codes that filter (no toggle), so an
-    unvalidated candidate can never leak into this path regardless of what
-    a caller passes.
+    ``semantic=True`` AND the flag on attempts `_semantic_rerank` first --
+    itself lazy-importing the optional embedding backend and wrapped so ANY
+    failure (extra not installed, embedding call errors, empty pool) falls
+    straight through to the SAME SQLite ranking below. NEVER crashes, NEVER
+    hard-imports langchain/mem0/faiss at module import time.
+
+    Semantic re-ranking ONLY ever reorders rows `state_service.
+    list_ranked_lessons` already returned (hard-coded ``validated=1``
+    filter, no toggle) -- it can reorder the validated pool, never expand
+    it to include an unvalidated candidate.
     """
-    if semantic:
-        raise NotImplementedError(
-            "Semantic lesson retrieval lands in Sprint 4 of the "
-            "auto-learning-lessons-loop PRD -- not implemented yet."
-        )
+    if semantic and settings.enable_semantic_lesson_retrieval:
+        ranked = _semantic_rerank(project, role, task, limit)
+        if ranked is not None:
+            return ranked
 
     from hivepilot.services import state_service
 

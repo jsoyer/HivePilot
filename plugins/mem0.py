@@ -126,23 +126,27 @@ stand-in.
 - ``step``: included when ``payload.step.name`` is set (``RunnerPayload``
   always carries a ``step``, so this is effectively always present); reads
   straight off the payload already on hand — no orchestrator change needed.
-- ``run_id``: **omitted.** ``Orchestrator._execute_task`` does NOT thread
-  ``run_id`` into the ``after_step`` ``run_hook(...)`` call today (only
-  ``payload``/``dry_run``/``role``/``output`` are — see the "Store data
-  availability" note above); rather than force an orchestrator signature
-  change for this sprint, ``run_id`` is left out and noted here as a
-  follow-up for whenever it IS threaded through.
+- ``run_id`` (Auto-Learning Lessons Loop PRD, Sprint 4): included when the
+  caller supplies it. ``Orchestrator._execute_task`` now threads its own
+  ``run_id`` local into the ``after_step`` ``run_hook(...)`` call
+  (``run_hook`` takes ``**kwargs``, so this needed no signature change) —
+  ``store()`` reads it straight off ``kwargs.get("run_id")``. Omitted when
+  absent/wrong-typed rather than fabricated (e.g. a direct test invocation
+  that doesn't pass one).
 - ``category``: optional, read from ``payload.step.metadata.get(
   "memory_category")`` when a caller sets it on the step config; defaults to
   ``"run"`` otherwise. Never invented beyond that one explicit config knob.
 - ``ts``: a UTC ISO-8601 timestamp (``datetime.now(timezone.utc).isoformat()``),
   generated at store time — genuinely available, not fabricated.
-- ``confidence``: **deliberately NOT included.** A memory-dashboard view
-  might show a confidence score, but HivePilot has no real signal to back
-  one — inventing a number here would be exactly the kind of fabricated
-  metadata this feature is trying to avoid. Add it later only if/when a
-  genuine source for it exists (e.g. a role's self-assessment, a reviewer
-  score).
+- ``confidence`` (Sprint 4): included ONLY when a caller supplies a finite
+  value in ``[0, 1]`` via ``kwargs.get("confidence")`` — real values only,
+  same discipline as everything else in this list. ``Orchestrator.
+  _execute_task``'s generic per-step call has no such signal to supply
+  (most steps aren't a judge/arbiter verdict), so this stays dormant
+  (omitted) on that path today; the field exists for a future/other caller
+  that DOES have a real score on hand (e.g. lesson-retrieval/semantic-
+  ranking context) rather than inventing a number here to backfill a
+  memory-dashboard column.
 
 This metadata is attached to the SAME ``client.add(...)`` call ``store()``
 already makes (still skipped when there's no salient content beyond bare
@@ -179,6 +183,7 @@ entirely.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -265,15 +270,33 @@ def _memory_key(payload: Any, role: str | None = None) -> str:
     return f"{project}:{task}"
 
 
-def _provenance_metadata(payload: Any, role: str | None = None) -> dict[str, Any]:
+def _provenance_metadata(
+    payload: Any,
+    role: str | None = None,
+    *,
+    run_id: int | None = None,
+    confidence: float | None = None,
+) -> dict[str, Any]:
     """Build the structured PROVENANCE `metadata` dict passed to `client.add(
     ..., metadata=...)` — see the "PROVENANCE metadata" note in the module
     docstring for the full rationale.
 
     Real values only, no fabrication: a key is included ONLY when a real
-    value is reachable off `payload`/`role` — never as a `None`/placeholder
-    stand-in. `confidence` is deliberately never included (no genuine signal
-    exists for it yet).
+    value is reachable off `payload`/`role`/*run_id*/*confidence* — never as
+    a `None`/placeholder stand-in.
+
+    *run_id* / *confidence* (Auto-Learning Lessons Loop PRD, Sprint 4):
+    `Orchestrator._execute_task` now threads the run's own `run_id` into the
+    `after_step` `run_hook(...)` call (it's already a local variable at that
+    call site — no signature change needed, `run_hook` takes `**kwargs`),
+    closing the "run_id omitted" TODO this docstring used to carry.
+    `confidence` has no generic per-step signal to read (most steps aren't a
+    judge/arbiter verdict), so it stays an OPT-IN passthrough: included ONLY
+    when a caller supplies a finite value in ``[0, 1]`` (e.g. a future
+    direct call from lesson-retrieval/semantic-ranking context that DOES
+    have a real score on hand) — `store()`'s only current caller
+    (`Orchestrator._execute_task`) never supplies one today, so this stays
+    dormant (omitted) on that path, exactly as before.
     """
     metadata: dict[str, Any] = {
         "source": "hivepilot",
@@ -297,11 +320,16 @@ def _provenance_metadata(payload: Any, role: str | None = None) -> dict[str, Any
         category if isinstance(category, str) and category else _DEFAULT_MEMORY_CATEGORY
     )
 
-    # `run_id` is NOT threaded into the `after_step` `run_hook(...)` call by
-    # `Orchestrator._execute_task` today (only `payload`/`dry_run`/`role`/
-    # `output` are) — deliberately omitted rather than forcing an
-    # orchestrator signature change for this sprint. Follow-up: thread
-    # `run_id` through once it's cheaply available there.
+    if isinstance(run_id, int) and not isinstance(run_id, bool):
+        metadata["run_id"] = run_id
+
+    if (
+        isinstance(confidence, (int, float))
+        and not isinstance(confidence, bool)
+        and math.isfinite(confidence)
+        and 0.0 <= confidence <= 1.0
+    ):
+        metadata["confidence"] = confidence
 
     return metadata
 
@@ -475,7 +503,16 @@ def store(**kwargs: Any) -> None:
         from hivepilot.services.config_provenance import redact_text
 
         content = redact_text(content)
-        provenance = _provenance_metadata(payload, role)
+        # Sprint 4: `run_id` is already threaded into the `after_step`
+        # `run_hook(...)` call by `Orchestrator._execute_task` (see
+        # `_provenance_metadata`'s docstring) — read it straight off
+        # `kwargs` here rather than a fresh orchestrator plumb-through.
+        # `confidence` has no such caller yet; `kwargs.get(...)` stays
+        # `None` on the current path and `_provenance_metadata` simply
+        # omits it (real-value-only, never fabricated).
+        run_id = kwargs.get("run_id")
+        confidence = kwargs.get("confidence")
+        provenance = _provenance_metadata(payload, role, run_id=run_id, confidence=confidence)
         client.add(content, user_id=key, metadata=provenance)
         logger.info("plugin.mem0.stored", key=key, step=step_name, category=provenance["category"])
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run

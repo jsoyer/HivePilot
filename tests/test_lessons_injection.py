@@ -22,6 +22,7 @@ Covers:
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -42,9 +43,11 @@ def _reset_lesson_settings() -> Iterator[None]:
     """Guarantee the opt-in flag + inject limit never leak between tests."""
     original_flag = settings.enable_lesson_distillation
     original_limit = settings.lesson_inject_limit
+    original_semantic_flag = settings.enable_semantic_lesson_retrieval
     yield
     settings.enable_lesson_distillation = original_flag
     settings.lesson_inject_limit = original_limit
+    settings.enable_semantic_lesson_retrieval = original_semantic_flag
 
 
 def _seed_validated_lesson(
@@ -132,9 +135,64 @@ class TestRetrieveLessonsRanking:
         lessons = retrieve_lessons("p", role="developer", task="t", limit=10)
         assert lessons == []
 
-    def test_semantic_true_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
-            retrieve_lessons("p", semantic=True)
+    def test_semantic_true_flag_off_falls_back_to_sqlite_ranking(self) -> None:
+        """Auto-Learning Lessons Loop PRD, Sprint 4: `semantic=True` alone is
+        not enough -- `settings.enable_semantic_lesson_retrieval` (default
+        False) gates the actual semantic attempt. With the flag off,
+        `semantic=True` must NEVER raise and must return the exact same
+        SQLite score+recency ranking as `semantic=False`."""
+        settings.enable_semantic_lesson_retrieval = False
+        _seed_validated_lesson(project="p", role="developer", task="t", text="low", score=0.5)
+        _seed_validated_lesson(project="p", role="developer", task="t", text="high", score=0.9)
+        lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=True)
+        assert [lesson.text for lesson in lessons] == ["high", "low"]
+
+    def test_semantic_true_flag_on_extras_absent_falls_back_no_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Even with the flag ON, a missing optional embedding extra (the
+        default/common case -- `hivepilot[langchain]` not installed) must
+        fall straight through to the SQLite ranking, never raise.
+
+        `conftest.py` stubs `langchain_community` (and `.embeddings`) as
+        MagicMocks in `sys.modules` for every test in this suite (so
+        orchestrator-level tests can import without the real dependency) --
+        that stub would falsely 'succeed' `_semantic_rerank`'s lazy import
+        and return MagicMock junk instead of exercising the real
+        `ImportError` path. Temporarily remove the stub entries so the
+        import genuinely fails (the package really isn't installed in this
+        test env), exercising `_semantic_rerank`'s own internal
+        try/except-ImportError branch for real -- mirrors
+        `test_knowledge_service.py`'s `_force_plain_context` pattern for the
+        identical conftest-stub problem."""
+        monkeypatch.delitem(sys.modules, "langchain_community", raising=False)
+        monkeypatch.delitem(sys.modules, "langchain_community.embeddings", raising=False)
+        settings.enable_semantic_lesson_retrieval = True
+        try:
+            _seed_validated_lesson(project="p", role="developer", task="t", text="low", score=0.5)
+            _seed_validated_lesson(project="p", role="developer", task="t", text="high", score=0.9)
+            lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=True)
+            assert [lesson.text for lesson in lessons] == ["high", "low"]
+        finally:
+            settings.enable_semantic_lesson_retrieval = False
+
+    def test_semantic_rerank_never_admits_unvalidated_candidate(self) -> None:
+        """Semantic re-ranking must only ever reorder ALREADY-VALIDATED rows
+        -- it must never surface an unvalidated candidate, flag on or off."""
+        settings.enable_semantic_lesson_retrieval = True
+        try:
+            _seed_validated_lesson(
+                project="p",
+                role="developer",
+                task="t",
+                text="candidate-only",
+                score=0.99,
+                validated=False,
+            )
+            lessons = retrieve_lessons("p", role="developer", task="t", limit=10, semantic=True)
+            assert lessons == []
+        finally:
+            settings.enable_semantic_lesson_retrieval = False
 
 
 # ---------------------------------------------------------------------------
