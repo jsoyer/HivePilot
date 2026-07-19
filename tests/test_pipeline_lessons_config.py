@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -131,17 +132,20 @@ class TestBlankOverrideValidatorMatrix:
     @pytest.mark.parametrize("field", ["distill_runner", "distill_model"])
     @pytest.mark.parametrize("bad_value", ["", "   ", "\t\n"])
     def test_rejects_blank(self, field: str, bad_value: str) -> None:
+        kwargs: dict[str, Any] = {field: bad_value}
         with pytest.raises(ValidationError):
-            LessonsConfig(**{field: bad_value})
+            LessonsConfig(**kwargs)
 
     @pytest.mark.parametrize("field", ["distill_runner", "distill_model"])
     def test_accepts_none(self, field: str) -> None:
-        cfg = LessonsConfig(**{field: None})
+        kwargs: dict[str, Any] = {field: None}
+        cfg = LessonsConfig(**kwargs)
         assert getattr(cfg, field) is None
 
     @pytest.mark.parametrize("field", ["distill_runner", "distill_model"])
     def test_accepts_non_blank(self, field: str) -> None:
-        cfg = LessonsConfig(**{field: "codex"})
+        kwargs: dict[str, Any] = {field: "codex"}
+        cfg = LessonsConfig(**kwargs)
         assert getattr(cfg, field) == "codex"
 
 
