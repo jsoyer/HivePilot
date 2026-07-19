@@ -15,8 +15,17 @@ from pydantic import BaseModel, field_validator
 
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
-from hivepilot.services import analytics_service, chatops_service, state_service, token_service
+from hivepilot.services import (
+    analytics_service,
+    async_run_service,
+    chatops_service,
+    notification_service,
+    policy_service,
+    state_service,
+    token_service,
+)
 from hivepilot.services.metrics import registry, run_duration_seconds
+from hivepilot.ui.plugin_manager import persist_plugins_disabled
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 
 app = FastAPI(
@@ -166,6 +175,30 @@ def require_role(required: str):
     return dependency
 
 
+def _validate_extra_prompt(v: str | None) -> str | None:
+    """Shared `extra_prompt` validation for every run-triggering request
+    body (`RunRequest` for sync `POST /v1/run`, `NewRunRequest` for async
+    `POST /v1/runs`, Mirador actionable dashboard PRD Sprint 3). A single
+    helper -- not duplicated per model -- so both apply byte-for-byte the
+    same length check / sanitize / injection-detection behavior; extracted
+    verbatim from `RunRequest`'s own prior validator with no behavior
+    change for existing `RunRequest` callers.
+    """
+    if v is None:
+        return None
+    if len(v) > MAX_PROMPT_LEN:
+        raise ValueError(
+            f"extra_prompt exceeds maximum allowed length of {MAX_PROMPT_LEN} characters"
+        )
+    cleaned = sanitize_prompt(v)
+    hits = check_prompt_injection(cleaned)
+    if hits:
+        from hivepilot.utils.logging import get_logger
+
+        get_logger(__name__).warning("prompt_injection.detected", patterns=hits)
+    return cleaned
+
+
 class RunRequest(BaseModel):
     task: str
     projects: list[str]
@@ -175,19 +208,24 @@ class RunRequest(BaseModel):
     @field_validator("extra_prompt", mode="before")
     @classmethod
     def validate_extra_prompt(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        if len(v) > MAX_PROMPT_LEN:
-            raise ValueError(
-                f"extra_prompt exceeds maximum allowed length of {MAX_PROMPT_LEN} characters"
-            )
-        cleaned = sanitize_prompt(v)
-        hits = check_prompt_injection(cleaned)
-        if hits:
-            from hivepilot.utils.logging import get_logger
+        return _validate_extra_prompt(v)
 
-            get_logger(__name__).warning("prompt_injection.detected", patterns=hits)
-        return cleaned
+
+class NewRunRequest(BaseModel):
+    """Body for `POST /v1/runs` (Mirador actionable dashboard PRD, Sprint 3)
+    -- the async, single-project counterpart to `RunRequest`. Reuses
+    `_validate_extra_prompt` (see above) so its `extra_prompt` handling is
+    identical to `RunRequest`'s, never a weaker reimplementation."""
+
+    task: str
+    project: str
+    extra_prompt: str | None = None
+    auto_git: bool = False
+
+    @field_validator("extra_prompt", mode="before")
+    @classmethod
+    def validate_extra_prompt(cls, v: str | None) -> str | None:
+        return _validate_extra_prompt(v)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +301,28 @@ async def readyz():
     return {"ready": True, "checks": checks}
 
 
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard (PRD mirador-actionable-dashboard, Sprint 1)
+# ---------------------------------------------------------------------------
+
+
+@v1.get("/whoami")
+@app.get("/whoami")
+def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> dict[str, str]:
+    """Let the caller introspect its own RBAC role/tenant.
+
+    Gated at the lowest rank (`read`, the floor every valid token
+    satisfies), so any authenticated caller can always resolve its own
+    identity — this is what powers the Mirador web client's `useRole()`
+    (`web/src/lib/role-context.tsx`), which fail-closed gates action
+    controls app-wide (unknown/null role -> `can()` false for everything).
+
+    Returns ONLY `{role, tenant}` — never the token hash, note, expiry, or
+    any other `TokenEntry` field.
+    """
+    return {"role": caller.role, "tenant": caller.tenant}
+
+
 @v1.post("/run", dependencies=[Depends(require_role("run"))])
 @app.post("/run", dependencies=[Depends(require_role("run"))])
 def run_task(request: RunRequest):
@@ -295,6 +355,240 @@ def list_runs(caller: token_service.TokenEntry = Depends(require_role("run"))):
     if caller.role == "admin":
         return state_service.list_recent_runs()
     return state_service.list_recent_runs(tenant=caller.tenant)
+
+
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard PRD, Sprint 3 -- async run trigger.
+#
+# `POST /v1/runs` records a run row and returns its id immediately (202,
+# <500ms); the pipeline itself executes on a background thread via
+# `hivepilot.services.async_run_service.submit_run`. This is deliberately
+# `/v1/runs` only (NOT dual-registered on `app` like every other endpoint in
+# this file) -- a distinct HTTP method+path pairing from `GET /v1/runs`
+# (`list_runs` above), so FastAPI dispatches by method with no route
+# collision.
+#
+# **THE CRUX (exactly one run row per trigger, no dropped run-level gate):**
+# `Orchestrator.run_task`/`_run_task_body` ALWAYS creates its own run row via
+# `state_service.record_run_start` and drives it to terminal -- calling it
+# here would create a SECOND row and leave the row THIS endpoint pre-creates
+# stuck at whatever initial status it started with. Instead, this endpoint
+# owns run-row creation itself (like `_run_task_body` owns it) and calls the
+# same per-project execution primitive `_run_task_body` calls,
+# `Orchestrator._execute_task`, which accepts a caller-supplied `run_id` and
+# does NOT create a row.
+#
+# Because this endpoint owns row creation, it can pick the correct INITIAL
+# status synchronously, before ever creating the row: `policy.
+# require_approval` is a config-only check (no I/O), so `create_run` below
+# evaluates it up front and creates the row with status "pending" instead of
+# "running" when true -- mirroring `_run_task_body`'s
+# `require_approval`-first branch (lines ~791-814) without ever needing to
+# "downgrade" a running row afterward. The (potentially slow) CVE-gate scan
+# and the run itself both happen in the background worker
+# (`_run_async_task` below), which mirrors `_run_task_body`'s remaining
+# if/elif/else branches (CVE gate at ~815-836, else-execute at ~837-853) in
+# the same order, so no run-level gate is weaker than sync `POST /v1/run`.
+# ---------------------------------------------------------------------------
+
+
+class NewRunResponse(BaseModel):
+    run_id: int
+    status: str
+
+
+def _run_async_task(
+    *,
+    orch: Orchestrator,
+    run_id: int,
+    project: Any,
+    task_name: str,
+    task: Any,
+    extra_prompt: str | None,
+    auto_git: bool,
+    policy: Any,
+) -> None:
+    """The background work `POST /v1/runs` submits via `async_run_service.
+    submit_run`. Mirrors `Orchestrator._run_task_body`'s per-project
+    require_approval / CVE-gate / execute branches -- EXCEPT run-row
+    creation, which the caller (`create_run` below) already owns. Drives
+    `run_id` to a terminal status exactly once (or leaves it `pending` for
+    an approval, mirroring `_run_task_body`'s own approval branch, which
+    also never calls `complete_run`).
+
+    Never surfaces raw exception text / `capture()` output to
+    `state_service.complete_run`'s `detail` -- only a short, safe summary
+    (exception TYPE name, never its message).
+    """
+    from hivepilot.orchestrator import RunCancelled, StepApprovalPending
+    from hivepilot.services.config_provenance import redact_text
+    from hivepilot.services.quota import QuotaDeferredError
+
+    try:
+        if policy.require_approval:
+            approval_meta = {
+                "task": task_name,
+                "project": project.path.name,
+                "extra_prompt": extra_prompt,
+                "auto_git": auto_git,
+            }
+            state_service.record_approval_request(
+                run_id, project.path.name, task_name, approval_meta
+            )
+            notification_service.send_approval_keyboard(
+                run_id=run_id, project=project.path.name, task=task_name
+            )
+            return
+
+        severity = policy.block_on_severity
+        if severity:
+            cve_block_detail = orch._cve_gate_block_detail(project, policy.scan_tool, severity)
+            if cve_block_detail is not None:
+                state_service.complete_run(run_id, "failed", cve_block_detail)
+                notification_service.send_notification(
+                    f"⛔ {project.path.name}: {task_name} blocked by CVE gate"
+                )
+                return
+
+        try:
+            from hivepilot.services.notion_service import on_run_start
+
+            on_run_start(run_id=run_id, project=project.path.name, task=task_name)
+        except Exception:  # noqa: BLE001
+            pass
+        notification_service.send_notification(f"Starting {task_name} on {project.path.name}")
+
+        detail = orch._execute_task(
+            project=project,
+            task_name=task_name,
+            task=task,
+            extra_prompt=extra_prompt,
+            auto_git=auto_git,
+            run_id=run_id,
+            policy=policy,
+            simulate=False,
+            dry_run=False,
+        )
+        detail = redact_text(detail) if detail else detail
+        state_service.complete_run(run_id, "success", "run completed")
+        notification_service.send_notification(f"✅ {project.path.name}: {task_name} completed")
+    except StepApprovalPending:
+        # A mid-task step-approval gate already recorded its own approval
+        # request and left the run paused -- do NOT overwrite that status
+        # (mirrors `_run_task_body`'s own StepApprovalPending handling).
+        pass
+    except RunCancelled:
+        # The step loop already marked the run CANCELLED (+ finished_at) via
+        # `state_service.complete_run` before raising -- mirrors
+        # StepApprovalPending's "already recorded its own terminal state,
+        # don't overwrite it" handling immediately above. Do NOT call
+        # complete_run again -- the run must resolve to a terminal status
+        # exactly once.
+        pass
+    except QuotaDeferredError:
+        state_service.complete_run(run_id, "deferred")
+    except Exception as exc:  # noqa: BLE001 -- never surface raw exception text
+        state_service.complete_run(run_id, "failed", f"run failed: {type(exc).__name__}")
+
+
+@v1.post("/runs", status_code=status.HTTP_202_ACCEPTED)
+def create_run(
+    body: NewRunRequest,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> NewRunResponse:
+    """Trigger a single-project run asynchronously. Returns immediately with
+    `{run_id, status}` -- the pipeline executes on a background thread (see
+    `_run_async_task` above). `caller.tenant` is recorded on the run row,
+    exactly like `list_runs`/`pending_approvals` scope by it.
+    """
+    orch = _get_orchestrator()
+
+    if body.task not in orch.tasks.tasks:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown task")
+    task = orch.tasks.tasks[body.task]
+
+    try:
+        project = orch._project(body.project)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown project"
+        ) from None
+
+    try:
+        policy = policy_service.enforce_policy(project.path.name, auto_git=body.auto_git)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    initial_status = "pending" if policy.require_approval else "running"
+    run_id = state_service.record_run_start(
+        project.path.name, body.task, status=initial_status, tenant=caller.tenant
+    )
+
+    def _work() -> None:
+        _run_async_task(
+            orch=orch,
+            run_id=run_id,
+            project=project,
+            task_name=body.task,
+            task=task,
+            extra_prompt=body.extra_prompt,
+            auto_git=body.auto_git,
+            policy=policy,
+        )
+
+    async_run_service.submit_run(run_id, _work)
+    return NewRunResponse(run_id=run_id, status=initial_status)
+
+
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard PRD, Sprint 4 -- stop/cancel an in-flight
+# async run. `/v1`-only (like `POST /v1/runs` above), not dual-registered on
+# `app` -- a distinct HTTP method+path pairing from every other route in
+# this file, so FastAPI dispatches by method+path with no route collision.
+#
+# **FAIL-CLOSED IS THE WHOLE POINT (see INVARIANTS.md "Write Endpoints
+# Fail-Closed" / "Async Run Handle"):** `async_run_service.request_cancel`
+# is the single source of truth for "is this run actually cancellable right
+# now" -- it returns `False` for an unknown run_id, a run that was never
+# async, OR a run that's already reached a terminal status (popped from the
+# in-flight registry by `submit_run`'s own `finally`). Every one of those
+# maps to `409`, NEVER a false-success `202`. Tenant-checked EXACTLY like
+# `POST /v1/approvals/{run_id}` (`handle_approval` above): 404 if the run
+# row doesn't exist, 403 for a non-admin caller whose tenant doesn't match
+# the run's tenant, admin bypasses the tenant check entirely.
+# ---------------------------------------------------------------------------
+
+
+class CancelRunResponse(BaseModel):
+    run_id: int
+    status: str
+
+
+@v1.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+def cancel_run(
+    run_id: int,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> CancelRunResponse:
+    """Request cooperative cancellation of an in-flight async run. The run
+    resolves to `RunStatus.CANCELLED` at its NEXT step boundary (see
+    `Orchestrator._execute_task_body`'s step loop) -- this endpoint itself
+    never blocks on that, it only flips the cooperative flag and returns.
+    """
+    row = state_service.get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if caller.role != "admin":
+        row_tenant = row.get("tenant", "default")
+        if row_tenant != caller.tenant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant cancel not allowed",
+            )
+    if not async_run_service.request_cancel(run_id):
+        # Unknown to the registry (never async, or already terminal) --
+        # fail-closed: never report false success.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="not cancellable")
+    return CancelRunResponse(run_id=run_id, status="cancelling")
 
 
 @v1.get("/approvals")
@@ -680,6 +974,84 @@ def plugins_health_endpoint() -> dict[str, Any]:
             for name, health in sorted(results.items())
         ]
     }
+
+
+# ---------------------------------------------------------------------------
+# Mirador actionable dashboard PRD, Sprint 5 -- POST /v1/plugins/{name}/toggle
+# (admin-only). Enable/disable a plugin from the web Health tab by upserting
+# `HIVEPILOT_PLUGINS_DISABLED` in the `.env` file `Settings` reads from (see
+# `hivepilot.ui.plugin_manager.persist_plugins_disabled`, reused as-is --
+# this endpoint only inlines the flip logic `PluginManagerApp.toggle_selected`
+# already established for the TUI's `space` binding, it never imports the
+# Textual app class itself).
+#
+# **Allowlist = UNION of `check_all()` (currently-registered/enabled
+# plugins) and `settings.plugins_disabled` (currently-disabled plugins).**
+# `check_all()` alone only lists ENABLED plugins -- a disabled plugin is
+# never registered in the first place, so it never appears there. Using
+# `check_all()` alone would make an already-disabled plugin permanently
+# un-re-enableable via this endpoint (a fail-closed 404 on the very request
+# meant to undo it). The union is therefore REQUIRED, not a convenience.
+#
+# **Fail-closed on an unknown name:** a name outside the union raises 404
+# BEFORE `persist_plugins_disabled` is ever called -- an invariant this
+# module's own tests assert on directly (a spied `persist_plugins_disabled`
+# must see `call_count == 0` for an unknown name). No `.env` write ever
+# happens for an unvalidated plugin name.
+#
+# **Concurrency:** `_plugin_toggle_lock` serializes the read-flip-persist
+# sequence below -- this is a core state-changing path (like
+# `_rate_lock`/`_orch_lock` above), so two concurrent toggles must not race
+# and silently lose one caller's write (last-writer-wins on the in-memory
+# read is fine; losing a write entirely is not).
+#
+# **No live reload.** `PluginManager` only scans/registers plugins once, at
+# `Orchestrator()` construction (see `hivepilot/ui/plugin_manager.py`'s
+# module docstring) -- this endpoint's effect is visible only after the API
+# process is restarted. The response's `restart_required: true` field and
+# the web UI's own copy make this explicit; there is no code path here that
+# could accidentally suggest otherwise.
+# ---------------------------------------------------------------------------
+
+_plugin_toggle_lock = threading.Lock()
+
+
+class PluginToggleResponse(BaseModel):
+    name: str
+    disabled: bool
+    restart_required: bool
+
+
+@v1.post("/plugins/{name}/toggle")
+@app.post("/plugins/{name}/toggle")
+def toggle_plugin_endpoint(
+    name: str,
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> PluginToggleResponse:
+    """Enable/disable a plugin (effective on next restart only). See the
+    module-level comment block just above for the allowlist-union,
+    fail-closed, and concurrency rationale.
+    """
+    known = set(_get_orchestrator().plugins.check_all().keys()) | set(settings.plugins_disabled)
+    if name not in known:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown plugin")
+
+    with _plugin_toggle_lock:
+        current = set(settings.plugins_disabled)
+        if name in current:
+            current.discard(name)
+        else:
+            current.add(name)
+        updated = sorted(current)
+        # Persist to .env FIRST; only mutate in-memory settings once the write
+        # succeeds. Otherwise a failing persist (permission/disk) would leave
+        # settings.plugins_disabled diverged from .env, and a later toggle would
+        # compute `current` from the corrupted in-memory value (code-review S5).
+        persist_plugins_disabled(updated)
+        settings.plugins_disabled = updated
+        disabled = name in current
+
+    return PluginToggleResponse(name=name, disabled=disabled, restart_required=True)
 
 
 def _get_mem0_client() -> Any | None:
