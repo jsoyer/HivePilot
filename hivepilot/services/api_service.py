@@ -1281,6 +1281,164 @@ def get_panel_endpoint(
     return dict(plugins.run_panel_fetch(name))
 
 
+# ---------------------------------------------------------------------------
+# Mirador Graph View (PRD mirador-graph-view, Sprint 1) — graph-native
+# backend sources (plugins/roles/runners as nodes+edges today; future
+# sprints add more). Read-only, sibling to the panel endpoints above. Dual-
+# registered on both the /v1/* router and the bare app, exactly like
+# /panels. `hivepilot.graph_sources` is imported here for its SIDE EFFECT
+# (registering every built-in `GraphSourceSpec` — see
+# `hivepilot/graph_sources/__init__.py`), mirroring how `hivepilot.webui`
+# is imported below purely to be referenced by attribute.
+# ---------------------------------------------------------------------------
+from hivepilot import graph as graph_module  # noqa: E402
+from hivepilot import graph_sources as _graph_sources  # noqa: E402,F401
+
+
+def _graph_node_to_dict(node: graph_module.GraphNode) -> dict[str, Any]:
+    return {
+        "id": node.id,
+        "label": node.label,
+        "kind": node.kind,
+        "status": node.status,
+        "group": node.group,
+        "badges": list(node.badges),
+        "meta": dict(node.meta),
+    }
+
+
+def _graph_edge_to_dict(edge: graph_module.GraphEdge) -> dict[str, Any]:
+    return {"source": edge.source, "target": edge.target, "kind": edge.kind, "label": edge.label}
+
+
+def _graph_data_to_dict(data: graph_module.GraphData) -> dict[str, Any]:
+    return {
+        "source": data.source,
+        "nodes": [_graph_node_to_dict(n) for n in data.nodes],
+        "edges": [_graph_edge_to_dict(e) for e in data.edges],
+        "layout_hint": data.layout_hint,
+    }
+
+
+def _graph_detail_to_dict(detail: graph_module.GraphDetail) -> dict[str, Any]:
+    return {"title": detail.title, "tags": list(detail.tags), "sections": list(detail.sections)}
+
+
+def _resolve_graph_min_role_rank(min_role: str) -> int:
+    """Fail-closed resolution of a graph source's declared `min_role`,
+    mirroring `get_panel_endpoint`'s own defensive guard: a non-string or
+    unrecognized `min_role` is treated as the HIGHEST possible bar (denies
+    every caller) rather than letting `token_service.role_rank`'s `-1`
+    sentinel invert the `<` comparison and fail open."""
+    rank = token_service.role_rank(min_role) if isinstance(min_role, str) else -1
+    if rank < 0:
+        return max(token_service.ROLE_RANKS.values()) + 1
+    return rank
+
+
+def _enforce_graph_min_role(
+    spec: graph_module.GraphSourceSpec, caller: token_service.TokenEntry, endpoint: str
+) -> None:
+    """Enforce *spec*'s own `min_role`, AFTER the source has already been
+    resolved — the required role is DATA-DEPENDENT (mirrors
+    `get_panel_endpoint`), so it cannot be expressed as a static
+    `Depends(require_role(...))`. Raises 403 (with an audit record) on
+    denial; returns normally when the caller satisfies the bar."""
+    min_role_rank = _resolve_graph_min_role_rank(spec.min_role)
+    if token_service.role_rank(caller.role) < min_role_rank:
+        state_service.record_audit(
+            token_hash=caller.token[:16],
+            role=caller.role,
+            endpoint=endpoint,
+            method="GET",
+            result="forbidden",
+            tenant=caller.tenant,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role for this graph source"
+        )
+
+
+@v1.get("/graph/sources", dependencies=[Depends(require_role("read"))])
+@app.get("/graph/sources", dependencies=[Depends(require_role("read"))])
+def list_graph_sources_endpoint() -> dict[str, Any]:
+    """Every registered graph source (name/title/min_role/params) — mirrors
+    `list_panels_endpoint` above. Source metadata is configuration, not
+    secret; every `read` token sees the full list regardless of its own
+    role (a source's own `min_role` only gates *fetching its data*, via
+    `get_graph_endpoint`/`get_graph_node_detail_endpoint` below)."""
+    sources = graph_module.list_graph_sources()
+    return {
+        "sources": [
+            {
+                "name": s.name,
+                "title": s.title or s.name,
+                "min_role": s.min_role,
+                "params": list(s.params),
+            }
+            for s in sources
+        ]
+    }
+
+
+@v1.get("/graph/{source}")
+@app.get("/graph/{source}")
+def get_graph_endpoint(
+    source: str,
+    request: Request,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """A single graph source's data. Unlike `/v1/graph/sources`, the
+    required role is DATA-DEPENDENT (mirrors `get_panel_endpoint`): the
+    floor `Depends(require_role("read"))` only enforces "any authenticated
+    token"; the source's own `min_role` is enforced HERE, after resolution.
+
+    Unknown source -> 404. `GraphContext` is built from the CALLER's own
+    resolved tenant+role (never client-supplied) plus the raw query
+    params. Run via `run_graph_fetch`, which never raises — a raising/
+    malformed source degrades to a normalized single error node, never a
+    500.
+    """
+    spec = graph_module.get_graph_source(source)
+    if spec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Graph source not found")
+
+    _enforce_graph_min_role(spec, caller, f"/v1/graph/{source}")
+
+    ctx = graph_module.GraphContext(
+        tenant=caller.tenant, role=caller.role, params=dict(request.query_params)
+    )
+    data = graph_module.run_graph_fetch(spec, ctx)
+    return _graph_data_to_dict(data)
+
+
+@v1.get("/graph/{source}/node/{node_id}")
+@app.get("/graph/{source}/node/{node_id}")
+def get_graph_node_detail_endpoint(
+    source: str,
+    node_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """A single node's detail. Unknown source -> 404; the source's
+    `min_role` is enforced after resolution (same as `get_graph_endpoint`).
+    A source with no `node_detail` callable, or one that returns `None` for
+    this node id, -> 404. `run_graph_node_detail` never raises — an
+    exception inside a source's own `node_detail` degrades to a normalized
+    error `GraphDetail` (200), never a 500.
+    """
+    spec = graph_module.get_graph_source(source)
+    if spec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Graph source not found")
+
+    _enforce_graph_min_role(spec, caller, f"/v1/graph/{source}/node/{node_id}")
+
+    ctx = graph_module.GraphContext(tenant=caller.tenant, role=caller.role, params={})
+    detail = graph_module.run_graph_node_detail(spec, ctx, node_id)
+    if detail is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+    return _graph_detail_to_dict(detail)
+
+
 @v1.post("/chatops/slack", dependencies=[Depends(require_role("run"))])
 @app.post("/chatops/slack", dependencies=[Depends(require_role("run"))])
 def slack_handler(payload: dict[str, Any]):
