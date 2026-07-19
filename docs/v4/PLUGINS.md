@@ -29,9 +29,16 @@ plugin runner/notifier executes with the same process environment and
 Master switch: `settings.plugins_enabled: bool = True` (`hivepilot/config.py`).
 Set to `False` to disable both discovery mechanisms; built-ins are unaffected.
 
+**Same posture applies to guided agent-CLI install.** HivePilot never
+silently fetches or executes an installer either — `hivepilot agents
+install` is an explicit, consented operator action, analogous to "no network
+fetch of plugin code" above: nothing runs without you choosing, in real
+time, to run it. See "Installing agent CLIs (`hivepilot agents`)" below for
+the full confirm-then-run contract.
+
 ## Plugin inventory
 
-This repo ships **20** local-file plugins under `plugins/*.py` (excluding
+This repo ships **21** local-file plugins under `plugins/*.py` (excluding
 `plugins/__init__.py`). Every one follows the uniform gating model below —
 see "Gating model" further down for the full opt-in/opt-out contract.
 
@@ -48,6 +55,7 @@ see "Gating model" further down for the full opt-in/opt-out contract.
 | `herdr` | `plugins/herdr.py` | runner (infra, multiplexer) + health | `herdr_enabled` | ON |
 | `hugo` | `plugins/hugo.py` | runner (infra, static-site) + health | `hugo_enabled` | ON (+ PATH) |
 | `tmux` | `plugins/tmux.py` | runner (infra, execution-wrapper) + health | `tmux_enabled` | ON |
+| `gh` | `plugins/gh.py` | runner (infra, command-based, PATH-gated) + health | `gh_enabled` | ON (+ PATH) |
 | `bitwarden` | `plugins/bitwarden.py` | secrets + health | `bitwarden_enabled` | ON |
 | `vaultwarden` | `plugins/vaultwarden.py` | secrets + health | `vaultwarden_enabled` | ON |
 | `infisical` | `plugins/infisical.py` | secrets | `infisical_enabled` | ON |
@@ -176,6 +184,154 @@ runner/notifier/hook/secret/panel/health. Toggle e.g. `rtk` off with
 `HIVEPILOT_RTK_ENABLED=false`.
 
 See "TUI plugin manager" below for the interactive `space` toggle.
+
+## Installing agent CLIs (`hivepilot agents`)
+
+Every agent-CLI kind in the tables above needs its own binary on `PATH`
+before HivePilot can dispatch to it. `hivepilot agents` gives an operator a
+guided way to check and install those binaries, backed by
+`hivepilot.services.agent_install` (`AGENT_INSTALL_SPECS`,
+`propose_install`).
+
+> **Confirm-then-run of a maintainer-vetted, pinned command — never
+> automatic.** Guided install (`hivepilot agents install <name>`) executes
+> ONLY a maintainer-vetted, pinned, OFFICIAL one-liner copied verbatim from
+> the vendor's own install docs (`AGENT_INSTALL_SPECS` in
+> `hivepilot/services/agent_install.py` — every entry's comment cites the
+> exact docs URL and fetch date it was sourced from). Nothing dynamic,
+> config-sourced, or user-supplied is ever concatenated into the command
+> that gets executed.
+>
+> - **Never auto-installs.** `propose_install` only ever runs a command
+>   after an explicit "yes" from a human at a terminal on every single
+>   invocation — there is no code path that installs anything without that
+>   real-time consent.
+> - **Never runs in a non-interactive / scheduled / pipeline context.**
+>   Even with `--yes`, `propose_install` refuses to execute anything unless
+>   BOTH stdin and stdout are attached to a real TTY (`sys.stdin.isatty()
+>   and sys.stdout.isatty()`) — a scheduled run, a CI job, or a pipeline
+>   stage can never trigger or run an installer, no matter how it's
+>   invoked. `--yes` maps only to skipping the interactive y/N prompt once
+>   a session is already known to be interactive.
+> - **Docs-only when there's no verifiable one-liner.** `gemini`,
+>   `kimi-cli`, `qwen-code`, and `gh` ship exclusively through package
+>   managers (npm / uv / brew / apt / dnf / winget / ...), so their
+>   `InstallSpec.command` is `None` — `agents install` for these prints
+>   `docs_url` and runs nothing at all, ever.
+> - **Sourced from the vendor's own docs.** Every pinned `command` in
+>   `AGENT_INSTALL_SPECS` carries a comment citing the exact official-docs
+>   URL it was copied from; a maintainer is expected to re-verify it if a
+>   vendor's install flow changes.
+>
+> This is the same posture as "Trust model" above: HivePilot never silently
+> fetches or runs anything on its own — every privileged action (loading a
+> plugin, running an installer) is either sourced from a trusted local file
+> / your own `pip install`, or requires an explicit, consented operator
+> action taken in real time.
+
+### `agents list`
+
+Read-only — never executes anything. Lists every canonical agent runner
+kind (`hivepilot.services.agent_checks.AGENT_RUNNER_KINDS`) plus every kind
+with a guided-install `InstallSpec`, with live PATH status:
+
+```
+$ hivepilot agents list
+                       Agent CLIs
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
+┃ kind        ┃ binary       ┃ on PATH ┃ install        ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
+│ antigravity │ agy          │ ✗       │ pinned command │
+│ claude      │ claude       │ ✓       │ pinned command │
+│ codex       │ codex        │ ✗       │ pinned command │
+│ cursor      │ cursor-agent │ ✗       │ pinned command │
+│ gemini      │ gemini       │ ✗       │ docs only      │
+│ gh          │ gh           │ ✓       │ docs only      │
+│ kimi-cli    │ kimi         │ ✗       │ docs only      │
+│ ollama      │ ollama       │ ✗       │ pinned command │
+│ opencode    │ opencode     │ ✗       │ pinned command │
+│ openrouter  │ openrouter   │ ✗       │ —              │
+│ pi          │ pi           │ ✗       │ —              │
+│ qwen-code   │ qwen         │ ✗       │ docs only      │
+│ vibe        │ vibe         │ ✗       │ pinned command │
+└─────────────┴──────────────┴─────────┴────────────────┘
+```
+
+Some listed kinds are install-only (`gh` isn't a full HivePilot runner
+kind — see "the `gh` runner" below — but is still installable this way),
+while others (`cursor`, `antigravity`) are both a full runner kind AND
+installable this way. `openrouter`/`pi` have no `InstallSpec` at all
+(`install` shows `—`) — install those following their own upstream docs.
+
+### `agents install <name> [--yes]`
+
+Confirm-then-run for one agent CLI, interactive only:
+
+```
+$ hivepilot agents install claude
+About to install Claude Code using the official Anthropic installer:
+  curl -fsSL https://claude.ai/install.sh | bash
+⚠️  This downloads and runs an install script from Anthropic. Review it before continuing.
+Proceed? [y/N] y
+Claude Code installer exited with code 0
+```
+
+`--yes`/`-y` skips ONLY the `Proceed? [y/N]` prompt once a session is
+already interactive — it can never force a non-interactive caller into
+running anything (see the trust-model callout above). A docs-only kind
+(e.g. `gemini`) prints the vendor docs URL and exits without running
+anything, regardless of `--yes`:
+
+```
+$ hivepilot agents install gemini
+Gemini CLI: no verified official one-liner — install manually, see https://github.com/google-gemini/gemini-cli
+```
+
+An unknown kind is rejected before anything else runs:
+
+```
+$ hivepilot agents install made-up-agent
+agents install: unknown agent kind 'made-up-agent'
+Run `hivepilot agents list` to see known kinds.
+```
+
+### `doctor`'s install suggestions
+
+`hivepilot doctor` ends with an "Install suggestions" section — one line per
+missing agent binary, pointing at the exact next command to run (or the
+docs URL for a docs-only kind):
+
+```
+=== Install suggestions ===
+  codex: not found — run 'hivepilot agents install codex'
+  gemini: not found — see https://github.com/google-gemini/gemini-cli
+  gh: not found — see https://cli.github.com/
+```
+
+Like the rest of `doctor`, this is diagnostic-only — it never installs
+anything itself, it only tells you what command to run.
+
+### Pinned vs. docs-only agents
+
+| kind | vendor | binary | install method |
+|---|---|---|---|
+| `claude` | Anthropic | `claude` | pinned command (`curl \| bash`) |
+| `codex` | OpenAI | `codex` | pinned command (`curl \| sh`) |
+| `cursor` | Cursor (Anysphere) | `cursor-agent` | pinned command (`curl \| bash`) |
+| `opencode` | opencode | `opencode` | pinned command (`curl \| bash`) |
+| `ollama` | Ollama | `ollama` | pinned command (`curl \| sh`) |
+| `vibe` | Mistral AI | `vibe` | pinned command (`curl \| bash`) |
+| `antigravity` | Google | `agy` | pinned command (`curl \| bash`) |
+| `gemini` | Google | `gemini` | docs only — npm / Homebrew / MacPorts / conda |
+| `kimi-cli` | Moonshot AI | `kimi` | docs only — `uv tool install kimi-cli` |
+| `qwen-code` | Alibaba (QwenLM) | `qwen` | docs only — `npm install -g @qwen-code/qwen-code` |
+| `gh` | GitHub | `gh` | docs only — brew / apt / dnf / winget / zypper |
+
+Consistent with the S1 registry (`AGENT_INSTALL_SPECS`): a "pinned command"
+kind's `InstallSpec.command` is a maintainer-vetted, cited official
+one-liner; a "docs only" kind has `command=None` because the vendor never
+publishes a verifiable one-liner (it's package-manager-only), so guided
+install for it can only ever show `docs_url`, never execute anything.
 
 ## Gating model — everything is opt-in/opt-out, nothing mandatory
 
@@ -909,6 +1065,89 @@ lets the runner execute; only an unexpected internal exception reports
 
 Disable it the same way as any other bundled plugin: `HIVEPILOT_TMUX_ENABLED=false`,
 or add `"tmux"` to `HIVEPILOT_PLUGINS_DISABLED`.
+
+### Example: the `gh` runner (`plugins/gh.py`)
+
+Ships in this repo as a reference **command-based** runner plugin — same
+trust tier and PATH-gating shape as `rtk`/`hugo`/`tmux` above, but
+deliberately **not** an agent kind: `gh` never sends a prompt to a model, it
+shells out to the official [GitHub CLI](https://cli.github.com/) for
+whatever subcommand the step asks for. Opt-out by default (`gh_enabled`,
+default `True`, env `HIVEPILOT_GH_ENABLED`) and PATH-gated at BOTH
+`register()` time and dispatch — the plugin only contributes the `gh` kind
+when `shutil.which("gh")` finds the binary, unlike `rtk`/`herdr`/`tmux`
+above there is no raw-command fallback: a missing `gh` binary means the
+kind never registers at all.
+
+**Command-based model.** `GhRunner` renders the step's `command` (or the
+runner definition's `command`) template exactly like the built-in `shell`
+runner, then runs `gh <args>` via `shlex.split(...)` on the rendered
+string — never a full shell (`shell=True`), so shell metacharacters in a
+rendered value are never re-interpreted:
+
+```yaml
+# roles.yaml
+runners:
+  open-pr:
+    kind: gh
+    command: "pr create --title {{ task_name }} --body {{ extra_prompt }} --fill"
+```
+
+```yaml
+# tasks.yaml
+steps:
+  - name: open-pr
+    runner: open-pr
+```
+
+**Env / secrets.** Reaches the process via the same env-merge every runner
+uses (`project.env` + runner `env` + resolved secrets,
+`hivepilot.utils.env.merge_environments`) — a step should authenticate `gh`
+via `GH_TOKEN`/`GITHUB_TOKEN` in that overlay (e.g. resolved from
+`${secret:NAME}`), never by putting a token on the rendered command line —
+argv is visible to any other user via `ps`/`/proc/<pid>/cmdline`.
+
+**Auto-gating of destructive operations.** Like the IaC/`kubectl` runners
+(see "Auto-gating of destructive operations" and "Step-level approval gate"
+in `docs/v4/CONFIG.md`), `GhRunner` implements the optional
+`is_destructive(payload) -> bool` structural contract: a step's command
+pauses for approval — even without setting `require_approval` on the step —
+whenever the resolved args contain any of these `(group, subcommand)`
+pairs, scanned as a sliding window over the WHOLE arg list (so a leading
+global flag like `--repo owner/name` before the subcommand doesn't defeat
+the check):
+
+| group | subcommand |
+|---|---|
+| `pr` | `merge` |
+| `repo` | `delete` |
+| `release` | `delete` |
+| `secret` | `delete` |
+| `secret` | `set` |
+| `gist` | `delete` |
+| `ssh-key` | `delete` |
+| `cache` | `delete` |
+
+Read-only/idempotent-create commands (`pr create`, `issue list`, `pr view`,
+`repo clone`, ...) are intentionally excluded — they run immediately, no
+approval gate. An unresolvable command (missing/unparseable) fails safe:
+`is_destructive` returns `False` and `run()` raises separately, so nothing
+executes ungated.
+
+**Install.** `gh` is one of the `agents install` docs-only kinds — the
+official GitHub CLI ships exclusively through package managers (brew / apt
+/ dnf / winget / zypper) and direct binary downloads, with no official
+curl-pipe script, so `hivepilot agents install gh` only prints
+`https://cli.github.com/` and installs nothing; see "Installing agent CLIs
+(`hivepilot agents`)" above.
+
+**Health check** — `register()["health"]["gh"]` reports `ok` when `gh` is on
+`PATH`, `error` ("gh not on PATH — install from https://cli.github.com/")
+otherwise — unlike `rtk`/`herdr`/`tmux`, there is no fallback execution
+path, so a missing `gh` binary is a hard error, not a degradation.
+
+Disable it the same way as any other bundled plugin: `HIVEPILOT_GH_ENABLED=false`,
+or add `"gh"` to `HIVEPILOT_PLUGINS_DISABLED`.
 
 ### Example: the `headroom` plugin (`plugins/headroom.py`)
 
