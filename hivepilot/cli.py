@@ -3396,9 +3396,10 @@ def agents_list() -> None:
 
     Read-only -- never executes anything. Covers the canonical agent runner
     kinds (`hivepilot.services.agent_checks.AGENT_RUNNER_KINDS`) plus every
-    kind with a guided-install `InstallSpec` (some install-only kinds --
-    e.g. `cursor`/`antigravity`/`gh` -- aren't full HivePilot runner kinds
-    but are still installable via `agents install`).
+    kind with a guided-install `InstallSpec` -- some listed kinds are
+    install-only (e.g. `gh`, which isn't a full HivePilot runner kind but is
+    still installable via `agents install`), while others (e.g. `cursor`,
+    `antigravity`) are both a full runner kind AND installable this way.
     """
     from rich.console import Console
     from rich.table import Table

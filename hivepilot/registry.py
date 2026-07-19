@@ -81,6 +81,8 @@ _OPTIONAL_AGENT_PLUGIN_KINDS: Dict[str, tuple[str, str]] = {
     "pi": ("pi_enabled", "pi"),
     "qwen-code": ("qwen_code_enabled", "qwen"),
     "kimi-cli": ("kimi_cli_enabled", "kimi"),
+    # S3 (follow-on): Google Antigravity CLI (plugins/antigravity.py).
+    "antigravity": ("antigravity_enabled", "agy"),
 }
 
 

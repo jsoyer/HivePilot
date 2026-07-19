@@ -338,6 +338,13 @@ class Settings(BaseSettings):
     pi_enabled: bool = True
     qwen_code_enabled: bool = True
     kimi_cli_enabled: bool = True
+    # S3 (follow-on to runner-defaults-plugins-mode PRD): brand-new
+    # `kind: "antigravity"` agent runner (Google Antigravity CLI, binary
+    # `agy`) added directly as a default-on, PATH-gated plugin
+    # (plugins/antigravity.py) — same opt-OUT + shutil.which gating pattern
+    # as pi_enabled/qwen_code_enabled/kimi_cli_enabled above.
+    # env: HIVEPILOT_ANTIGRAVITY_ENABLED
+    antigravity_enabled: bool = True
     # Phase 25 — brand-new `kind: "hugo"` static-site-generator runner added
     # directly as a default-on, PATH-gated plugin (plugins/hugo.py) — same
     # opt-OUT + shutil.which gating pattern as rtk_enabled/pi_enabled/etc.

@@ -21,7 +21,7 @@ MANDATORY_AGENTS = ("claude", "codex", "vibe")
 # hivepilot.registry (active_agent_runner_kinds / _BUILTIN_RUNNERS gating) and
 # hivepilot.orchestrator (fail-closed run_pipeline guard). Built-in agent kinds
 # + the optional, PATH-gated agent-plugin kinds (gemini/opencode/ollama/pi/
-# qwen-code/kimi-cli). Infra runners (shell/terraform/kubectl/…) are NOT agents
+# qwen-code/kimi-cli/antigravity). Infra runners (shell/terraform/kubectl/…) are NOT agents
 # and are deliberately absent. Keep in sync with registry._OPTIONAL_AGENT_PLUGIN_KINDS
 # and _BUILTIN_RUNNERS' agent entries — do not re-list this literal anywhere else.
 AGENT_RUNNER_KINDS: frozenset[str] = frozenset(
@@ -36,6 +36,7 @@ AGENT_RUNNER_KINDS: frozenset[str] = frozenset(
         "pi",
         "qwen-code",
         "kimi-cli",
+        "antigravity",
     }
 )
 
