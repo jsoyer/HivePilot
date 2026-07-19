@@ -6,6 +6,7 @@ import { useAsyncData } from '@/lib/use-async-data'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
 import { CostView } from './views/CostView'
+import { GraphView } from './views/GraphView'
 import { HealthView } from './views/HealthView'
 import { Mem0View } from './views/Mem0View'
 import { PanelView } from './views/PanelView'
@@ -24,6 +25,10 @@ const BUILTIN_TABS = [
   // the New Run form inside gates itself on useRole().can('run') — see
   // RunsView.
   { value: 'runs', label: 'Runs', Panel: RunsView },
+  // Mirador Graph View PRD, Sprint 3: read-only for any token; a graph
+  // source's own min_role (data-dependent, GET /v1/graph/{source}) gates
+  // itself inside GraphView, exactly like PanelView's per-panel min_role.
+  { value: 'graph', label: 'Graph', Panel: GraphView },
 ] as const
 
 /** A dynamic panel tab's `value` — prefixed so it can never collide with a

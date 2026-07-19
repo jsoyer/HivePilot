@@ -506,3 +506,101 @@ export function togglePlugin(name: string): Promise<PluginToggleResult> {
   return postJson<PluginToggleResult>(`/v1/plugins/${encodeURIComponent(name)}/toggle`, {})
 }
 
+// ---------------------------------------------------------------------------
+// GET /v1/graph/sources, GET /v1/graph/{source}, GET /v1/graph/{source}/node/
+// {node_id} — Mirador Graph View PRD, Sprint 3 web surface. Shapes
+// transcribed directly from `hivepilot/graph.py`'s `GraphNode`/`GraphEdge`/
+// `GraphData`/`GraphDetail`/`GraphSourceSpec` dataclasses and the
+// `_graph_node_to_dict`/`_graph_edge_to_dict`/`_graph_data_to_dict`/
+// `_graph_detail_to_dict`/`list_graph_sources_endpoint` JSON encoders in
+// `hivepilot/services/api_service.py` — read those before changing anything
+// here.
+//
+// A graph source's own `min_role` can be higher than the token gate's `read`
+// floor check (exactly like `/v1/panels/{name}`'s `min_role` / `/v1/memories`'s
+// `admin` gate) — `fetchGraph`/`fetchGraphNode` both opt into
+// `on403: 'forbidden'` so a 403 throws `ApiForbiddenError` and leaves the
+// token untouched, matching `fetchPanel`'s pattern. `fetchGraphSources`
+// itself only requires the gate's own `read` floor (source metadata is
+// configuration, not secret — mirrors `list_panels_endpoint`), so it uses
+// the default `on403: 'clear'`.
+//
+// `GraphNode.meta` / `GraphDetail.sections` text content is source-authored
+// and UNTRUSTED, exactly like `PanelData` — `GraphDetail.sections` reuses
+// the closed `PanelSection` union above verbatim (see `graph.py`'s module
+// docstring), so it renders through the EXISTING `PanelRenderer`, which
+// already only ever uses plain JSX interpolation, never
+// `dangerouslySetInnerHTML`.
+// ---------------------------------------------------------------------------
+
+export interface GraphNode {
+  id: string
+  label: string
+  kind: string
+  status: string | null
+  group: string | null
+  badges: string[]
+  meta: Record<string, unknown>
+}
+
+export interface GraphEdge {
+  source: string
+  target: string
+  kind: string | null
+  label: string | null
+}
+
+export interface GraphData {
+  source: string
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  layout_hint: string | null
+}
+
+export interface GraphSourceSummary {
+  name: string
+  title: string
+  min_role: string
+  params: string[]
+}
+
+export interface GraphSourcesResponse {
+  sources: GraphSourceSummary[]
+}
+
+/** Every registered graph source's name/title/min_role/params — mirrors
+ * `fetchPanels`. Role gate: `read` (the floor) — a source's own `min_role`
+ * only gates fetching ITS data below (`fetchGraph`/`fetchGraphNode`), not
+ * whether it's listed here. */
+export function fetchGraphSources(): Promise<GraphSourcesResponse> {
+  return apiFetch<GraphSourcesResponse>('/v1/graph/sources')
+}
+
+export interface GraphDetail {
+  title: string
+  tags: string[]
+  sections: PanelSection[]
+}
+
+/** A single graph source's full node/edge data. `params` becomes the raw
+ * query string (e.g. `{ pipeline: 'acme' }` -> `?pipeline=acme`) — the
+ * backend's `GraphContext.params` is exactly `dict(request.query_params)`,
+ * so this must stay a thin passthrough, never client-side filtering. Uses
+ * `on403: 'forbidden'` — see module note above. */
+export function fetchGraph(source: string, params?: Record<string, string>): Promise<GraphData> {
+  const query = params && Object.keys(params).length > 0 ? `?${new URLSearchParams(params).toString()}` : ''
+  return apiFetch<GraphData>(`/v1/graph/${encodeURIComponent(source)}${query}`, { on403: 'forbidden' })
+}
+
+/** A single node's detail view within *source* — `GraphDetail.sections`
+ * renders via the existing `PanelRenderer`. Uses `on403: 'forbidden'` — see
+ * module note above. A 404 (unknown source/node, or a source with no
+ * `node_detail` callable) surfaces as a thrown `ApiError`, same as any
+ * other non-2xx response — callers must handle it. */
+export function fetchGraphNode(source: string, nodeId: string): Promise<GraphDetail> {
+  return apiFetch<GraphDetail>(
+    `/v1/graph/${encodeURIComponent(source)}/node/${encodeURIComponent(nodeId)}`,
+    { on403: 'forbidden' },
+  )
+}
+
