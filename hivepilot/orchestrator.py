@@ -613,6 +613,90 @@ def _build_challenge_arbiter_prompt(
     )
 
 
+# ---------------------------------------------------------------------------
+# Adversarial review — thin layer over debate (Sprint 2)
+#
+# Review is NOT a parallel concept (see the module comment above
+# `DebateConfig` in hivepilot/models.py): a review is an adversarial challenge
+# round over a stage's diff/output. Sprint 2 originally synthesized every
+# reviewer's challenge through the SAME judge/arbiter used by debates
+# (`Orchestrator._adjudicate` / `_parse_verdict`) and registered THE JUDGE'S
+# verdict -- a FAIL-OPEN hole: an all-reject reviewer round could still be
+# overturned by a confident-but-wrong judge decision. Fixed: the judge is
+# NEVER consulted for the review path. Each reviewer's own explicit `status:`
+# token (see `prompts/agents/reviewer.md`'s Required Output Format -- PASS |
+# REQUEST_CHANGES | BLOCKED | NEEDS_HUMAN) is parsed directly
+# (`_parse_reviewer_verdict`) and aggregated with simple, deterministic
+# boolean logic (`Orchestrator._run_review`): ALL reviewers must explicitly
+# PASS for a non-blocking verdict; anything else blocks. The result is fed
+# through the EXISTING `_register_verdict` sticky, fail-closed gate -- no new
+# Verdict type, no new gate, but the reviewers are the deciders, not an LLM
+# judge.
+# ---------------------------------------------------------------------------
+
+_REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
+    "You are an adversarial reviewer. A colleague has proposed the following "
+    "change. Your job is NOT to approve it by default -- find every reason it "
+    "must NOT be accepted.\n\n"
+    "PROPOSED CHANGE:\n{subject}\n\n"
+    "List every concrete reason this change should be REJECTED (correctness, "
+    "security, missing tests, scope creep, style/consistency, anything else "
+    "you can find). If, after genuinely adversarial scrutiny, you find no "
+    "reason to reject it, say so explicitly -- but never manufacture approval "
+    "just to be agreeable."
+)
+
+
+def _build_review_challenge_prompt(subject: str) -> str:
+    """Render the adversarial-review challenge prompt (Sprint 2 contract)."""
+    return _REVIEW_CHALLENGE_PROMPT_TEMPLATE.format(subject=subject[:4000])
+
+
+# Explicit reviewer verdict tokens -- see `prompts/agents/reviewer.md`'s
+# Required Output Format: "status: PASS | REQUEST_CHANGES | BLOCKED |
+# NEEDS_HUMAN". These are the ONLY tokens `_parse_reviewer_verdict` treats as
+# recognised; anything else is unparseable (fails closed).
+_REVIEWER_VERDICT_TOKENS: frozenset[str] = frozenset(
+    {"PASS", "REQUEST_CHANGES", "BLOCKED", "NEEDS_HUMAN"}
+)
+
+
+def _parse_reviewer_verdict(text: str) -> str | None:
+    """Parse a reviewer's raw stage output for its explicit ``status:``
+    verdict token (adversarial-review fail-open fix, Sprint 2 follow-up).
+
+    FAIL-CLOSED parser: returns one of ``_REVIEWER_VERDICT_TOKENS`` ONLY when
+    exactly one unambiguous ``status:`` line naming a recognised token is
+    found (tolerating an optional leading ``-`` bullet, per the reviewer
+    prompt's own output format). Returns ``None`` -- callers MUST treat this
+    as "this reviewer blocks", never as an implicit pass -- for:
+
+    * empty/whitespace-only text;
+    * no ``status:`` line at all;
+    * a ``status:`` line naming an unrecognised token;
+    * multiple ``status:`` lines naming DIFFERENT recognised tokens
+      (ambiguous -- never guess which one governs).
+
+    A reviewer never gets the benefit of the doubt: only a clean, singular
+    ``PASS`` is unambiguous approval.
+    """
+    import re
+
+    if not text or not text.strip():
+        return None
+    found: set[str] = set()
+    for line in text.splitlines():
+        match = re.match(r"^\s*-?\s*status\s*:\s*([A-Za-z_]+)", line, re.IGNORECASE)
+        if not match:
+            continue
+        token = match.group(1).strip().upper()
+        if token in _REVIEWER_VERDICT_TOKENS:
+            found.add(token)
+    if len(found) == 1:
+        return next(iter(found))
+    return None
+
+
 def _parse_components(text: str, valid: list[str]) -> list[str]:
     """Extract the component subset an agent selected via a ``COMPONENTS:`` line,
     intersected with the *valid* component set. Returns ``[]`` if none matched
@@ -2185,6 +2269,183 @@ class Orchestrator:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("verdict.persist_failed", kind="challenge", error=str(exc))
+
+    def _run_review(
+        self,
+        *,
+        stage: "PipelineStage | None",
+        pipeline: "PipelineConfig | None",
+        effective: "EffectiveDebateConfig",
+        project: ProjectConfig,
+        policy: policy_service.Policy | None,
+        subject: str | None,
+        simulate: bool = False,
+        run_id: int | None = None,
+    ) -> None:
+        """Run the configured `effective.reviewers` as an ADVERSARIAL CHALLENGE
+        over *subject* (the stage's just-produced diff/output) and derive the
+        review's governing :class:`Verdict` DETERMINISTICALLY from each
+        reviewer's own explicit verdict, fed through `_register_verdict` so
+        it inherits the sticky, fail-closed PR gate (adversarial-review
+        fail-open fix, Sprint 2 follow-up).
+
+        SECURITY FIX: this method previously routed each reviewer's challenge
+        into the debate-judge arbiter (`_adjudicate`/`_parse_verdict`) as a
+        `Position(stance="challenge")` and registered THE JUDGE'S synthesis.
+        That let an LLM judge OVERTURN every reviewer's rejection with a
+        confident-but-wrong ACCEPT -- fail-open. The judge is NEVER consulted
+        here anymore. Each reviewer's own ``status:`` token (see
+        `prompts/agents/reviewer.md`'s Required Output Format -- PASS |
+        REQUEST_CHANGES | BLOCKED | NEEDS_HUMAN) is parsed directly via
+        `_parse_reviewer_verdict` and aggregated with plain boolean logic:
+        ALL configured reviewers must explicitly PASS for a non-blocking
+        verdict; ANY other outcome -- an explicit REQUEST_CHANGES/BLOCKED/
+        NEEDS_HUMAN, an unparseable/ambiguous output, an empty output, an
+        unresolved/unknown role, or a runner call that raised -- registers as
+        blocking. A reviewer never gets the benefit of the doubt.
+
+        FAIL-CLOSED, nothing to review: when *subject* is empty/whitespace/
+        None (no diff/output was produced for reviewers to look at), or when
+        `effective.reviewers` is empty, registers an explicit blocking
+        verdict immediately WITHOUT calling any reviewer -- you cannot
+        review what you cannot see, and a review can never silently no-op
+        into an implicit ACCEPT. This method does NOT trust
+        `resolve_debate_config`'s config-resolve-time invariant (non-empty
+        reviewers whenever `review_target` is set) blindly.
+
+        FAIL-CLOSED, unexpected failure: any exception raised by this
+        method's own aggregation logic (as opposed to a single reviewer's
+        own resolve/call, which is already caught per-reviewer below and
+        simply counted as blocking) registers an explicit blocking verdict
+        BEFORE re-raising -- `_execute_task_body`'s `perform_git_actions`
+        call site can never be reached believing the review path finished
+        cleanly when it didn't.
+
+        Only called by `_execute_task_body` when
+        `effective.review_target is not None` (see `_effective_debate`).
+        """
+        from hivepilot.roles import get_role, resolve_host, resolve_runner
+
+        if not subject or not subject.strip():
+            # No diff/output was produced for this stage -- there is nothing
+            # for a reviewer to look at. Feeding a "(no diff)" placeholder
+            # would let an empty subject sail through as if it had been
+            # genuinely reviewed; block instead.
+            logger.warning("review.empty_subject", review_target=effective.review_target)
+            self._register_verdict(
+                Verdict(decision=None, confidence=None),
+                confidence_threshold=effective.confidence_threshold,
+            )
+            return
+
+        if not effective.reviewers:
+            # Should be unreachable -- `resolve_debate_config` fails closed at
+            # config-resolve time on `review_target` set + reviewers=[] -- but
+            # this method never trusts that invariant blindly.
+            logger.warning("review.no_reviewers_configured", review_target=effective.review_target)
+            self._register_verdict(
+                Verdict(decision=None, confidence=None),
+                confidence_threshold=effective.confidence_threshold,
+            )
+            return
+
+        try:
+            prompt = _build_review_challenge_prompt(subject)
+            reviewer_summaries: list[str] = []
+            all_pass = True
+
+            for role_name in effective.reviewers:
+                try:
+                    role = get_role(role_name)
+                    runner_kind, role_model, role_effort = resolve_runner(role_name, policy)
+                    review_host = resolve_host(role_name, policy)
+                except Exception as exc:  # unknown/unresolvable role -- fail-closed
+                    logger.warning(
+                        "review.role_unresolved", role=role_name, error=redact_text(str(exc))
+                    )
+                    all_pass = False
+                    reviewer_summaries.append(f"{role_name}: UNRESOLVED")
+                    continue
+
+                step = TaskStep(
+                    name=f"review:{role_name}",
+                    runner=runner_kind,
+                    prompt_file=str(role.prompt_file),
+                )
+                payload = RunnerPayload(
+                    project_name=project.path.name,
+                    project=project,
+                    task_name=f"review:{role_name}",
+                    step=step,
+                    metadata={"extra_prompt": prompt, "prior_context": ""},
+                    secrets=self._resolve_secrets(step, project, policy),
+                )
+                try:
+                    if simulate:
+                        # Dry-run infrastructure only -- no real reviewer
+                        # feedback exists to parse, so a simulated round never
+                        # blocks a --simulate run.
+                        output = f"status: PASS\n[simulated adversarial review by {role_name}]"
+                    else:
+                        from typing import cast
+
+                        from hivepilot.models import RunnerKind
+
+                        rdef = RunnerDefinition(
+                            name=f"review:{role_name}",
+                            kind=cast(RunnerKind, runner_kind),
+                            command=None,
+                            model=role_model,
+                            effort=role_effort,
+                            host=review_host,
+                        )
+                        output = self.registry.capture_definition(rdef, payload)
+                except Exception as exc:  # a reviewer call failing must not fail open
+                    logger.warning(
+                        "review.call_failed", role=role_name, error=redact_text(str(exc))
+                    )
+                    all_pass = False
+                    reviewer_summaries.append(f"{role_name}: CALL_FAILED")
+                    continue
+
+                output = redact_text(output) if output else output
+                token = _parse_reviewer_verdict(output or "")
+                if token != "PASS":
+                    all_pass = False
+                reviewer_summaries.append(f"{role_name}: {token or 'UNPARSEABLE'}")
+
+            verdict = (
+                Verdict(decision="ACCEPT", confidence=1.0)
+                if all_pass
+                else Verdict(decision=None, confidence=None)
+            )
+            self._register_verdict(verdict, confidence_threshold=effective.confidence_threshold)
+            try:
+                state_service.record_verdict(
+                    run_id=run_id,
+                    project=project.path.name,
+                    task=None,
+                    role="review",
+                    kind="review",
+                    decision=verdict.decision,
+                    confidence=verdict.confidence,
+                    summary=(
+                        f"adversarial review by {', '.join(effective.reviewers)}: "
+                        f"{'; '.join(reviewer_summaries)}"
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("verdict.persist_failed", kind="review", error=str(exc))
+        except Exception:
+            # Anything unexpected in the aggregation logic itself (not a
+            # single reviewer's own resolve/call -- those are already caught
+            # above and counted as blocking) must never leave the gate
+            # unset. Register blocking, then re-raise.
+            self._register_verdict(
+                Verdict(decision=None, confidence=None),
+                confidence_threshold=effective.confidence_threshold,
+            )
+            raise
 
     def run_pipeline(
         self,
@@ -4207,6 +4468,25 @@ class Orchestrator:
             if _stage_cache is not None and _stage_cache_key_val is not None and task_result:
                 _stage_cache.put(_stage_cache_key_val, task_result)
 
+            # Adversarial review (Sprint 2) — runs BEFORE `perform_git_actions`
+            # so a blocking review verdict reaches `self._governing_verdict`
+            # in time to gate THIS stage's own promote_pr/merge_pr call below.
+            # The subject is the stage's just-produced, still-uncommitted diff
+            # (`git diff` in the worktree — `perform_git_actions`/`task.git`
+            # hasn't run `git commit` yet at this point).
+            if effective_debate.review_target is not None:
+                _review_subject = self._git_diff(_exec_project.path)
+                self._run_review(
+                    stage=stage,
+                    pipeline=pipeline,
+                    effective=effective_debate,
+                    project=_exec_project,
+                    policy=policy,
+                    subject=_review_subject,
+                    simulate=simulate,
+                    run_id=run_id,
+                )
+
             if auto_git:
                 perform_git_actions(
                     project_name=project.path.name,  # real component name → correct branch name
@@ -4412,8 +4692,19 @@ class Orchestrator:
 
     @staticmethod
     def _git_diff(path: Path) -> str | None:
+        """Return the working tree's diff against HEAD, or ``None`` if empty.
+
+        ``git diff HEAD`` (not bare ``git diff``) so the diff covers BOTH
+        staged and unstaged changes -- a bare ``git diff`` only compares the
+        working tree to the INDEX and silently misses anything already
+        `git add`-ed. `_run_review`'s reviewers must see the full change,
+        including staged content, or an already-staged diff would review as
+        empty and (correctly, per `_run_review`'s empty-subject fail-closed
+        guard) block instead of being shown -- but the fix here is to show it
+        to them in the first place.
+        """
         result = subprocess.run(
-            ["git", "diff"],
+            ["git", "diff", "HEAD"],
             cwd=str(path),
             text=True,
             capture_output=True,
