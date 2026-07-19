@@ -36,7 +36,7 @@ Parallel final stage: Documentation runs after CISO clearance, alongside QA.
 - All review reports must be written in English and stored as Obsidian artifacts.
 
 ## Required Output Format
-- status: PASS | REQUEST_CHANGES | BLOCKED | NEEDS_HUMAN
+- status: PASS | REQUEST_CHANGES | BLOCKED | NEEDS_HUMAN — plain `status: <TOKEN>` on its own line, no markdown decoration (never `**status: PASS**` or similar); the parser is line-anchored and a decorated line fails closed (blocks).
 - summary: 3-5 SHORT plain-language bullets. NO markdown tables, NO file dumps, NO multi-paragraph prose. Put exhaustive detail (file lists, payloads, matrices) in the vault artifact, NOT here.
 - decisions: review decisions made
 - blockers: unresolved issues or "none"

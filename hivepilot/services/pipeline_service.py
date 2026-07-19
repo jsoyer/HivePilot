@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from hivepilot.models import PipelineConfig, TasksFile
+from hivepilot.models import PipelineConfig, TasksFile, resolve_debate_config
 
 
 def validate_pipeline(pipeline: PipelineConfig, tasks: TasksFile) -> None:
@@ -13,6 +13,7 @@ def validate_pipeline(pipeline: PipelineConfig, tasks: TasksFile) -> None:
             )
     validate_roles(tasks)
     validate_debate_config(pipeline)
+    validate_review_config(pipeline)
     validate_lessons_config(pipeline)
 
 
@@ -48,6 +49,26 @@ def validate_debate_config(pipeline: PipelineConfig) -> None:
             _validate_confidence_threshold(
                 stage.debate.confidence_threshold, where=f"Pipeline stage '{stage.name}'"
             )
+
+
+def validate_review_config(pipeline: PipelineConfig) -> None:
+    """Fail closed on `debate.review_target` requiring at least one resolved
+    reviewer, re-checked cross-block at pipeline LOAD time (before any stage
+    executes).
+
+    `resolve_debate_config`'s own resolve-time backstop (see
+    `hivepilot/models.py`) already enforces this fail-closed rule for a
+    single stage's resolution -- calling it here, once for the pipeline-only
+    view (`stage=None`, covers a pipeline-level `review_target` when the
+    pipeline has zero stages or no stage overrides it) and once per stage,
+    surfaces the SAME error at config load instead of only being caught
+    mid-run when the offending stage actually executes. Mirrors
+    `validate_debate_config`'s shape (delegates to the existing fail-closed
+    check rather than duplicating its logic).
+    """
+    resolve_debate_config(pipeline=pipeline, stage=None)
+    for stage in pipeline.stages:
+        resolve_debate_config(pipeline=pipeline, stage=stage)
 
 
 def validate_lessons_config(pipeline: PipelineConfig) -> None:

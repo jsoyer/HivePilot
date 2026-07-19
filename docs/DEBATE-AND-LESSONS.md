@@ -61,6 +61,15 @@ override.
 - `runner`
 - `model`
 - `confidence_threshold`
+- `reviewers` — list of reviewer role names to run as an adversarial
+  challenge over the stage's diff (the "review" facet — a thin layer over
+  the same `debate:` block, not a separate config section).
+- `review_target` — `"internal"` or `"github_pr"`. Fail-closed: setting
+  `review_target` without at least one reviewer resolving anywhere in the
+  chain is rejected — at YAML-load time when both are set in the same
+  `debate:` block, or at `resolve_debate_config` time (surfaced early by
+  `validate_pipeline` at pipeline load, not mid-run) when they're split
+  across the pipeline and stage blocks.
 
 **Precedence (hybride, fail-closed):**
 
@@ -71,8 +80,24 @@ override.
   turns it *on*.
 - Scalars (`runner`, `model`, `confidence_threshold`) resolve
   stage > pipeline > floor, first non-`None` wins.
+- `reviewers` and `review_target` resolve stage > pipeline > unset (there is
+  no global floor tier for these two — they are opt-in per pipeline/stage
+  only).
 - A present-but-blank `runner` or `model` (empty string) is rejected at
   config load time — it is not treated as "unset."
+
+**How a review verdict gates the pipeline:**
+
+- `review_target: github_pr` gates `promote_pr`/`merge_pr` inside
+  `perform_git_actions` — exactly the same fail-closed gate `enable_judge`/
+  `enable_arbiter` use. A blocking review verdict (missing/empty/
+  low-confidence/non-approval) skips the merge; it does not stop the stage
+  itself.
+- `review_target: internal` has no PR to gate — a pipeline using it may
+  never open one. A blocking review verdict instead halts STAGE/PIPELINE
+  PROGRESSION directly: the stage raises and is recorded as failed, which
+  trips `stage_failed` in the pipeline stage loop the same as any other
+  task failure.
 
 Example `pipelines.yaml` fragment:
 
@@ -85,6 +110,8 @@ stages:
       runner: claude
       model: claude-opus-4-6
       confidence_threshold: 0.75
+      reviewers: [reviewer]
+      review_target: github_pr
 ```
 
 See [CONFIGURATION.md](./CONFIGURATION.md) for the full settings reference.

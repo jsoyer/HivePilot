@@ -252,6 +252,13 @@ omitting them changes nothing about pipeline behavior.
 - `runner`
 - `model`
 - `confidence_threshold` — validated to be in `(0, 1]` at config load time
+- `reviewers` — list of reviewer role names
+- `review_target` — `"internal"` or `"github_pr"`; requires at least one
+  resolved `reviewers` entry (fail-closed: `review_target` set with an
+  empty resolved `reviewers` list raises — at YAML-load time within one
+  `debate:` block, or at pipeline load via `validate_pipeline` when the
+  empty-reviewers case only appears once pipeline- and stage-level blocks
+  are combined)
 
 `DebateConfig` can be set at the pipeline level and/or the stage level. Resolution in
 `resolve_debate_config`:
@@ -263,6 +270,10 @@ omitting them changes nothing about pipeline behavior.
   global floor has enabled.
 - `runner`, `model`, and `confidence_threshold` resolve first-non-None in order
   `stage > pipeline > floor`.
+- `reviewers`/`review_target` resolve `stage > pipeline > unset` (no global floor tier).
+  `review_target="github_pr"` gates `promote_pr`/`merge_pr` in `perform_git_actions`,
+  the same as `enable_judge`/`enable_arbiter`. `review_target="internal"` has no PR to
+  gate — a blocking review verdict instead halts stage/pipeline progression directly.
 
 #### `LessonsConfig` (pipeline-level only — no stage tier)
 
@@ -286,6 +297,8 @@ pipelines:
     debate:
       enable_judge: true
       confidence_threshold: 0.7
+      reviewers: [reviewer]
+      review_target: github_pr
     lessons:
       enable_distillation: true
       min_score: 0.6

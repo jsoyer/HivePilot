@@ -48,7 +48,7 @@ from hivepilot.models import (
     TaskConfig,
     TaskStep,
 )
-from hivepilot.orchestrator import Verdict
+from hivepilot.orchestrator import ReviewBlockedError, Verdict
 from hivepilot.services import config_provenance
 from hivepilot.services.git_service import is_blocking
 
@@ -474,7 +474,13 @@ class TestEmptySubjectFailsClosed:
         an empty diff for a stage with `review_target` set, the review path
         still runs (not skipped) and registers a blocking verdict — an empty
         diff must never be fed to reviewers as if there were nothing to
-        object to."""
+        object to.
+
+        `review_target="internal"` (Sprint 3, adversarial-review S3) means a
+        blocking verdict must also halt STAGE PROGRESSION by raising
+        `ReviewBlockedError` — `_execute_task_body` no longer returns
+        normally here; the blocking verdict is still asserted on `orch`
+        afterward."""
         orch = _bare_orchestrator()
         _register_stub_runner("review-empty-subject-stub")
         try:
@@ -494,6 +500,7 @@ class TestEmptySubjectFailsClosed:
                 patch("hivepilot.orchestrator.Orchestrator._git_diff", return_value=""),
                 patch("hivepilot.roles.get_role") as mock_get_role,
                 patch("hivepilot.services.state_service.record_verdict"),
+                pytest.raises(ReviewBlockedError, match="review_target=internal"),
             ):
                 orch._execute_task_body(
                     project=project,
@@ -604,6 +611,14 @@ class TestReviewPathGating:
             RUNNER_MAP.pop("review-gate-stub-off", None)
 
     def test_review_target_set_review_path_entered(self, tmp_path: Path) -> None:
+        """`_run_review` is mocked out here (a no-op), so `orch._governing_verdict`
+        stays at its never-registered default (`None`) -- which `is_blocking`
+        correctly treats as blocking (fail-closed). Combined with
+        `review_target="internal"` (Sprint 3), that means `_execute_task_body`
+        now raises `ReviewBlockedError` right after `_run_review` returns.
+        `mock_review` has already been called by that point, so the original
+        S2 assertions (that the review path was entered with the correct
+        effective config) still hold -- just wrapped in `pytest.raises`."""
         orch = _bare_orchestrator()
         _register_stub_runner("review-gate-stub-on")
         try:
@@ -624,6 +639,7 @@ class TestReviewPathGating:
             with (
                 patch.object(orch, "_resolve_secrets", return_value={}),
                 patch.object(orch, "_run_review") as mock_review,
+                pytest.raises(ReviewBlockedError, match="review_target=internal"),
             ):
                 orch._execute_task_body(
                     project=project,
