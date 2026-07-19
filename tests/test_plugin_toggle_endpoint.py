@@ -271,7 +271,7 @@ class TestToggleTwiceIsIdempotentRoundtrip:
 
 class TestPersistPluginsDisabledRealWrite:
     def test_writes_env_key_with_plugin_name(self, tmp_path):
-        from hivepilot.ui.plugin_manager import persist_plugins_disabled
+        from hivepilot.ui.plugin_persist import persist_plugins_disabled
 
         env_path = tmp_path / ".env"
         result_path = persist_plugins_disabled(["rtk"], env_path=env_path)
@@ -282,7 +282,7 @@ class TestPersistPluginsDisabledRealWrite:
         assert "rtk" in content
 
     def test_preserves_other_lines_and_upserts(self, tmp_path):
-        from hivepilot.ui.plugin_manager import persist_plugins_disabled
+        from hivepilot.ui.plugin_persist import persist_plugins_disabled
 
         env_path = tmp_path / ".env"
         env_path.write_text("SOME_OTHER_KEY=1\n", encoding="utf-8")
