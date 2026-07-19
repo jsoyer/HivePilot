@@ -16,6 +16,7 @@ import questionary
 from hivepilot.config import settings
 from hivepilot.models import (
     EffectiveDebateConfig,
+    EffectiveLessonsConfig,
     EffortLevel,
     Group,
     PipelineConfig,
@@ -26,6 +27,7 @@ from hivepilot.models import (
     TaskStep,
     resolve_debate_config,
     resolve_effort,
+    resolve_lessons_config,
     resolve_mode,
     resolve_stage_model,
 )
@@ -1346,6 +1348,14 @@ class Orchestrator:
         exporters = task.artifacts.get("exporters", [])
         artifact_manager.export(exporters)
         project_lookup = {project.path.name: project for project in projects}
+        # Per-pipeline-lessons-yaml PRD, Sprint 2: resolve ONCE per run,
+        # reuse for every project result below -- `pipeline` is constant
+        # for the whole `_run_task_body` call (mirrors `_effective_debate`'s
+        # resolve-once-per-call discipline). `None` for a plain (non-
+        # pipeline) task run resolves to the settings floor only, byte-
+        # identical to reading `settings.enable_lesson_distillation`
+        # directly (see `resolve_lessons_config`'s docstring).
+        _effective_lessons = resolve_lessons_config(pipeline=pipeline)
         for result in results:
             project_cfg = project_lookup.get(result.project)
             if not project_cfg:
@@ -1370,7 +1380,14 @@ class Orchestrator:
             # A failure here is caught and logged, never allowed to break
             # the pipeline -- same best-effort discipline as the
             # Notion/Linear notification calls a few lines above.
-            if settings.enable_lesson_distillation and not simulate and not dry_run:
+            #
+            # Per-pipeline-lessons-yaml PRD, Sprint 2: the gate now reads
+            # the RESOLVED per-pipeline config (`_effective_lessons.
+            # enable_distillation`) instead of `settings.
+            # enable_lesson_distillation` directly -- strengthen-only OR
+            # across the floor + this pipeline's `lessons:` block (see
+            # `resolve_lessons_config`), never weaker than the floor.
+            if _effective_lessons.enable_distillation and not simulate and not dry_run:
                 run_id = run_ids.get(result.project)
                 if run_id is not None:
                     try:
@@ -1380,6 +1397,7 @@ class Orchestrator:
                             role=task.role,
                             task_name=task_name,
                             result=result,
+                            lessons_config=_effective_lessons,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
@@ -1398,6 +1416,7 @@ class Orchestrator:
         role: str | None,
         task_name: str,
         result: RunResult,
+        lessons_config: "EffectiveLessonsConfig | None" = None,
     ) -> None:
         """Distill *this project's* verdicts + interactions + outcome from
         *run_id* into lesson CANDIDATEs via ONE `lessons_service.
@@ -1405,11 +1424,23 @@ class Orchestrator:
         record_lesson(..., validated=False)` (Auto-Learning Lessons Loop
         PRD, Sprint 2 -- Sprint 3 owns real validation).
 
+        ``lessons_config`` (per-pipeline-lessons-yaml PRD, Sprint 2) is the
+        caller's already-resolved `EffectiveLessonsConfig` -- `_run_task_
+        body` always passes its ONE per-run resolution. `None` (a direct/
+        standalone caller, e.g. a unit test invoking this method without
+        going through `_run_task_body`) resolves to the floor only
+        (`resolve_lessons_config(pipeline=None)`), byte-identical to
+        reading `settings.lesson_distill_runner`/`.lesson_distill_model`/
+        `.lesson_min_score` directly.
+
         Never raises past the caller's own try/except -- but this method
         itself does no swallowing so callers see the real error for
         logging."""
         from hivepilot.services import lessons_service
 
+        _resolved = (
+            lessons_config if lessons_config is not None else resolve_lessons_config(pipeline=None)
+        )
         verdicts = state_service.list_recent_verdicts(run_id=run_id)
         interactions = state_service.list_recent_interactions(run_id=run_id)
         outcomes = [
@@ -1421,8 +1452,8 @@ class Orchestrator:
             }
         ]
         distiller_def = lessons_service.build_distiller_definition(
-            runner=settings.lesson_distill_runner,
-            model=settings.lesson_distill_model,
+            runner=_resolved.distill_runner,
+            model=_resolved.distill_model,
         )
         lessons = lessons_service.distill_lessons(
             run_id=run_id,
@@ -1460,7 +1491,9 @@ class Orchestrator:
                 category=lesson.category,
                 validated=False,
             )
-            validated, score = lessons_service.validate_lesson(lesson, outcome_signal)
+            validated, score = lessons_service.validate_lesson(
+                lesson, outcome_signal, min_score=_resolved.min_score
+            )
             state_service.update_lesson_validation(lesson_id, validated=validated, score=score)
 
     def _build_lesson_outcome_signal(
@@ -1777,6 +1810,13 @@ class Orchestrator:
         from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
         from hivepilot.runners.base import RunnerPayload
 
+        # Per-pipeline-lessons-yaml PRD, Sprint 2: resolve ONCE, reuse for
+        # both `RunnerPayload`s this round constructs (rebuttal + challenger
+        # resolution) -- mirrors `_execute_task_body`'s resolve-once
+        # discipline. `pipeline=None` (a call site outside a live pipeline
+        # run) resolves to the settings floor only.
+        effective_lessons = resolve_lessons_config(pipeline=pipeline)
+
         # 1. Resolve target role key
         target_role_key = _resolve_role_from_display(challenge_target)
         if target_role_key is None:
@@ -1865,6 +1905,7 @@ class Orchestrator:
             step=step,
             metadata={"extra_prompt": rebuttal_prompt, "prior_context": ""},
             secrets={},
+            lessons=effective_lessons,
         )
 
         if simulate:
@@ -1974,6 +2015,7 @@ class Orchestrator:
                     step=ch_step,
                     metadata={"extra_prompt": resolution_prompt, "prior_context": ""},
                     secrets={},
+                    lessons=effective_lessons,
                 )
                 resolution_output = self.registry.capture_definition(ch_runner_def, ch_payload)
 
@@ -3500,7 +3542,14 @@ class Orchestrator:
             "extra_prompt": extra_prompt or "",
             "prior_context": prior_context or "",
         }
-        if settings.enable_lesson_distillation:
+        # Per-pipeline-lessons-yaml PRD, Sprint 2: resolve ONCE per task
+        # execution, reuse for the metadata gate below AND every
+        # `RunnerPayload` this call constructs -- mirrors `effective_debate`
+        # (`self._effective_debate(stage, pipeline)`) just below. `None`
+        # `pipeline`/`stage` (a plain, non-pipeline task run) resolves to
+        # the settings floor only, byte-identical to pre-Sprint-2 behaviour.
+        effective_lessons = resolve_lessons_config(pipeline=pipeline)
+        if effective_lessons.enable_distillation:
             # Auto-Learning Lessons Loop PRD, Sprint 3: the ONLY channel a
             # runner (ClaudeRunner/PromptCliRunner) can key its 'Lessons
             # learned' retrieval on -- RunnerPayload carries project_name/
@@ -3508,12 +3557,12 @@ class Orchestrator:
             # SAME metadata dict is reused for every step of this task (see
             # the step loop below). None for a non-role task -- retrieval
             # degrades to project+task keying only, never crashes. Gated on
-            # the flag (post-review fix, LOW): injection is the only
-            # consumer of this key, and a flag-off run must stay
-            # byte-identical for every metadata CONSUMER, not just the
-            # rendered prompt string -- e.g. the `after_step` hook fan-out
-            # passes this SAME dict to every plugin, so an unconditional
-            # extra key would leak into flag-off runs too.
+            # the RESOLVED per-pipeline flag (post-review fix, LOW):
+            # injection is the only consumer of this key, and a flag-off
+            # run must stay byte-identical for every metadata CONSUMER, not
+            # just the rendered prompt string -- e.g. the `after_step` hook
+            # fan-out passes this SAME dict to every plugin, so an
+            # unconditional extra key would leak into flag-off runs too.
             metadata["role"] = task.role
         effective_debate = self._effective_debate(stage, pipeline)
         if task.engine != "native":
@@ -3531,6 +3580,7 @@ class Orchestrator:
                 step=placeholder_step,
                 metadata=metadata,
                 secrets=self._resolve_secrets(placeholder_step, project, policy),
+                lessons=effective_lessons,
             )
             try:
                 if simulate:
@@ -3664,6 +3714,7 @@ class Orchestrator:
                     step=step,
                     metadata=metadata,
                     secrets=secrets,
+                    lessons=effective_lessons,
                 )
                 # Phase 24b.1: tracks the RunnerDefinition actually used/attempted
                 # for this step, so record_step(...) below can thread the

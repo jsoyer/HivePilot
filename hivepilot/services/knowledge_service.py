@@ -15,10 +15,13 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from hivepilot.models import EffectiveLessonsConfig  # noqa: F401 -- typing only
 
 logger = get_logger(__name__)
 
@@ -143,14 +146,27 @@ def _hash_files(project_path: Path, files: Iterable[Path]) -> str:
 
 
 def build_lessons_context(
-    project: str, role: str | None, task: str | None, *, limit: int | None = None
+    project: str,
+    role: str | None,
+    task: str | None,
+    *,
+    limit: int | None = None,
+    effective: "EffectiveLessonsConfig | None" = None,
 ) -> str:
     """Return the formatted ``Lessons learned`` block for *project*/*role*/
     *task* -- VALIDATED lessons only (Auto-Learning Lessons Loop PRD,
     Sprint 3's fail-closed gate), ranked score desc / recency desc, capped
-    at ``limit`` (default: `settings.lesson_inject_limit`).
+    at ``limit`` (default: the resolved config's ``inject_limit``).
 
-    GATE: returns ``""`` when `settings.enable_lesson_distillation` is
+    ``effective`` (per-pipeline-lessons-yaml PRD, Sprint 2) is the caller's
+    already-resolved `EffectiveLessonsConfig` (see `hivepilot.models.
+    resolve_lessons_config`) -- e.g. `RunnerPayload.lessons`, threaded down
+    from the orchestrator's ONE per-run resolution. `None` (the default --
+    every call site that predates this Sprint, or a standalone/non-pipeline
+    call) resolves to the floor only (`resolve_lessons_config(pipeline=
+    None)`), byte-identical to reading `settings.*` directly.
+
+    GATE: returns ``""`` when the resolved config's `enable_distillation` is
     False -- checked FIRST, before touching the database at all, so the
     flags-off path is byte-identical to before this Sprint (no import of
     `state_service`/`lessons_service`, no query, no injected section) --
@@ -160,36 +176,39 @@ def build_lessons_context(
     context": omit the section entirely.
 
     Sprint 4 fix: this is the ONLY production caller of `retrieve_lessons`
-    -- it now passes ``semantic=settings.enable_semantic_lesson_retrieval``
-    through, so the opt-in semantic re-rank actually reaches injected
-    lessons (previously the flag had zero effect here: `retrieve_lessons`
-    defaults `semantic=False`, so its own internal
+    -- it now passes ``semantic=<resolved>.enable_semantic`` through, so the
+    opt-in semantic re-rank actually reaches injected lessons (previously
+    the flag had zero effect here: `retrieve_lessons` defaults
+    `semantic=False`, so its own internal
     `enable_semantic_lesson_retrieval` check could never even be reached
-    from this call site). `retrieve_lessons` still applies the flag as a
-    SECOND, internal gate -- so `enable_semantic_lesson_retrieval=False`
-    (the default) keeps this call on the exact same SQLite-ranked S3 path,
-    and any semantic-path failure (missing extra, embedding error) still
-    falls back to that same path, never crashes.
+    from this call site). `retrieve_lessons` still applies the RAW
+    `settings.enable_semantic_lesson_retrieval` flag as a SECOND, internal
+    gate (defense in depth, unchanged by this Sprint) -- so the default
+    keeps this call on the exact same SQLite-ranked S3 path, and any
+    semantic-path failure (missing extra, embedding error) still falls back
+    to that same path, never crashes.
 
     Calls `state_service.mark_lesson_used` for every lesson actually
     returned (best-effort -- a persistence hiccup here must never break
     prompt assembly for the run itself).
     """
-    from hivepilot.config import settings
+    from hivepilot.models import resolve_lessons_config
 
-    if not settings.enable_lesson_distillation:
+    eff = effective if effective is not None else resolve_lessons_config(pipeline=None)
+
+    if not eff.enable_distillation:
         return ""
 
     from hivepilot.services import state_service
     from hivepilot.services.lessons_service import retrieve_lessons
 
-    effective_limit = limit if limit is not None else settings.lesson_inject_limit
+    effective_limit = limit if limit is not None else eff.inject_limit
     lessons = retrieve_lessons(
         project,
         role=role,
         task=task,
         limit=effective_limit,
-        semantic=settings.enable_semantic_lesson_retrieval,
+        semantic=eff.enable_semantic,
     )
     if not lessons:
         return ""

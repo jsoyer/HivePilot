@@ -391,7 +391,9 @@ class OutcomeSignal:
     max_verdict_confidence: float | None = None
 
 
-def validate_lesson(lesson: Lesson, outcome_signal: OutcomeSignal | None) -> tuple[bool, float]:
+def validate_lesson(
+    lesson: Lesson, outcome_signal: OutcomeSignal | None, *, min_score: float | None = None
+) -> tuple[bool, float]:
     """Validate *lesson* against *outcome_signal* and return
     ``(validated, score)``.
 
@@ -413,9 +415,16 @@ def validate_lesson(lesson: Lesson, outcome_signal: OutcomeSignal | None) -> tup
     empty-value-fail-open bug class this module exists to avoid).
 
     ``validated`` is ``True`` only when the computed score is
-    ``>= settings.lesson_min_score`` -- itself fail-closed-validated to a
-    finite value in ``(0.0, 1.0]`` at `Settings` construction (see
-    `Settings._validate_lesson_min_score`), so this gate can never be
+    ``>= min_score`` -- ``min_score`` defaults to `settings.lesson_min_score`
+    when the caller doesn't pass one (byte-identical to before this Sprint),
+    but an ORCHESTRATOR caller resolving a per-pipeline `lessons:` override
+    (per-pipeline-lessons-yaml PRD, Sprint 2 -- see `hivepilot.models.
+    resolve_lessons_config`) passes the RESOLVED value instead, so a
+    pipeline-level `min_score` override actually reaches this gate. Either
+    way the value was already fail-closed-validated to a finite number in
+    ``(0.0, 1.0]`` -- at `Settings` construction for the floor (see
+    `Settings._validate_lesson_min_score`), or at `LessonsConfig` field-
+    validation time for a pipeline override -- so this gate can never be
     silently defeated by a misconfigured floor of ``0``.
     """
     if outcome_signal is None:
@@ -437,7 +446,8 @@ def validate_lesson(lesson: Lesson, outcome_signal: OutcomeSignal | None) -> tup
         return False, 0.0
 
     score = max(candidate_scores)
-    validated = score >= settings.lesson_min_score
+    effective_min_score = min_score if min_score is not None else settings.lesson_min_score
+    validated = score >= effective_min_score
     return validated, score
 
 

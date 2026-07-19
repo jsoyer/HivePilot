@@ -128,7 +128,9 @@ class PromptCliRunner(BaseRunner):
         from hivepilot.services.knowledge_service import build_lessons_context
 
         role = payload.metadata.get("role")
-        return build_lessons_context(payload.project_name, role, payload.task_name)
+        return build_lessons_context(
+            payload.project_name, role, payload.task_name, effective=payload.lessons
+        )
 
     def _augment_prompt(self, payload: RunnerPayload, prompt_text: str) -> str:
         """Prepend stable knowledge context then append volatile sections.
