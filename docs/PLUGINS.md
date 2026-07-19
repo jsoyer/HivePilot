@@ -66,7 +66,7 @@ Hot-reload (`PluginManager.reload()`) is staging-then-commit: a full re-scan of 
 
 ## Shipped plugins (inventory)
 
-21 plugins ship under `plugins/*.py`.
+23 plugins ship under `plugins/*.py`.
 
 **Agent runners** (PATH-gated: flag AND binary must both be present):
 
@@ -79,6 +79,8 @@ Hot-reload (`PluginManager.reload()`) is staging-then-commit: a full re-scan of 
 | `qwen_code` (kind `qwen-code`) | runner | ON, PATH-gated |
 | `kimi_cli` (kind `kimi-cli`) | runner | ON, PATH-gated |
 | `antigravity` | runner | ON, PATH-gated |
+| `codex` | runner | ON, PATH-gated |
+| `cursor` | runner | ON, PATH-gated |
 
 **Infra runners** (runner + health):
 

@@ -312,9 +312,8 @@ class Settings(BaseSettings):
     # Sprint 01). Default True — turning one off removes it from RUNNER_MAP via
     # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
     # (shell/terraform/kubectl/…) stay unconditional and get no flag.
-    # env: HIVEPILOT_CLAUDE_ENABLED / _CODEX_ENABLED / _VIBE_ENABLED / _OPENROUTER_ENABLED
+    # env: HIVEPILOT_CLAUDE_ENABLED / _VIBE_ENABLED / _OPENROUTER_ENABLED
     claude_enabled: bool = True
-    codex_enabled: bool = True
     vibe_enabled: bool = True
     openrouter_enabled: bool = True
     # Sprint 2 (runner-defaults-plugins-mode PRD): gemini/opencode/ollama
@@ -329,6 +328,15 @@ class Settings(BaseSettings):
     gemini_enabled: bool = True
     opencode_enabled: bool = True
     ollama_enabled: bool = True
+    # codex-cursor-plugins migration: codex/cursor moved OUT of
+    # hivepilot.registry._BUILTIN_RUNNERS and into default-on, PATH-gated
+    # plugins (plugins/codex.py / plugins/cursor.py) — same opt-OUT +
+    # shutil.which gating pattern as gemini/opencode/ollama above. `codex`
+    # stays in hivepilot.services.agent_checks.MANDATORY_AGENTS regardless
+    # (that check scans PATH directly, unaffected by builtin-vs-plugin).
+    # env: HIVEPILOT_CODEX_ENABLED / _CURSOR_ENABLED
+    codex_enabled: bool = True
+    cursor_enabled: bool = True
     # Sprint 3 (runner-defaults-plugins-mode PRD): three brand-new agent
     # kinds (never previously built-in) added directly as default-on,
     # PATH-gated plugins (plugins/pi.py / plugins/qwen_code.py /

@@ -3148,14 +3148,19 @@ def plugins_list() -> None:
 
     # Sprint 5 (runner-defaults-plugins-mode PRD): the agent taxonomy gets its
     # own table, distinct from every other runner kind — built-in agents
-    # {claude, codex, vibe, openrouter} (openrouter tagged API-only, no CLI
+    # {claude, vibe, openrouter} (openrouter tagged API-only, no CLI
     # binary) plus every PATH-gated plugin agent (gemini/opencode/ollama/pi/
-    # qwen-code/kimi-cli — see hivepilot.registry._OPTIONAL_AGENT_PLUGIN_KINDS,
-    # the single source of truth this reuses), each tagged active (flag on +
-    # binary on PATH — i.e. currently in RUNNER_MAP) or inactive (flag off,
-    # or binary absent), with its per-plugin enable-flag env var so an
-    # inactive row is immediately actionable. See docs/PLUGINS.md.
-    _builtin_agent_kinds = ("claude", "codex", "vibe", "openrouter")
+    # qwen-code/kimi-cli/antigravity/codex/cursor — see
+    # hivepilot.registry._OPTIONAL_AGENT_PLUGIN_KINDS, the single source of
+    # truth this reuses), each tagged active (flag on + binary on PATH — i.e.
+    # currently in RUNNER_MAP) or inactive (flag off, or binary absent), with
+    # its per-plugin enable-flag env var so an inactive row is immediately
+    # actionable. See docs/PLUGINS.md.
+    #
+    # codex-cursor-plugins migration: codex/cursor moved OUT of this tuple
+    # into _OPTIONAL_AGENT_PLUGIN_KINDS — they now render via the plugin loop
+    # below, not this built-in loop.
+    _builtin_agent_kinds = ("claude", "vibe", "openrouter")
     _api_only_agent_kinds = frozenset({"openrouter"})
 
     agents_table = Table(title="Agent Runners")

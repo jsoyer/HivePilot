@@ -1,11 +1,11 @@
 # 🐝 HivePilot
 
-HivePilot is a YAML-driven orchestrator that runs a company of role-bound AI agents through a software-delivery pipeline against one or many repositories. It dispatches coding-agent CLIs (Claude Code, Codex, Vibe, plus OpenRouter and a range of PATH-gated agent plugins) and shell/LangChain runners, in CLI or API mode, from a single config-driven engine — with code review and PRs, an optional adjudicated debate that gates PR promotion, an opt-in auto-learning loop, remote control, and a plugin system.
+HivePilot is a YAML-driven orchestrator that runs a company of role-bound AI agents through a software-delivery pipeline against one or many repositories. It dispatches coding-agent CLIs (Claude Code, Vibe and OpenRouter built-ins, plus Codex, Cursor and a range of PATH-gated agent plugins) and shell/LangChain runners, in CLI or API mode, from a single config-driven engine — with code review and PRs, an optional adjudicated debate that gates PR promotion, an opt-in auto-learning loop, remote control, and a plugin system.
 
 ## What it does
 
 - Runs a configurable pipeline of role-bound agents (e.g. CEO → CTO → Developer → Reviewer → CISO → QA → Documentation) against a repo; each role resolves to a runner + model, overridable per project.
-- Multi-runner: built-in agent kinds `claude`, `codex`, `vibe`, `openrouter` (API-only); PATH-gated plugin agents (gemini, opencode, ollama, pi, qwen-code, kimi-cli, antigravity); plus shell/LangChain/LangGraph/CrewAI engines. Each CLI runner can flip to API mode per YAML.
+- Multi-runner: built-in agent kinds `claude`, `vibe`, `openrouter` (API-only); PATH-gated plugin agents (codex, cursor, gemini, opencode, ollama, pi, qwen-code, kimi-cli, antigravity); plus shell/LangChain/LangGraph/CrewAI engines. Each CLI runner can flip to API mode per YAML.
 - Code review + Git/GitHub automation: branch/commit/push, PR create/draft/promote/merge, `gh` issue/release.
 - Opt-in adjudicated debate: dual-model positions produce an ADR, with an optional independent LLM judge + challenge arbiter that fail-closed gates PR promotion (blocks `promote_pr`/`merge_pr` on any absent, low-confidence, or non-approval verdict).
 - Opt-in auto-learning lessons loop: distills a run's verdicts/outcomes into candidate lessons, validates each against the run's real outcome (never an LLM self-report), and injects only validated lessons into future runs.

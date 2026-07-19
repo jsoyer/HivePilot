@@ -16,21 +16,22 @@ def test_known_kinds_returns_frozenset_of_builtins() -> None:
     # they are no longer unconditionally present here. `openrouter` is the
     # one new built-in agent kind (API-only). See
     # tests/test_agent_plugin_migration.py for the migrated-kind coverage.
+    # codex-cursor-plugins migration: codex/cursor moved OUT of
+    # _BUILTIN_RUNNERS the same way — no longer unconditionally present
+    # here either. See tests/test_codex.py / tests/test_cursor.py.
     builtins = {
         "claude",
         "shell",
         "langchain",
         "internal",
-        "codex",
         "container",
-        "cursor",
         "vibe",
         "openrouter",
     }
     known = RunnerRegistry.known_kinds()
     assert isinstance(known, frozenset)
     assert builtins <= known
-    for migrated_kind in ("gemini", "opencode", "ollama"):
+    for migrated_kind in ("gemini", "opencode", "ollama", "codex", "cursor"):
         assert migrated_kind not in builtins
 
 

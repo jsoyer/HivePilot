@@ -35,14 +35,14 @@ Registered at import time — no PATH check required. Each can be opted out via
 `HIVEPILOT_<KIND>_ENABLED=false`:
 
 - `claude`
-- `codex`
 - `vibe`
 - `openrouter` — **API-only**: `supported_modes == {"api"}`, no CLI binary exists for it.
 
 ### PATH-gated plugin agent kinds
 
 Registered only if the opt-out flag is true **and** the binary is found on `PATH`
-(via `shutil.which`):
+(via `shutil.which`). `codex` and `cursor` are default-on agents delivered as
+PATH-gated plugins (not compiled-in built-ins):
 
 | kind         | binary | flag                     |
 | ------------ | ------ | ------------------------ |
@@ -53,6 +53,8 @@ Registered only if the opt-out flag is true **and** the binary is found on `PATH
 | `qwen-code`  | qwen   | `qwen_code_enabled`      |
 | `kimi-cli`   | kimi   | `kimi_cli_enabled`       |
 | `antigravity`| agy    | `antigravity_enabled`    |
+| `codex`      | codex  | `codex_enabled`          |
+| `cursor`     | cursor-agent | `cursor_enabled`   |
 
 An inactive kind raises an actionable `RunnerPluginUnavailableError` naming the flag
 and the missing binary — never a bare `KeyError`.

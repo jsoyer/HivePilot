@@ -61,15 +61,19 @@ def _plugin_stems() -> list[str]:
 
 class TestBuiltinRunnersGate:
     def test_gate_excludes_disabled_agent_kinds_includes_infra(self) -> None:
+        # codex-cursor-plugins migration: codex/cursor moved OUT of
+        # _BUILTIN_RUNNERS into gated plugins (see TestAgentRunnerKindsSingleSourceOfTruth
+        # / tests/test_codex.py / tests/test_cursor.py for their own gating
+        # coverage) -- the built-in agent set this class exercises is now
+        # exactly {claude, vibe, openrouter}.
         s = Settings(
             _env_file=None,  # type: ignore[call-arg]
             claude_enabled=False,
-            codex_enabled=False,
             vibe_enabled=False,
             openrouter_enabled=False,
         )
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
-        for disabled in ("claude", "codex", "vibe", "openrouter"):
+        for disabled in ("claude", "vibe", "openrouter"):
             assert disabled not in active
         # infra kinds carry no `<kind>_enabled` flag -> getattr(..., True) default wins
         for infra in ("shell", "terraform", "kubectl", "helm"):
@@ -78,14 +82,14 @@ class TestBuiltinRunnersGate:
     def test_gate_keeps_all_agents_active_by_default(self) -> None:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
-        for agent in ("claude", "codex", "vibe", "openrouter"):
+        for agent in ("claude", "vibe", "openrouter"):
             assert agent in active
 
     def test_only_claude_disabled_excludes_only_claude(self) -> None:
         s = Settings(_env_file=None, claude_enabled=False)  # type: ignore[call-arg]
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
         assert "claude" not in active
-        for agent in ("codex", "vibe", "openrouter"):
+        for agent in ("vibe", "openrouter"):
             assert agent in active
 
 
@@ -241,6 +245,7 @@ class TestAgentRunnerKindsSingleSourceOfTruth:
             {
                 "claude",
                 "codex",
+                "cursor",
                 "vibe",
                 "openrouter",
                 "gemini",

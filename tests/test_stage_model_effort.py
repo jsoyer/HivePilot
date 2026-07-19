@@ -737,10 +737,23 @@ class TestOrchestratorStageDispatchByteIdentical:
         assert called_def.model == "claude-opus-x"
         assert called_def.effort == "high"
 
-    def test_codex_default_medium_byte_identical_through_run_task(self, tmp_path: Path) -> None:
+    def test_codex_default_medium_byte_identical_through_run_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """End-to-end: a `reviewer` (codex) role step with no stage overrides
-        must still resolve to `medium` effort via the real CodexRunner path."""
-        from hivepilot.registry import RunnerRegistry
+        must still resolve to `medium` effort via the real CodexRunner path.
+
+        codex-cursor-plugins migration: `codex` is now a PATH-gated plugin
+        kind (`plugins/codex.py`), no longer unconditionally present in
+        `RUNNER_MAP` -- register it directly here (mirroring what
+        `plugins/codex.py`'s `register()` does when active) so this test's
+        REAL dispatch through `RunnerRegistry`/`resolve_runner_class`
+        resolves `CodexRunner`, independent of whether the `codex` CLI
+        binary happens to be on the test host's PATH.
+        """
+        from hivepilot.registry import RUNNER_MAP, RunnerRegistry
+
+        monkeypatch.setitem(RUNNER_MAP, "codex", CodexRunner)
 
         orch = _bare_orchestrator()
         orch.registry = RunnerRegistry({})
