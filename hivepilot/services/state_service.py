@@ -721,6 +721,68 @@ def mark_lesson_used(lesson_id: int) -> None:
         )
 
 
+def update_lesson_validation(lesson_id: int, *, validated: bool, score: float) -> None:
+    """Update an already-persisted lesson CANDIDATE's ``validated``/``score``
+    columns (Auto-Learning Lessons Loop PRD, Sprint 3), after
+    `lessons_service.validate_lesson` computes them from REAL outcome
+    signal.
+
+    Deliberately INSERT-then-UPDATE, never a combined upsert at INSERT
+    time: `record_lesson` always persists a fresh candidate with
+    ``validated=False``/``score=None`` first (Sprint 2's contract, and
+    Sprint 2's own tests assert exactly that) -- this function only ever
+    runs as a SEPARATE, later step against an id that row already has,
+    keeping that INSERT-time contract fully intact for any caller that
+    stops after `record_lesson` (e.g. `enable_lesson_distillation=False`
+    or a validation-step failure -- see the orchestrator wiring's
+    best-effort discipline around this call).
+    """
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            db.ph("UPDATE lessons SET validated=?, score=? WHERE id=?"),
+            (int(validated), score, lesson_id),
+        )
+    logger.info("state.lesson_validated", lesson_id=lesson_id, validated=validated, score=score)
+
+
+def list_ranked_lessons(
+    project: str,
+    role: str | None = None,
+    task: str | None = None,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Return VALIDATED lessons for *project* (optionally filtered by
+    *role*/*task*), ranked ``score DESC, created_at DESC`` (then ``id
+    DESC`` as a final deterministic tiebreak among same-timestamp rows),
+    capped at *limit* -- the read `lessons_service.retrieve_lessons` (Sprint
+    3) wraps into `Lesson` objects for retrieval/injection.
+
+    Always restricted to ``validated=1`` -- unlike `list_lessons`, there is
+    NO ``validated_only`` toggle here: retrieval/injection must never be
+    able to surface an unvalidated (or not-yet-validated) candidate, so
+    that filter is unconditional rather than caller-controlled.
+    """
+    init_db()
+    clauses = ["project=?", "validated=1"]
+    params: list[Any] = [project]
+    if role is not None:
+        clauses.append("role=?")
+        params.append(role)
+    if task is not None:
+        clauses.append("task=?")
+        params.append(task)
+    where = " AND ".join(clauses)
+    sql = (
+        f"SELECT * FROM lessons WHERE {where} ORDER BY score DESC, created_at DESC, id DESC LIMIT ?"
+    )
+    params.append(limit)
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_schedule_last_run(name: str) -> datetime | None:
     init_db()
     with db.connect() as conn:

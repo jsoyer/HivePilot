@@ -117,19 +117,36 @@ class PromptCliRunner(BaseRunner):
             return None
         return build_context(payload.project.path, [Path(f) for f in files])
 
+    def _build_lessons_context(self, payload: RunnerPayload) -> str:
+        """Mirror ClaudeRunner._build_lessons_context: the stable 'Lessons
+        learned' block for this step's project/role/task (Auto-Learning
+        Lessons Loop PRD, Sprint 3). ``role`` comes from
+        ``payload.metadata`` (``Orchestrator._execute_task_body`` threads
+        ``task.role`` in there) -- ``None`` degrades retrieval to
+        project+task keying rather than crashing.
+        """
+        from hivepilot.services.knowledge_service import build_lessons_context
+
+        role = payload.metadata.get("role")
+        return build_lessons_context(payload.project_name, role, payload.task_name)
+
     def _augment_prompt(self, payload: RunnerPayload, prompt_text: str) -> str:
         """Prepend stable knowledge context then append volatile sections.
 
         Order (cache-friendly — stable content first):
           1. Knowledge context (governance docs, injected inline)
-          2. Base prompt (role instructions)
-          3. Volatile: extra_prompt, prior_context
+          2. Lessons learned (validated, outcome-backed guidance — Sprint 3)
+          3. Base prompt (role instructions)
+          4. Volatile: extra_prompt, prior_context
 
         Mirrors ClaudeRunner so non-Claude CLIs (opencode/cursor/codex/gemini/vibe)
-        also receive the pipeline hand-off context and pre-injected governance docs.
+        also receive the pipeline hand-off context, pre-injected governance docs,
+        and validated lessons.
         """
-        # Stable: knowledge context goes BEFORE the prompt so prefix caching covers it.
+        # Stable: knowledge context + lessons learned go BEFORE the prompt so
+        # prefix caching covers them.
         knowledge = self._build_knowledge_context(payload)
+        lessons_context = self._build_lessons_context(payload)
 
         # Volatile sections (user-specific, per-run context).
         volatile: list[str] = []
@@ -140,12 +157,14 @@ class PromptCliRunner(BaseRunner):
         if prior:
             volatile.append(f"Outputs from previous agents:\n{prior}")
 
-        if not knowledge and not volatile:
+        if not knowledge and not lessons_context and not volatile:
             return prompt_text
 
         parts: list[str] = []
         if knowledge:
             parts.append(f"Knowledge context:\n{knowledge}")
+        if lessons_context:
+            parts.append(f"Lessons learned:\n{lessons_context}")
         parts.append(f"Instructions:\n{prompt_text}")
         parts.extend(volatile)
         return "\n\n".join(parts)

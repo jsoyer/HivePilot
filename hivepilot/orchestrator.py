@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import questionary
 
@@ -82,6 +82,7 @@ from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from hivepilot.roles import Role
+    from hivepilot.services import lessons_service
     from hivepilot.services.debate_service import Position
 
 logger = get_logger(__name__)
@@ -1434,8 +1435,19 @@ class Orchestrator:
             distiller_def=distiller_def,
             capture_fn=self.registry.capture_definition,
         )
+        if not lessons:
+            return
+        # Sprint 3: validate each freshly-persisted candidate against the
+        # SAME run's REAL outcome signal -- never the distiller's own
+        # self-report (see `lessons_service.validate_lesson`'s fail-closed
+        # contract). Built ONCE per call (same run_id/result for every
+        # candidate lesson from this project's run) from the *verdicts*/
+        # *interactions* already fetched above -- no extra DB round-trip.
+        outcome_signal = self._build_lesson_outcome_signal(
+            result=result, verdicts=verdicts, interactions=interactions
+        )
         for lesson in lessons:
-            state_service.record_lesson(
+            lesson_id = state_service.record_lesson(
                 run_id=run_id,
                 project=project.path.name,
                 role=role,
@@ -1448,6 +1460,64 @@ class Orchestrator:
                 category=lesson.category,
                 validated=False,
             )
+            validated, score = lessons_service.validate_lesson(lesson, outcome_signal)
+            state_service.update_lesson_validation(lesson_id, validated=validated, score=score)
+
+    def _build_lesson_outcome_signal(
+        self,
+        *,
+        result: RunResult,
+        verdicts: list[dict[str, Any]],
+        interactions: list[dict[str, Any]],
+    ) -> lessons_service.OutcomeSignal:
+        """Build the REAL outcome signal `lessons_service.validate_lesson`
+        gates on (Sprint 3) -- never the distiller's own self-report.
+
+        ``run_success`` is the direct, real `RunResult.success` for the
+        SAME project run this distillation call covers.
+
+        ``resolved_challenge``/``max_verdict_confidence`` are deliberately
+        scoped to ``kind == "challenge"`` verdicts/interactions ONLY -- not
+        e.g. a plain ``"debate"`` verdict, which reflects the debate
+        judge's confidence in ITS OWN routing decision, not whether this
+        run's actual output held up under independent scrutiny. A resolved
+        challenge is real evidence the agent's work survived a direct
+        objection; a debate verdict is not. Two mechanisms persist a
+        resolved challenge, both covered here:
+          * the independent challenge ARBITER path
+            (`_resolve_challenge_via_arbiter` -> `_persist_challenge_verdict`)
+            persists a `kind="challenge"` verdict row with `decision`/
+            `confidence`;
+          * the SELF-adjudication path (`_run_rebuttal_round`) persists only
+            an `interactions` row (`action="challenge"`,
+            `summary="[RESOLUTION] ..."`) with no verdict row at all -- a
+            resolution that does NOT start with "MAINTAIN" is resolved.
+        """
+        from hivepilot.services import lessons_service
+
+        challenge_verdicts = [v for v in verdicts if v.get("kind") == "challenge"]
+        resolved_via_verdict = any(
+            isinstance(v.get("decision"), str) and v["decision"].strip().upper() == "ACCEPT"
+            for v in challenge_verdicts
+        )
+        resolved_via_interaction = any(
+            i.get("action") == "challenge"
+            and isinstance(i.get("summary"), str)
+            and "[RESOLUTION]" in i["summary"]
+            and "MAINTAIN" not in i["summary"].upper()
+            for i in interactions
+        )
+        confidences = [
+            v["confidence"]
+            for v in challenge_verdicts
+            if isinstance(v.get("confidence"), (int, float))
+            and not isinstance(v.get("confidence"), bool)
+        ]
+        return lessons_service.OutcomeSignal(
+            run_success=bool(result.success),
+            resolved_challenge=resolved_via_verdict or resolved_via_interaction,
+            max_verdict_confidence=max(confidences) if confidences else None,
+        )
 
     def _agent_name(self, stage: PipelineStage) -> str:
         """Human-facing agent name for a stage (FR theme), falling back to stage name."""
@@ -3406,7 +3476,18 @@ class Orchestrator:
         Sprint-2 behaviour.
         """
         logger.info("task.start", project=project.path.name, task=task_name)
-        metadata = {"extra_prompt": extra_prompt or "", "prior_context": prior_context or ""}
+        metadata = {
+            "extra_prompt": extra_prompt or "",
+            "prior_context": prior_context or "",
+            # Auto-Learning Lessons Loop PRD, Sprint 3: the ONLY channel a
+            # runner (ClaudeRunner/PromptCliRunner) can key its 'Lessons
+            # learned' retrieval on -- RunnerPayload carries project_name/
+            # task_name natively but has no dedicated role field, and this
+            # SAME metadata dict is reused for every step of this task (see
+            # the step loop below). None for a non-role task -- retrieval
+            # degrades to project+task keying only, never crashes.
+            "role": task.role,
+        }
         effective_debate = self._effective_debate(stage, pipeline)
         if task.engine != "native":
             from hivepilot.engines import run_engine

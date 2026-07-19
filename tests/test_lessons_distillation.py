@@ -144,11 +144,19 @@ class TestDistillAndPersistLessons:
         # Redacted: the live secret value must never reach the persisted row.
         assert "sk-live-supersecret" not in row["text"]
         assert row["text"].startswith("Never hardcode")
-        # Sprint 2 never sets validated=True, and the distiller's own
-        # self-reported score/confidence (0.99 / 1.0 in the JSON above) must
-        # NEVER be trusted as the persisted score/confidence.
-        assert row["validated"] == 0
-        assert row["score"] is None
+        # Sprint 3: `_distill_and_persist_lessons` now also validates each
+        # candidate against the run's REAL outcome signal right after
+        # persisting it — this run's `RunResult.success=True` is real
+        # positive signal, so the candidate is validated with score 1.0.
+        # Critically, that score is NOT the distiller's self-reported 0.99/
+        # 1.0 (`score`/`confidence` in the JSON above) — those keys are
+        # never even read (see `lessons_service.Lesson`/`parse_distilled_
+        # lessons`) — and the recorded "debate" verdict (confidence=0.8)
+        # does NOT contribute either: `_build_lesson_outcome_signal` scopes
+        # verdict-confidence signal to `kind == "challenge"` only.
+        assert row["validated"] == 1
+        assert row["score"] == 1.0
+        assert row["score"] != 0.99
         assert row["confidence"] is None
 
     def test_malformed_distiller_output_persists_nothing(self) -> None:

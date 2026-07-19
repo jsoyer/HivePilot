@@ -140,3 +140,47 @@ def _hash_files(project_path: Path, files: Iterable[Path]) -> str:
         if full.exists():
             hasher.update(full.read_bytes())
     return hasher.hexdigest()[:12]
+
+
+def build_lessons_context(
+    project: str, role: str | None, task: str | None, *, limit: int | None = None
+) -> str:
+    """Return the formatted ``Lessons learned`` block for *project*/*role*/
+    *task* -- VALIDATED lessons only (Auto-Learning Lessons Loop PRD,
+    Sprint 3's fail-closed gate), ranked score desc / recency desc, capped
+    at ``limit`` (default: `settings.lesson_inject_limit`).
+
+    GATE: returns ``""`` when `settings.enable_lesson_distillation` is
+    False -- checked FIRST, before touching the database at all, so the
+    flags-off path is byte-identical to before this Sprint (no import of
+    `state_service`/`lessons_service`, no query, no injected section) --
+    and also returns ``""`` when there are simply no validated lessons for
+    this key. Both callers (`ClaudeRunner._build_prompt`/`PromptCliRunner.
+    _augment_prompt`) must treat an empty string exactly like "no Knowledge
+    context": omit the section entirely.
+
+    Calls `state_service.mark_lesson_used` for every lesson actually
+    returned (best-effort -- a persistence hiccup here must never break
+    prompt assembly for the run itself).
+    """
+    from hivepilot.config import settings
+
+    if not settings.enable_lesson_distillation:
+        return ""
+
+    from hivepilot.services import state_service
+    from hivepilot.services.lessons_service import retrieve_lessons
+
+    effective_limit = limit if limit is not None else settings.lesson_inject_limit
+    lessons = retrieve_lessons(project, role=role, task=task, limit=effective_limit)
+    if not lessons:
+        return ""
+
+    for lesson in lessons:
+        if lesson.id is not None:
+            try:
+                state_service.mark_lesson_used(lesson.id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("lessons.mark_used_failed", lesson_id=lesson.id, error=str(exc))
+
+    return "\n".join(f"- {lesson.text}" for lesson in lessons)
