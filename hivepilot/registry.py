@@ -10,7 +10,6 @@ from hivepilot.runners.base import BaseRunner, RunnerPayload, set_last_usage
 from hivepilot.runners.chef_runner import ChefRunner
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
-from hivepilot.runners.cursor_runner import CursorRunner
 from hivepilot.runners.helm_runner import HelmRunner
 from hivepilot.runners.iac_runner import OpenTofuRunner, PulumiRunner, TerraformRunner
 from hivepilot.runners.internal_runner import InternalRunner
@@ -19,7 +18,7 @@ from hivepilot.runners.kustomize_runner import KustomizeRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
 from hivepilot.runners.openrouter_runner import OpenRouterRunner
 from hivepilot.runners.packer_runner import PackerRunner
-from hivepilot.runners.prompt_cli_runner import CodexRunner, VibeRunner
+from hivepilot.runners.prompt_cli_runner import VibeRunner
 from hivepilot.runners.puppet_runner import PuppetRunner
 from hivepilot.runners.salt_runner import SaltRunner
 from hivepilot.runners.shell_runner import ShellRunner
@@ -83,6 +82,13 @@ _OPTIONAL_AGENT_PLUGIN_KINDS: Dict[str, tuple[str, str]] = {
     "kimi-cli": ("kimi_cli_enabled", "kimi"),
     # S3 (follow-on): Google Antigravity CLI (plugins/antigravity.py).
     "antigravity": ("antigravity_enabled", "agy"),
+    # codex-cursor-plugins migration: codex/cursor moved OUT of
+    # _BUILTIN_RUNNERS into default-on, PATH-gated plugins (plugins/codex.py
+    # / plugins/cursor.py), same pattern as gemini/opencode/ollama above.
+    # `cursor`'s CLI binary is `cursor-agent` (NOT `cursor`) — matches
+    # `CursorRunner.command_name` and `AGENT_INSTALL_SPECS["cursor"]`.
+    "codex": ("codex_enabled", "codex"),
+    "cursor": ("cursor_enabled", "cursor-agent"),
 }
 
 
@@ -205,9 +211,7 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "shell": ShellRunner,
     "langchain": LangChainRunner,
     "internal": InternalRunner,
-    "codex": CodexRunner,
     "container": ContainerRunner,
-    "cursor": CursorRunner,
     "vibe": VibeRunner,
     # Sprint 2 (runner-defaults-plugins-mode PRD): the only NEW built-in
     # agent kind — API-only, no CLI binary. gemini/opencode/ollama moved OUT
@@ -215,6 +219,10 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     # ollama.py); see RunnerPluginUnavailableError above for their
     # resolution-time error and _OPTIONAL_AGENT_PLUGIN_KINDS for the mapping.
     "openrouter": OpenRouterRunner,
+    # codex-cursor-plugins migration: codex/cursor moved OUT of this dict
+    # into gated plugins (plugins/codex.py / plugins/cursor.py) — same
+    # pattern as gemini/opencode/ollama above. Built-in agent kinds are now
+    # exactly {claude, vibe, openrouter}.
     "terraform": TerraformRunner,
     "opentofu": OpenTofuRunner,
     "pulumi": PulumiRunner,

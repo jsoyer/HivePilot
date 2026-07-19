@@ -139,16 +139,54 @@ class TestRoleModelsField:
 
 
 class TestCursorRunnerInRegistry:
-    """cursor must be registered in RUNNER_MAP and CursorRunner must be the right class."""
+    """cursor is registered in RUNNER_MAP (via plugins/cursor.py — the
+    codex-cursor-plugins migration moved it OUT of the unconditional
+    `_BUILTIN_RUNNERS` dict into a default-on, PATH-gated plugin, same as
+    gemini/opencode/ollama/codex) and CursorRunner must be the right class."""
 
-    def test_cursor_key_in_runner_map(self):
+    def test_cursor_key_in_runner_map_when_binary_present(self, monkeypatch):
+        from pathlib import Path
+
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.config import settings
         from hivepilot.registry import RUNNER_MAP
+
+        monkeypatch.setattr(
+            plugins_mod.settings, "base_dir", Path(__file__).parent.parent, raising=False
+        )
+
+        monkeypatch.setattr(settings, "cursor_enabled", True, raising=False)
+        RUNNER_MAP.pop("cursor", None)
+        with patch(
+            "shutil.which",
+            side_effect=lambda name: (
+                "/usr/local/bin/cursor-agent" if name == "cursor-agent" else None
+            ),
+        ):
+            plugins_mod.PluginManager()
 
         assert "cursor" in RUNNER_MAP, "RUNNER_MAP missing 'cursor' key"
 
-    def test_cursor_runner_class_is_correct(self):
+    def test_cursor_runner_class_is_correct(self, monkeypatch):
+        from pathlib import Path
+
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.config import settings
         from hivepilot.registry import RUNNER_MAP
         from hivepilot.runners.cursor_runner import CursorRunner
+
+        monkeypatch.setattr(
+            plugins_mod.settings, "base_dir", Path(__file__).parent.parent, raising=False
+        )
+        monkeypatch.setattr(settings, "cursor_enabled", True, raising=False)
+        RUNNER_MAP.pop("cursor", None)
+        with patch(
+            "shutil.which",
+            side_effect=lambda name: (
+                "/usr/local/bin/cursor-agent" if name == "cursor-agent" else None
+            ),
+        ):
+            plugins_mod.PluginManager()
 
         assert RUNNER_MAP["cursor"] is CursorRunner
 

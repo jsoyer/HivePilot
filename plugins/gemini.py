@@ -5,9 +5,10 @@ binary being on PATH.
 
 Sprint 2 (runner-defaults-plugins-mode PRD) moved `gemini`/`opencode`/
 `ollama` OUT of `hivepilot.registry._BUILTIN_RUNNERS` and into default-on,
-PATH-gated plugins exactly like this one — the built-in agent set is now
-`{claude, codex, vibe, openrouter}` only. `GeminiRunner`'s CLI invocation
-logic is completely unchanged; only its *registration* moved here.
+PATH-gated plugins exactly like this one. The codex-cursor-plugins migration
+later did the same for `codex`/`cursor` — the built-in agent set is now
+`{claude, vibe, openrouter}` only. `GeminiRunner`'s CLI invocation logic is
+completely unchanged; only its *registration* moved here.
 
 This is the CANONICAL gated-agent-plugin skeleton (`plugins/opencode.py` /
 `plugins/ollama.py` mirror it exactly; Sprint 3's new plugins copy it too):

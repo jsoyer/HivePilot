@@ -3,7 +3,10 @@ gated-plugin migration for gemini/opencode/ollama.
 
 Covers:
 - `_BUILTIN_RUNNERS` no longer registers gemini/opencode/ollama; `openrouter`
-  is a new built-in agent kind alongside claude/codex/vibe.
+  is a new built-in agent kind alongside claude/vibe. (codex/cursor were
+  later moved out too, by the codex-cursor-plugins migration -- see
+  tests/test_codex.py / tests/test_cursor.py for their dedicated coverage;
+  this file's own `codex`/`cursor` assertions were updated to match.)
 - `KNOWN_RUNNER_KINDS` (the "built-in" doc/grouping tuple `plugins list`
   reads) is updated to match.
 - Each migrated plugin (`plugins/gemini.py` / `plugins/opencode.py` /
@@ -35,7 +38,6 @@ from hivepilot.registry import RUNNER_MAP, RunnerPluginUnavailableError, resolve
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.openrouter_runner import OpenRouterRunner
 from hivepilot.runners.prompt_cli_runner import (
-    CodexRunner,
     GeminiRunner,
     OllamaRunner,
     OpenCodeRunner,
@@ -75,13 +77,19 @@ class TestBuiltinReduction:
         for kind in ("gemini", "opencode", "ollama"):
             assert kind not in _BUILTIN_RUNNERS
 
-    def test_claude_codex_vibe_openrouter_are_builtin_runners(self) -> None:
+    def test_claude_vibe_openrouter_are_builtin_runners(self) -> None:
+        # codex-cursor-plugins migration: codex moved OUT of _BUILTIN_RUNNERS
+        # into a gated plugin (plugins/codex.py) -- see
+        # tests/test_codex.py::test_codex_not_in_builtin_runners for that
+        # coverage. The built-in agent set here is now exactly
+        # {claude, vibe, openrouter}.
         from hivepilot.registry import _BUILTIN_RUNNERS
 
         assert _BUILTIN_RUNNERS["claude"] is ClaudeRunner
-        assert _BUILTIN_RUNNERS["codex"] is CodexRunner
         assert _BUILTIN_RUNNERS["vibe"] is VibeRunner
         assert _BUILTIN_RUNNERS["openrouter"] is OpenRouterRunner
+        assert "codex" not in _BUILTIN_RUNNERS
+        assert "cursor" not in _BUILTIN_RUNNERS
 
     def test_openrouter_registered_in_runner_map_by_default(self) -> None:
         assert RUNNER_MAP.get("openrouter") is OpenRouterRunner
@@ -93,9 +101,16 @@ class TestBuiltinReduction:
     def test_openrouter_in_known_runner_kinds(self) -> None:
         assert "openrouter" in KNOWN_RUNNER_KINDS
 
-    def test_claude_codex_vibe_still_in_known_runner_kinds(self) -> None:
-        for kind in ("claude", "codex", "vibe"):
+    def test_claude_vibe_still_in_known_runner_kinds(self) -> None:
+        for kind in ("claude", "vibe"):
             assert kind in KNOWN_RUNNER_KINDS
+
+    def test_codex_cursor_not_in_known_runner_kinds(self) -> None:
+        # codex-cursor-plugins migration: codex/cursor removed from
+        # KNOWN_RUNNER_KINDS for the same reason gemini/opencode/ollama were
+        # -- they are no longer unconditionally present in RUNNER_MAP.
+        for kind in ("codex", "cursor"):
+            assert kind not in KNOWN_RUNNER_KINDS
 
 
 # ---------------------------------------------------------------------------
