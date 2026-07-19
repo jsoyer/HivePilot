@@ -475,6 +475,49 @@ class Settings(BaseSettings):
             )
         return v
 
+    # ---- Auto-Learning Lessons Loop PRD, Sprint 2 (opt-in distillation) ----
+    # Opt-in, ONE-LLM-call-per-run distillation of the run's verdicts +
+    # interactions + outcomes into structured, scored CANDIDATE lessons
+    # (see `lessons_service.distill_lessons`, wired at pipeline end in
+    # `Orchestrator._run_task_body`, near where per-project
+    # `knowledge_service.append_feedback` already fires). Defaults False --
+    # the flags-off path is byte-identical to pre-Sprint-2 behaviour (no
+    # extra LLM call, no `lessons` rows written).
+    # env: HIVEPILOT_ENABLE_LESSON_DISTILLATION
+    enable_lesson_distillation: bool = False
+    # Runner kind used for the ONE distiller `capture_definition` call.
+    # env: HIVEPILOT_LESSON_DISTILL_RUNNER
+    lesson_distill_runner: str = "claude"
+    # Model passed to the distiller RunnerDefinition; None lets the runner
+    # use its own default. env: HIVEPILOT_LESSON_DISTILL_MODEL
+    lesson_distill_model: str | None = None
+    # Minimum score, in (0.0, 1.0], a lesson must reach before it is
+    # eligible for retrieval/injection into a future run (Sprint 3 computes
+    # the real score from outcome signal -- Sprint 2 never reads this at
+    # distillation time, only persists candidates at `validated=False`).
+    # env: HIVEPILOT_LESSON_MIN_SCORE
+    lesson_min_score: float = 0.5
+    # Max number of validated lessons injected into a future run's context
+    # (Sprint 3/4's retrieval + injection path).
+    # env: HIVEPILOT_LESSON_INJECT_LIMIT
+    lesson_inject_limit: int = 5
+
+    @field_validator("lesson_min_score")
+    @classmethod
+    def _validate_lesson_min_score(cls, v: float) -> float:
+        # Fail closed, same rationale/shape as
+        # `_validate_judge_confidence_threshold` above: a `lesson_min_score`
+        # of 0 (or negative, >1, NaN, inf) would let ANY distilled candidate
+        # (however weak) pass the future validation gate -- a fail-OPEN
+        # lesson-quality floor. Reject at startup instead of silently
+        # admitting garbage lessons.
+        if not math.isfinite(v) or not (0 < v <= 1):
+            raise ValueError(
+                "lesson_min_score (env HIVEPILOT_LESSON_MIN_SCORE) must be a "
+                f"finite number in (0, 1], got {v!r}"
+            )
+        return v
+
     @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
     @classmethod
     def _coerce_notification_chat_id(cls, v: object) -> object:
