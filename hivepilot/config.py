@@ -308,6 +308,13 @@ class Settings(BaseSettings):
     # Demo skill plugin (plugins/sample_skill.py) — opt-IN, dormant by
     # default. env: HIVEPILOT_SAMPLE_SKILL_ENABLED
     sample_skill_enabled: bool = False
+    # Example `graph_sources` plugin capability (plugins/example_graph_source.py,
+    # Mirador Graph View PRD Sprint 4) — opt-IN, dormant by default, same
+    # pattern as sample/sample_skill above. Required by
+    # tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag
+    # (every plugins/*.py stem must have a matching `<stem>_enabled` flag).
+    # env: HIVEPILOT_EXAMPLE_GRAPH_SOURCE_ENABLED
+    example_graph_source_enabled: bool = False
     # Built-in agent runners are individually disable-able (plugin-arch-overhaul
     # Sprint 01). Default True — turning one off removes it from RUNNER_MAP via
     # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners

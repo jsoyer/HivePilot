@@ -172,6 +172,26 @@ def register_graph_source(spec: GraphSourceSpec) -> None:
     _GRAPH_SOURCES[spec.name] = spec
 
 
+def unregister_graph_source(name: str) -> None:
+    """Remove *name* from the registry, no-op if absent.
+
+    Sprint 4's plugin-ownership model (`hivepilot/plugins.py`
+    `PluginManager._commit`) is the only intended caller: a manager tears
+    down the graph-source names IT previously registered, immediately
+    before re-registering its freshly-staged set, on every `reload()` —
+    exactly mirroring how `RUNNER_MAP`/`NOTIFIER_MAP`/`SECRETS_MAP` entries
+    this SAME manager owns are popped before being re-added (see
+    `PluginManager._commit`'s `_owned_runner_kinds` handling). This is what
+    makes a plugin's graph source disappear when the plugin is disabled +
+    reloaded (never left orphaned/fail-open), and lets a still-enabled
+    plugin's re-`exec()`d module register a brand-new `GraphSourceSpec`
+    object under the same name on reload without a self-collision. A
+    built-in source (registered once at import time by
+    `hivepilot/graph_sources/__init__.py`, never manager-owned) is never
+    passed here by that call site, so built-ins are never torn down."""
+    _GRAPH_SOURCES.pop(name, None)
+
+
 def list_graph_sources() -> list[GraphSourceSpec]:
     """Every registered graph source, sorted by name — safe to call
     unconditionally from the `/v1/graph/sources` endpoint."""
