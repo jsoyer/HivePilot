@@ -1828,20 +1828,22 @@ Prints six tables:
   handling" below) is never credited to the plugin that lost.
 - **Agent Runners** — the coding-agent taxonomy from "Agent runner taxonomy"
   above, sourced live from the registry: every built-in agent kind
-  (`claude`/`codex`/`vibe`/`openrouter`) tagged `built-in`, plus every plugin
-  agent kind (`gemini`/`opencode`/`ollama`/`pi`/`qwen-code`/`kimi-cli`)
-  tagged `plugin`. Status is derived from real `RUNNER_MAP` membership for
-  BOTH tiers (Sprint 05 — a built-in kind is no longer assumed always
-  active): `active` when currently registered (`openrouter` renders
-  `API-only` instead, since it never spawns a CLI subprocess), `inactive`
-  when its `<kind>_enabled` flag is `False` (built-ins) or its flag is
-  `False`/binary absent (plugin agents) — each row carries its own
-  `HIVEPILOT_<KIND>_ENABLED` env var (including the built-ins) so an
-  inactive row is immediately actionable.
+  (`claude`/`vibe`/`openrouter`) tagged `built-in`, plus every plugin
+  agent kind (`gemini`/`opencode`/`ollama`/`pi`/`qwen-code`/`kimi-cli`/
+  `antigravity`/`codex`/`cursor`) tagged `plugin`. Status is derived from
+  real `RUNNER_MAP` membership for BOTH tiers (Sprint 05 — a built-in kind
+  is no longer assumed always active): `active` when currently registered
+  (`openrouter` renders `API-only` instead, since it never spawns a CLI
+  subprocess), `inactive` when its `<kind>_enabled` flag is `False`
+  (built-ins) or its flag is `False`/binary absent (plugin agents) — each
+  row carries its own `HIVEPILOT_<KIND>_ENABLED` env var (including the
+  built-ins) so an inactive row is immediately actionable.
 - **Other Runner Kinds** — every remaining (non-agent) kind currently in
-  `RUNNER_MAP` — `shell`, `langchain`, `internal`, `container`, `cursor`, the
+  `RUNNER_MAP` — `shell`, `langchain`, `internal`, `container`, the
   IaC runners, etc. — labeled `built-in` or `plugin` by membership in
-  `KNOWN_RUNNER_KINDS`.
+  `KNOWN_RUNNER_KINDS`. (`cursor` is an AGENT kind — it renders in the
+  **Agent Runners** table above, not here; the `_agent_kinds` filter in
+  `hivepilot.cli.plugins_list` excludes it from this table.)
 - **Notifiers** — every notifier currently in `NOTIFIER_MAP`, labeled
   `built-in` or `plugin` by membership in `{slack, discord, telegram}`.
 - **Secrets Backends** — every backend currently in `SECRETS_MAP`, labeled
