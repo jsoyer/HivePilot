@@ -1351,7 +1351,103 @@ class Orchestrator:
                 continue
             summary_text = f"{result.target} -> {'success' if result.success else 'failed'} ({result.detail or 'no detail'})"
             knowledge_service.append_feedback(project_cfg.path, result.target, summary_text)
+            # Auto-Learning Lessons Loop PRD, Sprint 2: opt-in, best-effort
+            # per-project lesson distillation, right next to the
+            # `append_feedback` call above -- same "one summary per
+            # completed project result" granularity, correlated by the
+            # SAME `run_id` the rest of this project's verdicts/
+            # interactions/steps were persisted under. Both `simulate=True`
+            # AND `dry_run=True` skip the real distiller call and every
+            # persistence side effect: `simulate` mirrors
+            # `Orchestrator._adjudicate`'s simulate branch (no real
+            # `capture_definition` call -- a simulated run has no real
+            # verdicts/interactions worth distilling anyway); `dry_run`
+            # additionally gates it because distillation makes a REAL LLM
+            # call (unlike `record_verdict`/`record_interaction`, which only
+            # persist data already produced by a step that already ran) --
+            # a dry run must never trigger a brand-new, costed side effect.
+            # A failure here is caught and logged, never allowed to break
+            # the pipeline -- same best-effort discipline as the
+            # Notion/Linear notification calls a few lines above.
+            if settings.enable_lesson_distillation and not simulate and not dry_run:
+                run_id = run_ids.get(result.project)
+                if run_id is not None:
+                    try:
+                        self._distill_and_persist_lessons(
+                            run_id=run_id,
+                            project=project_cfg,
+                            role=task.role,
+                            task_name=task_name,
+                            result=result,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "lessons.distill_error",
+                            project=project_cfg.path.name,
+                            task=task_name,
+                            error=redact_text(str(exc)),
+                        )
         return results
+
+    def _distill_and_persist_lessons(
+        self,
+        *,
+        run_id: int,
+        project: ProjectConfig,
+        role: str | None,
+        task_name: str,
+        result: RunResult,
+    ) -> None:
+        """Distill *this project's* verdicts + interactions + outcome from
+        *run_id* into lesson CANDIDATEs via ONE `lessons_service.
+        distill_lessons` call, then persist each via `state_service.
+        record_lesson(..., validated=False)` (Auto-Learning Lessons Loop
+        PRD, Sprint 2 -- Sprint 3 owns real validation).
+
+        Never raises past the caller's own try/except -- but this method
+        itself does no swallowing so callers see the real error for
+        logging."""
+        from hivepilot.services import lessons_service
+
+        verdicts = state_service.list_recent_verdicts(run_id=run_id)
+        interactions = state_service.list_recent_interactions(run_id=run_id)
+        outcomes = [
+            {
+                "project": result.project,
+                "target": result.target,
+                "success": result.success,
+                "detail": result.detail,
+            }
+        ]
+        distiller_def = lessons_service.build_distiller_definition(
+            runner=settings.lesson_distill_runner,
+            model=settings.lesson_distill_model,
+        )
+        lessons = lessons_service.distill_lessons(
+            run_id=run_id,
+            project=project,
+            role=role,
+            task=task_name,
+            verdicts=verdicts,
+            interactions=interactions,
+            outcomes=outcomes,
+            distiller_def=distiller_def,
+            capture_fn=self.registry.capture_definition,
+        )
+        for lesson in lessons:
+            state_service.record_lesson(
+                run_id=run_id,
+                project=project.path.name,
+                role=role,
+                task=task_name,
+                source_verdict_id=lesson.source_verdict_id,
+                source_interaction_id=lesson.source_interaction_id,
+                text=lesson.text,
+                score=None,
+                confidence=None,
+                category=lesson.category,
+                validated=False,
+            )
 
     def _agent_name(self, stage: PipelineStage) -> str:
         """Human-facing agent name for a stage (FR theme), falling back to stage name."""

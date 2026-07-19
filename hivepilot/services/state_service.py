@@ -294,6 +294,43 @@ def init_db() -> None:
             )
             """
         )
+        # Auto-Learning Lessons Loop PRD, Sprint 2: persist opt-in,
+        # LLM-distilled "lessons" candidates correlating a run's verdicts +
+        # interactions + outcomes into structured, scored guidance for future
+        # runs. Sibling to `verdicts`/`interactions` -- same `run_id` FK/
+        # CASCADE shape, plus optional FKs back to the specific `verdicts`/
+        # `interactions` row a lesson was distilled from (nullable -- a
+        # lesson need not trace to exactly one source row). `validated`
+        # defaults to 0/False: Sprint 2 only ever inserts CANDIDATE lessons
+        # (see `lessons_service.distill_lessons`) -- Sprint 3 owns turning a
+        # candidate into a validated, retrievable lesson via real outcome
+        # signal, never the distiller's own self-reported score. `text` is
+        # the only free-text column and is routed through `redact_text`
+        # before INSERT in `record_lesson` below -- same choke-point pattern
+        # as `verdicts.summary`/`interactions.summary`.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS lessons (
+                id {pk},
+                run_id INTEGER,
+                project TEXT,
+                role TEXT,
+                task TEXT,
+                source_verdict_id INTEGER,
+                source_interaction_id INTEGER,
+                text TEXT,
+                score REAL,
+                confidence REAL,
+                category TEXT,
+                validated INTEGER DEFAULT 0,
+                use_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(source_verdict_id) REFERENCES verdicts(id),
+                FOREIGN KEY(source_interaction_id) REFERENCES interactions(id)
+            )
+            """
+        )
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:
@@ -567,6 +604,117 @@ def list_recent_verdicts(limit: int = 50, run_id: int | None = None) -> list[dic
                 db.ph("SELECT * FROM verdicts ORDER BY id DESC LIMIT ?"), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
+
+
+def record_lesson(
+    *,
+    run_id: int | None,
+    project: str | None,
+    role: str | None,
+    task: str | None,
+    source_verdict_id: int | None = None,
+    source_interaction_id: int | None = None,
+    text: str,
+    score: float | None,
+    confidence: float | None,
+    category: str | None,
+    validated: bool = False,
+) -> int:
+    """Persist a distilled :class:`lessons_service.Lesson` candidate
+    (Auto-Learning Lessons Loop PRD, Sprint 2) and return the new row id.
+
+    ``text`` is the only free-text field and is routed through
+    ``redact_text`` before INSERT -- same choke-point pattern as
+    ``record_verdict``'s ``summary``/``record_interaction``'s ``summary``,
+    since a distilled lesson can echo a resolved ``${secret:NAME}`` value
+    from the verdicts/interactions it was built from.
+
+    ``validated`` defaults to ``False`` -- Sprint 2's distillation path
+    (``lessons_service.distill_lessons`` -> the orchestrator wiring) always
+    calls this with ``validated=False``; real validation is Sprint 3's job.
+    """
+    init_db()
+    from hivepilot.services.config_provenance import redact_text
+
+    text = redact_text(text)
+    with db.connect() as conn:
+        lesson_id = db.insert_returning_id(
+            conn,
+            db.ph(
+                "INSERT INTO lessons "
+                "(run_id, project, role, task, source_verdict_id, source_interaction_id, "
+                "text, score, confidence, category, validated) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                run_id,
+                project,
+                role,
+                task,
+                source_verdict_id,
+                source_interaction_id,
+                text,
+                score,
+                confidence,
+                category,
+                int(validated),
+            ),
+        )
+        logger.info(
+            "state.lesson",
+            lesson_id=lesson_id,
+            run_id=run_id,
+            project=project,
+            role=role,
+            category=category,
+            validated=validated,
+        )
+        return lesson_id
+
+
+def list_lessons(
+    project: str,
+    role: str | None = None,
+    task: str | None = None,
+    *,
+    validated_only: bool = True,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return lessons for *project*, newest first (ranking is Sprint 3's
+    job -- this is a simple recent-first read), optionally filtered by
+    *role*/*task*. ``validated_only`` (default ``True``) restricts to rows
+    with ``validated=1``; Sprint 2 never sets that flag, so callers must
+    pass ``validated_only=False`` to see Sprint 2's freshly-distilled
+    candidates until Sprint 3's validation gate promotes them."""
+    init_db()
+    clauses = ["project=?"]
+    params: list[Any] = [project]
+    if role is not None:
+        clauses.append("role=?")
+        params.append(role)
+    if task is not None:
+        clauses.append("task=?")
+        params.append(task)
+    if validated_only:
+        clauses.append("validated=1")
+    where = " AND ".join(clauses)
+    sql = f"SELECT * FROM lessons WHERE {where} ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def mark_lesson_used(lesson_id: int) -> None:
+    """Increment a lesson's ``use_count`` (called when a lesson is injected
+    into a future run's context -- Sprint 3/4's retrieval + injection
+    path)."""
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            db.ph("UPDATE lessons SET use_count = use_count + 1 WHERE id=?"),
+            (lesson_id,),
+        )
 
 
 def get_schedule_last_run(name: str) -> datetime | None:
