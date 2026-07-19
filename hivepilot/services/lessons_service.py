@@ -544,7 +544,15 @@ def _semantic_rerank(
             for row in top_rows
         ]
     except Exception as exc:  # noqa: BLE001 -- semantic ranking is best-effort only
-        logger.warning("lessons.semantic_rerank_failed", error=str(exc))
+        # Redact before logging -- same choke-point discipline as every
+        # other egress point in this loop (`distill_lessons`'s prompt/
+        # response redaction, `mem0`/`obsidian` `store()`). An embedding
+        # backend's exception message could in principle echo back a
+        # fragment of the query text/lesson content it was fed (which may
+        # itself carry a resolved `${secret:NAME}` value).
+        from hivepilot.services.config_provenance import redact_text
+
+        logger.warning("lessons.semantic_rerank_failed", error=redact_text(str(exc)))
         return None
 
 

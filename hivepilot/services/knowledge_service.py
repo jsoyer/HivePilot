@@ -159,6 +159,18 @@ def build_lessons_context(
     _augment_prompt`) must treat an empty string exactly like "no Knowledge
     context": omit the section entirely.
 
+    Sprint 4 fix: this is the ONLY production caller of `retrieve_lessons`
+    -- it now passes ``semantic=settings.enable_semantic_lesson_retrieval``
+    through, so the opt-in semantic re-rank actually reaches injected
+    lessons (previously the flag had zero effect here: `retrieve_lessons`
+    defaults `semantic=False`, so its own internal
+    `enable_semantic_lesson_retrieval` check could never even be reached
+    from this call site). `retrieve_lessons` still applies the flag as a
+    SECOND, internal gate -- so `enable_semantic_lesson_retrieval=False`
+    (the default) keeps this call on the exact same SQLite-ranked S3 path,
+    and any semantic-path failure (missing extra, embedding error) still
+    falls back to that same path, never crashes.
+
     Calls `state_service.mark_lesson_used` for every lesson actually
     returned (best-effort -- a persistence hiccup here must never break
     prompt assembly for the run itself).
@@ -172,7 +184,13 @@ def build_lessons_context(
     from hivepilot.services.lessons_service import retrieve_lessons
 
     effective_limit = limit if limit is not None else settings.lesson_inject_limit
-    lessons = retrieve_lessons(project, role=role, task=task, limit=effective_limit)
+    lessons = retrieve_lessons(
+        project,
+        role=role,
+        task=task,
+        limit=effective_limit,
+        semantic=settings.enable_semantic_lesson_retrieval,
+    )
     if not lessons:
         return ""
 
