@@ -14,16 +14,31 @@ which all route through `redact_text`/the resolved-secrets masking registry
 into a step's output or prompt context could therefore reach an external
 mem0 store or a plaintext Obsidian vault note verbatim.
 
-Covers TWO layers, per the sprint spec:
+A follow-up opus adversarial review additionally caught that the hook-facing
+payload copy still carried `payload.secrets` — the RAW `{ENV_NAME:
+resolved_value}` map itself, not text `redact_text`/`redact_value` can mask —
+verbatim. That is closed too: the hook-facing copy blanks `secrets={}`
+unconditionally.
+
+Covers THREE layers, per the sprint spec:
 (A) The orchestrator `after_step` choke point (`_execute_task_body`) redacts
-    `output` and `payload.metadata` into a COPY before the hook fires — the
-    shared `metadata` dict (reused across every step in the task, see
-    `payload = RunnerPayload(..., metadata=metadata, ...)`) is never mutated
-    in place, so later steps' real prompts are unaffected.
+    `output` and `payload.metadata` (via `redact_value`, recursive) into a
+    COPY before the hook fires — the shared `metadata` dict (reused across
+    every step in the task, see `payload = RunnerPayload(...,
+    metadata=metadata, ...)`) is never mutated in place, so later steps'
+    real prompts are unaffected.
 (B) Defense-in-depth inside `plugins/mem0.py::store` and
     `plugins/obsidian.py::store` — both redact the content they persist
     even if a future/other caller invokes `store()` directly without going
     through the orchestrator choke.
+(C) `payload.secrets` is blanked (`secrets={}`) on the hook-facing copy for
+    BOTH `before_step` and `after_step` — the raw resolved-secret env map
+    must never reach a hook, regardless of whether the surrounding text was
+    redacted. `before_step`'s copy keeps its `metadata` as the SAME dict
+    reference as the live payload (no `metadata=` override), preserving
+    mem0/obsidian `recall`'s in-place-mutation injection contract — see
+    `tests/test_mem0.py` / `tests/test_plugin_obsidian_brain.py`'s recall
+    tests, which this sprint must not regress.
 """
 
 from __future__ import annotations
@@ -225,6 +240,65 @@ class TestAfterStepChokeRedactsOutput:
         before_metadata = before_recorder.calls[0]["payload"].metadata
         assert before_metadata["extra_prompt"] == f"use credential {MARKER} to proceed"
         assert after_recorder.calls[0]["payload"].metadata is not before_metadata
+
+    def test_after_step_hook_payload_secrets_is_empty_while_live_payload_keeps_them(
+        self,
+    ) -> None:
+        """`payload.secrets` is the RAW `{ENV_NAME: resolved_value}` map — not
+        text, so `redact_text`/`redact_value` can't mask it. The hook-facing
+        copy must blank it entirely (`secrets={}`), while the REAL payload
+        the runner actually dispatches with (captured here via
+        `capture_definition`'s call args) must keep its real secrets — the
+        runner needs them to build the subprocess environment."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        after_recorder = _Recorder()
+        pm = _bare_plugin_manager()
+        pm.hooks["after_step"] = [after_recorder]
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline("x"), plugin_manager=pm)
+        orch.registry = MagicMock()
+
+        live_payloads: list = []
+
+        def _capture(_runner_def, _payload):
+            live_payloads.append(_payload)
+            return "ordinary output"
+
+        orch.registry.capture_definition.side_effect = _capture
+
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", _resolve_secrets_stub),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+                dry_run=False,
+                simulate=False,
+            )
+
+        assert len(after_recorder.calls) == 1
+        assert len(live_payloads) == 1
+
+        hook_payload = after_recorder.calls[0]["payload"]
+        live_payload = live_payloads[0]
+
+        assert hook_payload.secrets == {}
+        assert live_payload.secrets == {"API_KEY": MARKER}
+        assert hook_payload is not live_payload
 
 
 # ---------------------------------------------------------------------------

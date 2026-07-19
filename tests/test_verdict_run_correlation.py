@@ -93,6 +93,28 @@ def _reset_judge_flag() -> Iterator[None]:
     settings.enable_debate_judge = original
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_policy_cache() -> Iterator[None]:
+    """`policy_service._get_policies()` caches parsed policy config in a
+    module-level `_cache` keyed for the whole process — `policy_service.
+    get_policy(project_name)` (called from `_run_debate_body`) reads through
+    it. `tests/test_policy_service.py::
+    test_invalid_block_on_severity_raises_at_load` deliberately loads an
+    INVALID policy for a project also named `"p"` (same name this module
+    uses) and never resets the cache in teardown, so — when that test runs
+    earlier in the same session — its poisoned entry leaks here and
+    `get_policy("p")` raises before `run_debate` ever reaches the judge
+    call. Reload (clear + re-read from the real, valid on-disk config)
+    before AND after every test in this module so it is hermetic regardless
+    of run order/adjacency — this fixes isolation in THIS file only; the
+    leaking test's own missing teardown is out of scope for Sprint 1."""
+    from hivepilot.services import policy_service
+
+    policy_service.reload_policies()
+    yield
+    policy_service.reload_policies()
+
+
 def _orch_ready_for_judge_debate(monkeypatch) -> "hivepilot.orchestrator.Orchestrator":
     from hivepilot.models import ProjectConfig
 
