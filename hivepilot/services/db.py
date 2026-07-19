@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
@@ -100,6 +101,33 @@ def _sqlite_path() -> Path:
 # ── connection factory ─────────────────────────────────────────────────────────
 
 
+def _enable_wal_mode(conn: Any) -> None:
+    """Switch *conn* to WAL journal mode, retrying on transient contention.
+
+    `PRAGMA journal_mode=WAL` on a brand-new database file requires briefly
+    taking an exclusive lock to create the `-wal`/`-shm` side files. When
+    several connections race to do this for the very first time against the
+    same fresh file (e.g. `init_db()` invoked concurrently from an async-run
+    worker thread and the request thread), the loser can get
+    `OperationalError: database is locked` -- and, unlike ordinary
+    read/write contention, this specific failure is NOT retried by SQLite's
+    busy handler (the `timeout=`/`PRAGMA busy_timeout` set on the connection
+    below has no effect here), so it surfaces near-instantly instead of
+    waiting. A short manual retry loop closes that race: once WAL mode is
+    durably set for the file (or another connection wins the race to set it,
+    since it's a persistent, file-level property), later attempts see it
+    already applied and no longer contend.
+    """
+    for attempt in range(10):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower() or attempt == 9:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 @contextmanager
 def connect() -> Generator[Any, None, None]:
     """
@@ -132,9 +160,20 @@ def connect() -> Generator[Any, None, None]:
     else:
         db_path = _sqlite_path()
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(db_path)
+        # `timeout` (seconds) is sqlite3's busy-timeout: a writer that finds
+        # the file locked by another connection waits (retrying internally)
+        # up to this long instead of raising `OperationalError: database is
+        # locked` immediately. The stdlib default is 5s, which is too tight
+        # for concurrent `init_db()` migrations (e.g. the S3 async-run worker
+        # thread and the request thread both touching the same sqlite file at
+        # startup) under CI's slower/loaded filesystem. 30s gives every
+        # writer room to wait its turn without changing schema, query logic,
+        # or isolation behaviour -- it only affects how long a blocked writer
+        # waits before giving up.
+        conn = sqlite3.connect(db_path, timeout=30)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+        _enable_wal_mode(conn)
+        conn.execute("PRAGMA busy_timeout = 30000")
         try:
             yield conn
             conn.commit()
