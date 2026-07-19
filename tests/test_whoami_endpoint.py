@@ -38,6 +38,17 @@ def _auth(raw_token: str) -> dict:
     return {"Authorization": f"Bearer {raw_token}"}
 
 
+def _rank(role: str) -> int:
+    return ROLE_RANKS[role]
+
+
+# Hoisted (rather than inlined in the decorator below) so mypy resolves the
+# `sorted(...)` call's type variable from this `list[str]` annotation instead
+# of biasing it to `object` via pytest.mark.parametrize's
+# `Iterable[object]`-typed argvalues parameter.
+_ROLES_BY_RANK: list[str] = sorted(ROLE_RANKS, key=_rank)
+
+
 class TestWhoamiEndpoint:
     def test_requires_auth(self, api_client):
         resp = api_client.get("/v1/whoami")
@@ -53,7 +64,7 @@ class TestWhoamiEndpoint:
         resp = api_client.get("/v1/whoami", headers=_auth("not-a-real-token"))
         assert resp.status_code == 401
 
-    @pytest.mark.parametrize("role", sorted(ROLE_RANKS, key=lambda r: ROLE_RANKS[r]))
+    @pytest.mark.parametrize("role", _ROLES_BY_RANK)
     def test_returns_role_and_tenant_for_every_rank(self, api_client, tmp_tokens_file, role):
         """Every rank (read/run/approve/admin) round-trips through whoami —
         the endpoint only requires the floor ("read"), so higher-ranked
