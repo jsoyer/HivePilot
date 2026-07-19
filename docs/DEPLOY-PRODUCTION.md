@@ -22,11 +22,22 @@ docker compose up -d --build
 docker compose exec hivepilot hivepilot config sync
 docker compose exec hivepilot hivepilot validate --dir /data
 docker compose exec hivepilot hivepilot doctor
+
+# Bootstrap API tokens — the scheduler container REQUIRES one to start (it will
+# restart-loop with "Token required..." until this is done; expected, see step 7).
+docker compose exec hivepilot hivepilot tokens add --role admin --note bootstrap
+#   -> New token (admin): <ADMIN_TOKEN>   (save it now -- shown once)
+docker compose exec hivepilot hivepilot tokens add --role run --note scheduler --token <ADMIN_TOKEN>
+#   -> New token (run): <RUN_TOKEN>       (save it now -- shown once)
+echo "HIVEPILOT_API_TOKEN=<RUN_TOKEN>" >> .env
+docker compose up -d   # recreate the scheduler container so it picks up the token
+
 curl -s http://127.0.0.1:8045/health
 ```
 
-If `validate`/`doctor` come back clean and `/health` returns `{"status": "ok", ...}`,
-you have a running API + scheduler. Continue to [Install the agent CLI(s)](#6-install-the-agent-cli-s)
+If `validate`/`doctor` come back clean, the scheduler container stays up (no
+more restart-loop), and `/health` returns `{"status": "ok", ...}`, you have a
+running API + scheduler. Continue to [Install the agent CLI(s)](#6-install-the-agent-cli-s)
 before triggering a real pipeline run.
 
 ## 1. Prerequisites
@@ -63,13 +74,20 @@ process each one runs — see `docker-compose.yml`):
 - `scheduler` → `hivepilot schedule daemon --interval 30`
 
 The API port binds to **`127.0.0.1:8045` on the host by default** — loopback
-only. `hivepilot api serve`'s own authentication is opt-in (bearer tokens via
-`api_tokens.yaml` / `HIVEPILOT_API_TOKEN` — see [Run + verify](#7-run-verify)),
-so **put a reverse proxy (TLS + auth) in front before exposing this beyond
-loopback.** HivePilot ships a Caddy integration for this
+only. `hivepilot api serve` itself does not require a token to start (unlike
+the scheduler — see [7. API tokens](#7-api-tokens-bootstrap)), but its
+authenticated endpoints check bearer tokens from `api_tokens.yaml` /
+`HIVEPILOT_API_TOKEN`, so **put a reverse proxy (TLS + auth) in front before
+exposing this beyond loopback.** HivePilot ships a Caddy integration for this
 (`hivepilot caddy generate` / `setup` / `reload` — see
 [DEPLOYMENT.md#reverse-proxy-caddy](DEPLOYMENT.md#reverse-proxy-caddy)); any
 other TLS-terminating proxy works too.
+
+**The `scheduler` service in `docker-compose.yml` will not start without
+`HIVEPILOT_API_TOKEN` set in `.env`** (it runs `schedule daemon`, which is
+fail-closed on auth — see [7. API tokens](#7-api-tokens-bootstrap)). Bootstrap
+the token first, then add `HIVEPILOT_API_TOKEN=<run-token>` to `.env` before
+(or bring the scheduler back up after) `docker compose up -d`.
 
 Podman note: the image's `HEALTHCHECK` instruction (used if you `podman run`/
 `podman build` the image directly, outside compose) is a Docker-format
@@ -124,6 +142,9 @@ export HIVEPILOT_BASE_DIR=/data
 export HIVEPILOT_API_HOST=127.0.0.1
 export HIVEPILOT_API_PORT=8045
 export HIVEPILOT_CONFIG_REPO=<your-config-repo>
+# HIVEPILOT_API_TOKEN is NOT required for `api serve` to start (unlike the
+# scheduler below) -- only set it here if some other admin-role CLI command
+# you run against this host needs one. See step 7.
 ```
 
 `/etc/init.d/hivepilot-api`:
@@ -149,7 +170,17 @@ depend() {
 ```
 
 `/etc/conf.d/hivepilot-scheduler` — same as above, minus the `API_HOST`/`API_PORT`
-lines. `/etc/init.d/hivepilot-scheduler`:
+lines, **plus a run-role `HIVEPILOT_API_TOKEN`** (the scheduler daemon is
+fail-closed and refuses to start without one — see
+[7. API tokens](#7-api-tokens-bootstrap) for how to mint it):
+
+```sh
+export HIVEPILOT_BASE_DIR=/data
+export HIVEPILOT_CONFIG_REPO=<your-config-repo>
+export HIVEPILOT_API_TOKEN=<run-token>
+```
+
+`/etc/init.d/hivepilot-scheduler`:
 
 ```sh
 #!/sbin/openrc-run
@@ -170,6 +201,12 @@ depend() {
     after firewall
 }
 ```
+
+Before starting the scheduler, bootstrap the `<run-token>` referenced in its
+`conf.d` file above — see [7. API tokens](#7-api-tokens-bootstrap) for the
+exact commands. `hivepilot tokens add` works directly against local state
+(`state.db`), so it can be run from the installed CLI before any service is
+started: `HIVEPILOT_BASE_DIR=/data /usr/local/bin/hivepilot tokens add --role admin ...`.
 
 Enable and start both:
 
@@ -288,7 +325,89 @@ Alpine release/arch) or see
 `gh` is optional — HivePilot degrades gracefully without it; `doctor` reports
 its absence under `=== External binaries ===`.
 
-## 7. Run + verify
+## 7. API tokens (bootstrap)
+
+**Do this before starting the scheduler daemon** (step 2A's `scheduler`
+service or step 2B's `hivepilot-scheduler` OpenRC service) — it is
+fail-closed and will not run without a token.
+
+**The first token created on a fresh system MUST be `admin`.** Any other
+first role is rejected:
+
+```bash
+hivepilot tokens add --role run --note "scheduler"
+```
+
+```
+Invalid value: First token must be admin
+```
+
+Bootstrap order — create the admin token first, then use it to authorize
+minting a lesser-role token for the scheduler (every token mint after the
+first requires an existing admin token, passed via `--token`):
+
+```bash
+hivepilot tokens add --role admin --note "bootstrap"
+```
+
+```
+New token (admin): <ADMIN_TOKEN>
+Save this token now -- it will not be shown again.
+```
+
+```bash
+hivepilot tokens add --role run --note "scheduler" --token <ADMIN_TOKEN>
+```
+
+```
+New token (run): <RUN_TOKEN>
+Save this token now -- it will not be shown again.
+```
+
+Both tokens are shown **exactly once** at creation time and stored **hashed**
+(SHA-256) thereafter — `hivepilot tokens list` shows role/note/expiry, never
+the raw value; there is no way to recover a lost token, only rotate
+(`hivepilot tokens rotate`) or mint a new one.
+
+**The scheduler daemon requires a `run`-role token to start at all** —
+`hivepilot schedule daemon` with no token set fails immediately:
+
+```
+Invalid value: Token required. Pass --token or set HIVEPILOT_API_TOKEN.
+```
+
+Supply it via the environment (preferred for a long-running service) or
+`--token`:
+
+```bash
+export HIVEPILOT_API_TOKEN=<RUN_TOKEN>
+hivepilot schedule daemon --interval 30
+```
+
+```
+Starting scheduler daemon (interval=30s, shutdown_timeout=120s)
+```
+
+Wire the token into the service that actually runs the daemon:
+
+- **Compose (step 2A)**: add `HIVEPILOT_API_TOKEN=<RUN_TOKEN>` to `.env` —
+  `docker-compose.yml`'s `scheduler` service already loads `env_file: .env`,
+  so no compose-file edit is needed. Re-run `docker compose up -d` to recreate
+  the container with the new value (a plain restart does not re-read `.env`).
+- **OpenRC (step 2B)**: add `export HIVEPILOT_API_TOKEN=<RUN_TOKEN>` to
+  `/etc/conf.d/hivepilot-scheduler` (already shown in step 2B above) before
+  `rc-service hivepilot-scheduler start`.
+
+This same requirement extends beyond the daemon: most mutating CLI commands
+(`run`, `run-pipeline`, `schedule *`, `approvals *`, `tokens *`, `debate`,
+`audit`) require a role token the same way — read-only/setup commands
+(`doctor`, `validate`, `config sync`/`status`, `plugins list`,
+`agents list`/`install`) do not. Exporting `HIVEPILOT_API_TOKEN` once (a
+`run`-role token covers `run`/`run-pipeline`; `approve`/`admin` are needed for
+approvals/token management respectively) in the shell you operate from covers
+all of these.
+
+## 8. Run + verify
 
 Start both processes (already running if you used Compose in step 2A, or the
 OpenRC services in step 2B):
@@ -310,17 +429,9 @@ hivepilot plugins list
 hivepilot plugins health   # non-zero exit if any plugin health check fails — CI/deploy-gate friendly
 ```
 
-Create your first API token (needed once you put the API behind auth — see
-step 2A):
-
-```bash
-hivepilot tokens add --role admin --note "initial admin token"
-```
-
-Save the printed token now — it is shown only once.
-
 Finally, confirm the config/validate loop and a dry pipeline preview work
-end-to-end:
+end-to-end (this needs the `run`-role token from step 7 — export
+`HIVEPILOT_API_TOKEN` as shown there, or pass `--token <RUN_TOKEN>`):
 
 ```bash
 hivepilot config sync
@@ -328,7 +439,7 @@ hivepilot validate --dir /data
 hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaults to --dry-run
 ```
 
-## 8. Operations
+## 9. Operations
 
 - **State**: `state.db` (SQLite) lives under `base_dir` (`/data` in the
   container image) alongside the synced config. Persist this — it holds run
