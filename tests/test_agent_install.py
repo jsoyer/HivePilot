@@ -153,6 +153,38 @@ def test_propose_install_non_interactive_default_detection(
     mock_run.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("stdin_tty", "stdout_tty"),
+    [
+        (True, False),  # a TTY stdin but a piped/redirected stdout
+        (False, True),  # a piped/redirected stdin but a TTY stdout
+    ],
+)
+def test_propose_install_mixed_tty_is_non_interactive_and_refuses(
+    monkeypatch: pytest.MonkeyPatch, stdin_tty: bool, stdout_tty: bool
+) -> None:
+    """`interactive` is `stdin.isatty() AND stdout.isatty()` — ANY single
+    non-TTY stream (redirected/piped) means non-interactive, so the installer
+    must refuse WITHOUT executing even with assume_yes=True. Locks the `and`
+    logic so a future collapse to a single-stream check is caught by CI."""
+    mock_run = MagicMock()
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: stdin_tty)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: stdout_tty)
+    spec = InstallSpec(
+        name="Example CLI",
+        binary="example",
+        vendor="Example Inc",
+        docs_url="https://example.com/docs/install",
+        command="curl -fsSL https://example.com/install.sh | bash",
+    )
+    result = propose_install(spec, assume_yes=True)
+    assert result.ran is False
+    assert result.exit_code is None
+    assert "non-interactive" in result.message
+    mock_run.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # propose_install — interactive
 # ---------------------------------------------------------------------------

@@ -256,10 +256,12 @@ def propose_install(
     # expressed as a plain list-argv subprocess call, so we hand the exact
     # pinned string to `bash -lc`. This is safe ONLY because the string is a
     # vetted constant, not because shell interpretation is generally safe —
-    # keep it that way.
-    result = subprocess.run(  # noqa: S602 - vetted in-repo constant, see comment above  # nosec B602
-        ["bash", "-lc", spec.command], check=False
-    )
+    # keep it that way. No inline noqa/nosec is needed: ruff does not select
+    # the flake8-bandit (S) family, and bandit's own B603 (subprocess call)
+    # and B607 (partial exec path) are already skipped project-wide in
+    # pyproject.toml [tool.bandit]. (B602 does NOT apply here — this call does
+    # not pass shell=True.)
+    result = subprocess.run(["bash", "-lc", spec.command], check=False)
     return InstallResult(
         ran=True,
         exit_code=result.returncode,
