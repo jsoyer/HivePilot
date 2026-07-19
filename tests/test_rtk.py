@@ -1,7 +1,7 @@
 """
 Tests for the `rtk` runner plugin (Sprint 1 of the plugins plan).
 
-`plugins/rtk.py` is a local-file plugin (see docs/v4/PLUGINS.md) that wraps
+`plugins/rtk.py` is a local-file plugin (see docs/PLUGINS.md) that wraps
 whatever command a shell-generic step would normally run with `rtk proxy
 <cmd>` to cut token usage on command output, and falls back to running the
 raw command (no crash) when `rtk` isn't on PATH.

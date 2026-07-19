@@ -1,7 +1,7 @@
 """
 Tests for the `headroom` plugin (Sprint 3 of the plugins plan).
 
-`plugins/headroom.py` is a local-file plugin (see docs/v4/PLUGINS.md) that
+`plugins/headroom.py` is a local-file plugin (see docs/PLUGINS.md) that
 compresses a step's prompt/context before it runs, via the `before_step`
 lifecycle hook. It targets `RunnerPayload.metadata["prior_context"]` and
 `RunnerPayload.metadata["extra_prompt"]` — both are read verbatim by

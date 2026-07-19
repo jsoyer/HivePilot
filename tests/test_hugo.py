@@ -1,7 +1,7 @@
 """
 Tests for the `hugo` runner plugin (Phase 25).
 
-`plugins/hugo.py` is a local-file plugin (see docs/v4/PLUGINS.md) that wraps
+`plugins/hugo.py` is a local-file plugin (see docs/PLUGINS.md) that wraps
 the Hugo static-site-generator CLI: operations `build` (default) / `new` /
 `serve`, resolved from `payload.step.command` / `self.definition.command` /
 `self.definition.options["operation"]` — exactly the operation-resolution

@@ -1,7 +1,7 @@
 """Tests for hivepilot/webui/ — the Mirador web UI's FastAPI serving glue.
 
 Serves the pre-built static assets committed under hivepilot/webui/static/
-(built by web/, a separate Vite+React+TS app — see docs/v4/WEBUI.md).
+(built by web/, a separate Vite+React+TS app — see docs/DASHBOARD.md).
 Gated by `HIVEPILOT_ENABLE_WEBUI` (settings.enable_webui) AND the static
 directory actually having a built index.html, mirroring how
 `HIVEPILOT_ENABLE_TEXTUAL_UI` gates the Textual dashboard (hivepilot/cli.py).

@@ -4,7 +4,7 @@
 #
 # `tags` is an optional dict[str, list[str]] (default {}) mapping a tag name to a
 # subset of this group's components. A pipeline stage's `only_tags` resolves its
-# component names through this map (see docs/v4/RUNBOOK.md → Stage scoping). A tag
+# component names through this map (see docs/DEPLOYMENT.md → Stage scoping). A tag
 # referenced by a stage but absent here fails the run up front (fail-closed).
 groups:
   acme:

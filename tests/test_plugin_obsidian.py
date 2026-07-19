@@ -1,7 +1,7 @@
 """
 Tests for the `obsidian` plugin (Sprint 2 of the plugins plan).
 
-`plugins/obsidian.py` is a local-file plugin (see docs/v4/PLUGINS.md) that
+`plugins/obsidian.py` is a local-file plugin (see docs/PLUGINS.md) that
 logs pipeline runs into the Obsidian vault, both as a notifier (live log,
 one line per `send_notification(...)` call) and as lifecycle hooks
 (`on_pipeline_end` / `on_error`, a structured run-report block). Both

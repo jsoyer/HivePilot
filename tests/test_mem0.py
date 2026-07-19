@@ -1,7 +1,7 @@
 """
 Tests for the `mem0` plugin (Sprint 3b of the plugins plan).
 
-`plugins/mem0.py` is a local-file plugin (see docs/v4/PLUGINS.md) that gives
+`plugins/mem0.py` is a local-file plugin (see docs/PLUGINS.md) that gives
 agents persistent cross-run memory via `mem0` (`pip install mem0ai` — NOT a
 hivepilot dependency, never installed by this plugin; mocked throughout this
 module). It mirrors `plugins/headroom.py`'s proven shape (opt-in gate,

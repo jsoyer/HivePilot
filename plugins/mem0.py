@@ -168,7 +168,7 @@ an already-compressed ``extra_prompt``. This is the opposite of the
 recommended ordering; it's documented here rather than silently relied
 upon. Operators running both plugins together and wanting recall-then-
 compress should rename files to control ``sorted()`` order (e.g.
-``a_mem0.py`` / ``b_headroom.py``) — see ``docs/v4/PLUGINS.md``.
+``a_mem0.py`` / ``b_headroom.py``) — see ``docs/PLUGINS.md``.
 
 Deliberately NOT a ``@dataclass``: local-file plugins are loaded via
 ``importlib.util.spec_from_file_location()`` / ``exec_module()``

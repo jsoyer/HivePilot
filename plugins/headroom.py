@@ -1,6 +1,6 @@
 """headroom plugin — compresses each step's prompt/context before execution.
 
-`before_step` (lifecycle hook, see docs/v4/PLUGINS.md) mutates the SAME
+`before_step` (lifecycle hook, see docs/PLUGINS.md) mutates the SAME
 `RunnerPayload` object the orchestrator hands straight through to
 `registry.capture_definition(...)` / `runner.capture(...)`. In
 `Orchestrator._execute_task` (`hivepilot/orchestrator.py`), the `payload`
@@ -54,7 +54,7 @@ loads fine (and no-ops) when the library isn't present; see
 ``plugins/rtk.py`` for the same "external tool optional, graceful no-op"
 pattern this plugin follows for a token-saving companion tool: rtk
 compresses *command output* tokens, this plugin compresses *agent
-input/context* tokens (see docs/v4/PLUGINS.md for the complementarity
+input/context* tokens (see docs/PLUGINS.md for the complementarity
 note).
 
 Deliberately NOT a ``@dataclass``: local-file plugins are loaded via

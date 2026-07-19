@@ -1,7 +1,7 @@
 """
 Tests for the `herdr` runner plugin (Phase 27).
 
-`plugins/herdr.py` is a local-file plugin (see docs/v4/PLUGINS.md) that
+`plugins/herdr.py` is a local-file plugin (see docs/PLUGINS.md) that
 executes each pipeline step *inside a dedicated herdr pane* by driving the
 `herdr` CLI (split -> run -> wait idle -> read), giving live parallel-pane
 visibility. It degrades gracefully (raw `bash -lc` execution) when the

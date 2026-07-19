@@ -1,457 +1,88 @@
-# 🐝 HivePilot v4
+# 🐝 HivePilot
 
-HivePilot is an AI command center for multi-repo workflows. It dispatches Claude Code, LangChain, LangGraph, CrewAI, shell runners, built-in coding-agent CLIs (Codex, Vibe, OpenRouter) plus PATH-gated [plugin agent CLIs](docs/v4/PLUGINS.md#agent-runner-taxonomy-built-in-vs-plugin) (Gemini, OpenCode, Ollama, Pi, Qwen-Code, Kimi-CLI), Cursor, and Git/GitHub automation from a single YAML-driven orchestrator.
+HivePilot is a YAML-driven orchestrator that runs a company of role-bound AI agents through a software-delivery pipeline against one or many repositories. It dispatches coding-agent CLIs (Claude Code, Vibe and OpenRouter built-ins, plus Codex, Cursor and a range of PATH-gated agent plugins) and shell/LangChain runners, in CLI or API mode, from a single config-driven engine — with code review and PRs, an optional adjudicated debate that gates PR promotion, an opt-in auto-learning loop, remote control, and a plugin system.
 
-## 🆕 V4 — the agent company
+## What it does
 
-V4 turns the orchestrator into a **company of role-bound agents** that runs a full
-software pipeline against any repo, with multi-model execution, code review + PRs,
-a CEO dual-model debate, full interaction visibility, and remote control.
+- Runs a configurable pipeline of role-bound agents (e.g. CEO → CTO → Developer → Reviewer → CISO → QA → Documentation) against a repo; each role resolves to a runner + model, overridable per project.
+- Multi-runner: built-in agent kinds `claude`, `vibe`, `openrouter` (API-only); PATH-gated plugin agents (codex, cursor, gemini, opencode, ollama, pi, qwen-code, kimi-cli, antigravity); plus shell/LangChain/LangGraph/CrewAI engines. Each CLI runner can flip to API mode per YAML.
+- Code review + Git/GitHub automation: branch/commit/push, PR create/draft/promote/merge, `gh` issue/release.
+- Opt-in adjudicated debate: dual-model positions produce an ADR, with an optional independent LLM judge + challenge arbiter that fail-closed gates PR promotion (blocks `promote_pr`/`merge_pr` on any absent, low-confidence, or non-approval verdict).
+- Opt-in auto-learning lessons loop: distills a run's verdicts/outcomes into candidate lessons, validates each against the run's real outcome (never an LLM self-report), and injects only validated lessons into future runs.
+- Mirador dashboard: a TUI and a web command center (approve/deny, launch async runs, stop/cancel, toggle plugins), reading the SQLite state store tenant-scoped.
+- Remote control via Telegram bot, Slack/Discord, and an HTTP API (`hivepilot api serve`).
+- Plugin system: contribute runners, notifiers, lifecycle hooks, secrets backends, dashboard panels, and skills; loaded from installed packages or local files, fail-closed trust (no network fetch of plugin code).
+- Infrastructure runners (terraform / opentofu / pulumi, kubectl) with destructive-op auto-gating, plus drift detection with scheduled scans and gated auto-remediation.
 
-- **The chain**: CEO → Chief of Staff → CTO → Developer → Reviewer → CISO → QA → Documentation → Report → CEO Approval. Each stage is bound to a **role** that resolves to a **runner + model** (`opencode`/qwen·kimi·glm, `claude`, `codex`, `gemini`, `cursor`), overridable per project.
-- **Code review & PRs**: the **developer (claude)** opens a PR; the **reviewer (codex)** reviews it; a human merges. **Documentation/QA** run on **gemini**.
-- **CEO debate → ADR**: dual-model (qwen + kimi) positions synthesized into an Architecture Decision Record, with an optional independent LLM judge/arbiter scoring the debate and adjudicating challenges — see [Usage](docs/v4/USAGE.md#debate-judge-challenge-arbiter--the-fail-closed-pr-gate-opt-in).
-- **Visibility**: interactions store (SQLite) + Obsidian notes + Mermaid timeline + Telegram + Textual dashboard.
-- **Auto-learning lessons loop** *(opt-in)*: distills a completed run's verdicts/interactions/outcome into candidate lessons, validates each against the run's real outcome (fail-closed — never an LLM self-report), and injects only validated lessons into a future run's prompt — see [Usage](docs/v4/USAGE.md#auto-learning-lessons-loop-opt-in).
-- **Remote control via Telegram**: `/runpipeline`, `/debate`, `/steps`, `/interactions`, `/approve` … command and monitor the agents from your phone.
-- **Safety**: `--simulate` (preview, no real calls), per-project approval gates, prompt-injection validation, container isolation, lightweight core (langchain/torch/boto3 optional), and an opt-in fail-closed judge/arbiter gate on PR promotion (blocks `promote_pr`/`merge_pr` on any absent/low-confidence/non-approval verdict).
+## Quickstart
 
-📖 **V4 docs:** [Architecture](docs/v4/ARCHITECTURE.md) · [The agent company](docs/v4/AGENTS.md) · [Usage (CLI & Telegram)](docs/v4/USAGE.md) · [Configuration](docs/v4/CONFIG.md) · [Example deployment](docs/v4/DEPLOYMENT-EXAMPLE.md)
-
-The YAML reference below still applies (projects/tasks/pipelines/policies); V4 adds
-`role:` on tasks and per-project `role_overrides`/`allowed_runners` in policies.
-
-Roles, per-stage `model`, and per-stage reasoning `effort` are entirely config/pipeline-owned:
-the engine ships one generic `developer -> claude` role by default and the full company roster
-above is an opt-in template (`examples/roles.yaml`) — see
-[Usage](docs/v4/USAGE.md#model--reasoning-effort-model--effort) and
-[Plugins](docs/v4/PLUGINS.md#agent-runner-taxonomy-built-in-vs-plugin) for details.
-
----
-
-## ✨ Highlights
-
-- **Interactive mode** – `hivepilot interactive` (Questionary) lets you choose projects/tasks/pipelines on the fly.
-- **Parallel execution** – ThreadPool-backed scheduling spreads a task/pipeline across many repositories (`--concurrency` or `.env`).
-- **YAML-first runners** – Define Claude/shell/LangChain/internal/Codex/Gemini/OpenCode/Ollama/OpenRouter runners once and reference them everywhere.
-- **CLI ↔ API switch** – Every CLI runner can flip to API mode (OpenAI, Anthropic, Google Gemini, Mistral, Perplexity, OpenRouter) per YAML, CLI being the default fallback.
-- **Pipelines + multi-step API/CLI workflows** – Chain tasks with mixed engines (API pre-check → CLI codemod → shell validation).
-- **Structured logging & state store** – `runs/<timestamp>/summary.json` + JSON logs + SQLite `state.db` capture every run for later inspection, TUI dashboards, and scheduling.
-- **Git/GitHub automation** – Built-in services handle branch/commit/push, `gh repo/issue/release`, and YAML tasks (`gh-*`) for declarative automation.
-- **Rich extras** – LangGraph, LangChain, CrewAI, Textual dashboard, scheduler, and profile-driven Claude model selection (Sonnet/Opus/Haiku).
-- **Discovery + remote API** – `hivepilot discover` scans local/GitHub repos, and `hivepilot api serve` exposes FastAPI endpoints for remote triggers/ChatOps.
-- **Policies & notifications** – `policies.yaml` defines per-project rules (auto-git/approvals) and Slack/Discord/Telegram webhooks notify on start/completion/failure.
-- **Secrets & knowledge-aware prompts** – Steps reference `secrets:` blocks (env/SOPS/etc.) and `knowledge_files:` to inject repo context via LangChain/FAISS embeddings.
-- **RBAC + tokens** – CLI/API commands enforce `read`, `run`, `approve`, and `admin` roles. Manage tokens via `hivepilot tokens …` or add them to `api_tokens.yaml`; supply tokens via `--token` or `HIVEPILOT_API_TOKEN`.
-- **ChatOps** – Slack slash commands (and optional Telegram bot) can list/approve runs. `POST /chatops/slack` accepts Slack payloads; use `HIVEPILOT_CHATOPS_TOKEN` to authorize ChatOps flows.
-
----
-
-## 📂 Architecture Snapshot
-
-```
-hivepilot/
-├── hivepilot/
-│   ├── cli.py              # Typer CLI + interactive mode + gh subcommands
-│   ├── config.py           # Pydantic Settings (.env)
-│   ├── orchestrator.py     # Scheduler, concurrency, pipelines
-│   ├── registry.py         # Maps runner names to implementations
-│   ├── models.py           # Pydantic schemas for projects/tasks/pipelines
-│   ├── pipelines.py        # Pipeline helpers
-│   ├── runners/            # Claude, shell, LangChain, Codex/Gemini/OpenCode/Ollama/OpenRouter
-│   ├── services/           # git_service, github_service, project_service, pipeline_service
-│   └── utils/              # io (runs/summary), logging (structlog), shell helpers
-├── prompts/
-├── projects.yaml
-├── tasks.yaml
-├── pipelines.yaml
-├── model_profiles.yaml     # Claude profile map (coding/architecture/automation)
-├── .env.example
-├── requirements.txt
-└── README.md
-```
-
-Everything is configured via YAML (`projects`, `tasks`, `pipelines`, `model_profiles`). `.env` only tweaks global paths/commands.
-
----
-
-## ⚙️ YAML Reference
-
-### projects.yaml
-
-```yaml
-projects:
-  example-api:
-    path: ~/dev/example-api
-    description: Example backend service
-    claude_md: CLAUDE.md
-    default_branch: main
-    owner_repo: your-user/example-api
-    env:
-      PYTHONUNBUFFERED: "1"
-```
-
-### tasks.yaml
-
-```yaml
-runners:
-  claude-docs:
-    kind: claude
-    command: claude
-    options:
-      profile: automation        # maps to model_profiles.yaml
-  validation-suite:
-    kind: shell
-    command: |
-      if [ -f package.json ]; then npm test || true; fi
-      if [ -f pyproject.toml ]; then pytest || true; fi
-  codex-default:
-    kind: codex
-    command: codex
-    options:
-      mode: cli                  # default, switch to api when needed
-      api_provider: openai
-      api_model: gpt-4o
-
-  container-validation:
-    kind: container
-    command: |
-      pip install -r requirements.txt && pytest
-    options:
-      image: python:3.11
-      volumes:
-        - ${PWD}:/workspace
-        - /tmp/cache:/workspace/.cache
-
-tasks:
-  docs:
-    description: Rewrite documentation
-    steps:
-      - name: rewrite docs
-        runner: claude-docs
-        prompt_file: prompts/docs_rewrite.md
-        metadata:
-          claude_profile: automation
-          knowledge_files: ["README.md", "docs/architecture.md"]
-        secrets:
-          OPENAI_API_KEY:
-            source: env
-            key: OPENAI_API_KEY
-    artifacts:
-      capture: ["diff"]
-      exporters:
-        - target: local
-        - target: s3
-          bucket: hivepilot-artifacts
-          prefix: docs-runs
-    git:
-      commit: true
-      push: true
-      create_pr: true
-
-  codex-audit:
-    description: Architecture scan via Codex (CLI/API)
-    steps:
-      - name: codex review
-        runner: codex-default
-        prompt_file: prompts/architecture_review.md
-
-  refactor:
-    description: Refactor the codebase with a light validation pass.
-    steps:
-      - name: refactor
-        runner: claude
-        runner_ref: claude-refactor
-        prompt_file: refactor.md
-        timeout_seconds: 5400
-      - name: validation
-        runner: container
-        runner_ref: container-validation
-        allow_failure: true
-        timeout_seconds: 1800
-
-  gh-repo-init-task:
-    description: Provision the GitHub repo through internal runners
-    steps:
-      - name: repo init
-        runner: shell
-        command: hivepilot gh repo-init {project_name} --set-remote --push
-```
-
-Secrets declared per-step (env or file sources) are resolved right before the runner executes and injected into the CLI/API/container environment, so commands get tokens such as `OPENAI_API_KEY` without committing them directly to YAML.
-
-#### Command templating
-
-Shell/CLI commands accept `{variables}`: `project_name`, `project_path`, `project_default_branch`, `project_owner_repo`, `task_name`, `step_name`, `extra_prompt`. Escape braces via `{{` / `}}`.
-
-### Model profiles (`model_profiles.yaml`)
-
-```yaml
-claude_profiles:
-  coding:
-    model: sonnet      # best for coding
-  architecture:
-    model: opus        # deep reasoning / architecture
-  automation:
-    model: haiku       # fast automations
-```
-
-Reference profiles via `metadata.claude_profile` or runner `options.profile`. Add your own (e.g., `review`, `summary`).
-
-### CLI ↔ API switch
-
-Set `options.mode: api` (or `metadata.mode`) to call APIs instead of CLIs. Supported `api_provider` values:
-
-- `openai`, `anthropic`, `google`, `mistral`, `perplexity`, `openrouter`.
-
-Required env vars:
-
-| Provider      | Env var             |
-|---------------|---------------------|
-| OpenAI        | `OPENAI_API_KEY`    |
-| Anthropic     | `ANTHROPIC_API_KEY` |
-| Google Gemini | `GOOGLE_API_KEY`    |
-| Mistral AI    | `MISTRAL_API_KEY`   |
-| Perplexity    | `PERPLEXITY_API_KEY`|
-| OpenRouter    | `OPENROUTER_API_KEY`|
-
-CLI remains the default fallback; switching back is as simple as removing `mode: api`.
-
-### pipelines.yaml
-
-```yaml
-pipelines:
-  pentest-fix-review:
-    description: Pentest → refactor → docs
-    stages:
-      - name: pentest
-        task: pentest
-      - name: refactor follow-up
-        task: refactor
-      - name: docs summary
-        task: docs
-
-  gh-repo-init:
-    description: Ensure GitHub repo exists & push default branch
-    stages:
-      - name: initialize repo
-        task: gh-repo-init-task
-```
-
-### policies.yaml
-
-```yaml
-policies:
-  default:
-    allow_auto_git: true
-    require_approval: false
-    allow_containers: true
-  projects:
-    example-api:
-      allow_auto_git: false
-      require_approval: true
-      allow_containers: false
-```
-
-Policies are evaluated before every run. If `allow_auto_git` is `false`, `--auto-git` is blocked for that project. Extend via plugins to enforce approvals or multi-factor flows.
-
-#### Approval workflow
-
-- Runs on projects with `require_approval: true` are queued until approved.
-- Review pending runs via `hivepilot approvals list` or the `GET /approvals` API.
-- Approve/deny via CLI (`hivepilot approvals approve <run_id>`), API (`POST /approvals/{run_id}`), or respond via Slack/Discord/Telegram if you wire those webhooks to the API endpoint.
-- Notifications include the run ID so approvers know what to act on. Once approved, the orchestrator resumes the run with the same run ID and updates `state.db`.
-
-### schedules.yaml
-
-```yaml
-schedules:
-  docs-weekly:
-    task: docs
-    projects: ["example-api"]
-    interval_minutes: 10080
-    enabled: true
-```
-
-Use `hivepilot schedule list` to inspect schedules and `hivepilot schedule run` to execute those whose interval has elapsed. Schedule timestamps are tracked in `state.db`.
-
-### Notifications (Slack/Discord/Telegram)
-
-Set any combination of:
-
-- `SLACK_WEBHOOK_URL`
-- `DISCORD_WEBHOOK_URL`
-- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
-
-When present, HivePilot sends start/completion/failure notifications automatically. For richer flows (approvals, custom alerts), add plugins under `plugins/` or point `HIVEPILOT_PLUGINS_ENTRY` to your module.
-
-### api_tokens.yaml (RBAC)
-
-```yaml
-tokens:
-  - token: 0123abcd...
-    role: admin
-    note: "local admin"
-  - token: deadbeef...
-    role: run
-    note: "CI pipeline"
-```
-
-Manage tokens with `hivepilot tokens add/list/remove` (admin role required). Roles map to permissions:
-
-| Role     | Permissions                                |
-|----------|--------------------------------------------|
-| `read`   | list projects/tasks/schedules/approvals    |
-| `run`    | trigger tasks/pipelines, schedule runs     |
-| `approve`| approve/deny queued runs                   |
-| `admin`  | manage tokens, policies, API server        |
-
-CLI commands require `--token <value>` (or set `HIVEPILOT_API_TOKEN`). API requests must include `Authorization: Bearer <token>`. Tokens are stored in `api_tokens.yaml` and synced to `state.db` for quick lookup.
-
-### ChatOps (Slack/Discord/Telegram)
-
-- Set `HIVEPILOT_CHATOPS_TOKEN` to a token with `run`/`approve` permissions.
-- **Slack**: configure slash commands to hit `POST /chatops/slack`.
-  - `/hivepilot-run <project> <task>`
-  - `/hivepilot-approvals`
-  - `/hivepilot-approve <run_id>` / `/hivepilot-deny <run_id>`
-- **Discord**: send messages such as `!hp run <project> <task>` or `!hp approvals` to the endpoint bound to `POST /chatops/discord`.
-- **Telegram**: point your bot webhook to `POST /chatops/telegram` and use `/hp_run`, `/hp_approvals`, `/hp_approve`, `/hp_deny`.
-
----
-
-## 🧑‍💻 Installation
+Install the package:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
-cp .env.example .env
+pip install hivepilot
 ```
 
 Optional extras:
 
 ```bash
-pip install -e .[langgraph]
-pip install -e .[crewai]
-pip install -e .[full]    # langgraph + crewai + textual + langchain extras
+pip install "hivepilot[full]"          # langchain + torch
+pip install "hivepilot[notifications]" # Telegram
+pip install "hivepilot[langchain]"     # langchain only
 ```
 
-Docker:
+Check your environment and available agent binaries:
 
 ```bash
-docker compose build
-docker compose run --rm hivepilot hivepilot doctor
-```
-
----
-
-## 🕹 CLI Cheat Sheet
-
-```bash
-hivepilot lint
 hivepilot doctor
-hivepilot list-projects
-hivepilot list-tasks
-hivepilot list-pipelines
-hivepilot run example-api docs
-hivepilot run example-api docs --project example-site --concurrency 2
-hivepilot run example-api pentest --all --auto-git
-hivepilot run example-api gh-issue-from-extra --extra-prompt "Docs refresh"
-hivepilot run example-api docs --extra-prompt "Focus on auth"   # uses knowledge-aware prompts
-hivepilot run example-api codex-audit
-hivepilot run example-api gemini-brief
-hivepilot run example-api opencode-fix
-hivepilot run example-api ollama-scan
-hivepilot run-pipeline example-api pentest-fix-review
-hivepilot interactive
-hivepilot dashboard                  # Textual run history
-hivepilot approvals list             # show pending approvals
-hivepilot approvals approve 42 --approver alice
-hivepilot tokens add --role run --note "CI worker"
-hivepilot tokens list
-hivepilot tokens remove 0123abcd...
-
-# GitHub helpers
-hivepilot gh repo-init example-api --push
-hivepilot gh issue example-api "Docs refresh" --body "Regénérer README"
-hivepilot gh release example-api v0.2.0 --title "Docs refresh"
-
-# API / scheduler / plugins
-hivepilot api serve --host 0.0.0.0 --port 8045
-curl -X POST http://localhost:8045/run \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer <your-token>" \
-     -d '{"task":"docs","projects":["example-api"],"extra_prompt":"Focus on auth"}'
-# (Upcoming scheduler commands hook into the same API/state store.)
-
-# Discovery helpers
-hivepilot discover --root ~/dev --max-depth 2
-hivepilot discover --github-org your-org
-
-# Scheduler helpers
-hivepilot schedule list
-hivepilot schedule run
-# All commands accept --token / HIVEPILOT_API_TOKEN to enforce RBAC
-# Metrics endpoint
-curl http://localhost:8045/metrics
 ```
 
----
+Scaffold a workspace:
 
-## 📊 Logging, State & Dashboard
+```bash
+hivepilot init
+```
 
-- Each run writes `runs/<timestamp>/summary.json`.
-- Structlog JSON logs land in `runs/logs/hivepilot.log`.
-- `.env` `HIVEPILOT_OUTPUT_FORMAT` can switch summary format (json/plain).
-- SQLite `state.db` records run metadata for dashboards, exports, schedulers.
-- `hivepilot dashboard` (requires `HIVEPILOT_ENABLE_TEXTUAL_UI=true`) opens a Textual UI to browse history, details, and active runs.
+Preview a pipeline before running anything for real (no agent calls are made):
 
----
+```bash
+hivepilot run-pipeline <project> <pipeline> --simulate
+```
 
-## 🧠 Engines, Runners & Plugins
+`run-pipeline` also defaults to `--dry-run`, so a plain run is safe to try without `--simulate`. For a guided, menu-driven session instead of raw commands:
 
-- **Native** – Claude/shell workflows via the runner registry.
-- **LangGraph** – reference `graph: module:function` to compile/invoke graphs.
-- **CrewAI** – tasks/pipelines can point to a `build_crew` builder in `workflows/`.
-- **LangChain** – runner loads an `LLMChain`.
-- **CLI/API hybrids** – Codex, Gemini, OpenCode, Ollama, OpenRouter runners flip between CLI (fast, offline) and API (hosted) per YAML.
-- **Multi-step workflows** – mix API and CLI steps in pipelines (e.g., API analysis, CLI codemod, shell validation).
-- **Plugins hooks** – drop Python files in `plugins/` (or set `HIVEPILOT_PLUGINS_ENTRY=module:function`) to register hooks like `before_step` / `after_step`, enabling Slack notifications, approvals, vulnerability scanners, etc.
-  - Example `plugins/sample.py` logs every step; use it as a starting point for Slack/email approvals or external scanners.
-- **Artifacts** – after each run, `runs/<timestamp>/artifacts` contains `results.json`, Git patches (if enabled), etc. Configure exporters (local/S3) via `task.artifacts` to ship results automatically.
-- **Container runner** – run steps inside Docker images by setting `kind: container` with image/command options; policies can block/allow container use per project.
+```bash
+hivepilot interactive
+```
 
-Add new runners by dropping a Python class in `hivepilot/runners/` and registering it in the `RUNNER_MAP`.
+## Documentation
 
----
+| Doc | Purpose |
+| --- | --- |
+| [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Install, `doctor`, first pipeline, approval walkthrough |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the orchestrator, config, runners, and state fit together |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | The YAML config files and environment variables |
+| [docs/CLI-REFERENCE.md](docs/CLI-REFERENCE.md) | Every command |
+| [docs/PIPELINES-AND-ROLES.md](docs/PIPELINES-AND-ROLES.md) | The agent "company", roles, pipeline stages, groups/multi-repo |
+| [docs/RUNNERS.md](docs/RUNNERS.md) | Agent runners (Claude/Codex/…), CLI vs API mode, IaC (terraform/pulumi) and kubectl runners |
+| [docs/PLUGINS.md](docs/PLUGINS.md) | The plugin system (runners/notifiers/hooks/secrets/panels/skills) |
+| [docs/SKILLS.md](docs/SKILLS.md) | Plugin-contributed skills |
+| [docs/DEBATE-AND-LESSONS.md](docs/DEBATE-AND-LESSONS.md) | Dual-model debate + judge/arbiter PR gate, and the auto-learning lessons loop |
+| [docs/SECURITY.md](docs/SECURITY.md) | Approval gates, secrets masking, CVE gate, fail-closed model |
+| [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Telegram/Slack/Discord/Notion/Linear/Obsidian/Caddy/n8n/SSH remote agents |
+| [docs/DASHBOARD.md](docs/DASHBOARD.md) | Mirador dashboard (TUI + web) |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment, Kubernetes, multi-tenant, observability |
 
-## 🐙 Git + GitHub Services
+## Safety
 
-- `git_service.py` handles checkout, add/commit, push, auto-git enforcement.
-- `github_service.py` wraps `gh repo/issue/release` (with retries, templated URLs).
-- Use YAML `gh-*` tasks or CLI `hivepilot gh repo-init|issue|release` to manage repos, issues, releases.
-- `hivepilot gh repo-init` now accepts `--set-remote/--no-set-remote`, `--remote-protocol`, and `--visibility` so you can pick SSH vs HTTPS remotes and control how repos are created.
-- `hivepilot gh release` exposes `--notes-file` plus `--generate-notes/--no-generate-notes`, making it easy to publish either handcrafted or auto-generated release notes from automation.
+- `--simulate` previews a pipeline with no real agent calls; `run-pipeline` also defaults to `--dry-run`.
+- Three-tier approval gates: policy-level, stage-level (`pause_before`), and step-level (`require_approval`), plus automatic gating of destructive operations.
+- Prompt-injection validation on agent inputs.
+- Secrets are masked in every sink (logs, notifications, state store); `${secret:NAME}` references resolve lazily and fail closed by default.
+- The debate judge/arbiter PR gate is opt-in and fail-closed: it blocks PR promotion on any absent, low-confidence, or non-approval verdict.
+- The core install stays lightweight — langchain, torch, and boto3 are optional extras, not defaults.
 
----
+See [docs/SECURITY.md](docs/SECURITY.md) for details.
 
-## ✅ Quick Smoke Tests
+## Status
 
-1. `hivepilot tokens add --role admin --note "local admin"` → copy the token and `export HIVEPILOT_API_TOKEN=<token>`
-2. `hivepilot lint`
-3. `hivepilot doctor`
-4. `hivepilot run example-api docs --dry-run`
-5. `hivepilot run example-api gh-repo-init-task`
-6. `hivepilot run example-api gh-issue-from-extra --extra-prompt "Docs refresh"`
-7. `hivepilot run-pipeline example-api pentest-fix-review --concurrency 2`
-8. `hivepilot dashboard` (after `export HIVEPILOT_ENABLE_TEXTUAL_UI=true`)
-9. `hivepilot run example-api codex-audit --extra-prompt "Security scan"`
-10. `hivepilot run example-api docs-langgraph --auto-git`
-11. `hivepilot api serve` + `curl http://localhost:8045/run ...` (with `Authorization: Bearer <token>`)
-12. `hivepilot schedule list` / `hivepilot schedule run`
-13. `export SLACK_WEBHOOK_URL=...` (or Discord/Telegram) and re-run to confirm notifications
-14. `curl http://localhost:8045/metrics`
-15. `hivepilot run example-api docs --extra-prompt "Focus on auth"` to see knowledge-aware prompts/secrets
-
-Each run should create a folder under `runs/<timestamp>` containing summaries, logs, and (optionally) artifacts or state references.
+HivePilot is v0.2.0, requires Python >=3.10. See LICENSE.

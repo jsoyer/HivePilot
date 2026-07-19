@@ -2,7 +2,7 @@
 
 Serves the pre-built static assets committed under `hivepilot/webui/static/`
 (built by `web/`, a separate Vite + React + TypeScript + Tailwind + shadcn/ui
-app — see `docs/v4/WEBUI.md` and `web/README.md`). The build output is
+app — see `docs/DASHBOARD.md` and `web/README.md`). The build output is
 committed into the Python package so `pip install hivepilot[webui]` ships it
 and needs **zero Node at runtime**.
 

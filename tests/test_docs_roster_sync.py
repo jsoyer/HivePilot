@@ -1,4 +1,4 @@
-"""Guardrail: docs/v4/AGENTS.md must stay in sync with roles.py.
+"""Guardrail: docs/PIPELINES-AND-ROLES.md roster must stay in sync with roles.py.
 
 Catches the common drift where an agent is renamed or a model swapped in roles.py
 but the canonical roster table in AGENTS.md is forgotten (the bug we just fixed).
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from hivepilot.roles import list_roles
 
-_AGENTS_DOC = Path(__file__).resolve().parents[1] / "docs" / "v4" / "AGENTS.md"
+_AGENTS_DOC = Path(__file__).resolve().parents[1] / "docs" / "PIPELINES-AND-ROLES.md"
 
 
 def _short(model: str) -> str:

@@ -1,7 +1,7 @@
 """TUI for browsing/inspecting loaded HivePilot plugins, with an
 enable/disable toggle.
 
-v1 (see docs/v4/PLUGINS.md, roadmap Phase 26a) was browse + inspect only.
+v1 (see docs/PLUGINS.md, roadmap Phase 26a) was browse + inspect only.
 Sprint 5 (Phase 26b) adds a `space` binding that flips the highlighted
 plugin's presence in `settings.plugins_disabled` and persists that change —
 see `persist_plugins_disabled` below. Toggling does NOT live-unregister a

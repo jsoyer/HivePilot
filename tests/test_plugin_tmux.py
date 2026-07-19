@@ -1,7 +1,7 @@
 """
 Tests for the `tmux` runner plugin (plugin-arch-overhaul PRD, Sprint 03).
 
-`plugins/tmux.py` is a local-file plugin (see docs/v4/PLUGINS.md) that
+`plugins/tmux.py` is a local-file plugin (see docs/PLUGINS.md) that
 executes each pipeline step *inside a dedicated, deterministically-named tmux
 session* (`new-session -d` -> `wait-for` completion signal -> `capture-pane`
 full scrollback -> `kill-session`), enabling live attach/observe. It degrades

@@ -3116,7 +3116,7 @@ def plugins_list() -> None:
     taxonomy tables and the Loaded Plugins table. The **Loaded Plugins**
     table itself DOES carry real per-plugin attribution (Phase 26a) via
     `PluginRecord.contributions` — see the "contributes" column below.
-    See docs/v4/PLUGINS.md.
+    See docs/PLUGINS.md.
     """
     from rich.console import Console
     from rich.table import Table
@@ -3155,7 +3155,7 @@ def plugins_list() -> None:
     # truth this reuses), each tagged active (flag on + binary on PATH — i.e.
     # currently in RUNNER_MAP) or inactive (flag off, or binary absent), with
     # its per-plugin enable-flag env var so an inactive row is immediately
-    # actionable. See docs/v4/PLUGINS.md.
+    # actionable. See docs/PLUGINS.md.
     #
     # codex-cursor-plugins migration: codex/cursor moved OUT of this tuple
     # into _OPTIONAL_AGENT_PLUGIN_KINDS — they now render via the plugin loop
@@ -3238,7 +3238,7 @@ def plugins_health() -> None:
 def plugins_tui() -> None:
     """Interactive (read-only) Textual browser/inspector for loaded plugins.
 
-    v1 is browse + inspect only — no enable/disable (see docs/v4/PLUGINS.md).
+    v1 is browse + inspect only — no enable/disable (see docs/PLUGINS.md).
     """
     if not settings.enable_textual_ui:
         typer.echo("Enable HIVEPILOT_ENABLE_TEXTUAL_UI to launch the plugin manager TUI.")
@@ -3257,7 +3257,7 @@ def plugins_search(
 ) -> None:
     """Search the configured plugin discovery INDEX (Phase 26b Approach A).
 
-    METADATA ONLY — see docs/v4/PLUGINS.md "Trust model": this fetches a
+    METADATA ONLY — see docs/PLUGINS.md "Trust model": this fetches a
     small JSON document (name/description/install-hint/checksum) from
     `HIVEPILOT_PLUGINS_INDEX_URL` and displays it. It never downloads or
     executes plugin code; installation stays on your own `pip install` /
@@ -3310,7 +3310,7 @@ def plugins_info(
     yourself (Phase 26b Approach A).
 
     METADATA ONLY — this command never installs anything for you (see
-    docs/v4/PLUGINS.md "Trust model"). It only prints the `pip install` /
+    docs/PLUGINS.md "Trust model"). It only prints the `pip install` /
     `git clone` command the operator should run through their own trusted
     path.
     """

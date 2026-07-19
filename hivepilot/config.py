@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     # `plugins search`/`info` fetch and display (hivepilot/services/
     # plugin_index.py). METADATA ONLY: the index is never used to download
     # or execute plugin code — installation stays on the operator's own
-    # pip/git path (see docs/v4/PLUGINS.md "Trust model"). Empty (default)
+    # pip/git path (see docs/PLUGINS.md "Trust model"). Empty (default)
     # means no index is configured; `plugins search`/`info` then fail fast
     # with a friendly message instead of making any network call.
     # env: HIVEPILOT_PLUGINS_INDEX_URL

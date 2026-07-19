@@ -9,7 +9,7 @@ characters from every string field at parse time), `search_index`
 rendering a copy-paste-able command).
 
 CRITICAL: this module must NEVER download, import, or execute plugin code —
-only fetch and parse metadata. See docs/v4/PLUGINS.md "Trust model".
+only fetch and parse metadata. See docs/PLUGINS.md "Trust model".
 
 Adversarial-review follow-up (fix-then-ship): every index field is
 ATTACKER-CONTROLLED (compromised/MITM'd index host). These tests cover:
