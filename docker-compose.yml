@@ -26,8 +26,16 @@ services:
       HIVEPILOT_API_HOST: 0.0.0.0
     volumes:
       - hivepilot-data:/data
+    # Host-side bind defaults to loopback only — this is a RAW, unauthenticated
+    # -by-default HTTP API (bearer tokens are opt-in via api_tokens.yaml/
+    # HIVEPILOT_API_TOKEN). Do not change this to "8045:8045" (all interfaces)
+    # without putting a reverse proxy in front that terminates TLS and enforces
+    # auth (see `hivepilot api systemd-unit` / `hivepilot caddy` for a Caddy
+    # reverse-proxy option). HIVEPILOT_API_HOST stays 0.0.0.0 below — that is
+    # the CONTAINER-internal bind (needed so Docker's network can reach the
+    # process at all); it is independent of this host port mapping.
     ports:
-      - "8045:8045"
+      - "127.0.0.1:8045:8045"
     command: ["api", "serve", "--host", "0.0.0.0", "--port", "8045"]
     restart: unless-stopped
     healthcheck:

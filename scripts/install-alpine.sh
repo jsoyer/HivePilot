@@ -12,6 +12,12 @@ set -eu
 VENV_DIR="${HIVEPILOT_VENV_DIR:-/opt/hivepilot/venv}"
 REPO_URL="${HIVEPILOT_REPO_URL:-https://github.com/jsoyer/HivePilot.git}"
 EXTRAS="${HIVEPILOT_EXTRAS:-api,notifications}"
+# Pin the git install to a specific ref (branch, tag, or commit) for
+# reproducible/supply-chain-safe installs instead of trusting whatever HEAD
+# of the default branch happens to be at install time. Override with a
+# release tag or a pinned commit sha for production, e.g.:
+#   HIVEPILOT_REPO_REF=v0.2.0 sh scripts/install-alpine.sh
+REPO_REF="${HIVEPILOT_REPO_REF:-main}"
 
 echo "== HivePilot Alpine installer =="
 
@@ -60,7 +66,7 @@ case "$SOURCE" in
     "$VENV_DIR/bin/pip" install --no-cache-dir -e "${REPO_ROOT}[$EXTRAS]"
     ;;
   git)
-    "$VENV_DIR/bin/pip" install --no-cache-dir "hivepilot[$EXTRAS] @ git+${REPO_URL}"
+    "$VENV_DIR/bin/pip" install --no-cache-dir "hivepilot[$EXTRAS] @ git+${REPO_URL}@${REPO_REF}"
     ;;
   *)
     echo "ERROR: unknown HIVEPILOT_SOURCE '${SOURCE}' (expected git|pypi|local)" >&2

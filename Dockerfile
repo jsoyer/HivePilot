@@ -33,6 +33,27 @@ COPY . .
 # Extend/swap the extras list as needed, e.g. `.[full]` for every integration.
 RUN pip install --no-cache-dir ".[api,notifications]"
 
+# --- Seed the "packaged copy" of built-in agent prompts ---------------------
+# `hivepilot/roles.py::_PROMPTS_DIR` and
+# `hivepilot/services/auditor_service.py::AUDITOR_PROMPT` resolve the
+# built-in prompt templates via `Path(__file__).parent.parent / "prompts"`
+# (a package-relative sibling lookup — NOT declared in pyproject.toml's
+# [tool.setuptools.package-data], which only ships hivepilot/webui/static).
+# That lookup is the documented FINAL fallback in the role/prompt resolution
+# chain (config_repo / base_dir take priority when present), so a plain
+# `pip install .` into a venv needs `prompts/` copied next to the installed
+# `hivepilot` package for that fallback to actually resolve anything. Compute
+# the destination dynamically (not hardcoded to python3.12's site-packages
+# path) so this keeps working across Python version bumps, and copy ONLY the
+# tiny prompts/ directory — not the whole repository.
+# Run the `import hivepilot` probe from outside /build: cwd is prepended to
+# sys.path, so running it from /build (which itself contains a `hivepilot/`
+# source subdirectory) would shadow the installed site-packages copy and
+# resolve `hivepilot.__file__` to the source tree instead — computing the
+# wrong destination (and looping `cp -r` into itself).
+RUN PKG_PARENT="$(cd / && python3 -c 'import hivepilot, os; print(os.path.dirname(os.path.dirname(hivepilot.__file__)))')" \
+    && cp -r /build/prompts "${PKG_PARENT}/prompts"
+
 
 FROM python:3.12-alpine AS final
 
@@ -52,12 +73,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apk add --no-cache git curl bash ca-certificates \
     && addgroup -S hivepilot \
     && adduser -S -G hivepilot -h /home/hivepilot hivepilot \
-    && mkdir -p /app /data \
-    && chown -R hivepilot:hivepilot /app /data
+    && mkdir -p /data \
+    && chown -R hivepilot:hivepilot /data
 
+# The venv (built + installed in the builder stage, including the seeded
+# prompts/ "packaged copy" above) is self-contained — the application is
+# installed into it, so the source tree is deliberately NOT copied into this
+# final stage. This keeps the image slim and makes .dockerignore a
+# defense-in-depth measure rather than the only leak control: nothing from
+# the build context reaches this stage at all except via the venv install.
 COPY --from=builder /opt/venv /opt/venv
-WORKDIR /app
-COPY --chown=hivepilot:hivepilot . .
+WORKDIR /data
 
 # Config files (projects.yaml, tasks.yaml, roles.yaml, ...) and state.db live
 # under /data so they survive container recreation via a mounted volume.
