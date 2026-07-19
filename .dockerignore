@@ -12,6 +12,12 @@ venv
 !.env.example
 state.db
 *.db
+api_tokens.yaml
+
+# --- Key material / credentials (defense-in-depth catch-alls) ---
+*.pem
+*.key
+id_rsa*
 
 # --- Runtime / local artifacts ---
 runs/
@@ -31,8 +37,12 @@ build
 htmlcov
 coverage.*
 
-# --- Claude / worktree tooling (host-only, not needed in image) ---
-.claude/worktrees
+# --- Claude tooling (host-only dev config, never needed at runtime).
+# settings.local.json is a PER-DEVELOPER override that can carry local
+# paths/config and must never land in an image layer; excluding all of
+# .claude/ is simplest and safest since nothing under it is read at runtime
+# (see Dockerfile — the final image no longer COPYs the source tree at all).
+.claude/
 
 # --- Editors / OS cruft ---
 .DS_Store
