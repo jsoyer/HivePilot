@@ -24,6 +24,69 @@ For development (editable install with all extras):
 pip install -e ".[full]"
 ```
 
+## Guided setup (`hivepilot setup`)
+
+The fastest way to get a fresh install fully wired up is the interactive
+setup wizard:
+
+```bash
+hivepilot setup
+```
+
+```
+        _   _
+       (_)-(_)
+    .-'   V   '-.
+   (   `-._|_.-'   )
+    `-.   _   .-'
+   .----( o )----.
+  /  |# # # # #|  \
+ |   |# # # # #|   |
+  \  |# # # # #|  /
+   `--\_______/--'
+       U     U
+
+HivePilot
+Guided setup
+```
+
+It walks through, in order, and shows a ✓/○ status line for each before
+doing anything:
+
+1. **Environment probe** — Python version, install path, config dir, init system.
+2. **Config repo** (optional) — private repo URL, HTTPS token vs. SSH deploy key, `config sync`.
+3. **Admin token** (bootstrap) — mints the first (admin-role) API token if none exist yet; shown once, boxed.
+4. **Agent runners** — read-only PATH probe for `claude`/`codex`/etc., with `agents install` hints for anything missing.
+5. **Telegram** — bot token + **auto-detected chat ids**: message your bot, the wizard polls `getUpdates` and lets you pick which chats to authorize, plus which gets notifications vs. the live agent stream.
+6. **Plugins** — multiselect from the curated example plugins (`plugins install` under the hood).
+7. **Concierge** — opt-in natural-language chatops (only shown if your build has it).
+8. **Services** — OpenRC/systemd guidance, or the foreground commands to run directly.
+9. **Summary** — a boxed recap of what's configured and what's still to do.
+
+It's idempotent and resumable: re-running never silently overwrites
+anything — every write is shown and confirmed first. It only ever writes to
+your `.env` file (via a line-level upsert that preserves every other line)
+and, for the admin token, the tokens store; nothing else is touched.
+
+Every step is skippable, and you can run just one:
+
+```bash
+hivepilot setup --only telegram
+```
+
+For CI/automation, `--non-interactive` never prompts — supply values via
+flags (or their `HIVEPILOT_*` env var equivalents) instead. A section you
+explicitly request via `--only` that's still missing what it needs exits
+non-zero rather than hanging:
+
+```bash
+hivepilot setup --non-interactive --yes \
+  --telegram-bot-token "$TELEGRAM_BOT_TOKEN" \
+  --plugins rtk,gh
+```
+
+See [CLI-REFERENCE.md](./CLI-REFERENCE.md#setup) for the full flag list.
+
 ## Verify your environment
 
 Run diagnostics before doing anything else:

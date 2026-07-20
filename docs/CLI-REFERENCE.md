@@ -34,6 +34,7 @@ These commands are ungrouped — invoke them directly as `hivepilot <cmd>`.
 | `dashboard` | Textual TUI showing recent runs. Requires `HIVEPILOT_ENABLE_TEXTUAL_UI`. | No |
 | `lint` | Lint config files for errors/warnings. | No |
 | `init` | Scaffold a new HivePilot workspace. | **Yes** |
+| `setup` | Guided, idempotent setup wizard (config repo, admin token, agent runners, Telegram, plugins, concierge, services). | **Yes** |
 | `init-template` / `templates` | Scaffold from, or list, workspace templates. | `init-template` yes; `templates` no |
 | `debate` | Run a multi-agent debate (judge/arbiter adjudicated consensus). | **Yes** |
 | `audit` | Run an audit pass (config/security/governance, depending on flags). | No |
@@ -63,6 +64,22 @@ hivepilot run-pipeline release-pipeline --project api-service
 
 # Executes for real
 hivepilot run-pipeline release-pipeline --project api-service --no-dry-run
+```
+
+### `setup`
+
+Guided, idempotent walk through everything a fresh install needs: an
+optional private config repo, the first (admin) API token, agent runner
+CLIs, Telegram (bot token + auto-detected chat ids), curated plugins, the
+opt-in NL concierge, and OS service scaffolding. See
+[GETTING-STARTED.md](./GETTING-STARTED.md#guided-setup-hivepilot-setup) for
+the full walkthrough.
+
+```bash
+hivepilot setup                                   # interactive, full wizard
+hivepilot setup --only telegram                    # just one section
+hivepilot setup --non-interactive --yes \
+  --telegram-bot-token "$TELEGRAM_BOT_TOKEN"        # CI/automation-friendly
 ```
 
 ## `gh` — GitHub
