@@ -244,33 +244,63 @@ Kubernetes' default container-liveness (process exit == restart); there is
 no meaningful HTTP/TCP endpoint to probe for a blocking polling/gateway
 process.
 
-## RBAC & the kubectl runner
+## RBAC & the kubectl / helm / kustomize runners
 
 `rbac.create` defaults to **`false`** — no Role/RoleBinding is created, and
 the ServiceAccount has no permissions beyond what any unauthenticated
-in-cluster identity would have. HivePilot ships a `kubectl` runner plugin
-(`hivepilot/runners/kubectl_runner.py`) that shells out to the `kubectl`
-binary from whichever pipeline step invokes it; destructive operations
-(`apply`, `delete`, mutating `rollout` sub-commands) are gated behind
-HivePilot's own step-level approval flow (`is_destructive()` /
-`step_requires_approval`), but **that is an application-level gate, not a
-Kubernetes-level one** — a compromised pod or a bug in the approval logic is
-bounded only by what RBAC actually grants this ServiceAccount.
+in-cluster identity would have. When enabled, the chart's default
+`rbac.rules` grants only `get`/`list`/`watch` on `pods`, `services`,
+`configmaps`, `events` (core API group) and `deployments`, `replicasets`
+(`apps` API group) — read-only, no write verbs, no wildcard resources. This
+section covers the three IaC-adjacent runner plugins that can go beyond
+that default if a pipeline exercises their mutating operations:
+`hivepilot/runners/kubectl_runner.py`, `hivepilot/runners/helm_runner.py`,
+and `hivepilot/runners/kustomize_runner.py`.
 
-If you enable the kubectl runner in a pipeline that runs inside this
+**kubectl & helm — same in-cluster blast-radius story.** Both runners shell
+out to a real cluster-talking binary (`kubectl`, `helm`) from whichever
+pipeline step invokes them. `kubectl apply`/`delete` and `helm
+install`/`upgrade`/`rollback`/`uninstall` can create, mutate, or delete
+*any* resource kind the underlying RBAC identity is allowed to touch —
+including CRDs and other cluster-scoped resources if the identity has
+cluster-scoped permissions. Both runners surface their mutating operations
+via `is_destructive()`, gated behind HivePilot's own step-level approval
+flow (`hivepilot.orchestrator.step_requires_approval`), but **that is an
+application-level gate, not a Kubernetes-level one** — a compromised pod or
+a bug in the approval logic is bounded only by what RBAC actually grants
+this ServiceAccount, never by the approval prompt itself.
+
+**kustomize — local-file-only, but feeds kubectl.** The kustomize runner
+never talks to the Kubernetes API itself: `kustomize build` renders
+manifests to stdout and `kustomize edit set image`/`set namespace` only
+mutate the overlay's `kustomization.yaml` on disk. The actual cluster
+mutation happens when a pipeline pipes that rendered output into a
+*subsequent* `kubectl apply` step — so the real RBAC boundary for a
+kustomize-based pipeline is still the kubectl runner's ServiceAccount, not
+the kustomize step itself.
+
+If you enable any of these runners in a pipeline that runs inside this
 Deployment, know that:
 
-- The `kubectl` CLI does **not** auto-detect in-cluster ServiceAccount
-  credentials the way client-go controllers do — you must generate a
-  kubeconfig pointing at the mounted SA token
+- Neither the `kubectl` nor the `helm` CLI auto-detects in-cluster
+  ServiceAccount credentials the way client-go controllers do — you must
+  generate a kubeconfig pointing at the mounted SA token
   (`/var/run/secrets/kubernetes.io/serviceaccount/token`) and the cluster CA,
   and set `KUBECONFIG` to it (e.g. via an `extraVolumeMounts`/`extraEnv` +
   an init step, or bake a kubeconfig template into your own image layer).
+  Both runners accept an explicit `kubeconfig` runner option for the same
+  purpose.
 - Set `rbac.create: true` and start from the minimal, read-only
   `rbac.rules` default in `values.yaml` — widen only as far as the
-  pipelines you actually run require, and never grant `cluster-admin`.
+  pipelines you actually run require (e.g. add `apps`/`get,list,watch,
+  create,update,patch,delete` on `deployments` for a `kubectl apply`
+  pipeline), and **never grant `cluster-admin`**.
 - Prefer `rbac.scope: Role` (namespaced) over `ClusterRole` unless a
-  pipeline genuinely needs cross-namespace access.
+  pipeline genuinely needs cross-namespace access — this applies equally to
+  kubectl, helm (chart installs that create cluster-scoped CRDs are the
+  main reason a pipeline might reach for `ClusterRole`; grant it only for
+  that specific need), and any downstream `kubectl apply` step consuming
+  kustomize output.
 
 ## Values reference
 
