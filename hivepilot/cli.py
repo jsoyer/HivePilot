@@ -74,6 +74,8 @@ playbooks_app = typer.Typer(help="Multi-agent collaboration playbook templates")
 app.add_typer(playbooks_app, name="playbooks")
 agents_app = typer.Typer(help="Agent CLI availability + guided install")
 app.add_typer(agents_app, name="agents")
+autopilot_app = typer.Typer(help="Guarded autonomous objective queue (Autopilot)")
+app.add_typer(autopilot_app, name="autopilot")
 logger = get_logger(__name__)
 
 
@@ -3478,6 +3480,152 @@ def agents_install(
     typer.echo(result.message)
     if result.ran and result.exit_code not in (0, None):
         raise typer.Exit(result.exit_code or 1)
+
+
+# ---------------------------------------------------------------------------
+# Autopilot: guarded objective queue + fail-closed dispatch gate
+#
+# Thin CLI wrapper over `hivepilot.services.autopilot_queue` -- a plain
+# service, not a runner, invoked directly here (no `Orchestrator`/`RunResult`
+# in this path). `enqueue` only ever accepts and echoes plain strings (the
+# id plus the pipeline/project/reason the caller passed in) -- it never
+# constructs or forwards a `RunResult`/step-`detail`-shaped payload. See
+# docs/AUTOPILOT.md.
+# ---------------------------------------------------------------------------
+
+
+@autopilot_app.command("enqueue")
+def autopilot_enqueue(
+    pipeline: str = typer.Argument(..., help="Pipeline name"),
+    project: str = typer.Argument(..., help="Project name"),
+    reason: str = typer.Option("", "--reason", help="Why this objective is being proposed"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to scope this row to"),
+) -> None:
+    """Propose a new objective into the autopilot queue (state: proposed)."""
+    from hivepilot.services import autopilot_queue
+
+    row_id = autopilot_queue.enqueue(project, pipeline, reason, tenant=tenant)
+    typer.echo(f"Enqueued objective #{row_id}: {pipeline} -> {project} (proposed)")
+
+
+def _autopilot_render_queue(
+    tenant: Optional[str] = typer.Option("default", "--tenant", help="Filter by tenant"),
+    state: Optional[str] = typer.Option(None, "--state", help="Filter by state"),
+) -> None:
+    from hivepilot.services import autopilot_queue
+
+    items = autopilot_queue.list_queue(tenant=tenant, state=state)
+    if not items:
+        typer.echo("Autopilot queue is empty.")
+        return
+
+    typer.echo(f"{'ID':<6} {'State':<10} {'Project':<20} {'Pipeline':<20} {'Cost':<8} Reason")
+    typer.echo("-" * 80)
+    for item in items:
+        cost = f"{item.cost_usd:.2f}" if item.cost_usd is not None else "-"
+        typer.echo(
+            f"{item.id:<6} {item.state:<10} {item.project:<20} {item.pipeline:<20} "
+            f"{cost:<8} {item.reason or '-'}"
+        )
+
+
+@autopilot_app.command("queue")
+def autopilot_queue_cmd(
+    tenant: Optional[str] = typer.Option("default", "--tenant", help="Filter by tenant"),
+    state: Optional[str] = typer.Option(None, "--state", help="Filter by state"),
+) -> None:
+    """List autopilot queue rows."""
+    _autopilot_render_queue(tenant=tenant, state=state)
+
+
+@autopilot_app.command("list")
+def autopilot_list_cmd(
+    tenant: Optional[str] = typer.Option("default", "--tenant", help="Filter by tenant"),
+    state: Optional[str] = typer.Option(None, "--state", help="Filter by state"),
+) -> None:
+    """Alias for `autopilot queue`."""
+    _autopilot_render_queue(tenant=tenant, state=state)
+
+
+@autopilot_app.command("promote")
+def autopilot_promote(
+    item_id: int = typer.Argument(..., help="Queue row id"),
+) -> None:
+    """Promote a proposed objective to queued."""
+    from hivepilot.services import autopilot_queue
+
+    autopilot_queue.promote(item_id)
+    typer.echo(f"Promoted objective #{item_id} to queued.")
+
+
+@autopilot_app.command("veto")
+def autopilot_veto(
+    item_id: int = typer.Argument(..., help="Queue row id"),
+) -> None:
+    """Veto a proposed/queued objective."""
+    from hivepilot.services import autopilot_queue
+
+    autopilot_queue.veto(item_id)
+    typer.echo(f"Vetoed objective #{item_id}.")
+
+
+@autopilot_app.command("pause")
+def autopilot_pause(
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to pause"),
+) -> None:
+    """Pause autopilot dispatch for a tenant."""
+    from hivepilot.services import autopilot_queue
+
+    autopilot_queue.pause(tenant=tenant)
+    typer.echo(f"Autopilot paused for tenant '{tenant}'.")
+
+
+@autopilot_app.command("resume")
+def autopilot_resume(
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to resume"),
+) -> None:
+    """Resume autopilot dispatch for a tenant."""
+    from hivepilot.services import autopilot_queue
+
+    autopilot_queue.resume(tenant=tenant)
+    typer.echo(f"Autopilot resumed for tenant '{tenant}'.")
+
+
+@autopilot_app.command("stop")
+def autopilot_stop(
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to stop"),
+) -> None:
+    """Stop autopilot dispatch for a tenant."""
+    from hivepilot.services import autopilot_queue
+
+    autopilot_queue.stop(tenant=tenant)
+    typer.echo(f"Autopilot stopped for tenant '{tenant}'.")
+
+
+@autopilot_app.command("status")
+def autopilot_status(
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to inspect"),
+) -> None:
+    """Show autopilot control flags + a per-state queue summary for a tenant."""
+    from hivepilot.services import autopilot_queue
+
+    paused = autopilot_queue.is_paused(tenant=tenant)
+    stopped = autopilot_queue.is_stopped(tenant=tenant)
+    items = autopilot_queue.list_queue(tenant=tenant)
+
+    typer.echo(f"Tenant: {tenant}")
+    typer.echo(f"Stopped: {stopped}")
+    typer.echo(f"Paused: {paused}")
+
+    if not items:
+        typer.echo("Queue: empty")
+        return
+
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item.state] = counts.get(item.state, 0) + 1
+    summary = ", ".join(f"{state}={count}" for state, count in sorted(counts.items()))
+    typer.echo(f"Queue: {summary}")
 
 
 if __name__ == "__main__":
