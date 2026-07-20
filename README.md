@@ -67,6 +67,7 @@ hivepilot interactive
 | [docs/PLUGINS.md](docs/PLUGINS.md) | The plugin system (runners/notifiers/hooks/secrets/panels/skills) |
 | [docs/SKILLS.md](docs/SKILLS.md) | Plugin-contributed skills |
 | [docs/DEBATE-AND-LESSONS.md](docs/DEBATE-AND-LESSONS.md) | Dual-model debate + judge/arbiter PR gate, and the auto-learning lessons loop |
+| [docs/AUTOPILOT.md](docs/AUTOPILOT.md) | Guarded objective queue + fail-closed autonomous dispatch gate |
 | [docs/SECURITY.md](docs/SECURITY.md) | Approval gates, secrets masking, CVE gate, fail-closed model |
 | [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Telegram/Slack/Discord/Notion/Linear/Obsidian/Caddy/n8n/SSH remote agents |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | Mirador dashboard (TUI + web) |

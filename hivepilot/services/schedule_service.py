@@ -13,10 +13,30 @@ from hivepilot.services import state_service
 @dataclass
 class ScheduleEntry:
     name: str
-    task: str
     projects: list[str]
+    task: str | None = None
     interval_minutes: int = 1440
     enabled: bool = True
+    # Phase (Autopilot) — mutually exclusive with `task`. The only supported
+    # value is "autopilot": `run_entry` then drains at most one objective
+    # from the guarded autopilot queue (see `autopilot_queue.py`) instead of
+    # running a fixed task. Existing fixed-`task` entries are byte-identical
+    # (this field defaults to `None` and is never populated by them).
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        has_task = bool(self.task)
+        has_source = bool(self.source)
+        if has_task == has_source:
+            raise ValueError(
+                f"schedule {self.name!r}: exactly one of 'task' or 'source' must be set "
+                f"(got task={self.task!r}, source={self.source!r})"
+            )
+        if has_source and self.source != "autopilot":
+            raise ValueError(
+                f"schedule {self.name!r}: unsupported source {self.source!r} "
+                "(only 'autopilot' is supported)"
+            )
 
 
 def load_schedules(path: Path | None = None) -> dict[str, ScheduleEntry]:
@@ -28,10 +48,11 @@ def load_schedules(path: Path | None = None) -> dict[str, ScheduleEntry]:
     for name, values in data.get("schedules", {}).items():
         entries[name] = ScheduleEntry(
             name=name,
-            task=values["task"],
+            task=values.get("task"),
             projects=values.get("projects", []),
             interval_minutes=values.get("interval_minutes", 1440),
             enabled=values.get("enabled", True),
+            source=values.get("source"),
         )
     return entries
 
@@ -64,7 +85,24 @@ def run_entry(
     Run a schedule entry via the orchestrator.
     On failure, enqueue into the retry queue with exponential backoff.
     Returns True if the run succeeded immediately.
+
+    Entries with `source == "autopilot"` skip the fixed-task path entirely
+    and instead drain at most one objective from the guarded autopilot
+    queue via `autopilot_queue.drain_one` -- see that module's docstring
+    for the fail-closed gate contract. This branch never touches the
+    retry_service backoff path (a denied/blocked drain is an expected,
+    visible "awaiting human" state, not a schedule failure), and always
+    calls `mark_run(entry)` so the schedule's interval-based due-calc
+    still applies normally. Fixed-`task` entries (source is None) are
+    completely unaffected -- behavior below this branch is unchanged.
     """
+    if entry.source == "autopilot":
+        from hivepilot.services import autopilot_queue
+
+        autopilot_queue.drain_one(orchestrator, tenant="default")
+        mark_run(entry)
+        return True
+
     from hivepilot.services import retry_service
 
     try:
