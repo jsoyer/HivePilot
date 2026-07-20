@@ -54,6 +54,8 @@ slack_app = typer.Typer(help="Slack bot")
 app.add_typer(slack_app, name="slack")
 discord_app = typer.Typer(help="Discord bot")
 app.add_typer(discord_app, name="discord")
+signal_app = typer.Typer(help="Signal bot")
+app.add_typer(signal_app, name="signal")
 linear_app = typer.Typer(help="Linear issue tracker integration")
 app.add_typer(linear_app, name="linear")
 iac_app = typer.Typer(help="Infrastructure-as-Code operations")
@@ -1885,6 +1887,95 @@ def discord_notify(
     except RuntimeError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Signal commands (Phase 23e)
+# ---------------------------------------------------------------------------
+
+
+@signal_app.command("start")
+def signal_start(
+    mode: str = typer.Option(
+        "cli", "--mode", "-m", help="cli (signal-cli) or rest (signal-cli-rest-api)"
+    ),
+) -> None:
+    """Start the Signal bot's pull-only receive loop. Blocking — Signal has no
+    inbound webhook, so this must run continuously (dedicated terminal or
+    systemd unit), same as `telegram start`/`slack start`/`discord start`."""
+    from hivepilot.services import signal_bot as sbot
+
+    mode = mode.lower()
+    if mode not in ("cli", "rest"):
+        typer.echo(f"Unknown mode: {mode!r}. Use 'cli' or 'rest'.", err=True)
+        raise typer.Exit(1)
+    try:
+        typer.echo(f"Starting Signal bot in {mode} mode (Ctrl+C to stop)…")
+        sbot.SignalBot(mode=mode).run()
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@signal_app.command("notify")
+def signal_notify(
+    message: str = typer.Argument(..., help="Message to send to the notification number"),
+) -> None:
+    """Send a plain text message to the configured Signal notification number."""
+    from hivepilot.services import signal_bot as sbot
+
+    try:
+        sbot.notify(message)
+        typer.echo("Message sent.")
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@signal_app.command("register")
+def signal_register(
+    number: str = typer.Argument(..., help="E.164 phone number to register, e.g. +15551234567"),
+    voice: bool = typer.Option(False, "--voice", help="Request a voice call instead of SMS"),
+    captcha: Optional[str] = typer.Option(
+        None, "--captcha", help="Captcha token (signal-cli may require this)"
+    ),
+) -> None:
+    """Register a phone number as a Signal bot via signal-cli (one-time setup)."""
+    from hivepilot.services import signal_bot as sbot
+
+    try:
+        sbot.register(number, voice=voice, captcha=captcha)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Registration requested for {number}. Check SMS/voice for the code, then run:")
+    typer.echo(f"  signal-cli -a {number} verify <code>")
+
+
+@signal_app.command("link")
+def signal_link(
+    device_name: str = typer.Option(
+        "hivepilot", "--name", "-n", help="Device name shown on the primary phone"
+    ),
+) -> None:
+    """Link this machine as a secondary Signal device (scan the printed
+    URI/QR data on your phone). Blocking until the primary device confirms."""
+    from hivepilot.services import signal_bot as sbot
+
+    try:
+        sbot.link(device_name)
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+
+@signal_app.command("info")
+def signal_info() -> None:
+    """Show current Signal bot configuration and signal-cli PATH availability."""
+    from hivepilot.services import signal_bot as sbot
+
+    for key, value in sbot.info().items():
+        typer.echo(f"  {key:<20}: {value}")
 
 
 @app.command("init-template")

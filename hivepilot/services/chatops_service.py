@@ -72,6 +72,14 @@ def _dispatch(command: str, args: list[str], source: str) -> str:
         orch.run_approved(run_id=run_id, approve=approve, approver=source, reason=reason)
         return f"{'Approved' if approve else 'Denied'} run {run_id}"
 
+    if command == "status":
+        _verify("run")
+        runs = state_service.list_recent_runs(limit=5)
+        if not runs:
+            return "No recent runs."
+        lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
+        return "Recent runs:\n" + "\n".join(lines)
+
     return f"Unknown command: {command}"
 
 
@@ -111,3 +119,24 @@ def handle_telegram(update: dict[str, Any]) -> str:
     raw_command = parts[0].lstrip("/")  # hp_run
     command = raw_command.removeprefix("hp_").removeprefix("hp")  # run
     return _dispatch(command, parts[1:], source="telegram")
+
+
+def handle_signal(payload: dict[str, str]) -> str:
+    """Handle a Signal message body (commands: run, approvals, approve, deny, status).
+
+    Signal has no cloud bot API / inbound webhook (it's E2E P2P) -- unlike
+    handle_slack/handle_discord/handle_telegram above (all driven by an inbound
+    HTTP webhook payload), this is called directly by `signal_bot.SignalBot`'s
+    pull-only receive loop (signal-cli `receive` / signal-cli-rest-api polling)
+    for each inbound message, not via a FastAPI route. The leading `/` is
+    optional so both `/run acme deploy` and Signal's natural reply style
+    (`approve 42`, `deny 42 not ready`) route the same way -- there are no
+    inline buttons on Signal, so `approve <run_id>` / `deny <run_id>` is the
+    only approval UX available.
+    """
+    text = payload.get("text", "").strip()
+    if not text:
+        return "Unknown command"
+    parts = text.split()
+    command = parts[0].lstrip("/")
+    return _dispatch(command, parts[1:], source="signal")
