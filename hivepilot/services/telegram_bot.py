@@ -23,11 +23,16 @@ _pending_challenges: dict[int, tuple[int, str]] = {}
 
 # Natural-language concierge (opt-in, settings.chatops_concierge_enabled):
 # pending destructive route/action decisions awaiting a Yes/No inline-keyboard
-# confirmation, keyed by chat_id. Deliberately a SEPARATE dict from
-# `_pending_challenges` / `state_service.approvals` — the concierge confirm
-# flow is its own namespace (`concierge:yes:<token>` / `concierge:no:<token>`
-# callback_data), not a pipeline-checkpoint approval.
-_pending_concierge: dict[int, "ConciergeDecision"] = {}
+# confirmation, keyed by chat_id. Value is (token, decision) — the SAME
+# shape as chatops_service._pending_concierge_text — so a stale keyboard
+# (superseded by a newer message before the user presses a button) can never
+# confirm the WRONG decision: `_concierge_callback` rejects any
+# `concierge:yes:<token>` whose token doesn't match the currently-stored one
+# instead of blindly executing whatever happens to be pending. Deliberately
+# a SEPARATE dict from `_pending_challenges` / `state_service.approvals` —
+# the concierge confirm flow is its own namespace (`concierge:yes:<token>` /
+# `concierge:no:<token>` callback_data), not a pipeline-checkpoint approval.
+_pending_concierge: dict[int, tuple[str, "ConciergeDecision"]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -315,27 +320,40 @@ async def _run_agent_order(update: Any, role_key: str, target: str, order: str) 
 
 def _summarize_concierge_decision(decision: "ConciergeDecision") -> str:
     """Short human-readable summary of a destructive decision, for the
-    inline-keyboard confirmation prompt."""
+    inline-keyboard confirmation prompt. Sent as PLAIN text (see
+    `_send_concierge_keyboard_message`) — never wrap fields in markdown
+    syntax here, since `decision.order`/`.target` are model-controlled and
+    must never be interpreted as formatting."""
     if decision.kind == "route":
         target = decision.target or settings.default_target
         order = f": {decision.order}" if decision.order else ""
-        return f"ask {decision.role_key} to work on `{target}`{order}"
+        return f"ask {decision.role_key} to work on {target}{order}"
     if decision.kind == "action":
         if decision.action in ("approve", "deny"):
             run_id = (decision.params or {}).get("run_id")
             return f"{decision.action} run #{run_id}"
         target = decision.target or settings.default_target
-        return f"{decision.action} on `{target}`"
+        return f"{decision.action} on {target}"
     return "perform this action"
 
 
 async def _send_concierge_keyboard_message(
-    bot: Any, *, chat_id: int, decision: "ConciergeDecision"
+    bot: Any, *, chat_id: int, token: str, decision: "ConciergeDecision"
 ) -> None:
     """Send a Yes/No inline keyboard for a pending destructive concierge
-    decision. Separate callback namespace from `_send_approval_keyboard_message`
-    (`concierge:yes:<token>` / `concierge:no:<token>`, pattern registered
-    alongside the existing `(approve|deny|challenge)` handler)."""
+    decision. *token* is the SAME value the caller already stored in
+    `_pending_concierge[chat_id]` — generated once, threaded through, never
+    re-minted here — so the button's callback_data and the stored pending
+    entry always agree (see `_concierge_callback`). Separate callback
+    namespace from `_send_approval_keyboard_message` (`concierge:yes:<token>`
+    / `concierge:no:<token>`, pattern registered alongside the existing
+    `(approve|deny|challenge)` handler).
+
+    Sent with `parse_mode=None` (plain text): `decision.order`/`.target` are
+    model-controlled and must never be interpreted as Markdown — an
+    unbalanced backtick/`*`/`_` in either must not corrupt or hide the
+    confirmation prompt the user is meant to read before pressing Yes.
+    """
     try:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     except ImportError as exc:
@@ -343,7 +361,6 @@ async def _send_concierge_keyboard_message(
             "python-telegram-bot required: pip install hivepilot[notifications]"
         ) from exc
 
-    token = uuid.uuid4().hex[:8]
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -356,7 +373,6 @@ async def _send_concierge_keyboard_message(
     await bot.send_message(
         chat_id=chat_id,
         text=f"⚠️ This will {summary}. Confirm?",
-        parse_mode="Markdown",
         reply_markup=keyboard,
     )
 
@@ -477,15 +493,34 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
         await _execute_concierge_decision(update, decision)
         return
 
-    _pending_concierge[chat_id] = decision
-    await _send_concierge_keyboard_message(context.bot, chat_id=chat_id, decision=decision)
+    # Mint the confirmation token ONCE, here, and thread it into both the
+    # stored pending entry and the keyboard's callback_data — so a stale
+    # keyboard (superseded by a newer destructive message before the user
+    # presses a button) can never confirm the WRONG decision: `yes:<token>`
+    # is only honoured if it matches what's CURRENTLY stored for this chat.
+    token = uuid.uuid4().hex[:8]
+    _pending_concierge[chat_id] = (token, decision)
+    await _send_concierge_keyboard_message(
+        context.bot, chat_id=chat_id, token=token, decision=decision
+    )
 
 
 async def _concierge_callback(update: Any, context: Any) -> None:
     """Handle the ✅ Yes / ❌ No inline keyboard for a pending concierge
     decision — a SEPARATE callback namespace from `_callback_approval`
     (`concierge:yes:<token>` / `concierge:no:<token>`, never touches
-    `_pending_challenges` or `state_service.approvals`)."""
+    `_pending_challenges` or `state_service.approvals`).
+
+    The token in `concierge:yes:<token>` MUST match the token currently
+    stored in `_pending_concierge[chat_id]` (mirrors
+    `chatops_service`'s `yes <token>` validation exactly). Without this, a
+    second destructive message overwriting the pending entry before the
+    user presses an earlier keyboard's ✅ would let that stale button
+    confirm the CURRENT (different) decision instead of the one the user
+    actually saw and approved. On a mismatch: do NOT pop or execute
+    anything, and leave any currently-pending decision untouched — a wrong/
+    stale token must never clear a still-valid pending confirmation.
+    """
     query = update.callback_query
     await query.answer()
 
@@ -497,16 +532,29 @@ async def _concierge_callback(update: Any, context: Any) -> None:
     data = query.data or ""
     parts = data.split(":", 2)
     action = parts[1] if len(parts) > 1 else ""
+    supplied_token = parts[2] if len(parts) > 2 else ""
 
-    decision = _pending_concierge.pop(chat_id, None)
-    if decision is None:
+    pending = _pending_concierge.get(chat_id)
+    if pending is None:
         await query.edit_message_text("This confirmation has expired.")
         return
 
     if action != "yes":
+        _pending_concierge.pop(chat_id, None)
         await query.edit_message_text("Annulé.")
         return
 
+    stored_token, decision = pending
+    if supplied_token != stored_token:
+        # Stale/wrong button — leave the current pending entry untouched
+        # (do NOT pop) so the real, still-pending confirmation can still be
+        # answered correctly afterwards.
+        await query.edit_message_text(
+            "⚠️ This confirmation has expired — please re-send your request."
+        )
+        return
+
+    _pending_concierge.pop(chat_id, None)
     await query.edit_message_text("⏳ Running…")
     # `_run_agent_order` (reused for kind="route") only needs `.message` —
     # wrap the callback's own message so it can `reply_text`/`delete` on it
