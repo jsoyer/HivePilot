@@ -37,6 +37,30 @@ bundled with the API — no separate frontend server to run. Unlike the TUI, the
 command center is actionable, not just a viewer: you can approve gated actions,
 launch runs, and toggle plugins directly from the UI.
 
+## Breaking change: synchronous `POST /run` removed (Phase 14b)
+
+The deprecated synchronous run-trigger endpoint (`POST /run` / `POST /v1/run`,
+which blocked the request until the pipeline finished and returned
+`{"results": [...]}` inline) has been **removed**. It is no longer reachable
+over HTTP — external clients that called it will now get a `404`.
+
+**Migration:** switch to the async pair that already replaced it:
+
+1. `POST /v1/runs` with `{"task": ..., "project": ..., "extra_prompt": ...,
+   "auto_git": ...}` — returns immediately (`202`) with `{"run_id", "status"}`.
+   Note the body shape difference: `project` (singular, one project per
+   call) instead of the old `projects` (list).
+2. Poll `GET /v1/runs/{run_id}` (requires the `run` role, matching
+   `POST /v1/runs`/cancel) until `status` is a terminal value (`success`, `failed`, `cancelled`,
+   `deferred`) — the response includes `project`, `task`, `status`,
+   `detail`, `started_at`, `finished_at`, and the per-step `steps` array
+   (each with `step`, `status`, `detail`, `provider`, `model`, token/cost
+   fields).
+
+This does not affect in-process callers (the CLI, chatops/bot commands) —
+they invoke `Orchestrator.run_task` directly, not over HTTP, and are
+unaffected by this removal.
+
 ## What you can do (web)
 
 All actions below are backed by the HTTP API, tenant-scoped, and role-gated where
@@ -45,10 +69,9 @@ without side effects.
 
 - **See who you are** — whoami view shows your identity and resolved role.
 - **Approve or deny gated actions** — the approval queue, subject to your role.
-- **Launch runs asynchronously** — `POST /v1/runs`, then watch progress in the UI.
-  (The older synchronous `POST /run` still works but is deprecated — it returns
-  `Deprecation: true` and `Link: </v1/runs>; rel="successor-version"` response
-  headers; migrate to `POST /v1/runs`.)
+- **Launch runs asynchronously** — `POST /v1/runs` returns immediately (202) with a
+  `run_id`; poll `GET /v1/runs/{run_id}` (`run` role) for its status and
+  per-step results while the UI watches progress.
 - **Stop / cancel a running pipeline** — halt an in-flight run.
 - **Toggle plugins on/off** — admin-gated, `POST /v1/plugins/{name}/toggle`. The
   health view can also re-enable a previously disabled plugin.
