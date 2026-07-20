@@ -92,6 +92,85 @@ def fake_vault(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _write_minimal_valid_config(base_dir: Path) -> None:
+    """Write the six required config files (+ a prompts/agents dir) so
+    validate_config() reports zero cross-reference problems."""
+    import yaml
+
+    (base_dir / "projects.yaml").write_text(
+        yaml.dump({"projects": {"demo": {"path": "~/dev/demo"}}})
+    )
+    (base_dir / "roles.yaml").write_text(
+        yaml.dump({"roles": [{"name": "planner", "prompt_file": "planner.md"}]})
+    )
+    (base_dir / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+    (base_dir / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+    (base_dir / "tasks.yaml").write_text(yaml.dump({"tasks": {}}))
+    (base_dir / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+    (base_dir / "prompts" / "agents").mkdir(parents=True)
+    (base_dir / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+
+class TestValidateCli:
+    """`hivepilot validate` -- default (no --dir) must resolve the config
+    that's actually active (XDG -> config_repo -> base_dir, matching
+    `hivepilot config sync`'s real write target and every runtime loader),
+    not literally `Path.cwd()`. An explicit `--dir` must keep validating
+    that exact directory, unaffected by any unrelated XDG config."""
+
+    def test_default_no_dir_resolves_config_synced_to_xdg(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: after `hivepilot config sync` (writes to XDG_CONFIG_HOME),
+        running bare `hivepilot validate` from an unrelated cwd must report OK,
+        not false 'Missing required config file' errors."""
+        xdg_dir = tmp_path / "xdg" / "hivepilot"
+        xdg_dir.mkdir(parents=True)
+        _write_minimal_valid_config(xdg_dir)
+
+        empty_cwd = tmp_path / "empty-cwd"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["validate"])
+
+        assert result.exit_code == 0, result.output
+        assert "OK" in result.output
+
+    def test_explicit_dir_still_validates_that_exact_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--dir X` must keep validating X literally -- even when an
+        unrelated XDG config exists -- so scaffold/pre-activation validation
+        (and the documented `--dir /data` deploy flow) is unaffected."""
+        xdg_dir = tmp_path / "xdg" / "hivepilot"
+        xdg_dir.mkdir(parents=True)
+        _write_minimal_valid_config(xdg_dir)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+        explicit_dir = tmp_path / "explicit-target"
+        explicit_dir.mkdir()  # deliberately empty -- no config files here
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["validate", "--dir", str(explicit_dir)])
+
+        assert result.exit_code == 1, result.output
+        assert "Missing required config file" in result.output
+
+    def test_explicit_dir_with_valid_config_still_passes(self, tmp_path: Path) -> None:
+        """Regression guard: explicit --dir with a valid config must still
+        report OK exactly as before this fix."""
+        _write_minimal_valid_config(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["validate", "--dir", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert "OK" in result.output
+
+
 class TestObsidianCli:
     def test_obsidian_audit_command_exists(self, fake_vault: Path) -> None:
         """hivepilot obsidian audit should exit 0 and print a report."""

@@ -34,7 +34,24 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
     Parameters
     ----------
     base_dir:
-        Directory containing the config files.  Defaults to ``Path.cwd()``.
+        Directory containing the config files. When explicitly provided,
+        every required file (and `prompts/agents/`) is resolved LITERALLY
+        relative to it -- this is the "validate this exact directory in
+        isolation" contract that `config_writer._validate_prospective`'s
+        scratch-copy validation, `init_service.run_init`'s target-dir
+        validation, and `hivepilot validate --dir X` all rely on: the
+        directory being validated is deliberately NOT (yet, or ever) the
+        globally-active config, so it must never be shadowed by XDG/
+        config_repo state.
+        When omitted (the default), every required file AND the prompts
+        directory are instead resolved through the same XDG-aware
+        `settings.resolve_config_path()` chain the runtime config loaders
+        use (`project_service.load_projects/tasks/pipelines/groups`) --
+        1. $XDG_CONFIG_HOME/hivepilot/<file>, 2. config_repo/<file>,
+        3. settings.base_dir/<file> -- so "validate the config that's
+        actually active" (e.g. after `hivepilot config sync`, which writes
+        to XDG, never to cwd) reflects reality instead of always reading
+        cwd literally.
 
     Returns
     -------
@@ -60,7 +77,10 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
     ]
     data: dict[str, Any] = {}
     for filename in required_files:
-        path = base_dir / filename
+        if explicit_base_dir:
+            path = base_dir / filename
+        else:
+            path = settings.resolve_config_path(filename)
         if not path.exists():
             problems.append(f"Missing required config file: {filename}")
             data[filename] = None
@@ -79,6 +99,18 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
     tasks_data = data.get("tasks.yaml") or {}
     task_names: set[str] = set((tasks_data.get("tasks") or {}).keys())
 
+    # NOTE: this explicit_base_dir/else split is now mirrored by required_files
+    # above (previously only prompts_dir did this -- the inconsistency that
+    # let `Missing required config file` false-positive after a `config sync`
+    # to XDG). Left AS IS here, deliberately NOT collapsed to always use
+    # resolve_config_path: `config_writer._validate_prospective` builds a
+    # scratch copy of a config dir (including its own `prompts/` subtree) and
+    # calls `validate_config(base_dir=tmp_dir)` specifically so a prospective
+    # `prompt_file` reference is checked against THAT scratch copy, not the
+    # globally-active prompts dir -- collapsing this branch would silently
+    # validate the wrong (currently-active) prompts directory instead of the
+    # one actually being proposed, breaking `config set`/`config edit`'s
+    # pre-write validation gate.
     if explicit_base_dir:
         prompts_dir = base_dir / "prompts" / "agents"
     else:

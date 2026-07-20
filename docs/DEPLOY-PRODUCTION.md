@@ -20,7 +20,7 @@ cp .env.example .env
 # edit .env: set HIVEPILOT_CONFIG_REPO=<your-config-repo> and any secrets you need
 docker compose up -d --build
 docker compose exec hivepilot hivepilot config sync
-docker compose exec hivepilot hivepilot validate --dir /data
+docker compose exec hivepilot hivepilot validate
 docker compose exec hivepilot hivepilot doctor
 
 # Bootstrap API tokens — the scheduler container REQUIRES one to start (it will
@@ -229,13 +229,26 @@ hivepilot config sync
 hivepilot config status
 ```
 
-For a private repo, authenticate via an SSH deploy key (put the key on the
-host / mount it into the container and use an `ssh://` or `git@` URL — the
-key's own passphrase-less agent setup is outside HivePilot's scope) or a token
-embedded in an HTTPS URL, e.g.
-`https://<token>@github.com/you/hivepilot-config.git`. **Never hardcode the
-token in a committed file** — set `HIVEPILOT_CONFIG_REPO` via `.env` (mounted,
-not baked into the image) or the shell environment only.
+For a private repo, authenticate via one of:
+
+- **SSH deploy key** (recommended for `git@`/`ssh://` URLs) — put the key on
+  the host / mount it into the container and use an `ssh://` or `git@` URL;
+  the key's own passphrase-less agent setup is outside HivePilot's scope.
+- **`HIVEPILOT_CONFIG_TOKEN`** (recommended for `https://` URLs) — a
+  fine-grained (or classic) GitHub PAT scoped to `Contents: read` on the
+  config repo (add `write` too if you use `hivepilot config push`). Set
+  `HIVEPILOT_CONFIG_REPO=https://github.com/you/hivepilot-config.git` (no
+  token in the URL) plus `HIVEPILOT_CONFIG_TOKEN=<pat>`. `config_service`
+  injects it as a **transient**, per-invocation `http.extraheader`
+  (`Authorization: Basic base64(x-access-token:<token>)`) via `GIT_CONFIG_*`
+  environment variables — it is **never** written to `.git/config`, **never**
+  embedded in the repo URL, and never logged. `ssh://`/`git@` repo URLs
+  ignore `HIVEPILOT_CONFIG_TOKEN` entirely (SSH auth uses the deploy key
+  above instead).
+
+**Never hardcode the token in a committed file** — set `HIVEPILOT_CONFIG_REPO`
+and `HIVEPILOT_CONFIG_TOKEN` via `.env` (mounted, not baked into the image) or
+the shell environment only.
 
 `config sync` clones the repo into `~/.local/share/hivepilot/config-repo`
 (`$XDG_DATA_HOME/hivepilot/config-repo`) and copies the managed files
@@ -253,6 +266,19 @@ every role falls back to the packaged defaults. The Docker image seeds the
 packaged copy at build time (see the Dockerfile's builder stage); a bare
 `sh scripts/install-alpine.sh` install seeds it via `pip install` into the
 venv's site-packages the same way.
+
+**Config-repo plugins auto-load:** a `plugins/` directory INSIDE your config
+repo clone (e.g. `<config_repo>/plugins/vendored_skills.py` contributing
+custom skills) is automatically added to the plugin scan path — no manual
+`HIVEPILOT_PLUGINS_EXTRA_DIRS` needed. It is scanned right after
+`base_dir/plugins` and before any `plugins_extra_dirs` entry, and every
+plugin it contributes is still subject to the normal
+`plugins_enabled`/`plugins_disabled` and capability-policy gates. **Trust
+warning:** a plugin is arbitrary Python executed in-process with the same
+privileges as the HivePilot process — only point `HIVEPILOT_CONFIG_REPO` at
+a config repo you trust. Set `HIVEPILOT_CONFIG_REPO_LOAD_PLUGINS=false` to
+opt out and keep the config repo config-only (no code execution surface);
+this has no effect if `HIVEPILOT_CONFIG_REPO` itself is unset.
 
 ## 4. Secrets
 
@@ -274,9 +300,18 @@ full model.
 Run both before pointing real traffic or schedules at this deployment:
 
 ```bash
-hivepilot validate --dir /data     # cross-reference validation (roles/tasks/pipelines/policies)
-hivepilot doctor                    # paths, binaries, agent CLI availability
+hivepilot validate     # cross-reference validation (roles/tasks/pipelines/policies)
+hivepilot doctor        # paths, binaries, agent CLI availability
 ```
+
+`validate` with no `--dir` resolves the config that's actually active
+(`$XDG_CONFIG_HOME/hivepilot` → `config_repo` → `base_dir`, the same chain
+`hivepilot config sync` writes to and every runtime loader reads) — do NOT
+pass `--dir /data` here: `config sync` writes to
+`$XDG_CONFIG_HOME/hivepilot`, not `base_dir` (`/data` in the container
+image), so `--dir /data` would report a false `Missing required config
+file`. Only pass `--dir <path>` to validate a specific directory in
+isolation (e.g. a not-yet-active scaffold before it's synced).
 
 `validate` prints `OK` and exits 0 when clean; any cross-reference problem
 (e.g. a pipeline stage referencing an undefined role) is printed as
@@ -435,7 +470,7 @@ end-to-end (this needs the `run`-role token from step 7 — export
 
 ```bash
 hivepilot config sync
-hivepilot validate --dir /data
+hivepilot validate
 hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaults to --dry-run
 ```
 
