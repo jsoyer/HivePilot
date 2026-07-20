@@ -8,25 +8,21 @@ service module (not a plugin file loaded via importlib), so
 `@dataclass(frozen=True)` is safe here — the CPython 3.14 dataclass-loader
 bug only affects plugin files.
 
-Design notes (deviations from the literal integration-seam sketch, both
-required to avoid crashing `ClaudeRunner`):
+Two deliberate deviations from the literal integration-seam sketch, both
+required because `ClaudeRunner` reads them unconditionally in CLI *and* API
+mode (`Orchestrator.human_challenge`'s `project=None`/`prompt_file=""`
+pattern only "works" today because Chief-of-Staff happens to be bound to a
+non-Claude runner in this repo's `roles.yaml` — the concierge always
+dispatches to `kind="claude"`):
 
-1. `RunnerPayload.project` is a REAL minimal `ProjectConfig` here, not
-   `None`. `ClaudeRunner._build_prompt`/`_run_api` unconditionally read
-   `payload.project.path`/`.description`/`.claude_md` in BOTH cli and api
-   mode — `Orchestrator.human_challenge`'s `project=None` pattern only
-   "works" in this repo because Chief-of-Staff is bound to a non-Claude
-   runner (`cursor`) in `roles.yaml`; the concierge always dispatches to
-   `kind="claude"`, so it needs a real (if trivial) project.
+1. `RunnerPayload.project` is a real minimal `ProjectConfig`, not `None`
+   (`_build_prompt`/`_run_api` read `payload.project.path` unconditionally).
 2. `TaskStep.prompt_file` points at a real, checked-in file
-   (`prompts/agents/concierge.md`) with the STABLE classifier instructions
-   (output contract + destructive-action table), not `""`.
-   `ClaudeRunner._assemble_prompt` raises `ValueError` on an empty
-   `prompt_file` in both modes — mirroring the volatile `extra_prompt`-only
-   pattern from `human_challenge` would always crash. The stable file also
-   lets Anthropic prompt-caching cover the same across every classify call.
-   The per-message roster/user-text/grounding snapshot is the VOLATILE part,
-   threaded through `metadata["extra_prompt"]` exactly as specced.
+   (`prompts/agents/concierge.md`, the STABLE classifier instructions —
+   output contract + destructive-action table), not `""`
+   (`_assemble_prompt` raises `ValueError` on an empty `prompt_file`). The
+   per-message roster/user-text/grounding snapshot is the VOLATILE part,
+   threaded through `metadata["extra_prompt"]` as specced.
 """
 
 from __future__ import annotations
