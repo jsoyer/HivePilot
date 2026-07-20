@@ -2444,6 +2444,64 @@ def scan_sbom(
         typer.echo(sbom)
 
 
+@scan_app.command("licenses")
+def scan_licenses(
+    project: str = typer.Argument(..., help="Project name"),
+    allow: Optional[list[str]] = typer.Option(
+        None,
+        "--allow",
+        help="Allowlisted license id (repeatable). Any license not in this list is a violation.",
+    ),
+    deny: Optional[list[str]] = typer.Option(
+        None, "--deny", help="Denied license id (repeatable). Takes precedence over --allow."
+    ),
+    tool: str = typer.Option("syft", "--tool", help="License scan tool (derived from the SBOM)"),
+    fail_on_violation: bool = typer.Option(
+        False, "--fail-on-violation", help="Exit non-zero if any component violates the gate"
+    ),
+) -> None:
+    """Check a project's dependency licenses against an allow/deny gate."""
+    from hivepilot.services import scan_service
+
+    project_path = _resolve_project_path(project)
+
+    try:
+        result = scan_service.check_licenses(project_path, allowed=allow, denied=deny, tool=tool)
+    except (RuntimeError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    if result.error:
+        typer.echo(result.error, err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Scan tool: {result.tool}")
+    typer.echo(f"Total components: {result.total}")
+    typer.echo(f"Violations: {len(result.violations)}")
+
+    if result.components:
+        violating_packages = {(c.package, c.version) for c in result.violations}
+        typer.echo("")
+        typer.echo(f"{'PACKAGE':<30} {'VERSION':<15} {'LICENSES':<30} STATUS")
+        for component in result.components:
+            status = (
+                "VIOLATION"
+                if (component.package, component.version) in violating_packages
+                else "ok"
+            )
+            typer.echo(
+                f"{component.package:<30} {component.version:<15} "
+                f"{', '.join(component.licenses):<30} {status}"
+            )
+
+    if fail_on_violation and scan_service.has_license_violations(result):
+        typer.echo(
+            f"\nFound {len(result.violations)} component(s) with disallowed license(s).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
 # ---------------------------------------------------------------------------
 # Templates marketplace (Phase 22)
 # ---------------------------------------------------------------------------

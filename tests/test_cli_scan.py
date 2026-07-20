@@ -76,7 +76,12 @@ import hivepilot.cli as cli_module  # noqa: E402
 from hivepilot.cli import app  # noqa: E402
 from hivepilot.models import ProjectConfig, ProjectsFile  # noqa: E402
 from hivepilot.services import scan_service  # noqa: E402
-from hivepilot.services.scan_service import Finding, ScanResult  # noqa: E402
+from hivepilot.services.scan_service import (  # noqa: E402
+    ComponentLicense,
+    Finding,
+    LicenseResult,
+    ScanResult,
+)
 
 _SECRET_LOOKING_VALUE = "sk-live-cli-should-never-echo-this"  # noqa: S105
 
@@ -214,3 +219,81 @@ class TestScanSbomCommand:
         result = runner.invoke(app, ["scan", "sbom", "proj"])
         assert result.exit_code != 0
         assert "syft not found" in result.output
+
+
+def _license_result(*, violations: bool = False) -> LicenseResult:
+    components = [
+        ComponentLicense(package="libfoo", version="1.0.0", licenses=("MIT",)),
+        ComponentLicense(package="libgpl", version="2.0.0", licenses=("GPL-3.0",)),
+    ]
+    return LicenseResult(
+        tool="syft",
+        total=2,
+        components=components,
+        violations=[components[1]] if violations else [],
+    )
+
+
+class TestScanLicensesCommand:
+    def test_prints_table_with_violation_marked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            scan_service, "check_licenses", lambda *a, **k: _license_result(violations=True)
+        )
+        runner = CliRunner()
+        result = runner.invoke(app, ["scan", "licenses", "proj", "--deny", "GPL-3.0"])
+        assert result.exit_code == 0, result.output
+        assert "libfoo" in result.output
+        assert "libgpl" in result.output
+        assert "VIOLATION" in result.output
+        assert "Violations: 1" in result.output
+
+    def test_fail_on_violation_exits_nonzero_when_violations_present(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            scan_service, "check_licenses", lambda *a, **k: _license_result(violations=True)
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            app, ["scan", "licenses", "proj", "--deny", "GPL-3.0", "--fail-on-violation"]
+        )
+        assert result.exit_code != 0
+
+    def test_no_fail_on_violation_flag_exits_zero_despite_violations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            scan_service, "check_licenses", lambda *a, **k: _license_result(violations=True)
+        )
+        runner = CliRunner()
+        result = runner.invoke(app, ["scan", "licenses", "proj", "--deny", "GPL-3.0"])
+        assert result.exit_code == 0, result.output
+
+    def test_fail_on_violation_exits_zero_when_no_violations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            scan_service, "check_licenses", lambda *a, **k: _license_result(violations=False)
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            app, ["scan", "licenses", "proj", "--allow", "MIT", "--fail-on-violation"]
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_missing_tool_error_surfaces_clear_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _raise(*a, **k):
+            raise RuntimeError("syft not found on PATH. Install it before generating an SBOM.")
+
+        monkeypatch.setattr(scan_service, "check_licenses", _raise)
+        runner = CliRunner()
+        result = runner.invoke(app, ["scan", "licenses", "proj"])
+        assert result.exit_code != 0
+        assert "syft not found" in result.output
+
+    def test_unknown_project_errors(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(app, ["scan", "licenses", "does-not-exist"])
+        assert result.exit_code != 0
