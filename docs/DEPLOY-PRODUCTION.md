@@ -609,13 +609,19 @@ the installer by hand:
 hivepilot self-update
 ```
 
-HivePilot is **not published on PyPI** — it installs from git. `self-update`
-resolves `sys.executable` (the interpreter behind the currently-running
-`hivepilot` console script, i.e. THIS install's own venv python) and runs
-`pip install -U --no-cache-dir` directly against it — so it always targets
-the correct venv and never falls back to the system Python/pip, avoiding
-PEP 668's `externally-managed-environment` guard without ever needing
-`--break-system-packages`.
+HivePilot is **not published on PyPI** — it installs from git, from a ref
+(`main` by default) that can move without the `pyproject.toml` version string
+changing. `self-update` resolves `sys.executable` (the interpreter behind the
+currently-running `hivepilot` console script, i.e. THIS install's own venv
+python) and runs two pip invocations directly against it: first
+`pip install --force-reinstall --no-deps --no-cache-dir <spec>` to
+unconditionally reinstall the hivepilot package from the pinned ref
+(force-reinstall, not `-U`, because a plain `-U` against an unchanged version
+string is a silent no-op even when `main`'s HEAD commit moved), then a plain
+`pip install --no-cache-dir <spec>` to resolve any dependency a new version
+may have newly added. It always targets the correct venv and never falls back
+to the system Python/pip, avoiding PEP 668's `externally-managed-environment`
+guard without ever needing `--break-system-packages`.
 
 Flags:
 

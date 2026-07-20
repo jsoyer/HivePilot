@@ -63,22 +63,67 @@ def build_update_spec(repo: str, ref: str, extras: str) -> str:
 
 
 def run_self_update(spec: str, *, python: str | None = None) -> subprocess.CompletedProcess[str]:
-    """Run `<python> -m pip install -U --no-cache-dir <spec>`, captured.
+    """Force-reinstall hivepilot from `spec`, then resolve any new deps.
 
     `python` defaults to `sys.executable` -- see module docstring for why
     that always targets the correct venv. Never passes
     `--break-system-packages`: the venv-targeted pip never needs it, and
     passing it would silently allow writes outside the venv if this were
     ever invoked with a system interpreter by mistake.
+
+    Two pip invocations, not one -- this is the actual fix for a
+    self-update-is-a-silent-no-op bug: `pip install -U <spec>` alone will
+    NOT reinstall when `HIVEPILOT_UPDATE_REF` (`main` by default) is a
+    moving branch whose HEAD commit changed but whose `pyproject.toml`
+    `version` string did NOT (e.g. still `0.2.0`). pip resolves the new
+    commit, sees the same version already satisfied, and reports
+    "Requirement already satisfied" without touching the install --
+    `self-update` runs "successfully" and changes nothing.
+
+    1. `pip install --force-reinstall --no-deps --no-cache-dir <spec>` --
+       unconditionally re-clones `ref` and reinstalls the hivepilot package
+       itself, regardless of the resolved version. `--no-deps` keeps this
+       step fast (it never re-downloads/reinstalls dependencies) and is
+       what makes the force-reinstall safe to run on every `self-update`
+       rather than something an operator has to opt into.
+    2. `pip install --no-cache-dir <spec>` (no `-U`, no `--force-reinstall`)
+       -- a plain resolve that installs any dependency a new version may
+       have newly added. A cheap no-op when nothing changed (everything is
+       already satisfied); does not touch hivepilot itself or already
+       satisfied deps, so it can't undo step 1 or re-download the world.
+
+    If step 1 fails, its result is returned immediately and step 2 is never
+    run -- there is no point resolving deps for a package whose own
+    reinstall just failed, and doing so would risk masking the real error.
+    On success, the two steps' stdout/stderr are concatenated (in order)
+    into a single `CompletedProcess` so callers -- which mask credentials
+    before echoing -- only need to handle one result, and see the combined
+    output of both invocations.
     """
     py = python or sys.executable
-    return subprocess.run(  # nosec B603 - argv list, no shell=True; `py` defaults to
-        # sys.executable and `spec` is built by build_update_spec from
-        # config/CLI-flag strings, never raw untrusted input.
-        [py, "-m", "pip", "install", "-U", "--no-cache-dir", spec],
+    # nosec B603 - argv list, no shell=True; `py` defaults to sys.executable
+    # and `spec` is built by build_update_spec from config/CLI-flag strings,
+    # never raw untrusted input.
+    reinstall = subprocess.run(
+        [py, "-m", "pip", "install", "--force-reinstall", "--no-deps", "--no-cache-dir", spec],
         check=False,
         capture_output=True,
         text=True,
+    )
+    if reinstall.returncode != 0:
+        return reinstall
+
+    deps = subprocess.run(  # nosec B603 - see above
+        [py, "-m", "pip", "install", "--no-cache-dir", spec],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return subprocess.CompletedProcess(
+        args=deps.args,
+        returncode=deps.returncode,
+        stdout=reinstall.stdout + deps.stdout,
+        stderr=reinstall.stderr + deps.stderr,
     )
 
 
