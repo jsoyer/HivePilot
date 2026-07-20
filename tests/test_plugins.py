@@ -502,3 +502,159 @@ def register():
             "hooks": ["after_step", "before_step"],
             "panels": ["sample_stats"],
         }
+
+
+class TestPluginCapabilityGate:
+    """Phase 26b: the `capabilities` manifest load-time admission gate
+    (`hivepilot.plugin_capabilities.validate_capabilities`) wired into
+    `PluginManager._load_into`. Mirrors `TestPanelInvalidMinRoleRejection`
+    (`tests/test_panels.py`) — a denied/invalid manifest fails REGISTRATION
+    entirely (fail-closed, atomic rollback), not a silent skip.
+    """
+
+    def test_plugin_declaring_no_capabilities_is_unaffected(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "plain.py").write_text(
+            """
+class PlainRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    return {"runners": {"plain-kind": PlainRunner}}
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_capability_policy", [], raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        record = next(r for r in pm.loaded if r.name == "plain")
+        assert record.contributions == {"runners": ["plain-kind"]}
+        assert "plain-kind" in RUNNER_MAP
+
+    def test_declared_capability_denied_by_default_empty_policy_rolls_back_plugin(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.plugin_capabilities import PluginCapabilityDeniedError
+        from hivepilot.registry import RUNNER_MAP
+        from hivepilot.services.notification_service import NOTIFIER_MAP
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "greedy.py").write_text(
+            """
+class GreedyRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def _greedy_notifier(msg):
+    return None
+
+
+def register():
+    return {
+        "runners": {"greedy-kind": GreedyRunner},
+        "notifiers": {"greedy-notif": _greedy_notifier},
+        "capabilities": ["network"],
+    }
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_capability_policy", [], raising=False)
+
+        with pytest.raises(PluginCapabilityDeniedError):
+            plugins_mod.PluginManager()
+
+        # Atomic rollback: the runner/notifier this plugin also staged must
+        # never leak into the live maps even though they registered cleanly
+        # BEFORE the capability gate denied the plugin.
+        assert "greedy-kind" not in RUNNER_MAP
+        assert "greedy-notif" not in NOTIFIER_MAP
+
+    def test_declared_capability_allowed_by_policy_loads_and_is_attributed(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "netty.py").write_text(
+            "def register():\n    return {'capabilities': ['network']}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "plugins_capability_policy", ["network"], raising=False
+        )
+
+        pm = plugins_mod.PluginManager()
+
+        record = next(r for r in pm.loaded if r.name == "netty")
+        assert record.contributions == {"capabilities": ["network"]}
+
+    def test_unknown_capability_token_rolls_back_plugin(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.plugin_capabilities import PluginCapabilityInvalidError
+        from hivepilot.registry import RUNNER_MAP
+
+        pdir = tmp_path / "plugins"
+        pdir.mkdir()
+        (pdir / "bogus.py").write_text(
+            """
+class BogusRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    return {
+        "runners": {"bogus-kind": BogusRunner},
+        "capabilities": ["nuclear_launch_codes"],
+    }
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "plugins_capability_policy", ["network"], raising=False
+        )
+
+        with pytest.raises(PluginCapabilityInvalidError):
+            plugins_mod.PluginManager()
+
+        assert "bogus-kind" not in RUNNER_MAP
+
+    def test_every_bundled_plugin_declares_no_capabilities_and_still_loads(
+        self, monkeypatch
+    ) -> None:
+        """Backward-compat regression guard: none of the ~24 shipped plugins
+        declare a `capabilities` manifest, so a default (empty) policy must
+        never deny any of them — the whole plugin set loads exactly as it
+        did before this manifest existed."""
+        from hivepilot import plugins as plugins_mod
+
+        monkeypatch.setattr(plugins_mod.settings, "plugins_capability_policy", [], raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        for record in pm.loaded:
+            assert "capabilities" not in record.contributions

@@ -344,3 +344,27 @@ class TestHugoEnabledFlag:
         monkeypatch.setenv("HIVEPILOT_HUGO_ENABLED", "false")
         s = Settings()
         assert s.hugo_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 26b — plugins_capability_policy: the operator allow-list gating
+# `hivepilot.plugin_capabilities.validate_capabilities`. Default `[]` =
+# fail-closed deny-every-declared-capability (mirrors `plugins_disabled`'s
+# JSON-array env convention).
+# ---------------------------------------------------------------------------
+
+
+class TestPluginsCapabilityPolicy:
+    def test_default_is_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_PLUGINS_CAPABILITY_POLICY", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.plugins_capability_policy == []
+
+    def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_PLUGINS_CAPABILITY_POLICY", '["network", "env"]')
+        s = Settings()
+        assert s.plugins_capability_policy == ["network", "env"]
+
+    def test_is_list_of_str_type(self) -> None:
+        s = Settings()
+        assert isinstance(s.plugins_capability_policy, list)
