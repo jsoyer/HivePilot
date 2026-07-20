@@ -219,6 +219,71 @@ rc-service hivepilot-api start
 rc-service hivepilot-scheduler start
 ```
 
+### OpenRC services (Alpine) — scripted alternative to the manual steps above
+
+`scripts/setup-openrc.sh` scripts everything in step 2B above into one
+idempotent, re-runnable installer: it prompts for (or reads from the
+environment) your config repo URL, the scheduler's `run`-role API token, and
+optionally an `ANTHROPIC_API_KEY` and a Telegram bot token, then writes
+`/etc/init.d/hivepilot-{api,scheduler,telegram}` (openrc-run + a
+`supervise-daemon` supervisor for auto-restart) and
+`/etc/conf.d/hivepilot-{api,scheduler,telegram}` (their exported env,
+`chmod 600`), enables each via `rc-update add ... default`, and (re)starts
+them.
+
+```bash
+wget -qO- https://raw.githubusercontent.com/jsoyer/HivePilot/main/scripts/setup-openrc.sh | sh
+```
+
+Review-first variant (recommended — inspect before piping to a shell as root):
+
+```bash
+wget -qO /tmp/setup-openrc.sh https://raw.githubusercontent.com/jsoyer/HivePilot/main/scripts/setup-openrc.sh
+less /tmp/setup-openrc.sh   # review it
+sh /tmp/setup-openrc.sh
+```
+
+Or, from a checked-out working copy (also the review-first path if you
+already cloned the repo for the bare-metal install above):
+
+```bash
+sh scripts/setup-openrc.sh
+```
+
+Non-interactive (every prompt is skipped once its var is already set, so
+this also runs unattended in CI/automation):
+
+```bash
+RUN_TOKEN=<run-role-token> \
+HIVEPILOT_CONFIG_REPO=<your-config-repo> \
+ANTHROPIC_API_KEY=<key> \
+  sh scripts/setup-openrc.sh
+```
+
+**Prerequisites** (same as the manual walkthrough above): HivePilot already
+installed into a venv (`scripts/install-alpine.sh`), the config repo
+reachable, and a `run`-role API token bootstrapped first — see
+[7. API tokens](#7-api-tokens-bootstrap); `RUN_TOKEN` is **required**, the
+script refuses to proceed without it (the scheduler is fail-closed).
+`ANTHROPIC_API_KEY` and the Telegram bot token/chat IDs are optional — the
+`hivepilot-telegram` service is skipped entirely (not written, not enabled)
+if no bot token is provided.
+
+**What it installs**: the same 3 services + `conf.d` env files described
+manually above, run as `root`/`HOME=/root` (not the non-root
+`hivepilot:hivepilot` user shown in the manual walkthrough — adjust
+`command_user` in the generated `/etc/init.d/*` files yourself if you want a
+dedicated unprivileged user instead), with `PATH` set to include
+`/root/.local/bin` (so the daemon finds `claude`/other agent CLIs) plus the
+venv's `bin/`, and `HIVEPILOT_CONFIG_HOT_RELOAD=true` /
+`HIVEPILOT_PLUGINS_HOT_RELOAD=true` exported by default. **Idempotent** —
+safe to re-run any time (e.g. to rotate `RUN_TOKEN`); it always overwrites
+the generated files and restarts the affected services. Full option/env-var
+reference: the script's own header comment (`scripts/setup-openrc.sh`).
+
+For the plain, hand-editable equivalent (no script, copy-paste the
+`openrc-run`/`conf.d` files directly), see the manual walkthrough above.
+
 ## 3. Wire the config
 
 Point HivePilot at your private config repo and pull it down:
