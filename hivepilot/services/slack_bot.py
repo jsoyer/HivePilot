@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any
+import uuid
+from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from hivepilot.services.concierge_service import ConciergeDecision
 
 logger = get_logger(__name__)
 
 # Lazily-initialised bolt App instance (used by webhook/FastAPI mode)
 _app_instance = None
 _app_lock = threading.Lock()
+
+# Natural-language concierge (opt-in, settings.chatops_concierge_enabled):
+# pending destructive route/action decisions awaiting a Yes/No block-kit
+# button confirmation, keyed by channel_id (Slack events carry a channel but
+# no stable per-DM-thread identity beyond that — mirrors chatops_service's
+# per-source coarseness). Value: (confirmation_token, decision) — same shape
+# as chatops_service._pending_concierge_text / telegram_bot._pending_concierge.
+_pending_concierge: dict[str, tuple[str, "ConciergeDecision"]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +116,90 @@ def _approval_blocks(run_id: int, project: str, task: str) -> list[dict[str, Any
             ],
         },
     ]
+
+
+# ---------------------------------------------------------------------------
+# Natural-language concierge (opt-in, settings.chatops_concierge_enabled) —
+# hooked from a bolt `event("message")` listener registered in
+# `_register_handlers`, guarded so the flag off means byte-identical (no-op)
+# behaviour. Destructive route/action decisions get a Yes/No block-kit
+# confirmation; execution re-uses `chatops_service._execute_concierge_decision`
+# so the SAME ChatOps-token permission check as `/hp-run`/`/hp-approve`
+# applies — the confirmation step never bypasses existing authorization.
+# ---------------------------------------------------------------------------
+
+
+def _concierge_blocks(token: str, summary: str) -> list[dict[str, Any]]:
+    """Yes/No block-kit confirmation, mirroring `_approval_blocks`. *token* is
+    threaded into both buttons' `value` so `handle_concierge_yes` can validate
+    it against the currently-stored pending entry — a stale button (superseded
+    by a newer destructive message before the user clicks) can never confirm
+    the wrong decision."""
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"⚠️ This will {summary}. Confirm?"},
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Yes"},
+                    "style": "primary",
+                    "action_id": "concierge_yes",
+                    "value": token,
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "No"},
+                    "style": "danger",
+                    "action_id": "concierge_no",
+                    "value": token,
+                },
+            ],
+        },
+    ]
+
+
+def _execute_concierge(decision: "ConciergeDecision", channel_id: str, respond: Any) -> None:
+    """Execute an already-confirmed concierge decision via the SAME
+    auth-checked entrypoint the Signal/generic ChatOps text-confirm path
+    uses (`chatops_service._execute_concierge_decision`) — re-verifies the
+    ChatOps token at the `run`/`approve` permission level, no privilege
+    escalation via the confirm step."""
+    from hivepilot.services import chatops_service
+
+    try:
+        result = chatops_service._execute_concierge_decision(
+            _get_orch(), decision, f"slack:{channel_id}"
+        )
+        respond(result)
+    except Exception as exc:
+        logger.error("slack.concierge.execute_error", error=str(exc))
+        respond(f"Error: {exc}")
+
+
+def _handle_concierge_message(decision: "ConciergeDecision", channel_id: str, say: Any) -> None:
+    """Answer directly, execute a non-destructive decision, or mint a
+    confirmation token and store the pending decision for a destructive one.
+    Every currently-known route/action kind IS destructive (see
+    `concierge_service`'s hardcoded table) — the non-destructive branch only
+    guards a future kind, never exercised today."""
+    if decision.kind == "answer":
+        say(decision.answer_text or "I'm not sure how to help with that. Try /help.")
+        return
+    if not decision.destructive:
+        _execute_concierge(decision, channel_id, say)
+        return
+
+    from hivepilot.services.chatops_service import _summarize_concierge_decision
+
+    token = uuid.uuid4().hex[:8]
+    _pending_concierge[channel_id] = (token, decision)
+    summary = _summarize_concierge_decision(decision)
+    blocks = _concierge_blocks(token, summary)
+    say(blocks=blocks, text=f"⚠️ This will {summary}. Confirm?")
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +372,69 @@ def _register_handlers(bolt_app) -> None:
         except Exception as exc:
             logger.error("slack.handle_approval_action.error", run_id=run_id, error=str(exc))
             respond(f"Error processing run #{run_id}: {exc}")
+
+    # -- Natural-language concierge (opt-in, settings.chatops_concierge_enabled) --
+    # Registered unconditionally — the flag check is the FIRST line of the
+    # listener body, guaranteeing byte-identical (no-op) behaviour when off,
+    # rather than skipping registration (either approach is fine per spec;
+    # this one keeps the handler map shape stable for tests/introspection).
+
+    @bolt_app.event("message")
+    def handle_concierge_message(event, say):
+        if not settings.chatops_concierge_enabled:
+            return
+        channel_id = event.get("channel", "")
+        if not _is_allowed(channel_id):
+            return
+        # Ignore the bot's own messages and non-plain subtypes (edits,
+        # channel-join notices, etc.) to avoid loops / mis-classifying
+        # system messages as user requests.
+        if event.get("bot_id") or event.get("subtype"):
+            return
+        text = (event.get("text") or "").strip()
+        if not text:
+            return
+
+        from hivepilot.services import concierge_service
+
+        decision = concierge_service.route(
+            text,
+            default_role=settings.chatops_default_role,
+            default_target=settings.default_target,
+        )
+        _handle_concierge_message(decision, channel_id, say)
+
+    @bolt_app.action("concierge_yes")
+    def handle_concierge_yes(ack, action, body, respond):
+        ack()
+        channel_id = ((body or {}).get("channel") or {}).get("id", "")
+        if not _is_allowed(channel_id):
+            respond("Unauthorized channel.")
+            return
+        supplied_token = action.get("value", "")
+        pending = _pending_concierge.get(channel_id)
+        if pending is None:
+            respond("This confirmation has expired.")
+            return
+        stored_token, decision = pending
+        if supplied_token != stored_token:
+            # Stale/wrong button — leave the current pending entry untouched
+            # so the real, still-pending confirmation can still be answered
+            # correctly afterwards.
+            respond("⚠️ This confirmation has expired — please re-send your request.")
+            return
+        _pending_concierge.pop(channel_id, None)
+        _execute_concierge(decision, channel_id, respond)
+
+    @bolt_app.action("concierge_no")
+    def handle_concierge_no(ack, action, body, respond):
+        ack()
+        channel_id = ((body or {}).get("channel") or {}).get("id", "")
+        if not _is_allowed(channel_id):
+            respond("Unauthorized channel.")
+            return
+        _pending_concierge.pop(channel_id, None)
+        respond("Cancelled.")
 
 
 # ---------------------------------------------------------------------------

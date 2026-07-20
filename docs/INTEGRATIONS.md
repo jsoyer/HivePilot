@@ -131,6 +131,21 @@ How it behaves once enabled:
   classified. An **answer** replies directly. A **route**/**action** (routing to an agent,
   running a task/pipeline, or approving/denying a run) is always treated as destructive and
   shows a ✅ Yes / ❌ No inline keyboard before anything runs.
+- **Slack**: any plain channel message (not a slash command) is classified the same way. An
+  **answer** replies directly in-channel. A destructive route/action posts a Block Kit
+  message with Yes / No buttons before anything runs. Requires subscribing the app to the
+  `message.channels` (and/or `message.im`/`message.groups`, depending on where the bot is
+  invited) event in the Slack app configuration so `message` events are delivered.
+- **Discord**: **gateway mode only** — the HTTP-interactions mode can't receive plain
+  messages, so this doesn't apply to a bot run via `discord` HTTP webhooks. A plain channel
+  message is classified the same way. An **answer** replies directly. A destructive
+  route/action replies with a text confirmation — `⚠️ This will <summary>. Reply
+  'yes <token>' to confirm or 'no' to cancel.` — mirroring Signal's text-only confirmation
+  flow. Reading plain message content requires the privileged **Message Content Intent**:
+  enable it for the bot in the [Discord developer portal](https://discord.com/developers/applications)
+  (Bot → Privileged Gateway Intents → Message Content Intent) — without it, Discord silently
+  withholds message content even though the gateway connection succeeds. This intent is only
+  requested by `discord gateway` when `HIVEPILOT_CHATOPS_CONCIERGE_ENABLED=true`.
 - **Signal** (and the generic `/chatops/*` webhook path, which shares the same dispatch
   layer): free text that doesn't match a known command is classified the same way. An
   **answer** is returned directly. A destructive route/action returns a text confirmation
@@ -142,7 +157,9 @@ How it behaves once enabled:
   fake "read action".
 - Confirming re-checks the same ChatOps-token permission level the equivalent explicit
   command would require (`run` for routing/running, `approve` for approving/denying) — the
-  confirmation step never bypasses existing authorization.
+  confirmation step never bypasses existing authorization. Every platform whitelists
+  (allowed channel/chat/guild) before the concierge is ever reached, and ignores the bot's
+  own messages / non-plain message subtypes to avoid loops.
 
 The concierge runs one LLM classification call per free-text message when enabled — be
 mindful of cost/latency on high-traffic chats; the default model is intentionally a cheap

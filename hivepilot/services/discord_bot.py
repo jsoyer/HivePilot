@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any
+import uuid
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
 
+if TYPE_CHECKING:
+    from hivepilot.services.concierge_service import ConciergeDecision
+
 logger = get_logger(__name__)
 
 _DISCORD_API = "https://discord.com/api/v10"
+
+# Natural-language concierge (opt-in, settings.chatops_concierge_enabled,
+# gateway-mode only — HTTP-interactions mode can't receive plain messages):
+# pending destructive route/action decisions awaiting a text "yes <token>" /
+# "no" confirmation reply, keyed by channel_id. Value: (confirmation_token,
+# decision) — same shape as chatops_service._pending_concierge_text /
+# slack_bot._pending_concierge / telegram_bot._pending_concierge.
+_pending_concierge: dict[int, tuple[str, "ConciergeDecision"]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +177,94 @@ def _exec_status() -> str:
         return "No recent runs."
     lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
     return "Recent runs:\n" + "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Natural-language concierge (opt-in, settings.chatops_concierge_enabled) —
+# gateway-mode only (`run_gateway`'s `on_message`). HTTP-interactions mode
+# never receives plain messages, so there's nothing to hook there. A
+# text-reply "yes <token>" / "no" confirmation is used (mirrors Signal's
+# chatops_service flow) rather than a discord.ui View/Button, keeping this
+# consistent with the rest of the module's dict/JSON-driven, no-SDK-object
+# testing style. Execution re-uses `chatops_service._execute_concierge_decision`
+# so the SAME ChatOps-token permission check as the native `/run`/`/approve`
+# slash commands applies — the confirmation step never bypasses existing
+# authorization.
+# ---------------------------------------------------------------------------
+
+
+async def _execute_concierge_discord(
+    decision: "ConciergeDecision", channel_id: int, message: Any
+) -> None:
+    """Execute an already-confirmed concierge decision via the SAME
+    auth-checked entrypoint the Signal/generic ChatOps text-confirm path
+    uses."""
+    import asyncio
+
+    from hivepilot.services import chatops_service
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: chatops_service._execute_concierge_decision(
+                _get_orch(), decision, f"discord:{channel_id}"
+            ),
+        )
+        await message.channel.send(result)
+    except Exception as exc:
+        logger.error("discord.concierge.execute_error", error=str(exc))
+        await message.channel.send(f"Error: {exc}")
+
+
+async def _handle_concierge_decision_discord(
+    decision: "ConciergeDecision", channel_id: int, message: Any
+) -> None:
+    """Answer directly, execute a non-destructive decision, or mint a
+    confirmation token and store the pending decision for a destructive one.
+    Every currently-known route/action kind IS destructive (see
+    `concierge_service`'s hardcoded table) — the non-destructive branch only
+    guards a future kind, never exercised today."""
+    if decision.kind == "answer":
+        await message.channel.send(
+            decision.answer_text or "I'm not sure how to help with that. Try /help."
+        )
+        return
+    if not decision.destructive:
+        await _execute_concierge_discord(decision, channel_id, message)
+        return
+
+    from hivepilot.services.chatops_service import _summarize_concierge_decision
+
+    token = uuid.uuid4().hex[:8]
+    _pending_concierge[channel_id] = (token, decision)
+    summary = _summarize_concierge_decision(decision)
+    await message.channel.send(
+        f"⚠️ This will {summary}. Reply 'yes {token}' to confirm or 'no' to cancel."
+    )
+
+
+async def _handle_concierge_confirmation_discord(
+    content: str, channel_id: int, message: Any
+) -> None:
+    """Handle a "yes <token>" / "no" reply to a pending destructive concierge
+    decision. A wrong/stale token is rejected WITHOUT executing or clearing
+    the still-valid pending entry — mirrors `chatops_service._dispatch`'s
+    `yes <token>` / `no` handling exactly."""
+    pending = _pending_concierge.get(channel_id)
+    if pending is None:
+        return
+    if content.strip().lower() == "no":
+        _pending_concierge.pop(channel_id, None)
+        await message.channel.send("Cancelled.")
+        return
+    supplied_token = content.split(None, 1)[1].strip() if " " in content else ""
+    stored_token, decision = pending
+    if supplied_token != stored_token:
+        await message.channel.send("⚠️ This confirmation has expired — please re-send your request.")
+        return
+    _pending_concierge.pop(channel_id, None)
+    await _execute_concierge_discord(decision, channel_id, message)
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +447,13 @@ def run_gateway() -> None:
     token = _token()
 
     intents = discord.Intents.default()
+    if settings.chatops_concierge_enabled:
+        # Plain messages (`on_message`) require the privileged Message
+        # Content intent — only requested when the concierge is opt-in
+        # enabled. The operator must also enable "Message Content Intent"
+        # for the bot in the Discord developer portal, or Discord will
+        # silently withhold message content regardless of this flag.
+        intents.message_content = True
     client = discord.Client(intents=intents)
     tree = app_commands.CommandTree(client)
 
@@ -436,6 +543,45 @@ def run_gateway() -> None:
     async def on_ready() -> None:
         await tree.sync()
         logger.info("discord.gateway.ready", user=str(client.user))
+
+    @client.event
+    async def on_message(message: Any) -> None:
+        """Natural-language concierge (opt-in, gateway-mode only). First line
+        guarantees byte-identical (no-op) behaviour when the flag is off."""
+        if not settings.chatops_concierge_enabled:
+            return
+        # Ignore the bot's own messages to avoid loops.
+        if message.author == client.user:
+            return
+        guild = getattr(message, "guild", None)
+        guild_id = guild.id if guild is not None else None
+        channel = getattr(message, "channel", None)
+        channel_id = channel.id if channel is not None else None
+        if not _is_allowed(guild_id, channel_id):
+            return
+        content = (message.content or "").strip()
+        if not content:
+            return
+
+        lowered = content.lower()
+        if channel_id in _pending_concierge and (lowered == "no" or lowered.startswith("yes ")):
+            await _handle_concierge_confirmation_discord(content, channel_id, message)
+            return
+
+        import asyncio
+
+        from hivepilot.services import concierge_service
+
+        loop = asyncio.get_event_loop()
+        decision = await loop.run_in_executor(
+            None,
+            lambda: concierge_service.route(
+                content,
+                default_role=settings.chatops_default_role,
+                default_target=settings.default_target,
+            ),
+        )
+        await _handle_concierge_decision_discord(decision, channel_id, message)
 
     logger.info("discord.gateway.start")
     client.run(token)
