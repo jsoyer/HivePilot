@@ -138,8 +138,18 @@ def _resolve_prompt_path(prompt_filename: str, settings_obj: Settings) -> Path:
     return _PROMPTS_DIR / prompt_filename
 
 
-def load_roles() -> dict[str, Role]:
-    """Load roles from the configured roles_file (roles.yaml).
+def _load_roles_strict() -> dict[str, Role]:
+    """Load roles from the configured roles_file (roles.yaml), RAISING on any
+    failure (missing file, unparseable YAML, schema/validation error) instead
+    of ever falling back to ``_DEFAULT_ROLES``.
+
+    This is the strict core that both bootstrap loading (``load_roles``,
+    which catches everything and falls back to defaults) and hot-reload
+    (``refresh_roles``, which catches everything and keeps the PREVIOUS live
+    ``ROLES`` — never downgrades to the generic single-role default) build
+    on. Factored out so a reload of a broken roles.yaml on a running process
+    can be distinguished from "first boot, nothing configured yet" — the two
+    callers want genuinely different fallback behavior on failure.
 
     Resolution order (via settings.resolve_config_path):
       1. $XDG_CONFIG_HOME/hivepilot/roles.yaml
@@ -151,41 +161,76 @@ def load_roles() -> dict[str, Role]:
     (see ``_resolve_prompt_path``) so a prompt override placed in the config
     repo is picked up, falling back to ``_PROMPTS_DIR`` (identical to
     _DEFAULT_ROLES) when no override exists.
-
-    On FileNotFoundError or any parse / validation error, logs a warning and
-    returns _DEFAULT_ROLES so the application is never left without roles.
     """
     from hivepilot.config import settings  # local import to avoid circular at module load
 
     roles_path = settings.resolve_config_path(settings.roles_file)
+    raw = yaml.safe_load(roles_path.read_text(encoding="utf-8"))
+    entries: list[dict] = raw["roles"]
+    result: dict[str, Role] = {}
+    for entry in entries:
+        entry = dict(entry)  # shallow copy so we don't mutate the parsed data
+        prompt_filename = entry.pop("prompt_file")
+        entry["prompt_file"] = _resolve_prompt_path(prompt_filename, settings)
+        role = Role(**entry)
+        result[role.name] = role
+    return result
+
+
+def load_roles() -> dict[str, Role]:
+    """Bootstrap loader — wraps ``_load_roles_strict()`` and, on ANY failure
+    (missing file, parse error, validation error), logs a warning and returns
+    ``_DEFAULT_ROLES`` so the application is never left without roles. Used
+    at import time (module-level ``ROLES`` below) and by any caller that
+    wants "give me something usable, no matter what" semantics.
+
+    See ``_load_roles_strict`` for the resolution order / prompt_file
+    handling. See ``refresh_roles`` for the hot-reload counterpart, which
+    deliberately does NOT fall back to ``_DEFAULT_ROLES`` on failure.
+    """
     try:
-        raw = yaml.safe_load(roles_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        log.warning("roles.yaml not found at %s — using built-in defaults", roles_path)
+        return _load_roles_strict()
+    except FileNotFoundError as exc:
+        log.warning("roles.yaml not found (%s) — using built-in defaults", exc)
         return _DEFAULT_ROLES
     except Exception as exc:  # noqa: BLE001
-        log.warning("Failed to read roles.yaml (%s) — using built-in defaults: %s", roles_path, exc)
-        return _DEFAULT_ROLES
-
-    try:
-        entries: list[dict] = raw["roles"]
-        result: dict[str, Role] = {}
-        for entry in entries:
-            entry = dict(entry)  # shallow copy so we don't mutate the parsed data
-            prompt_filename = entry.pop("prompt_file")
-            entry["prompt_file"] = _resolve_prompt_path(prompt_filename, settings)
-            role = Role(**entry)
-            result[role.name] = role
-        return result
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Failed to parse roles.yaml — using built-in defaults: %s", exc)
+        log.warning("Failed to load roles.yaml — using built-in defaults: %s", exc)
         return _DEFAULT_ROLES
 
 
-def refresh_roles() -> None:
-    """Re-load roles from disk and update the module-level ROLES dict in-place."""
+def refresh_roles() -> bool:
+    """Hot-reload roles from disk into the module-level ``ROLES`` dict,
+    fail-closed TO THE PREVIOUS LIVE CONFIG (not to ``_DEFAULT_ROLES``).
+
+    Snapshots nothing explicitly — the current ``ROLES`` global itself IS the
+    snapshot; on success it is atomically rebound (a single GIL-atomic
+    reference assignment) to the freshly loaded dict; on ANY exception from
+    ``_load_roles_strict()`` (missing file, bad YAML, schema/validation
+    error) the exception TYPE is logged and ``ROLES`` is left completely
+    untouched, so a broken ``roles.yaml`` deployed to a running process can
+    never silently downgrade a rich, already-loaded roster (e.g. the 8-role
+    "company" roster) down to the generic single-``developer`` fallback that
+    ``load_roles()`` uses at bootstrap. Returns ``True`` on a successful
+    swap, ``False`` if the previous config was kept.
+
+    Known residual: a reload that lands MID pipeline run could let a later
+    stage of that same run see the new role bindings while an earlier stage
+    already ran against the old ones (``get_role``/``ROLES`` are read live at
+    each call site, not snapshotted per-run). Safe reload points (SIGHUP,
+    the scheduler tick boundary, the explicit admin endpoint) make this
+    unlikely in practice; eliminating it fully requires threading a per-run
+    roles snapshot through ``run_task``/``run_pipeline`` — a deferred
+    follow-up, not attempted here. See docs/DEPLOY-PRODUCTION.md §10.
+    """
     global ROLES  # noqa: PLW0603
-    ROLES = load_roles()
+    try:
+        new_roles = _load_roles_strict()
+    except Exception as exc:  # noqa: BLE001 — a bad candidate must never touch live ROLES
+        log.warning("roles.refresh_failed — keeping previous roles config: %s", type(exc).__name__)
+        return False
+    ROLES = new_roles
+    log.info("roles.refreshed — %d role(s) loaded", len(new_roles))
+    return True
 
 
 # Module-level ROLES dict — sourced from roles.yaml at import time.

@@ -368,3 +368,23 @@ class TestPluginsCapabilityPolicy:
     def test_is_list_of_str_type(self) -> None:
         s = Settings()
         assert isinstance(s.plugins_capability_policy, list)
+
+
+# ---------------------------------------------------------------------------
+# Phase 14c (#249) — config_hot_reload: opt-in AUTOMATIC per-tick roles.yaml
+# reload in SchedulerDaemon. Mirrors plugins_hot_reload's shape; default OFF
+# for byte-identical scheduler behavior. Explicit reload (CLI/admin endpoint/
+# SIGHUP) is unaffected by this flag.
+# ---------------------------------------------------------------------------
+
+
+class TestConfigHotReloadFlag:
+    def test_default_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CONFIG_HOT_RELOAD", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.config_hot_reload is False
+
+    def test_env_override_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CONFIG_HOT_RELOAD", "true")
+        s = Settings()
+        assert s.config_hot_reload is True

@@ -1412,3 +1412,85 @@ class TestAnalyticsCsvAndJsonRegression:
         resp = api_client.get("/v1/analytics/cost?format=csv", headers=_auth(raw))
         assert resp.status_code == 200
         assert "text/csv" in resp.headers["content-type"]
+
+
+class TestAdminReloadEndpoint:
+    """POST /v1/admin/reload (Phase 14c, #249) -- admin-gated, calls
+    roles.refresh_roles() + Orchestrator.refresh() and returns both bools."""
+
+    def test_requires_auth(self, api_client):
+        resp = api_client.post("/v1/admin/reload")
+        assert resp.status_code == 401
+
+    def test_read_role_forbidden(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.post("/v1/admin/reload", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_run_role_forbidden(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("run")
+        resp = api_client.post("/v1/admin/reload", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_admin_role_calls_refresh_roles_and_orchestrator_refresh(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        refresh_roles_calls = []
+        orch_refresh_calls = []
+
+        monkeypatch.setattr(
+            api_service.roles,
+            "refresh_roles",
+            lambda: refresh_roles_calls.append(1) or True,
+        )
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(refresh=lambda: orch_refresh_calls.append(1) or True),
+        )
+
+        raw, _ = add_token("admin")
+        resp = api_client.post("/v1/admin/reload", headers=_auth(raw))
+
+        assert resp.status_code == 200
+        assert resp.json() == {"roles_reloaded": True, "config_reloaded": True}
+        assert refresh_roles_calls == [1]
+        assert orch_refresh_calls == [1]
+
+    def test_partial_failure_reported_not_hidden(self, api_client, tmp_tokens_file, monkeypatch):
+        """A broken roles.yaml (refresh_roles() -> False) must surface as
+        `roles_reloaded: false` in the response, not be swallowed into a
+        blanket success."""
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(api_service.roles, "refresh_roles", lambda: False)
+        monkeypatch.setattr(
+            api_service, "_get_orchestrator", lambda: SimpleNamespace(refresh=lambda: True)
+        )
+
+        raw, _ = add_token("admin")
+        resp = api_client.post("/v1/admin/reload", headers=_auth(raw))
+
+        assert resp.status_code == 200
+        assert resp.json() == {"roles_reloaded": False, "config_reloaded": True}
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file, monkeypatch):
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(api_service.roles, "refresh_roles", lambda: True)
+        monkeypatch.setattr(
+            api_service, "_get_orchestrator", lambda: SimpleNamespace(refresh=lambda: True)
+        )
+
+        raw, _ = add_token("admin")
+        resp = api_client.post("/admin/reload", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json() == {"roles_reloaded": True, "config_reloaded": True}

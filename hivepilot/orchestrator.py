@@ -991,8 +991,56 @@ class Orchestrator:
             self._injected_plugins if self._injected_plugins is not None else PluginManager()
         )
 
-    def refresh(self) -> None:
-        self._load()
+    def refresh(self) -> bool:
+        """Hot-reload projects/tasks/pipelines from disk (Phase 14c),
+        staging-then-commit -- mirrors ``PluginManager.reload()``'s pattern.
+
+        ``load_projects()``/``load_tasks()``/``load_pipelines()`` are called
+        into LOCAL variables first; only if ALL THREE succeed are
+        ``self.projects``/``self.tasks``/``self.pipelines``/``self.registry``
+        atomically reassigned (each individual assignment is GIL-atomic, so
+        an in-flight request reading e.g. ``self.tasks`` mid-refresh sees
+        either the fully-old or fully-new object, never a torn read of one
+        new attribute alongside three old ones). On ANY exception the
+        exception TYPE is logged and every live attribute is left completely
+        untouched -- a bad YAML deployed to a running process never leaves
+        this Orchestrator in a torn state (e.g. new tasks paired with old
+        pipelines that no longer validate against them). Returns ``True`` on
+        a successful swap, ``False`` if the previous config was kept.
+
+        Deliberately does NOT touch ``self.plugins`` (plugin hot-reload is
+        `PluginManager.reload()`'s own, separately-gated concern -- see
+        ``scheduler_daemon.py``) and does NOT call ``_load()`` (which is for
+        ``__init__`` only and has no staging/fallback semantics).
+
+        Known residual: a reload landing MID pipeline run could let a LATER
+        stage of that same run see the new tasks/pipelines while an earlier
+        stage already ran against the old ones -- ``run_task``/
+        ``run_pipeline`` read ``self.tasks``/``self.pipelines`` live, not a
+        per-run snapshot. Safe reload points (SIGHUP, the scheduler tick
+        boundary, the explicit admin endpoint, called between runs) make
+        this unlikely in practice; eliminating it fully requires threading a
+        per-run config snapshot through ``run_task``/``run_pipeline`` -- a
+        deferred follow-up, not attempted here. See
+        docs/DEPLOY-PRODUCTION.md §10.
+        """
+        try:
+            new_projects = load_projects()
+            new_tasks = load_tasks()
+            new_pipelines = load_pipelines()
+            new_registry = RunnerRegistry(new_tasks.runners)
+        except Exception as exc:  # noqa: BLE001 — a bad candidate must never touch live state
+            logger.warning(
+                "orchestrator.refresh_failed — keeping previous config: %s",
+                type(exc).__name__,
+            )
+            return False
+        self.projects = new_projects
+        self.tasks = new_tasks
+        self.pipelines = new_pipelines
+        self.registry = new_registry
+        logger.info("orchestrator.refreshed")
+        return True
 
     def _enter_run_scope(self) -> None:
         with self._run_scope_lock:
