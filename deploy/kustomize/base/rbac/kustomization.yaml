@@ -1,0 +1,9 @@
+# Standalone sub-kustomization so an overlay can pull in JUST the Role/
+# RoleBinding (`resources: [../../base/rbac]`) without also getting the
+# whole base -- see base/ingress/kustomization.yaml for why this exists as
+# its own directory.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rbac.yaml

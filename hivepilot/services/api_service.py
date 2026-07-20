@@ -5,6 +5,7 @@ import io
 import threading
 import uuid
 from collections import defaultdict
+from pathlib import Path
 from time import time
 from typing import Any
 
@@ -323,9 +324,24 @@ def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> 
     return {"role": caller.role, "tenant": caller.tenant}
 
 
-@v1.post("/run", dependencies=[Depends(require_role("run"))])
-@app.post("/run", dependencies=[Depends(require_role("run"))])
-def run_task(request: RunRequest):
+@v1.post("/run", dependencies=[Depends(require_role("run"))], deprecated=True)
+@app.post("/run", dependencies=[Depends(require_role("run"))], deprecated=True)
+def run_task(request: RunRequest, response: Response):
+    """Synchronous run trigger — **deprecated**, use `POST /v1/runs` instead.
+
+    `POST /v1/runs` (see `create_run` below) is the async successor: it
+    returns immediately (202) with a `run_id` and executes on a background
+    thread, instead of blocking the request for the full run duration. This
+    endpoint is kept working, unchanged, for existing callers -- it now
+    additionally surfaces its deprecated status via the OpenAPI schema
+    (`deprecated=True`) and RFC 8594 response headers (`Deprecation`/
+    `Link: rel="successor-version"`) so clients can migrate proactively.
+    """
+    from hivepilot.utils.logging import get_logger
+
+    get_logger(__name__).warning("api.run.deprecated", path="/run")
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</v1/runs>; rel="successor-version"'
     with run_duration_seconds.time():
         results = _get_orchestrator().run_task(
             project_names=request.projects,
@@ -692,36 +708,132 @@ def _pdf_safe(value: Any) -> str:
     return str(value).encode("latin-1", "replace").decode("latin-1")
 
 
+# Common install locations for a Unicode-capable TTF, checked (in order,
+# after `settings.pdf_font_path`) when no explicit font path is configured.
+# Debian/Ubuntu: `apt install fonts-dejavu`; Alpine: `apk add ttf-dejavu`.
+_COMMON_UNICODE_FONT_PATHS = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+)
+
+
+def _resolve_unicode_font_path() -> str | None:
+    """Return a usable Unicode TTF path, or `None` if none can be found.
+
+    Checked in order: (1) `settings.pdf_font_path`
+    (`HIVEPILOT_PDF_FONT_PATH`) if set and the file exists; (2) a small list
+    of common system font install paths. Never raises -- an unreadable
+    configured path or a filesystem error just falls through to `None`, so
+    the caller can gracefully degrade to the latin-1-only core font instead
+    of ever 500ing on a font-lookup failure.
+    """
+    try:
+        if settings.pdf_font_path and Path(settings.pdf_font_path).is_file():
+            return settings.pdf_font_path
+        for candidate in _COMMON_UNICODE_FONT_PATHS:
+            if Path(candidate).is_file():
+                return candidate
+    except OSError:
+        return None
+    return None
+
+
+def _render_pdf_bytes(
+    rows: list[dict[str, Any]],
+    title: str,
+    columns: list[str],
+    *,
+    unicode_font_path: str | None,
+) -> bytes:
+    """Build the actual PDF bytes for `_pdf_response`, either via a Unicode
+    TTF (`unicode_font_path` set) or the latin-1-only Helvetica core font
+    (`unicode_font_path` is `None`). Split out so `_pdf_response` can retry
+    with the latin-1 path if the Unicode path raises for ANY reason at
+    render time -- see `_pdf_response`'s docstring for why render-time
+    failures (not just font-*load* failures) must also degrade gracefully.
+    """
+    from fpdf import FPDF
+    from fpdf.fonts import FontFace
+
+    pdf = FPDF(orientation="L")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    table_kwargs: dict[str, Any] = {}
+    if unicode_font_path:
+        pdf.add_font("HivePilotUni", fname=unicode_font_path)
+        body_family = "HivePilotUni"
+        cell_text = lambda v: str(v) if v is not None else ""  # noqa: E731
+        # Only the regular (non-bold) style of the Unicode font is
+        # registered above -- fpdf2's table() defaults to a bold heading
+        # row, which would raise if asked to use a family with no bold
+        # variant loaded. Disable the bold emphasis on headings for the
+        # Unicode path only; the Helvetica/latin-1 fallback keeps its
+        # original (bold-heading) look.
+        table_kwargs["headings_style"] = FontFace(emphasis=None)
+    else:
+        body_family = "Helvetica"
+        cell_text = _pdf_safe
+
+    pdf.set_font(body_family, size=14)
+    pdf.cell(0, 10, cell_text(title), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font(body_family, size=9)
+    with pdf.table(**table_kwargs) as table:
+        header_row = table.row()
+        for column in columns:
+            header_row.cell(cell_text(column))
+        for row in rows:
+            data_row = table.row()
+            for column in columns:
+                data_row.cell(cell_text(row.get(column)))
+    return bytes(pdf.output())
+
+
 def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) -> Response:
     """Render `rows`/`columns` (the same shape `_csv_response` consumes) as a
     simple tabular PDF. fpdf2 is an OPTIONAL extra (`pip install
     hivepilot[pdf]`) — lazy-imported here so the core API never depends on
     it. If it's missing, fail gracefully with a clear message instead of a
     500/traceback.
+
+    Unicode rendering: fpdf2's built-in core fonts (Helvetica, etc.) only
+    support latin-1, so non-latin project/task/provider names degrade to
+    `?` (see `_pdf_safe`). When a Unicode TTF is available (see
+    `_resolve_unicode_font_path`), it's registered and used instead, and
+    cell text is passed through WITHOUT the latin-1 replace so non-latin
+    characters render correctly.
+
+    Never 500s on EITHER font *load* or *render*: glyph coverage varies per
+    TTF (e.g. DejaVu Sans has no emoji/most CJK), and `Row.cell()` only
+    queues text -- the actual glyph lookup happens later, inside the `with
+    pdf.table()` block, when `table.render()` runs. So `_render_pdf_bytes`
+    is wrapped in its own try/except here (not just the `add_font` call):
+    ANY failure building the Unicode-font PDF -- font-load OR a render-time
+    error for an out-of-coverage codepoint -- discards that attempt and
+    rebuilds the WHOLE PDF via the Helvetica/latin-1 path instead, which
+    can only ever render already-latin-1-safe text (see `_pdf_safe`) and so
+    cannot itself raise the same way.
     """
     try:
-        from fpdf import FPDF
+        from fpdf import FPDF  # noqa: F401 -- import-availability probe only
     except ImportError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="PDF export requires the 'pdf' extra: pip install hivepilot[pdf]",
         ) from exc
 
-    pdf = FPDF(orientation="L")
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=14)
-    pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", size=9)
-    with pdf.table() as table:
-        header_row = table.row()
-        for column in columns:
-            header_row.cell(column)
-        for row in rows:
-            data_row = table.row()
-            for column in columns:
-                data_row.cell(_pdf_safe(row.get(column)))
-    pdf_bytes = bytes(pdf.output())
+    font_path = _resolve_unicode_font_path()
+    pdf_bytes: bytes | None = None
+    if font_path:
+        try:
+            pdf_bytes = _render_pdf_bytes(rows, title, columns, unicode_font_path=font_path)
+        except Exception:  # noqa: BLE001 -- any Unicode font-load/render failure -> latin-1 fallback
+            pdf_bytes = None
+    if pdf_bytes is None:
+        pdf_bytes = _render_pdf_bytes(rows, title, columns, unicode_font_path=None)
+
     filename = title.lower().replace(" ", "_").replace("/", "_") + ".pdf"
     return Response(
         content=pdf_bytes,

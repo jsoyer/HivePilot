@@ -46,6 +46,9 @@ without side effects.
 - **See who you are** — whoami view shows your identity and resolved role.
 - **Approve or deny gated actions** — the approval queue, subject to your role.
 - **Launch runs asynchronously** — `POST /v1/runs`, then watch progress in the UI.
+  (The older synchronous `POST /run` still works but is deprecated — it returns
+  `Deprecation: true` and `Link: </v1/runs>; rel="successor-version"` response
+  headers; migrate to `POST /v1/runs`.)
 - **Stop / cancel a running pipeline** — halt an in-flight run.
 - **Toggle plugins on/off** — admin-gated, `POST /v1/plugins/{name}/toggle`. The
   health view can also re-enable a previously disabled plugin.
@@ -55,7 +58,12 @@ without side effects.
 ## Analytics
 
 The API exposes read-only analytics under `/v1/analytics/*`, tenant-scoped and
-exportable as CSV:
+exportable as CSV or PDF (`?format=csv` / `?format=pdf`, requires the optional
+`pip install hivepilot[pdf]` extra). PDF export renders non-latin project/task/
+provider names correctly when a Unicode TTF is available — install one (e.g.
+`apt install fonts-dejavu` on Debian/Ubuntu, `apk add ttf-dejavu` on Alpine) or
+set `HIVEPILOT_PDF_FONT_PATH` to a specific TTF path. Without a Unicode font,
+non-latin characters degrade to `?` instead of failing the export:
 
 - run summary
 - trends

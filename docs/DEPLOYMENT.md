@@ -88,7 +88,11 @@ helm install hivepilot deploy/helm/hivepilot
 ```
 
 Consult the chart's own values file for the configurable options — this
-document does not enumerate them.
+document does not enumerate them. If any pipeline uses the kubectl/helm/
+kustomize runner plugins, read the chart's
+[RBAC & the kubectl / helm / kustomize runners](../deploy/helm/hivepilot/README.md#rbac--the-kubectl--helm--kustomize-runners)
+section first — the app-level destructive-op approval gate is not a
+Kubernetes-level control; RBAC is the real security boundary.
 
 ## Configuration in production
 

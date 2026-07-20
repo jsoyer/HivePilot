@@ -1,0 +1,73 @@
+# Scheduler daemon (`hivepilot schedule daemon`) -- OPTIONAL, not wired into
+# base/kustomization.yaml's `resources:` by default (mirrors the Helm
+# chart's `scheduler.enabled: false` default: a bare apply with no run-role
+# token would CrashLoopBackOff). Bootstrap a HIVEPILOT_API_TOKEN with role
+# >= run in hivepilot-secret first, then add this file to an overlay's
+# `resources:` list to enable it. Single replica for the same reason as the
+# API Deployment (SQLite state.db is not multi-writer safe). No HTTP server,
+# so no liveness/readiness probe -- Kubernetes' default "container running ==
+# alive" applies, same as the Helm chart's scheduler Deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hivepilot-scheduler
+  labels:
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: scheduler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: scheduler
+    spec:
+      serviceAccountName: hivepilot
+      terminationGracePeriodSeconds: 130
+      securityContext:
+        runAsNonRoot: false
+        fsGroup: 1000
+      containers:
+        - name: scheduler
+          image: ghcr.io/jsoyer/hivepilot:latest
+          imagePullPolicy: IfNotPresent
+          command: ["hivepilot"]
+          args:
+            - schedule
+            - daemon
+            - --interval
+            - "30"
+            - --shutdown-timeout
+            - "120"
+          envFrom:
+            - configMapRef:
+                name: hivepilot-config
+            - secretRef:
+                name: hivepilot-secret
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: state
+              mountPath: /app/state-data
+            - name: tokens
+              mountPath: /app/api_tokens.yaml
+              subPath: api_tokens.yaml
+              readOnly: true
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: hivepilot-state
+        - name: tokens
+          secret:
+            secretName: hivepilot-secret
+            items:
+              - key: api_tokens.yaml
+                path: api_tokens.yaml

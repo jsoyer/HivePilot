@@ -16,6 +16,11 @@ state DB is ever touched. Covers:
    gated through the orchestrator task path (Sprint D4 core), not the CLI.
 4. A secret planted in a mocked drift-scan row never appears in CLI output
    (the CLI only ever prints status/counts, never the raw `detail` field).
+5. `drift scan` resolves the project's real `RunnerDefinition` (via the same
+   canonical registry resolver `Orchestrator` uses) and threads it into
+   `drift_service.scan_and_record(..., definition=...)`, instead of the
+   pre-fix call with no `definition=` at all (which silently ignored a named
+   runner's `options`/`env`, e.g. `workspace`/`var_file`).
 """
 
 from __future__ import annotations
@@ -73,8 +78,9 @@ for _mod in _STUBS:
 from typer.testing import CliRunner  # noqa: E402
 
 import hivepilot.cli as cli_module  # noqa: E402
+import hivepilot.orchestrator as orchestrator_module  # noqa: E402
 from hivepilot.cli import app  # noqa: E402
-from hivepilot.models import ProjectConfig, ProjectsFile  # noqa: E402
+from hivepilot.models import ProjectConfig, ProjectsFile, RunnerDefinition, TasksFile  # noqa: E402
 from hivepilot.services.drift_service import DriftResult, DriftSummary  # noqa: E402
 
 _LEAKED_LOOKING_TOKEN = "sk-live-should-never-leak-0123456789"  # noqa: S105
@@ -154,6 +160,97 @@ class TestDriftScan:
         assert cli_result.exit_code == 0, cli_result.output
         assert len(calls) == 1
         assert calls[0].get("tenant") is not None
+
+    def test_scan_resolves_named_runner_definition_and_threads_it_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A named `opentofu` runner in `tasks.yaml`'s top-level `runners:`
+        block (carrying `options`) must reach `scan_and_record` via
+        `definition=`, not be silently dropped."""
+        calls: list[dict] = []
+
+        def _fake_scan(project: ProjectConfig, **kwargs: object) -> DriftResult:
+            calls.append(kwargs)
+            return DriftResult(project="proj", runner="opentofu", drifted=False)
+
+        monkeypatch.setattr("hivepilot.services.drift_service.scan_and_record", _fake_scan)
+
+        named_definition = RunnerDefinition(
+            kind="opentofu", options={"workspace": "prod", "var_file": "prod.tfvars"}
+        )
+        fake_tasks = TasksFile(tasks={}, runners={"opentofu": named_definition})
+        monkeypatch.setattr(orchestrator_module, "load_tasks", lambda *a, **k: fake_tasks)
+
+        runner = CliRunner()
+        cli_result = runner.invoke(app, ["drift", "scan", "--project", "proj"])
+        assert cli_result.exit_code == 0, cli_result.output
+        assert len(calls) == 1
+        passed_definition = calls[0].get("definition")
+        assert passed_definition is not None
+        assert passed_definition.options == {"workspace": "prod", "var_file": "prod.tfvars"}
+
+    def test_scan_with_no_named_runner_still_passes_a_fallback_definition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no matching named runner, `definition=` is still passed (an
+        empty synthetic `RunnerDefinition`) -- `scan_and_record` treats
+        `None` and an empty definition identically, so this is a
+        byte-identical fallback for a zero-option project."""
+        calls: list[dict] = []
+
+        def _fake_scan(project: ProjectConfig, **kwargs: object) -> DriftResult:
+            calls.append(kwargs)
+            return DriftResult(project="proj", runner="opentofu", drifted=False)
+
+        monkeypatch.setattr("hivepilot.services.drift_service.scan_and_record", _fake_scan)
+
+        fake_tasks = TasksFile(tasks={}, runners={})
+        monkeypatch.setattr(orchestrator_module, "load_tasks", lambda *a, **k: fake_tasks)
+
+        runner = CliRunner()
+        cli_result = runner.invoke(app, ["drift", "scan", "--project", "proj"])
+        assert cli_result.exit_code == 0, cli_result.output
+        assert len(calls) == 1
+        passed_definition = calls[0].get("definition")
+        assert passed_definition is not None
+        assert passed_definition.options == {}
+
+    def test_scan_with_no_tasks_yaml_on_disk_falls_back_and_exits_zero(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Regression test (mirrors test_cli_iac.py's
+        TestMissingTasksYamlDoesNotCrash): `_resolve_iac_runner_definition`
+        constructs a real `Orchestrator()`, which raises
+        `pydantic.ValidationError` from `load_tasks()` when `tasks.yaml` is
+        absent (`TasksFile.tasks` is required). `drift scan` previously only
+        ever read `projects.yaml` -- a project directory with no
+        `tasks.yaml` must keep working, not crash. Deliberately does NOT
+        monkeypatch `load_tasks`, to exercise the real missing-file path."""
+        calls: list[dict] = []
+
+        def _fake_scan(project: ProjectConfig, **kwargs: object) -> DriftResult:
+            calls.append(kwargs)
+            return DriftResult(project="proj", runner="opentofu", drifted=False)
+
+        monkeypatch.setattr("hivepilot.services.drift_service.scan_and_record", _fake_scan)
+
+        (tmp_path / "projects.yaml").write_text(
+            f"projects:\n  proj:\n    path: {tmp_path}\n", encoding="utf-8"
+        )
+        assert not (tmp_path / "tasks.yaml").exists()
+
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+
+        runner = CliRunner()
+        cli_result = runner.invoke(app, ["drift", "scan", "--project", "proj"])
+        assert cli_result.exit_code == 0, cli_result.output
+        assert len(calls) == 1
+        passed_definition = calls[0].get("definition")
+        assert passed_definition is not None
+        assert passed_definition.options == {}
 
 
 class TestDriftStatus:

@@ -1,0 +1,33 @@
+# OPTIONAL -- not wired into ../kustomization.yaml's `resources:` by
+# default (mirrors the Helm chart's `rbac.create: false` default).
+# overlays/prod pulls in this whole directory (../../base/rbac) as its own
+# resource, opt-in. Namespaced Role (never ClusterRole/cluster-admin)
+# granting only read-only get/list/watch -- the SAME minimal default the
+# Helm chart ships. See the Helm chart README "RBAC & the kubectl / helm /
+# kustomize runners" for the full blast-radius discussion (the app-level
+# destructive-op approval gate is NOT a Kubernetes-level control) before
+# widening these rules for a pipeline that actually runs kubectl/helm/
+# kustomize apply/install/upgrade.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hivepilot
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hivepilot
+subjects:
+  - kind: ServiceAccount
+    name: hivepilot
+roleRef:
+  kind: Role
+  name: hivepilot
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,90 @@
+# HivePilot API server (`hivepilot api serve`). Single replica: the SQLite
+# state.db is not multi-writer safe -- see the Helm chart README
+# "Single-replica & HA caveat". Do not scale this Deployment until an
+# external DB backend (HIVEPILOT_DATABASE_URL=postgresql://...) is
+# configured. This is the plain-manifest equivalent of
+# deploy/helm/hivepilot/templates/deployment-api.yaml -- see
+# deploy/kustomize/README.md for how the two relate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hivepilot-api
+  labels:
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: hivepilot
+      securityContext:
+        runAsNonRoot: false
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: ghcr.io/jsoyer/hivepilot:latest
+          imagePullPolicy: IfNotPresent
+          command: ["hivepilot"]
+          args:
+            - api
+            - serve
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8045"
+          ports:
+            - name: http
+              containerPort: 8045
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: hivepilot-config
+            - secretRef:
+                name: hivepilot-secret
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: state
+              mountPath: /app/state-data
+            - name: tokens
+              mountPath: /app/api_tokens.yaml
+              subPath: api_tokens.yaml
+              readOnly: true
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: hivepilot-state
+        - name: tokens
+          secret:
+            secretName: hivepilot-secret
+            items:
+              - key: api_tokens.yaml
+                path: api_tokens.yaml

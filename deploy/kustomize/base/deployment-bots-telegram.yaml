@@ -1,0 +1,59 @@
+# Telegram chat-ops bot -- OPTIONAL, not wired into base/kustomization.yaml's
+# `resources:` by default (mirrors the Helm chart's `bots.telegram.enabled:
+# false` default). Needs HIVEPILOT_TELEGRAM_BOT_TOKEN in hivepilot-secret.
+# Add this file to an overlay's `resources:` list to enable it. Blocking,
+# long-lived process (polling mode), so a 1-replica Deployment same as the
+# scheduler. The Helm chart's equivalent (deployment-bots.yaml) also renders
+# slack/discord variants from the same template loop -- copy this file per
+# additional bot if you need those too (mode: socket / gateway respectively).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hivepilot-bot-telegram
+  labels:
+    app.kubernetes.io/component: bot-telegram
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: bot-telegram
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: bot-telegram
+    spec:
+      serviceAccountName: hivepilot
+      securityContext:
+        runAsNonRoot: false
+        fsGroup: 1000
+      containers:
+        - name: bot-telegram
+          image: ghcr.io/jsoyer/hivepilot:latest
+          imagePullPolicy: IfNotPresent
+          command: ["hivepilot"]
+          args:
+            - telegram
+            - start
+            - --mode
+            - polling
+          envFrom:
+            - configMapRef:
+                name: hivepilot-config
+            - secretRef:
+                name: hivepilot-secret
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: state
+              mountPath: /app/state-data
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: hivepilot-state

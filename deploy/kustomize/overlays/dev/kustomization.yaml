@@ -1,0 +1,39 @@
+# Dev overlay -- single replica (already the base default), no ingress, no
+# RBAC, no persistent storage (the state PVC is deleted and the API
+# Deployment's "state" volume is switched to an ephemeral emptyDir so a
+# local/kind/minikube cluster needs no StorageClass at all -- state.db is
+# lost on pod restart, which is fine for local iteration).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hivepilot-dev
+
+resources:
+  - ../../base
+
+patches:
+  # Delete the base PVC entirely -- dev has no persistent storage.
+  - target:
+      kind: PersistentVolumeClaim
+      name: hivepilot-state
+    patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: hivepilot-state
+      $patch: delete
+  # Switch the API Deployment's "state" volume from the (now-deleted) PVC to
+  # an ephemeral emptyDir.
+  - target:
+      kind: Deployment
+      name: hivepilot-api
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/volumes/0/persistentVolumeClaim
+      - op: add
+        path: /spec/template/spec/volumes/0/emptyDir
+        value: {}
+
+images:
+  - name: ghcr.io/jsoyer/hivepilot
+    newTag: dev

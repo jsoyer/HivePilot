@@ -1,0 +1,16 @@
+# Persistent state (SQLite state.db, run artifacts, logs) for the API
+# Deployment. ReadWriteOnce, 2Gi by default -- override storage/size in the
+# prod overlay via a patch. The dev overlay deletes this resource entirely
+# and switches the API Deployment's "state" volume to an ephemeral emptyDir
+# (see overlays/dev/kustomization.yaml) so a local/dev cluster needs no
+# storage class at all.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hivepilot-state
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

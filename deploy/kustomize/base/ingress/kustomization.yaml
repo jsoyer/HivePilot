@@ -1,0 +1,10 @@
+# Standalone sub-kustomization so an overlay can pull in JUST the Ingress
+# (`resources: [../../base/ingress]`) without also getting the whole base --
+# kustomize's default load restrictions require any cross-directory resource
+# reference to be a directory containing its own kustomization.yaml, not a
+# bare file path. See overlays/prod/kustomization.yaml for how this is used.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ingress.yaml
