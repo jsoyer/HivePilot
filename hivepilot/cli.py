@@ -3309,6 +3309,111 @@ def init_config(
     _handle_mandatory_agent_verdict(outcome.mandatory_agents)
 
 
+@app.command("setup")
+def setup(
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        help=(
+            "Never prompt -- use flags/env only (CI-friendly). A step explicitly "
+            "requested via --only that's still missing its required value exits "
+            "non-zero instead of hanging."
+        ),
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts once already interactive; also applies non-interactively.",
+    ),
+    only: Optional[str] = typer.Option(
+        None,
+        "--only",
+        help="Run just one section: config, token, runners, telegram, plugins, concierge, services.",
+    ),
+    timeout: int = typer.Option(
+        30, "--timeout", help="Seconds to poll Telegram getUpdates for chat auto-detection."
+    ),
+    config_repo: Optional[str] = typer.Option(
+        None, "--config-repo", envvar="HIVEPILOT_CONFIG_REPO", help="Config repo URL (optional)."
+    ),
+    config_token: Optional[str] = typer.Option(
+        None,
+        "--config-token",
+        envvar="HIVEPILOT_CONFIG_TOKEN",
+        help="Auth token for a private HTTPS config repo.",
+    ),
+    telegram_bot_token: Optional[str] = typer.Option(
+        None,
+        "--telegram-bot-token",
+        envvar="HIVEPILOT_TELEGRAM_BOT_TOKEN",
+        help="Telegram bot token.",
+    ),
+    telegram_allowed_chat_ids: Optional[str] = typer.Option(
+        None,
+        "--telegram-allowed-chat-ids",
+        help="Comma-separated chat ids to authorize (skips auto-detection).",
+    ),
+    telegram_notification_chat_id: Optional[int] = typer.Option(
+        None, "--telegram-notification-chat-id"
+    ),
+    telegram_stream_chat_id: Optional[int] = typer.Option(None, "--telegram-stream-chat-id"),
+    plugins: Optional[str] = typer.Option(
+        None, "--plugins", help="Comma-separated curated plugin names to install."
+    ),
+    concierge: bool = typer.Option(
+        False, "--concierge/--no-concierge", help="Enable the NL concierge, if available."
+    ),
+    mint_admin_token: bool = typer.Option(
+        False,
+        "--mint-admin-token",
+        help=(
+            "Non-interactive only: explicitly opt in to minting the bootstrap admin "
+            "token headlessly. Without this flag, --non-interactive NEVER mints one "
+            "(the raw token is never printed either way in non-interactive mode -- "
+            "only a masked confirmation)."
+        ),
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Non-interactive only: allow overwriting a secret (config repo, Telegram "
+            "bot token) that's already set in .env. Without this flag, a non-interactive "
+            "re-run skips a key that already has a value instead of silently replacing it."
+        ),
+    ),
+) -> None:
+    """Guided, idempotent setup wizard: config repo, admin token, agent
+    runners, Telegram (with chat-id auto-detection), plugins, concierge, and
+    services -- one friendly command for a fresh HivePilot install.
+    """
+    from rich.console import Console
+
+    from hivepilot.services import setup_wizard
+
+    console = Console()
+    options = setup_wizard.SetupOptions(
+        non_interactive=non_interactive,
+        assume_yes=yes,
+        only=only,
+        timeout=timeout,
+        config_repo=config_repo,
+        config_token=config_token,
+        telegram_bot_token=telegram_bot_token,
+        telegram_allowed_chat_ids=telegram_allowed_chat_ids,
+        telegram_notification_chat_id=telegram_notification_chat_id,
+        telegram_stream_chat_id=telegram_stream_chat_id,
+        plugins=plugins,
+        concierge=concierge,
+        mint_admin_token=mint_admin_token,
+        force=force,
+    )
+    exit_code = setup_wizard.run_setup(console, options)
+    if exit_code:
+        raise typer.Exit(exit_code)
+
+
 @app.command("validate")
 def validate(
     config_dir: Path | None = typer.Option(
