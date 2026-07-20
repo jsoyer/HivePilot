@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import shutil
 from pathlib import Path
 
 from git import GitCommandError, InvalidGitRepositoryError, Repo  # type: ignore
@@ -37,20 +39,62 @@ def _config_dir() -> Path:
     return settings.xdg_data_home / "config-repo"
 
 
+def _auth_git_env() -> dict[str, str]:
+    """Build a TRANSIENT per-invocation git env for `HIVEPILOT_CONFIG_TOKEN`.
+
+    Returns `{}` (no-op) when no token is configured, or when config_repo is
+    not an https URL (ssh://, git@, and local paths use their own auth and
+    must never receive an Authorization header). Otherwise returns the
+    `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` env vars git
+    reads per-invocation to inject an `http.extraheader` — this is NEVER
+    persisted to `.git/config` or any other file, and the token is never
+    embedded in the repo URL. The token itself is also registered with the
+    process-wide secret redaction registry so it can never leak into logs
+    even indirectly.
+    """
+    token = settings.config_token
+    if not token:
+        return {}
+    repo_url = str(settings.config_repo or "")
+    if not repo_url.startswith("https://"):
+        return {}
+
+    from hivepilot.services.config_provenance import register_secret_value
+
+    register_secret_value(token)
+
+    header = "Authorization: Basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraheader",
+        "GIT_CONFIG_VALUE_0": header,
+    }
+
+
 def _open_or_clone() -> Repo:
     """Return an open Repo, cloning from config_repo if it doesn't exist yet."""
     repo_url = _require_config_repo()
     dest = _config_dir()
+    auth = _auth_git_env()
 
     if dest.exists():
         try:
-            return Repo(dest)
+            repo = Repo(dest)
+            if auth:
+                repo.git.update_environment(**auth)
+            return repo
         except InvalidGitRepositoryError:
-            pass  # fall through to re-clone
+            # Leftover/partial dir from a previously-failed clone — remove it
+            # so clone_from below doesn't fail with "destination path already
+            # exists and is not empty".
+            shutil.rmtree(dest, ignore_errors=True)
 
     logger.info("config.clone", repo=repo_url, dest=str(dest))
-    env = {**proxy_env()}
-    return Repo.clone_from(repo_url, str(dest), branch=settings.config_branch, env=env or None)
+    env = {**proxy_env(), **auth}
+    repo = Repo.clone_from(repo_url, str(dest), branch=settings.config_branch, env=env or None)
+    if auth:
+        repo.git.update_environment(**auth)
+    return repo
 
 
 def sync() -> list[str]:

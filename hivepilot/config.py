@@ -211,6 +211,14 @@ class Settings(BaseSettings):
     no_proxy: str | None = None
     config_repo: str | None = None
     config_branch: str = "main"
+    # Auth token for a PRIVATE https config_repo (fine-grained/classic PAT with
+    # Contents:read [+ write, only if `hivepilot config push` is used] on the
+    # config repo). env: HIVEPILOT_CONFIG_TOKEN. Injected by config_service as
+    # a TRANSIENT per-invocation `http.extraheader` (via GIT_CONFIG_* env
+    # vars) — never written to `.git/config`, never embedded in the repo URL,
+    # never logged. https-only: ssh:// / git@ config_repo URLs ignore this
+    # setting entirely and authenticate via the host's own SSH key/agent.
+    config_token: str | None = None
     domain: str | None = None  # public domain used by caddy + webhook auto-registration
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids: list[int] = Field(default_factory=list)

@@ -229,13 +229,26 @@ hivepilot config sync
 hivepilot config status
 ```
 
-For a private repo, authenticate via an SSH deploy key (put the key on the
-host / mount it into the container and use an `ssh://` or `git@` URL — the
-key's own passphrase-less agent setup is outside HivePilot's scope) or a token
-embedded in an HTTPS URL, e.g.
-`https://<token>@github.com/you/hivepilot-config.git`. **Never hardcode the
-token in a committed file** — set `HIVEPILOT_CONFIG_REPO` via `.env` (mounted,
-not baked into the image) or the shell environment only.
+For a private repo, authenticate via one of:
+
+- **SSH deploy key** (recommended for `git@`/`ssh://` URLs) — put the key on
+  the host / mount it into the container and use an `ssh://` or `git@` URL;
+  the key's own passphrase-less agent setup is outside HivePilot's scope.
+- **`HIVEPILOT_CONFIG_TOKEN`** (recommended for `https://` URLs) — a
+  fine-grained (or classic) GitHub PAT scoped to `Contents: read` on the
+  config repo (add `write` too if you use `hivepilot config push`). Set
+  `HIVEPILOT_CONFIG_REPO=https://github.com/you/hivepilot-config.git` (no
+  token in the URL) plus `HIVEPILOT_CONFIG_TOKEN=<pat>`. `config_service`
+  injects it as a **transient**, per-invocation `http.extraheader`
+  (`Authorization: Basic base64(x-access-token:<token>)`) via `GIT_CONFIG_*`
+  environment variables — it is **never** written to `.git/config`, **never**
+  embedded in the repo URL, and never logged. `ssh://`/`git@` repo URLs
+  ignore `HIVEPILOT_CONFIG_TOKEN` entirely (SSH auth uses the deploy key
+  above instead).
+
+**Never hardcode the token in a committed file** — set `HIVEPILOT_CONFIG_REPO`
+and `HIVEPILOT_CONFIG_TOKEN` via `.env` (mounted, not baked into the image) or
+the shell environment only.
 
 `config sync` clones the repo into `~/.local/share/hivepilot/config-repo`
 (`$XDG_DATA_HOME/hivepilot/config-repo`) and copies the managed files
