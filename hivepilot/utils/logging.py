@@ -30,6 +30,39 @@ def _redact_secret_values(
     return event_dict
 
 
+def _bind_trace_context(
+    _logger: WrappedLogger, _method_name: str, event_dict: EventDict
+) -> EventDict:
+    """structlog processor: bind ``trace_id``/``span_id`` (formatted the same
+    way OTel itself does — 32-hex / 16-hex) onto the event dict when an OTel
+    span is currently active AND recording, so a log line can be pivoted to
+    its trace in Jaeger/Grafana (roadmap item 4: trace-aware error
+    correlation).
+
+    Lazy, guarded import of `opentelemetry.trace` — never a hard dependency
+    of the core install. No-op (returns `event_dict` unchanged) when OTel
+    isn't installed, tracing is off, or there's no active/recording span —
+    log output stays byte-identical to before this processor existed.
+    Never raises.
+    """
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        return event_dict
+    try:
+        span = trace.get_current_span()
+        if not span.is_recording():
+            return event_dict
+        span_context = span.get_span_context()
+        if not span_context.is_valid:
+            return event_dict
+        event_dict["trace_id"] = format(span_context.trace_id, "032x")
+        event_dict["span_id"] = format(span_context.span_id, "016x")
+    except Exception:  # noqa: BLE001 — tracing must never break logging
+        return event_dict
+    return event_dict
+
+
 def configure_logging() -> None:
     global _configured
     if _configured:
@@ -47,6 +80,7 @@ def configure_logging() -> None:
         processors=[
             structlog.processors.TimeStamper(fmt="ISO"),
             _redact_secret_values,
+            _bind_trace_context,
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

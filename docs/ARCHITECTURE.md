@@ -102,7 +102,7 @@ See [SECURITY.md](./SECURITY.md) for the full threat model and gate configuratio
 
 ## State & observability
 
-Every run is persisted to the SQLite state store (runs, steps, interactions, verdicts, lessons, drift scans, tenants), mirrored to a per-run `runs/<timestamp>/summary.json`, and logged as structured JSON. A read-only analytics API exposes run history, durations (p50/p95/p99), provider/cost breakdowns, and CSV export, tenant-scoped. OpenTelemetry tracing is opt-in via `HIVEPILOT_ENABLE_TRACING`.
+Every run is persisted to the SQLite state store (runs, steps, interactions, verdicts, lessons, drift scans, tenants), mirrored to a per-run `runs/<timestamp>/summary.json`, and logged as structured JSON. A read-only analytics API exposes run history, durations (p50/p95/p99), provider/cost breakdowns, and CSV export, tenant-scoped. OpenTelemetry tracing is opt-in via `HIVEPILOT_ENABLE_TRACING`: `pipeline.run`/`task.run`/`step.run` spans are exported via OTLP, a W3C `TRACEPARENT` header is propagated into every runner subprocess's environment (local execution; the SSH/remote path forwards it too, folded into the same env-assignment mechanism it already uses for other vars) so a downstream OTel-instrumented tool nests under the invoking `step.run` span, and structured log lines are enriched with `trace_id`/`span_id` when a span is recording, for log↔trace correlation in Jaeger/Grafana. All of this is a pure no-op when tracing is disabled.
 
 See [DASHBOARD.md](./DASHBOARD.md) for the Mirador dashboard (TUI and web) and [DEPLOYMENT.md](./DEPLOYMENT.md) for running the API/dashboard in production.
 
