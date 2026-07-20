@@ -46,6 +46,9 @@ without side effects.
 - **See who you are** — whoami view shows your identity and resolved role.
 - **Approve or deny gated actions** — the approval queue, subject to your role.
 - **Launch runs asynchronously** — `POST /v1/runs`, then watch progress in the UI.
+  (The older synchronous `POST /run` still works but is deprecated — it returns
+  `Deprecation: true` and `Link: </v1/runs>; rel="successor-version"` response
+  headers; migrate to `POST /v1/runs`.)
 - **Stop / cancel a running pipeline** — halt an in-flight run.
 - **Toggle plugins on/off** — admin-gated, `POST /v1/plugins/{name}/toggle`. The
   health view can also re-enable a previously disabled plugin.

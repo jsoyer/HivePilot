@@ -323,9 +323,24 @@ def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> 
     return {"role": caller.role, "tenant": caller.tenant}
 
 
-@v1.post("/run", dependencies=[Depends(require_role("run"))])
-@app.post("/run", dependencies=[Depends(require_role("run"))])
-def run_task(request: RunRequest):
+@v1.post("/run", dependencies=[Depends(require_role("run"))], deprecated=True)
+@app.post("/run", dependencies=[Depends(require_role("run"))], deprecated=True)
+def run_task(request: RunRequest, response: Response):
+    """Synchronous run trigger — **deprecated**, use `POST /v1/runs` instead.
+
+    `POST /v1/runs` (see `create_run` below) is the async successor: it
+    returns immediately (202) with a `run_id` and executes on a background
+    thread, instead of blocking the request for the full run duration. This
+    endpoint is kept working, unchanged, for existing callers -- it now
+    additionally surfaces its deprecated status via the OpenAPI schema
+    (`deprecated=True`) and RFC 8594 response headers (`Deprecation`/
+    `Link: rel="successor-version"`) so clients can migrate proactively.
+    """
+    from hivepilot.utils.logging import get_logger
+
+    get_logger(__name__).warning("api.run.deprecated", path="/run")
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</v1/runs>; rel="successor-version"'
     with run_duration_seconds.time():
         results = _get_orchestrator().run_task(
             project_names=request.projects,
