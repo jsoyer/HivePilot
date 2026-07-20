@@ -553,3 +553,37 @@ class TestLenientEnvListParsing:
         monkeypatch.setenv("HIVEPILOT_SIGNAL_ALLOWED_NUMBERS", "+15551234567")
         s = Settings()
         assert s.signal_allowed_numbers == ["+15551234567"]
+
+
+class TestConciergeConfig:
+    """Natural-language concierge (opt-in, default off) config surface."""
+
+    def test_concierge_enabled_defaults_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CHATOPS_CONCIERGE_ENABLED", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.chatops_concierge_enabled is False
+
+    def test_concierge_enabled_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CHATOPS_CONCIERGE_ENABLED", "true")
+        s = Settings()
+        assert s.chatops_concierge_enabled is True
+
+    def test_default_role_defaults_to_ceo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CHATOPS_DEFAULT_ROLE", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.chatops_default_role == "ceo"
+
+    def test_default_role_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CHATOPS_DEFAULT_ROLE", "cto")
+        s = Settings()
+        assert s.chatops_default_role == "cto"
+
+    def test_concierge_model_defaults_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CHATOPS_CONCIERGE_MODEL", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.chatops_concierge_model is None
+
+    def test_concierge_model_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CHATOPS_CONCIERGE_MODEL", "haiku")
+        s = Settings()
+        assert s.chatops_concierge_model == "haiku"

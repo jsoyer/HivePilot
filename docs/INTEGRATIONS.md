@@ -106,6 +106,48 @@ works with or without a leading `/`. A missing `signal-cli` binary (or an unreac
 REST endpoint) degrades gracefully — a clear error on `signal start`/`signal notify`, and
 a logged skip-and-continue on each poll tick — it never crashes a HivePilot run.
 
+## Natural-language concierge (opt-in)
+
+By default, chatting with HivePilot means memorizing commands (`/run`, `/ask`, `@mention`).
+The concierge lets you talk to it like a colleague instead — a plain-text message is
+classified into **ANSWER** (a direct reply, e.g. "what's running?"), **ROUTE** (address a
+specific agent, e.g. "ask Gustave to fix the auth bug"), or **ACTION** (an orchestration
+primitive: run a task/pipeline, approve/deny a run). It is **off by default** and
+**fail-closed**: any classifier error, timeout, or malformed response degrades to a
+friendly "I didn't quite get that" answer — it never fabricates or guesses an action it
+can't validate.
+
+Enable it:
+
+```bash
+export HIVEPILOT_CHATOPS_CONCIERGE_ENABLED=true   # opt-in, default OFF
+export HIVEPILOT_CHATOPS_DEFAULT_ROLE=ceo          # role addressed when the user doesn't name one (default: ceo)
+export HIVEPILOT_CHATOPS_CONCIERGE_MODEL=haiku     # cheap/fast classifier model (default: a built-in cheap model)
+```
+
+How it behaves once enabled:
+
+- **Telegram**: a plain (non-`@`, non-`/`) message that used to be silently ignored is now
+  classified. An **answer** replies directly. A **route**/**action** (routing to an agent,
+  running a task/pipeline, or approving/denying a run) is always treated as destructive and
+  shows a ✅ Yes / ❌ No inline keyboard before anything runs.
+- **Signal** (and the generic `/chatops/*` webhook path, which shares the same dispatch
+  layer): free text that doesn't match a known command is classified the same way. An
+  **answer** is returned directly. A destructive route/action returns a text confirmation
+  — `⚠️ This will <summary>. Reply 'yes <token>' to confirm or 'no' to cancel.` — since
+  Signal has no inline buttons.
+- **Every route/action is destructive by design** — there is no unconfirmed path from
+  free text to an actual run, pipeline trigger, or approval/denial. A read-only request
+  ("what's pending?", "who is the CTO?") is always answered directly, never turned into a
+  fake "read action".
+- Confirming re-checks the same ChatOps-token permission level the equivalent explicit
+  command would require (`run` for routing/running, `approve` for approving/denying) — the
+  confirmation step never bypasses existing authorization.
+
+The concierge runs one LLM classification call per free-text message when enabled — be
+mindful of cost/latency on high-traffic chats; the default model is intentionally a cheap
+one for this reason.
+
 ## Notifiers (webhooks)
 
 Notifications are a plugin contribution type. Webhook URLs (`SLACK_WEBHOOK_URL`,

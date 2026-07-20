@@ -11,6 +11,8 @@ import inspect
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 import hivepilot.services.telegram_bot as telegram_bot
 
 # ---------------------------------------------------------------------------
@@ -510,3 +512,242 @@ def test_fetch_recent_chats_dedupes(monkeypatch) -> None:
     chats = telegram_bot.fetch_recent_chats()
     assert {c["id"] for c in chats} == {42, -100}
     assert any(c["name"] == "Team" for c in chats)
+
+
+# ---------------------------------------------------------------------------
+# Natural-language concierge (opt-in) — plain-text @mention hook
+# ---------------------------------------------------------------------------
+
+from hivepilot.services.concierge_service import ConciergeDecision  # noqa: E402
+
+
+def _make_mention_update(chat_id: int = 555, text: str = "hello there") -> MagicMock:
+    update = MagicMock()
+    update.effective_chat.id = chat_id
+    update.message.chat.id = chat_id
+    update.message.text = text
+    update.message.reply_text = AsyncMock()
+    return update
+
+
+def _make_mention_context() -> MagicMock:
+    ctx = MagicMock()
+    ctx.bot = MagicMock()
+    ctx.bot.send_message = AsyncMock()
+    return ctx
+
+
+class TestConciergeOffByteIdentical:
+    """`chatops_concierge_enabled=False` (default) — a plain-text message
+    still hits the old silent `return`; concierge_service.route is never
+    called and no reply is sent."""
+
+    def test_concierge_not_called_and_silent_when_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", False)
+        update = _make_mention_update(text="hello there")
+        context = _make_mention_context()
+        telegram_bot._pending_challenges.clear()
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch("hivepilot.services.concierge_service.route") as mock_route,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(update, context))
+
+        mock_route.assert_not_called()
+        update.message.reply_text.assert_not_awaited()
+
+
+class TestConciergeOnAnswer:
+    def test_answer_decision_replies_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(text="what's running?")
+        context = _make_mention_context()
+        telegram_bot._pending_challenges.clear()
+        decision = ConciergeDecision(kind="answer", answer_text="Nothing is running right now.")
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch(
+                "hivepilot.services.concierge_service.route", return_value=decision
+            ) as mock_route,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(update, context))
+
+        mock_route.assert_called_once()
+        update.message.reply_text.assert_awaited_once_with("Nothing is running right now.")
+
+
+class TestConciergeOnDestructive:
+    def test_destructive_route_sends_keyboard_and_stores_pending(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(chat_id=777, text="ask gustave to fix the bug")
+        context = _make_mention_context()
+        telegram_bot._pending_challenges.clear()
+        telegram_bot._pending_concierge.clear()
+        decision = ConciergeDecision(
+            kind="route",
+            role_key="developer",
+            target="acme",
+            order="fix the bug",
+            destructive=True,
+        )
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch("hivepilot.services.concierge_service.route", return_value=decision),
+        ):
+            asyncio.run(telegram_bot._cmd_mention(update, context))
+
+        assert 777 in telegram_bot._pending_concierge
+        assert telegram_bot._pending_concierge[777] == decision
+        context.bot.send_message.assert_awaited_once()
+        call_kwargs = context.bot.send_message.call_args.kwargs
+        assert call_kwargs["chat_id"] == 777
+        assert "reply_markup" in call_kwargs
+
+    def teardown_method(self, method) -> None:
+        telegram_bot._pending_concierge.clear()
+
+
+class TestConciergeCallback:
+    """`concierge:yes:<token>` / `concierge:no:<token>` inline-keyboard callback."""
+
+    def _make_callback_update(self, chat_id: int, data: str) -> MagicMock:
+        update = MagicMock()
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message.chat.id = chat_id
+        update.callback_query.data = data
+        return update
+
+    def _make_callback_context(self) -> MagicMock:
+        ctx = MagicMock()
+        ctx.bot = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        return ctx
+
+    def test_no_cancels_and_drops_pending(self) -> None:
+        telegram_bot._pending_concierge[888] = ConciergeDecision(
+            kind="action", action="run", destructive=True
+        )
+        update = self._make_callback_update(888, "concierge:no:tok123")
+        context = self._make_callback_context()
+
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        assert 888 not in telegram_bot._pending_concierge
+        update.callback_query.edit_message_text.assert_awaited()
+
+    def test_yes_executes_route_decision(self) -> None:
+        decision = ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="do it", destructive=True
+        )
+        telegram_bot._pending_concierge[999] = decision
+        update = self._make_callback_update(999, "concierge:yes:tok123")
+        context = self._make_callback_context()
+
+        orch = MagicMock()
+        orch.run_task.return_value = []
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        assert 999 not in telegram_bot._pending_concierge
+        orch.run_task.assert_called_once()
+        assert orch.run_task.call_args.kwargs["project_names"] == ["acme"]
+
+    def test_yes_with_no_pending_reports_expired(self) -> None:
+        telegram_bot._pending_concierge.pop(111, None)
+        update = self._make_callback_update(111, "concierge:yes:tok123")
+        context = self._make_callback_context()
+
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        update.callback_query.edit_message_text.assert_awaited()
+
+    def test_unauthorized_chat_never_executes(self) -> None:
+        decision = ConciergeDecision(kind="action", action="run", destructive=True)
+        telegram_bot._pending_concierge[222] = decision
+        update = self._make_callback_update(222, "concierge:yes:tok123")
+        context = self._make_callback_context()
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=False),
+            patch.object(telegram_bot, "_get_orch") as mock_get_orch,
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        mock_get_orch.assert_not_called()
+        # Pending entry is untouched by an unauthorized attempt.
+        assert 222 in telegram_bot._pending_concierge
+
+    def teardown_method(self, method) -> None:
+        telegram_bot._pending_concierge.clear()
+
+
+class TestConciergeHandlerRegistered:
+    def test_callback_handler_registered_in_build_application(self) -> None:
+        src = inspect.getsource(telegram_bot._build_application)
+        assert "_concierge_callback" in src
+        assert "concierge" in src
+
+
+# ---------------------------------------------------------------------------
+# Graceful PTB error handler (Conflict / network errors logged concisely,
+# unexpected errors keep their traceback)
+# ---------------------------------------------------------------------------
+
+
+class TestOnError:
+    def test_conflict_logs_warning_no_raise(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as stdlib_logging
+
+        from telegram.error import Conflict
+
+        context = MagicMock()
+        context.error = Conflict("terminated by other getUpdates request")
+
+        with caplog.at_level(stdlib_logging.WARNING):
+            asyncio.run(telegram_bot._on_error(None, context))
+
+        assert any(rec.levelname == "WARNING" for rec in caplog.records)
+
+    def test_network_error_logs_warning_no_raise(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as stdlib_logging
+
+        from telegram.error import NetworkError
+
+        context = MagicMock()
+        context.error = NetworkError("connection reset")
+
+        with caplog.at_level(stdlib_logging.WARNING):
+            asyncio.run(telegram_bot._on_error(None, context))
+
+        assert any(rec.levelname == "WARNING" for rec in caplog.records)
+
+    def test_unexpected_error_logs_error_with_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging as stdlib_logging
+
+        context = MagicMock()
+        context.error = RuntimeError("something genuinely unexpected")
+
+        with caplog.at_level(stdlib_logging.WARNING):
+            asyncio.run(telegram_bot._on_error(None, context))
+
+        assert any(rec.levelname == "ERROR" for rec in caplog.records)
+
+    def test_registered_in_build_application(self) -> None:
+        src = inspect.getsource(telegram_bot._build_application)
+        assert "add_error_handler" in src
+        assert "_on_error" in src
