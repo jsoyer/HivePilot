@@ -622,6 +622,8 @@ class TestConciergeCallback:
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
         update.callback_query.message.chat.id = chat_id
+        update.callback_query.message.reply_text = AsyncMock()
+        update.callback_query.message.delete = AsyncMock()
         update.callback_query.data = data
         return update
 

@@ -361,43 +361,27 @@ async def _send_concierge_keyboard_message(
     )
 
 
-async def _execute_concierge_decision(
-    bot: Any, chat_id: int, decision: "ConciergeDecision"
-) -> None:
-    """Execute an already-confirmed concierge decision and report the
-    outcome via `bot.send_message`. `route` reuses the existing agent-command
-    path (via `_get_orch().run_task`); `action run`/`run_pipeline` dispatch
-    to the orchestrator directly; `approve`/`deny` reuse `_dispatch_approval`
-    (the SAME entrypoint the ✅/❌ approval buttons use)."""
+async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDecision") -> None:
+    """Execute an already-confirmed concierge decision, replying on
+    `update_like.message` (either the original message, or a lightweight
+    wrapper around the callback-query's own message — see
+    `_concierge_callback`). `route` reuses `_run_agent_order` UNCHANGED (same
+    heartbeat/ack UX as `/ask`); `action run`/`run_pipeline` dispatch to the
+    orchestrator directly; `approve`/`deny` reuse `_dispatch_approval` (the
+    SAME entrypoint the ✅/❌ approval buttons use)."""
     if decision.kind == "route":
-        entry = _AGENT_REGISTRY.get(decision.role_key or "")
-        task_name = entry.get("task") if entry else None
-        if entry is None or task_name is None:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"{decision.role_key or 'That agent'} is not configured on this deployment.",
+        role_key = decision.role_key or ""
+        if role_key not in _AGENT_REGISTRY:
+            await update_like.message.reply_text(
+                f"{role_key or 'That agent'} is not configured on this deployment."
             )
             return
         target = decision.target or settings.default_target
-        loop = asyncio.get_event_loop()
-        try:
-            results = await loop.run_in_executor(
-                None,
-                lambda: _get_orch().run_task(
-                    project_names=[target],
-                    task_name=task_name,
-                    extra_prompt=decision.order or None,
-                    auto_git=True,
-                ),
-            )
-            await bot.send_message(chat_id=chat_id, text=_format_results(results))
-        except Exception as exc:
-            logger.error("telegram.concierge.route_error", role=decision.role_key, error=str(exc))
-            await bot.send_message(chat_id=chat_id, text=f"❌ Error: {exc}")
+        await _run_agent_order(update_like, role_key, target, decision.order or "")
         return
 
     if decision.kind != "action":
-        await bot.send_message(chat_id=chat_id, text="Nothing to do.")
+        await update_like.message.reply_text("Nothing to do.")
         return
 
     params = decision.params or {}
@@ -409,7 +393,7 @@ async def _execute_concierge_decision(
             if decision.action == "run":
                 task = params.get("task")
                 if not task:
-                    await bot.send_message(chat_id=chat_id, text="Missing task name — cannot run.")
+                    await update_like.message.reply_text("Missing task name — cannot run.")
                     return
                 extra = params.get("order") or params.get("extra_prompt")
                 results = await loop.run_in_executor(
@@ -432,17 +416,17 @@ async def _execute_concierge_decision(
                         auto_git=True,
                     ),
                 )
-            await bot.send_message(chat_id=chat_id, text=_format_results(results))
+            await update_like.message.reply_text(_format_results(results))
         except Exception as exc:
             logger.error("telegram.concierge.action_error", action=decision.action, error=str(exc))
-            await bot.send_message(chat_id=chat_id, text=f"❌ Error: {exc}")
+            await update_like.message.reply_text(f"❌ Error: {exc}")
         return
 
     if decision.action in ("approve", "deny"):
         try:
             run_id = int(params.get("run_id"))
         except (TypeError, ValueError):
-            await bot.send_message(chat_id=chat_id, text="Invalid run id.")
+            await update_like.message.reply_text("Invalid run id.")
             return
         approve = decision.action == "approve"
         try:
@@ -457,12 +441,12 @@ async def _execute_concierge_decision(
                 text = f"✅ Run #{run_id} approved — {outcome}."
             else:
                 text = f"❌ Run #{run_id} denied."
-            await bot.send_message(chat_id=chat_id, text=text)
+            await update_like.message.reply_text(text)
         except Exception as exc:
-            await bot.send_message(chat_id=chat_id, text=f"Error processing run #{run_id}: {exc}")
+            await update_like.message.reply_text(f"Error processing run #{run_id}: {exc}")
         return
 
-    await bot.send_message(chat_id=chat_id, text="Nothing to do.")
+    await update_like.message.reply_text("Nothing to do.")
 
 
 async def _handle_concierge_mention(update: Any, context: Any, text: str) -> None:
@@ -490,7 +474,7 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
         # Every currently-known route/action kind IS destructive (see
         # concierge_service's hardcoded table) — this only guards a future
         # non-destructive kind, never exercised today.
-        await _execute_concierge_decision(context.bot, chat_id, decision)
+        await _execute_concierge_decision(update, decision)
         return
 
     _pending_concierge[chat_id] = decision
@@ -524,7 +508,14 @@ async def _concierge_callback(update: Any, context: Any) -> None:
         return
 
     await query.edit_message_text("⏳ Running…")
-    await _execute_concierge_decision(context.bot, chat_id, decision)
+    # `_run_agent_order` (reused for kind="route") only needs `.message` —
+    # wrap the callback's own message so it can `reply_text`/`delete` on it
+    # exactly like a normal update, without threading `bot`/`chat_id` through
+    # a second parallel code path.
+    from types import SimpleNamespace
+
+    update_like = SimpleNamespace(message=query.message)
+    await _execute_concierge_decision(update_like, decision)
 
 
 async def _cmd_ask(update: Any, context: Any) -> None:
