@@ -96,8 +96,6 @@ _rate_lock = threading.Lock()
 _rate_counts: dict[str, list[float]] = defaultdict(list)
 
 _RATE_LIMITED_PATHS = {
-    "/run",
-    "/v1/run",
     "/chatops/slack",
     "/chatops/discord",
     "/chatops/telegram",
@@ -178,13 +176,14 @@ def require_role(required: str):
 
 
 def _validate_extra_prompt(v: str | None) -> str | None:
-    """Shared `extra_prompt` validation for every run-triggering request
-    body (`RunRequest` for sync `POST /v1/run`, `NewRunRequest` for async
-    `POST /v1/runs`, Mirador actionable dashboard PRD Sprint 3). A single
-    helper -- not duplicated per model -- so both apply byte-for-byte the
-    same length check / sanitize / injection-detection behavior; extracted
-    verbatim from `RunRequest`'s own prior validator with no behavior
-    change for existing `RunRequest` callers.
+    """Shared `extra_prompt` validation for run-triggering request bodies
+    (`NewRunRequest` for async `POST /v1/runs`; originally shared with
+    `RunRequest`, the request body of the now-removed synchronous
+    `POST /run` -- see `RunRequest`'s own docstring, Phase 14b). A single
+    helper -- not duplicated per model -- so any future sibling model
+    applies byte-for-byte the same length check / sanitize / injection-
+    detection behavior; extracted verbatim from `RunRequest`'s own prior
+    validator with no behavior change.
     """
     if v is None:
         return None
@@ -202,6 +201,18 @@ def _validate_extra_prompt(v: str | None) -> str | None:
 
 
 class RunRequest(BaseModel):
+    """Request body of the synchronous `POST /run` endpoint, **removed** in
+    Phase 14b (see `docs/DASHBOARD.md`'s "Breaking change" note -- external
+    callers must migrate to `POST /v1/runs` + `GET /v1/runs/{run_id}`).
+
+    Kept (not deleted) solely because `test_async_runs_endpoint.py::
+    test_extra_prompt_validation_shared_with_sync_run_request` uses it as a
+    regression guard proving `NewRunRequest`'s `extra_prompt` handling never
+    silently drifts from this original validator. `Orchestrator.run_task`
+    (the in-process method this model's fields used to be forwarded to) is
+    untouched and still used by the CLI/chatops in-process callers.
+    """
+
     task: str
     projects: list[str]
     extra_prompt: str | None = None
@@ -215,9 +226,9 @@ class RunRequest(BaseModel):
 
 class NewRunRequest(BaseModel):
     """Body for `POST /v1/runs` (Mirador actionable dashboard PRD, Sprint 3)
-    -- the async, single-project counterpart to `RunRequest`. Reuses
-    `_validate_extra_prompt` (see above) so its `extra_prompt` handling is
-    identical to `RunRequest`'s, never a weaker reimplementation."""
+    -- the async, single-project successor to the removed sync `RunRequest`.
+    Reuses `_validate_extra_prompt` (see above) so its `extra_prompt`
+    handling is identical to `RunRequest`'s, never a weaker reimplementation."""
 
     task: str
     project: str
@@ -323,34 +334,6 @@ def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> 
     any other `TokenEntry` field.
     """
     return {"role": caller.role, "tenant": caller.tenant}
-
-
-@v1.post("/run", dependencies=[Depends(require_role("run"))], deprecated=True)
-@app.post("/run", dependencies=[Depends(require_role("run"))], deprecated=True)
-def run_task(request: RunRequest, response: Response):
-    """Synchronous run trigger — **deprecated**, use `POST /v1/runs` instead.
-
-    `POST /v1/runs` (see `create_run` below) is the async successor: it
-    returns immediately (202) with a `run_id` and executes on a background
-    thread, instead of blocking the request for the full run duration. This
-    endpoint is kept working, unchanged, for existing callers -- it now
-    additionally surfaces its deprecated status via the OpenAPI schema
-    (`deprecated=True`) and RFC 8594 response headers (`Deprecation`/
-    `Link: rel="successor-version"`) so clients can migrate proactively.
-    """
-    from hivepilot.utils.logging import get_logger
-
-    get_logger(__name__).warning("api.run.deprecated", path="/run")
-    response.headers["Deprecation"] = "true"
-    response.headers["Link"] = '</v1/runs>; rel="successor-version"'
-    with run_duration_seconds.time():
-        results = _get_orchestrator().run_task(
-            project_names=request.projects,
-            task_name=request.task,
-            extra_prompt=request.extra_prompt,
-            auto_git=request.auto_git,
-        )
-    return {"results": [result.__dict__ for result in results]}
 
 
 @v1.get("/projects", dependencies=[Depends(require_role("read"))])
@@ -606,6 +589,105 @@ def cancel_run(
         # fail-closed: never report false success.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="not cancellable")
     return CancelRunResponse(run_id=run_id, status="cancelling")
+
+
+# ---------------------------------------------------------------------------
+# Phase 14b -- result retrieval by id, the async family's missing piece.
+# `POST /v1/runs` (above) returns a `run_id` immediately; this is how a
+# caller polls it for status + step results. `/v1`-only, like `POST /v1/runs`
+# and `POST /v1/runs/{run_id}/cancel` above -- not dual-registered on `app`.
+#
+# Gated at `run`, matching every other endpoint in this family --
+# `GET /v1/runs` (list), `POST /v1/runs` (create), `POST /v1/runs/{run_id}/
+# cancel` -- all require `run`. Run ids are a sequential autoincrement PK,
+# so a lower `read` floor here would let a bare `read` token enumerate
+# `id=1,2,3,...` and harvest every run's full step detail (which includes
+# provider/model/token/cost fields the list endpoint doesn't expose) within
+# its tenant -- "must already know the id" is not a real barrier against a
+# sequential id space.
+#
+# Tenant-checked like `POST /v1/runs/{run_id}/cancel` (404 if the row
+# doesn't exist, admin bypasses the tenant check) EXCEPT a tenant mismatch
+# also reports 404 here, not 403 -- a GET must not let an unauthorized
+# caller distinguish "wrong tenant" from "doesn't exist" (existence leak).
+# ---------------------------------------------------------------------------
+
+
+class RunStepDetail(BaseModel):
+    step: str
+    status: str
+    detail: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    timestamp: str | None = None
+
+
+class RunDetailResponse(BaseModel):
+    run_id: int
+    project: str
+    task: str
+    status: str
+    detail: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    tenant: str = "default"
+    steps: list[RunStepDetail]
+
+
+@v1.get("/runs/{run_id}")
+def get_run(
+    run_id: int,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> RunDetailResponse:
+    """Fetch a single run's status + step results by id -- how a caller
+    polls the `run_id` returned by `POST /v1/runs` to completion. Gated at
+    `run`, matching `GET /v1/runs`/`POST /v1/runs`/`POST /v1/runs/{run_id}/
+    cancel` (see module comment above for why a lower `read` floor isn't
+    safe here).
+
+    `detail`/step `detail` are returned exactly as persisted: `record_step`/
+    `complete_run` already redact every registered secret VALUE before
+    writing to the `steps`/`runs` tables (see `state_service`'s own
+    docstrings), so there is no additional un-redacted surface to guard
+    against here -- this endpoint never re-derives or re-fetches raw output.
+    """
+    row = state_service.get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    row_tenant = row.get("tenant", "default")
+    if caller.role != "admin" and row_tenant != caller.tenant:
+        # Same status as "doesn't exist" -- never leak that a run exists in
+        # another tenant.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    steps = state_service.get_steps_for_run(run_id)
+    return RunDetailResponse(
+        run_id=row["id"],
+        project=row.get("project"),
+        task=row.get("task"),
+        status=row.get("status"),
+        detail=row.get("detail"),
+        started_at=row.get("started_at"),
+        finished_at=row.get("finished_at"),
+        tenant=row_tenant,
+        steps=[
+            RunStepDetail(
+                step=step.get("step"),
+                status=step.get("status"),
+                detail=step.get("detail"),
+                provider=step.get("provider"),
+                model=step.get("model"),
+                input_tokens=step.get("input_tokens"),
+                output_tokens=step.get("output_tokens"),
+                cost_usd=step.get("cost_usd"),
+                timestamp=step.get("timestamp"),
+            )
+            for step in steps
+        ],
+    )
 
 
 @v1.get("/approvals")

@@ -327,25 +327,126 @@ class TestCreateRunEndpoint:
         assert secret_bearing_message not in (row["detail"] or "")
         assert "RuntimeError" in (row["detail"] or "")
 
-    def test_sync_run_endpoint_unchanged(self, api_client, tmp_tokens_file, monkeypatch):
-        """POST /run (sync) stays byte-for-byte unchanged by this sprint."""
-        from hivepilot.services import api_service
 
-        called = {}
+class TestGetRunEndpoint:
+    """Tests for `GET /v1/runs/{run_id}` (Phase 14b) -- the async family's
+    missing piece: `POST /v1/runs` returns a `run_id`; this is how a caller
+    polls it for status + step results. `run`-role gated, matching every
+    other endpoint in this family (`GET /v1/runs` list, `POST /v1/runs`
+    create, `POST /v1/runs/{run_id}/cancel`) -- a bare `read` token must NOT
+    suffice, since run ids are a sequential autoincrement PK and this
+    endpoint exposes more than the list (per-step provider/model/token/cost
+    detail), so a lower floor would let `read` enumerate every run's full
+    detail within its tenant. Tenant-scoped like the rest of the family, but
+    a cross-tenant read reports 404 (not 403) to avoid an existence leak on
+    a GET.
+    """
 
-        def _run_task(**kwargs):
-            called.update(kwargs)
-            return []
+    def test_requires_auth(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
 
-        orch = SimpleNamespace(run_task=_run_task)
-        monkeypatch.setattr(api_service, "_get_orchestrator", lambda: orch)
+        run_id = state_service.record_run_start("acme-web", "deploy", status="success")
+        resp = api_client.get(f"/v1/runs/{run_id}")
+        assert resp.status_code == 401
+
+    def test_unknown_run_id_404(self, api_client, tmp_tokens_file):
         raw, _ = add_token("run")
-        resp = api_client.post(
-            "/v1/run",
-            json={"task": "deploy", "projects": ["acme-web"], "auto_git": False},
-            headers=_auth(raw),
+        resp = api_client.get("/v1/runs/999999", headers=_auth(raw))
+        assert resp.status_code == 404
+
+    def test_returns_status_and_steps(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("acme-web", "deploy", status="running")
+        state_service.record_step(run_id, "step-1", "success", detail="did the thing")
+        state_service.complete_run(run_id, "success", "run completed")
+
+        raw, _ = add_token("run")
+        resp = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["run_id"] == run_id
+        assert body["project"] == "acme-web"
+        assert body["task"] == "deploy"
+        assert body["status"] == "success"
+        assert body["detail"] == "run completed"
+        assert len(body["steps"]) == 1
+        assert body["steps"][0]["step"] == "step-1"
+        assert body["steps"][0]["status"] == "success"
+        assert body["steps"][0]["detail"] == "did the thing"
+
+    def test_read_role_forbidden_run_role_allowed(self, api_client, tmp_tokens_file):
+        """A bare `read` token (below the `run` floor) must be rejected --
+        fail-closed, same shape as the sibling endpoints' own
+        `test_read_role_forbidden` checks -- while a `run` token succeeds."""
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("acme-web", "deploy", status="running")
+
+        raw_read, _ = add_token("read")
+        resp_read = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw_read))
+        assert resp_read.status_code == 403
+
+        raw_run, _ = add_token("run")
+        resp_run = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw_run))
+        assert resp_run.status_code == 200
+
+    def test_cross_tenant_read_returns_404_not_403(self, api_client, tmp_tokens_file):
+        """Fail-closed AND no existence leak: a caller from a different
+        tenant gets the same 404 as a genuinely-unknown run_id."""
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start(
+            "acme-web", "deploy", status="running", tenant="tenant-a"
         )
+        raw, _ = add_token("run", tenant="tenant-b")
+        resp = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw))
+        assert resp.status_code == 404
+
+    def test_admin_bypasses_tenant_check(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start(
+            "acme-web", "deploy", status="running", tenant="tenant-a"
+        )
+        raw, _ = add_token("admin", tenant="tenant-b")
+        resp = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw))
         assert resp.status_code == 200
-        assert resp.json() == {"results": []}
-        assert called["project_names"] == ["acme-web"]
-        assert called["task_name"] == "deploy"
+
+    def test_same_tenant_caller_can_read(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start(
+            "acme-web", "deploy", status="running", tenant="tenant-a"
+        )
+        raw, _ = add_token("run", tenant="tenant-a")
+        resp = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_secret_values_redacted_in_step_and_run_detail(self, api_client, tmp_tokens_file):
+        """`record_step`/`complete_run` already redact registered secret
+        VALUES at the persistence choke point -- this proves that
+        protection survives the round trip through `GET /v1/runs/{id}`
+        rather than re-leaking the raw value on read."""
+        from hivepilot.services import state_service
+        from hivepilot.services.config_provenance import (
+            clear_secret_values,
+            register_secret_value,
+        )
+
+        secret = "sk-live-super-secret-token-xyz-0123456789"
+        clear_secret_values()
+        try:
+            register_secret_value(secret)
+            run_id = state_service.record_run_start("acme-web", "deploy", status="running")
+            state_service.record_step(run_id, "step-1", "failed", detail=f"boom: {secret}")
+            state_service.complete_run(run_id, "failed", f"run failed: {secret}")
+
+            raw, _ = add_token("run")
+            resp = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw))
+            assert resp.status_code == 200
+            body = resp.json()
+            assert secret not in body["detail"]
+            assert secret not in body["steps"][0]["detail"]
+        finally:
+            clear_secret_values()
