@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import hivepilot.services.telegram_bot as telegram_bot
@@ -344,6 +345,150 @@ def test_new_commands_registered_in_source() -> None:
     src = inspect.getsource(telegram_bot._build_application)
     for cmd in ("runpipeline", "debate", "steps", "pipelines", "projects", "tasks"):
         assert cmd in src, f"{cmd} not registered"
+
+
+# ---------------------------------------------------------------------------
+# Python 3.14 "no current event loop" regression (run_polling / run_webhook)
+# ---------------------------------------------------------------------------
+
+
+def _get_current_loop_or_none():
+    """Best-effort snapshot of the current event loop for save/restore in
+    tests — tolerates the Python 3.14 'no current event loop' RuntimeError
+    (which can already be the ambient state before a test even runs)."""
+    try:
+        return asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        return None
+
+
+class TestEnsureEventLoop:
+    """_ensure_event_loop() must give the main thread a usable loop on 3.14
+    (where asyncio.get_event_loop() raises instead of auto-creating one),
+    without disturbing an already-running loop."""
+
+    def test_sets_new_loop_when_none_current(self) -> None:
+        old_loop = _get_current_loop_or_none()
+        try:
+            # Simulate the Python 3.14 "no current event loop" state.
+            asyncio.set_event_loop(None)
+
+            telegram_bot._ensure_event_loop()
+
+            # A loop must now be retrievable without raising.
+            loop = asyncio.get_event_loop()
+            assert loop is not None
+            assert not loop.is_running()
+        finally:
+            asyncio.set_event_loop(old_loop)
+
+    def test_noop_when_loop_already_running(self) -> None:
+        observed: dict[str, Any] = {}
+
+        async def _inner():
+            running_before = asyncio.get_running_loop()
+            telegram_bot._ensure_event_loop()
+            running_after = asyncio.get_running_loop()
+            observed["before"] = running_before
+            observed["after"] = running_after
+
+        asyncio.run(_inner())
+        # The running loop must be untouched — same object before and after.
+        assert observed["before"] is observed["after"]
+
+    def test_noop_when_loop_already_set_but_not_running(self) -> None:
+        old_loop = _get_current_loop_or_none()
+        existing = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(existing)
+            telegram_bot._ensure_event_loop()
+            assert asyncio.get_event_loop() is existing
+        finally:
+            asyncio.set_event_loop(old_loop)
+            existing.close()
+
+
+class TestRunPollingNoCurrentLoop:
+    """Regression: run_polling() must not raise 'no current event loop' on
+    the Python 3.14-style no-loop main thread, and must delegate to PTB."""
+
+    def test_run_polling_survives_no_current_loop_and_calls_ptb(self) -> None:
+        fake_app = MagicMock()
+        old_loop = _get_current_loop_or_none()
+        try:
+            asyncio.set_event_loop(None)  # simulate 3.14 no-loop main thread
+            with (
+                patch.object(telegram_bot, "_token", return_value="123:ABC"),
+                patch.object(telegram_bot, "_build_application", return_value=fake_app),
+            ):
+                telegram_bot.run_polling()
+        finally:
+            asyncio.set_event_loop(old_loop)
+
+        fake_app.run_polling.assert_called_once_with(drop_pending_updates=True)
+
+    def test_run_polling_calls_ensure_event_loop_before_ptb(self) -> None:
+        fake_app = MagicMock()
+        call_order: list[str] = []
+        fake_app.run_polling.side_effect = lambda **_: call_order.append("run_polling")
+        with (
+            patch.object(telegram_bot, "_token", return_value="123:ABC"),
+            patch.object(telegram_bot, "_build_application", return_value=fake_app),
+            patch.object(
+                telegram_bot,
+                "_ensure_event_loop",
+                side_effect=lambda: call_order.append("ensure_event_loop"),
+            ),
+        ):
+            telegram_bot.run_polling()
+
+        assert call_order == ["ensure_event_loop", "run_polling"]
+
+
+class TestRunWebhookNoCurrentLoop:
+    """Same 3.14 loop-guarantee, for the built-in-server webhook path."""
+
+    def test_run_webhook_survives_no_current_loop_and_calls_ptb(self) -> None:
+        fake_app = MagicMock()
+        old_loop = _get_current_loop_or_none()
+        try:
+            asyncio.set_event_loop(None)  # simulate 3.14 no-loop main thread
+            with (
+                patch.object(telegram_bot, "_token", return_value="123456:ABC"),
+                patch.object(telegram_bot, "_build_application", return_value=fake_app),
+            ):
+                telegram_bot.run_webhook("https://example.com")
+        finally:
+            asyncio.set_event_loop(old_loop)
+
+        fake_app.run_webhook.assert_called_once()
+
+    def test_run_webhook_calls_ensure_event_loop_before_ptb(self) -> None:
+        fake_app = MagicMock()
+        call_order: list[str] = []
+        fake_app.run_webhook.side_effect = lambda **_: call_order.append("run_webhook")
+        with (
+            patch.object(telegram_bot, "_token", return_value="123456:ABC"),
+            patch.object(telegram_bot, "_build_application", return_value=fake_app),
+            patch.object(
+                telegram_bot,
+                "_ensure_event_loop",
+                side_effect=lambda: call_order.append("ensure_event_loop"),
+            ),
+        ):
+            telegram_bot.run_webhook("https://example.com")
+
+        assert call_order == ["ensure_event_loop", "run_webhook"]
+
+
+class TestProcessUpdateUnaffectedByLoopFix:
+    """The FastAPI-integrated process_update path runs inside uvicorn's already
+    -running loop; it must not call _ensure_event_loop (get_running_loop()
+    early-return already covers it — nothing to wire in here)."""
+
+    def test_process_update_source_does_not_reference_ensure_event_loop(self) -> None:
+        src = inspect.getsource(telegram_bot.process_update)
+        assert "_ensure_event_loop" not in src
 
 
 def test_fetch_recent_chats_dedupes(monkeypatch) -> None:

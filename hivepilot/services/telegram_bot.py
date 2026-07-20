@@ -1159,8 +1159,25 @@ def _quiet_http_logging() -> None:
         logging.getLogger(_name).setLevel(logging.WARNING)
 
 
+def _ensure_event_loop() -> None:
+    """Py3.14: asyncio.get_event_loop() no longer auto-creates a loop in the
+    main thread and raises 'no current event loop'. PTB v21's run_polling/
+    run_webhook rely on get_event_loop() internally, so give the main thread a
+    fresh loop before delegating to PTB. No-op if a loop is already set/running."""
+    try:
+        asyncio.get_running_loop()
+        return  # already inside a running loop (e.g. FastAPI) -> nothing to do
+    except RuntimeError:
+        pass
+    try:
+        asyncio.get_event_loop()  # a loop is set but not running -> fine
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 def run_polling() -> None:
     """Start the bot in long-polling mode. Blocking. No public URL required."""
+    _ensure_event_loop()
     _quiet_http_logging()
     token = _token()
     logger.info("telegram.polling.start")
@@ -1186,6 +1203,7 @@ def run_webhook(
     port        : local port to listen on (default: settings.telegram_webhook_port)
     secret      : X-Telegram-Bot-Api-Secret-Token (recommended)
     """
+    _ensure_event_loop()
     _quiet_http_logging()
     token = _token()
     effective_port = port or settings.telegram_webhook_port
