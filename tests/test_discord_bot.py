@@ -34,6 +34,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import hivepilot.services.discord_bot as discord_bot
+from hivepilot.services.concierge_service import ConciergeDecision
 
 ALLOWED_GUILD = 111
 ALLOWED_CHANNEL = 222
@@ -52,6 +53,22 @@ def _allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
     rejected by every handler (guild AND channel are both enforced)."""
     monkeypatch.setattr(discord_bot.settings, "discord_allowed_guild_ids", [ALLOWED_GUILD])
     monkeypatch.setattr(discord_bot.settings, "discord_allowed_channel_ids", [ALLOWED_CHANNEL])
+
+
+@pytest.fixture(autouse=True)
+def _reset_pending_concierge() -> Any:
+    """`_pending_concierge` is a module-level singleton — reset it around
+    every test so tests don't leak pending confirmations into each other."""
+    discord_bot._pending_concierge.clear()
+    yield
+    discord_bot._pending_concierge.clear()
+
+
+@pytest.fixture(autouse=True)
+def _concierge_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concierge is opt-in — default off in every test unless a test
+    explicitly flips it on."""
+    monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", False)
 
 
 class _ImmediateThread:
@@ -566,6 +583,25 @@ def _fake_describe(**kwargs: Any) -> Callable:
     return decorator
 
 
+class _FakeAllowedMentions:
+    """Stand-in for `discord.AllowedMentions` — `.none()` returns a distinct
+    sentinel instance so tests can assert every concierge `send(...)` call
+    passes `allowed_mentions=discord.AllowedMentions.none()` (suppresses
+    `@everyone`/`@here`/role pings from attacker-influenced text)."""
+
+    _NONE_SENTINEL = object()
+
+    def __init__(self, sentinel: object) -> None:
+        self._sentinel = sentinel
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _FakeAllowedMentions) and self._sentinel == other._sentinel
+
+    @staticmethod
+    def none() -> "_FakeAllowedMentions":
+        return _FakeAllowedMentions(_FakeAllowedMentions._NONE_SENTINEL)
+
+
 @pytest.fixture()
 def fake_discord(monkeypatch: pytest.MonkeyPatch):
     """Inject a fake `discord` package tree into sys.modules so the lazy
@@ -579,6 +615,7 @@ def fake_discord(monkeypatch: pytest.MonkeyPatch):
     fake_discord_mod.Intents = _FakeIntents  # type: ignore[attr-defined]
     fake_discord_mod.Client = _FakeClient  # type: ignore[attr-defined]
     fake_discord_mod.Interaction = _FakeInteraction  # type: ignore[attr-defined]
+    fake_discord_mod.AllowedMentions = _FakeAllowedMentions  # type: ignore[attr-defined]
 
     fake_app_commands = types.ModuleType("discord.app_commands")
     fake_app_commands.CommandTree = _FakeCommandTree  # type: ignore[attr-defined]
@@ -643,3 +680,253 @@ class TestRunGateway:
             asyncio.run(tree.commands["approve"](interaction, 42))
         interaction.response.send_message.assert_awaited_once_with("Unauthorized.", ephemeral=True)
         orch.run_approved.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Natural-language concierge (opt-in, settings.chatops_concierge_enabled) —
+# gateway-mode only (`run_gateway`'s `on_message`).
+# ---------------------------------------------------------------------------
+
+
+class _FakeGuild:
+    def __init__(self, guild_id: int | None) -> None:
+        self.id = guild_id
+
+
+class _FakeChannel:
+    def __init__(self, channel_id: int | None) -> None:
+        self.id = channel_id
+        self.send = AsyncMock()
+
+
+class _FakeMessage:
+    def __init__(
+        self,
+        content: str,
+        *,
+        author: Any = "OtherUser",
+        guild_id: int | None = ALLOWED_GUILD,
+        channel_id: int | None = ALLOWED_CHANNEL,
+    ) -> None:
+        self.content = content
+        self.author = author
+        self.guild = _FakeGuild(guild_id) if guild_id is not None else None
+        self.channel = _FakeChannel(channel_id)
+
+
+class TestGatewayMessageContentIntent:
+    def test_intent_not_set_when_concierge_disabled(self, fake_discord: Any) -> None:
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        assert getattr(client.intents, "message_content", None) is not True
+
+    def test_intent_set_when_concierge_enabled(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        assert client.intents.message_content is True
+
+
+class TestOnMessageConciergeFlagOff:
+    def test_flag_off_route_never_called_no_message_sent(self, fake_discord: Any) -> None:
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("hello there")
+        with patch("hivepilot.services.concierge_service.route") as route:
+            asyncio.run(client.events["on_message"](message))
+        route.assert_not_called()
+        message.channel.send.assert_not_awaited()
+
+
+class TestOnMessageConciergeNoLoop:
+    def test_own_message_ignored(self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("hello there", author=client.user)
+        with patch("hivepilot.services.concierge_service.route") as route:
+            asyncio.run(client.events["on_message"](message))
+        route.assert_not_called()
+        message.channel.send.assert_not_awaited()
+
+    def test_empty_content_ignored(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("   ")
+        with patch("hivepilot.services.concierge_service.route") as route:
+            asyncio.run(client.events["on_message"](message))
+        route.assert_not_called()
+        message.channel.send.assert_not_awaited()
+
+
+class TestOnMessageConciergeWhitelist:
+    def test_denied_guild_channel_route_never_called(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("hello there", guild_id=DENIED_GUILD, channel_id=DENIED_CHANNEL)
+        with patch("hivepilot.services.concierge_service.route") as route:
+            asyncio.run(client.events["on_message"](message))
+        route.assert_not_called()
+        message.channel.send.assert_not_awaited()
+
+
+class TestOnMessageConciergeAnswer:
+    def test_answer_decision_sends_text(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("how's it going?")
+        decision = ConciergeDecision(kind="answer", answer_text="It's running fine.")
+        with patch("hivepilot.services.concierge_service.route", return_value=decision):
+            asyncio.run(client.events["on_message"](message))
+        message.channel.send.assert_awaited_once_with(
+            "It's running fine.", allowed_mentions=discord_bot._no_mentions()
+        )
+
+
+class TestOnMessageConciergeDestructive:
+    def test_destructive_route_sends_confirmation_and_stores_pending(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("ask gustave to fix bug")
+        decision = ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix bug", destructive=True
+        )
+        with patch("hivepilot.services.concierge_service.route", return_value=decision):
+            asyncio.run(client.events["on_message"](message))
+
+        message.channel.send.assert_awaited_once()
+        sent_text = message.channel.send.call_args.args[0]
+        assert "yes " in sent_text
+        assert (
+            message.channel.send.call_args.kwargs["allowed_mentions"] == discord_bot._no_mentions()
+        )
+
+        assert ALLOWED_CHANNEL in discord_bot._pending_concierge
+        token, stored_decision = discord_bot._pending_concierge[ALLOWED_CHANNEL]
+        assert stored_decision is decision
+        assert token in sent_text
+
+
+class TestOnMessageConciergeYesNo:
+    def _pending_route_decision(self) -> ConciergeDecision:
+        return ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix bug", destructive=True
+        )
+
+    def test_yes_correct_token_executes_via_shared_entrypoint(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes tok123")
+        with patch(
+            "hivepilot.services.chatops_service._execute_concierge_decision",
+            return_value="Triggered task on acme",
+        ) as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_called_once()
+        args = execute.call_args.args
+        assert args[1] is decision
+        assert args[2] == f"discord:{ALLOWED_CHANNEL}"
+        message.channel.send.assert_awaited_once_with(
+            "Triggered task on acme", allowed_mentions=discord_bot._no_mentions()
+        )
+        assert ALLOWED_CHANNEL not in discord_bot._pending_concierge
+
+    def test_yes_wrong_token_not_executed_pending_untouched(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes stale-token")
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_not_called()
+        message.channel.send.assert_awaited_once()
+        assert "expired" in message.channel.send.call_args.args[0].lower()
+        assert (
+            message.channel.send.call_args.kwargs["allowed_mentions"] == discord_bot._no_mentions()
+        )
+        assert discord_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
+
+    def test_overwrite_scenario_stale_token_never_executes_new_decision(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """decision A is pending with token A; before the user replies
+        "yes <token_a>", decision B overwrites the pending entry for the
+        same channel (different token, different content). Replying with
+        A's stale token must execute NOTHING — never A, and never B."""
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision_a = self._pending_route_decision()
+        decision_b = ConciergeDecision(
+            kind="action",
+            action="run_pipeline",
+            target="acme-api",
+            params={"pipeline": "company"},
+            destructive=True,
+        )
+        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_a", decision_a)
+        # A newer destructive message overwrites the pending entry before the
+        # user replies to A's confirmation prompt.
+        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_b", decision_b)
+
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes token_a")  # A's stale token
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_not_called()
+        message.channel.send.assert_awaited_once()
+        assert "expired" in message.channel.send.call_args.args[0].lower()
+        # B is still pending, untouched, and can still be confirmed correctly later.
+        assert discord_bot._pending_concierge[ALLOWED_CHANNEL] == ("token_b", decision_b)
+
+    def test_yes_denied_channel_falls_through_no_pending_for_that_channel(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A denied guild/channel never reaches the confirmation logic at
+        all — the whitelist gate runs before pending lookup."""
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge[DENIED_CHANNEL] = ("tok123", decision)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes tok123", guild_id=DENIED_GUILD, channel_id=DENIED_CHANNEL)
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_not_called()
+        message.channel.send.assert_not_awaited()
+        assert DENIED_CHANNEL in discord_bot._pending_concierge
+
+    def test_no_cancels_and_pops(self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("no")
+        asyncio.run(client.events["on_message"](message))
+        message.channel.send.assert_awaited_once_with(
+            "Cancelled.", allowed_mentions=discord_bot._no_mentions()
+        )
+        assert ALLOWED_CHANNEL not in discord_bot._pending_concierge
