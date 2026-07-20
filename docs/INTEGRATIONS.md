@@ -56,6 +56,55 @@ hivepilot discord notify   # send a one-off message
 
 Webhook-based notifications use `DISCORD_WEBHOOK_URL`.
 
+## Signal
+
+Signal has **no cloud bot API** and, being end-to-end encrypted peer-to-peer messaging,
+**no inbound webhook mode** — unlike Telegram/Slack/Discord above, there is nothing for
+Signal to push updates to. A Signal bot is a dedicated phone number driven by either the
+[`signal-cli`](https://github.com/AsamK/signal-cli) binary or its HTTP wrapper,
+[`signal-cli-rest-api`](https://github.com/bbernhard/signal-cli-rest-api); messages are
+received by **polling** (`signal-cli --output=json receive`, or `GET /v1/receive/{number}`
+against the REST wrapper) and sent the same way each mode's send call.
+
+```bash
+hivepilot signal start --mode cli    # or --mode rest — blocking poll loop
+hivepilot signal notify "message"    # one-off notification
+hivepilot signal register +15551234567 [--voice] [--captcha <token>]
+hivepilot signal link                # link this machine as a secondary device
+hivepilot signal info                # show config + signal-cli PATH availability
+```
+
+One-time setup (either path — register a *new* number, or link as a secondary device off
+an existing Signal account):
+
+- **Register**: `hivepilot signal register <number>` triggers `signal-cli register`
+  (SMS or `--voice` call); once you receive the code, finish with
+  `signal-cli -a <number> verify <code>` directly (not wrapped by HivePilot, since it
+  needs the human-received code as input).
+- **Link**: `hivepilot signal link` prints a `sgnl://linkdevice?...` URI for your primary
+  phone to scan (Signal app → Linked Devices → Link New Device).
+
+`signal-cli` persists its registration state (identity keys, session data) in its own
+local data directory — set up once via register/link, never passed as a CLI secret
+afterward. On Alpine: `apk add openjdk17-jre` plus the `signal-cli` release jar/tarball
+on `PATH`; alternatively, run the `signal-cli-rest-api` container and point
+`HIVEPILOT_SIGNAL_REST_URL` at it (`--mode rest`), which needs no JVM on the HivePilot
+host itself.
+
+Configuration: `HIVEPILOT_SIGNAL_NUMBER` (the bot's own E.164 number),
+`HIVEPILOT_SIGNAL_ALLOWED_NUMBERS` (E.164 whitelist; empty means open),
+`HIVEPILOT_SIGNAL_CLI_PATH` (defaults to `signal-cli` on PATH),
+`HIVEPILOT_SIGNAL_REST_URL` (base URL of a running `signal-cli-rest-api`, rest mode only),
+`HIVEPILOT_SIGNAL_NOTIFICATION_NUMBER` (proactive notifications),
+`HIVEPILOT_SIGNAL_RECEIVE_MODE` (`cli` or `rest`, default `cli`).
+
+Commands mirror the other bots (`/run`, `/approvals`, `/approve`, `/deny`, `/status`,
+`/help`) via the same shared `chatops_service` dispatch layer. Signal has no inline
+buttons, so approvals are reply-driven: `approve <run_id>` / `deny <run_id> [reason]`
+works with or without a leading `/`. A missing `signal-cli` binary (or an unreachable
+REST endpoint) degrades gracefully — a clear error on `signal start`/`signal notify`, and
+a logged skip-and-continue on each poll tick — it never crashes a HivePilot run.
+
 ## Notifiers (webhooks)
 
 Notifications are a plugin contribution type. Webhook URLs (`SLACK_WEBHOOK_URL`,

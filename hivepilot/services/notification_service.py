@@ -519,6 +519,17 @@ def send_approval_keyboard(
     except Exception:  # noqa: BLE001
         pass
 
+    try:
+        # Phase 23e — Signal (text-only: Signal has no inline buttons, so
+        # signal_bot.notify_approval_required sends "reply approve/deny
+        # <run_id>" instructions instead of a keyboard). Same best-effort,
+        # never-break-a-run shape as the Slack/Discord branches above.
+        from hivepilot.services.signal_bot import notify_approval_required as signal_notify
+
+        signal_notify(run_id=run_id, project=project, task=task)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def stream_agent_request(requester: str, target: str, question: str) -> None:
     """Stream a ❓ request turn: *requester* asks *target* a targeted question.

@@ -642,6 +642,16 @@ class Settings(BaseSettings):
     discord_allowed_guild_ids: list[int] = Field(default_factory=list)
     discord_allowed_channel_ids: list[int] = Field(default_factory=list)
     discord_notification_channel_id: int | None = None  # proactive notifications
+    # Phase 23e — Signal bot (dual-mode). Signal has no cloud bot API / inbound
+    # webhook (E2E P2P); the bot is a dedicated phone number driven either by
+    # the `signal-cli` binary (PATH-gated, optional external dependency) or a
+    # `signal-cli-rest-api` HTTP wrapper. See hivepilot/services/signal_bot.py.
+    signal_number: str | None = None  # bot's own E.164 number, e.g. +15551234567
+    signal_allowed_numbers: list[str] = Field(default_factory=list)  # E.164 whitelist
+    signal_cli_path: str = "signal-cli"  # binary name/path on PATH
+    signal_rest_url: str | None = None  # base URL of a signal-cli-rest-api instance
+    signal_notification_number: str | None = None  # proactive notifications
+    signal_receive_mode: str = "cli"  # "cli" or "rest"
     linear_api_key: str | None = None
     linear_team_id: str | None = None  # default team for issue creation
     linear_default_project_id: str | None = None  # default project
