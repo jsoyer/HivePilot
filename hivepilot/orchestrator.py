@@ -75,7 +75,12 @@ from hivepilot.services.interaction_service import (
 )
 from hivepilot.services.obsidian_service import ObsidianService
 from hivepilot.services.pipeline_service import validate_pipeline
-from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
+from hivepilot.services.project_service import (
+    ensure_checkout,
+    load_pipelines,
+    load_projects,
+    load_tasks,
+)
 from hivepilot.services.secret_refs import resolve_secret_refs
 from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.services.state_service import RunStatus
@@ -1210,6 +1215,27 @@ class Orchestrator:
         notion_page_ids: dict[str, str | None] = {}
         immediate_projects: list[ProjectConfig] = []
         for project in projects:
+            # Auto-clone of a missing project repo (PR B): clone project.path
+            # from project.owner_repo before any gate below touches it (the
+            # CVE/license gates and step dispatch both need project.path to
+            # exist). A missing path with no owner_repo, or a clone failure,
+            # must fail THIS project only -- never abort the whole batch.
+            # Skipped entirely for --simulate: a simulated run must never
+            # perform a real network clone (mirrors the require_approval/CVE/
+            # license gates below, all of which are also `not simulate`-gated).
+            if not simulate:
+                try:
+                    ensure_checkout(project)
+                except RuntimeError as exc:
+                    run_id = state_service.record_run_start(
+                        project.path.name, task_name, status="running"
+                    )
+                    state_service.complete_run(run_id, "failed", str(exc))
+                    notification_service.send_notification(
+                        f"⛔ {project.path.name}: {task_name} blocked - {exc}"
+                    )
+                    results.append(RunResult(project.path.name, task_name, False, str(exc)))
+                    continue
             policy = policy_service.enforce_policy(project.path.name, auto_git=auto_git)
             run_policies[project.path.name] = policy
             severity = policy.block_on_severity

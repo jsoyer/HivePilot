@@ -96,6 +96,17 @@ class Settings(BaseSettings):
     claude_capture_usage: bool = False
     gh_command: str = "gh"
     git_command: str = "git"
+    # Auto-clone of a missing project repo (PR B): when a project's `path`
+    # doesn't exist and it has an `owner_repo`, orchestrator.run_task clones
+    # it from that repo before the run instead of failing deep inside a
+    # runner's `subprocess.run(cwd=...)` with a raw `[Errno 2]`. "ssh"
+    # matches github_service.ensure_repository's existing ssh default (and
+    # the deploy-key/SSH pattern most self-hosts use); "https" requires
+    # pre-authed git or a credential helper on the host -- HivePilot's
+    # config-token machinery (HIVEPILOT_CONFIG_TOKEN) only authenticates the
+    # config repo, not arbitrary project repos.
+    # env: HIVEPILOT_PROJECT_CLONE_PROTOCOL
+    project_clone_protocol: str = "ssh"
     concurrency_limit: int = 4
     interactive_default_all: bool = False
     enable_textual_ui: bool = False

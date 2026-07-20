@@ -432,7 +432,9 @@ def _task_and_project():
         engine="native",
         steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
     )
-    project = ProjectConfig(path=Path("/tmp/wiring-p"))
+    proj_path = Path("/tmp/wiring-p")
+    proj_path.mkdir(parents=True, exist_ok=True)
+    project = ProjectConfig(path=proj_path)
     return task, project
 
 
