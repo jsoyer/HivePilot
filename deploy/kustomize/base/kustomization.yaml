@@ -1,0 +1,54 @@
+# HivePilot -- plain-manifest Kustomize base, mirroring the Helm chart at
+# ../../helm/hivepilot (see ../README.md for how the two relate and when to
+# use one over the other).
+#
+# Only the API Deployment + Service + ServiceAccount + PVC + ConfigMap +
+# Secret are wired in here by default -- this mirrors the Helm chart's
+# defaults (scheduler/bots/ingress/rbac all default OFF). The scheduler,
+# telegram bot, ingress, and rbac manifests still live in this directory but
+# are only pulled in by an overlay that opts into them (see
+# overlays/prod/kustomization.yaml for an example); an overlay that wants
+# the scheduler or a bot enabled can add e.g. `../../base/deployment-
+# scheduler.yaml` to its own `resources:` list the same way.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: hivepilot
+      app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - serviceaccount.yaml
+  - pvc.yaml
+  - service.yaml
+  - deployment.yaml
+
+# Non-secret operational config, mounted via envFrom on every Deployment.
+# Add project/task/pipeline YAML overrides here (or generate a second
+# ConfigMap in an overlay) the same way the Helm chart's `config.files`
+# renders one -- see ../README.md.
+configMapGenerator:
+  - name: hivepilot-config
+    literals:
+      - HIVEPILOT_STATE_DB=state-data/state.db
+      - HIVEPILOT_RUNS_DIR=state-data/runs
+      - HIVEPILOT_LOGS_DIR=state-data/runs/logs
+      - HIVEPILOT_LOG_TO_FILE=false
+      - HIVEPILOT_ENABLE_WEBUI=false
+
+# Empty placeholders -- NEVER commit real tokens/keys to a kustomization you
+# check in. Override via `-n`/`--set`-equivalent (a sealed-secrets/external-
+# secrets-operator managed Secret, or a gitignored overlay patch) instead of
+# editing this file with real values. See the Helm chart README "Bootstrap
+# the first admin token" / "Secrets options" -- the same guidance applies
+# here.
+secretGenerator:
+  - name: hivepilot-secret
+    type: Opaque
+    literals:
+      - api_tokens.yaml=
+
+images:
+  - name: ghcr.io/jsoyer/hivepilot
+    newTag: latest

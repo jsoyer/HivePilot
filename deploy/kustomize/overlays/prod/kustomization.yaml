@@ -1,0 +1,34 @@
+# Prod overlay -- ingress on, opt-in namespaced RBAC (Role/RoleBinding, read-
+# only rules -- see base/rbac/rbac.yaml and the Helm chart README "RBAC &
+# the kubectl / helm / kustomize runners" before widening them), higher
+# resource requests/limits, and the base PVC left ON (persistent state.db).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hivepilot-prod
+
+resources:
+  - ../../base
+  - ../../base/ingress
+  - ../../base/rbac
+
+patches:
+  # Bump the API Deployment's resource requests/limits above the base
+  # (dev-sized) defaults for a real production workload.
+  - target:
+      kind: Deployment
+      name: hivepilot-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+
+images:
+  - name: ghcr.io/jsoyer/hivepilot
+    newTag: latest

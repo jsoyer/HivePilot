@@ -1,0 +1,31 @@
+# OPTIONAL -- not wired into ../kustomization.yaml's `resources:` by
+# default (mirrors the Helm chart's `ingress.enabled: false` default).
+# overlays/prod pulls in this whole directory (../../base/ingress) as its
+# own resource. Exposes the API (/v1/*, /metrics) and the Mirador web UI
+# (/ui, only serves 200s when HIVEPILOT_ENABLE_WEBUI=true AND the static
+# bundle is present in the image -- 404s otherwise). Set a real
+# ingressClassName / TLS / cert-manager annotations via a prod-overlay
+# patch before going live.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hivepilot
+spec:
+  rules:
+    - host: hivepilot.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hivepilot-api
+                port:
+                  number: 8045
+          - path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: hivepilot-api
+                port:
+                  number: 8045
