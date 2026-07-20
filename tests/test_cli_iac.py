@@ -311,3 +311,52 @@ class TestNamedRunnerDefinitionResolution:
         assert passed_definition.options == {}
         assert passed_definition.env == {}
         assert passed_definition.command == "plan"
+
+
+class TestMissingTasksYamlDoesNotCrash:
+    """Regression test: `_resolve_iac_runner_definition` constructs a real
+    `Orchestrator()`, whose `_load()` calls `load_tasks()` -- and
+    `TasksFile.tasks` is a REQUIRED pydantic field, so a project directory
+    with a `projects.yaml` but NO `tasks.yaml` on disk (a config shape that
+    worked fine for `iac`/`drift` before this resolver was added, since
+    those commands previously only ever read `projects.yaml`) raises
+    `pydantic.ValidationError` from inside `Orchestrator()` construction.
+    This must degrade to the same empty-default `RunnerDefinition`, never an
+    uncaught traceback. Deliberately does NOT monkeypatch `load_tasks` (the
+    other tests in this file do) so it exercises the REAL missing-file load
+    path through `hivepilot.services.project_service.load_tasks`.
+    """
+
+    def test_iac_plan_with_no_tasks_yaml_on_disk_falls_back_and_exits_zero(
+        self,
+        fake_runner_cls: tuple[MagicMock, MagicMock],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        runner_cls, instance = fake_runner_cls
+        instance.is_destructive.return_value = False
+
+        # A real projects.yaml exists at this base_dir, but tasks.yaml does
+        # NOT -- resolve_config_path() falls through to base_dir/tasks.yaml,
+        # _read_yaml() sees no file and returns {}, and
+        # TasksFile.model_validate({}) raises ValidationError (tasks: is
+        # required) from inside Orchestrator()'s _load().
+        (tmp_path / "projects.yaml").write_text(
+            f"projects:\n  proj:\n    path: {tmp_path}\n", encoding="utf-8"
+        )
+        assert not (tmp_path / "tasks.yaml").exists()
+
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+
+        cli_runner = CliRunner()
+        result = cli_runner.invoke(app, ["iac", "plan", "--project", "proj"])
+
+        assert result.exit_code == 0, result.output
+        runner_cls.assert_called_once()
+        passed_definition = runner_cls.call_args.kwargs["definition"]
+        assert passed_definition.options == {}
+        assert passed_definition.env == {}
+        assert passed_definition.command == "plan"

@@ -1148,12 +1148,22 @@ class TestAnalyticsPdfExport:
         assert "acme-project-marker" in text
         assert "other-project-marker" not in text
 
-    def test_summary_pdf_unicode_row_does_not_crash(self, api_client, tmp_tokens_file):
+    def test_summary_pdf_unicode_row_does_not_crash(self, api_client, tmp_tokens_file, monkeypatch):
         """fpdf2's core fonts (Helvetica) are latin-1 only. Project/task
         names (and provider/model names sourced from LLM APIs) aren't
         guaranteed latin-1 — a non-latin-1 cell must never raise
-        FPDFUnicodeEncodingException/UnicodeEncodeError inside table()."""
-        from hivepilot.services import state_service
+        FPDFUnicodeEncodingException/UnicodeEncodeError inside table().
+
+        Deterministically pinned to the NO-Unicode-font branch (never
+        depends on what fonts happen to be installed on the host running
+        this test) — this exercises `_pdf_safe`'s latin-1 replace path. See
+        `TestAnalyticsPdfExportUnicodeFont` for the Unicode-font branch with
+        the same out-of-coverage glyph, pinned to a real TTF."""
+        from hivepilot.config import settings
+        from hivepilot.services import api_service, state_service
+
+        monkeypatch.setattr(settings, "pdf_font_path", None)
+        monkeypatch.setattr(api_service, "_COMMON_UNICODE_FONT_PATHS", ())
 
         state_service.record_run_start("projet-éàü-日本語-\U0001f680", "t", status="success")
         raw, _ = add_token("read")
@@ -1162,10 +1172,18 @@ class TestAnalyticsPdfExport:
         assert resp.headers["content-type"] == "application/pdf"
         assert resp.content.startswith(b"%PDF")
 
-    def test_providers_pdf_unicode_model_name_does_not_crash(self, api_client, tmp_tokens_file):
+    def test_providers_pdf_unicode_model_name_does_not_crash(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
         """Same as above but through a provider/model row — model names are
-        sourced from LLM APIs and not guaranteed latin-1."""
-        from hivepilot.services import state_service
+        sourced from LLM APIs and not guaranteed latin-1. Deterministically
+        pinned to the NO-Unicode-font branch, same reasoning as
+        `test_summary_pdf_unicode_row_does_not_crash`."""
+        from hivepilot.config import settings
+        from hivepilot.services import api_service, state_service
+
+        monkeypatch.setattr(settings, "pdf_font_path", None)
+        monkeypatch.setattr(api_service, "_COMMON_UNICODE_FONT_PATHS", ())
 
         run_id = state_service.record_run_start("p", "t", status="running")
         state_service.record_step(
@@ -1258,6 +1276,38 @@ class TestAnalyticsPdfExportUnicodeFont:
         raw, _ = add_token("read")
         resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
         assert resp.status_code == 200
+        assert resp.content.startswith(b"%PDF")
+        assert len(resp.content) > 0
+
+    def test_unicode_font_with_out_of_coverage_glyph_does_not_500(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """A real Unicode TTF (e.g. DejaVu Sans) still doesn't cover EVERY
+        codepoint -- most emoji and much of CJK aren't in it. `Row.cell()`
+        only queues text; the actual glyph lookup happens later, inside the
+        `with pdf.table()` block, when `table.render()` runs -- so a naive
+        try/except around `add_font`/`set_font` alone would NOT catch a
+        render-time failure for an out-of-coverage codepoint. This pins a
+        real font (skip only if truly none available -- deterministic
+        otherwise) and asserts the response degrades gracefully (200, valid
+        PDF) instead of ever 500ing, proving `_pdf_response`'s render-time
+        fallback (not just its font-load fallback) actually works."""
+        font_path = _find_any_system_ttf()
+        if font_path is None:
+            pytest.skip("no DejaVuSans.ttf found on this box to test real Unicode rendering")
+
+        from hivepilot.config import settings
+        from hivepilot.services import state_service
+
+        monkeypatch.setattr(settings, "pdf_font_path", font_path)
+
+        # Rocket emoji: not covered by DejaVu Sans -- exercises the
+        # render-time (not just font-load) fallback path.
+        state_service.record_run_start("launch-\U0001f680-project", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"] == "application/pdf"
         assert resp.content.startswith(b"%PDF")
         assert len(resp.content) > 0
 

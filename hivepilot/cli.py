@@ -2083,20 +2083,34 @@ def _resolve_iac_runner_definition(kind: str):
     the real `options`/`env`/`host`/`model`, e.g. `workspace`/`var_file`/
     `backend_config` for the IaC runners) via the same canonical registry
     resolver (`RunnerRegistry._definition_for`) `Orchestrator` already uses
-    for orchestrator-run steps. Falls back to an empty synthetic definition
-    (today's pre-fix default) when no named runner entry exists in
-    `tasks.yaml`'s top-level `runners:` block -- strictly non-regressing.
+    for orchestrator-run steps.
+
+    Named-runner options are honoured only when a valid `tasks.yaml` defines
+    a matching entry under its top-level `runners:` block; otherwise this
+    degrades to the same empty synthetic `RunnerDefinition` this function
+    has always fallen back to (today's pre-fix default) -- including when
+    `tasks.yaml` is missing, empty, or fails to parse/validate.
+    `Orchestrator()` construction loads `tasks.yaml` via `load_tasks()`
+    (`TasksFile.tasks` is a REQUIRED field, so an absent/empty file raises
+    `pydantic.ValidationError`, and malformed YAML raises `yaml.YAMLError`)
+    -- callers of the `iac`/`drift` CLI groups only ever needed
+    `projects.yaml` before this resolver was added, so a project with no
+    `tasks.yaml` at all must keep working exactly as before, not crash with
+    an uncaught traceback.
 
     Shared by `_run_iac_operation` (plan/apply/destroy/drift/output/cost) and
     `drift_scan_cmd`, so every CLI entry point that resolves an IaC/drift
     runner honours the same project config the exact same way.
     """
+    import yaml
+    from pydantic import ValidationError
+
     from hivepilot.models import RunnerDefinition, RunnerKind
 
-    orch = Orchestrator()
     try:
+        orch = Orchestrator()
         return orch.registry._definition_for(kind)
-    except KeyError:
+    except (KeyError, ValidationError, yaml.YAMLError, OSError):
         return RunnerDefinition(name=kind, kind=cast(RunnerKind, kind))
 
 

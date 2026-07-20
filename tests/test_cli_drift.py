@@ -215,6 +215,43 @@ class TestDriftScan:
         assert passed_definition is not None
         assert passed_definition.options == {}
 
+    def test_scan_with_no_tasks_yaml_on_disk_falls_back_and_exits_zero(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Regression test (mirrors test_cli_iac.py's
+        TestMissingTasksYamlDoesNotCrash): `_resolve_iac_runner_definition`
+        constructs a real `Orchestrator()`, which raises
+        `pydantic.ValidationError` from `load_tasks()` when `tasks.yaml` is
+        absent (`TasksFile.tasks` is required). `drift scan` previously only
+        ever read `projects.yaml` -- a project directory with no
+        `tasks.yaml` must keep working, not crash. Deliberately does NOT
+        monkeypatch `load_tasks`, to exercise the real missing-file path."""
+        calls: list[dict] = []
+
+        def _fake_scan(project: ProjectConfig, **kwargs: object) -> DriftResult:
+            calls.append(kwargs)
+            return DriftResult(project="proj", runner="opentofu", drifted=False)
+
+        monkeypatch.setattr("hivepilot.services.drift_service.scan_and_record", _fake_scan)
+
+        (tmp_path / "projects.yaml").write_text(
+            f"projects:\n  proj:\n    path: {tmp_path}\n", encoding="utf-8"
+        )
+        assert not (tmp_path / "tasks.yaml").exists()
+
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+
+        runner = CliRunner()
+        cli_result = runner.invoke(app, ["drift", "scan", "--project", "proj"])
+        assert cli_result.exit_code == 0, cli_result.output
+        assert len(calls) == 1
+        passed_definition = calls[0].get("definition")
+        assert passed_definition is not None
+        assert passed_definition.options == {}
+
 
 class TestDriftStatus:
     def test_renders_rows(self, monkeypatch: pytest.MonkeyPatch) -> None:

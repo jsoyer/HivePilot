@@ -740,52 +740,42 @@ def _resolve_unicode_font_path() -> str | None:
     return None
 
 
-def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) -> Response:
-    """Render `rows`/`columns` (the same shape `_csv_response` consumes) as a
-    simple tabular PDF. fpdf2 is an OPTIONAL extra (`pip install
-    hivepilot[pdf]`) — lazy-imported here so the core API never depends on
-    it. If it's missing, fail gracefully with a clear message instead of a
-    500/traceback.
-
-    Unicode rendering: fpdf2's built-in core fonts (Helvetica, etc.) only
-    support latin-1, so non-latin project/task/provider names degrade to
-    `?` (see `_pdf_safe`). When a Unicode TTF is available (see
-    `_resolve_unicode_font_path`), it's registered and used instead, and
-    cell text is passed through WITHOUT the latin-1 replace so non-latin
-    characters render correctly. Font loading is wrapped in try/except: any
-    failure (corrupt font, fpdf2 internal error) falls back to the
-    Helvetica/latin-1 path rather than ever 500ing.
+def _render_pdf_bytes(
+    rows: list[dict[str, Any]],
+    title: str,
+    columns: list[str],
+    *,
+    unicode_font_path: str | None,
+) -> bytes:
+    """Build the actual PDF bytes for `_pdf_response`, either via a Unicode
+    TTF (`unicode_font_path` set) or the latin-1-only Helvetica core font
+    (`unicode_font_path` is `None`). Split out so `_pdf_response` can retry
+    with the latin-1 path if the Unicode path raises for ANY reason at
+    render time -- see `_pdf_response`'s docstring for why render-time
+    failures (not just font-*load* failures) must also degrade gracefully.
     """
-    try:
-        from fpdf import FPDF
-        from fpdf.fonts import FontFace
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="PDF export requires the 'pdf' extra: pip install hivepilot[pdf]",
-        ) from exc
+    from fpdf import FPDF
+    from fpdf.fonts import FontFace
 
     pdf = FPDF(orientation="L")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    unicode_family: str | None = None
-    font_path = _resolve_unicode_font_path()
-    if font_path:
-        try:
-            pdf.add_font("HivePilotUni", fname=font_path)
-            unicode_family = "HivePilotUni"
-        except Exception:  # noqa: BLE001 -- any font-load failure -> latin-1 fallback
-            unicode_family = None
-
-    body_family = unicode_family or "Helvetica"
-    cell_text = (lambda v: str(v) if v is not None else "") if unicode_family else _pdf_safe
-    # Only the regular (non-bold) style of the Unicode font is registered
-    # above -- fpdf2's table() defaults to a bold heading row, which would
-    # raise if asked to use a family with no bold variant loaded. Disable
-    # the bold emphasis on headings for the Unicode path only; the
-    # Helvetica/latin-1 fallback keeps its original (bold-heading) look.
-    table_kwargs = {"headings_style": FontFace(emphasis=None)} if unicode_family else {}
+    table_kwargs: dict[str, Any] = {}
+    if unicode_font_path:
+        pdf.add_font("HivePilotUni", fname=unicode_font_path)
+        body_family = "HivePilotUni"
+        cell_text = lambda v: str(v) if v is not None else ""  # noqa: E731
+        # Only the regular (non-bold) style of the Unicode font is
+        # registered above -- fpdf2's table() defaults to a bold heading
+        # row, which would raise if asked to use a family with no bold
+        # variant loaded. Disable the bold emphasis on headings for the
+        # Unicode path only; the Helvetica/latin-1 fallback keeps its
+        # original (bold-heading) look.
+        table_kwargs["headings_style"] = FontFace(emphasis=None)
+    else:
+        body_family = "Helvetica"
+        cell_text = _pdf_safe
 
     pdf.set_font(body_family, size=14)
     pdf.cell(0, 10, cell_text(title), new_x="LMARGIN", new_y="NEXT")
@@ -798,7 +788,52 @@ def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) ->
             data_row = table.row()
             for column in columns:
                 data_row.cell(cell_text(row.get(column)))
-    pdf_bytes = bytes(pdf.output())
+    return bytes(pdf.output())
+
+
+def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) -> Response:
+    """Render `rows`/`columns` (the same shape `_csv_response` consumes) as a
+    simple tabular PDF. fpdf2 is an OPTIONAL extra (`pip install
+    hivepilot[pdf]`) — lazy-imported here so the core API never depends on
+    it. If it's missing, fail gracefully with a clear message instead of a
+    500/traceback.
+
+    Unicode rendering: fpdf2's built-in core fonts (Helvetica, etc.) only
+    support latin-1, so non-latin project/task/provider names degrade to
+    `?` (see `_pdf_safe`). When a Unicode TTF is available (see
+    `_resolve_unicode_font_path`), it's registered and used instead, and
+    cell text is passed through WITHOUT the latin-1 replace so non-latin
+    characters render correctly.
+
+    Never 500s on EITHER font *load* or *render*: glyph coverage varies per
+    TTF (e.g. DejaVu Sans has no emoji/most CJK), and `Row.cell()` only
+    queues text -- the actual glyph lookup happens later, inside the `with
+    pdf.table()` block, when `table.render()` runs. So `_render_pdf_bytes`
+    is wrapped in its own try/except here (not just the `add_font` call):
+    ANY failure building the Unicode-font PDF -- font-load OR a render-time
+    error for an out-of-coverage codepoint -- discards that attempt and
+    rebuilds the WHOLE PDF via the Helvetica/latin-1 path instead, which
+    can only ever render already-latin-1-safe text (see `_pdf_safe`) and so
+    cannot itself raise the same way.
+    """
+    try:
+        from fpdf import FPDF  # noqa: F401 -- import-availability probe only
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="PDF export requires the 'pdf' extra: pip install hivepilot[pdf]",
+        ) from exc
+
+    font_path = _resolve_unicode_font_path()
+    pdf_bytes: bytes | None = None
+    if font_path:
+        try:
+            pdf_bytes = _render_pdf_bytes(rows, title, columns, unicode_font_path=font_path)
+        except Exception:  # noqa: BLE001 -- any Unicode font-load/render failure -> latin-1 fallback
+            pdf_bytes = None
+    if pdf_bytes is None:
+        pdf_bytes = _render_pdf_bytes(rows, title, columns, unicode_font_path=None)
+
     filename = title.lower().replace(" ", "_").replace("/", "_") + ".pdf"
     return Response(
         content=pdf_bytes,
