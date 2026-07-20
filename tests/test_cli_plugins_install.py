@@ -153,10 +153,22 @@ def test_plugins_install_partial_unknown_name_rejects_whole_batch(monkeypatch) -
 
 
 def _mock_response(text: str = "def register():\n    return {}\n", status_code: int = 200):
+    """Mirrors `tests/test_plugin_installer.py`'s own `_mock_response` --
+    `fetch_plugin` now streams via `iter_content` (🟡 fix: cap enforced
+    DURING transfer, not after buffering the full `.text`), so every mocked
+    response here needs a real `iter_content` generator, not just `.text`."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
     resp.raise_for_status = MagicMock()
+    resp.close = MagicMock()
+    body = text.encode("utf-8")
+
+    def _iter_content(chunk_size: int = 8192):
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+
+    resp.iter_content = _iter_content
     return resp
 
 

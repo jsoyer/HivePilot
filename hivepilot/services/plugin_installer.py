@@ -55,6 +55,10 @@ PrereqKind = Literal["binary", "pip", "config", "none"]
 # `hivepilot.services.plugin_index.MAX_INDEX_BYTES`.
 MAX_PLUGIN_BYTES = 2 * 1024 * 1024
 _FETCH_TIMEOUT_SECONDS = 30
+# Same chunk size as `hivepilot.services.plugin_index.fetch_index`'s
+# `_STREAM_CHUNK_SIZE` — `fetch_plugin` mirrors that module's stream-and-cap
+# shape exactly.
+_STREAM_CHUNK_SIZE = 65536
 
 
 @dataclass(frozen=True)
@@ -251,6 +255,16 @@ def fetch_plugin(
     internal detail) on network failure, timeout, non-2xx HTTP status, or an
     oversized response body (see `MAX_PLUGIN_BYTES`). The fetched content is
     written to disk only — never imported, compiled, or `exec()`'d here.
+
+    Streams the response (`stream=True` + `iter_content`) and aborts as soon
+    as the accumulated size exceeds `MAX_PLUGIN_BYTES`, WITHOUT ever
+    buffering the full body first — mirrors
+    `hivepilot.services.plugin_index.fetch_index`'s identical
+    stream-and-cap-during-transfer shape exactly (that module's own
+    `MAX_INDEX_BYTES` cap exists for the same reason: a compromised/MITM'd
+    source host serving a huge body is a memory DoS otherwise; capping only
+    AFTER a full `requests.get(...).text` read would already have buffered
+    the oversized body in memory, defeating the point of the cap).
     """
     if name not in KNOWN_EXAMPLE_PLUGINS:
         available = ", ".join(sorted(KNOWN_EXAMPLE_PLUGINS))
@@ -263,7 +277,7 @@ def fetch_plugin(
     url = f"{resolved_repo}/{resolved_ref}/plugins/{name}.py"
 
     try:
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=timeout, stream=True)
     except requests.Timeout as exc:
         raise RuntimeError(f"plugins install: fetch of {name!r} timed out") from exc
     except requests.RequestException as exc:
@@ -273,18 +287,30 @@ def fetch_plugin(
 
     try:
         response.raise_for_status()
+
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=_STREAM_CHUNK_SIZE):
+            body.extend(chunk)
+            if len(body) > MAX_PLUGIN_BYTES:
+                raise RuntimeError(
+                    f"plugins install: {name!r} response exceeds {MAX_PLUGIN_BYTES} bytes"
+                )
     except requests.HTTPError as exc:
         raise RuntimeError(
             f"plugins install: source repo returned HTTP {response.status_code} for {name!r}"
         ) from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"plugins install: failed to read response for {name!r} ({type(exc).__name__})"
+        ) from exc
+    finally:
+        response.close()
 
-    body = response.text
-    if len(body.encode("utf-8", errors="ignore")) > MAX_PLUGIN_BYTES:
-        raise RuntimeError(f"plugins install: {name!r} response exceeds {MAX_PLUGIN_BYTES} bytes")
+    text = bytes(body).decode("utf-8")
 
     resolved_dest.mkdir(parents=True, exist_ok=True)
     dest_path = resolved_dest / f"{name}.py"
-    dest_path.write_text(body, encoding="utf-8")
+    dest_path.write_text(text, encoding="utf-8")
     logger.info("plugin_installer.fetched", name=name, url=url, dest=str(dest_path))
     return dest_path
 

@@ -7,11 +7,20 @@ The single most important property under test is that `fetch_plugin` REJECTS
 any name not in the curated `KNOWN_EXAMPLE_PLUGINS` registry -- no
 arbitrary-URL/arbitrary-path fetch is ever possible, and the fetched content
 is written to disk only, never imported/exec'd by this module.
+
+A close second: `fetch_plugin` STREAMS the response (`stream=True` +
+`iter_content`) and enforces `MAX_PLUGIN_BYTES` DURING the transfer, never
+after buffering the full body -- mirroring
+`hivepilot.services.plugin_index.fetch_index`'s identical shape. Every mock
+response below therefore provides a real `iter_content` generator (via
+`_mock_response`), not just a `.text` attribute, so the tests actually
+exercise the streaming code path rather than a bypassed one.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -28,6 +37,33 @@ from hivepilot.services.plugin_installer import (
     is_installed,
     persist_enabled,
 )
+
+# ---------------------------------------------------------------------------
+# Shared response mock — mirrors `plugin_index.py`'s `stream=True` +
+# `iter_content(chunk_size=...)` shape so every test below exercises the
+# REAL streaming code path in `fetch_plugin`, not a bypassed one.
+# ---------------------------------------------------------------------------
+
+
+def _mock_response(
+    text: str = "def register():\n    return {}\n",
+    status_code: int = 200,
+    chunk_size: int = 8192,
+) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.text = text
+    resp.raise_for_status = MagicMock()
+    resp.close = MagicMock()
+    body = text.encode("utf-8")
+
+    def _iter_content(chunk_size: int = chunk_size) -> Iterator[bytes]:
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+
+    resp.iter_content = _iter_content
+    return resp
+
 
 # ---------------------------------------------------------------------------
 # Registry sanity — every curated spec is well-formed, matches a real
@@ -144,10 +180,7 @@ def test_fetch_plugin_never_makes_a_network_call_for_unknown_name(
 def test_fetch_plugin_writes_response_body_to_dest_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = "def register():\n    return {}\n"
-    mock_response.raise_for_status = MagicMock()
+    mock_response = _mock_response()
     mock_get = MagicMock(return_value=mock_response)
     monkeypatch.setattr(requests, "get", mock_get)
 
@@ -159,6 +192,7 @@ def test_fetch_plugin_writes_response_body_to_dest_dir(
     args, kwargs = mock_get.call_args
     assert args[0] == "https://example.com/x/main/plugins/rtk.py"
     assert kwargs.get("timeout") is not None
+    assert kwargs.get("stream") is True
 
 
 def test_fetch_plugin_uses_configured_repo_and_ref_by_default(
@@ -169,11 +203,7 @@ def test_fetch_plugin_uses_configured_repo_and_ref_by_default(
     monkeypatch.setattr(settings, "plugins_source_repo", "https://example.com/fork", raising=False)
     monkeypatch.setattr(settings, "plugins_source_ref", "v9", raising=False)
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = "def register():\n    return {}\n"
-    mock_response.raise_for_status = MagicMock()
-    mock_get = MagicMock(return_value=mock_response)
+    mock_get = MagicMock(return_value=_mock_response())
     monkeypatch.setattr(requests, "get", mock_get)
 
     fetch_plugin("rtk", dest_dir=tmp_path)
@@ -187,11 +217,9 @@ def test_fetch_plugin_is_idempotent_overwrites_existing_file(
 ) -> None:
     (tmp_path / "rtk.py").write_text("stale content", encoding="utf-8")
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = "fresh content"
-    mock_response.raise_for_status = MagicMock()
-    monkeypatch.setattr(requests, "get", MagicMock(return_value=mock_response))
+    monkeypatch.setattr(
+        requests, "get", MagicMock(return_value=_mock_response(text="fresh content"))
+    )
 
     path = fetch_plugin("rtk", dest_dir=tmp_path)
 
@@ -204,11 +232,7 @@ def test_fetch_plugin_creates_dest_dir_if_missing(
     dest = tmp_path / "nested" / "plugins"
     assert not dest.exists()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = "def register():\n    return {}\n"
-    mock_response.raise_for_status = MagicMock()
-    monkeypatch.setattr(requests, "get", MagicMock(return_value=mock_response))
+    monkeypatch.setattr(requests, "get", MagicMock(return_value=_mock_response()))
 
     path = fetch_plugin("rtk", dest_dir=dest)
 
@@ -221,12 +245,7 @@ def test_fetch_plugin_defaults_to_the_managed_installed_plugins_dir(
     from hivepilot.config import settings
 
     monkeypatch.setattr(type(settings), "xdg_data_home", property(lambda self: tmp_path))
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = "def register():\n    return {}\n"
-    mock_response.raise_for_status = MagicMock()
-    monkeypatch.setattr(requests, "get", MagicMock(return_value=mock_response))
+    monkeypatch.setattr(requests, "get", MagicMock(return_value=_mock_response()))
 
     path = fetch_plugin("rtk")
 
@@ -257,12 +276,22 @@ def test_fetch_plugin_connection_error_raises_runtime_error(
 def test_fetch_plugin_http_error_status_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    mock_response = MagicMock()
-    mock_response.status_code = 404
+    mock_response = _mock_response(status_code=404)
     mock_response.raise_for_status = MagicMock(side_effect=requests.HTTPError("404 Client Error"))
     monkeypatch.setattr(requests, "get", MagicMock(return_value=mock_response))
     with pytest.raises(RuntimeError):
         fetch_plugin("rtk", dest_dir=tmp_path)
+
+
+def test_fetch_plugin_http_error_status_closes_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mock_response = _mock_response(status_code=404)
+    mock_response.raise_for_status = MagicMock(side_effect=requests.HTTPError("404 Client Error"))
+    monkeypatch.setattr(requests, "get", MagicMock(return_value=mock_response))
+    with pytest.raises(RuntimeError):
+        fetch_plugin("rtk", dest_dir=tmp_path)
+    mock_response.close.assert_called_once()
 
 
 def test_fetch_plugin_never_execs_the_fetched_content(
@@ -271,11 +300,7 @@ def test_fetch_plugin_never_execs_the_fetched_content(
     """The fetched body is malicious-looking Python -- must be written
     verbatim to disk and NEVER imported/exec'd by fetch_plugin itself."""
     malicious = "import os\nos.environ['PWNED'] = '1'\n"
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = malicious
-    mock_response.raise_for_status = MagicMock()
-    monkeypatch.setattr(requests, "get", MagicMock(return_value=mock_response))
+    monkeypatch.setattr(requests, "get", MagicMock(return_value=_mock_response(text=malicious)))
 
     path = fetch_plugin("rtk", dest_dir=tmp_path)
 
@@ -283,6 +308,61 @@ def test_fetch_plugin_never_execs_the_fetched_content(
     import os as _os
 
     assert "PWNED" not in _os.environ
+
+
+# ---------------------------------------------------------------------------
+# fetch_plugin — streamed size cap (🟡 fix: abort DURING transfer, not after)
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_plugin_rejects_oversized_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The size cap must abort WHILE streaming, never after the full body
+    has already been buffered — that's the entire point of `stream=True` +
+    `iter_content`. This test proves it two ways: (1) `fetch_plugin` raises
+    `RuntimeError` and writes nothing to disk, and (2) NOT every chunk the
+    mocked generator could yield is actually consumed — i.e. the read
+    genuinely stops early instead of draining the whole iterator first."""
+    monkeypatch.setattr(plugin_installer, "MAX_PLUGIN_BYTES", 10)
+
+    all_chunks = (b"aaaaa", b"bbbbb", b"ccccc", b"ddddd", b"eeeee")  # 25 bytes total
+    chunks_consumed: list[bytes] = []
+
+    def _oversized_iter_content(chunk_size: int = 8192) -> Iterator[bytes]:
+        for chunk in all_chunks:
+            chunks_consumed.append(chunk)
+            yield chunk
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.iter_content = _oversized_iter_content
+    mock_response.close = MagicMock()
+    monkeypatch.setattr(requests, "get", MagicMock(return_value=mock_response))
+
+    with pytest.raises(RuntimeError, match="exceeds"):
+        fetch_plugin("rtk", dest_dir=tmp_path)
+
+    assert len(chunks_consumed) < len(all_chunks), (
+        "fetch_plugin must abort before consuming every chunk -- "
+        f"consumed {len(chunks_consumed)} of {len(all_chunks)}"
+    )
+    assert not (tmp_path / "rtk.py").exists()
+    mock_response.close.assert_called_once()
+
+
+def test_fetch_plugin_exactly_at_cap_is_allowed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A body whose size is exactly `MAX_PLUGIN_BYTES` (not GREATER than it)
+    must succeed — the cap is a strict `>` comparison, not `>=`."""
+    monkeypatch.setattr(plugin_installer, "MAX_PLUGIN_BYTES", 10)
+    monkeypatch.setattr(requests, "get", MagicMock(return_value=_mock_response(text="a" * 10)))
+
+    path = fetch_plugin("rtk", dest_dir=tmp_path)
+
+    assert path.read_text(encoding="utf-8") == "a" * 10
 
 
 # ---------------------------------------------------------------------------
