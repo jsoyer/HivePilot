@@ -1,11 +1,15 @@
-"""Tests for hivepilot.services.config_validation prompts_dir resolution.
+"""Tests for hivepilot.services.config_validation prompts_dir / required_files
+resolution.
 
 Verifies that when validate_config() is called with the default (no
-explicit base_dir), the prompts directory is resolved through the
-XDG/config_repo-aware `settings.resolve_config_path`, so an externally
-overridden prompts dir is honored -- while explicit base_dir callers
-(e.g. tests that point at a tmp_path) keep their existing cwd-relative
-behavior untouched.
+explicit base_dir), BOTH the prompts directory and the six required config
+files are resolved through the XDG/config_repo-aware
+`settings.resolve_config_path` -- matching the runtime loaders
+(`project_service.load_projects/tasks/pipelines/groups`) and what
+`hivepilot config sync` actually writes to (`settings.xdg_config_home`) --
+while explicit base_dir callers (e.g. tests that point at a tmp_path, or
+`config_writer._validate_prospective`'s scratch-copy validation) keep their
+existing literal base_dir-relative behavior untouched.
 """
 
 from __future__ import annotations
@@ -46,8 +50,9 @@ def test_explicit_base_dir_still_resolves_prompts_relative_to_it(tmp_path: Path)
 
 
 def test_default_base_dir_uses_resolve_config_path(monkeypatch, tmp_path: Path) -> None:
-    """When base_dir is omitted, prompts_dir must come from
-    settings.resolve_config_path('prompts'), not a hardcoded cwd join."""
+    """When base_dir is omitted, BOTH prompts_dir AND every required config
+    file must come from settings.resolve_config_path(...), not a hardcoded
+    cwd join."""
     override_prompts = tmp_path / "external-prompts"
     (override_prompts / "agents").mkdir(parents=True)
     (override_prompts / "agents" / "planner.md").write_text("# planner")
@@ -61,7 +66,13 @@ def test_default_base_dir_uses_resolve_config_path(monkeypatch, tmp_path: Path) 
 
     def fake_resolve_config_path(self, filename):
         calls.append(str(filename))
-        return override_prompts
+        if str(filename) == "prompts":
+            return override_prompts
+        # required_files: route through the fake the same way the real
+        # method would resolve them under test isolation (see
+        # tests/conftest.py::_isolate_config_resolution) -- cwd_dir holds
+        # the files written by _write_minimal_config above.
+        return cwd_dir / filename
 
     # Settings is a pydantic BaseSettings instance; instance attributes can't
     # be reassigned arbitrarily, so patch the method on the class instead.
@@ -70,7 +81,102 @@ def test_default_base_dir_uses_resolve_config_path(monkeypatch, tmp_path: Path) 
     problems = config_validation.validate_config()
 
     assert "prompts" in calls, "resolve_config_path('prompts') was never called"
+    for required in (
+        "projects.yaml",
+        "roles.yaml",
+        "policies.yaml",
+        "groups.yaml",
+        "pipelines.yaml",
+        "tasks.yaml",
+    ):
+        assert required in calls, f"resolve_config_path({required!r}) was never called"
     assert problems == [], f"Unexpected problems: {problems}"
+
+
+def test_default_base_dir_finds_config_synced_to_xdg(monkeypatch, tmp_path: Path) -> None:
+    """Regression for the real `config sync` -> `validate` flow: `config sync`
+    (config_service._copy_to_base_dir) writes the six managed files to
+    `settings.xdg_config_home` (~/.config/hivepilot), never to cwd or
+    settings.base_dir. Before this fix, validate_config()'s required_files
+    loop hardcoded `base_dir / filename` (defaulting to Path.cwd()) and
+    never saw the XDG copy, so it wrongly reported every file as missing
+    even though the runtime config loaders (which already go through
+    `settings.resolve_config_path`) would happily find them. This must no
+    longer report ANY "Missing required config file" problem."""
+    xdg_dir = tmp_path / "xdg" / "hivepilot"
+    xdg_dir.mkdir(parents=True)
+    _write_minimal_config(xdg_dir)
+    (xdg_dir / "prompts" / "agents").mkdir(parents=True)
+    (xdg_dir / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    # Nothing in cwd -- simulates an operator running `hivepilot validate`
+    # from an arbitrary directory after `config sync`.
+    empty_cwd = tmp_path / "empty-cwd"
+    empty_cwd.mkdir()
+    monkeypatch.chdir(empty_cwd)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(config_validation.settings, "config_repo", None, raising=False)
+
+    problems = config_validation.validate_config()
+
+    missing = [p for p in problems if p.startswith("Missing required config file")]
+    assert missing == [], f"Unexpected missing-file problems after XDG config sync: {missing}"
+
+
+def test_default_base_dir_missing_everywhere_still_reports_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Preserve existing correct behavior: when the resolve_config_path chain
+    finds NOTHING at any tier (empty XDG, no config_repo, empty base_dir
+    fallback), validate_config() must still report every required file as
+    missing -- the fix only changes WHERE it looks, not whether an absent
+    config is still caught."""
+    empty_xdg = tmp_path / "empty-xdg"
+    empty_xdg.mkdir()
+    empty_base_dir = tmp_path / "empty-base-dir"
+    empty_base_dir.mkdir()
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(empty_xdg))
+    monkeypatch.setattr(config_validation.settings, "config_repo", None, raising=False)
+    monkeypatch.setattr(config_validation.settings, "base_dir", empty_base_dir, raising=False)
+
+    problems = config_validation.validate_config()
+
+    for filename in (
+        "projects.yaml",
+        "roles.yaml",
+        "policies.yaml",
+        "groups.yaml",
+        "pipelines.yaml",
+        "tasks.yaml",
+    ):
+        assert f"Missing required config file: {filename}" in problems
+
+
+def test_explicit_base_dir_required_files_stay_literal_even_with_xdg_present(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """An explicit base_dir caller (config_writer scratch-copy validation,
+    `hivepilot validate --dir X`, or the many tests that pass base_dir=
+    tmp_path) must keep resolving required_files literally against that
+    directory -- NOT via the XDG chain -- even when an unrelated XDG config
+    happens to exist. Otherwise a scratch/target validation would silently
+    check the wrong (globally-active) config instead of the one being
+    validated."""
+    xdg_dir = tmp_path / "xdg" / "hivepilot"
+    xdg_dir.mkdir(parents=True)
+    _write_minimal_config(xdg_dir)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    # The explicit target dir has NOTHING -- if required_files leaked
+    # through to the XDG chain, this would incorrectly report no problems.
+    explicit_dir = tmp_path / "explicit-target"
+    explicit_dir.mkdir()
+
+    problems = config_validation.validate_config(base_dir=explicit_dir)
+
+    missing = [p for p in problems if p.startswith("Missing required config file")]
+    assert len(missing) == 6, f"Expected all 6 required files missing, got: {missing}"
 
 
 # ---------------------------------------------------------------------------

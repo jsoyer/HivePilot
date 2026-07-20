@@ -3307,7 +3307,18 @@ def init_config(
 
 @app.command("validate")
 def validate(
-    config_dir: Path = typer.Option(Path("."), "--dir", "-d", help="Config directory to validate"),
+    config_dir: Path | None = typer.Option(
+        None,
+        "--dir",
+        "-d",
+        help=(
+            "Config directory to validate. Omit to validate the config that's "
+            "actually active (XDG_CONFIG_HOME -> config_repo -> base_dir, the "
+            "same chain `hivepilot config sync` writes to and every runtime "
+            "loader reads); pass an explicit path to validate that exact "
+            "directory in isolation instead (e.g. a not-yet-active scaffold)."
+        ),
+    ),
 ) -> None:
     """Validate cross-references in a HivePilot config directory."""
     from hivepilot.services.config_validation import validate_config
