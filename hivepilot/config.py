@@ -865,6 +865,21 @@ class Settings(BaseSettings):
     # export gracefully falls back to the latin-1-only core font it already
     # used before this option existed. env: HIVEPILOT_PDF_FONT_PATH
     pdf_font_path: str | None = None
+    # `hivepilot plugins install <name>...` (hivepilot/services/plugin_installer.py)
+    # fetches a CURATED built-in example plugin's source (`plugins/<name>.py`,
+    # only names in `plugin_installer.KNOWN_EXAMPLE_PLUGINS` -- never an
+    # arbitrary URL/path) from `{plugins_source_repo}/{plugins_source_ref}/plugins/{name}.py`
+    # and writes it into the managed `xdg_data_home/plugins` dir (see
+    # `hivepilot.plugins._installed_plugins_dir`), where it is picked up by
+    # the SAME gated local-file plugin loader as any other plugin -- the
+    # fetched file is never imported/executed by the install command itself.
+    # Default points at this project's own GitHub raw-content host so
+    # `plugins install rtk` works out of the box; override to a fork/mirror.
+    # env: HIVEPILOT_PLUGINS_SOURCE_REPO
+    plugins_source_repo: str = "https://raw.githubusercontent.com/jsoyer/HivePilot"
+    # Git ref (branch/tag/sha) `plugins install` fetches from, within
+    # `plugins_source_repo` above. env: HIVEPILOT_PLUGINS_SOURCE_REF
+    plugins_source_ref: str = "main"
 
     # ---- `hivepilot self-update` defaults ----
     # HivePilot is NOT published on PyPI -- it installs from git. These are

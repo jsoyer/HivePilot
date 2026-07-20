@@ -85,10 +85,11 @@ def register() -> dict:
 
 ## Trust model (fail-closed)
 
-There is **no network fetch of plugin code, ever.** Plugin code reaches the process from exactly two trust sources:
+Plugin code reaches the process from exactly three trust sources:
 
 1. Local files under `plugins/` — the same trust boundary as editing `tasks.yaml`. Anyone who can write to the repo can write a plugin.
 2. Installed packages — the `pip install` trust boundary. If you trust what you installed, you trust its registered plugin.
+3. `hivepilot plugins install <name>...` — the ONE narrow, curated exception to "no network fetch of plugin code": it fetches a maintainer-vetted `plugins/<name>.py` from a fixed, in-repo allow-list (`hivepilot.services.plugin_installer.KNOWN_EXAMPLE_PLUGINS`) over HTTPS and writes it into the managed plugins dir. No arbitrary URL or path is ever reachable, and the fetched file is written to disk only — it is picked up by the same local-file loader (source 1 above) on the next process start, subject to every gate below exactly like a hand-copied plugin file. See "Installing built-in example plugins" for the full walkthrough and its own trust discussion.
 
 A plugin runs with full process privileges. There is no sandbox, no permission model, and no capability restriction on what a plugin's code can do once loaded.
 
@@ -208,7 +209,61 @@ hivepilot plugins info <name>
 
 Prints index metadata for a plugin plus the exact `pip`/`git` command to install it. HivePilot never executes that command itself — you run it yourself. Install targets returned from the index are validated and control characters are stripped before display.
 
-There is no CLI subcommand to enable or disable a plugin directly — toggle via `plugins tui` or by editing `HIVEPILOT_PLUGINS_DISABLED` in `.env`.
+```bash
+hivepilot plugins available
+```
+
+Read-only table of every CURATED built-in example plugin `plugins install` can fetch — name, description, `<NAME>_ENABLED` flag, prerequisite, and whether it's currently installed + enabled. Never fetches anything over the network. See "Installing built-in example plugins" below.
+
+```bash
+hivepilot plugins install <name>... [--enable/--no-enable] [--ref REF] [--yes]
+```
+
+Fetches one or more curated built-in example plugins into the managed plugins dir and, by default, persists each `<NAME>_ENABLED=true`. See "Installing built-in example plugins" below for the full walkthrough.
+
+There is no CLI subcommand to enable or disable an ALREADY-INSTALLED plugin directly — toggle via `plugins tui` or by editing `HIVEPILOT_PLUGINS_DISABLED`/`HIVEPILOT_<NAME>_ENABLED` in `.env`. (`plugins install` is the exception for a plugin it just fetched — see `--enable`/`--no-enable` above.)
+
+## Installing built-in example plugins
+
+Before this command existed, trying one of the built-in example plugins (`rtk`, `herdr`, `mem0`, `headroom`, `hugo`, `obsidian`, `kms`, …) meant manually downloading its `plugins/<name>.py` into your config repo, committing, `hivepilot config sync`-ing, and setting its `<NAME>_ENABLED` flag by hand. `hivepilot plugins install` collapses that into one command.
+
+```bash
+# See what's available
+hivepilot plugins available
+
+# Install one or more, review the confirm-then-run prompt, then confirm
+hivepilot plugins install rtk herdr mem0 headroom
+
+# Skip the confirmation prompt (e.g. scripted setup)
+hivepilot plugins install rtk --yes
+
+# Fetch without persisting the enable flag
+hivepilot plugins install kms --no-enable
+
+# Fetch from a pinned ref instead of HIVEPILOT_PLUGINS_SOURCE_REF
+hivepilot plugins install hugo --ref v0.3.0
+```
+
+**Where it fetches from and where it writes to.** Each name is resolved to `{HIVEPILOT_PLUGINS_SOURCE_REPO}/{HIVEPILOT_PLUGINS_SOURCE_REF}/plugins/<name>.py` (default: this project's own `raw.githubusercontent.com/jsoyer/HivePilot` host, ref `main`) and written into the managed directory `xdg_data_home/plugins` — `~/.local/share/hivepilot/plugins/` by default (`$XDG_DATA_HOME/hivepilot/plugins` if set). That directory is auto-added to the local-file plugin scan path (`hivepilot.plugins._installed_plugins_dir`, scanned right after the config repo's own `plugins/` dir, before `plugins_extra_dirs`) — no manual `HIVEPILOT_PLUGINS_EXTRA_DIRS` needed.
+
+**Only curated names, never an arbitrary fetch.** `plugins install`/`plugins available` only ever know about the fixed allow-list in `hivepilot.services.plugin_installer.KNOWN_EXAMPLE_PLUGINS` — an unknown name is rejected before any network call, with the full list of valid names printed. There is no way to point this command at an arbitrary URL or path.
+
+**Still gated exactly like any other plugin.** Fetching (and even enabling) a plugin this way does **not** bypass any of the three gating layers in "Trust model" above: the fetched file only becomes live Python the next time HivePilot starts, when it's picked up by the normal local-file loader — still subject to `plugins_enabled`, `plugins_disabled`, and its own `<name>_enabled` check inside `register()`. And most of these plugins additionally no-op at runtime until their prerequisite is actually present:
+
+| Plugin | Prerequisite |
+|---|---|
+| `rtk`, `herdr`, `hugo`, `gh`, `tmux` | the matching binary on `PATH` |
+| `bitwarden`, `vaultwarden` | the official Bitwarden `bw` CLI on `PATH` |
+| `mem0` | `pip install mem0ai` |
+| `headroom` | `pip install "headroom-ai[all]"` |
+| `infisical` | `pip install infisicalsdk` (+ `HIVEPILOT_INFISICAL_TOKEN`/`_WORKSPACE_ID`/`_ENVIRONMENT`) |
+| `onepassword` | `pip install onepassword-sdk` for service-account mode (Connect mode needs no extra package) |
+| `kms` | `boto3` (AWS) / `google-cloud-kms` (GCP) / `azure-keyvault-keys`+`azure-identity` (Azure), matching `HIVEPILOT_KMS_PROVIDER` |
+| `obsidian` | none — just set `HIVEPILOT_OBSIDIAN_VAULT` to your vault's directory |
+
+`plugins install` prints each plugin's exact prerequisite after fetching; it never installs a binary or `pip install`s anything on your behalf — that stays an explicit operator decision, same as `hivepilot agents install`'s guided (never automatic) posture for agent CLIs. Restart HivePilot's services after installing for the plugin (and, if `--enable` persisted a flag, the flag) to take effect.
+
+**Trust note.** This is the one narrow exception to "no network fetch of plugin code" in the Trust model above — see that section for the honest accounting of what it does and doesn't change about the security posture.
 
 ## Writing a plugin
 
