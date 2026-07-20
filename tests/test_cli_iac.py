@@ -273,7 +273,9 @@ class TestNamedRunnerDefinitionResolution:
         monkeypatch.setattr(orchestrator_module, "load_tasks", lambda *a, **k: fake_tasks)
 
         cli_runner = CliRunner()
-        result = cli_runner.invoke(app, ["iac", "plan", "--project", "proj", "--runner", "opentofu"])
+        result = cli_runner.invoke(
+            app, ["iac", "plan", "--project", "proj", "--runner", "opentofu"]
+        )
 
         assert result.exit_code == 0, result.output
         runner_cls.assert_called_once()
@@ -299,7 +301,9 @@ class TestNamedRunnerDefinitionResolution:
         monkeypatch.setattr(orchestrator_module, "load_tasks", lambda *a, **k: fake_tasks)
 
         cli_runner = CliRunner()
-        result = cli_runner.invoke(app, ["iac", "plan", "--project", "proj", "--runner", "opentofu"])
+        result = cli_runner.invoke(
+            app, ["iac", "plan", "--project", "proj", "--runner", "opentofu"]
+        )
 
         assert result.exit_code == 0, result.output
         runner_cls.assert_called_once()

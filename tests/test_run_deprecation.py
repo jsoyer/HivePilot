@@ -101,10 +101,12 @@ class TestRunEndpointDeprecation:
     def test_v1_runs_response_has_no_deprecation_header(
         self, api_client: TestClient, tmp_tokens_file, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        from pathlib import Path
+
         from hivepilot.models import ProjectConfig, TaskConfig
         from hivepilot.services import api_service, policy_service
 
-        project = ProjectConfig(path="acme-web")
+        project = ProjectConfig(path=Path("acme-web"))
         task = TaskConfig(description="deploy things")
         orch = SimpleNamespace(
             tasks=SimpleNamespace(tasks={"deploy": task}),
