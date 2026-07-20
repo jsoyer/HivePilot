@@ -106,6 +106,58 @@ def secrets_cache_clear() -> None:
     typer.echo("Secret TTL cache cleared.")
 
 
+@app.command("reload")
+def reload_config(
+    api_url: str | None = typer.Option(
+        None,
+        "--api-url",
+        help="Base URL of a running `hivepilot api serve` (default: http://<api_host>:<api_port>)",
+        envvar="HIVEPILOT_API_URL",
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="Admin token", envvar="HIVEPILOT_API_TOKEN"
+    ),
+) -> None:
+    """Hot-reload roles.yaml + projects/tasks/pipelines in a running `api
+    serve` process, without a restart (Phase 14c, #249).
+
+    POSTs to that process's `POST /v1/admin/reload` (admin-role-gated).
+    Equivalent to sending the process `SIGHUP`, or (for the scheduler
+    daemon) `hivepilot schedule daemon`'s own SIGHUP handler -- this command
+    is the `api serve` counterpart, callable without shell access to the
+    host running it.
+    """
+    import requests
+
+    token_value = _get_token_value(token)
+    base_url = (api_url or f"http://{settings.api_host}:{settings.api_port}").rstrip("/")
+    url = f"{base_url}/v1/admin/reload"
+    try:
+        resp = requests.post(url, headers={"Authorization": f"Bearer {token_value}"}, timeout=15)
+    except requests.RequestException as exc:
+        typer.echo(f"Could not reach HivePilot API at {base_url}: {exc}")
+        raise typer.Exit(1) from exc
+
+    if resp.status_code == 401:
+        typer.echo("Reload failed: invalid or missing token.")
+        raise typer.Exit(1)
+    if resp.status_code == 403:
+        typer.echo("Reload failed: token lacks the 'admin' role.")
+        raise typer.Exit(1)
+    if resp.status_code != 200:
+        typer.echo(f"Reload failed: HTTP {resp.status_code} — {resp.text}")
+        raise typer.Exit(1)
+
+    data = resp.json()
+    typer.echo(f"roles_reloaded: {data.get('roles_reloaded')}")
+    typer.echo(f"config_reloaded: {data.get('config_reloaded')}")
+    if not (data.get("roles_reloaded") and data.get("config_reloaded")):
+        typer.echo(
+            "Note: one or more parts kept the previous config (fail-closed) — "
+            "check the api serve process logs for the load error."
+        )
+
+
 def _get_token_value(token: str | None) -> str:
     value = token or os.environ.get("HIVEPILOT_API_TOKEN")
     if not value:

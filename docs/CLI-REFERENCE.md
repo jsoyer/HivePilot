@@ -40,6 +40,7 @@ These commands are ungrouped — invoke them directly as `hivepilot <cmd>`.
 | `groups` | List configured project groups. | No |
 | `worker` / `workers` | Manage worker processes for async/queued runs. | **Yes** |
 | `validate` | Validate config files against schema. | No |
+| `reload` | Hot-reload roles/projects/tasks/pipelines in a running `api serve` process, without a restart (calls `POST /v1/admin/reload`). Requires an admin token. | **Yes** |
 
 ### `run`
 

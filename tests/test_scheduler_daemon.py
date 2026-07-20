@@ -335,6 +335,80 @@ class TestSchedulerDaemonHotReload:
         assert daemon._hot_reload_manager is None
 
 
+def _tracked_true(calls: list[int]) -> Any:
+    """Return a zero-arg callable that records a call then returns True --
+    avoids `lambda: calls.append(1) or True` (mypy flags `list.append`'s
+    `None` return used in a boolean `or` expression as `func-returns-value`)."""
+
+    def _fn() -> bool:
+        calls.append(1)
+        return True
+
+    return _fn
+
+
+class TestSchedulerDaemonRolesHotReload:
+    """Phase 14c (#249) — SIGHUP always force-reloads roles.yaml
+    (unconditionally, unlike plugin hot-reload); the per-tick reload is
+    opt-in via `settings.config_hot_reload`."""
+
+    def test_sighup_calls_refresh_roles(self, monkeypatch) -> None:
+        from hivepilot import roles as roles_mod
+        from hivepilot.config import settings
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        # SIGHUP's roles reload is unconditional -- prove it fires even with
+        # plugin hot-reload off (the two are independent).
+        monkeypatch.setattr(settings, "plugins_hot_reload", False, raising=False)
+        calls: list[int] = []
+        monkeypatch.setattr(roles_mod, "refresh_roles", _tracked_true(calls))
+
+        daemon = SchedulerDaemon()
+        daemon._handle_sighup(signal.SIGHUP, None)
+
+        assert calls == [1]
+
+    def test_sighup_roles_reload_failure_does_not_crash(self, monkeypatch) -> None:
+        from hivepilot import roles as roles_mod
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        def _boom():
+            raise RuntimeError("bad yaml")
+
+        monkeypatch.setattr(roles_mod, "refresh_roles", _boom)
+
+        daemon = SchedulerDaemon()
+        daemon._handle_sighup(signal.SIGHUP, None)  # must not raise
+
+    def test_tick_skips_roles_reload_when_flag_off(self, monkeypatch) -> None:
+        from hivepilot import roles as roles_mod
+        from hivepilot.config import settings
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        monkeypatch.setattr(settings, "config_hot_reload", False, raising=False)
+        calls: list[int] = []
+        monkeypatch.setattr(roles_mod, "refresh_roles", _tracked_true(calls))
+
+        daemon = SchedulerDaemon()
+        daemon._maybe_hot_reload_roles()
+
+        assert calls == []
+
+    def test_tick_calls_refresh_roles_when_flag_on(self, monkeypatch) -> None:
+        from hivepilot import roles as roles_mod
+        from hivepilot.config import settings
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        monkeypatch.setattr(settings, "config_hot_reload", True, raising=False)
+        calls: list[int] = []
+        monkeypatch.setattr(roles_mod, "refresh_roles", _tracked_true(calls))
+
+        daemon = SchedulerDaemon()
+        daemon._maybe_hot_reload_roles()
+
+        assert calls == [1]
+
+
 class TestSchedulerDaemonSharedManagerInjection:
     """MUST-FIX (adversarial review): when `plugins_hot_reload` is ON, the
     daemon's dedicated hot-reload `PluginManager` registers runner/notifier/

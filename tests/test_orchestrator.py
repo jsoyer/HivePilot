@@ -2784,3 +2784,84 @@ class TestRemediationGatePresent:
         orch = _make_orchestrator_with_real_registry("apply-infra", task, "proj-a", project)
 
         assert orch.remediation_gate_present("ghost-project", "apply-infra") is False
+
+
+class TestOrchestratorRefresh:
+    """Phase 14c — Orchestrator.refresh() hot-reload: staging-then-commit,
+    fail-closed to the PREVIOUS live projects/tasks/pipelines (no torn
+    state) on any load failure."""
+
+    def test_refresh_returns_true_and_swaps_on_valid_config(self) -> None:
+        from hivepilot.models import PipelinesFile
+
+        pipeline = _make_pipeline_by_name("stage-a")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        new_pipelines = PipelinesFile(pipelines={"new-pipe": pipeline})
+        new_tasks = MagicMock(tasks={"new-task": object()}, runners={})
+        new_projects = MagicMock(projects={"new-proj": object()})
+
+        with (
+            patch("hivepilot.orchestrator.load_projects", return_value=new_projects),
+            patch("hivepilot.orchestrator.load_tasks", return_value=new_tasks),
+            patch("hivepilot.orchestrator.load_pipelines", return_value=new_pipelines),
+            patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
+        ):
+            ok = orch.refresh()
+
+        assert ok is True
+        assert orch.projects is new_projects
+        assert orch.tasks is new_tasks
+        assert orch.pipelines is new_pipelines
+
+    def test_refresh_returns_false_and_keeps_old_state_when_one_load_raises(self) -> None:
+        """The key fail-closed guarantee: if load_pipelines() (or any of the
+        three loaders) raises, self.tasks must NOT have been reassigned
+        either -- no torn state (new tasks paired with old pipelines)."""
+
+        pipeline = _make_pipeline_by_name("stage-a")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        old_projects = orch.projects
+        old_tasks = orch.tasks
+        old_pipelines = orch.pipelines
+        old_registry = orch.registry
+
+        new_tasks = MagicMock(tasks={"new-task": object()}, runners={})
+
+        with (
+            patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
+            patch("hivepilot.orchestrator.load_tasks", return_value=new_tasks),
+            patch("hivepilot.orchestrator.load_pipelines", side_effect=ValueError("bad yaml")),
+        ):
+            ok = orch.refresh()
+
+        assert ok is False
+        # Nothing was reassigned -- not even self.tasks, which was loaded
+        # successfully BEFORE the failing load_pipelines() call.
+        assert orch.projects is old_projects
+        assert orch.tasks is old_tasks
+        assert orch.pipelines is old_pipelines
+        assert orch.registry is old_registry
+
+    def test_refresh_does_not_touch_plugins(self) -> None:
+        """refresh() is scoped to projects/tasks/pipelines/registry only --
+        plugin hot-reload is PluginManager.reload()'s own concern."""
+        pipeline = _make_pipeline_by_name("stage-a")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        old_plugins = orch.plugins
+
+        with (
+            patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
+            patch(
+                "hivepilot.orchestrator.load_tasks", return_value=MagicMock(tasks={}, runners={})
+            ),
+            patch(
+                "hivepilot.orchestrator.load_pipelines",
+                return_value=orch.pipelines,
+            ),
+            patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
+        ):
+            orch.refresh()
+
+        assert orch.plugins is old_plugins

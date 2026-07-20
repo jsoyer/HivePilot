@@ -169,6 +169,18 @@ class Settings(BaseSettings):
     # a behavior change an operator should opt into explicitly.
     # env: HIVEPILOT_PLUGINS_HOT_RELOAD
     plugins_hot_reload: bool = False
+    # Phase 14c (#249) — opt-in hot-reload of roles.yaml on EVERY scheduler
+    # tick, mirroring `plugins_hot_reload`'s shape/rationale above but for
+    # roles instead of plugins. When True, SchedulerDaemon calls
+    # `roles.refresh_roles()` once per tick (cheap: a YAML read + Pydantic
+    # validation, fail-closed to the previous roles on any error -- see
+    # `hivepilot/roles.py`'s `refresh_roles()` docstring). Independent of
+    # this flag, roles ARE always reloadable on demand via `hivepilot
+    # reload` / `POST /v1/admin/reload` / sending the daemon `SIGHUP` -- this
+    # setting only gates the AUTOMATIC per-tick reload. Default OFF:
+    # byte-identical scheduler behavior until an operator opts in.
+    # env: HIVEPILOT_CONFIG_HOT_RELOAD
+    config_hot_reload: bool = False
     # Phase 26b — operator allow-list for the plugin `capabilities` manifest
     # (hivepilot/plugin_capabilities.py). A plugin MAY declare
     # `register()["capabilities"] = [...]` from the closed

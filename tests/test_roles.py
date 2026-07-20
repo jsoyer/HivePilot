@@ -354,3 +354,139 @@ class TestResolveRunnerEffort:
         runner_kind, model, effort = resolve_runner("developer")
         assert effort == "high"
         assert isinstance(effortful, Role)
+
+
+class TestRefreshRolesHotReload:
+    """Phase 14c — refresh_roles() hot-reload: fail-closed TO THE PREVIOUS
+    live config (never downgraded to _DEFAULT_ROLES), and the strict/
+    non-strict loader split (_load_roles_strict raises, load_roles never
+    does)."""
+
+    def _mock_settings(self, roles_path: Path):
+        return type(
+            "MockSettings",
+            (),
+            {
+                "roles_file": roles_path,
+                "resolve_config_path": lambda self, f: roles_path,
+            },
+        )()
+
+    def _valid_role_yaml(self, prompt_path: Path) -> str:
+        return f"""
+roles:
+  - name: tester
+    title: Tester
+    prompt_file: {prompt_path.name}
+    model_profile: coding
+    inputs: []
+    outputs: []
+    can_block: false
+    order: 1
+"""
+
+    def test_refresh_roles_returns_true_and_swaps_on_valid_new_config(self, tmp_path, monkeypatch):
+        import hivepilot.config as config_module
+        from hivepilot import roles as roles_module
+
+        prompt_file = tmp_path / "tester.md"
+        prompt_file.write_text("You are a tester.")
+        roles_path = tmp_path / "roles.yaml"
+        roles_path.write_text(self._valid_role_yaml(prompt_file))
+
+        original_settings = config_module.settings
+        original_roles = dict(roles_module.ROLES)
+        try:
+            config_module.settings = self._mock_settings(roles_path)
+            ok = roles_module.refresh_roles()
+            assert ok is True
+            assert set(roles_module.ROLES.keys()) == {"tester"}
+            assert roles_module.ROLES["tester"].title == "Tester"
+        finally:
+            config_module.settings = original_settings
+            roles_module.ROLES = original_roles
+
+    def test_refresh_roles_returns_false_and_keeps_previous_rich_roles_on_broken_file(
+        self, tmp_path, monkeypatch
+    ):
+        """The key fail-closed guarantee: a broken roles.yaml deployed to a
+        running process must NOT silently downgrade a rich, already-loaded
+        roster down to the generic single-`developer` `_DEFAULT_ROLES`
+        fallback -- the previous config is kept verbatim."""
+        import hivepilot.config as config_module
+        from hivepilot import roles as roles_module
+        from hivepilot.roles import _DEFAULT_ROLES
+
+        broken_path = tmp_path / "broken_roles.yaml"
+        broken_path.write_text("roles: [{name: bad, missing_required_fields: true}]")
+
+        # Simulate a "rich" already-loaded roster distinct from _DEFAULT_ROLES
+        # (the real repo roles.yaml already provides one, but build an
+        # explicit synthetic snapshot so this test doesn't depend on the
+        # repo's roles.yaml staying exactly as-is).
+        rich_snapshot = dict(roles_module.ROLES)
+        rich_snapshot["extra_role"] = _DEFAULT_ROLES["developer"].model_copy(
+            update={"name": "extra_role"}
+        )
+
+        original_settings = config_module.settings
+        original_roles = dict(roles_module.ROLES)
+        try:
+            roles_module.ROLES = rich_snapshot
+            config_module.settings = self._mock_settings(broken_path)
+            ok = roles_module.refresh_roles()
+            assert ok is False
+            # Kept the previous (rich) config verbatim -- NOT downgraded to
+            # _DEFAULT_ROLES, and NOT silently mutated either.
+            assert roles_module.ROLES == rich_snapshot
+            assert "extra_role" in roles_module.ROLES
+            assert set(roles_module.ROLES.keys()) != set(_DEFAULT_ROLES.keys())
+        finally:
+            config_module.settings = original_settings
+            roles_module.ROLES = original_roles
+
+    def test_refresh_roles_returns_false_on_missing_file(self, tmp_path, monkeypatch):
+        import hivepilot.config as config_module
+        from hivepilot import roles as roles_module
+
+        missing_path = tmp_path / "does_not_exist.yaml"
+
+        original_settings = config_module.settings
+        original_roles = dict(roles_module.ROLES)
+        try:
+            config_module.settings = self._mock_settings(missing_path)
+            ok = roles_module.refresh_roles()
+            assert ok is False
+            assert roles_module.ROLES == original_roles
+        finally:
+            config_module.settings = original_settings
+            roles_module.ROLES = original_roles
+
+    def test_load_roles_strict_raises_on_bad_file(self, tmp_path):
+        import hivepilot.config as config_module
+        from hivepilot.roles import _load_roles_strict
+
+        missing_path = tmp_path / "does_not_exist.yaml"
+        original_settings = config_module.settings
+        try:
+            config_module.settings = self._mock_settings(missing_path)
+            with pytest.raises(FileNotFoundError):
+                _load_roles_strict()
+        finally:
+            config_module.settings = original_settings
+
+    def test_load_roles_bootstrap_still_returns_defaults_on_same_bad_file(self, tmp_path):
+        """load_roles() (the non-raising bootstrap loader) must be
+        byte-identical in behavior to before this change -- it still
+        swallows the exception and returns _DEFAULT_ROLES."""
+        import hivepilot.config as config_module
+        from hivepilot.roles import _DEFAULT_ROLES, load_roles
+
+        missing_path = tmp_path / "does_not_exist.yaml"
+        original_settings = config_module.settings
+        try:
+            config_module.settings = self._mock_settings(missing_path)
+            result = load_roles()
+            assert result == _DEFAULT_ROLES
+        finally:
+            config_module.settings = original_settings

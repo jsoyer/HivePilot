@@ -455,7 +455,11 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
   (see the Dockerfile) — a non-zero exit means a hard failure (missing base
   dir, a mandatory binary reported missing).
 - **Updating**:
-  - Config only: `hivepilot config sync` on the running host/container.
+  - Config only: `hivepilot config sync` on the running host/container, THEN
+    trigger a hot-reload (see "Config hot-reload" below) — `config sync`
+    alone only updates the files on disk; a running `api serve` or `schedule
+    daemon` process keeps its already-loaded roles/projects/tasks/pipelines
+    in memory until reloaded.
   - The application itself: rebuild/re-pull the image
     (`docker compose build --pull && docker compose up -d`) for the container
     path, or re-run `HIVEPILOT_REPO_REF=<new-tag> sh scripts/install-alpine.sh`
@@ -463,6 +467,36 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
 - **Backup**: back up `state.db` and your config repo (the source of truth for
   `projects.yaml`/`tasks.yaml`/etc. — `/data`'s copy is a synced mirror, not
   the canonical copy).
+- **Config hot-reload** (Phase 14c, #249): `config sync`'d changes to
+  `roles.yaml`/`projects.yaml`/`tasks.yaml`/`pipelines.yaml` now take effect
+  in a running process WITHOUT a restart, via three equivalent paths:
+  - `hivepilot reload --token <admin-token>` (CLI, calls the API below)
+  - `POST /v1/admin/reload` (admin-role token required) against a running
+    `api serve` process — reloads roles AND projects/tasks/pipelines
+  - Sending a running `schedule daemon` process `SIGHUP` — reloads roles
+    unconditionally; projects/tasks/pipelines are already re-read fresh on
+    every scheduler tick, so there is nothing else to reload there. An
+    opt-in `HIVEPILOT_CONFIG_HOT_RELOAD=true` also reloads roles
+    automatically on every tick (default off).
+
+  **Fail-closed-to-previous guarantee**: a reload never leaves a process
+  without a working config. If the new `roles.yaml` (or
+  `projects.yaml`/`tasks.yaml`/`pipelines.yaml`) is missing, unparseable, or
+  fails validation, the reload is rejected and the process KEEPS the
+  configuration it already had loaded — it is never silently downgraded to
+  a built-in default roster. `hivepilot reload` / `POST /v1/admin/reload`
+  report this per-part (`roles_reloaded`/`config_reloaded` booleans); check
+  the `api serve`/`schedule daemon` process logs for the underlying load
+  error when either is `false`.
+
+  **Known residual**: a reload landing MID pipeline run could let a LATER
+  stage of that same run see the new role/task/pipeline bindings while an
+  earlier stage of it already ran against the old ones — roles and
+  orchestrator config are read live at each call site, not snapshotted
+  per-run. Reloading between runs (the SIGHUP / tick-boundary / explicit
+  admin-endpoint call patterns above) avoids this in practice; eliminating
+  it fully would require threading a per-run config snapshot through
+  `run_task`/`run_pipeline` — not implemented.
 
 ## See also
 

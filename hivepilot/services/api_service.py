@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import generate_latest
 from pydantic import BaseModel, field_validator
 
+from hivepilot import roles
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import (
@@ -1165,6 +1166,48 @@ def toggle_plugin_endpoint(
         disabled = name in current
 
     return PluginToggleResponse(name=name, disabled=disabled, restart_required=True)
+
+
+# ---------------------------------------------------------------------------
+# Config hot-reload (Phase 14c, #249)
+# ---------------------------------------------------------------------------
+# Makes `config sync`'d roles.yaml / projects.yaml / tasks.yaml / pipelines.yaml
+# changes take effect in a running `api serve` process WITHOUT a restart.
+# Fail-closed: `roles.refresh_roles()` and `Orchestrator.refresh()` each
+# stage-then-commit internally (see their own docstrings) -- a broken config
+# file on disk never corrupts the live process, it just keeps serving the
+# previous good config and reports `False` for that half of the reload.
+#
+# `_orch_lock` -- the SAME lock `_get_orchestrator()` uses to guard the
+# lazy-singleton double-checked-lock construction -- is reused here so a
+# reload can never race that construction (e.g. the very first request that
+# triggers `Orchestrator()` construction, concurrent with an admin calling
+# reload). Holding it around `orch.refresh()` also prevents two concurrent
+# `POST /v1/admin/reload` calls from interleaving their staging passes on
+# the same Orchestrator instance. It does NOT block already-in-flight
+# requests reading `orch.tasks`/`orch.projects`/`orch.pipelines` -- those
+# attribute reads are unguarded (as they always have been) and, per
+# `Orchestrator.refresh()`'s own atomicity guarantee, see either the fully
+# old or fully new object, never a torn read.
+class ReloadResponse(BaseModel):
+    roles_reloaded: bool
+    config_reloaded: bool
+
+
+@v1.post("/admin/reload")
+@app.post("/admin/reload")
+def admin_reload_endpoint(
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> ReloadResponse:
+    """Hot-reload roles.yaml + projects/tasks/pipelines into this running API
+    process. See the module-level comment block just above for the
+    fail-closed and concurrency rationale. Also reachable via `hivepilot
+    reload` (CLI) and, for the scheduler daemon, `SIGHUP`.
+    """
+    with _orch_lock:
+        roles_reloaded = roles.refresh_roles()
+        config_reloaded = _get_orchestrator().refresh()
+    return ReloadResponse(roles_reloaded=roles_reloaded, config_reloaded=config_reloaded)
 
 
 def _get_mem0_client() -> Any | None:

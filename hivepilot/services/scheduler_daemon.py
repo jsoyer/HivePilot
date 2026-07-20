@@ -101,18 +101,60 @@ class SchedulerDaemon:
         attempt on the daemon's dedicated hot-reload manager, bypassing the
         `plugins_changed_on_disk()` gate the regular tick uses (`_maybe_hot_
         reload_plugins`). A no-op (logged) when `plugins_hot_reload` is off.
+
+        Phase 14c (#249) — ALSO force-reloads roles.yaml via
+        `roles.refresh_roles()`, unconditionally (not gated by
+        `plugins_hot_reload`/`config_hot_reload` — an explicit SIGHUP is
+        always an explicit reload request, same as `hivepilot reload` /
+        `POST /v1/admin/reload`). Projects/tasks/pipelines are already hot
+        in this daemon (fresh `Orchestrator()` per tick), so there is
+        nothing else to reload here. Runs on the signal-handling thread
+        (single-threaded, never a worker thread) — matches `refresh_roles()`'s
+        own "safe reload point" contract.
         """
         logger.info("scheduler_daemon.sighup_received")
+        self._reload_roles()
         manager = self._ensure_hot_reload_manager()
         if manager is None:
             return
         self._apply_reload(manager)
 
+    def _reload_roles(self) -> None:
+        """Call `roles.refresh_roles()` and log the outcome. Never raises —
+        `refresh_roles()` already fails closed internally (keeps the
+        previous roles config on any load error), but this wrapper is
+        defensive against an unexpected exception so a roles reload can
+        never crash the tick / SIGHUP handler."""
+        from hivepilot import roles
+
+        try:
+            ok = roles.refresh_roles()
+        except Exception:  # noqa: BLE001 — must never crash the tick/handler
+            logger.exception("scheduler_daemon.roles_reload_error")
+            return
+        if ok:
+            logger.info("scheduler_daemon.roles_reloaded")
+        else:
+            logger.warning("scheduler_daemon.roles_reload_failed")
+
     def _tick(self) -> None:
         self._maybe_hot_reload_plugins()
+        self._maybe_hot_reload_roles()
         self._run_due_schedules()
         self._run_drift_scans()
         self._process_deferred_rows()
+
+    def _maybe_hot_reload_roles(self) -> None:
+        """Phase 14c (#249) — opt-in AUTOMATIC per-tick roles.yaml reload,
+        gated by `settings.config_hot_reload` (default OFF — byte-identical
+        scheduler behavior otherwise). Independent of `plugins_hot_reload`;
+        explicit reload (SIGHUP / CLI / admin endpoint) is always available
+        regardless of this flag."""
+        from hivepilot.config import settings
+
+        if not settings.config_hot_reload:
+            return
+        self._reload_roles()
 
     # ------------------------------------------------------------------
     # Phase 26b — plugin hot-reload
