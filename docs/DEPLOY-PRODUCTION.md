@@ -9,6 +9,22 @@ observability) see [DEPLOYMENT.md](DEPLOYMENT.md). This doc is the
 Alpine-specific, copy-pasteable path — including OpenRC service scripts, since
 Alpine has no systemd.
 
+## Pick an install path (container OR bare-metal)
+
+HivePilot runs the same way whether it lives in a container or directly on the
+host — **Docker/Podman is a convenience, not a requirement.** Choose one:
+
+| Path | You get | Best when |
+| --- | --- | --- |
+| **A — Container** (Docker or Podman Compose) | An isolated, reproducible image (non-root, `HEALTHCHECK`, API + scheduler wired in `docker-compose.yml`), self-updating via image rebuild | You want a hands-off, reproducible prod deploy and already run a container engine. **Recommended for production.** |
+| **B — Bare-metal** (`scripts/install-alpine.sh`) | A plain venv at `/opt/hivepilot/venv` + `hivepilot` on `PATH`, run as OpenRC services. **No container engine, no docker installed.** | You don't want Docker/Podman on the host, or you're on a minimal/edge box, or you prefer OS-native service management. |
+
+Both are detailed in [2. Two install paths](#2-two-install-paths) below and produce
+an identical running system (same CLI, same `/data` layout, same green-gate
+checks). The container path installs and uses Docker/Podman; the bare-metal path
+never touches a container engine. The quick-start immediately below uses path A —
+skip to [2B](#b--bare-metal-via-scriptsinstall-alpinesh) for the bare-metal recipe.
+
 ## Quick-start (fresh Alpine → running, container path)
 
 The minimal sequence, assuming you already have a private config repo and a
@@ -47,8 +63,11 @@ before triggering a real pipeline run.
   `pipelines.yaml` / `policies.yaml` / `groups.yaml` / `schedules.yaml` /
   `model_profiles.yaml` / `prompts/` tree, in its own git repository. This is
   **not** part of the public HivePilot repo — see [Wire the config](#3-wire-the-config).
-- Git access to that config repo (an SSH deploy key or a token embedded in the
-  clone URL — never commit either into HivePilot's own repo or `.env`-in-image).
+- Git access to that config repo. Three supported ways to authenticate (see
+  [Wire the config](#3-wire-the-config)): an SSH deploy key (`git@`/`ssh://`
+  URL), a fine-grained read-only PAT in `HIVEPILOT_CONFIG_TOKEN` (HTTPS URL,
+  recommended), or a token embedded directly in an HTTPS clone URL. Never commit
+  any of them into HivePilot's own repo or bake them into the image.
 - At least one agent CLI you plan to run pipelines with (e.g. Claude Code) — see
   [Install the agent CLI(s)](#6-install-the-agent-cli-s). `doctor` and `validate`
   both work without one installed; only real pipeline runs need it.
@@ -229,13 +248,28 @@ hivepilot config sync
 hivepilot config status
 ```
 
-For a private repo, authenticate via an SSH deploy key (put the key on the
-host / mount it into the container and use an `ssh://` or `git@` URL — the
-key's own passphrase-less agent setup is outside HivePilot's scope) or a token
-embedded in an HTTPS URL, e.g.
-`https://<token>@github.com/you/hivepilot-config.git`. **Never hardcode the
-token in a committed file** — set `HIVEPILOT_CONFIG_REPO` via `.env` (mounted,
-not baked into the image) or the shell environment only.
+For a private repo, authenticate one of three ways:
+
+1. **SSH deploy key (recommended for the bare-metal path)** — put the key on the
+   host / mount it into the container and use an `ssh://` or `git@` URL. The
+   key's own (passphrase-less) agent setup is outside HivePilot's scope. On
+   Alpine this needs `openssh-client`, which `scripts/install-alpine.sh` installs
+   by default (skip with `HIVEPILOT_WITH_SSH=0`; the container image already has
+   git's SSH transport).
+2. **`HIVEPILOT_CONFIG_TOKEN` (recommended for the HTTPS/container path)** — set
+   it to a fine-grained, read-only PAT scoped to just the config repo, alongside
+   an `https://` `HIVEPILOT_CONFIG_REPO`. HivePilot sends it as a transient git
+   `Authorization` header at clone/fetch time; **it is never written to the
+   clone's `.git/config` on disk** (unlike option 3). Ignored for `ssh`/`git@`
+   URLs.
+3. **Token embedded in the HTTPS URL** — e.g.
+   `https://<token>@github.com/you/hivepilot-config.git`. Simplest, but the token
+   ends up persisted in the local clone's remote config; prefer option 2.
+
+`gh` (GitHub CLI) is **not** required for `config sync` — it uses plain `git`
+(GitPython) under the hood. **Never hardcode a token in a committed file** — set
+`HIVEPILOT_CONFIG_REPO` / `HIVEPILOT_CONFIG_TOKEN` via `.env` (mounted, not baked
+into the image) or the shell environment only.
 
 `config sync` clones the repo into `~/.local/share/hivepilot/config-repo`
 (`$XDG_DATA_HOME/hivepilot/config-repo`) and copies the managed files
