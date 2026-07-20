@@ -2160,7 +2160,7 @@ def _run_iac_operation(
 def iac_plan(
     project: str = typer.Option(..., "--project", "-p", help="Project name"),
     runner: str = typer.Option(
-        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"
+        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi, atlantis"
     ),
 ) -> None:
     """Run infrastructure plan."""
@@ -2171,7 +2171,7 @@ def iac_plan(
 def iac_apply(
     project: str = typer.Option(..., "--project", "-p", help="Project name"),
     runner: str = typer.Option(
-        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi"
+        "opentofu", "--runner", "-r", help="Runner: opentofu, terraform, pulumi, atlantis"
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:

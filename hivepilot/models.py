@@ -92,6 +92,7 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "terraform",
     "opentofu",
     "pulumi",
+    "atlantis",
     "kubectl",
     "ansible",
     "helm",

@@ -6,6 +6,7 @@ from typing import Any, Dict, Protocol, Type, cast
 from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition, RunnerKind
 from hivepilot.runners.ansible_runner import AnsibleRunner
+from hivepilot.runners.atlantis_runner import AtlantisRunner
 from hivepilot.runners.base import BaseRunner, RunnerPayload, set_last_usage
 from hivepilot.runners.chef_runner import ChefRunner
 from hivepilot.runners.claude_runner import ClaudeRunner
@@ -226,6 +227,7 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "terraform": TerraformRunner,
     "opentofu": OpenTofuRunner,
     "pulumi": PulumiRunner,
+    "atlantis": AtlantisRunner,
     "kubectl": KubectlRunner,
     "ansible": AnsibleRunner,
     "helm": HelmRunner,
