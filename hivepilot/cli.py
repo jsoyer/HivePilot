@@ -3915,13 +3915,18 @@ def self_update(
 ) -> None:
     """Update this HivePilot install in place, in its own venv.
 
-    HivePilot is not published on PyPI -- it installs from git. This
-    resolves `sys.executable` (the interpreter behind the currently-running
-    `hivepilot` console script, i.e. THIS install's venv python) and runs
-    `pip install -U --no-cache-dir` against it directly -- so it always
-    targets the correct venv and never falls back to a system Python/pip,
-    avoiding PEP 668's "externally-managed-environment" guard without ever
-    needing `--break-system-packages`.
+    HivePilot is not published on PyPI -- it installs from git, from a ref
+    (`main` by default) that moves without the `pyproject.toml` version
+    string necessarily changing. This resolves `sys.executable` (the
+    interpreter behind the currently-running `hivepilot` console script,
+    i.e. THIS install's venv python) and force-reinstalls the hivepilot
+    package from the pinned ref, unconditionally, then does a normal
+    dependency resolve for anything newly added -- so it always targets the
+    correct venv and never falls back to a system Python/pip, avoiding PEP
+    668's "externally-managed-environment" guard without ever needing
+    `--break-system-packages`. It force-reinstalls rather than a plain
+    `-U` so a ref that moved without a version bump still gets picked up
+    (see `hivepilot.services.update_service.run_self_update`).
 
     This is install-mutating, so unless `--yes` is passed it confirms with
     the operator first (mirroring `hivepilot agents install`'s UX). The
@@ -3954,6 +3959,10 @@ def self_update(
     # a private fork via `https://x-access-token:TOKEN@...` -- never echo it
     # unmasked. The real, unmasked `spec` is still what's passed to pip below.
     typer.echo(f"Will install: {mask_url_credentials(spec)}")
+    typer.echo(
+        "(force-reinstalling hivepilot from this ref even if the version "
+        "string is unchanged -- git refs can move without a version bump)"
+    )
 
     if not yes:
         confirmed = typer.confirm(

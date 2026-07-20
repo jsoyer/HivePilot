@@ -48,9 +48,22 @@ def test_build_update_spec_uses_defaults_shape() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_self_update_invokes_pip_via_sys_executable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_self_update_force_reinstalls_code_then_resolves_new_deps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: a moving `main` whose HEAD commit changed but whose
+    `pyproject.toml` version string did NOT (e.g. still `0.2.0`) makes plain
+    `pip install -U <spec>` a silent no-op -- pip resolves the new commit,
+    sees the same version already satisfied, and reports "Requirement
+    already satisfied" without reinstalling. `run_self_update` must instead
+    force-reinstall the package itself (`--force-reinstall --no-deps`, so
+    the new code is ALWAYS pulled down regardless of the version string),
+    followed by a plain resolve to pick up any newly added dependency."""
     mock_run = MagicMock(
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        side_effect=[
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="reinstalled\n", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="deps ok\n", stderr=""),
+        ]
     )
     monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -58,24 +71,64 @@ def test_run_self_update_invokes_pip_via_sys_executable(monkeypatch: pytest.Monk
     result = run_self_update(spec)
 
     assert result.returncode == 0
+    assert result.stdout == "reinstalled\ndeps ok\n"
+    assert mock_run.call_count == 2
+
+    reinstall_argv = mock_run.call_args_list[0].args[0]
+    deps_argv = mock_run.call_args_list[1].args[0]
+
+    assert reinstall_argv == [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--force-reinstall",
+        "--no-deps",
+        "--no-cache-dir",
+        spec,
+    ]
+    assert deps_argv == [sys.executable, "-m", "pip", "install", "--no-cache-dir", spec]
+    assert "--break-system-packages" not in reinstall_argv
+    assert "--break-system-packages" not in deps_argv
+    assert "-U" not in reinstall_argv
+    assert "-U" not in deps_argv
+
+
+def test_run_self_update_skips_dep_resolve_when_force_reinstall_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run = MagicMock(
+        return_value=subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="boom: could not resolve ref"
+        )
+    )
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
+    result = run_self_update("hivepilot[api] @ git+https://example.com/repo.git@main")
+
+    assert result.returncode == 1
+    assert result.stderr == "boom: could not resolve ref"
     mock_run.assert_called_once()
     argv = mock_run.call_args.args[0]
-    assert argv[0] == sys.executable
-    assert argv == [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", spec]
-    assert "--break-system-packages" not in argv
+    assert "--force-reinstall" in argv
+    assert "--no-deps" in argv
 
 
 def test_run_self_update_accepts_explicit_python_override(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_run = MagicMock(
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        side_effect=[
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+        ]
     )
     monkeypatch.setattr(subprocess, "run", mock_run)
 
     run_self_update(
         "hivepilot[api] @ git+https://example.com/repo.git@main", python="/other/python"
     )
-    argv = mock_run.call_args.args[0]
-    assert argv[0] == "/other/python"
+    assert mock_run.call_count == 2
+    for call in mock_run.call_args_list:
+        assert call.args[0][0] == "/other/python"
 
 
 # ---------------------------------------------------------------------------
