@@ -658,3 +658,122 @@ def register():
 
         for record in pm.loaded:
             assert "capabilities" not in record.contributions
+
+
+class TestConfigRepoPluginsAutoLoad:
+    """A config repo's own `plugins/` dir (e.g. a vendored `vendored_skills.py`
+    contributing skills) auto-loads into the local-file scan path when
+    `settings.config_repo` is set -- without a manual
+    `HIVEPILOT_PLUGINS_EXTRA_DIRS` override. See
+    `hivepilot.plugins._config_repo_plugins_dir` /
+    `_scan_local_plugins`."""
+
+    @staticmethod
+    def _write_skill_plugin(pdir, name: str = "vendored_skills") -> None:
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / f"{name}.py").write_text(
+            "def register():\n"
+            "    return {'skills': [{'name': 'demo-skill', 'description': 'x', "
+            "'provider': 'test', 'files': {}}]}\n",
+            encoding="utf-8",
+        )
+
+    def test_config_repo_plugins_auto_loaded_without_extra_dirs(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.services import config_service as config_service_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        clone_dir = tmp_path / "clone"
+        clone_plugins = clone_dir / "plugins"
+        self._write_skill_plugin(clone_plugins)
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "config_repo", "https://example.com/x.git", raising=False
+        )
+        monkeypatch.setattr(plugins_mod.settings, "config_repo_load_plugins", True, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+        monkeypatch.setattr(config_service_mod, "_config_dir", lambda: clone_dir, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        assert pm.get_skill("demo-skill") is not None
+
+    def test_config_repo_load_plugins_false_skips_auto_load(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.services import config_service as config_service_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        clone_dir = tmp_path / "clone"
+        clone_plugins = clone_dir / "plugins"
+        self._write_skill_plugin(clone_plugins)
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "config_repo", "https://example.com/x.git", raising=False
+        )
+        monkeypatch.setattr(plugins_mod.settings, "config_repo_load_plugins", False, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+        monkeypatch.setattr(config_service_mod, "_config_dir", lambda: clone_dir, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        assert pm.get_skill("demo-skill") is None
+
+    def test_no_config_repo_scan_path_is_byte_identical(self, tmp_path, monkeypatch) -> None:
+        """`config_repo` unset -> `_config_repo_plugins_dir()` is a pure no-op
+        (never touches disk / imports config_service) and the scan result is
+        identical to before this feature existed."""
+        from hivepilot import plugins as plugins_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+
+        assert plugins_mod._config_repo_plugins_dir() is None
+        assert plugins_mod._scan_local_plugins() == []
+
+    def test_no_double_scan_when_config_repo_dir_already_in_extra_dirs(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """If the config repo's plugins dir is ALSO already listed in
+        `plugins_extra_dirs` (e.g. an operator's pre-existing manual
+        override), it must be scanned exactly once, not twice."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.services import config_service as config_service_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        clone_dir = tmp_path / "clone"
+        clone_plugins = clone_dir / "plugins"
+        self._write_skill_plugin(clone_plugins)
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "config_repo", "https://example.com/x.git", raising=False
+        )
+        monkeypatch.setattr(plugins_mod.settings, "config_repo_load_plugins", True, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "plugins_extra_dirs", [clone_plugins], raising=False
+        )
+        monkeypatch.setattr(config_service_mod, "_config_dir", lambda: clone_dir, raising=False)
+
+        calls: list = []
+        real_scan = plugins_mod._scan_plugin_dir
+
+        def spy_scan(plugin_dir, *, seen_stems):
+            calls.append(plugin_dir)
+            return real_scan(plugin_dir, seen_stems=seen_stems)
+
+        monkeypatch.setattr(plugins_mod, "_scan_plugin_dir", spy_scan)
+
+        found = plugins_mod._scan_local_plugins()
+
+        assert calls.count(clone_plugins) == 1, f"Expected exactly one scan, got: {calls}"
+        assert len(found) == 1

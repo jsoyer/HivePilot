@@ -460,18 +460,61 @@ def _scan_plugin_dir(
     return found
 
 
+def _config_repo_plugins_dir() -> Path | None:
+    """Return the config repo clone's `plugins/` dir, if auto-loading it is
+    enabled and it actually exists on disk -- else `None`.
+
+    Lets plugins/skills vendored INSIDE a private config repo (the
+    documented `/srv/config/plugins` use case, e.g. a `vendored_skills.py`
+    contributing `register()["skills"]`) load automatically, without a
+    manual `HIVEPILOT_PLUGINS_EXTRA_DIRS` override: a plugin like that
+    locates its own sibling `skills/` directory relative to its own
+    `__file__`, so simply loading the plugin module from the clone is
+    sufficient -- no extra copy step, and `config sync` itself is
+    untouched.
+
+    Gated behind BOTH `settings.config_repo` (must be set -- an operator
+    who never configured a config repo sees zero behavior change) AND
+    `settings.config_repo_load_plugins` (opt-out, default True) -- a
+    plugin is arbitrary Python executed in-process, so auto-loading it from
+    the config repo the operator already chose is a deliberate (but
+    reasonable, and reversible) trust-model extension. Loaded plugins
+    remain subject to the normal `plugins_enabled`/`plugins_disabled`/
+    capability-policy gates either way -- this function only decides
+    whether the DIRECTORY is added to the scan path, not whether any
+    individual plugin in it is allowed to register.
+
+    Lazy, function-local import of `config_service._config_dir` (the single
+    source of truth for "where is the config repo cloned") to avoid a
+    module-load-time `plugins.py` -> `config_service.py` dependency,
+    mirroring the lazy-import pattern already used elsewhere in this module.
+    """
+    if not settings.config_repo or not settings.config_repo_load_plugins:
+        return None
+
+    from hivepilot.services.config_service import _config_dir
+
+    candidate = _config_dir() / "plugins"
+    return candidate if candidate.exists() else None
+
+
 def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
-    """Scan `base_dir/plugins`, then each directory in `settings.plugins_extra_dirs`
-    (in order), for local-file plugins.
+    """Scan `base_dir/plugins`, then the config repo clone's own `plugins/`
+    dir (if auto-loading is enabled -- see `_config_repo_plugins_dir`), then
+    each directory in `settings.plugins_extra_dirs` (in order), for
+    local-file plugins.
 
     `base_dir/plugins` is always scanned FIRST — a deployment that points
     `base_dir` at its own config repo (to load its own `plugins/*.py`) can
     still reach the engine's shipped `plugins/*.py` via `plugins_extra_dirs`,
-    without one shadowing the other. A module stem already loaded from an
-    earlier directory is skipped rather than re-loaded or raising a collision
-    (dedup by stem, first-wins — `base_dir/plugins` always wins over any
-    extra dir). A `plugins_extra_dirs` entry that doesn't exist on disk is
-    silently skipped, same as a missing `base_dir/plugins` always has been.
+    without one shadowing the other. The config repo clone's `plugins/` dir
+    (when applicable) is scanned NEXT, before any manually-configured extra
+    dir, and is SKIPPED here if it's already present in
+    `settings.plugins_extra_dirs` (compared by resolved path) so it is never
+    scanned twice. A module stem already loaded from an earlier directory is
+    skipped rather than re-loaded or raising a collision (dedup by stem,
+    first-wins). A directory that doesn't exist on disk is silently skipped,
+    same as a missing `base_dir/plugins` always has been.
 
     Returns each successfully-loaded plugin's `register` callable paired with
     a `PluginRecord` describing where it came from.
@@ -482,7 +525,15 @@ def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
 
     seen_stems: set[str] = set()
     found.extend(_scan_plugin_dir(settings.base_dir / "plugins", seen_stems=seen_stems))
-    for extra_dir in settings.plugins_extra_dirs:
+
+    extra_dirs = list(settings.plugins_extra_dirs)
+    config_repo_plugins = _config_repo_plugins_dir()
+    if config_repo_plugins is not None:
+        already_listed = {d.resolve() for d in extra_dirs}
+        if config_repo_plugins.resolve() not in already_listed:
+            found.extend(_scan_plugin_dir(config_repo_plugins, seen_stems=seen_stems))
+
+    for extra_dir in extra_dirs:
         found.extend(_scan_plugin_dir(extra_dir, seen_stems=seen_stems))
     return found
 

@@ -219,6 +219,18 @@ class Settings(BaseSettings):
     # never logged. https-only: ssh:// / git@ config_repo URLs ignore this
     # setting entirely and authenticate via the host's own SSH key/agent.
     config_token: str | None = None
+    # Auto-load `plugins/*.py` shipped INSIDE the config repo clone (e.g. a
+    # vendored `vendored_skills.py` under `<config_repo>/plugins/`) without
+    # requiring a manual `HIVEPILOT_PLUGINS_EXTRA_DIRS` override -- see
+    # `hivepilot.plugins._config_repo_plugins_dir`. Default True: an
+    # operator who points HivePilot at a config repo generally expects its
+    # bundled plugins/skills to just work. env:
+    # HIVEPILOT_CONFIG_REPO_LOAD_PLUGINS -- a cautious operator who does NOT
+    # want the config repo to also be a code-execution surface (a plugin is
+    # arbitrary Python run in-process) can set this to False; plugins remain
+    # subject to the normal `plugins_enabled`/`plugins_disabled`/capability-
+    # policy gates either way. No-op when `config_repo` itself is unset.
+    config_repo_load_plugins: bool = True
     domain: str | None = None  # public domain used by caddy + webhook auto-registration
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids: list[int] = Field(default_factory=list)

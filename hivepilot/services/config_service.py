@@ -48,9 +48,10 @@ def _auth_git_env() -> dict[str, str]:
     `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` env vars git
     reads per-invocation to inject an `http.extraheader` — this is NEVER
     persisted to `.git/config` or any other file, and the token is never
-    embedded in the repo URL. The token itself is also registered with the
-    process-wide secret redaction registry so it can never leak into logs
-    even indirectly.
+    embedded in the repo URL. Both the raw token AND the base64-encoded
+    header value are registered with the process-wide secret redaction
+    registry (`config_provenance.register_secret_value`) so neither form can
+    ever leak into logs, even indirectly.
     """
     token = settings.config_token
     if not token:
@@ -63,7 +64,13 @@ def _auth_git_env() -> dict[str, str]:
 
     register_secret_value(token)
 
-    header = "Authorization: Basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    header_b64 = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    header = "Authorization: Basic " + header_b64
+    # Defense-in-depth: register the base64-encoded header form too, not just
+    # the raw token — in case the header string itself (rather than the bare
+    # token) ever ends up in a future log line or exception message, it is
+    # still redacted.
+    register_secret_value(header_b64)
     return {
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "http.extraheader",

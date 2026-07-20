@@ -240,9 +240,18 @@ def test_token_never_logged_during_sync(
     with caplog.at_level(logging.DEBUG):
         config_service.sync()
 
+    header_b64 = base64.b64encode(b"x-access-token:super-secret-token-value").decode()
     for record in caplog.records:
-        assert "super-secret-token-value" not in record.getMessage()
-        assert "super-secret-token-value" not in str(record.__dict__)
+        message = record.getMessage()
+        record_dict = str(record.__dict__)
+        assert "super-secret-token-value" not in message
+        assert "super-secret-token-value" not in record_dict
+        # Defense-in-depth (FIX B): the base64-encoded Authorization header
+        # form must ALSO never appear, not just the raw token -- in case the
+        # header itself (rather than the bare token) leaked into some future
+        # log line.
+        assert header_b64 not in message
+        assert header_b64 not in record_dict
 
 
 # ---------------------------------------------------------------------------
