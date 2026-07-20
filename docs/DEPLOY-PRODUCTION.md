@@ -493,7 +493,10 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
   (see the Dockerfile) — a non-zero exit means a hard failure (missing base
   dir, a mandatory binary reported missing).
 - **Updating**:
-  - Config only: `hivepilot config sync` on the running host/container.
+  - Config only: `hivepilot config sync`, then **restart the daemons** for most
+    changes to take effect — see [10. Reboot & config-refresh behavior](#10-reboot--config-refresh-behavior)
+    (only `schedules.yaml` is picked up live; roles/pipelines/tasks/policies are
+    read at process start).
   - The application itself: rebuild/re-pull the image
     (`docker compose build --pull && docker compose up -d`) for the container
     path, or re-run `HIVEPILOT_REPO_REF=<new-tag> sh scripts/install-alpine.sh`
@@ -501,6 +504,79 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
 - **Backup**: back up `state.db` and your config repo (the source of truth for
   `projects.yaml`/`tasks.yaml`/etc. — `/data`'s copy is a synced mirror, not
   the canonical copy).
+
+## 10. Reboot & config-refresh behavior
+
+Once configured, HivePilot runs as **two long-lived services** — you do not
+re-launch it per task:
+
+- `hivepilot api serve` — the HTTP API (port 8045).
+- `hivepilot schedule daemon --interval 30` — polls `schedules.yaml` and
+  dispatches due pipeline runs autonomously.
+
+Everything else (`run`, `run-pipeline`, `debate`, `config sync`, `validate`,
+`doctor`, `tokens …`) is a one-shot CLI command you run on demand, not a service.
+
+### Survives a host reboot
+
+Both services are wired to come back automatically: the Compose services carry a
+`restart:` policy, and the OpenRC path enables them at boot
+(`rc-update add … default`). **All durable state lives in `state.db` (SQLite)
+under `base_dir` (`/data`)** — run history, approvals, API tokens, the retry
+queue, and a **per-schedule last-run cursor**. As long as `/data` persists (the
+`hivepilot-data` named volume in Compose, or a backed-up `/data` on bare metal),
+after a reboot the scheduler **resumes from the persisted cursor** rather than
+re-firing every schedule at once: a schedule's next run is computed as
+`last_run + interval_minutes`, and `last_run` is read from `state.db`. So a
+reboot loses no history and does not cause a thundering herd of catch-up runs.
+
+> Corollary: if you do **not** persist `/data`, you lose tokens + history and the
+> scheduler treats every schedule as never-run on next start. Always mount/back
+> up `/data`.
+
+### Which config changes are picked up live vs. need a restart
+
+This is the key operational distinction (it answers "if I add a role, is a
+periodic `config sync` enough?"):
+
+| Config file | Refresh behavior | Restart needed? |
+| --- | --- | --- |
+| `schedules.yaml` | **Live** — the daemon re-reads it from disk on every tick (≤ `--interval`, default 30 s). Add/disable/retune a schedule and it takes effect within one interval. | No |
+| `roles.yaml` | **Cached at process start.** Role definitions are loaded once when the process boots and are never re-read by a running daemon. `config sync` updates the file on disk, but the running API/scheduler keep the old roles in memory. | **Yes** |
+| `pipelines.yaml`, `tasks.yaml`, `policies.yaml`, `groups.yaml`, `model_profiles.yaml` | Read when a run's orchestrator is constructed; to guarantee a change is applied (and because roles above always need it), treat these the same as roles. | **Yes (recommended)** |
+
+So: **a periodic `config sync` alone will NOT make a newly-added role take
+effect** — the file lands on disk but the long-running daemons hold role
+definitions from their last start. Adding/renaming/removing a role (or changing
+pipelines/tasks/policies) requires `config sync` **followed by a restart** of the
+API and scheduler. A periodic sync is only genuinely "live" for `schedules.yaml`.
+
+There is **no built-in periodic/auto `config sync`**, and `schedules.yaml`
+entries can only invoke a named task against projects (via the orchestrator) —
+they cannot run an arbitrary command like `config sync`. The recommended pattern
+is **event-driven, not polled**: have your config-repo CI/CD (or a small host
+cron / OpenRC periodic job) run `config sync` **and then a rolling restart** when
+you actually push a config change.
+
+Refresh recipes:
+
+```bash
+# Container (Compose): sync then restart both services.
+docker compose exec hivepilot hivepilot config sync
+docker compose restart hivepilot scheduler
+# (Use `docker compose up -d` instead of `restart` only when you also changed
+#  .env — a plain restart does not re-read .env; see step 7.)
+```
+
+```bash
+# Bare-metal (OpenRC): sync then restart both services.
+HIVEPILOT_BASE_DIR=/data /usr/local/bin/hivepilot config sync
+rc-service hivepilot-api restart
+rc-service hivepilot-scheduler restart
+```
+
+Only editing schedules? Skip the restart — the scheduler picks `schedules.yaml`
+up on its next tick.
 
 ## See also
 
