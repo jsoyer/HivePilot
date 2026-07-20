@@ -190,6 +190,11 @@ dev = [
   "opentelemetry-api>=1.24,<2.0",
   "opentelemetry-sdk>=1.24,<2.0",
   "opentelemetry-exporter-otlp-proto-grpc>=1.24,<2.0",
+  # Phase 19 KMS envelope mode — dev/test install includes `cryptography`
+  # so tests/test_kms.py's real AES-256-GCM round-trip + tamper tests run in
+  # CI (the cloud SDKs boto3/google-cloud-kms/azure are MOCKED in the tests,
+  # so only cryptography is needed here; the full `kms` extra stays optional).
+  "cryptography>=42.0",
 ]
 
 [tool.pytest.ini_options]
