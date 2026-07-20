@@ -136,7 +136,8 @@ Hot-reload (`PluginManager.reload()`) is staging-then-commit: a full re-scan of 
 | `bitwarden` | secrets + health | ON |
 | `vaultwarden` | secrets + health | ON |
 | `infisical` | secrets + health | ON |
-| `onepassword` | secrets + health | ON |
+| `onepassword` | secrets + health | ON (Connect + direct service-account) |
+| `kms` | secrets + health | ON (cloud-KMS envelope/direct; `hivepilot[kms]`) |
 
 **Notifier + hooks:**
 
