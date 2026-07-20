@@ -5,6 +5,7 @@ import io
 import threading
 import uuid
 from collections import defaultdict
+from pathlib import Path
 from time import time
 from typing import Any
 
@@ -707,15 +708,57 @@ def _pdf_safe(value: Any) -> str:
     return str(value).encode("latin-1", "replace").decode("latin-1")
 
 
+# Common install locations for a Unicode-capable TTF, checked (in order,
+# after `settings.pdf_font_path`) when no explicit font path is configured.
+# Debian/Ubuntu: `apt install fonts-dejavu`; Alpine: `apk add ttf-dejavu`.
+_COMMON_UNICODE_FONT_PATHS = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+)
+
+
+def _resolve_unicode_font_path() -> str | None:
+    """Return a usable Unicode TTF path, or `None` if none can be found.
+
+    Checked in order: (1) `settings.pdf_font_path`
+    (`HIVEPILOT_PDF_FONT_PATH`) if set and the file exists; (2) a small list
+    of common system font install paths. Never raises -- an unreadable
+    configured path or a filesystem error just falls through to `None`, so
+    the caller can gracefully degrade to the latin-1-only core font instead
+    of ever 500ing on a font-lookup failure.
+    """
+    try:
+        if settings.pdf_font_path and Path(settings.pdf_font_path).is_file():
+            return settings.pdf_font_path
+        for candidate in _COMMON_UNICODE_FONT_PATHS:
+            if Path(candidate).is_file():
+                return candidate
+    except OSError:
+        return None
+    return None
+
+
 def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) -> Response:
     """Render `rows`/`columns` (the same shape `_csv_response` consumes) as a
     simple tabular PDF. fpdf2 is an OPTIONAL extra (`pip install
     hivepilot[pdf]`) — lazy-imported here so the core API never depends on
     it. If it's missing, fail gracefully with a clear message instead of a
     500/traceback.
+
+    Unicode rendering: fpdf2's built-in core fonts (Helvetica, etc.) only
+    support latin-1, so non-latin project/task/provider names degrade to
+    `?` (see `_pdf_safe`). When a Unicode TTF is available (see
+    `_resolve_unicode_font_path`), it's registered and used instead, and
+    cell text is passed through WITHOUT the latin-1 replace so non-latin
+    characters render correctly. Font loading is wrapped in try/except: any
+    failure (corrupt font, fpdf2 internal error) falls back to the
+    Helvetica/latin-1 path rather than ever 500ing.
     """
     try:
         from fpdf import FPDF
+        from fpdf.fonts import FontFace
     except ImportError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -725,17 +768,36 @@ def _pdf_response(rows: list[dict[str, Any]], title: str, columns: list[str]) ->
     pdf = FPDF(orientation="L")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    pdf.set_font("Helvetica", size=14)
-    pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", size=9)
-    with pdf.table() as table:
+
+    unicode_family: str | None = None
+    font_path = _resolve_unicode_font_path()
+    if font_path:
+        try:
+            pdf.add_font("HivePilotUni", fname=font_path)
+            unicode_family = "HivePilotUni"
+        except Exception:  # noqa: BLE001 -- any font-load failure -> latin-1 fallback
+            unicode_family = None
+
+    body_family = unicode_family or "Helvetica"
+    cell_text = (lambda v: str(v) if v is not None else "") if unicode_family else _pdf_safe
+    # Only the regular (non-bold) style of the Unicode font is registered
+    # above -- fpdf2's table() defaults to a bold heading row, which would
+    # raise if asked to use a family with no bold variant loaded. Disable
+    # the bold emphasis on headings for the Unicode path only; the
+    # Helvetica/latin-1 fallback keeps its original (bold-heading) look.
+    table_kwargs = {"headings_style": FontFace(emphasis=None)} if unicode_family else {}
+
+    pdf.set_font(body_family, size=14)
+    pdf.cell(0, 10, cell_text(title), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font(body_family, size=9)
+    with pdf.table(**table_kwargs) as table:
         header_row = table.row()
         for column in columns:
-            header_row.cell(column)
+            header_row.cell(cell_text(column))
         for row in rows:
             data_row = table.row()
             for column in columns:
-                data_row.cell(_pdf_safe(row.get(column)))
+                data_row.cell(cell_text(row.get(column)))
     pdf_bytes = bytes(pdf.output())
     filename = title.lower().replace(" ", "_").replace("/", "_") + ".pdf"
     return Response(

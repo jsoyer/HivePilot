@@ -58,7 +58,12 @@ without side effects.
 ## Analytics
 
 The API exposes read-only analytics under `/v1/analytics/*`, tenant-scoped and
-exportable as CSV:
+exportable as CSV or PDF (`?format=csv` / `?format=pdf`, requires the optional
+`pip install hivepilot[pdf]` extra). PDF export renders non-latin project/task/
+provider names correctly when a Unicode TTF is available — install one (e.g.
+`apt install fonts-dejavu` on Debian/Ubuntu, `apk add ttf-dejavu` on Alpine) or
+set `HIVEPILOT_PDF_FONT_PATH` to a specific TTF path. Without a Unicode font,
+non-latin characters degrade to `?` instead of failing the export:
 
 - run summary
 - trends

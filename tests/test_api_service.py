@@ -1187,6 +1187,120 @@ class TestAnalyticsPdfExport:
         assert resp.content.startswith(b"%PDF")
 
 
+def _find_any_system_ttf() -> str | None:
+    """Best-effort search for ANY installed TTF, for test purposes only --
+    broader than the small production candidate list in
+    `api_service._COMMON_UNICODE_FONT_PATHS`, so this test still exercises
+    the real-font path on a dev box that has fonts installed somewhere
+    unusual (e.g. under a Flatpak runtime), while degrading to a skip on a
+    genuinely fontless CI image."""
+    import glob
+    from pathlib import Path
+
+    search_roots = [
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        str(Path.home() / ".local/share/fonts"),
+        str(Path.home() / ".local/share/flatpak/runtime"),
+        "/var/lib/flatpak/runtime",
+        "/Library/Fonts",
+        "/System/Library/Fonts",
+    ]
+    for root in search_roots:
+        matches = glob.glob(f"{root}/**/DejaVuSans.ttf", recursive=True)
+        if matches:
+            return matches[0]
+    return None
+
+
+@pytest.mark.skipif(not _HAS_FPDF, reason="fpdf2 optional extra not installed")
+class TestAnalyticsPdfExportUnicodeFont:
+    """PDF export renders non-latin text via a Unicode TTF when one is
+    configured/found, and always falls back gracefully to the latin-1-only
+    core font when none is available (never a crash either way)."""
+
+    def test_no_font_configured_falls_back_to_latin1_and_still_produces_valid_pdf(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """With no `pdf_font_path` and none of the common system paths
+        present, PDF export must still succeed via the pre-existing
+        latin-1 fallback -- this is the byte-identical non-regression path
+        and must ALWAYS be exercised, font or no font on the test box."""
+        from hivepilot.config import settings
+        from hivepilot.services import state_service
+
+        monkeypatch.setattr(settings, "pdf_font_path", None)
+        # Force the "no common system font found" branch too, regardless of
+        # what's actually installed on the box running this test.
+        monkeypatch.setattr("hivepilot.services.api_service._COMMON_UNICODE_FONT_PATHS", ())
+
+        state_service.record_run_start("p", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.content.startswith(b"%PDF")
+
+    def test_unicode_font_renders_non_latin_text_without_raising(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """With a real Unicode TTF configured, a non-latin (Cyrillic)
+        project name must render without raising, producing a valid PDF."""
+        font_path = _find_any_system_ttf()
+        if font_path is None:
+            pytest.skip("no DejaVuSans.ttf found on this box to test real Unicode rendering")
+
+        from hivepilot.config import settings
+        from hivepilot.services import state_service
+
+        monkeypatch.setattr(settings, "pdf_font_path", font_path)
+
+        state_service.record_run_start("проект-кириллица", "задача", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.content.startswith(b"%PDF")
+        assert len(resp.content) > 0
+
+    def test_font_load_failure_falls_back_to_latin1_never_500s(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """A configured font path that exists but fails to load (e.g.
+        corrupt/unreadable by fpdf2) must degrade to the latin-1 fallback,
+        never surface a 500."""
+        from hivepilot.config import settings
+        from hivepilot.services import api_service, state_service
+
+        bad_font = tmp_tokens_file.parent / "not-a-real-font.ttf"
+        bad_font.write_bytes(b"not a real font file")
+        monkeypatch.setattr(settings, "pdf_font_path", str(bad_font))
+        monkeypatch.setattr(api_service, "_COMMON_UNICODE_FONT_PATHS", ())
+
+        state_service.record_run_start("p", "t", status="success")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/summary?format=pdf", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.content.startswith(b"%PDF")
+
+    def test_resolve_unicode_font_path_prefers_configured_path(self, monkeypatch, tmp_path):
+        from hivepilot.config import settings
+        from hivepilot.services.api_service import _resolve_unicode_font_path
+
+        configured = tmp_path / "custom.ttf"
+        configured.write_bytes(b"stub")
+        monkeypatch.setattr(settings, "pdf_font_path", str(configured))
+
+        assert _resolve_unicode_font_path() == str(configured)
+
+    def test_resolve_unicode_font_path_returns_none_when_nothing_found(self, monkeypatch):
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(settings, "pdf_font_path", None)
+        monkeypatch.setattr(api_service, "_COMMON_UNICODE_FONT_PATHS", ())
+
+        assert api_service._resolve_unicode_font_path() is None
+
+
 class TestAnalyticsPdfExportFpdfAbsent:
     """When fpdf2 isn't installed, ?format=pdf must return a clear 501/400
     error — never a 500/traceback."""

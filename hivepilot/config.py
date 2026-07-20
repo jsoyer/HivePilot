@@ -736,6 +736,15 @@ class Settings(BaseSettings):
         ],
     )
 
+    # Optional path to a Unicode-capable TTF font (e.g. DejaVu Sans) used by
+    # the PDF analytics export (`api_service._pdf_response`) so non-latin
+    # project/task/provider names render correctly instead of degrading to
+    # `?`. `None` (the default) means the exporter probes a small list of
+    # common system font paths instead; if none of those exist either, PDF
+    # export gracefully falls back to the latin-1-only core font it already
+    # used before this option existed. env: HIVEPILOT_PDF_FONT_PATH
+    pdf_font_path: str | None = None
+
     @property
     def xdg_config_home(self) -> Path:
         """~/.config/hivepilot (or $XDG_CONFIG_HOME/hivepilot)"""
