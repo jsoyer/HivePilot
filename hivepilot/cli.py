@@ -2078,6 +2078,28 @@ def _cli_actor() -> str:
         return "cli"
 
 
+def _resolve_iac_runner_definition(kind: str):
+    """Resolve *kind* to its project-configured `RunnerDefinition` (carrying
+    the real `options`/`env`/`host`/`model`, e.g. `workspace`/`var_file`/
+    `backend_config` for the IaC runners) via the same canonical registry
+    resolver (`RunnerRegistry._definition_for`) `Orchestrator` already uses
+    for orchestrator-run steps. Falls back to an empty synthetic definition
+    (today's pre-fix default) when no named runner entry exists in
+    `tasks.yaml`'s top-level `runners:` block -- strictly non-regressing.
+
+    Shared by `_run_iac_operation` (plan/apply/destroy/drift/output/cost) and
+    `drift_scan_cmd`, so every CLI entry point that resolves an IaC/drift
+    runner honours the same project config the exact same way.
+    """
+    from hivepilot.models import RunnerDefinition, RunnerKind
+
+    orch = Orchestrator()
+    try:
+        return orch.registry._definition_for(kind)
+    except KeyError:
+        return RunnerDefinition(name=kind, kind=cast(RunnerKind, kind))
+
+
 def _run_iac_operation(
     project_name: str, operation: str, kind: str = "opentofu", *, yes: bool = False
 ) -> None:
@@ -2104,8 +2126,19 @@ def _run_iac_operation(
       interactive prompt -- before anything runs, and the confirmed
       operation is always recorded via ``state_service.record_interaction``,
       the audit trail this direct CLI path would otherwise have none of.
+
+    Runner definition resolution: the project's real per-runner ``options``/
+    ``env``/``host``/``model`` (e.g. ``workspace``/``var_file``/
+    ``backend_config`` for the IaC runners) are declared under a named entry
+    in ``tasks.yaml``'s top-level ``runners:`` block. This resolves *kind*
+    through the same canonical registry resolver
+    (``RunnerRegistry._definition_for``) `Orchestrator` already uses for
+    orchestrator-run steps, so a CLI-triggered ``iac``/``drift`` command
+    honours a matching named runner instead of silently ignoring it. When no
+    named runner definition exists, this falls back to the exact same empty
+    default this function has always synthesized -- strictly non-regressing.
     """
-    from hivepilot.models import RunnerDefinition, RunnerKind, TaskStep
+    from hivepilot.models import TaskStep
     from hivepilot.registry import resolve_runner_class
     from hivepilot.runners.base import RunnerPayload
     from hivepilot.services import policy_service
@@ -2118,7 +2151,7 @@ def _run_iac_operation(
         raise typer.BadParameter(f"Unknown project: {project_name}")
     project = projects.projects[project_name]
 
-    definition = RunnerDefinition(name=kind, kind=cast(RunnerKind, kind), command=operation)
+    definition = _resolve_iac_runner_definition(kind).model_copy(update={"command": operation})
     step = TaskStep(name=f"iac-{operation}", runner=kind, command=operation)
 
     # Mirrors Orchestrator._resolve_secrets: direct step.secrets form (always
@@ -2292,8 +2325,12 @@ def drift_scan_cmd(
         raise typer.BadParameter(f"Unknown project: {project}")
     project_cfg = projects.projects[project]
 
+    definition = _resolve_iac_runner_definition(runner)
+
     try:
-        result = drift_service.scan_and_record(project_cfg, runner_kind=runner, tenant=tenant)
+        result = drift_service.scan_and_record(
+            project_cfg, runner_kind=runner, tenant=tenant, definition=definition
+        )
     except (RuntimeError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
