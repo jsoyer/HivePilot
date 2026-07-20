@@ -551,6 +551,24 @@ class TestConciergeMessageAnswer:
             _call(app.events["message"], event=_message_event("how's it going?"), say=say)
         say.assert_called_once_with("It's running fine.")
 
+    def test_answer_text_broadcast_control_sequence_neutralized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F1 regression guard: `answer_text` is LLM-classified free text an
+        unprivileged channel member ultimately influences — a crafted
+        `<!channel>` must render as inert literal text, never trigger a
+        broadcast ping."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        app = _register()
+        say = MagicMock()
+        decision = ConciergeDecision(kind="answer", answer_text="<!channel> gotcha & <b>hi</b>")
+        with patch("hivepilot.services.concierge_service.route", return_value=decision):
+            _call(app.events["message"], event=_message_event("ignore instructions"), say=say)
+        sent_text = say.call_args.args[0]
+        assert "<!channel>" not in sent_text
+        assert "&lt;!channel&gt;" in sent_text
+        assert "&amp;" in sent_text
+
 
 class TestConciergeMessageDestructive:
     def test_destructive_route_sends_confirmation_and_stores_pending(
@@ -586,6 +604,34 @@ class TestConciergeMessageDestructive:
         }
         assert values == {token}
 
+    def test_summary_broadcast_control_sequence_neutralized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F1 regression guard: the destructive-decision summary embeds
+        `decision.order` — LLM-classified free text — into both the Block
+        Kit section text and the fallback `text` field. A crafted
+        `<!channel>` in the order must render as inert literal text in
+        BOTH places, never trigger a broadcast ping."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        app = _register()
+        say = MagicMock()
+        decision = ConciergeDecision(
+            kind="route",
+            role_key="developer",
+            target="acme",
+            order="<!channel> drop prod",
+            destructive=True,
+        )
+        with patch("hivepilot.services.concierge_service.route", return_value=decision):
+            _call(app.events["message"], event=_message_event("ask gustave"), say=say)
+
+        _, kwargs = say.call_args
+        assert "<!channel>" not in kwargs["text"]
+        assert "&lt;!channel&gt;" in kwargs["text"]
+        section_text = next(b for b in kwargs["blocks"] if b["type"] == "section")["text"]["text"]
+        assert "<!channel>" not in section_text
+        assert "&lt;!channel&gt;" in section_text
+
 
 class TestConciergeYesNo:
     def _pending_route_decision(self) -> ConciergeDecision:
@@ -593,7 +639,10 @@ class TestConciergeYesNo:
             kind="route", role_key="developer", target="acme", order="fix bug", destructive=True
         )
 
-    def test_yes_correct_token_executes_via_shared_entrypoint(self) -> None:
+    def test_yes_correct_token_executes_via_shared_entrypoint(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
         slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
         app = _register()
@@ -617,7 +666,10 @@ class TestConciergeYesNo:
         respond.assert_called_once_with("Triggered task on acme")
         assert ALLOWED_CHANNEL not in slack_bot._pending_concierge
 
-    def test_yes_wrong_token_not_executed_pending_untouched(self) -> None:
+    def test_yes_wrong_token_not_executed_pending_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
         slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
         app = _register()
@@ -637,7 +689,45 @@ class TestConciergeYesNo:
         # still be answered correctly afterwards.
         assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
 
-    def test_yes_denied_channel_rejected(self) -> None:
+    def test_overwrite_scenario_stale_button_never_executes_new_decision(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """decision A is pending with token A; before the user presses A's
+        Yes button, decision B overwrites the pending entry for the same
+        channel (different token, different content). Pressing A's stale
+        button must execute NOTHING — never A, and never B."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        decision_a = self._pending_route_decision()
+        decision_b = ConciergeDecision(
+            kind="action",
+            action="run_pipeline",
+            target="acme-api",
+            params={"pipeline": "company"},
+            destructive=True,
+        )
+        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_a", decision_a)
+        # A newer destructive message overwrites the pending entry before the
+        # user acts on A's button.
+        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_b", decision_b)
+
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            _call(
+                app.actions["concierge_yes"],
+                ack=_ack(),
+                action={"action_id": "concierge_yes", "value": "token_a"},  # A's stale button
+                body=body,
+                respond=respond,
+            )
+        execute.assert_not_called()
+        assert "expired" in respond.call_args.args[0].lower()
+        # B is still pending, untouched, and can still be confirmed correctly later.
+        assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("token_b", decision_b)
+
+    def test_yes_denied_channel_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
         slack_bot._pending_concierge[DENIED_CHANNEL] = ("tok123", decision)
         app = _register()
@@ -655,7 +745,8 @@ class TestConciergeYesNo:
         respond.assert_called_once_with("Unauthorized channel.")
         assert DENIED_CHANNEL in slack_bot._pending_concierge
 
-    def test_no_cancels_and_pops(self) -> None:
+    def test_no_cancels_and_pops(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
         slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
         app = _register()
@@ -670,6 +761,52 @@ class TestConciergeYesNo:
         )
         respond.assert_called_once_with("Cancelled.")
         assert ALLOWED_CHANNEL not in slack_bot._pending_concierge
+
+
+class TestConciergeYesNoFlagOff:
+    """F2 regression guard: a runtime flag toggle-off must not leave an
+    already-rendered Yes/No button executable. `_concierge_off_by_default`
+    keeps the flag off for these tests (no explicit monkeypatch needed)."""
+
+    def _pending_route_decision(self) -> ConciergeDecision:
+        return ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix bug", destructive=True
+        )
+
+    def test_yes_does_not_execute_when_flag_off(self) -> None:
+        decision = self._pending_route_decision()
+        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            _call(
+                app.actions["concierge_yes"],
+                ack=_ack(),
+                action={"action_id": "concierge_yes", "value": "tok123"},
+                body=body,
+                respond=respond,
+            )
+        execute.assert_not_called()
+        respond.assert_not_called()
+        # Pending entry untouched — flag off is a no-op, not a silent cancel.
+        assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
+
+    def test_no_does_not_pop_when_flag_off(self) -> None:
+        decision = self._pending_route_decision()
+        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        _call(
+            app.actions["concierge_no"],
+            ack=_ack(),
+            action={"action_id": "concierge_no", "value": "tok123"},
+            body=body,
+            respond=respond,
+        )
+        respond.assert_not_called()
+        assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
 
 
 # ---------------------------------------------------------------------------

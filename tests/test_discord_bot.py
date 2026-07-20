@@ -583,6 +583,25 @@ def _fake_describe(**kwargs: Any) -> Callable:
     return decorator
 
 
+class _FakeAllowedMentions:
+    """Stand-in for `discord.AllowedMentions` — `.none()` returns a distinct
+    sentinel instance so tests can assert every concierge `send(...)` call
+    passes `allowed_mentions=discord.AllowedMentions.none()` (suppresses
+    `@everyone`/`@here`/role pings from attacker-influenced text)."""
+
+    _NONE_SENTINEL = object()
+
+    def __init__(self, sentinel: object) -> None:
+        self._sentinel = sentinel
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _FakeAllowedMentions) and self._sentinel == other._sentinel
+
+    @staticmethod
+    def none() -> "_FakeAllowedMentions":
+        return _FakeAllowedMentions(_FakeAllowedMentions._NONE_SENTINEL)
+
+
 @pytest.fixture()
 def fake_discord(monkeypatch: pytest.MonkeyPatch):
     """Inject a fake `discord` package tree into sys.modules so the lazy
@@ -596,6 +615,7 @@ def fake_discord(monkeypatch: pytest.MonkeyPatch):
     fake_discord_mod.Intents = _FakeIntents  # type: ignore[attr-defined]
     fake_discord_mod.Client = _FakeClient  # type: ignore[attr-defined]
     fake_discord_mod.Interaction = _FakeInteraction  # type: ignore[attr-defined]
+    fake_discord_mod.AllowedMentions = _FakeAllowedMentions  # type: ignore[attr-defined]
 
     fake_app_commands = types.ModuleType("discord.app_commands")
     fake_app_commands.CommandTree = _FakeCommandTree  # type: ignore[attr-defined]
@@ -769,7 +789,9 @@ class TestOnMessageConciergeAnswer:
         decision = ConciergeDecision(kind="answer", answer_text="It's running fine.")
         with patch("hivepilot.services.concierge_service.route", return_value=decision):
             asyncio.run(client.events["on_message"](message))
-        message.channel.send.assert_awaited_once_with("It's running fine.")
+        message.channel.send.assert_awaited_once_with(
+            "It's running fine.", allowed_mentions=discord_bot._no_mentions()
+        )
 
 
 class TestOnMessageConciergeDestructive:
@@ -789,6 +811,9 @@ class TestOnMessageConciergeDestructive:
         message.channel.send.assert_awaited_once()
         sent_text = message.channel.send.call_args.args[0]
         assert "yes " in sent_text
+        assert (
+            message.channel.send.call_args.kwargs["allowed_mentions"] == discord_bot._no_mentions()
+        )
 
         assert ALLOWED_CHANNEL in discord_bot._pending_concierge
         token, stored_decision = discord_bot._pending_concierge[ALLOWED_CHANNEL]
@@ -820,7 +845,9 @@ class TestOnMessageConciergeYesNo:
         args = execute.call_args.args
         assert args[1] is decision
         assert args[2] == f"discord:{ALLOWED_CHANNEL}"
-        message.channel.send.assert_awaited_once_with("Triggered task on acme")
+        message.channel.send.assert_awaited_once_with(
+            "Triggered task on acme", allowed_mentions=discord_bot._no_mentions()
+        )
         assert ALLOWED_CHANNEL not in discord_bot._pending_concierge
 
     def test_yes_wrong_token_not_executed_pending_untouched(
@@ -837,7 +864,42 @@ class TestOnMessageConciergeYesNo:
         execute.assert_not_called()
         message.channel.send.assert_awaited_once()
         assert "expired" in message.channel.send.call_args.args[0].lower()
+        assert (
+            message.channel.send.call_args.kwargs["allowed_mentions"] == discord_bot._no_mentions()
+        )
         assert discord_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
+
+    def test_overwrite_scenario_stale_token_never_executes_new_decision(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """decision A is pending with token A; before the user replies
+        "yes <token_a>", decision B overwrites the pending entry for the
+        same channel (different token, different content). Replying with
+        A's stale token must execute NOTHING — never A, and never B."""
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision_a = self._pending_route_decision()
+        decision_b = ConciergeDecision(
+            kind="action",
+            action="run_pipeline",
+            target="acme-api",
+            params={"pipeline": "company"},
+            destructive=True,
+        )
+        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_a", decision_a)
+        # A newer destructive message overwrites the pending entry before the
+        # user replies to A's confirmation prompt.
+        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_b", decision_b)
+
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes token_a")  # A's stale token
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_not_called()
+        message.channel.send.assert_awaited_once()
+        assert "expired" in message.channel.send.call_args.args[0].lower()
+        # B is still pending, untouched, and can still be confirmed correctly later.
+        assert discord_bot._pending_concierge[ALLOWED_CHANNEL] == ("token_b", decision_b)
 
     def test_yes_denied_channel_falls_through_no_pending_for_that_channel(
         self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
@@ -864,5 +926,7 @@ class TestOnMessageConciergeYesNo:
         client = _FakeClient.instances[0]
         message = _FakeMessage("no")
         asyncio.run(client.events["on_message"](message))
-        message.channel.send.assert_awaited_once_with("Cancelled.")
+        message.channel.send.assert_awaited_once_with(
+            "Cancelled.", allowed_mentions=discord_bot._no_mentions()
+        )
         assert ALLOWED_CHANNEL not in discord_bot._pending_concierge

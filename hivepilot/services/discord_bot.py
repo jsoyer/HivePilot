@@ -193,6 +193,20 @@ def _exec_status() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _no_mentions() -> Any:
+    """`discord.AllowedMentions.none()` — suppresses `@everyone`/`@here`/role
+    pings. Every concierge-originated `message.channel.send(...)` passes this
+    (answer text and destructive-decision summaries are attacker-influenced —
+    LLM-classified free text an unprivileged channel member typed — so a
+    crafted "@everyone ..." must never actually ping). Lazily imported: this
+    module only lazily imports `discord` inside `run_gateway` (optional
+    dependency), and these concierge helpers are only ever invoked from
+    within that gateway-mode code path."""
+    import discord
+
+    return discord.AllowedMentions.none()
+
+
 async def _execute_concierge_discord(
     decision: "ConciergeDecision", channel_id: int, message: Any
 ) -> None:
@@ -211,10 +225,10 @@ async def _execute_concierge_discord(
                 _get_orch(), decision, f"discord:{channel_id}"
             ),
         )
-        await message.channel.send(result)
+        await message.channel.send(result, allowed_mentions=_no_mentions())
     except Exception as exc:
         logger.error("discord.concierge.execute_error", error=str(exc))
-        await message.channel.send(f"Error: {exc}")
+        await message.channel.send(f"Error: {exc}", allowed_mentions=_no_mentions())
 
 
 async def _handle_concierge_decision_discord(
@@ -227,7 +241,8 @@ async def _handle_concierge_decision_discord(
     guards a future kind, never exercised today."""
     if decision.kind == "answer":
         await message.channel.send(
-            decision.answer_text or "I'm not sure how to help with that. Try /help."
+            decision.answer_text or "I'm not sure how to help with that. Try /help.",
+            allowed_mentions=_no_mentions(),
         )
         return
     if not decision.destructive:
@@ -240,7 +255,8 @@ async def _handle_concierge_decision_discord(
     _pending_concierge[channel_id] = (token, decision)
     summary = _summarize_concierge_decision(decision)
     await message.channel.send(
-        f"⚠️ This will {summary}. Reply 'yes {token}' to confirm or 'no' to cancel."
+        f"⚠️ This will {summary}. Reply 'yes {token}' to confirm or 'no' to cancel.",
+        allowed_mentions=_no_mentions(),
     )
 
 
@@ -256,12 +272,15 @@ async def _handle_concierge_confirmation_discord(
         return
     if content.strip().lower() == "no":
         _pending_concierge.pop(channel_id, None)
-        await message.channel.send("Cancelled.")
+        await message.channel.send("Cancelled.", allowed_mentions=_no_mentions())
         return
     supplied_token = content.split(None, 1)[1].strip() if " " in content else ""
     stored_token, decision = pending
     if supplied_token != stored_token:
-        await message.channel.send("⚠️ This confirmation has expired — please re-send your request.")
+        await message.channel.send(
+            "⚠️ This confirmation has expired — please re-send your request.",
+            allowed_mentions=_no_mentions(),
+        )
         return
     _pending_concierge.pop(channel_id, None)
     await _execute_concierge_discord(decision, channel_id, message)

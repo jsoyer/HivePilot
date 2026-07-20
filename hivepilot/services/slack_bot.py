@@ -162,6 +162,18 @@ def _concierge_blocks(token: str, summary: str) -> list[dict[str, Any]]:
     ]
 
 
+def _slack_escape(text: str) -> str:
+    """Slack's standard mrkdwn escaping (`&`/`<`/`>`) — makes control
+    sequences like `<!channel>`/`<!here>`/`<!everyone>` and the `<...>` link
+    syntax render as inert literal text instead of triggering a broadcast
+    ping or an obfuscated link. MUST be applied to any concierge-originated
+    text that traces back to LLM-classified user input (`answer_text`, a
+    destructive decision's summary) before it reaches `say`/`respond` —
+    never applied to our own static labels, the confirmation token, or
+    button values."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _execute_concierge(decision: "ConciergeDecision", channel_id: str, respond: Any) -> None:
     """Execute an already-confirmed concierge decision via the SAME
     auth-checked entrypoint the Signal/generic ChatOps text-confirm path
@@ -187,7 +199,8 @@ def _handle_concierge_message(decision: "ConciergeDecision", channel_id: str, sa
     `concierge_service`'s hardcoded table) — the non-destructive branch only
     guards a future kind, never exercised today."""
     if decision.kind == "answer":
-        say(decision.answer_text or "I'm not sure how to help with that. Try /help.")
+        text = decision.answer_text or "I'm not sure how to help with that. Try /help."
+        say(_slack_escape(text))
         return
     if not decision.destructive:
         _execute_concierge(decision, channel_id, say)
@@ -197,7 +210,11 @@ def _handle_concierge_message(decision: "ConciergeDecision", channel_id: str, sa
 
     token = uuid.uuid4().hex[:8]
     _pending_concierge[channel_id] = (token, decision)
-    summary = _summarize_concierge_decision(decision)
+    # `summary` is derived from decision fields ultimately traced back to the
+    # LLM classifier's read of user-typed text (role/target/order) — escape
+    # it before it reaches either the Block Kit section text or the
+    # fallback `text` field, so a crafted "<!channel> ..." can't ping.
+    summary = _slack_escape(_summarize_concierge_decision(decision))
     blocks = _concierge_blocks(token, summary)
     say(blocks=blocks, text=f"⚠️ This will {summary}. Confirm?")
 
@@ -407,6 +424,12 @@ def _register_handlers(bolt_app) -> None:
     @bolt_app.action("concierge_yes")
     def handle_concierge_yes(ack, action, body, respond):
         ack()
+        # A runtime flag toggle-off must not leave an already-rendered Yes
+        # button executable — unlike Discord's confirm (which lives inside
+        # `on_message`, itself flag-gated), these action handlers are
+        # registered unconditionally, so the gate lives here instead.
+        if not settings.chatops_concierge_enabled:
+            return
         channel_id = ((body or {}).get("channel") or {}).get("id", "")
         if not _is_allowed(channel_id):
             respond("Unauthorized channel.")
@@ -429,6 +452,8 @@ def _register_handlers(bolt_app) -> None:
     @bolt_app.action("concierge_no")
     def handle_concierge_no(ack, action, body, respond):
         ack()
+        if not settings.chatops_concierge_enabled:
+            return
         channel_id = ((body or {}).get("channel") or {}).get("id", "")
         if not _is_allowed(channel_id):
             respond("Unauthorized channel.")
