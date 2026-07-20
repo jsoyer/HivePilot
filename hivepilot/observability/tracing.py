@@ -197,6 +197,46 @@ def record_exception_on_span(span: Any, exc: BaseException) -> None:  # noqa: AN
         pass
 
 
+def traceparent_env() -> dict[str, str]:
+    """Return ``{"TRACEPARENT": "<w3c traceparent header>"}`` for the
+    currently-active, recording span — or ``{}`` when OTel isn't installed,
+    tracing is off, or there's no active/recording span. Never raises.
+
+    This is the single choke point `merge_environments`
+    (`hivepilot.utils.env`) calls to propagate trace context into every
+    runner subprocess (~15 runners + drift_service all funnel through it),
+    so a downstream tool that itself emits OTel spans (a claude CLI plugin,
+    an ansible/terraform wrapper, ...) can nest under the `step.run` span
+    that invoked it. The header uses the UPPERCASE ``TRACEPARENT`` key —
+    env var names are conventionally uppercase; the W3C spec itself only
+    mandates the lowercase HTTP header name ``traceparent``.
+
+    When OTel isn't installed at all, the guarded import fails and this
+    returns ``{}`` — a pure no-op, so behavior stays byte-identical to
+    before this function existed.
+    """
+    try:
+        from opentelemetry import trace
+        from opentelemetry.propagate import inject
+    except ImportError:
+        return {}
+    try:
+        span = trace.get_current_span()
+        if not span.is_recording():
+            return {}
+        span_context = span.get_span_context()
+        if not span_context.is_valid:
+            return {}
+        carrier: dict[str, str] = {}
+        inject(carrier)
+        traceparent = carrier.get("traceparent")
+        if not traceparent:
+            return {}
+        return {"TRACEPARENT": traceparent}
+    except Exception:  # noqa: BLE001 — tracing must never break a run
+        return {}
+
+
 def current_context() -> Any:  # noqa: ANN401
     """Capture the currently-active OTel context for propagation across a
     thread-pool boundary (`concurrent.futures.ThreadPoolExecutor` worker
