@@ -43,9 +43,27 @@ projects:
     secrets:
       GITHUB_TOKEN:
         source: env
+      # KMS envelope-encrypted secret (see SECURITY.md → KMS backend):
+      DB_PASSWORD:
+        source: kms
+        provider: aws            # or HIVEPILOT_KMS_PROVIDER
+        encrypted_data_key: "<base64>"
+        ciphertext: "<base64>"   # AES-GCM ciphertext (tag appended, or add `tag:`)
+        iv: "<base64>"
+      # 1Password (Connect via op_connect_host, OR direct service-account when
+      # only HIVEPILOT_OP_SERVICE_ACCOUNT_TOKEN is set):
+      API_KEY:
+        source: onepassword
+        ref: "op://Prod/acme-api/api-key"
     env:
       GITHUB_TOKEN: "${secret:GITHUB_TOKEN}"
 ```
+
+Secrets-related environment settings (`HIVEPILOT_` prefix): `KMS_PROVIDER` /
+`KMS_KEY_ID` (KMS backend), `OP_INTEGRATION_NAME` / `OP_INTEGRATION_VERSION`
+(1Password direct mode), and `SECRETS_CACHE_TTL_SECONDS` — the opt-in in-memory
+secret cache TTL (default `0` = disabled; flush with `hivepilot secrets
+cache-clear`). See [SECURITY.md](SECURITY.md).
 
 ## tasks.yaml — `runners:` + `tasks:`
 

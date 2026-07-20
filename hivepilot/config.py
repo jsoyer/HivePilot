@@ -249,6 +249,40 @@ class Settings(BaseSettings):
     # the same Connect endpoint (service-account credential mode). Used only
     # when no Connect token is set. env: HIVEPILOT_OP_SERVICE_ACCOUNT_TOKEN
     op_service_account_token: str | None = None
+    # 1Password direct service-account (non-Connect) mode (plugins/onepassword.py):
+    # when `op_connect_host` is UNSET but `op_service_account_token` IS set, the
+    # plugin resolves `op://vault/item/field` directly against api.1password.com
+    # via the official async `onepassword-sdk` package (imported lazily; never
+    # installed by the plugin). These two identify the integration to the SDK's
+    # `Client.authenticate(...)` — cosmetic labels, never secrets.
+    # env: HIVEPILOT_OP_INTEGRATION_NAME / HIVEPILOT_OP_INTEGRATION_VERSION
+    op_integration_name: str = "HivePilot"
+    op_integration_version: str = "1.0.0"
+    # ---- KMS envelope-encryption secrets provider (plugins/kms.py) ----
+    # Config for the first-party `kms` secrets-backend plugin: decrypts an
+    # operator-provided ciphertext at runtime via their OWN cloud KMS (AWS KMS /
+    # GCP Cloud KMS / Azure Key Vault). Two spec modes (auto-detected by the
+    # ref.spec keys present): DIRECT (`ciphertext` — a KMS-encrypted blob ≤4KB
+    # decrypted straight by the provider) and ENVELOPE (`encrypted_data_key` +
+    # `ciphertext` + `iv` (+`tag`) — KMS-decrypt a small data key, then
+    # AES-256-GCM-decrypt a local ciphertext with it). All provider SDKs and
+    # `cryptography` are imported lazily; a missing lib/provider raises a clear
+    # RuntimeError naming ONLY the lib/provider — never a plaintext or data key.
+    # Provider — "aws" | "gcp" | "azure"; a ref.spec `provider` overrides this
+    # per-secret. env: HIVEPILOT_KMS_PROVIDER
+    kms_provider: str | None = None
+    # Fully-qualified KMS key id/resource name used to decrypt the data key
+    # (required for gcp/azure; AWS direct-mode embeds it in the ciphertext). A
+    # ref.spec `key_id` overrides this per-secret. env: HIVEPILOT_KMS_KEY_ID
+    kms_key_id: str | None = None
+    # ---- Secret TTL cache / rotation (hivepilot/services/secrets_service.py) ----
+    # Opt-in in-memory, process-local TTL cache for resolved secret values so a
+    # run doesn't re-hit the provider for every step, and rotated secrets are
+    # picked up after expiry. 0 (default) = DISABLED = today's always-live
+    # behaviour (backend called every resolution). Cached plaintext is held only
+    # in memory, NEVER persisted to disk, TTL-bounded, and flushed by
+    # `hivepilot secrets cache-clear`. env: HIVEPILOT_SECRETS_CACHE_TTL_SECONDS
+    secrets_cache_ttl_seconds: int = 0
     worker_retries: int = 2  # retry attempts on transient worker dispatch failures (W3)
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
@@ -333,6 +367,10 @@ class Settings(BaseSettings):
     #      _ONEPASSWORD_ / _RTK_ / _SAMPLE_ENABLED
     herdr_enabled: bool = True
     infisical_enabled: bool = True
+    # KMS envelope-encryption secrets backend (plugins/kms.py) — opt-OUT, like
+    # infisical_enabled/onepassword_enabled: register() returns {} when False.
+    # env: HIVEPILOT_KMS_ENABLED
+    kms_enabled: bool = True
     obsidian_enabled: bool = True
     onepassword_enabled: bool = True
     rtk_enabled: bool = True

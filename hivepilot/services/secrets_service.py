@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -15,9 +18,57 @@ from hivepilot.registry import (
     SecretRef,
     SecretsRegistry,
 )
+from hivepilot.services.config_provenance import register_secret_value
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Secret TTL cache / rotation (Phase 19 follow-up).
+#
+# SECURITY (deliberate, opt-in tradeoff): caching resolved PLAINTEXT secret
+# values in memory. This is OFF by default (`secrets_cache_ttl_seconds == 0`)
+# and, when enabled, is:
+#   * process-local — a plain module dict, never shared across processes;
+#   * NEVER persisted — held only in memory, never written to disk / state DB;
+#   * TTL-bounded — an entry older than the configured TTL is discarded and the
+#     value re-fetched (so a rotated secret is picked up after expiry);
+#   * flushable — `clear_secret_cache()` (and `hivepilot secrets cache-clear`)
+#     empty it immediately, forcing a live re-fetch on the next resolution.
+# A cached value can never outlive its TTL: every read checks the monotonic
+# expiry BEFORE returning, and every hit still registers the value for masking
+# so no sink can leak it. When the TTL is 0 the cache path is skipped entirely
+# and behaviour is byte-identical to the pre-cache implementation.
+#
+# `_now` is a monotonic clock indirection so TTL expiry is testable (patch
+# `secrets_service._now`) without real sleeps; monotonic time is also immune to
+# wall-clock adjustments that could otherwise extend an entry's lifetime.
+# ---------------------------------------------------------------------------
+
+_cache_lock = threading.Lock()
+# cache_key -> (monotonic_expiry, plaintext_value)
+_SECRET_CACHE: Dict[str, tuple[float, str]] = {}
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _cache_key(source: str, spec: Dict[str, Any]) -> str:
+    """A stable key from (source, sorted spec items). The spec carries only
+    non-sensitive locators (env var name, KMS ciphertext, vault path, ...) —
+    never a plaintext — and is hashed regardless, so the key leaks nothing."""
+    payload = json.dumps(
+        {"source": source, "spec": spec}, sort_keys=True, default=str, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def clear_secret_cache() -> None:
+    """Drop all cached secret values (rotation flush / process reset / tests)."""
+    with _cache_lock:
+        _SECRET_CACHE.clear()
 
 
 class EnvSecretsBackend:
@@ -139,13 +190,40 @@ class SecretResolver:
 
     def resolve(self, config: Dict[str, Any]) -> dict[str, str]:
         resolved: dict[str, str] = {}
+        ttl = getattr(settings, "secrets_cache_ttl_seconds", 0) or 0
         for name, spec in config.items():
             source = spec.get("source", "env")
             backend = SECRETS_MAP.get(source)
             if backend is None:
                 raise ValueError(f"Unknown secret source: {source}")
-            resolved[name] = backend.resolve(SecretRef(source=source, spec=spec), settings)
+            if ttl > 0:
+                resolved[name] = self._resolve_cached(source, spec, backend, ttl)
+            else:
+                # TTL disabled (default) — always-live path, byte-identical to
+                # the pre-cache implementation (no store, no self-registration;
+                # the caller registers the value for masking).
+                resolved[name] = backend.resolve(SecretRef(source=source, spec=spec), settings)
         return resolved
+
+    def _resolve_cached(self, source: str, spec: Dict[str, Any], backend: Any, ttl: int) -> str:
+        """Return a cached value when still within its TTL, else resolve live
+        and store it. Every path — hit OR miss — registers the value for masking
+        so a cache hit can never leak past a redaction sink."""
+        key = _cache_key(source, spec)
+        now = _now()
+        with _cache_lock:
+            entry = _SECRET_CACHE.get(key)
+            if entry is not None and entry[0] > now:
+                cached_value = entry[1]
+                register_secret_value(cached_value)
+                return cached_value
+        # Miss or expiry — resolve live OUTSIDE the lock (a backend call can be
+        # slow / re-entrant; we never hold the lock across it).
+        value = backend.resolve(SecretRef(source=source, spec=spec), settings)
+        with _cache_lock:
+            _SECRET_CACHE[key] = (now + ttl, value)
+        register_secret_value(value)
+        return value
 
     def _from_env(self, spec: Dict[str, Any]) -> str:
         return SECRETS_MAP["env"].resolve(SecretRef(source="env", spec=spec), settings)

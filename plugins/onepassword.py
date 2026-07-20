@@ -69,7 +69,9 @@ Configured via ``HIVEPILOT_OP_*`` (``hivepilot/config.py``): ``op_connect_host``
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Coroutine
 
 from hivepilot.config import Settings
 from hivepilot.plugins import HealthStatus
@@ -83,9 +85,46 @@ try:
 except ImportError:  # onepasswordconnectsdk is optional — never installed by this plugin
     new_client = None  # type: ignore[assignment,misc]
 
+# Direct (non-Connect) service-account mode: the official async `onepassword`
+# SDK (`pip install onepassword-sdk`) resolves an `op://vault/item/field`
+# reference straight against api.1password.com — no self-hosted Connect server.
+# Lazy/optional, like `new_client` above: absent -> only the direct path fails,
+# at resolve time, with a redacted lib-only error.
+try:
+    from onepassword.client import Client as _OPClient
+except ImportError:  # onepassword-sdk is optional — never installed by this plugin
+    _OPClient = None  # type: ignore[assignment,misc]
+
 # Provider name — the key this backend registers under in SECRETS_MAP and the
 # only identifier (besides the reference identity) ever surfaced in an error.
 _PROVIDER = "onepassword"
+
+
+def _run_coro(coro: "Coroutine[Any, Any, Any]") -> Any:
+    """Run *coro* to completion synchronously, future-proofed against a caller
+    that is ALREADY inside a running event loop (e.g. a future async runner
+    invoking this synchronous ``resolve()``).
+
+    ``asyncio.run()`` raises ``RuntimeError: asyncio.run() cannot be called
+    from a running event loop`` when one is already active. Today's callers
+    (``SecretResolver.resolve`` / ``secret_refs`` / the CLI / the orchestrator)
+    are all synchronous, so the running-loop branch is not exercised in
+    practice yet — but this keeps the plugin's public ``resolve()`` contract
+    (a plain synchronous call) safe under ANY caller, present or future. When a
+    loop is already running, the coroutine runs on a short-lived, single-use
+    worker thread (its own fresh loop via ``asyncio.run``) so it never competes
+    with the caller's loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop running in this thread — the common case. Safe to drive the
+        # coroutine directly.
+        return asyncio.run(coro)
+    # A loop IS already running in this thread — asyncio.run() would raise.
+    # Hand the coroutine to a dedicated worker thread with its own fresh loop.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def _parse_ref(ref: SecretRef) -> tuple[str, str, str]:
@@ -169,6 +208,14 @@ class OnePasswordBackend:
     name = _PROVIDER
 
     def resolve(self, ref: SecretRef, settings: Settings) -> str:
+        # Direct (non-Connect) service-account mode is selected ONLY when no
+        # Connect host is configured but a service-account token IS. When a
+        # Connect host is set, the Connect path is always used — even with only
+        # a service-account token — so existing Connect deployments are
+        # unaffected (backward-compatible selection).
+        if not settings.op_connect_host and settings.op_service_account_token:
+            return self._resolve_service_account(ref, settings)
+
         vault, item, field = _parse_ref(ref)
         identity = f"op://{vault}/{item}/{field}"
 
@@ -206,6 +253,76 @@ class OnePasswordBackend:
             field=field,
             identity=identity,
         )
+
+    def _resolve_service_account(self, ref: SecretRef, settings: Settings) -> str:
+        """Direct (non-Connect) resolution via the official async
+        ``onepassword-sdk`` against api.1password.com. Reuses the same
+        ``op://vault/item/field`` reference model; the reference identity is the
+        ONLY thing (besides the provider) ever surfaced in an error — never the
+        token or the fetched value."""
+        reference = ref.spec.get("reference") or ref.spec.get("ref")
+        if reference:
+            if not isinstance(reference, str) or not reference.startswith("op://"):
+                raise RuntimeError(
+                    f"{_PROVIDER} secret 'reference' must be an 'op://vault/item/field' reference"
+                )
+        else:
+            vault, item, field = _parse_ref(ref)
+            reference = f"op://{vault}/{item}/{field}"
+        identity = reference
+
+        if _OPClient is None:
+            raise RuntimeError(
+                f"{_PROVIDER} secret {identity!r} cannot be resolved: the "
+                "'onepassword-sdk' package is required for 1Password service-account "
+                "(non-Connect) mode (pip install onepassword-sdk)"
+            )
+
+        token = settings.op_service_account_token
+        try:
+            # The official SDK is async; run its authenticate+resolve to
+            # completion synchronously. Construction is INSIDE this guard: an
+            # authenticate() failure can embed the token in its message — the
+            # exact leak this redact-and-reraise boundary prevents.
+            value = _run_coro(
+                self._fetch_service_account(
+                    reference=reference,
+                    token=token,
+                    integration_name=settings.op_integration_name,
+                    integration_version=settings.op_integration_version,
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "plugin.onepassword.sa_fetch_failed",
+                provider=_PROVIDER,
+                reference=identity,
+                error_type=type(exc).__name__,
+            )
+            raise RuntimeError(
+                f"{_PROVIDER} failed to resolve secret {identity!r} ({type(exc).__name__})"
+            ) from None
+
+        if not value or not isinstance(value, str):
+            # Fail-closed on an empty/missing value (mirrors the Connect path
+            # and EnvSecretsBackend's `if not value: raise`).
+            raise RuntimeError(f"{_PROVIDER} returned no usable value for secret {identity!r}")
+        return value
+
+    async def _fetch_service_account(
+        self,
+        *,
+        reference: str,
+        token: str,
+        integration_name: str,
+        integration_version: str,
+    ) -> Any:
+        client = await _OPClient.authenticate(
+            auth=token,
+            integration_name=integration_name,
+            integration_version=integration_version,
+        )
+        return await client.secrets.resolve(reference)
 
     def _build_client(self, host: str, token: str) -> Any:
         # Positional (url, token) — matches onepasswordconnectsdk.new_client.

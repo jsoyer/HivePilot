@@ -75,10 +75,61 @@ or the store path.
 
 **Value masking**: every resolved secret value is registered and substring-masked in
 every sink — logs, notifications, the state DB, orchestrator error details, Obsidian
-notes, distilled lessons, and artifacts.
+notes, distilled lessons, and artifacts. Cache hits (see the TTL cache below) register
+the value for masking too, so a cached value can never leak.
 
-Secrets backends ship as plugins: Infisical, 1Password (Connect), Bitwarden,
-Vaultwarden (via the `bw` CLI, masked).
+Secrets backends ship as plugins: Infisical, 1Password (Connect **and** direct
+service-account), Bitwarden, Vaultwarden (via the `bw` CLI, masked), and **KMS**
+(cloud-KMS envelope/direct decryption).
+
+### KMS envelope-encryption backend (`source: kms`)
+
+Decrypts operator-provided **ciphertext** at runtime via the operator's OWN cloud KMS
+(`plugins/kms.py`). Nothing sensitive is stored in HivePilot config — only ciphertext
+the operator produced with their key. Two spec modes, auto-detected by the `ref.spec`
+keys present:
+
+- **direct** — `{"ciphertext": "<base64>"}`: a KMS-encrypted blob (≤4KB) decrypted
+  straight by the provider Decrypt API; the plaintext IS the secret.
+- **envelope** — `{"encrypted_data_key","ciphertext","iv"[,"tag"]}`: the provider
+  KMS-decrypts a small wrapped data key, then the local ciphertext is
+  AES-256-GCM-decrypted with it (via `cryptography`). `tag` is optional — when absent,
+  the GCM tag is assumed appended to `ciphertext`.
+
+Providers (`ref.spec["provider"]` or `HIVEPILOT_KMS_PROVIDER`): `aws` (boto3), `gcp`
+(`google-cloud-kms`), `azure` (`azure-keyvault-keys` + `azure-identity`). `key_id`
+comes from `ref.spec["key_id"]` or `HIVEPILOT_KMS_KEY_ID` (required for gcp/azure;
+AWS direct mode embeds it in the ciphertext). Install with `pip install
+hivepilot[kms]` (add `[cloud]` for the AWS boto3 client).
+
+**Anti-leak:** a decrypted plaintext or data key is never logged or returned in an
+error — every KMS error names only the provider / library / spec-field. A tampered
+ciphertext fails GCM authentication and leaks nothing.
+
+### 1Password direct service-account (non-Connect) mode
+
+The `onepassword` backend now supports a second auth mode. When `op_connect_host` is
+set it uses the Connect SDK as before; when `op_connect_host` is **unset** but
+`op_service_account_token` is set, it resolves `op://vault/item/field` directly against
+`api.1password.com` via the official async `onepassword-sdk` (`pip install
+hivepilot[onepassword]`) — no self-hosted Connect server. Selection is
+backward-compatible: an existing Connect host always keeps the Connect path.
+
+### Secret TTL cache / rotation (opt-in)
+
+`secrets_cache_ttl_seconds` (default `0` = **disabled** = always-live, byte-identical
+to prior behaviour). When set > 0, resolved secret values are cached **in memory,
+process-local**, for that many seconds so a run doesn't re-hit the provider for every
+step, and a rotated secret is picked up after the TTL expires.
+
+Security tradeoff (deliberate, opt-in): cached values are plaintext held **only in
+memory** — never persisted to disk or the state DB, TTL-bounded (an entry older than
+the TTL is discarded and re-fetched), and every hit re-registers the value for masking.
+Force an immediate flush after rotating a secret with:
+
+```bash
+hivepilot secrets cache-clear
+```
 
 See [CONFIGURATION.md](./CONFIGURATION.md) and [PLUGINS.md](./PLUGINS.md).
 

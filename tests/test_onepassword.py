@@ -488,6 +488,168 @@ class TestResolveFailClosed:
         assert excinfo.value.__suppress_context__ is True
 
 
+class TestServiceAccountDirectSdkMode:
+    """The direct (non-Connect) service-account mode: when ``op_connect_host``
+    is UNSET but ``op_service_account_token`` is set, the plugin resolves
+    ``op://vault/item/field`` directly against api.1password.com via the
+    official async ``onepassword-sdk`` (``onepassword.client.Client``), wrapped
+    in ``asyncio.run``. The Connect path (host set) is unaffected."""
+
+    def test_direct_path_resolves_via_official_sdk(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok-xyz", raising=False)
+        backend = op_module.OnePasswordBackend()
+
+        fake_client = MagicMock()
+        fake_client.secrets.resolve = AsyncMock(return_value=_FAKE_VALUE)
+        FakeClient = MagicMock()
+        FakeClient.authenticate = AsyncMock(return_value=fake_client)
+
+        with patch.object(op_module, "_OPClient", FakeClient):
+            value = backend.resolve(_ref(ref="op://Prod/db/password"), settings)
+
+        assert value == _FAKE_VALUE
+        FakeClient.authenticate.assert_awaited_once()
+        fake_client.secrets.resolve.assert_awaited_once_with("op://Prod/db/password")
+
+    def test_direct_path_builds_reference_from_discrete_keys(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok-xyz", raising=False)
+        backend = op_module.OnePasswordBackend()
+
+        fake_client = MagicMock()
+        fake_client.secrets.resolve = AsyncMock(return_value=_FAKE_VALUE)
+        FakeClient = MagicMock()
+        FakeClient.authenticate = AsyncMock(return_value=fake_client)
+
+        with patch.object(op_module, "_OPClient", FakeClient):
+            value = backend.resolve(_ref(vault="Prod", item="db", field="password"), settings)
+
+        assert value == _FAKE_VALUE
+        fake_client.secrets.resolve.assert_awaited_once_with("op://Prod/db/password")
+
+    def test_connect_path_still_used_when_host_set_even_with_sa_token(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Host set → Connect path, NEVER the direct SDK, even if only a
+        service-account token is present (backward-compatible selection)."""
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok", raising=False)
+        backend = op_module.OnePasswordBackend()
+        new_client = MagicMock(return_value=_mock_client_returning(_FAKE_VALUE))
+        # If the direct SDK were (wrongly) used, this would blow up on await.
+        with patch.object(op_module, "_OPClient", object()):
+            with patch.object(op_module, "new_client", new_client):
+                value = backend.resolve(_ref(vault="Prod", item="db", field="password"), settings)
+        assert value == _FAKE_VALUE
+        new_client.assert_called_once()
+
+    def test_direct_path_missing_sdk_raises_naming_lib_and_mode(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok", raising=False)
+        backend = op_module.OnePasswordBackend()
+        with patch.object(op_module, "_OPClient", None):
+            with pytest.raises(RuntimeError) as excinfo:
+                backend.resolve(_ref(vault="Prod", item="db", field="password"), settings)
+        msg = str(excinfo.value)
+        assert "onepassword-sdk" in msg
+        assert "service-account" in msg
+
+    def test_direct_path_error_is_redacted(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok", raising=False)
+        backend = op_module.OnePasswordBackend()
+        FakeClient = MagicMock()
+        FakeClient.authenticate = AsyncMock(
+            side_effect=RuntimeError(f"auth boom leaking {_FAKE_VALUE} and {_FAKE_TOKEN}")
+        )
+        with patch.object(op_module, "_OPClient", FakeClient):
+            with pytest.raises(RuntimeError) as excinfo:
+                backend.resolve(_ref(vault="Prod", item="db", field="password"), settings)
+        msg = str(excinfo.value)
+        assert "onepassword" in msg
+        assert "op://Prod/db/password" in msg
+        assert _FAKE_VALUE not in msg
+        assert _FAKE_TOKEN not in msg
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__ is True
+
+    def test_neither_connect_nor_service_account_configured_raises(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", None, raising=False)
+        backend = op_module.OnePasswordBackend()
+        with pytest.raises(RuntimeError) as excinfo:
+            backend.resolve(_ref(vault="Prod", item="db", field="password"), settings)
+        assert "onepassword" in str(excinfo.value)
+
+    def test_direct_path_empty_value_fails_closed(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok", raising=False)
+        backend = op_module.OnePasswordBackend()
+        fake_client = MagicMock()
+        fake_client.secrets.resolve = AsyncMock(return_value="")
+        FakeClient = MagicMock()
+        FakeClient.authenticate = AsyncMock(return_value=fake_client)
+        with patch.object(op_module, "_OPClient", FakeClient):
+            with pytest.raises(RuntimeError) as excinfo:
+                backend.resolve(_ref(vault="Prod", item="db", field="password"), settings)
+        assert "op://Prod/db/password" in str(excinfo.value)
+
+    async def test_direct_path_works_when_called_from_inside_a_running_event_loop(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`_run_coro` future-proofs the synchronous `resolve()` contract: even
+        when a caller invokes it from ALREADY inside a running event loop (this
+        test itself runs as a coroutine — asyncio_mode=auto), it must not raise
+        `asyncio.run() cannot be called from a running event loop` — it should
+        transparently hand the work to a worker thread instead."""
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", "sa-tok-xyz", raising=False)
+        backend = op_module.OnePasswordBackend()
+
+        fake_client = MagicMock()
+        fake_client.secrets.resolve = AsyncMock(return_value=_FAKE_VALUE)
+        FakeClient = MagicMock()
+        FakeClient.authenticate = AsyncMock(return_value=fake_client)
+
+        # Proves a running loop IS active in this thread while resolve() runs.
+        import asyncio
+
+        assert asyncio.get_running_loop() is not None
+
+        with patch.object(op_module, "_OPClient", FakeClient):
+            # A plain synchronous call from inside a coroutine — no crash.
+            value = backend.resolve(_ref(ref="op://Prod/db/password"), settings)
+
+        assert value == _FAKE_VALUE
+
+
 class TestPluginManagerRegistersOnePassword:
     def test_plugin_manager_registers_onepassword_into_secrets_map(
         self, monkeypatch: pytest.MonkeyPatch

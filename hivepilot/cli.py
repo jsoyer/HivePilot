@@ -78,7 +78,28 @@ agents_app = typer.Typer(help="Agent CLI availability + guided install")
 app.add_typer(agents_app, name="agents")
 autopilot_app = typer.Typer(help="Guarded autonomous objective queue (Autopilot)")
 app.add_typer(autopilot_app, name="autopilot")
+secrets_app = typer.Typer(help="Secret resolution helpers (TTL cache)")
+app.add_typer(secrets_app, name="secrets")
 logger = get_logger(__name__)
+
+
+@secrets_app.command("cache-clear")
+def secrets_cache_clear() -> None:
+    """Flush the in-memory, process-local secret TTL cache.
+
+    The cache (opt-in via ``HIVEPILOT_SECRETS_CACHE_TTL_SECONDS`` > 0) holds
+    resolved secret values in memory only, TTL-bounded, and never persisted. Run
+    this to force a live re-fetch of every secret on the next resolution — e.g.
+    right after rotating a secret in the upstream provider, without waiting for
+    the TTL to expire. A no-op (but always safe) when the cache is disabled or
+    empty. Note: the cache is per-process, so this clears only THIS process's
+    cache (a long-running daemon's cache is cleared by running this in-process /
+    restarting it).
+    """
+    from hivepilot.services.secrets_service import clear_secret_cache
+
+    clear_secret_cache()
+    typer.echo("Secret TTL cache cleared.")
 
 
 def _get_token_value(token: str | None) -> str:
