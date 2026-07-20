@@ -35,11 +35,24 @@ intentional output of the command.
 A pipeline-level CVE policy gate (failing a *pipeline stage* on a severity
 threshold) is a separate follow-up sprint; this sprint only wires a manual
 `--fail-on` gate at the CLI layer (see `hivepilot.cli`).
+
+License compliance (Phase 21, license-compliance sprint)
+----------------------------------------------------------
+`check_licenses` derives per-component license data from the **same**
+`generate_sbom` CycloneDX-JSON output rather than invoking a second scanner
+binary — the SBOM already carries each component's `licenses` field, so this
+reuses the exact anti-leak-safe subprocess path `generate_sbom` follows (no
+new binary beyond `syft`, which SBOM generation already requires). The SBOM
+string is parsed **in-memory** (never written to disk unless the caller of
+`generate_sbom` itself asked for that) and only structured `ComponentLicense`
+records are returned. A JSON-parse failure never echoes the raw SBOM text —
+`LicenseResult.error` is a generic, fixed message.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -410,3 +423,208 @@ def generate_sbom(
         "scan.sbom.end", format=format, output_path=str(output_path) if output_path else None
     )
     return sbom
+
+
+# ---------------------------------------------------------------------------
+# Public API — license compliance
+# ---------------------------------------------------------------------------
+
+_LICENSE_TOOLS = frozenset({"syft"})
+
+
+@dataclass(frozen=True)
+class ComponentLicense:
+    """One component's parsed license data — structured fields only.
+
+    `licenses` is a tuple (not a list) so this dataclass stays hashable given
+    `frozen=True`. A component with no license data attached in the SBOM
+    reports `("UNKNOWN",)`, never an empty tuple, so downstream allowlist
+    checks always have something concrete to compare against.
+    """
+
+    package: str
+    version: str
+    licenses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LicenseResult:
+    """Structured license-compliance outcome for a project's dependency tree.
+
+    `components` is the full inventory (always populated, even when no
+    `allowed`/`denied` gate is configured — useful for `hivepilot scan
+    licenses` with no gate at all). `violations` is the subset of
+    `components` that violate the configured gate; empty when no gate is
+    configured. `error` is populated only for the "SBOM produced but could
+    not be parsed" case, deliberately generic (never the raw SBOM text).
+    """
+
+    tool: str
+    total: int
+    components: list[ComponentLicense] = field(default_factory=list)
+    violations: list[ComponentLicense] = field(default_factory=list)
+    error: str | None = None
+
+
+_SPDX_EXPR_SPLIT_RE = re.compile(r"\s+(?:OR|AND|WITH)\s+")
+
+
+def _tokenize_spdx_expression(expression: str) -> tuple[str, ...]:
+    """Split a (possibly compound) SPDX license expression into individual
+    license-id tokens, stripping enclosing parentheses from each token.
+
+    `"MIT OR GPL-3.0"` -> `("MIT", "GPL-3.0")`. `"(MIT AND Apache-2.0) WITH
+    Classpath-exception-2.0"` -> `("MIT", "Apache-2.0",
+    "Classpath-exception-2.0")`. A simple (non-compound) expression returns
+    a single-element tuple.
+
+    This exists so DENY-mode matching (`_license_matches_any`) catches a
+    denied license hidden inside an OR/AND/WITH expression -- e.g.
+    `denied=["GPL-3.0"]` must flag `"MIT OR GPL-3.0"` even though the whole
+    expression is not itself `"GPL-3.0"`. The fail-closed consequence for
+    ALLOW-mode (`_license_all_allowed`) is that every operand of a compound
+    expression must be individually allowlisted -- an `OR` is NOT treated
+    as "any operand suffices" (see `check_licenses` docstring).
+    """
+    tokens = [
+        stripped
+        for raw_token in _SPDX_EXPR_SPLIT_RE.split(expression)
+        if (stripped := raw_token.strip().strip("()").strip())
+    ]
+    return tuple(tokens) if tokens else (expression,)
+
+
+def _extract_component_licenses(raw_licenses: Any) -> tuple[str, ...]:
+    """Parse a CycloneDX component's `licenses` array.
+
+    Each entry is either `{"license": {"id": "MIT"}}`,
+    `{"license": {"name": "Some License"}}`, or `{"expression": "MIT OR
+    Apache-2.0"}` (a compound SPDX expression, tokenized via
+    `_tokenize_spdx_expression` into one entry per operand). A component
+    with no usable license entries reports `("UNKNOWN",)`.
+    """
+    if not isinstance(raw_licenses, list):
+        return ("UNKNOWN",)
+
+    ids: list[str] = []
+    for entry in raw_licenses:
+        if not isinstance(entry, dict):
+            continue
+        license_obj = entry.get("license")
+        if isinstance(license_obj, dict):
+            value = license_obj.get("id") or license_obj.get("name")
+            if value:
+                ids.append(str(value))
+            continue
+        expression = entry.get("expression")
+        if expression:
+            ids.extend(_tokenize_spdx_expression(str(expression)))
+
+    return tuple(ids) if ids else ("UNKNOWN",)
+
+
+def _license_matches_any(licenses: tuple[str, ...], candidates: set[str]) -> bool:
+    """True if ANY of *licenses* matches an entry in *candidates* (deny-mode
+    check: any denied license present is a violation)."""
+    return any(lic.upper() in candidates for lic in licenses)
+
+
+def _license_all_allowed(licenses: tuple[str, ...], allowed: set[str]) -> bool:
+    """True only if EVERY one of *licenses* is in *allowed* (allowlist-mode
+    check: a single disallowed/unlisted license — including "UNKNOWN" when
+    it isn't itself in `allowed` — makes the whole component a violation)."""
+    return all(lic.upper() in allowed for lic in licenses)
+
+
+def check_licenses(
+    project_path: str | Path,
+    *,
+    allowed: list[str] | None = None,
+    denied: list[str] | None = None,
+    tool: str = "syft",
+    timeout: int = _DEFAULT_SCAN_TIMEOUT,
+) -> LicenseResult:
+    """Check *project_path*'s dependency licenses against an optional
+    allow/deny gate, deriving license data from the existing
+    `generate_sbom` CycloneDX-JSON output (no separate scanner tool).
+
+    Matching is case-insensitive (`.upper()` on both sides), but the
+    original license string is always preserved in the returned
+    `ComponentLicense.licenses`. Gate semantics:
+
+    * `denied` set → a component violates if ANY of its licenses matches a
+      denied id.
+    * `allowed` set (and not denied-matched) → a component violates if ANY
+      of its licenses is NOT in `allowed` (an unlisted license — including
+      `"UNKNOWN"` — is a violation).
+    * Both set → deny takes precedence (a denied license is always a
+      violation, even if it's also in `allowed`).
+    * Neither set → no violations; `components` still reports the full
+      inventory.
+
+    SPDX compound expressions (`{"expression": "MIT OR GPL-3.0"}`) are
+    tokenized into one entry per operand (see `_tokenize_spdx_expression`)
+    rather than kept as a single literal string. This means DENY matches
+    any operand (fail-closed: a denied license hidden inside an OR/AND/WITH
+    expression is still caught), while ALLOW requires EVERY operand to be
+    individually allowlisted — an `OR` is deliberately NOT treated as "any
+    operand suffices", which is the more conservative (also fail-closed)
+    reading for an allowlist gate.
+
+    Raises `ValueError` for an unsupported `tool`. Propagates whatever
+    `generate_sbom` raises for a missing `syft` binary, a timeout, or an
+    unexpected exit code (fail-closed, matching `scan_vulnerabilities`). A
+    malformed SBOM (JSON parse failure) does not raise — it returns a
+    `LicenseResult` with `error` set to a generic message, never the raw SBOM
+    text. Callers that gate on this result (the orchestrator's license gate)
+    MUST check `error` before `violations` — an unparseable SBOM always has
+    an empty `violations` list and must never be read as "no violations
+    found".
+    """
+    if tool not in _LICENSE_TOOLS:
+        raise ValueError(
+            f"Unsupported license scan tool: {tool!r}. Supported: {sorted(_LICENSE_TOOLS)}"
+        )
+
+    resolved_path = Path(project_path)
+    logger.info("scan.licenses.start", tool=tool, project_path=str(resolved_path))
+
+    sbom = generate_sbom(resolved_path, format="cyclonedx", timeout=timeout)
+
+    try:
+        data = json.loads(sbom) if sbom.strip() else {}
+    except json.JSONDecodeError:
+        logger.error("scan.licenses.sbom_parse_failed", tool=tool)
+        return LicenseResult(tool=tool, total=0, error="SBOM parse failed")
+
+    components: list[ComponentLicense] = []
+    for raw_component in data.get("components", []) or []:
+        if not isinstance(raw_component, dict):
+            continue
+        components.append(
+            ComponentLicense(
+                package=raw_component.get("name", "unknown"),
+                version=raw_component.get("version", "unknown"),
+                licenses=_extract_component_licenses(raw_component.get("licenses")),
+            )
+        )
+
+    denied_upper = {d.upper() for d in denied} if denied else None
+    allowed_upper = {a.upper() for a in allowed} if allowed else None
+
+    violations: list[ComponentLicense] = []
+    for component in components:
+        if denied_upper and _license_matches_any(component.licenses, denied_upper):
+            violations.append(component)
+        elif allowed_upper and not _license_all_allowed(component.licenses, allowed_upper):
+            violations.append(component)
+
+    logger.info("scan.licenses.end", tool=tool, total=len(components), violations=len(violations))
+    return LicenseResult(
+        tool=tool, total=len(components), components=components, violations=violations
+    )
+
+
+def has_license_violations(result: LicenseResult) -> bool:
+    """True if *result* has at least one component violating the gate."""
+    return bool(result.violations)

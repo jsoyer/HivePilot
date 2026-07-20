@@ -1208,6 +1208,35 @@ class Orchestrator:
                     f"⛔ {project.path.name}: {task_name} blocked by CVE gate"
                 )
                 results.append(RunResult(project.path.name, task_name, False, cve_block_detail))
+            elif (
+                not simulate
+                and (policy.denied_licenses or policy.allowed_licenses)
+                and (
+                    license_block_detail := self._license_gate_block_detail(
+                        project,
+                        policy.license_scan_tool,
+                        policy.allowed_licenses,
+                        policy.denied_licenses,
+                    )
+                )
+                is not None
+            ):
+                # License-compliance gate (Phase 21). Same shape as the CVE
+                # `elif` immediately above -- it's a *separate* elif rather
+                # than folded into the CVE condition so the two gates
+                # COMPOSE: this branch is only reached when the CVE elif's
+                # condition was False, i.e. either no CVE gate is configured
+                # or the CVE scan passed. A passing CVE gate therefore always
+                # falls through to this license check; either gate blocking
+                # is sufficient to block the run.
+                run_id = state_service.record_run_start(
+                    project.path.name, task_name, status="running"
+                )
+                state_service.complete_run(run_id, "failed", license_block_detail)
+                notification_service.send_notification(
+                    f"⛔ {project.path.name}: {task_name} blocked by license gate"
+                )
+                results.append(RunResult(project.path.name, task_name, False, license_block_detail))
             else:
                 run_id = state_service.record_run_start(
                     project.path.name, task_name, status="running"
@@ -3288,6 +3317,26 @@ class Orchestrator:
                 )
                 return RunResult(project_name, task_name, False, cve_block_detail)
 
+        # License-compliance gate defense-in-depth (Phase 21) -- mirrors the
+        # CVE re-check immediately above for the same reason: `require_approval`
+        # and the license gate are independent branches in `_run_task_body`,
+        # so an approver could otherwise approve straight past a disallowed
+        # license. Same `_is_step_checkpoint` skip rationale as above.
+        if (
+            not _is_step_checkpoint
+            and policy
+            and (policy.denied_licenses or policy.allowed_licenses)
+        ):
+            license_block_detail = self._license_gate_block_detail(
+                project, policy.license_scan_tool, policy.allowed_licenses, policy.denied_licenses
+            )
+            if license_block_detail is not None:
+                state_service.complete_run(run_id, "failed", license_block_detail)
+                notification_service.send_notification(
+                    f"⛔ {project_name}: {task_name} blocked by license gate"
+                )
+                return RunResult(project_name, task_name, False, license_block_detail)
+
         try:
             self._execute_task(
                 project=project,
@@ -4678,6 +4727,64 @@ class Orchestrator:
                 error_type=type(exc).__name__,
             )
             return f"CVE gate configured but scan failed: {type(exc).__name__}"
+
+        return None
+
+    def _license_gate_block_detail(
+        self,
+        project: ProjectConfig,
+        tool: str,
+        allowed: list[str] | None,
+        denied: list[str] | None,
+    ) -> str | None:
+        """License-compliance gate (Phase 21) — mirrors `_cve_gate_block_detail`
+        above structurally (same shape, same fail-closed guarantee).
+
+        Reuses `scan_service.check_licenses`/`has_license_violations`
+        directly (no re-implementation of license derivation here). Returns
+        a block-reason string when the run must be blocked, or `None` when
+        it may proceed.
+
+        Fail-closed: ANY exception from `check_licenses` — missing `syft`,
+        timeout, unexpected exit code — is treated as a block, never as
+        "proceed". A `LicenseResult.error` (the non-raising "SBOM produced
+        but could not be parsed" case `check_licenses` returns instead of
+        raising) is ALSO treated as a block — checked BEFORE
+        `has_license_violations`, since an unparseable SBOM always has an
+        empty `violations` list and must never be read as "no violations
+        found, proceed". A license gate the operator opted into
+        (`policy.denied_licenses`/`policy.allowed_licenses`) must never
+        silently pass when it cannot actually run/parse the scan.
+
+        Anti-leak: the returned detail is persisted (`state_service.
+        complete_run`) and sent to notifications, so it must never contain a
+        specific package name or license id that could embed lockfile/source
+        material — only a COUNT of violating components (see `hivepilot scan
+        licenses` for the detail), `LicenseResult.error` (already a fixed,
+        generic, leak-free string — see `scan_service.check_licenses`), or
+        an exception's type name (never its message, which could echo a
+        path or scanner-reported detail).
+        """
+        try:
+            license_result = scan_service.check_licenses(
+                project.path, allowed=allowed, denied=denied, tool=tool
+            )
+            if license_result.error is not None:
+                return f"License gate configured but scan failed: {license_result.error}"
+            if scan_service.has_license_violations(license_result):
+                return (
+                    f"Blocked by license gate: {len(license_result.violations)} "
+                    "component(s) with disallowed license(s) — see "
+                    "`hivepilot scan licenses` for detail"
+                )
+        except Exception as exc:  # noqa: BLE001 — fail-closed, see docstring above.
+            logger.error(
+                "run.license_gate_scan_failed",
+                project=project.path.name,
+                tool=tool,
+                error_type=type(exc).__name__,
+            )
+            return f"License gate configured but scan failed: {type(exc).__name__}"
 
         return None
 

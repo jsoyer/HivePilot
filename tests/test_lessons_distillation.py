@@ -448,7 +448,12 @@ class TestOrchestratorWiringGating:
         monkeypatch.setattr(orch, "_project", lambda name: project)
         monkeypatch.setattr(
             "hivepilot.orchestrator.policy_service.enforce_policy",
-            lambda *a, **k: MagicMock(require_approval=False, block_on_severity=None),
+            lambda *a, **k: MagicMock(
+                require_approval=False,
+                block_on_severity=None,
+                denied_licenses=None,
+                allowed_licenses=None,
+            ),
         )
         monkeypatch.setattr(orch, "_execute_task", lambda **kwargs: "stubbed output")
         # `_collect_artifacts` shells out to `git diff` against the project
@@ -505,7 +510,12 @@ class TestOrchestratorWiringGating:
         monkeypatch.setattr(orch, "_project", lambda name: project)
         monkeypatch.setattr(
             "hivepilot.orchestrator.policy_service.enforce_policy",
-            lambda *a, **k: MagicMock(require_approval=False, block_on_severity=None),
+            lambda *a, **k: MagicMock(
+                require_approval=False,
+                block_on_severity=None,
+                denied_licenses=None,
+                allowed_licenses=None,
+            ),
         )
         monkeypatch.setattr(orch, "_execute_task", lambda **kwargs: "stubbed output")
         monkeypatch.setattr(orch, "_collect_artifacts", lambda **kwargs: None)

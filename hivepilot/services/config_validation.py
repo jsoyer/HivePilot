@@ -178,6 +178,37 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
             )
 
     # -----------------------------------------------------------------------
+    # Check: every policy's `denied_licenses`/`allowed_licenses` (license-
+    # compliance gate), when set, is a NON-EMPTY list of non-empty strings.
+    # Mirrors the `block_on_severity` check immediately above for the same
+    # fail-closed-at-`config validate`-time reasoning (`policy_service.
+    # get_policy` validates the same eagerly at load time). An empty list
+    # is rejected, not just a non-list/bad-entry: `[]` is falsy, so the
+    # orchestrator's gate-enable check (`denied_licenses or allowed_licenses`)
+    # would otherwise silently treat an intentional-but-empty `allowed_licenses:
+    # []` (meaning "allow nothing") as "gate disabled" instead of blocking
+    # every run — the opposite of what an empty allowlist should mean.
+    # -----------------------------------------------------------------------
+    for policy_scope, policy_rules in _policy_entries:
+        if not isinstance(policy_rules, dict):
+            continue
+        for field_name in ("denied_licenses", "allowed_licenses"):
+            value = policy_rules.get(field_name)
+            if value is None:
+                continue
+            if (
+                not isinstance(value, list)
+                or not value
+                or not all(isinstance(entry, str) and entry.strip() for entry in value)
+            ):
+                problems.append(
+                    f"Policy '{policy_scope}' has invalid {field_name} "
+                    f"{value!r}. Must be a NON-EMPTY list of non-empty strings, or omit "
+                    "the key to disable the gate (an empty list is ambiguous: an empty "
+                    "allowlist would block all runs, an empty denylist is a no-op)."
+                )
+
+    # -----------------------------------------------------------------------
     # Check: dangling inputs (PRD A2 Sprint 3).
     #
     # Data-flow graph: pipeline stage -> task (tasks.yaml `role:`) -> role

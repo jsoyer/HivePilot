@@ -490,3 +490,112 @@ def test_invalid_block_on_severity_on_project_override_is_flagged(tmp_path: Path
 
     matching = [p for p in problems if "block_on_severity" in p and "demo" in p]
     assert matching, f"Expected a problem naming the invalid severity, got: {problems}"
+
+
+# ---------------------------------------------------------------------------
+# License compliance (Phase 21 -- license-compliance sprint):
+# denied_licenses / allowed_licenses validation
+# ---------------------------------------------------------------------------
+
+
+def test_valid_license_lists_produce_no_problem(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump(
+            {
+                "policies": {
+                    "default": {
+                        "denied_licenses": ["GPL-3.0"],
+                        "allowed_licenses": ["MIT", "Apache-2.0"],
+                    }
+                }
+            }
+        )
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    assert not any("denied_licenses" in p or "allowed_licenses" in p for p in problems), (
+        f"Unexpected: {problems}"
+    )
+
+
+def test_invalid_denied_licenses_entry_is_flagged(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump({"policies": {"default": {"denied_licenses": [""]}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "denied_licenses" in p and "default" in p]
+    assert matching, f"Expected a problem naming the invalid denied_licenses, got: {problems}"
+
+
+def test_invalid_allowed_licenses_on_project_override_is_flagged(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump(
+            {
+                "policies": {
+                    "default": {},
+                    "projects": {"demo": {"allowed_licenses": "MIT"}},
+                }
+            }
+        )
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "allowed_licenses" in p and "demo" in p]
+    assert matching, f"Expected a problem naming the invalid allowed_licenses, got: {problems}"
+
+
+def test_empty_denied_licenses_list_is_flagged(tmp_path: Path) -> None:
+    """An empty list is rejected the same as a malformed entry -- ambiguous,
+    never silently treated as a no-op."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump({"policies": {"default": {"denied_licenses": []}}})
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "denied_licenses" in p and "default" in p]
+    assert matching, f"Expected a problem naming the empty denied_licenses, got: {problems}"
+
+
+def test_empty_allowed_licenses_list_is_flagged(tmp_path: Path) -> None:
+    """`allowed_licenses: []` is especially dangerous (falsy -> would look
+    like "gate disabled" instead of "allow nothing") and must be flagged."""
+    _write_minimal_config(tmp_path)
+    (tmp_path / "prompts" / "agents").mkdir(parents=True)
+    (tmp_path / "prompts" / "agents" / "planner.md").write_text("# planner")
+
+    (tmp_path / "policies.yaml").write_text(
+        yaml.dump(
+            {
+                "policies": {
+                    "default": {},
+                    "projects": {"demo": {"allowed_licenses": []}},
+                }
+            }
+        )
+    )
+
+    problems = config_validation.validate_config(base_dir=tmp_path)
+
+    matching = [p for p in problems if "allowed_licenses" in p and "demo" in p]
+    assert matching, f"Expected a problem naming the empty allowed_licenses, got: {problems}"

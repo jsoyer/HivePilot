@@ -94,6 +94,35 @@ Scans are also available on demand:
 ```bash
 hivepilot scan vulns
 hivepilot scan sbom
+hivepilot scan licenses
+```
+
+## License gate
+
+Policy fields `denied_licenses` and `allowed_licenses` (both unset/`None` by default)
+run a license-compliance check before any step executes, derived from the same SBOM
+`generate_sbom`/the CVE gate already produce (no second scanner tool — `syft` is
+reused). `denied_licenses` blocks a run if any dependency carries one of the listed
+license ids; `allowed_licenses` blocks a run if any dependency carries a license
+*not* in the list (an unrecognized/"UNKNOWN" license counts as a violation). If both
+are set, `denied_licenses` takes precedence. Each list must be a **non-empty** list of
+non-empty strings when set — an empty list (`[]`) is rejected at config-load/`config
+validate` time, since `[]` is falsy and would otherwise be silently indistinguishable
+from "gate disabled" (worst case: an intentional empty `allowed_licenses: []`, meaning
+"allow nothing", would instead let every run through unchecked). A scanner failure —
+including an SBOM that can't be parsed — also blocks the run (fail-closed) — same
+guarantee as the CVE gate. The block detail sent to notifications/state only ever
+carries a violation *count* or a fixed generic scan-failure message, never package
+names or license ids; run `hivepilot scan licenses` for the full detail.
+
+SPDX compound expressions (e.g. `"MIT OR GPL-3.0"`) are split into individual license
+IDs before matching: a denied license is caught no matter which operand it appears as
+(fail-closed), while an allowlist requires *every* operand to be individually listed —
+an `OR` is not satisfied by a single allowed operand.
+
+```bash
+hivepilot scan licenses <project> --deny GPL-3.0 --fail-on-violation
+hivepilot scan licenses <project> --allow MIT --allow Apache-2.0
 ```
 
 ## Adjudication gates

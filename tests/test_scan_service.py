@@ -435,3 +435,352 @@ class TestGenerateSbom:
     def test_unsupported_format_raises_value_error(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError):
             scan_service.generate_sbom(tmp_path, format="not-a-real-format")
+
+
+# ---------------------------------------------------------------------------
+# License compliance (Phase 21 -- license-compliance sprint)
+#
+# `check_licenses` reuses `generate_sbom` (mocked here, never a real `syft`
+# invocation) and parses the CycloneDX-JSON it returns -- no second scanner
+# tool.
+# ---------------------------------------------------------------------------
+
+
+def _cyclonedx_sbom(components: list[dict[str, Any]]) -> str:
+    return json.dumps({"bomFormat": "CycloneDX", "components": components})
+
+
+_LEAKED_SBOM_MARKER = "sk-live-sbom-should-never-leak-0123456789"  # noqa: S105
+
+
+class TestCheckLicenses:
+    def test_no_gate_returns_full_inventory_and_no_violations(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libfoo",
+                    "version": "1.0.0",
+                    "licenses": [{"license": {"id": "MIT"}}],
+                },
+                {
+                    "name": "libbar",
+                    "version": "2.0.0",
+                    "licenses": [{"license": {"id": "GPL-3.0"}}],
+                },
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path)
+
+        assert result.total == 2
+        assert len(result.components) == 2
+        assert result.violations == []
+        assert result.error is None
+
+    def test_deny_mode_flags_denied_license_case_insensitive(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libfoo",
+                    "version": "1.0.0",
+                    "licenses": [{"license": {"id": "MIT"}}],
+                },
+                {
+                    "name": "libgpl",
+                    "version": "3.0.0",
+                    "licenses": [{"license": {"id": "gpl-3.0"}}],
+                },
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path, denied=["GPL-3.0"])
+
+        assert len(result.violations) == 1
+        assert result.violations[0].package == "libgpl"
+        # Original casing is preserved in the returned license string.
+        assert result.violations[0].licenses == ("gpl-3.0",)
+
+    def test_allowlist_mode_flags_unlisted_license(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libfoo",
+                    "version": "1.0.0",
+                    "licenses": [{"license": {"id": "MIT"}}],
+                },
+                {
+                    "name": "libbar",
+                    "version": "2.0.0",
+                    "licenses": [{"license": {"id": "GPL-3.0"}}],
+                },
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path, allowed=["MIT"])
+
+        assert len(result.violations) == 1
+        assert result.violations[0].package == "libbar"
+
+    def test_both_set_deny_takes_precedence(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # GPL-3.0 is denied even though it's also present in the allowlist.
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libgpl",
+                    "version": "3.0.0",
+                    "licenses": [{"license": {"id": "GPL-3.0"}}],
+                }
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(
+            tmp_path, allowed=["MIT", "GPL-3.0"], denied=["GPL-3.0"]
+        )
+
+        assert len(result.violations) == 1
+        assert result.violations[0].package == "libgpl"
+
+    def test_unknown_license_is_violation_under_allowlist(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom([{"name": "libnolic", "version": "1.0.0"}])
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path, allowed=["MIT"])
+
+        assert result.components[0].licenses == ("UNKNOWN",)
+        assert len(result.violations) == 1
+
+    def test_component_with_no_licenses_field_defaults_to_unknown(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom([{"name": "libnolic", "version": "1.0.0", "licenses": []}])
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path)
+
+        assert result.components[0].licenses == ("UNKNOWN",)
+
+    def test_license_name_form_is_extracted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libfoo",
+                    "version": "1.0.0",
+                    "licenses": [{"license": {"name": "Some Custom License"}}],
+                }
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path)
+
+        assert result.components[0].licenses == ("Some Custom License",)
+
+    def test_license_expression_form_is_tokenized_into_operands(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A compound SPDX expression is split into individual license-id
+        tokens (not kept as one literal string) -- see TestTokenizeSpdxExpression
+        and TestCheckLicensesSpdxExpressions below for the matching-mode
+        consequences (deny catches any operand; allow requires all)."""
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libfoo",
+                    "version": "1.0.0",
+                    "licenses": [{"expression": "MIT OR Apache-2.0"}],
+                }
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path)
+
+        assert result.components[0].licenses == ("MIT", "Apache-2.0")
+
+    def test_license_expression_single_id_stays_single_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [{"name": "libfoo", "version": "1.0.0", "licenses": [{"expression": "MIT"}]}]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path)
+
+        assert result.components[0].licenses == ("MIT",)
+
+    def test_sbom_parse_failure_returns_generic_error_no_raw_leak(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        bad_sbom = f"not valid json {_LEAKED_SBOM_MARKER}"
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: bad_sbom)
+
+        result = scan_service.check_licenses(tmp_path)
+
+        assert result.error == "SBOM parse failed"
+        assert _LEAKED_SBOM_MARKER not in (result.error or "")
+        assert result.components == []
+        assert result.violations == []
+
+    def test_missing_syft_raises_runtime_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        def _raise(*a, **k):
+            raise RuntimeError("syft not found on PATH. Install it before generating an SBOM.")
+
+        monkeypatch.setattr(scan_service, "generate_sbom", _raise)
+
+        with pytest.raises(RuntimeError, match="syft"):
+            scan_service.check_licenses(tmp_path)
+
+    def test_unsupported_tool_raises_value_error(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
+            scan_service.check_licenses(tmp_path, tool="not-a-real-tool")
+
+
+class TestTokenizeSpdxExpression:
+    def test_simple_id_is_single_token(self) -> None:
+        assert scan_service._tokenize_spdx_expression("MIT") == ("MIT",)
+
+    def test_or_expression_splits_into_both_operands(self) -> None:
+        assert scan_service._tokenize_spdx_expression("MIT OR GPL-3.0") == ("MIT", "GPL-3.0")
+
+    def test_and_expression_splits_into_both_operands(self) -> None:
+        assert scan_service._tokenize_spdx_expression("MIT AND Apache-2.0") == (
+            "MIT",
+            "Apache-2.0",
+        )
+
+    def test_with_expression_splits_into_both_operands(self) -> None:
+        assert scan_service._tokenize_spdx_expression(
+            "GPL-3.0-or-later WITH Classpath-exception-2.0"
+        ) == ("GPL-3.0-or-later", "Classpath-exception-2.0")
+
+    def test_parenthesized_compound_expression_strips_parens(self) -> None:
+        assert scan_service._tokenize_spdx_expression(
+            "(MIT AND Apache-2.0) WITH Classpath-exception-2.0"
+        ) == ("MIT", "Apache-2.0", "Classpath-exception-2.0")
+
+
+class TestCheckLicensesSpdxCompoundExpressions:
+    """Deny-mode matches any operand of a compound SPDX expression
+    (fail-closed); allow-mode requires every operand to be individually
+    allowlisted (conservative -- an OR is not satisfied by one operand)."""
+
+    def test_deny_catches_denied_license_hidden_inside_or_expression(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libmixed",
+                    "version": "1.0.0",
+                    "licenses": [{"expression": "MIT OR GPL-3.0"}],
+                }
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path, denied=["GPL-3.0"])
+
+        assert len(result.violations) == 1
+        assert result.violations[0].package == "libmixed"
+
+    def test_allow_passes_when_every_operand_is_listed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libmixed",
+                    "version": "1.0.0",
+                    "licenses": [{"expression": "MIT OR Apache-2.0"}],
+                }
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path, allowed=["MIT", "Apache-2.0"])
+
+        assert result.violations == []
+
+    def test_allow_flags_when_only_one_operand_is_listed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Conservative: an OR expression is not satisfied by a single
+        allowed operand -- every operand must be individually listed."""
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libmixed",
+                    "version": "1.0.0",
+                    "licenses": [{"expression": "MIT OR Apache-2.0"}],
+                }
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path, allowed=["MIT"])
+
+        assert len(result.violations) == 1
+        assert result.violations[0].package == "libmixed"
+
+    def test_and_with_expression_operands_all_matched_individually(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        sbom = _cyclonedx_sbom(
+            [
+                {
+                    "name": "libdual",
+                    "version": "1.0.0",
+                    "licenses": [
+                        {"expression": "(MIT AND Apache-2.0) WITH Classpath-exception-2.0"}
+                    ],
+                }
+            ]
+        )
+        monkeypatch.setattr(scan_service, "generate_sbom", lambda *a, **k: sbom)
+
+        result = scan_service.check_licenses(tmp_path, denied=["Classpath-exception-2.0"])
+
+        assert len(result.violations) == 1
+        assert result.violations[0].package == "libdual"
+
+
+class TestHasLicenseViolations:
+    def test_true_when_violations_present(self) -> None:
+        from hivepilot.services.scan_service import ComponentLicense, LicenseResult
+
+        result = LicenseResult(
+            tool="syft",
+            total=1,
+            components=[ComponentLicense(package="p", version="1", licenses=("GPL-3.0",))],
+            violations=[ComponentLicense(package="p", version="1", licenses=("GPL-3.0",))],
+        )
+        assert scan_service.has_license_violations(result) is True
+
+    def test_false_when_no_violations(self) -> None:
+        from hivepilot.services.scan_service import ComponentLicense, LicenseResult
+
+        result = LicenseResult(
+            tool="syft",
+            total=1,
+            components=[ComponentLicense(package="p", version="1", licenses=("MIT",))],
+        )
+        assert scan_service.has_license_violations(result) is False

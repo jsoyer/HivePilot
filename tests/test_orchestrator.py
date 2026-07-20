@@ -2112,6 +2112,595 @@ class TestCveGateRunApprovedResume:
 
 
 # ---------------------------------------------------------------------------
+# License compliance (Phase 21 -- license-compliance sprint): pipeline
+# license gate (`policy.denied_licenses`/`policy.allowed_licenses`).
+#
+# Mirrors `TestCveGate` above structurally: BEFORE a run's steps are
+# dispatched, `_run_task_body` may run `scan_service.check_licenses` and
+# block the run entirely (recorded as a failed run, `project` never added to
+# `immediate_projects`, so no step/runner is ever invoked) if a component
+# violates the configured gate, or if the scan itself fails (fail-closed).
+# ---------------------------------------------------------------------------
+
+
+class TestLicenseGate:
+    def _orch_with_project_and_task(self, task):
+        from hivepilot.models import ProjectConfig
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/license-gate-proj"))
+        orch.tasks.tasks["x"] = task
+        return orch
+
+    def _task(self):
+        from hivepilot.models import TaskConfig, TaskStep
+
+        return TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+
+    def _run_task(self, orch, *, policy, extra_patches=(), simulate=False, tmp_path=None):
+        from contextlib import ExitStack
+
+        fake_runner = MagicMock()
+        fake_runner.capture.return_value = "step ran"
+        orch.registry = MagicMock()
+        orch.registry.get_runner.return_value = fake_runner
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(orch, "_resolve_secrets", return_value={}))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.policy_service.enforce_policy", return_value=policy)
+            )
+            stack.enter_context(
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1)
+            )
+            mock_complete_run = stack.enter_context(
+                patch("hivepilot.orchestrator.state_service.complete_run")
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.state_service.record_step"))
+            mock_notify = stack.enter_context(
+                patch("hivepilot.orchestrator.notification_service.send_notification")
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.knowledge_service.append_feedback"))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path)
+            )
+            for extra in extra_patches:
+                stack.enter_context(extra)
+
+            results = orch.run_task(
+                project_names=["proj"],
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+                simulate=simulate,
+            )
+        return results, fake_runner, mock_complete_run, mock_notify
+
+    def _license_result(self, *, violating: bool):
+        from hivepilot.services.scan_service import ComponentLicense, LicenseResult
+
+        components = [
+            ComponentLicense(
+                package="LEAKY-PACKAGE-NAME-SHOULD-NOT-APPEAR",
+                version="1.0.0",
+                licenses=("GPL-3.0",),
+            )
+        ]
+        return LicenseResult(
+            tool="syft",
+            total=1,
+            components=components,
+            violations=components if violating else [],
+        )
+
+    def test_violation_blocks_run_and_never_executes_step(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(denied_licenses=["GPL-3.0"])
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, fake_runner, mock_complete_run, mock_notify = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.check_licenses",
+                    return_value=self._license_result(violating=True),
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "Blocked by license gate" in (results[0].detail or "")
+        assert "1" in (results[0].detail or "")
+        fake_runner.capture.assert_not_called()
+        mock_complete_run.assert_called_once()
+        assert mock_complete_run.call_args.args[1] == "failed"
+
+    def test_no_violation_proceeds_and_executes_step(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(allowed_licenses=["MIT"])
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, fake_runner, mock_complete_run, mock_notify = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.check_licenses",
+                    return_value=self._license_result(violating=False),
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is True
+        fake_runner.capture.assert_called_once()
+
+    def test_gate_unset_proceeds_without_calling_scan(self, tmp_path) -> None:
+        """Default policy (both license fields None): no overhead, no
+        behaviour change -- check_licenses must never be called."""
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy()
+
+        orch = self._orch_with_project_and_task(self._task())
+        with patch("hivepilot.orchestrator.scan_service.check_licenses") as mock_scan:
+            results, fake_runner, _, _ = self._run_task(orch, policy=policy, tmp_path=tmp_path)
+
+        mock_scan.assert_not_called()
+        assert len(results) == 1
+        assert results[0].success is True
+        fake_runner.capture.assert_called_once()
+
+    def test_simulate_bypasses_the_gate_entirely(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(denied_licenses=["GPL-3.0"])
+
+        orch = self._orch_with_project_and_task(self._task())
+        with patch("hivepilot.orchestrator.scan_service.check_licenses") as mock_scan:
+            results, fake_runner, _, _ = self._run_task(
+                orch, policy=policy, tmp_path=tmp_path, simulate=True
+            )
+
+        mock_scan.assert_not_called()
+        assert len(results) == 1
+        assert results[0].success is True
+
+    def test_scan_failure_blocks_fail_closed_and_never_executes_step(self, tmp_path) -> None:
+        """A scanner that raises (missing syft, timeout, ...) must BLOCK the
+        run -- a configured license gate must never fail open."""
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(denied_licenses=["GPL-3.0"])
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, fake_runner, mock_complete_run, mock_notify = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.check_licenses",
+                    side_effect=RuntimeError("syft not found on PATH"),
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        detail = results[0].detail or ""
+        assert "License gate configured but scan failed" in detail
+        assert "RuntimeError" in detail
+        assert "syft not found on PATH" not in detail
+        fake_runner.capture.assert_not_called()
+
+    def test_block_message_carries_only_counts_no_raw_leak(self, tmp_path) -> None:
+        """Anti-leak: the block detail must carry only a violation COUNT --
+        never a package name or license id that could embed lockfile/source
+        material."""
+        from hivepilot.services.policy_service import Policy
+
+        policy = Policy(denied_licenses=["GPL-3.0"])
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, *_ = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.check_licenses",
+                    return_value=self._license_result(violating=True),
+                ),
+            ),
+        )
+
+        detail = results[0].detail or ""
+        assert "LEAKY-PACKAGE-NAME-SHOULD-NOT-APPEAR" not in detail
+        assert "GPL-3.0" not in detail
+        assert "1" in detail  # violation count is safe to include
+
+    def test_sbom_parse_failure_blocks_fail_closed_and_never_executes_step(self, tmp_path) -> None:
+        """Adversarial-review regression: `check_licenses` does NOT raise on
+        an unparseable SBOM -- it returns a non-raising `LicenseResult` with
+        `error` set and `violations=[]`. The gate must check `error` BEFORE
+        `has_license_violations`, or an empty `violations` list would be
+        misread as "clean scan, proceed" -- a fail-open despite the scan
+        itself having failed."""
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import LicenseResult
+
+        policy = Policy(denied_licenses=["GPL-3.0"])
+        failed_scan_result = LicenseResult(
+            tool="syft", total=0, components=[], violations=[], error="SBOM parse failed"
+        )
+
+        orch = self._orch_with_project_and_task(self._task())
+        results, fake_runner, mock_complete_run, mock_notify = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.check_licenses",
+                    return_value=failed_scan_result,
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        detail = results[0].detail or ""
+        assert "License gate configured but scan failed" in detail
+        assert "SBOM parse failed" in detail
+        fake_runner.capture.assert_not_called()
+        mock_complete_run.assert_called_once()
+        assert mock_complete_run.call_args.args[1] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# License compliance (Phase 21): CVE gate + license gate composition.
+#
+# Both gates are independent `elif` branches in `_run_task_body`: either one
+# blocking must block the run, and a passing CVE gate must still fall
+# through to the license check (they are NOT mutually exclusive `elif`s of
+# each other -- only `require_approval` sits before both).
+# ---------------------------------------------------------------------------
+
+
+class TestCveAndLicenseGateComposition:
+    def _orch_with_project_and_task(self):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/compose-gate-proj"))
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        return orch
+
+    def _run_task(self, orch, *, policy, extra_patches, tmp_path):
+        from contextlib import ExitStack
+
+        fake_runner = MagicMock()
+        fake_runner.capture.return_value = "step ran"
+        orch.registry = MagicMock()
+        orch.registry.get_runner.return_value = fake_runner
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(orch, "_resolve_secrets", return_value={}))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.policy_service.enforce_policy", return_value=policy)
+            )
+            stack.enter_context(
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1)
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.state_service.complete_run"))
+            stack.enter_context(patch("hivepilot.orchestrator.state_service.record_step"))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.notification_service.send_notification")
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.knowledge_service.append_feedback"))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path)
+            )
+            for extra in extra_patches:
+                stack.enter_context(extra)
+
+            results = orch.run_task(
+                project_names=["proj"],
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+                simulate=False,
+            )
+        return results, fake_runner
+
+    def test_cve_passes_falls_through_to_license_check(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import (
+            ComponentLicense,
+            Finding,
+            LicenseResult,
+            ScanResult,
+        )
+
+        policy = Policy(block_on_severity="critical", denied_licenses=["GPL-3.0"])
+        clean_cve_result = ScanResult(
+            tool="grype",
+            total=1,
+            by_severity={"critical": 0, "high": 0, "medium": 1},
+            findings=[Finding(id="CVE-1", package="p", version="1", severity="medium")],
+        )
+        violating_license_result = LicenseResult(
+            tool="syft",
+            total=1,
+            components=[ComponentLicense(package="p", version="1", licenses=("GPL-3.0",))],
+            violations=[ComponentLicense(package="p", version="1", licenses=("GPL-3.0",))],
+        )
+
+        orch = self._orch_with_project_and_task()
+        results, fake_runner = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                    return_value=clean_cve_result,
+                ),
+                patch(
+                    "hivepilot.orchestrator.scan_service.check_licenses",
+                    return_value=violating_license_result,
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "Blocked by license gate" in (results[0].detail or "")
+        fake_runner.capture.assert_not_called()
+
+    def test_cve_blocks_before_license_check_ever_runs(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import Finding, ScanResult
+
+        policy = Policy(block_on_severity="critical", allowed_licenses=["MIT"])
+        critical_cve_result = ScanResult(
+            tool="grype",
+            total=1,
+            by_severity={"critical": 1, "high": 0, "medium": 0},
+            findings=[Finding(id="CVE-1", package="p", version="1", severity="critical")],
+        )
+
+        orch = self._orch_with_project_and_task()
+        with patch("hivepilot.orchestrator.scan_service.check_licenses") as mock_license_scan:
+            results, fake_runner = self._run_task(
+                orch,
+                policy=policy,
+                tmp_path=tmp_path,
+                extra_patches=(
+                    patch(
+                        "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                        return_value=critical_cve_result,
+                    ),
+                ),
+            )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "Blocked by CVE gate" in (results[0].detail or "")
+        # The license gate is never reached once the CVE elif already blocked.
+        mock_license_scan.assert_not_called()
+        fake_runner.capture.assert_not_called()
+
+    def test_both_gates_pass_proceeds(self, tmp_path) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import (
+            ComponentLicense,
+            LicenseResult,
+            ScanResult,
+        )
+
+        policy = Policy(block_on_severity="critical", allowed_licenses=["MIT"])
+        clean_cve_result = ScanResult(
+            tool="grype",
+            total=0,
+            by_severity={"critical": 0, "high": 0, "medium": 0},
+            findings=[],
+        )
+        clean_license_result = LicenseResult(
+            tool="syft",
+            total=1,
+            components=[ComponentLicense(package="p", version="1", licenses=("MIT",))],
+            violations=[],
+        )
+
+        orch = self._orch_with_project_and_task()
+        results, fake_runner = self._run_task(
+            orch,
+            policy=policy,
+            tmp_path=tmp_path,
+            extra_patches=(
+                patch(
+                    "hivepilot.orchestrator.scan_service.scan_vulnerabilities",
+                    return_value=clean_cve_result,
+                ),
+                patch(
+                    "hivepilot.orchestrator.scan_service.check_licenses",
+                    return_value=clean_license_result,
+                ),
+            ),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is True
+        fake_runner.capture.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# License compliance (Phase 21): defense-in-depth on the `require_approval`
+# resume path (`run_approved`) -- mirrors `TestCveGateRunApprovedResume`.
+# ---------------------------------------------------------------------------
+
+
+class TestLicenseGateRunApprovedResume:
+    def _orch_with_project_and_task(self):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/license-gate-approved-proj"))
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        return orch
+
+    def _approval_row(self):
+        import json as _json
+
+        return {
+            "status": "pending",
+            "project": "proj",
+            "task": "x",
+            "metadata": _json.dumps(
+                {"task": "x", "project": "proj", "extra_prompt": None, "auto_git": False}
+            ),
+        }
+
+    def test_approved_run_blocked_by_license_gate_never_executes(self) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import ComponentLicense, LicenseResult
+
+        policy = Policy(require_approval=True, denied_licenses=["GPL-3.0"])
+        components = [ComponentLicense(package="p", version="1", licenses=("GPL-3.0",))]
+        license_result = LicenseResult(
+            tool="syft", total=1, components=components, violations=components
+        )
+
+        orch = self._orch_with_project_and_task()
+
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=self._approval_row(),
+            ),
+            patch("hivepilot.orchestrator.state_service.update_approval") as mock_update,
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=policy),
+            patch.object(orch, "_execute_task") as mock_execute,
+            patch(
+                "hivepilot.orchestrator.scan_service.check_licenses",
+                return_value=license_result,
+            ),
+        ):
+            result = orch.run_approved(run_id=1, approve=True, approver="tester")
+
+        assert result.success is False
+        assert "Blocked by license gate" in (result.detail or "")
+        mock_execute.assert_not_called()
+        mock_complete.assert_called_once()
+        assert mock_complete.call_args.args[1] == "failed"
+        mock_update.assert_called_once()
+        assert mock_update.call_args.args[1] == "approved"
+
+    def test_approved_run_no_violation_proceeds_to_execute(self) -> None:
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import ComponentLicense, LicenseResult
+
+        policy = Policy(require_approval=True, allowed_licenses=["MIT"])
+        license_result = LicenseResult(
+            tool="syft",
+            total=1,
+            components=[ComponentLicense(package="p", version="1", licenses=("MIT",))],
+            violations=[],
+        )
+
+        orch = self._orch_with_project_and_task()
+
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=self._approval_row(),
+            ),
+            patch("hivepilot.orchestrator.state_service.update_approval"),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=policy),
+            patch.object(orch, "_execute_task") as mock_execute,
+            patch(
+                "hivepilot.orchestrator.scan_service.check_licenses",
+                return_value=license_result,
+            ),
+        ):
+            result = orch.run_approved(run_id=1, approve=True, approver="tester")
+
+        assert result.success is True
+        mock_execute.assert_called_once()
+        mock_complete.assert_called_once_with(1, "success")
+
+    def test_approved_run_blocked_by_sbom_parse_failure_never_executes(self) -> None:
+        """Adversarial-review regression, resume-path variant: a
+        non-raising `LicenseResult.error` (unparseable SBOM) must ALSO
+        block on the approval-resume re-check, not just the pre-run gate --
+        an approver must not be able to approve past a scan that failed to
+        even parse."""
+        from hivepilot.services.policy_service import Policy
+        from hivepilot.services.scan_service import LicenseResult
+
+        policy = Policy(require_approval=True, denied_licenses=["GPL-3.0"])
+        failed_scan_result = LicenseResult(
+            tool="syft", total=0, components=[], violations=[], error="SBOM parse failed"
+        )
+
+        orch = self._orch_with_project_and_task()
+
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=self._approval_row(),
+            ),
+            patch("hivepilot.orchestrator.state_service.update_approval") as mock_update,
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=policy),
+            patch.object(orch, "_execute_task") as mock_execute,
+            patch(
+                "hivepilot.orchestrator.scan_service.check_licenses",
+                return_value=failed_scan_result,
+            ),
+        ):
+            result = orch.run_approved(run_id=1, approve=True, approver="tester")
+
+        assert result.success is False
+        detail = result.detail or ""
+        assert "License gate configured but scan failed" in detail
+        assert "SBOM parse failed" in detail
+        mock_execute.assert_not_called()
+        mock_complete.assert_called_once()
+        assert mock_complete.call_args.args[1] == "failed"
+        mock_update.assert_called_once()
+        assert mock_update.call_args.args[1] == "approved"
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator.remediation_gate_present (Phase 20 D4 review MUST-FIX)
 #
 # Gated auto-remediation (`drift_schedule._attempt_remediation`) must refuse

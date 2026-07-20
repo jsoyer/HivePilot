@@ -37,6 +37,22 @@ class Policy:
     # orchestrator's CVE gate treats the same as any other scan failure
     # (fail-closed: block the run, never fail-open).
     scan_tool: str = "grype"
+    # License-compliance gate (Phase 21). `None`/`None` (both unset, the
+    # default) means no gate: `Orchestrator._run_task_body` never calls
+    # `scan_service.check_licenses` and behaviour is byte-identical to
+    # before this sprint. When either is set, each entry is validated
+    # eagerly in `get_policy` below (must be a non-empty string) so a typo
+    # in policies.yaml fails loudly at load time instead of silently never
+    # gating (fail-closed) — mirrors `block_on_severity`'s validation.
+    denied_licenses: list[str] | None = None
+    allowed_licenses: list[str] | None = None
+    # Scanner backend for the license gate: "syft" is the only supported
+    # value today (license data is derived from the SBOM `generate_sbom`
+    # already produces). Not eagerly validated here — an unsupported value
+    # surfaces as a `ValueError` from `scan_service.check_licenses` itself,
+    # which the orchestrator's license gate treats like any other scan
+    # failure (fail-closed).
+    license_scan_tool: str = "syft"
 
 
 def _load_yaml(path: Path) -> dict:
@@ -68,6 +84,35 @@ def _get_policies() -> dict:
     return _cache["data"]
 
 
+def _validate_license_list(value: object, *, field_name: str, project_name: str) -> None:
+    """Fail-closed at load time: `value` must be a NON-EMPTY list of
+    non-empty strings, or unset entirely — mirrors `block_on_severity`'s
+    eager validation so a typo in policies.yaml never silently leaves the
+    license gate un-enforced.
+
+    An empty list (`[]`) is deliberately REJECTED rather than treated as
+    "no entries" — it is ambiguous and, for `allowed_licenses`, actively
+    dangerous: `[]` is falsy, so the orchestrator's gate-enable check
+    (`policy.denied_licenses or policy.allowed_licenses`) would silently
+    treat it as "gate disabled" instead of its literal meaning ("nothing is
+    allowed -> block every run"). Forcing the operator to omit the key
+    entirely to disable the gate removes that ambiguity.
+    """
+    if value is None:
+        return
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(entry, str) and entry.strip() for entry in value)
+    ):
+        raise ValueError(
+            f"Invalid policy {field_name!r} for project {project_name!r}: {value!r}. "
+            "Must be a NON-EMPTY list of non-empty strings, or omit the key to disable "
+            "the gate (an empty list is ambiguous: an empty allowlist would block all "
+            "runs, an empty denylist is a no-op)."
+        )
+
+
 def get_policy(project_name: str) -> Policy:
     policies = _get_policies()
     project_rules = policies.get("projects", {}).get(project_name) if policies else None
@@ -81,6 +126,12 @@ def get_policy(project_name: str) -> Policy:
             f"Invalid policy 'block_on_severity' for project {project_name!r}: "
             f"{block_on_severity!r}. Must be one of {scan_service.SEVERITY_LEVELS} or unset."
         )
+    denied_licenses = rules.get("denied_licenses")
+    _validate_license_list(denied_licenses, field_name="denied_licenses", project_name=project_name)
+    allowed_licenses = rules.get("allowed_licenses")
+    _validate_license_list(
+        allowed_licenses, field_name="allowed_licenses", project_name=project_name
+    )
     return Policy(
         allow_auto_git=rules.get("allow_auto_git", True),
         require_approval=rules.get("require_approval", False),
@@ -90,6 +141,9 @@ def get_policy(project_name: str) -> Policy:
         secrets_fail_mode=rules.get("secrets_fail_mode", "closed"),
         block_on_severity=block_on_severity,
         scan_tool=rules.get("scan_tool", "grype"),
+        denied_licenses=denied_licenses,
+        allowed_licenses=allowed_licenses,
+        license_scan_tool=rules.get("license_scan_tool", "syft"),
     )
 
 
