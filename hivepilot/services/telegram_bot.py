@@ -4,10 +4,14 @@ import asyncio
 import os
 import subprocess
 import unicodedata
-from typing import Any
+import uuid
+from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from hivepilot.services.concierge_service import ConciergeDecision
 
 logger = get_logger(__name__)
 
@@ -16,6 +20,19 @@ _app_instance = None
 
 # pending challenge state: {chat_id: (run_id, approver_username)}
 _pending_challenges: dict[int, tuple[int, str]] = {}
+
+# Natural-language concierge (opt-in, settings.chatops_concierge_enabled):
+# pending destructive route/action decisions awaiting a Yes/No inline-keyboard
+# confirmation, keyed by chat_id. Value is (token, decision) — the SAME
+# shape as chatops_service._pending_concierge_text — so a stale keyboard
+# (superseded by a newer message before the user presses a button) can never
+# confirm the WRONG decision: `_concierge_callback` rejects any
+# `concierge:yes:<token>` whose token doesn't match the currently-stored one
+# instead of blindly executing whatever happens to be pending. Deliberately
+# a SEPARATE dict from `_pending_challenges` / `state_service.approvals` —
+# the concierge confirm flow is its own namespace (`concierge:yes:<token>` /
+# `concierge:no:<token>` callback_data), not a pipeline-checkpoint approval.
+_pending_concierge: dict[int, tuple[str, "ConciergeDecision"]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +312,260 @@ async def _run_agent_order(update: Any, role_key: str, target: str, order: str) 
     await update.message.reply_text(_format_results(results))
 
 
+# ---------------------------------------------------------------------------
+# Natural-language concierge (opt-in, settings.chatops_concierge_enabled) —
+# hooked from `_cmd_mention`'s `kind == "none"` branch (plain, non-@ text).
+# ---------------------------------------------------------------------------
+
+
+def _summarize_concierge_decision(decision: "ConciergeDecision") -> str:
+    """Short human-readable summary of a destructive decision, for the
+    inline-keyboard confirmation prompt. Sent as PLAIN text (see
+    `_send_concierge_keyboard_message`) — never wrap fields in markdown
+    syntax here, since `decision.order`/`.target` are model-controlled and
+    must never be interpreted as formatting."""
+    if decision.kind == "route":
+        target = decision.target or settings.default_target
+        order = f": {decision.order}" if decision.order else ""
+        return f"ask {decision.role_key} to work on {target}{order}"
+    if decision.kind == "action":
+        if decision.action in ("approve", "deny"):
+            run_id = (decision.params or {}).get("run_id")
+            return f"{decision.action} run #{run_id}"
+        target = decision.target or settings.default_target
+        return f"{decision.action} on {target}"
+    return "perform this action"
+
+
+async def _send_concierge_keyboard_message(
+    bot: Any, *, chat_id: int, token: str, decision: "ConciergeDecision"
+) -> None:
+    """Send a Yes/No inline keyboard for a pending destructive concierge
+    decision. *token* is the SAME value the caller already stored in
+    `_pending_concierge[chat_id]` — generated once, threaded through, never
+    re-minted here — so the button's callback_data and the stored pending
+    entry always agree (see `_concierge_callback`). Separate callback
+    namespace from `_send_approval_keyboard_message` (`concierge:yes:<token>`
+    / `concierge:no:<token>`, pattern registered alongside the existing
+    `(approve|deny|challenge)` handler).
+
+    Sent with `parse_mode=None` (plain text): `decision.order`/`.target` are
+    model-controlled and must never be interpreted as Markdown — an
+    unbalanced backtick/`*`/`_` in either must not corrupt or hide the
+    confirmation prompt the user is meant to read before pressing Yes.
+    """
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    except ImportError as exc:
+        raise RuntimeError(
+            "python-telegram-bot required: pip install hivepilot[notifications]"
+        ) from exc
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Yes", callback_data=f"concierge:yes:{token}"),
+                InlineKeyboardButton("❌ No", callback_data=f"concierge:no:{token}"),
+            ]
+        ]
+    )
+    summary = _summarize_concierge_decision(decision)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"⚠️ This will {summary}. Confirm?",
+        reply_markup=keyboard,
+    )
+
+
+async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDecision") -> None:
+    """Execute an already-confirmed concierge decision, replying on
+    `update_like.message` (either the original message, or a lightweight
+    wrapper around the callback-query's own message — see
+    `_concierge_callback`). `route` reuses `_run_agent_order` UNCHANGED (same
+    heartbeat/ack UX as `/ask`); `action run`/`run_pipeline` dispatch to the
+    orchestrator directly; `approve`/`deny` reuse `_dispatch_approval` (the
+    SAME entrypoint the ✅/❌ approval buttons use)."""
+    if decision.kind == "route":
+        role_key = decision.role_key or ""
+        if role_key not in _AGENT_REGISTRY:
+            await update_like.message.reply_text(
+                f"{role_key or 'That agent'} is not configured on this deployment."
+            )
+            return
+        target = decision.target or settings.default_target
+        await _run_agent_order(update_like, role_key, target, decision.order or "")
+        return
+
+    if decision.kind != "action":
+        await update_like.message.reply_text("Nothing to do.")
+        return
+
+    params = decision.params or {}
+
+    if decision.action in ("run", "run_pipeline"):
+        target = decision.target or settings.default_target
+        loop = asyncio.get_event_loop()
+        try:
+            if decision.action == "run":
+                task = params.get("task")
+                if not task:
+                    await update_like.message.reply_text("Missing task name — cannot run.")
+                    return
+                extra = params.get("order") or params.get("extra_prompt")
+                results = await loop.run_in_executor(
+                    None,
+                    lambda: _get_orch().run_task(
+                        project_names=[target],
+                        task_name=task,
+                        extra_prompt=extra,
+                        auto_git=True,
+                    ),
+                )
+            else:
+                pipeline = params.get("pipeline") or settings.default_pipeline
+                results = await loop.run_in_executor(
+                    None,
+                    lambda: _get_orch().run_pipeline(
+                        project_names=[target],
+                        pipeline_name=pipeline,
+                        extra_prompt=params.get("order"),
+                        auto_git=True,
+                    ),
+                )
+            await update_like.message.reply_text(_format_results(results))
+        except Exception as exc:
+            logger.error("telegram.concierge.action_error", action=decision.action, error=str(exc))
+            await update_like.message.reply_text(f"❌ Error: {exc}")
+        return
+
+    if decision.action in ("approve", "deny"):
+        try:
+            run_id = int(params.get("run_id"))
+        except (TypeError, ValueError):
+            await update_like.message.reply_text("Invalid run id.")
+            return
+        approve = decision.action == "approve"
+        try:
+            result = _dispatch_approval(
+                run_id,
+                approve=approve,
+                approver="telegram:concierge",
+                reason=None if approve else "Denied via Telegram concierge",
+            )
+            if approve:
+                outcome = "succeeded" if result.success else "failed"
+                text = f"✅ Run #{run_id} approved — {outcome}."
+            else:
+                text = f"❌ Run #{run_id} denied."
+            await update_like.message.reply_text(text)
+        except Exception as exc:
+            await update_like.message.reply_text(f"Error processing run #{run_id}: {exc}")
+        return
+
+    await update_like.message.reply_text("Nothing to do.")
+
+
+async def _handle_concierge_mention(update: Any, context: Any, text: str) -> None:
+    """Classify a plain (non-@) chat message and answer / route / confirm."""
+    from hivepilot.services import concierge_service
+
+    chat_id = update.message.chat.id
+    default_target = settings.default_target
+
+    loop = asyncio.get_event_loop()
+    decision = await loop.run_in_executor(
+        None,
+        lambda: concierge_service.route(
+            text, default_role=settings.chatops_default_role, default_target=default_target
+        ),
+    )
+
+    if decision.kind == "answer":
+        await update.message.reply_text(
+            decision.answer_text or "I'm not sure how to help with that. Try /help."
+        )
+        return
+
+    if not decision.destructive:
+        # Every currently-known route/action kind IS destructive (see
+        # concierge_service's hardcoded table) — this only guards a future
+        # non-destructive kind, never exercised today.
+        await _execute_concierge_decision(update, decision)
+        return
+
+    # Mint the confirmation token ONCE, here, and thread it into both the
+    # stored pending entry and the keyboard's callback_data — so a stale
+    # keyboard (superseded by a newer destructive message before the user
+    # presses a button) can never confirm the WRONG decision: `yes:<token>`
+    # is only honoured if it matches what's CURRENTLY stored for this chat.
+    token = uuid.uuid4().hex[:8]
+    _pending_concierge[chat_id] = (token, decision)
+    await _send_concierge_keyboard_message(
+        context.bot, chat_id=chat_id, token=token, decision=decision
+    )
+
+
+async def _concierge_callback(update: Any, context: Any) -> None:
+    """Handle the ✅ Yes / ❌ No inline keyboard for a pending concierge
+    decision — a SEPARATE callback namespace from `_callback_approval`
+    (`concierge:yes:<token>` / `concierge:no:<token>`, never touches
+    `_pending_challenges` or `state_service.approvals`).
+
+    The token in `concierge:yes:<token>` MUST match the token currently
+    stored in `_pending_concierge[chat_id]` (mirrors
+    `chatops_service`'s `yes <token>` validation exactly). Without this, a
+    second destructive message overwriting the pending entry before the
+    user presses an earlier keyboard's ✅ would let that stale button
+    confirm the CURRENT (different) decision instead of the one the user
+    actually saw and approved. On a mismatch: do NOT pop or execute
+    anything, and leave any currently-pending decision untouched — a wrong/
+    stale token must never clear a still-valid pending confirmation.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    chat_id = query.message.chat.id
+    if not _require_allowed(chat_id):
+        await query.edit_message_text("Unauthorized.")
+        return
+
+    data = query.data or ""
+    parts = data.split(":", 2)
+    action = parts[1] if len(parts) > 1 else ""
+    supplied_token = parts[2] if len(parts) > 2 else ""
+
+    pending = _pending_concierge.get(chat_id)
+    if pending is None:
+        await query.edit_message_text("This confirmation has expired.")
+        return
+
+    if action != "yes":
+        _pending_concierge.pop(chat_id, None)
+        await query.edit_message_text("Annulé.")
+        return
+
+    stored_token, decision = pending
+    if supplied_token != stored_token:
+        # Stale/wrong button — leave the current pending entry untouched
+        # (do NOT pop) so the real, still-pending confirmation can still be
+        # answered correctly afterwards.
+        await query.edit_message_text(
+            "⚠️ This confirmation has expired — please re-send your request."
+        )
+        return
+
+    _pending_concierge.pop(chat_id, None)
+    await query.edit_message_text("⏳ Running…")
+    # `_run_agent_order` (reused for kind="route") only needs `.message` —
+    # wrap the callback's own message so it can `reply_text`/`delete` on it
+    # exactly like a normal update, without threading `bot`/`chat_id` through
+    # a second parallel code path.
+    from types import SimpleNamespace
+
+    update_like = SimpleNamespace(message=query.message)
+    await _execute_concierge_decision(update_like, decision)
+
+
 async def _cmd_ask(update: Any, context: Any) -> None:
     """/ask <agent> [@target] <order...> — address one agent directly."""
     if not _require_allowed(update.effective_chat.id):
@@ -384,7 +655,9 @@ async def _cmd_mention(update: Any, context: Any) -> None:
     )
 
     if kind == "none":
-        return  # silently ignore non-@ messages
+        if settings.chatops_concierge_enabled:
+            await _handle_concierge_mention(update, context, text)
+        return  # byte-identical to before when the flag is off
 
     if kind == "unknown":
         # Extract token for error message (just the part after @)
@@ -1090,6 +1363,32 @@ async def _cmd_steps(update, context) -> None:
     await update.message.reply_text(f"Run {args[0]} steps:\n" + "\n".join(lines))
 
 
+async def _on_error(update: Any, context: Any) -> None:
+    """PTB error handler — logs a concise line for known, expected polling
+    errors (Conflict from a second instance polling the same token,
+    transient network hiccups) instead of a repeating full traceback, and
+    keeps the full traceback for anything genuinely unexpected.
+
+    `telegram.error` is imported lazily here, matching this module's
+    established convention of never hard-importing `telegram` at module
+    scope (python-telegram-bot stays an optional `[notifications]` extra).
+    """
+    from telegram.error import Conflict, NetworkError, TimedOut
+
+    error = context.error
+    if isinstance(error, Conflict):
+        logger.warning(
+            "telegram.polling_conflict",
+            detail="another bot instance is polling the same token — ensure only one instance runs",
+            error=str(error),
+        )
+        return
+    if isinstance(error, (NetworkError, TimedOut)):
+        logger.warning("telegram.network_error", detail="will retry", error=str(error))
+        return
+    logger.error("telegram.unhandled_error", error=str(error), exc_info=error)
+
+
 def _build_application(token: str):
     try:
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler
@@ -1143,6 +1442,13 @@ def _build_application(token: str):
     app.add_handler(
         CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny|challenge):\d+$")
     )
+    app.add_handler(CallbackQueryHandler(_concierge_callback, pattern=r"^concierge:(yes|no):"))
+    # Graceful error handler: a Telegram polling Conflict (another instance
+    # polling the same token) or a transient network error logs ONE concise
+    # warning line instead of a repeating 40-line traceback; genuinely
+    # unexpected errors still keep their full traceback. Always registered —
+    # pure improvement, no behaviour change on the happy path.
+    app.add_error_handler(_on_error)
     return app
 
 

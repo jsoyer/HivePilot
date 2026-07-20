@@ -820,6 +820,17 @@ class Settings(BaseSettings):
     signal_rest_url: str | None = None  # base URL of a signal-cli-rest-api instance
     signal_notification_number: str | None = None  # proactive notifications
     signal_receive_mode: str = "cli"  # "cli" or "rest"
+    # Natural-language concierge (slice 1) — opt-in, default OFF, fail-closed.
+    # When enabled, plain-text chat messages (Telegram non-@mention text,
+    # Signal's unmatched-command fallback) are classified by
+    # `hivepilot.services.concierge_service.route()` into answer/route/action
+    # instead of being silently dropped / returning "Unknown command".
+    # See docs/USAGE.md "Natural-language concierge (opt-in)".
+    chatops_concierge_enabled: bool = False
+    chatops_default_role: str = "ceo"
+    # Cheap/fast model for the classifier; None -> concierge_service picks a
+    # sensible cheap default (currently "haiku").
+    chatops_concierge_model: str | None = None
     linear_api_key: str | None = None
     linear_team_id: str | None = None  # default team for issue creation
     linear_default_project_id: str | None = None  # default project
