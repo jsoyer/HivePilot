@@ -184,6 +184,10 @@ class Settings(BaseSettings):
     no_proxy: str | None = None
     config_repo: str | None = None
     config_branch: str = "main"
+    # PAT for cloning a PRIVATE https:// config repo. Injected as a transient
+    # HTTP Authorization header at git time (never written to the clone's
+    # .git/config). Ignored for ssh:// / git@ URLs (those use the host SSH key).
+    config_token: str | None = None
     domain: str | None = None  # public domain used by caddy + webhook auto-registration
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids: list[int] = Field(default_factory=list)

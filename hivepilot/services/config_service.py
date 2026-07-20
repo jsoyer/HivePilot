@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from git import GitCommandError, InvalidGitRepositoryError, Repo  # type: ignore
@@ -37,20 +38,46 @@ def _config_dir() -> Path:
     return settings.xdg_data_home / "config-repo"
 
 
+def _git_env() -> dict[str, str]:
+    """Environment applied to every git operation on the config repo.
+
+    Always carries proxy vars. When ``config_token`` is set AND the config repo
+    is an ``https://`` URL, inject the token as a transient HTTP Authorization
+    header via git's env-based config (``GIT_CONFIG_COUNT``/``KEY``/``VALUE_*``).
+    This authenticates clone/fetch/push against a PRIVATE GitHub repo WITHOUT
+    ever writing the secret into the clone's ``.git/config`` on disk (which
+    embedding the token in the remote URL would do). ``ssh://`` / ``git@`` URLs
+    are left untouched — they authenticate via the host's SSH key/agent.
+    """
+    env = {**proxy_env()}
+    token = settings.config_token
+    repo_url = settings.config_repo or ""
+    if token and repo_url.startswith("https://"):
+        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "http.extraheader"
+        env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {basic}"
+    return env
+
+
 def _open_or_clone() -> Repo:
     """Return an open Repo, cloning from config_repo if it doesn't exist yet."""
     repo_url = _require_config_repo()
     dest = _config_dir()
+    env = _git_env()
 
     if dest.exists():
         try:
-            return Repo(dest)
+            repo = Repo(dest)
+            repo.git.update_environment(**env)
+            return repo
         except InvalidGitRepositoryError:
             pass  # fall through to re-clone
 
     logger.info("config.clone", repo=repo_url, dest=str(dest))
-    env = {**proxy_env()}
-    return Repo.clone_from(repo_url, str(dest), branch=settings.config_branch, env=env or None)
+    repo = Repo.clone_from(repo_url, str(dest), branch=settings.config_branch, env=env or None)
+    repo.git.update_environment(**env)
+    return repo
 
 
 def sync() -> list[str]:
