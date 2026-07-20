@@ -169,6 +169,21 @@ class Settings(BaseSettings):
     # a behavior change an operator should opt into explicitly.
     # env: HIVEPILOT_PLUGINS_HOT_RELOAD
     plugins_hot_reload: bool = False
+    # Phase 26b — operator allow-list for the plugin `capabilities` manifest
+    # (hivepilot/plugin_capabilities.py). A plugin MAY declare
+    # `register()["capabilities"] = [...]` from the closed
+    # `PLUGIN_CAPABILITIES` vocabulary (network/filesystem/subprocess/
+    # secrets_access/env); this setting is the set of tokens the operator
+    # ALLOWS a plugin to declare. Default `[]` = fail-closed deny-every-
+    # declared-capability: ANY plugin declaring ANY capability is denied at
+    # load until the operator explicitly opts that token in here. A plugin
+    # that declares NO capabilities at all is completely unaffected by this
+    # setting, regardless of its value — purely additive/backward-compatible.
+    # This is an ADVISORY admission gate, not runtime sandboxing — see
+    # docs/PLUGINS.md "Capability manifest & policy gate".
+    # env: HIVEPILOT_PLUGINS_CAPABILITY_POLICY — JSON array, same convention
+    # as plugins_disabled above.
+    plugins_capability_policy: list[str] = Field(default_factory=list)
     discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
     api_host: str = "127.0.0.1"
     api_port: int = 8045

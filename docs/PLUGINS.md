@@ -15,6 +15,7 @@ Registration is applied **atomically per plugin**: everything a single plugin st
 | Panels | `panels` | `list[PanelSpec]`, each `{name, title, fetch, min_role?}`; contributes tabs to the Mirador dashboard | Invalid `min_role` (not in `ROLE_RANKS`) is a fail-closed registration error |
 | Skills | `skills` | `list[SkillSpec]`, each `{name, description, provider, files, system_prompt?, applies_to?, min_role?}` | See [SKILLS.md](./SKILLS.md) |
 | Graph sources | `graph_sources` | `list[GraphSourceSpec]`, each `{name, data, node_detail?, title?, min_role?, params?}` → registered into `hivepilot.graph`'s module-global source registry via `register_graph_source()` | Name collision with a built-in or another plugin → `GraphSourceNameCollisionError`, rolled back atomically |
+| Capabilities | `capabilities` | `list[str]` from the closed `hivepilot.plugin_capabilities.PLUGIN_CAPABILITIES` vocabulary — an advisory manifest of what the plugin intends to do | Unknown token → `PluginCapabilityInvalidError`; token not in `settings.plugins_capability_policy` → `PluginCapabilityDeniedError`, rolled back atomically. See "Capability manifest & policy gate" below. |
 | Lifecycle hooks | any other key | a callable (`before_step`, `after_step`, `on_pipeline_end`, `on_error`, …) | No collision check — every plugin's hook for a given name runs |
 
 Secrets contributions are covered in more depth in [SECURITY.md](./SECURITY.md); panels and the graph view in [DASHBOARD.md](./DASHBOARD.md); skills in [SKILLS.md](./SKILLS.md).
@@ -101,6 +102,18 @@ If a plugin's `register()` call or its module import raises, the failure is logg
 
 Hot-reload (`PluginManager.reload()`) is staging-then-commit: a full re-scan of all plugin sources builds a candidate state without touching the live global maps, and that candidate is only committed if the whole re-scan succeeds. Reload is only effective when explicitly invoked (a scheduler tick or `SIGHUP`) — flipping a flag or dropping a new binary on `PATH` otherwise takes effect at the next process start, not live.
 
+### Capability manifest & policy gate (Phase 26b)
+
+**This is advisory admission control, NOT runtime sandboxing.** A plugin declaring `capabilities = []` (or nothing at all) still runs with full process privileges once loaded — nothing in this repo can interpreter-level-enforce what a plugin's code actually does. True process isolation (subprocess sandboxing, seccomp, OS-level capability dropping) is future work, not shipped here.
+
+What IS shipped: a plugin MAY declare `register()["capabilities"] = [...]` from a closed vocabulary (`hivepilot.plugin_capabilities.PLUGIN_CAPABILITIES`): `network`, `filesystem`, `subprocess`, `secrets_access`, `env`. This is checked at LOAD TIME against `settings.plugins_capability_policy` (env `HIVEPILOT_PLUGINS_CAPABILITY_POLICY`, a JSON array like `plugins_disabled`) — the set of capability tokens the operator is willing to ALLOW a plugin to declare.
+
+- **Default `[]` (fail-closed, deny-declared):** ANY plugin declaring ANY capability is denied at load until the operator explicitly opts that token in.
+- **A plugin declaring NO capabilities at all is completely unaffected**, regardless of policy — this is purely additive; every plugin shipped before this manifest existed keeps working exactly as before.
+- A denied or malformed (`PluginCapabilityDeniedError` / `PluginCapabilityInvalidError`) capability manifest fails that plugin's **whole registration**, atomically rolling back its OTHER contributions — the same fail-closed, atomic-per-plugin-rollback shape as an invalid panel/skill `min_role` (see Contribution types above).
+
+`hivepilot plugins audit` is a companion **read-only static scanner**: it `ast`-parses every local plugin's source TEXT (never imports/execs it, never calls `register()`) to flag risky imports/calls — `subprocess`, network sockets, `os.system`, `eval`/`exec`, write-mode `open`, `ctypes`, and similar — and cross-references them against that plugin's own declared `capabilities` manifest (itself extracted statically, best-effort, from a literal `"capabilities": [...]` entry in its `register()` source) to surface **under-declaration**: code that appears to use a capability the plugin didn't declare. This is advisory, not exhaustive — a dynamically constructed capabilities list, or a risky call the scanner doesn't recognize, won't be caught. Pass `--strict` to exit non-zero (CI-friendly) when any under-declaration is found; the default is a 0-exit report.
+
 ## Shipped plugins (inventory)
 
 24 plugins ship under `plugins/*.py`.
@@ -170,6 +183,12 @@ hivepilot plugins health
 ```
 
 Runs every registered health check and prints a table. Exits non-zero if any check errors — safe to wire into CI.
+
+```bash
+hivepilot plugins audit [--strict]
+```
+
+Read-only static scan of every local plugin's source (see "Capability manifest & policy gate" above). Prints a per-plugin table of risky findings, declared capabilities, and under-declared capabilities. Exits 0 by default (advisory report); `--strict` exits 1 if any plugin under-declares a capability it appears to use — safe to wire into CI.
 
 ```bash
 hivepilot plugins tui

@@ -242,6 +242,30 @@ class TestPluginsListContributionAttribution:
         assert "explicit-entry" in result.output
 
 
+class TestPluginsListCapabilitiesColumn:
+    """Phase 26b: `plugins list`'s "contributes" column surfaces a plugin's
+    declared `capabilities` manifest alongside every other contribution
+    type — additive, mirrors `TestPluginsListContributionAttribution`
+    above."""
+
+    def test_declared_capabilities_are_rendered(self, monkeypatch) -> None:
+        record = PluginRecord(
+            name="netty",
+            source="local-file",
+            location="plugins/netty.py",
+            contributions={"capabilities": ["network"]},
+        )
+        mock_orch = MagicMock()
+        mock_orch.plugins.loaded = [record]
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda: mock_orch)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "capabilities: network" in result.output
+
+
 def test_plugins_list_taxonomy_tables_still_render(monkeypatch) -> None:
     """Regression (#198): the built-in-vs-plugin taxonomy tables (Agent
     Runners / Other Runner Kinds / Notifiers / Secrets Backends) still render

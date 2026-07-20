@@ -3276,10 +3276,11 @@ def _health_badge(status: str) -> str:
 
 
 # Rendering order for the per-plugin "contributes" column in `plugins list`'s
-# Loaded Plugins table — mirrors the seven `register()` contribution-type
-# keys `PluginManager` pops (`hivepilot/plugins.py`) plus lifecycle `hooks`,
-# in a stable, deterministic order (not insertion order of the underlying
-# dict). `graph_sources` (Mirador Graph View PRD, Sprint 4) added here.
+# Loaded Plugins table — mirrors the `register()` contribution-type keys
+# `PluginManager` pops (`hivepilot/plugins.py`) plus lifecycle `hooks`, in a
+# stable, deterministic order (not insertion order of the underlying dict).
+# `graph_sources` (Mirador Graph View PRD, Sprint 4) and `capabilities`
+# (Phase 26b — advisory capability manifest) added here.
 _CONTRIBUTION_RENDER_ORDER = (
     "runners",
     "notifiers",
@@ -3288,6 +3289,7 @@ _CONTRIBUTION_RENDER_ORDER = (
     "panels",
     "skills",
     "graph_sources",
+    "capabilities",
     "hooks",
 )
 
@@ -3456,6 +3458,111 @@ def plugins_health() -> None:
     results = _print_health_table(console, orchestrator.plugins, title="Plugin Health")
 
     if any(status == "error" for status, _detail in results.values()):
+        raise typer.Exit(1)
+
+
+def _collect_plugin_source_files() -> list[tuple[str, Path]]:
+    """Enumerate local-file plugin source paths for `plugins audit` — mirrors
+    `_scan_local_plugins`'s (`hivepilot/plugins.py`) directory scan order and
+    stem-dedup (`base_dir/plugins` first, then `plugins_extra_dirs` in
+    order), WITHOUT importing/`exec()`ing any file and WITHOUT honoring
+    `plugins_disabled` — a disabled plugin's source is still a legitimate
+    audit target (it's still on disk, and could be re-enabled)."""
+    seen: set[str] = set()
+    out: list[tuple[str, Path]] = []
+    for plugin_dir in (settings.base_dir / "plugins", *settings.plugins_extra_dirs):
+        if not plugin_dir.exists():
+            continue
+        for file in sorted(plugin_dir.glob("*.py")):
+            if file.stem.startswith("_") or file.stem in seen:
+                continue
+            seen.add(file.stem)
+            out.append((file.stem, file))
+    return out
+
+
+@plugins_app.command("audit")
+def plugins_audit(
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 if any plugin under-declares a capability it appears to use.",
+    ),
+) -> None:
+    """Read-only STATIC security scan of every local-file plugin's source TEXT.
+
+    Never imports, `exec()`s, or calls `register()` on a plugin — pure `ast`
+    parsing of the file text (`hivepilot.plugin_capabilities.audit_plugin_source`).
+    Flags risky imports/calls (subprocess, network sockets, `os.system`,
+    `eval`/`exec`, write-mode `open`, `ctypes`, ...) and cross-references them
+    against a plugin's own declared `capabilities` manifest (itself
+    best-effort statically extracted from its `register()` return literal) to
+    flag UNDER-declaration. Advisory, not exhaustive — see docs/PLUGINS.md
+    "Capability manifest & policy gate". Exits 0 by default (an advisory
+    report); pass `--strict` to fail CI on any under-declaration.
+    """
+    from rich.console import Console
+    from rich.markup import escape as rich_escape
+    from rich.table import Table
+
+    from hivepilot.plugin_capabilities import audit_plugin_source
+
+    console = Console(width=200)
+    files = _collect_plugin_source_files()
+
+    if not files:
+        console.print("[yellow]No plugin source files found to audit.[/yellow]")
+        raise typer.Exit(0)
+
+    table = Table(title="Plugin Capability Audit")
+    table.add_column("plugin")
+    table.add_column("risky findings")
+    table.add_column("declared capabilities")
+    table.add_column("under-declared")
+
+    # `plugins audit` is the tool an operator uses to VET an untrusted
+    # plugin's source before enabling it — every cell value below is derived
+    # from that plugin's own source text (import/call findings, the literal
+    # strings under a `"capabilities": [...]` key, even the raised
+    # SyntaxError's message, which can echo back a source snippet) and is
+    # therefore attacker-controlled. `rich.table.Table` parses Rich markup
+    # in cell strings by default, so a plugin author could embed e.g.
+    # `"capabilities": ["[red]FAKE-CLEAN[/red]"]` or markup that hides an
+    # under-declared warning to spoof the audit report itself. Every such
+    # value is `rich_escape()`-d immediately before `table.add_row(...)` —
+    # same helper/pattern already used for untrusted marketplace metadata in
+    # `plugins search`/`plugins info` above. Only OUR OWN static labels
+    # (e.g. the `[red]...[/red]` wrapper around `under_str`, whose content
+    # is drawn exclusively from the closed `PLUGIN_CAPABILITIES` vocabulary,
+    # never raw source text) are left as real, intentional markup.
+    any_under_declared = False
+    for stem, path in files:
+        safe_stem = rich_escape(stem)
+        try:
+            source = path.read_text(encoding="utf-8")
+            result = audit_plugin_source(source)
+        except (OSError, SyntaxError) as exc:
+            table.add_row(safe_stem, f"[red]scan error: {rich_escape(str(exc))}[/red]", "-", "-")
+            continue
+
+        findings_str = rich_escape(
+            ", ".join(f"{f.pattern} (line {f.lineno})" for f in result.findings) or "-"
+        )
+        declared_str = rich_escape(", ".join(sorted(result.declared_capabilities)) or "-")
+        if result.under_declared:
+            any_under_declared = True
+            # Safe to interpolate un-escaped: `result.under_declared` tokens
+            # are always drawn from the closed `PLUGIN_CAPABILITIES`
+            # vocabulary (see `audit_plugin_source`), never raw plugin
+            # source text.
+            under_str = f"[red]{', '.join(sorted(result.under_declared))}[/red]"
+        else:
+            under_str = "-"
+        table.add_row(safe_stem, findings_str, declared_str, under_str)
+
+    console.print(table)
+
+    if strict and any_under_declared:
         raise typer.Exit(1)
 
 

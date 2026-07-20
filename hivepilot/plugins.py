@@ -890,13 +890,19 @@ class PluginManager:
             panels = hooks.pop("panels", None)
             skills = hooks.pop("skills", None)
             graph_sources = hooks.pop("graph_sources", None)
+            # Phase 26b — the plugin's declared capability manifest (advisory
+            # surface + fail-closed load-time admission gate; see
+            # `hivepilot/plugin_capabilities.py`). Popped unconditionally,
+            # same as the seven contribution types above, so it never leaks
+            # through to the lifecycle-hooks loop below as a bogus "hook".
+            declared_capabilities = hooks.pop("capabilities", None)
             # Declared unconditionally (not just inside the `if` below) so
             # `record.contributions` can be populated from these lists further
             # down regardless of which contribution types this plugin
             # declared — a plugin contributing ONLY lifecycle hooks (no
-            # runners/notifiers/secrets/health/panels/skills/graph_sources)
-            # never enters the `if` block below at all, and these must still
-            # exist (as empty lists) for that case.
+            # runners/notifiers/secrets/health/panels/skills/graph_sources/
+            # capabilities) never enters the `if` block below at all, and
+            # these must still exist (as empty lists) for that case.
             applied_runners: list[str] = []
             applied_notifiers: list[str] = []
             applied_secrets: list[str] = []
@@ -904,8 +910,23 @@ class PluginManager:
             applied_panels: list[str] = []
             applied_skills: list[str] = []
             applied_graph_sources: list[str] = []
-            if runners or notifiers or secrets or health or panels or skills or graph_sources:
+            applied_capabilities: list[str] = []
+            if (
+                runners
+                or notifiers
+                or secrets
+                or health
+                or panels
+                or skills
+                or graph_sources
+                or declared_capabilities is not None
+            ):
                 from hivepilot import graph as graph_module
+                from hivepilot.plugin_capabilities import (
+                    PluginCapabilityDeniedError,
+                    PluginCapabilityInvalidError,
+                    validate_capabilities,
+                )
                 from hivepilot.registry import (
                     RUNNER_MAP,
                     SECRETS_MAP,
@@ -1072,6 +1093,25 @@ class PluginManager:
                         )
                         if not was_present:
                             applied_graph_sources.append(graph_spec.name)
+
+                    # Phase 26b — capability manifest admission gate. Runs
+                    # LAST in this try block (after every other contribution
+                    # type has staged successfully) but is still covered by
+                    # the SAME except below: a denied/invalid capability
+                    # rolls back everything this plugin already staged above
+                    # (runners/notifiers/secrets/health/panels/skills/graph_
+                    # sources), atomic with every other validation error
+                    # here. Nothing is staged into a shared live map for
+                    # capabilities themselves — `validate_capabilities`
+                    # either returns cleanly or raises; there is nothing to
+                    # unwind for THIS check beyond the rollback below.
+                    validated_caps = validate_capabilities(
+                        record.name,
+                        declared_capabilities,
+                        policy=frozenset(settings.plugins_capability_policy),
+                    )
+                    if validated_caps:
+                        applied_capabilities = sorted(validated_caps)
                 except (
                     RunnerKindCollisionError,
                     NotifierKindCollisionError,
@@ -1082,6 +1122,8 @@ class PluginManager:
                     SkillNameCollisionError,
                     SkillInvalidMinRoleError,
                     graph_module.GraphSourceNameCollisionError,
+                    PluginCapabilityInvalidError,
+                    PluginCapabilityDeniedError,
                 ):
                     for kind in applied_runners:
                         staged.runner_map.pop(kind, None)
@@ -1097,6 +1139,11 @@ class PluginManager:
                         staged.skills.pop(skill_name, None)
                     for graph_name in applied_graph_sources:
                         staged.graph_source_map.pop(graph_name, None)
+                    # `applied_capabilities` needs no rollback here: nothing
+                    # is staged into a shared live map for capabilities (see
+                    # the comment above `validate_capabilities(...)`), and
+                    # `raise` below aborts before `record.contributions` is
+                    # ever populated from it.
                     raise
 
                 if notifiers:
@@ -1135,6 +1182,8 @@ class PluginManager:
                 contributions["skills"] = sorted(applied_skills)
             if applied_graph_sources:
                 contributions["graph_sources"] = sorted(applied_graph_sources)
+            if applied_capabilities:
+                contributions["capabilities"] = applied_capabilities
             if applied_hooks:
                 contributions["hooks"] = applied_hooks
             record.contributions = contributions
