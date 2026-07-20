@@ -1435,7 +1435,9 @@ class TestRunResultDetailRedaction:
         from hivepilot.models import ProjectConfig
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
-        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/redact-proj"))
+        proj_path = Path("/tmp/redact-proj")
+        proj_path.mkdir(parents=True, exist_ok=True)
+        orch.projects.projects["proj"] = ProjectConfig(path=proj_path)
         orch.tasks.tasks["x"] = task
         return orch
 
@@ -1732,7 +1734,9 @@ class TestCveGate:
         from hivepilot.models import ProjectConfig
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
-        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/cve-gate-proj"))
+        proj_path = Path("/tmp/cve-gate-proj")
+        proj_path.mkdir(parents=True, exist_ok=True)
+        orch.projects.projects["proj"] = ProjectConfig(path=proj_path)
         orch.tasks.tasks["x"] = task
         return orch
 
@@ -2128,7 +2132,9 @@ class TestLicenseGate:
         from hivepilot.models import ProjectConfig
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
-        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/license-gate-proj"))
+        proj_path = Path("/tmp/license-gate-proj")
+        proj_path.mkdir(parents=True, exist_ok=True)
+        orch.projects.projects["proj"] = ProjectConfig(path=proj_path)
         orch.tasks.tasks["x"] = task
         return orch
 
@@ -2384,7 +2390,9 @@ class TestCveAndLicenseGateComposition:
         from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
-        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/compose-gate-proj"))
+        proj_path = Path("/tmp/compose-gate-proj")
+        proj_path.mkdir(parents=True, exist_ok=True)
+        orch.projects.projects["proj"] = ProjectConfig(path=proj_path)
         orch.tasks.tasks["x"] = TaskConfig(
             description="t",
             engine="native",
@@ -2865,3 +2873,268 @@ class TestOrchestratorRefresh:
             orch.refresh()
 
         assert orch.plugins is old_plugins
+
+
+# ---------------------------------------------------------------------------
+# Auto-clone of a missing project repo (PR B) -- `ensure_checkout` is called
+# once per project at the top of the per-project preflight loop, BEFORE
+# `policy_service.enforce_policy` and the CVE/license gates (which may
+# themselves need `project.path` to exist). A clone failure (or a missing
+# path with no `owner_repo`) must become a failed `RunResult` for THAT
+# project only -- never an unhandled exception that aborts the whole batch.
+# ---------------------------------------------------------------------------
+
+
+class TestProjectAutoClone:
+    def _task(self):
+        from hivepilot.models import TaskConfig, TaskStep
+
+        return TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+
+    def _orch(self):
+        return _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+
+    def _run(self, orch, project_names, *, extra_patches=(), tmp_path=None, simulate=False):
+        from contextlib import ExitStack
+
+        from hivepilot.services.policy_service import Policy
+
+        fake_runner = MagicMock()
+        fake_runner.capture.return_value = "step ran"
+        orch.registry = MagicMock()
+        orch.registry.get_runner.return_value = fake_runner
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(orch, "_resolve_secrets", return_value={}))
+            stack.enter_context(
+                patch(
+                    "hivepilot.orchestrator.policy_service.enforce_policy",
+                    return_value=Policy(),
+                )
+            )
+            stack.enter_context(
+                patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1)
+            )
+            mock_complete_run = stack.enter_context(
+                patch("hivepilot.orchestrator.state_service.complete_run")
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.state_service.record_step"))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.notification_service.send_notification")
+            )
+            stack.enter_context(patch("hivepilot.orchestrator.knowledge_service.append_feedback"))
+            stack.enter_context(
+                patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path)
+            )
+            for extra in extra_patches:
+                stack.enter_context(extra)
+
+            results = orch.run_task(
+                project_names=project_names,
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+                simulate=simulate,
+            )
+        return results, fake_runner, mock_complete_run
+
+    def test_ensure_checkout_invoked_before_policy_gate_for_missing_path(self, tmp_path) -> None:
+        """Missing path + owner_repo set -> ensure_checkout is called (and, since
+        it's mocked to a successful no-op clone here, the run proceeds to
+        dispatch the step normally)."""
+        from hivepilot.models import ProjectConfig
+
+        orch = self._orch()
+        orch.projects.projects["proj"] = ProjectConfig(
+            path=tmp_path / "missing-but-clonable", owner_repo="acme/widgets"
+        )
+        orch.tasks.tasks["x"] = self._task()
+
+        mock_ensure = MagicMock(return_value=None)
+        results, fake_runner, _ = self._run(
+            orch,
+            ["proj"],
+            tmp_path=tmp_path,
+            extra_patches=(patch("hivepilot.orchestrator.ensure_checkout", mock_ensure),),
+        )
+
+        mock_ensure.assert_called_once_with(orch.projects.projects["proj"])
+        assert len(results) == 1
+        assert results[0].success is True
+        fake_runner.capture.assert_called_once()
+
+    def test_ensure_checkout_is_noop_when_path_exists_byte_identical(self, tmp_path) -> None:
+        """Path exists -> the REAL ensure_checkout runs (not mocked): no clone
+        attempt is made (Repo.clone_from never called) and the run proceeds
+        exactly as it did before auto-clone existed."""
+        from hivepilot.models import ProjectConfig
+
+        orch = self._orch()
+        orch.projects.projects["proj"] = ProjectConfig(path=tmp_path)
+        orch.tasks.tasks["x"] = self._task()
+
+        fake_repo = MagicMock()
+        results, fake_runner, _ = self._run(
+            orch,
+            ["proj"],
+            tmp_path=tmp_path,
+            extra_patches=(patch("hivepilot.services.project_service.Repo", fake_repo),),
+        )
+
+        fake_repo.clone_from.assert_not_called()
+        assert len(results) == 1
+        assert results[0].success is True
+        fake_runner.capture.assert_called_once()
+
+    def test_missing_path_no_owner_repo_fails_gracefully_others_unaffected(self, tmp_path) -> None:
+        """A project with a missing path and no owner_repo fails as a
+        RunResult (not an unhandled exception), and a second, healthy
+        project in the same run is completely unaffected."""
+        from hivepilot.models import ProjectConfig
+
+        good_path = tmp_path / "goodproj"
+        good_path.mkdir()
+        orch = self._orch()
+        orch.projects.projects["badproj"] = ProjectConfig(path=tmp_path / "missing-no-repo")
+        orch.projects.projects["goodproj"] = ProjectConfig(path=good_path)
+        orch.tasks.tasks["x"] = self._task()
+
+        results, fake_runner, mock_complete_run = self._run(
+            orch, ["badproj", "goodproj"], tmp_path=tmp_path
+        )
+
+        by_project = {r.project: r for r in results}
+        assert set(by_project) == {"missing-no-repo", "goodproj"}
+
+        bad = by_project["missing-no-repo"]
+        assert bad.success is False
+        assert "owner_repo" in (bad.detail or "")
+        assert str(orch.projects.projects["badproj"].path) in (bad.detail or "")
+
+        good = by_project["goodproj"]
+        assert good.success is True
+
+        # Only the healthy project ever reached step dispatch.
+        fake_runner.capture.assert_called_once()
+
+        # The failed project's run row was actually closed out as "failed"
+        # (mirrors the CVE/license gate pattern), not just reflected in the
+        # in-memory RunResult.
+        failed_calls = [c for c in mock_complete_run.call_args_list if c.args[1] == "failed"]
+        assert len(failed_calls) == 1
+        assert "owner_repo" in failed_calls[0].args[2]
+
+    def test_clone_failure_becomes_failed_run_result_not_a_crash(self, tmp_path) -> None:
+        """ensure_checkout raising (a real clone failure) must become a
+        failed RunResult for that project, never propagate out of run_task."""
+        from hivepilot.models import ProjectConfig
+
+        orch = self._orch()
+        orch.projects.projects["proj"] = ProjectConfig(
+            path=tmp_path / "missing", owner_repo="acme/widgets"
+        )
+        orch.tasks.tasks["x"] = self._task()
+
+        mock_ensure = MagicMock(side_effect=RuntimeError("Failed to auto-clone acme/widgets"))
+        results, fake_runner, mock_complete_run = self._run(
+            orch,
+            ["proj"],
+            tmp_path=tmp_path,
+            extra_patches=(patch("hivepilot.orchestrator.ensure_checkout", mock_ensure),),
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "acme/widgets" in (results[0].detail or "")
+        fake_runner.capture.assert_not_called()
+
+        # The run row was closed out as "failed", not left pending/running.
+        mock_complete_run.assert_called_once()
+        assert mock_complete_run.call_args.args[1] == "failed"
+        assert "acme/widgets" in mock_complete_run.call_args.args[2]
+
+    def test_simulate_never_calls_ensure_checkout_no_real_clone(self, tmp_path) -> None:
+        """--simulate must never perform a real network clone: ensure_checkout
+        is skipped entirely (mirrors the require_approval/CVE/license gates,
+        all of which are also `not simulate`-gated), even for a project whose
+        path is missing."""
+        from hivepilot.models import ProjectConfig
+
+        orch = self._orch()
+        orch.projects.projects["proj"] = ProjectConfig(
+            path=tmp_path / "missing-during-simulate", owner_repo="acme/widgets"
+        )
+        orch.tasks.tasks["x"] = self._task()
+
+        mock_ensure = MagicMock()
+        results, fake_runner, _ = self._run(
+            orch,
+            ["proj"],
+            tmp_path=tmp_path,
+            simulate=True,
+            extra_patches=(patch("hivepilot.orchestrator.ensure_checkout", mock_ensure),),
+        )
+
+        mock_ensure.assert_not_called()
+        assert len(results) == 1
+        assert results[0].success is True
+
+    def test_mkdir_permission_error_isolates_failing_project_others_unaffected(
+        self, tmp_path
+    ) -> None:
+        """A bare OSError/PermissionError from the real ensure_checkout's
+        Path.mkdir (not a git-specific error) must still be normalized to a
+        RuntimeError and isolated to the ONE failing project -- a second,
+        healthy project in the same run must be completely unaffected, and
+        run_task must not raise."""
+        from pathlib import Path as _Path
+
+        from hivepilot.models import ProjectConfig
+
+        good_path = tmp_path / "goodproj"
+        good_path.mkdir()
+        bad_parent = tmp_path / "missing"
+        orch = self._orch()
+        orch.projects.projects["badproj"] = ProjectConfig(
+            path=bad_parent / "unwritable-parent", owner_repo="acme/widgets"
+        )
+        orch.projects.projects["goodproj"] = ProjectConfig(path=good_path)
+        orch.tasks.tasks["x"] = self._task()
+
+        real_mkdir = _Path.mkdir
+
+        def selective_permission_error(self, *args, **kwargs):
+            # Only the auto-clone's own mkdir(project.path.parent) fails --
+            # every OTHER mkdir call in the run (ArtifactManager's run-dir
+            # setup, etc.) behaves normally, so this isolates the failure to
+            # ensure_checkout itself rather than the surrounding machinery.
+            if self == bad_parent:
+                raise PermissionError("Permission denied: /internal/mount-detail")
+            return real_mkdir(self, *args, **kwargs)
+
+        results, fake_runner, mock_complete_run = self._run(
+            orch,
+            ["badproj", "goodproj"],
+            tmp_path=tmp_path,
+            extra_patches=(patch.object(_Path, "mkdir", selective_permission_error),),
+        )
+
+        by_project = {r.project: r for r in results}
+        assert set(by_project) == {"unwritable-parent", "goodproj"}
+
+        bad = by_project["unwritable-parent"]
+        assert bad.success is False
+        assert "PermissionError" in (bad.detail or "")
+        assert "internal/mount-detail" not in (bad.detail or "")
+
+        good = by_project["goodproj"]
+        assert good.success is True
+        fake_runner.capture.assert_called_once()
+
+        failed_calls = [c for c in mock_complete_run.call_args_list if c.args[1] == "failed"]
+        assert len(failed_calls) == 1

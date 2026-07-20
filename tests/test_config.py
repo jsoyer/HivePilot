@@ -84,6 +84,23 @@ class TestContextRoutingMode:
 # ---------------------------------------------------------------------------
 
 
+class TestProjectCloneProtocol:
+    """`project_clone_protocol` (auto-clone missing project repo, PR B)
+    defaults to "ssh" -- byte-identical dormant default matching
+    `github_service.ensure_repository`'s existing ssh default -- and is
+    env-overridable via HIVEPILOT_PROJECT_CLONE_PROTOCOL."""
+
+    def test_default_is_ssh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_PROJECT_CLONE_PROTOCOL", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.project_clone_protocol == "ssh"
+
+    def test_env_override_https(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_PROJECT_CLONE_PROTOCOL", "https")
+        s = Settings()
+        assert s.project_clone_protocol == "https"
+
+
 class TestClaudeCaptureUsage:
     """`claude_capture_usage` defaults to False (byte-identical behaviour) and
     is env-overridable (HIVEPILOT_CLAUDE_CAPTURE_USAGE)."""

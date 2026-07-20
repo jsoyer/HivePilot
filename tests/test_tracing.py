@@ -635,7 +635,7 @@ class TestCrossThreadContextPropagation:
 
         tracer, exporter = in_memory_tracer
         orch = _make_orch_with_task(None)
-        orch.projects.projects["proj"] = ProjectConfig(path=Path("/tmp/xthread-proj"))
+        orch.projects.projects["proj"] = ProjectConfig(path=tmp_path)
         orch.tasks.tasks["x"] = TaskConfig(
             description="t",
             engine="native",
