@@ -63,18 +63,26 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HIVEPILOT_BASE_DIR=/data
 
 # Runtime OS deps only (no compiler toolchain needed — see builder stage note).
-# `github-cli` is NOT reliably available across Alpine releases/architectures
-# in the community repo, so it is intentionally NOT installed here to avoid a
-# hard build failure on hosts where the package is missing. `gh` is optional:
-# HivePilot degrades gracefully when it is absent (see `hivepilot doctor`);
-# install it later via the distro's package manager or see
-# https://github.com/cli/cli/blob/trunk/docs/install_linux.md, or run
-# `hivepilot agents install claude` for the agent CLIs HivePilot itself needs.
 RUN apk add --no-cache git curl bash ca-certificates \
     && addgroup -S hivepilot \
     && adduser -S -G hivepilot -h /home/hivepilot hivepilot \
     && mkdir -p /data \
     && chown -R hivepilot:hivepilot /data
+
+# `github-cli` (gh) — used by the github_pr merge gate and gh-based agent/plugin
+# installers. It lives in Alpine's *community* repo, which IS enabled on the
+# official python:3.12-alpine base, so this normally succeeds. It is installed
+# BEST-EFFORT (`|| echo`, its own RUN layer) rather than chained into the hard
+# apk line above, because the package is not guaranteed across every Alpine
+# release/architecture — a missing package must NOT fail the image build. `gh`
+# is optional: HivePilot degrades gracefully without it (see `hivepilot doctor`).
+# Opt out by setting the build arg to 0: `--build-arg WITH_GH=0`.
+ARG WITH_GH=1
+RUN if [ "$WITH_GH" = "1" ]; then \
+        apk add --no-cache github-cli 2>/dev/null \
+            && echo "OK github-cli installed" \
+            || echo "NOTE: github-cli unavailable for this Alpine release/arch — continuing without it (optional)"; \
+    fi
 
 # The venv (built + installed in the builder stage, including the seeded
 # prompts/ "packaged copy" above) is self-contained — the application is
