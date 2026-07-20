@@ -13,9 +13,11 @@ Adds two fields to the per-project policy surface, read from the SAME
 This module deliberately does **not** modify ``hivepilot/services/policy_service.py``
 or ``hivepilot/models.py`` (both are owned by parallel work) -- it reuses
 ``policy_service.load_policies()`` (an unmodified, already-public raw-dict
-loader) and ``policy_service.get_policy()`` (for the existing
-``require_approval`` field) as read-only building blocks, and keeps its own
-small dataclass here.
+loader) as its only read-only building block from that module.
+``require_approval`` is resolved locally in ``get_autopilot_policy`` (fail-
+closed to ``True`` when absent) rather than via ``policy_service.get_policy``,
+whose own default for that field is ``False`` -- see that function's
+docstring for why reusing it here would be unsafe.
 
 Disabled-by-default invariant: a project with no ``auto_dispatch`` block in
 ``policies.yaml`` resolves to an empty allowlist, which the gate in
@@ -60,9 +62,15 @@ def get_autopilot_policy(project_name: str) -> AutopilotPolicy:
 
     Merges ``policies.default`` then ``policies.projects.<project_name>``
     (project overrides win) for ``auto_dispatch``/``budget_daily_usd`` --
-    the same default/project merge order ``policy_service.get_policy`` uses
-    -- and delegates to ``policy_service.get_policy`` itself for
-    ``require_approval`` so the two policy surfaces never drift apart.
+    the same default/project merge order ``policy_service.get_policy`` uses.
+    ``require_approval`` is resolved from that SAME merged project/default
+    block directly (project value wins if present, else the default-block
+    value, else ``True``) -- it deliberately does NOT reuse
+    ``policy_service.get_policy``'s own ``require_approval`` (which defaults
+    to ``False`` when the key is absent everywhere): reusing that default
+    here would silently fail-open the autopilot gate for any project that
+    configures ``auto_dispatch``/``budget_daily_usd`` but never explicitly
+    sets ``require_approval``.
 
     Malformed values fail closed: a non-list ``auto_dispatch`` becomes an
     empty list; a non-numeric ``budget_daily_usd`` becomes ``None`` (both
@@ -86,10 +94,20 @@ def get_autopilot_policy(project_name: str) -> AutopilotPolicy:
     except (TypeError, ValueError):
         budget_daily_usd = None
 
-    base_policy = policy_service.get_policy(project_name)
+    # Fail-closed contract (F1): require_approval must default to True when
+    # absent from BOTH the project and default blocks -- policy_service's own
+    # get_policy() defaults this to False for its own (lower-stakes) callers,
+    # which would silently fail-open the autopilot gate if reused here. Project
+    # value wins if explicitly set, else the default-block value, else True.
+    if "require_approval" in project_block:
+        require_approval = bool(project_block["require_approval"])
+    elif "require_approval" in default_block:
+        require_approval = bool(default_block["require_approval"])
+    else:
+        require_approval = True
 
     return AutopilotPolicy(
         auto_dispatch=auto_dispatch,
-        require_approval=base_policy.require_approval,
+        require_approval=require_approval,
         budget_daily_usd=budget_daily_usd,
     )

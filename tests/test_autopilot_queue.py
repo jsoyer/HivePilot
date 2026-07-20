@@ -262,6 +262,102 @@ class TestPipelineWouldAutoMerge:
 
 
 # ---------------------------------------------------------------------------
+# F4 regression — malformed pipelines.yaml/tasks.yaml must deny, not crash
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedConfigFailsClosed:
+    def test_invalid_yaml_syntax_fails_closed_true(self) -> None:
+        """Broken YAML syntax raises yaml.YAMLError from yaml.safe_load --
+        pipeline_would_auto_merge must catch it and return True (deny),
+        never let it propagate."""
+
+        def fake_load(filename: object) -> dict:
+            import yaml
+
+            if "pipelines" in str(filename):
+                raise yaml.YAMLError("mapping values are not allowed here")
+            return {"tasks": {}}
+
+        with patch.object(autopilot_queue, "_load_raw_yaml", side_effect=fake_load):
+            assert autopilot_queue.pipeline_would_auto_merge("p") is True
+
+    def test_non_dict_git_block_fails_closed_true(self) -> None:
+        """A `git:` value that is a string instead of a mapping raises
+        AttributeError on `.get('merge_pr', ...)` -- must resolve to True,
+        not propagate."""
+
+        def fake_load(filename: object) -> dict:
+            if "pipelines" in str(filename):
+                return {"pipelines": {"p": {"stages": [{"name": "s", "task": "t"}]}}}
+            return {"tasks": {"t": {"git": "not-a-mapping"}}}
+
+        with patch.object(autopilot_queue, "_load_raw_yaml", side_effect=fake_load):
+            assert autopilot_queue.pipeline_would_auto_merge("p") is True
+
+    def test_non_dict_pipeline_def_fails_closed_true(self) -> None:
+        """A pipeline entry that is a list instead of a mapping raises
+        AttributeError on `.get('stages')` -- must resolve to True."""
+
+        def fake_load(filename: object) -> dict:
+            if "pipelines" in str(filename):
+                return {"pipelines": {"p": ["not", "a", "mapping"]}}
+            return {"tasks": {}}
+
+        with patch.object(autopilot_queue, "_load_raw_yaml", side_effect=fake_load):
+            assert autopilot_queue.pipeline_would_auto_merge("p") is True
+
+    def test_drain_one_denies_cleanly_on_malformed_config_without_raising(self) -> None:
+        """End-to-end: drain_one() must not raise when the gate's merge_pr
+        check hits malformed config for an otherwise-fully-dispatchable
+        item -- it must deny and leave the row untouched."""
+        item_id = autopilot_queue.enqueue("acme-api", "groomer", "x")
+        autopilot_queue.promote(item_id)
+        orchestrator = MagicMock()
+        policy = AutopilotPolicy(
+            auto_dispatch=["groomer"], require_approval=False, budget_daily_usd=5.0
+        )
+
+        def fake_load(filename: object) -> dict:
+            import yaml
+
+            if "pipelines" in str(filename):
+                raise yaml.YAMLError("bad yaml")
+            return {"tasks": {}}
+
+        with (
+            patch("hivepilot.services.autopilot_queue.get_autopilot_policy", return_value=policy),
+            patch("hivepilot.services.autopilot_queue.spent_today_usd", return_value=0.0),
+            patch.object(autopilot_queue, "_load_raw_yaml", side_effect=fake_load),
+        ):
+            result = autopilot_queue.drain_one(orchestrator, tenant="default")
+
+        orchestrator.run_pipeline.assert_not_called()
+        assert result is not None
+        items = autopilot_queue.list_queue(tenant="default")
+        assert items[0].state == "queued"  # left exactly as-is -- deny, not a crash
+
+
+# ---------------------------------------------------------------------------
+# F6 regression — atomic claim guards against double-dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestClaimRunning:
+    def test_second_claim_on_same_item_loses_the_race(self) -> None:
+        item_id = autopilot_queue.enqueue("acme-api", "groomer", "x")
+        autopilot_queue.promote(item_id)
+
+        first = autopilot_queue._claim_running(item_id)
+        second = autopilot_queue._claim_running(item_id)
+
+        assert first is True
+        assert second is False
+        items = autopilot_queue.list_queue(tenant="default")
+        assert items[0].state == "running"
+
+
+# ---------------------------------------------------------------------------
 # drain_one — single-objective-per-tick dispatch
 # ---------------------------------------------------------------------------
 

@@ -115,6 +115,10 @@ malformed input denies — the gate never allows by default:
    `> 0`, and today's already-spent amount must be strictly less than that
    ceiling. No budget configured, a non-positive budget, an over-budget
    spend, or a budget check that raises — all deny.
+   The ceiling is a soft cap checked once *before* dispatch (via
+   `spent_today_usd()`), not a hard reservation, so a single run whose cost
+   lands the day over budget still finishes — it's only re-checked at the
+   next scheduler tick.
 4. **Never auto-merges.** The resolved pipeline's tasks are inspected via
    raw YAML (deliberately **not** `hivepilot/models.py`, to stay
    collision-free with parallel work on that file) for any `git.merge_pr:

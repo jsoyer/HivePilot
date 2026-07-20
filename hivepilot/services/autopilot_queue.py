@@ -32,10 +32,16 @@ denies -- this function never allows by default:
       on any task the pipeline's stages reference) -- unknown pipelines/
       tasks/config also fail closed to "would auto-merge" (deny).
 
-Disabled-by-default: a project with no `auto_dispatch` policy block simply
-never satisfies (a), so the drain can *propose* objectives via `enqueue()`
-but they never advance past `proposed` without a human `promote()`, and
-`drain_one()` never dispatches them either.
+Disabled-by-default vs. pre-authorized allowlist: a project with no
+`auto_dispatch` policy block simply never satisfies (a), so the drain can
+*propose* objectives via `enqueue()` but they never advance past `proposed`
+without a human `promote()` (and even then, `promote()` alone never
+bypasses the gate). A project WITH a non-empty `auto_dispatch` allowlist,
+by contrast, is pre-authorizing that (project, pipeline) pair for
+unattended dispatch: if every other gate condition also passes, `drain_one()`
+dispatches a `proposed` row directly -- no `promote()` required. Rows that
+fail any gate condition (unlisted pipeline, exhausted budget, etc.) are the
+ones that stay `proposed`/`queued` awaiting a human.
 """
 
 from __future__ import annotations
@@ -222,6 +228,24 @@ def mark(item_id: int, state: str, *, cost_usd: float | None = None) -> None:
             )
 
 
+def _claim_running(item_id: int) -> bool:
+    """Atomically claim *item_id* for dispatch: flips it to `running` only if
+    it is still in `queued` or `proposed`. Returns True iff this call won the
+    claim (rowcount == 1) -- defense-in-depth against concurrent/re-entrant
+    drains double-dispatching the same row (the SELECT in `next_dispatchable`
+    and this UPDATE are not otherwise in one transaction)."""
+    _init_queue_db()
+    with db.connect() as conn:
+        cursor = conn.execute(
+            db.ph(
+                "UPDATE autopilot_queue SET state='running', updated_ts=CURRENT_TIMESTAMP "
+                "WHERE id=? AND state IN ('queued', 'proposed')"
+            ),
+            (item_id,),
+        )
+        return cursor.rowcount == 1
+
+
 def promote(item_id: int) -> None:
     """`proposed -> queued` only -- an explicit human (or CLI) action. A
     no-op on rows already past `proposed` (never regresses running/done/
@@ -344,28 +368,44 @@ def pipeline_would_auto_merge(pipeline_name: str) -> bool:
     Deliberately reads `pipelines.yaml`/`tasks.yaml` as raw YAML (not via
     `hivepilot.models.PipelinesFile`/`TasksFile`) so this module has zero
     dependency on `hivepilot/models.py`.
+
+    The whole load-and-walk below runs inside a single `try/except Exception`
+    backstop: malformed YAML (`yaml.YAMLError`) or a config shape that
+    doesn't match expectations (e.g. a `git:`/pipeline/stage entry that is a
+    string or list instead of a mapping, raising `AttributeError`/`TypeError`
+    from a stray `.get(...)`) must never propagate out of this function --
+    it must resolve to `True` (refuse), exactly like the explicit
+    unknown-pipeline/unknown-task cases below.
     """
-    pipelines = _load_raw_yaml(settings.pipelines_file).get("pipelines") or {}
-    tasks = _load_raw_yaml(settings.tasks_file).get("tasks") or {}
+    try:
+        pipelines = _load_raw_yaml(settings.pipelines_file).get("pipelines") or {}
+        tasks = _load_raw_yaml(settings.tasks_file).get("tasks") or {}
 
-    pipeline_def = pipelines.get(pipeline_name)
-    if not pipeline_def:
-        return True
-
-    stages = pipeline_def.get("stages") or []
-    if not stages:
-        return True
-
-    for stage in stages:
-        task_name = stage.get("task") if isinstance(stage, dict) else None
-        if not task_name or task_name not in tasks:
-            return True
-        task_def = tasks.get(task_name) or {}
-        git_block = task_def.get("git") or {}
-        if git_block.get("merge_pr", False):
+        pipeline_def = pipelines.get(pipeline_name)
+        if not pipeline_def:
             return True
 
-    return False
+        stages = pipeline_def.get("stages") or []
+        if not stages:
+            return True
+
+        for stage in stages:
+            task_name = stage.get("task") if isinstance(stage, dict) else None
+            if not task_name or task_name not in tasks:
+                return True
+            task_def = tasks.get(task_name) or {}
+            git_block = task_def.get("git") or {}
+            if git_block.get("merge_pr", False):
+                return True
+
+        return False
+    except Exception as exc:  # noqa: BLE001 - fail-closed: can't tell -> assume auto-merge -> deny
+        logger.warning(
+            "autopilot.pipeline_would_auto_merge_malformed_config",
+            pipeline=pipeline_name,
+            error=f"{exc.__class__.__name__}: {exc}",
+        )
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +502,12 @@ def drain_one(orchestrator: Any, *, tenant: str = "default") -> QueueItem | None
     except Exception as exc:  # noqa: BLE001 - fail-closed: unknown spend -> deny
         decision = GateDecision(False, f"budget check failed: {exc.__class__.__name__}: {exc}")
     else:
-        decision = autopilot_gate(item.project, item.pipeline, policies=policy, budget=spent_before)
+        try:
+            decision = autopilot_gate(
+                item.project, item.pipeline, policies=policy, budget=spent_before
+            )
+        except Exception as exc:  # noqa: BLE001 - fail-closed: gate itself must never crash the tick
+            decision = GateDecision(False, f"gate check failed: {exc.__class__.__name__}: {exc}")
 
     if not decision.allow:
         logger.info(
@@ -475,7 +520,16 @@ def drain_one(orchestrator: Any, *, tenant: str = "default") -> QueueItem | None
         )
         return item
 
-    mark(item.id, "running")
+    if not _claim_running(item.id):
+        logger.warning(
+            "autopilot.drain_claim_lost",
+            id=item.id,
+            project=item.project,
+            pipeline=item.pipeline,
+            tenant=tenant,
+        )
+        return item
+
     try:
         orchestrator.run_pipeline(
             project_names=[item.project],
