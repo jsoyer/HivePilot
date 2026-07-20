@@ -352,9 +352,13 @@ official installer. It never runs unattended in a non-interactive context
 (CI, cron, a headless pipeline step) — the operator must be present to
 consent.
 
-For `gh` (GitHub CLI), there is no scripted installer in HivePilot — install
-it via Alpine's package manager (`apk add github-cli`, when available for your
-Alpine release/arch) or see
+`gh` (GitHub CLI) is used by the `github_pr` merge gate and gh-based
+agent/plugin installers. The bare-metal `scripts/install-alpine.sh` installs it
+**best-effort by default** from Alpine's *community* repo (skip with
+`HIVEPILOT_WITH_GH=0`); if the community repo isn't enabled on your host the
+installer skips it without failing. To add it manually — on the container path,
+or after a skipped bare-metal install — run `apk add github-cli` (enable the
+community repo first if needed) or see
 [docs.github.com/en/github-cli](https://docs.github.com/en/github-cli/github-cli/quickstart).
 `gh` is optional — HivePilot degrades gracefully without it; `doctor` reports
 its absence under `=== External binaries ===`.

@@ -33,6 +33,24 @@ echo "-- Installing OS packages (python3, pip, git, curl, bash, ca-certificates$
 apk add --no-cache python3 py3-pip git curl bash ca-certificates $SSH_PKG
 echo "OK OS packages installed"
 
+# 1b. github-cli (gh) — OPTIONAL. Used by the github_pr merge gate and gh-based
+#     agent/plugin installers. It lives in Alpine's *community* repo (3.13+),
+#     which a minimal host may not have enabled — so this is best-effort and
+#     MUST NOT abort the install (note the `|| echo` under `set -e`). Skip
+#     entirely with HIVEPILOT_WITH_GH=0.
+WITH_GH="${HIVEPILOT_WITH_GH:-1}"
+if [ "$WITH_GH" = "1" ]; then
+  echo "-- Installing github-cli (optional; Alpine community repo)..."
+  if apk add --no-cache github-cli 2>/dev/null; then
+    echo "OK github-cli installed"
+  else
+    echo "NOTE: github-cli not installed (community repo not enabled, or"
+    echo "      unavailable for this Alpine release/arch). HivePilot works"
+    echo "      without it. To add it later, enable the community repo and run:"
+    echo "        apk add github-cli"
+  fi
+fi
+
 # 2. Create the venv if it doesn't already exist.
 if [ ! -d "$VENV_DIR" ]; then
   echo "-- Creating virtualenv at ${VENV_DIR}..."
