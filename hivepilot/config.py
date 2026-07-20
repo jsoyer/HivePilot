@@ -395,6 +395,15 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_DRIFT_GRAPH_SOURCE_ENABLED / _SECRETS_TRUST_GRAPH_SOURCE_ENABLED
     drift_graph_source_enabled: bool = False
     secrets_trust_graph_source_enabled: bool = False
+    # Two `panel`-type plugins (Mirador Panels sprint) -- opt-IN, dormant by
+    # default, same pattern as drift_graph_source_enabled above. `drift_panel`
+    # (plugins/drift_panel.py) is a counts-only IaC drift-scan history panel;
+    # `autopilot_panel` (plugins/autopilot_panel.py) is a queue-status +
+    # budget burn-down + awaiting-human panel. Both required by
+    # tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag.
+    # env: HIVEPILOT_DRIFT_PANEL_ENABLED / _AUTOPILOT_PANEL_ENABLED
+    drift_panel_enabled: bool = False
+    autopilot_panel_enabled: bool = False
     # Two more opt-in `skill`-type plugins -- dormant by default, same
     # pattern as sample_skill_enabled above. `shadcn` (plugins/shadcn.py)
     # is a Mirador web accelerator (shadcn/ui + Tailwind conventions for
