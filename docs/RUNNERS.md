@@ -131,6 +131,34 @@ hivepilot iac cost       # read-only estimate
 `apply` and `destroy` are destructive operations and are auto-gated for human approval
 — see [SECURITY.md](SECURITY.md).
 
+### atlantis
+
+The `atlantis` runner kind invokes the **one-shot `atlantis plan`/`atlantis apply` CLI
+subcommands** (CI/local mode). It deliberately does NOT spawn the long-running
+`atlantis server` daemon — a daemon process would hang the blocking subprocess call
+every IaC runner relies on. Real Atlantis is normally PR/webhook-driven; operators who
+want that flow run `atlantis server` outside HivePilot and use this runner only for
+direct plan/apply invocations.
+
+Supported operations:
+
+- `plan` (default, read-only)
+- `apply` (**DESTRUCTIVE** — auto-gated for human approval, same as `terraform apply` /
+  `pulumi up`; see [SECURITY.md](SECURITY.md))
+
+Options: `operation` (`plan`/`apply`, defaults to `plan`), `project` (maps to `atlantis
+plan/apply -p <project>`), `dir` (maps to `--dir <dir>`), `args` (a list of strings,
+appended verbatim after `-p`/`--dir`). `args` must be a `list`, not a bare string. Note
+that `args` is appended AFTER `-p`/`--dir`, so a trailing flag inside `args` (e.g.
+`-p other`) can override the `project`/`dir` scoping — the same config-trust boundary
+as every other option (whoever controls the runner definition/options controls the
+final command).
+
+Like the other IaC runners, plan/apply output is never captured or returned —
+`run()` always executes with `capture_output=False`. Atlantis wraps Terraform/OpenTofu
+under the hood, so its output can echo secret var values (`TF_VAR_*` and similar) that
+the redaction choke point cannot reliably mask.
+
 ### kubectl runner
 
 A runner kind for Kubernetes operations. Destructive operations go through the same
