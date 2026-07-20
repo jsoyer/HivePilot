@@ -777,3 +777,144 @@ class TestConfigRepoPluginsAutoLoad:
 
         assert calls.count(clone_plugins) == 1, f"Expected exactly one scan, got: {calls}"
         assert len(found) == 1
+
+
+class TestInstalledPluginsAutoLoad:
+    """The managed `xdg_data_home/plugins` dir (`hivepilot plugins install`'s
+    fetch destination -- see `hivepilot.services.plugin_installer`) auto-loads
+    into the local-file scan path, mirroring `_config_repo_plugins_dir` /
+    `TestConfigRepoPluginsAutoLoad` above exactly: existence-gated, no
+    dedicated enable flag of its own, deduped by resolved path, and a pure
+    no-op (byte-identical scan) when the directory doesn't exist on disk."""
+
+    @staticmethod
+    def _write_skill_plugin(pdir, name: str = "vendored_skills") -> None:
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / f"{name}.py").write_text(
+            "def register():\n"
+            "    return {'skills': [{'name': 'demo-skill', 'description': 'x', "
+            "'provider': 'test', 'files': {}}]}\n",
+            encoding="utf-8",
+        )
+
+    def test_installed_plugins_dir_auto_loaded(self, tmp_path, monkeypatch) -> None:
+        from hivepilot import plugins as plugins_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        data_home = tmp_path / "data-home"
+        installed_dir = data_home / "plugins"
+        self._write_skill_plugin(installed_dir)
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+        monkeypatch.setattr(
+            type(plugins_mod.settings), "xdg_data_home", property(lambda self: data_home)
+        )
+
+        pm = plugins_mod.PluginManager()
+
+        assert pm.get_skill("demo-skill") is not None
+
+    def test_no_installed_plugins_dir_scan_path_is_byte_identical(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The managed dir doesn't exist on disk (default state for every
+        operator who has never run `plugins install`) -> `_installed_plugins_dir()`
+        returns `None` and the scan result is identical to before this
+        feature existed."""
+        from hivepilot import plugins as plugins_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        data_home = tmp_path / "data-home-does-not-exist"
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+        monkeypatch.setattr(
+            type(plugins_mod.settings), "xdg_data_home", property(lambda self: data_home)
+        )
+
+        assert plugins_mod._installed_plugins_dir() is None
+        assert plugins_mod._scan_local_plugins() == []
+
+    def test_no_double_scan_when_installed_dir_already_in_extra_dirs(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """If the managed dir is ALSO already listed in `plugins_extra_dirs`
+        (e.g. a pre-existing manual override pointing at the same path), it
+        must be scanned exactly once, not twice."""
+        from hivepilot import plugins as plugins_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        data_home = tmp_path / "data-home"
+        installed_dir = data_home / "plugins"
+        self._write_skill_plugin(installed_dir)
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "plugins_extra_dirs", [installed_dir], raising=False
+        )
+        monkeypatch.setattr(
+            type(plugins_mod.settings), "xdg_data_home", property(lambda self: data_home)
+        )
+
+        calls: list = []
+        real_scan = plugins_mod._scan_plugin_dir
+
+        def spy_scan(plugin_dir, *, seen_stems):
+            calls.append(plugin_dir)
+            return real_scan(plugin_dir, seen_stems=seen_stems)
+
+        monkeypatch.setattr(plugins_mod, "_scan_plugin_dir", spy_scan)
+
+        found = plugins_mod._scan_local_plugins()
+
+        assert calls.count(installed_dir) == 1, f"Expected exactly one scan, got: {calls}"
+        assert len(found) == 1
+
+    def test_no_double_scan_when_installed_dir_equals_config_repo_dir(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Edge case: an operator's config repo `plugins/` dir happens to
+        resolve to the SAME path as the managed installed-plugins dir (e.g.
+        `base_dir`/`config_repo` deliberately pointed at
+        `xdg_data_home`) -- must still be scanned exactly once."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.services import config_service as config_service_mod
+
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+        data_home = tmp_path / "data-home"
+        clone_dir = data_home  # config repo clone == xdg_data_home on purpose
+        shared_plugins = clone_dir / "plugins"
+        self._write_skill_plugin(shared_plugins)
+
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", base_dir, raising=False)
+        monkeypatch.setattr(
+            plugins_mod.settings, "config_repo", "https://example.com/x.git", raising=False
+        )
+        monkeypatch.setattr(plugins_mod.settings, "config_repo_load_plugins", True, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+        monkeypatch.setattr(config_service_mod, "_config_dir", lambda: clone_dir, raising=False)
+        monkeypatch.setattr(
+            type(plugins_mod.settings), "xdg_data_home", property(lambda self: data_home)
+        )
+
+        calls: list = []
+        real_scan = plugins_mod._scan_plugin_dir
+
+        def spy_scan(plugin_dir, *, seen_stems):
+            calls.append(plugin_dir)
+            return real_scan(plugin_dir, seen_stems=seen_stems)
+
+        monkeypatch.setattr(plugins_mod, "_scan_plugin_dir", spy_scan)
+
+        found = plugins_mod._scan_local_plugins()
+
+        assert calls.count(shared_plugins) == 1, f"Expected exactly one scan, got: {calls}"
+        assert len(found) == 1

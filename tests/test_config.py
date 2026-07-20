@@ -36,6 +36,34 @@ class TestObsidianVaultConfig:
         assert isinstance(s.obsidian_vault, Path)
 
 
+class TestPluginsSourceConfig:
+    """`plugins_source_repo` / `plugins_source_ref` — where `hivepilot plugins
+    install` fetches curated built-in example plugins from (Sprint:
+    plugins-install PRD)."""
+
+    def test_plugins_source_repo_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_PLUGINS_SOURCE_REPO", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.plugins_source_repo == "https://raw.githubusercontent.com/jsoyer/HivePilot"
+
+    def test_plugins_source_ref_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_PLUGINS_SOURCE_REF", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.plugins_source_ref == "main"
+
+    def test_plugins_source_repo_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "HIVEPILOT_PLUGINS_SOURCE_REPO", "https://raw.githubusercontent.com/acme/fork"
+        )
+        s = Settings()
+        assert s.plugins_source_repo == "https://raw.githubusercontent.com/acme/fork"
+
+    def test_plugins_source_ref_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_PLUGINS_SOURCE_REF", "v1.2.3")
+        s = Settings()
+        assert s.plugins_source_ref == "v1.2.3"
+
+
 def test_blank_notification_chat_id_is_none(monkeypatch) -> None:
     from hivepilot.config import Settings
 

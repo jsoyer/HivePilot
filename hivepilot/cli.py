@@ -3764,6 +3764,134 @@ def plugins_info(
     console.print(table)
 
 
+@plugins_app.command("available")
+def plugins_available() -> None:
+    """List every CURATED built-in example plugin `hivepilot plugins install`
+    can fetch (`hivepilot.services.plugin_installer.KNOWN_EXAMPLE_PLUGINS`):
+    name, description, its `<NAME>_ENABLED` flag, prerequisite (binary on
+    PATH / pip package / config var), and whether it's currently installed
+    (present in the managed plugins dir) + enabled.
+
+    Read-only — never fetches anything over the network. Distinct from
+    `plugins search`/`plugins info` above, which query the OPERATOR-configured
+    remote plugin INDEX (`HIVEPILOT_PLUGINS_INDEX_URL`); this command's
+    registry is a fixed, in-repo constant covering only the built-in example
+    plugins shipped under `plugins/*.py`. See docs/PLUGINS.md "Installing
+    built-in example plugins".
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.services import plugin_installer
+
+    console = Console(width=200)
+    table = Table(title="Available Built-in Example Plugins")
+    table.add_column("name")
+    table.add_column("description")
+    table.add_column("enable flag")
+    table.add_column("prerequisite")
+    table.add_column("installed")
+    table.add_column("enabled")
+    for name in sorted(plugin_installer.KNOWN_EXAMPLE_PLUGINS):
+        spec = plugin_installer.KNOWN_EXAMPLE_PLUGINS[name]
+        installed = "yes" if plugin_installer.is_installed(name) else "no"
+        enabled = "yes" if plugin_installer.is_enabled(name) else "no"
+        table.add_row(name, spec.description, spec.env_flag, spec.prereq_detail, installed, enabled)
+    console.print(table)
+    typer.echo("Install with: hivepilot plugins install <name> [<name> ...]")
+
+
+@plugins_app.command("install")
+def plugins_install(
+    names: list[str] = typer.Argument(
+        ...,
+        help=(
+            "Curated built-in example plugin name(s) to fetch, e.g. "
+            "rtk herdr mem0 (see `hivepilot plugins available`)"
+        ),
+    ),
+    enable: bool = typer.Option(
+        True,
+        "--enable/--no-enable",
+        help="Persist HIVEPILOT_<NAME>_ENABLED=true to .env after fetching each plugin",
+    ),
+    ref: Optional[str] = typer.Option(
+        None,
+        "--ref",
+        help="Override the source repo ref/branch (default: HIVEPILOT_PLUGINS_SOURCE_REF)",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+) -> None:
+    """Fetch one or more CURATED built-in example plugins (`plugins/<name>.py`
+    shipped in this repo) into the managed plugins dir
+    (`xdg_data_home/plugins`, default `~/.local/share/hivepilot/plugins/`)
+    and, by default, persist each `<NAME>_ENABLED=true` flag to `.env`.
+
+    Confirm-then-run: prints what will be fetched, from where, and each
+    plugin's prerequisite, then asks to proceed — skip the prompt with
+    `--yes`. Idempotent: re-running overwrites the previously fetched file.
+
+    SECURITY: only names in `hivepilot.services.plugin_installer.KNOWN_EXAMPLE_PLUGINS`
+    (list them with `hivepilot plugins available`) can ever be fetched — there
+    is no arbitrary URL/path fetch. The fetched file is written to disk only;
+    this command never imports or executes it. It becomes live the next time
+    HivePilot starts, loaded by the SAME gated local-file plugin loader
+    (`plugins_enabled` / `plugins_disabled` / `<stem>_enabled` / capability
+    policy) as any other plugin — `plugins install` grants no privilege
+    beyond "an operator put a plugin file where the loader already looks".
+    See docs/PLUGINS.md "Installing built-in example plugins".
+    """
+    from hivepilot.services import plugin_installer
+
+    unknown = [n for n in names if n not in plugin_installer.KNOWN_EXAMPLE_PLUGINS]
+    if unknown:
+        available = ", ".join(sorted(plugin_installer.KNOWN_EXAMPLE_PLUGINS))
+        typer.echo(
+            f"plugins install: unknown plugin(s): {', '.join(unknown)}. Available: {available}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    resolved_ref = ref or settings.plugins_source_ref
+    dest_dir = plugin_installer.installed_plugins_dir()
+
+    typer.echo(
+        f"About to fetch {len(names)} plugin(s) from "
+        f"{settings.plugins_source_repo} @ {resolved_ref}:"
+    )
+    for n in names:
+        spec = plugin_installer.KNOWN_EXAMPLE_PLUGINS[n]
+        typer.echo(f"  - {n}: {spec.description}")
+        typer.echo(f"      prereq: {spec.prereq_detail}")
+    typer.echo(f"Destination: {dest_dir}")
+    if enable:
+        typer.echo("Each plugin's <NAME>_ENABLED flag will be persisted to .env.")
+    else:
+        typer.echo("--no-enable: flags will NOT be persisted; enable manually if desired.")
+
+    if not yes and not typer.confirm("Proceed?", default=False):
+        typer.echo("Aborted.")
+        raise typer.Exit(0)
+
+    for n in names:
+        spec = plugin_installer.KNOWN_EXAMPLE_PLUGINS[n]
+        try:
+            path = plugin_installer.fetch_plugin(n, ref=resolved_ref, dest_dir=dest_dir)
+        except RuntimeError as exc:
+            typer.echo(f"plugins install: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        typer.echo(f"Installed {n} -> {path}")
+        if enable:
+            env_path = plugin_installer.persist_enabled(n)
+            typer.echo(f"Enabled: {spec.env_flag}=true (persisted to {env_path})")
+        typer.echo(f"Prereq for {n}: {spec.prereq_detail}")
+
+    typer.echo(
+        "Restart HivePilot services for the change to take effect — a plugin "
+        "no-ops until its prerequisite (binary/lib/config) is present."
+    )
+
+
 @skills_app.command("list")
 def skills_list() -> None:
     """List every registered plugin-contributed skill (skill-plugin-type PRD,

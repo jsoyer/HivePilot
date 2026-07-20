@@ -498,23 +498,45 @@ def _config_repo_plugins_dir() -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _installed_plugins_dir() -> Path | None:
+    """Return the managed "installed plugins" directory (`xdg_data_home/plugins`
+    -- `~/.local/share/hivepilot/plugins/` by default) if it exists on disk,
+    else `None`.
+
+    This is the fetch destination `hivepilot plugins install <name>...`
+    (`hivepilot.services.plugin_installer.fetch_plugin`) writes a curated
+    built-in example plugin into, so it loads on the next process start
+    without a manual `HIVEPILOT_PLUGINS_EXTRA_DIRS` override. Mirrors
+    `_config_repo_plugins_dir` above exactly: existence-gated, no dedicated
+    enable flag of its own (a plugin loaded from here is still subject to
+    the normal `plugins_enabled`/`plugins_disabled`/capability-policy
+    gates), and byte-identical to current behaviour for every operator who
+    has never run `plugins install` -- the directory simply doesn't exist.
+    """
+    candidate = settings.xdg_data_home / "plugins"
+    return candidate if candidate.exists() else None
+
+
 def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
     """Scan `base_dir/plugins`, then the config repo clone's own `plugins/`
     dir (if auto-loading is enabled -- see `_config_repo_plugins_dir`), then
-    each directory in `settings.plugins_extra_dirs` (in order), for
-    local-file plugins.
+    the managed `plugins install` dir (if it exists -- see
+    `_installed_plugins_dir`), then each directory in
+    `settings.plugins_extra_dirs` (in order), for local-file plugins.
 
     `base_dir/plugins` is always scanned FIRST — a deployment that points
     `base_dir` at its own config repo (to load its own `plugins/*.py`) can
     still reach the engine's shipped `plugins/*.py` via `plugins_extra_dirs`,
     without one shadowing the other. The config repo clone's `plugins/` dir
-    (when applicable) is scanned NEXT, before any manually-configured extra
-    dir, and is SKIPPED here if it's already present in
-    `settings.plugins_extra_dirs` (compared by resolved path) so it is never
-    scanned twice. A module stem already loaded from an earlier directory is
-    skipped rather than re-loaded or raising a collision (dedup by stem,
-    first-wins). A directory that doesn't exist on disk is silently skipped,
-    same as a missing `base_dir/plugins` always has been.
+    (when applicable), then the managed installed-plugins dir (when it
+    exists), are scanned NEXT, before any manually-configured extra dir, and
+    each is SKIPPED here if it's already present in
+    `settings.plugins_extra_dirs` OR is the other one of the two (compared
+    by resolved path) so it is never scanned twice. A module stem already
+    loaded from an earlier directory is skipped rather than re-loaded or
+    raising a collision (dedup by stem, first-wins). A directory that
+    doesn't exist on disk is silently skipped, same as a missing
+    `base_dir/plugins` always has been.
 
     Returns each successfully-loaded plugin's `register` callable paired with
     a `PluginRecord` describing where it came from.
@@ -532,6 +554,14 @@ def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
         already_listed = {d.resolve() for d in extra_dirs}
         if config_repo_plugins.resolve() not in already_listed:
             found.extend(_scan_plugin_dir(config_repo_plugins, seen_stems=seen_stems))
+
+    installed_plugins = _installed_plugins_dir()
+    if installed_plugins is not None:
+        already_listed = {d.resolve() for d in extra_dirs}
+        if config_repo_plugins is not None:
+            already_listed.add(config_repo_plugins.resolve())
+        if installed_plugins.resolve() not in already_listed:
+            found.extend(_scan_plugin_dir(installed_plugins, seen_stems=seen_stems))
 
     for extra_dir in extra_dirs:
         found.extend(_scan_plugin_dir(extra_dir, seen_stems=seen_stems))
