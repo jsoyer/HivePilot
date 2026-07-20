@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -191,3 +191,135 @@ class TestObsidianCli:
         assert result.exit_code == 0
         # We have a partial vault so some folders should be missing
         assert "missing" in result.output.lower() or "04 - Engineering" in result.output
+
+
+# ---------------------------------------------------------------------------
+# schedule health / schedule list -- source: autopilot entries (task=None)
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleHealthCommand:
+    """`hivepilot schedule health` must not crash on `source: autopilot`
+    entries, whose `task` is None (mutually exclusive with `source`).
+    Before the fix, the f-string `task={entry.task:<15}` raised
+    `TypeError: unsupported format string passed to NoneType.__format__`.
+    """
+
+    def test_autopilot_entry_does_not_crash(self) -> None:
+        from hivepilot.services.schedule_service import ScheduleEntry
+
+        entry = ScheduleEntry(
+            name="autopilot-drain", projects=["p"], source="autopilot", interval_minutes=5
+        )
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch(
+                "hivepilot.services.schedule_service.load_schedules",
+                return_value={"autopilot-drain": entry},
+            ),
+            patch("hivepilot.services.state_service.get_schedule_last_run", return_value=None),
+            patch("hivepilot.services.retry_service.list_queue", return_value=[]),
+            patch("hivepilot.services.retry_service.list_dlq", return_value=[]),
+        ):
+            result = runner.invoke(app, ["schedule", "health"])
+
+        assert result.exit_code == 0, result.output
+        assert "<source:autopilot>" in result.output
+
+    def test_task_entry_still_shows_task_name(self) -> None:
+        """Normal task-based entries keep printing `task=<name>` unchanged."""
+        from hivepilot.services.schedule_service import ScheduleEntry
+
+        entry = ScheduleEntry(name="docs-weekly", projects=["p"], task="docs", interval_minutes=60)
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch(
+                "hivepilot.services.schedule_service.load_schedules",
+                return_value={"docs-weekly": entry},
+            ),
+            patch("hivepilot.services.state_service.get_schedule_last_run", return_value=None),
+            patch("hivepilot.services.retry_service.list_queue", return_value=[]),
+            patch("hivepilot.services.retry_service.list_dlq", return_value=[]),
+        ):
+            result = runner.invoke(app, ["schedule", "health"])
+
+        assert result.exit_code == 0, result.output
+        assert "task=docs" in result.output
+
+    def test_real_last_run_shows_formatted_date_not_literal_25(self) -> None:
+        """Regression: `last={last or 'never':<25}` applied the `<25`
+        format spec directly to a `datetime` -- `datetime.__format__`
+        interprets a spec with no `%` codes as an strftime pattern, so it
+        rendered the literal string "<25" instead of left-padding a
+        readable timestamp. `last` must be converted to a string FIRST,
+        then padded.
+        """
+        from datetime import datetime, timezone
+
+        from hivepilot.services.schedule_service import ScheduleEntry
+
+        entry = ScheduleEntry(name="docs-weekly", projects=["p"], task="docs", interval_minutes=60)
+        last_run = datetime(2026, 7, 20, 12, 30, 0, tzinfo=timezone.utc)
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch(
+                "hivepilot.services.schedule_service.load_schedules",
+                return_value={"docs-weekly": entry},
+            ),
+            patch(
+                "hivepilot.services.state_service.get_schedule_last_run",
+                return_value=last_run,
+            ),
+            patch("hivepilot.services.retry_service.list_queue", return_value=[]),
+            patch("hivepilot.services.retry_service.list_dlq", return_value=[]),
+        ):
+            result = runner.invoke(app, ["schedule", "health"])
+
+        assert result.exit_code == 0, result.output
+        assert "2026-07-20 12:30:00" in result.output
+        assert "<25" not in result.output
+
+
+class TestScheduleListCommand:
+    """`hivepilot schedule list` should print a readable label for
+    `source: autopilot` entries instead of the misleading `task=None`."""
+
+    def test_autopilot_entry_shows_source_label(self) -> None:
+        from hivepilot.services.schedule_service import ScheduleEntry
+
+        entry = ScheduleEntry(
+            name="autopilot-drain", projects=["p"], source="autopilot", interval_minutes=5
+        )
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch(
+                "hivepilot.services.schedule_service.load_schedules",
+                return_value={"autopilot-drain": entry},
+            ),
+        ):
+            result = runner.invoke(app, ["schedule", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "<source:autopilot>" in result.output
+        assert "task=None" not in result.output
+
+    def test_task_entry_still_shows_task_name(self) -> None:
+        from hivepilot.services.schedule_service import ScheduleEntry
+
+        entry = ScheduleEntry(name="docs-weekly", projects=["p"], task="docs", interval_minutes=60)
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch(
+                "hivepilot.services.schedule_service.load_schedules",
+                return_value={"docs-weekly": entry},
+            ),
+        ):
+            result = runner.invoke(app, ["schedule", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "task=docs" in result.output

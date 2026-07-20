@@ -666,10 +666,13 @@ def schedule_health(
             next_run = last + timedelta(minutes=entry.interval_minutes)
             due_in = (next_run - now).total_seconds()
             next_str = f"due in {int(due_in)}s" if due_in > 0 else "OVERDUE"
+            last_str = last.strftime("%Y-%m-%d %H:%M:%S")
         else:
             next_str = "never run"
+            last_str = "never"
+        task_label = entry.task or f"<source:{entry.source}>"
         typer.echo(
-            f"  {name:<20} task={entry.task:<15} interval={entry.interval_minutes}m  last={last or 'never':<25} next={next_str}  [{status}]"
+            f"  {name:<20} task={task_label:<15} interval={entry.interval_minutes}m  last={last_str:<25} next={next_str}  [{status}]"
         )
 
     pending = retry_service.list_queue("pending")
@@ -796,8 +799,9 @@ def schedule_list(
     schedules = load_schedules()
     for name, entry in schedules.items():
         status = "enabled" if entry.enabled else "disabled"
+        task_label = entry.task or f"<source:{entry.source}>"
         typer.echo(
-            f"- {name}: task={entry.task} projects={entry.projects} interval={entry.interval_minutes}m ({status})"
+            f"- {name}: task={task_label} projects={entry.projects} interval={entry.interval_minutes}m ({status})"
         )
 
 

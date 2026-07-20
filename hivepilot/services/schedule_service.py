@@ -115,6 +115,15 @@ def run_entry(
         mark_run(entry)
         return True
     except Exception as exc:  # noqa: BLE001
+        # Stamp last_run even on failure so the schedule's own
+        # interval_minutes cadence is respected by due_schedules() --
+        # otherwise a persistently-failing task never stamps last_run and
+        # stays perpetually "due", causing the daemon to re-dispatch it
+        # every tick (~30s) on top of the independent retry_service backoff
+        # below. Retries remain governed entirely by retry_service's own
+        # retry_queue/backoff -- this only stops the schedule ITSELF from
+        # busy-looping.
+        mark_run(entry)
         retry_service.enqueue(
             schedule_name=entry.name,
             task=entry.task,
