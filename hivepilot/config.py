@@ -792,6 +792,20 @@ class Settings(BaseSettings):
     # used before this option existed. env: HIVEPILOT_PDF_FONT_PATH
     pdf_font_path: str | None = None
 
+    # ---- `hivepilot self-update` defaults ----
+    # HivePilot is NOT published on PyPI -- it installs from git. These are
+    # the defaults `hivepilot self-update` builds its pip spec from
+    # (`hivepilot[<update_extras>] @ git+<update_repo>@<update_ref>`); every
+    # one is overridable per-invocation via the matching CLI flag
+    # (--repo/--ref/--extras). An operator can pin a tag/sha here via env
+    # (HIVEPILOT_UPDATE_REPO/_REF/_EXTRAS) for reproducible prod updates.
+    update_repo: str = "https://github.com/jsoyer/HivePilot.git"
+    update_ref: str = "main"
+    # Base prod extras. Must include everything this deployment actually
+    # runs -- e.g. pass --extras "api,notifications,webui" (or set
+    # HIVEPILOT_UPDATE_EXTRAS) to keep the web UI, containers, etc.
+    update_extras: str = "api,notifications"
+
     @property
     def xdg_config_home(self) -> Path:
         """~/.config/hivepilot (or $XDG_CONFIG_HOME/hivepilot)"""

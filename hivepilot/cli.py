@@ -3882,6 +3882,115 @@ def agents_install(
 
 
 # ---------------------------------------------------------------------------
+# self-update: venv-targeted git+https pip install (HivePilot is NOT on
+# PyPI). Thin wrapper over `hivepilot.services.update_service` -- confirm-
+# then-run, same UX shape as `agents install` above.
+# ---------------------------------------------------------------------------
+
+
+@app.command("self-update")
+def self_update(
+    ref: str = typer.Option(
+        None, "--ref", help="Git ref to install (default: settings.update_ref, i.e. 'main')"
+    ),
+    extras: str = typer.Option(
+        None,
+        "--extras",
+        help=(
+            "Comma-separated extras, e.g. 'api,notifications,webui' -- must include "
+            "everything this deployment runs (default: settings.update_extras)"
+        ),
+    ),
+    repo: str = typer.Option(
+        None, "--repo", help="git+https repo URL to install from (default: settings.update_repo)"
+    ),
+    restart: bool = typer.Option(
+        False,
+        "--restart",
+        help="Best-effort restart of the HivePilot services after a successful update",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the interactive y/N confirmation prompt"
+    ),
+) -> None:
+    """Update this HivePilot install in place, in its own venv.
+
+    HivePilot is not published on PyPI -- it installs from git. This
+    resolves `sys.executable` (the interpreter behind the currently-running
+    `hivepilot` console script, i.e. THIS install's venv python) and runs
+    `pip install -U --no-cache-dir` against it directly -- so it always
+    targets the correct venv and never falls back to a system Python/pip,
+    avoiding PEP 668's "externally-managed-environment" guard without ever
+    needing `--break-system-packages`.
+
+    This is install-mutating, so unless `--yes` is passed it confirms with
+    the operator first (mirroring `hivepilot agents install`'s UX). The
+    running process keeps executing the OLD code until restarted -- pass
+    `--restart` for a best-effort restart of the known HivePilot services, or
+    restart them manually afterward.
+    """
+    import importlib.metadata
+    import shutil
+
+    from hivepilot.services.update_service import (
+        KNOWN_SERVICES,
+        build_update_spec,
+        mask_url_credentials,
+        restart_services,
+        run_self_update,
+    )
+
+    resolved_repo = repo or settings.update_repo
+    resolved_ref = ref or settings.update_ref
+    resolved_extras = extras or settings.update_extras
+    spec = build_update_spec(resolved_repo, resolved_ref, resolved_extras)
+
+    try:
+        current_version = importlib.metadata.version("hivepilot")
+    except importlib.metadata.PackageNotFoundError:
+        current_version = "unknown"
+    typer.echo(f"Current version: {current_version}")
+    # `spec` may embed a credential if --repo/HIVEPILOT_UPDATE_REPO pointed at
+    # a private fork via `https://x-access-token:TOKEN@...` -- never echo it
+    # unmasked. The real, unmasked `spec` is still what's passed to pip below.
+    typer.echo(f"Will install: {mask_url_credentials(spec)}")
+
+    if not yes:
+        confirmed = typer.confirm(
+            f"Update hivepilot to {resolved_ref} with extras [{resolved_extras}]?"
+        )
+        if not confirmed:
+            typer.echo("Aborted.")
+            raise typer.Exit(0)
+
+    result = run_self_update(spec)
+    if result.stdout:
+        # pip itself logs the exact git clone URL (credentials included) when
+        # resolving a `git+` requirement -- mask before echoing.
+        typer.echo(mask_url_credentials(result.stdout))
+    if result.returncode != 0:
+        typer.echo(f"self-update failed (pip exit {result.returncode}):", err=True)
+        if result.stderr:
+            typer.echo(mask_url_credentials(result.stderr), err=True)
+        raise typer.Exit(1)
+
+    typer.echo("Updated. Restart the API/scheduler/bot services to run the new version.")
+
+    if restart:
+        if shutil.which("rc-service") is None and shutil.which("systemctl") is None:
+            typer.echo(
+                "No init system detected (rc-service/systemctl) -- "
+                "restart the HivePilot services manually."
+            )
+        else:
+            restarted = restart_services(KNOWN_SERVICES)
+            if restarted:
+                typer.echo(f"Restarted services: {', '.join(restarted)}")
+            else:
+                typer.echo("No known HivePilot services were found to restart.")
+
+
+# ---------------------------------------------------------------------------
 # Autopilot: guarded objective queue + fail-closed dispatch gate
 #
 # Thin CLI wrapper over `hivepilot.services.autopilot_queue` -- a plain

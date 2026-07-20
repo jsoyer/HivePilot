@@ -562,8 +562,10 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
     in memory until reloaded.
   - The application itself: rebuild/re-pull the image
     (`docker compose build --pull && docker compose up -d`) for the container
-    path, or re-run `HIVEPILOT_REPO_REF=<new-tag> sh scripts/install-alpine.sh`
-    for bare metal (idempotent — reuses the existing venv).
+    path; for bare metal, prefer `hivepilot self-update` (see below) — it's
+    the same idea as re-running
+    `HIVEPILOT_REPO_REF=<new-tag> sh scripts/install-alpine.sh` but from a
+    single first-class command, always targeting the correct venv.
 - **Backup**: back up `state.db` and your config repo (the source of truth for
   `projects.yaml`/`tasks.yaml`/etc. — `/data`'s copy is a synced mirror, not
   the canonical copy).
@@ -597,6 +599,59 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
   admin-endpoint call patterns above) avoids this in practice; eliminating
   it fully would require threading a per-run config snapshot through
   `run_task`/`run_pipeline` — not implemented.
+
+## 10. Self-update
+
+Once installed (bare-metal path), keep HivePilot current without re-running
+the installer by hand:
+
+```bash
+hivepilot self-update
+```
+
+HivePilot is **not published on PyPI** — it installs from git. `self-update`
+resolves `sys.executable` (the interpreter behind the currently-running
+`hivepilot` console script, i.e. THIS install's own venv python) and runs
+`pip install -U --no-cache-dir` directly against it — so it always targets
+the correct venv and never falls back to the system Python/pip, avoiding
+PEP 668's `externally-managed-environment` guard without ever needing
+`--break-system-packages`.
+
+Flags:
+
+- `--ref <git-ref>` — branch/tag/sha to install (default: `main`, or
+  `settings.update_ref` / `HIVEPILOT_UPDATE_REF`)
+- `--extras <a,b,c>` — comma-separated extras; **must include everything
+  this deployment actually runs**, e.g. `--extras "api,notifications,webui"`
+  to keep the web UI (default: `api,notifications`, or
+  `settings.update_extras` / `HIVEPILOT_UPDATE_EXTRAS`)
+- `--repo <url>` — source repo (default:
+  `https://github.com/jsoyer/HivePilot.git`, or `settings.update_repo` /
+  `HIVEPILOT_UPDATE_REPO`)
+- `--restart` — best-effort restart of the known HivePilot services after a
+  successful update: `hivepilot-api`, `hivepilot-scheduler`,
+  `hivepilot-telegram`. Tries `rc-service <svc> restart` (OpenRC/Alpine)
+  when present, else falls back to `systemctl restart <svc>`; a service
+  that isn't installed/running on this host is silently skipped, never
+  fatal to the command. With neither init system on `PATH`, it prints a
+  clear "restart manually" notice instead.
+- `--yes` / `-y` — skip the interactive y/N confirmation
+
+This is install-mutating, so unless `--yes` is passed it prints the current
+version and the pip spec it's about to install, then confirms with the
+operator before doing anything (same confirm-then-run UX as
+`hivepilot agents install`, step 6 above). The running process keeps
+executing the OLD code in memory until restarted — pass `--restart`, or
+restart the services manually afterward.
+
+**Never embed a token in `--repo`/`HIVEPILOT_UPDATE_REPO`** (e.g.
+`https://x-access-token:TOKEN@github.com/...` for a private fork). The
+command masks any credential before echoing it back
+(`https://***@github.com/...`), but the raw value still transits your shell
+history, environment, and process list either way. For a private fork, use
+`ssh://` instead — e.g. `--repo ssh://git@github.com/org/private-fork.git`
+with the host's SSH key/agent already configured — so no secret ever needs
+to appear on the command line at all.
 
 ## See also
 
