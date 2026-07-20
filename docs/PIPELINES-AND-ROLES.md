@@ -182,6 +182,39 @@ A typical company pipeline has the developer role open a pull request and a revi
 
 Optionally, an opt-in **debate judge/arbiter** can fail-closed gate `promote_pr`/`merge_pr` — if the debate verdict doesn't clear the configured confidence floor, the promote/merge is blocked rather than allowed through. See [DEBATE-AND-LESSONS.md](./DEBATE-AND-LESSONS.md).
 
+## Agent file-ownership conflicts
+
+When multiple roles run against the same repo (e.g. two developer roles, or a developer and a docs role working in parallel), it's useful to declare which role OWNS which files, so an accidental cross-role edit can be spotted. This is an opt-in **declaration + detection layer**: it does not change how pipelines run.
+
+Declare ownership in an optional `ownership.yaml` at the project root, mapping a role name to the glob patterns of files it owns:
+
+```yaml
+backend:
+  - hivepilot/**
+docs:
+  - docs/**
+frontend:
+  - web/**
+```
+
+Globs support `*` (within one path segment), `?` (single character), and `**` (recursive, crosses directories). No `ownership.yaml` means ownership isn't declared for the project — nothing is checked.
+
+A bare directory pattern with no wildcard (e.g. `hivepilot/services/`) matches **nothing** — it's not a prefix match. To own everything under a directory, use `hivepilot/services/**`.
+
+Check for conflicts manually with the read-only CLI:
+
+```bash
+# Advisory: show which changed files fall under any role's declared ownership
+hivepilot ownership check
+
+# Flag any changed file owned by a role OTHER than the given one
+hivepilot ownership check --role backend --diff-from origin/main
+```
+
+`hivepilot ownership check` exits `1` if a `--role`-scoped conflict is found, `0` otherwise (including when no `ownership.yaml` exists, or the current directory isn't a git repository — both are graceful no-ops, not errors).
+
+**Current scope:** this ships the declaration format (`ownership.yaml`), the pure detection function (`hivepilot.services.file_ownership.detect_conflicts`), and this manual CLI check. Automatic, fail-closed enforcement — blocking a merge or stage progression the moment a conflict is detected — is **planned but not yet wired** into the orchestrator/git flow; today, a conflict is something you check for, not something the engine blocks on.
+
 ## The default company roster
 
 The engine ships a single generic `developer → claude` role by default. The

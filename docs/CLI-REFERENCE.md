@@ -267,6 +267,14 @@ hivepilot api serve --host 0.0.0.0 --port 8080 --workers 2
 | `list` | List agent-CLI availability on the host. | No |
 | `install <name>` | Guided, host-modifying install of an agent CLI binary. Treat as requiring explicit user consent. | **Yes** (writes to host) |
 
+## `ownership` — agent file-ownership conflicts
+
+Read-only manual check against an optional `ownership.yaml`. See [PIPELINES-AND-ROLES.md](./PIPELINES-AND-ROLES.md#agent-file-ownership-conflicts). Automatic merge-time enforcement is planned but not yet wired.
+
+| Command | Purpose | Mutating? |
+| --- | --- | --- |
+| `check` | Report changed files owned by another role (`--role`), or advisory-list all changed files matched by any role's ownership globs (no `--role`). Exits `1` on a `--role`-scoped conflict. | No |
+
 ## Approval-gated & destructive commands
 
 The following are the destructive commands called out above:

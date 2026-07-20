@@ -80,6 +80,10 @@ autopilot_app = typer.Typer(help="Guarded autonomous objective queue (Autopilot)
 app.add_typer(autopilot_app, name="autopilot")
 secrets_app = typer.Typer(help="Secret resolution helpers (TTL cache)")
 app.add_typer(secrets_app, name="secrets")
+ownership_app = typer.Typer(
+    help="Agent file-ownership conflict detection (read-only; enforcement gate deferred)"
+)
+app.add_typer(ownership_app, name="ownership")
 logger = get_logger(__name__)
 
 
@@ -3954,6 +3958,129 @@ def autopilot_status(
         counts[item.state] = counts.get(item.state, 0) + 1
     summary = ", ".join(f"{state}={count}" for state, count in sorted(counts.items()))
     typer.echo(f"Queue: {summary}")
+
+
+# ---------------------------------------------------------------------------
+# Agent file-ownership conflict detection (Phase 16 C1 — read-only CLI)
+#
+# `hivepilot ownership check` is a manual, read-only inspection over the pure
+# `hivepilot.services.file_ownership` detection layer: it loads an optional
+# `ownership.yaml` and diffs the current worktree against a git ref, then
+# reports files changed by one role that are owned by another. This is the
+# SAME "manual gate at this CLI layer only" shape as `scan vulns --fail-on`
+# above -- the automatic fail-closed enforcement gate (blocking a merge on a
+# detected conflict) is a DEFERRED follow-up that will wire this into
+# `Orchestrator`/`git_service`, not this command.
+#
+# Attribution model (kept deliberately simple, see the sprint spec): with
+# `--role R`, every changed file is attributed to R, and any changed file
+# owned by some OTHER role is flagged as a conflict. Without `--role`, there
+# is no "offending" role to compare against, so the command is purely
+# advisory: it reports which changed files fall under ANY role's declared
+# ownership glob, and always exits 0 (never a hard conflict signal without a
+# role to conflict against).
+# ---------------------------------------------------------------------------
+
+
+def _git_changed_files(ref: str) -> list[str]:
+    """Return the paths changed in the current worktree relative to `ref`
+    (`git diff --name-only <ref>`). Raises `RuntimeError` if `git` isn't
+    available or the current directory isn't inside a git repository (or any
+    other git failure) -- the caller treats that as a graceful no-op, not a
+    crash."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [settings.git_command, "diff", "--name-only", ref],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        # Covers FileNotFoundError (git not on PATH) and PermissionError
+        # (git present but not executable), and any other OS-level failure
+        # to even launch the subprocess -- all graceful no-ops to the caller.
+        raise RuntimeError(f"git command failed to run: {exc}") from exc
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git diff --name-only {ref} failed: {result.stderr.strip() or 'unknown error'}"
+        )
+
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+@ownership_app.command("check")
+def ownership_check(
+    ownership: str = typer.Option(
+        "ownership.yaml", "--ownership", help="Path to the ownership.yaml declaration file"
+    ),
+    diff_from: str = typer.Option(
+        "HEAD", "--diff-from", help="Git ref to diff the current worktree against"
+    ),
+    role: Optional[str] = typer.Option(
+        None,
+        "--role",
+        help="Attribute all changed files to this role; changed files owned by a "
+        "DIFFERENT role are flagged as conflicts. Without --role, the report is "
+        "advisory only (which changed files fall under some role's ownership).",
+    ),
+) -> None:
+    """Check changed files against an optional ownership.yaml for cross-role
+    file-ownership conflicts. Read-only and advisory -- does not block or
+    mutate anything; the automatic fail-closed merge-time gate is a deferred
+    follow-up (see PIPELINES-AND-ROLES.md)."""
+    from hivepilot.services.file_ownership import detect_conflicts, load_file_ownership
+
+    try:
+        ownership_map = load_file_ownership(ownership)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    if not ownership_map:
+        typer.echo(f"No ownership declarations found at '{ownership}' -- nothing to check.")
+        raise typer.Exit(code=0)
+
+    try:
+        changed_files = _git_changed_files(diff_from)
+    except RuntimeError as exc:
+        typer.echo(f"Could not compute changed files: {exc}")
+        raise typer.Exit(code=0)
+
+    if not changed_files:
+        typer.echo("No changed files detected.")
+        raise typer.Exit(code=0)
+
+    if role is not None:
+        conflicts = detect_conflicts(ownership_map, {role: changed_files})
+        if not conflicts:
+            typer.echo(f"Clean: no changed files owned by a role other than '{role}'.")
+            raise typer.Exit(code=0)
+
+        typer.echo(f"{'PATH':<50} {'OWNER':<20} OFFENDING")
+        for conflict in conflicts:
+            typer.echo(f"{conflict.path:<50} {conflict.owner_role:<20} {conflict.offending_role}")
+        typer.echo(f"\nFound {len(conflicts)} file-ownership conflict(s).", err=True)
+        raise typer.Exit(code=1)
+
+    # Advisory mode (no --role): report every changed file matched by ANY
+    # role's ownership glob. Uses detect_conflicts with each changed file
+    # attributed to a synthetic role no real role can equal, purely to reuse
+    # the same glob-matching logic for the "who owns this?" lookup.
+    advisory = detect_conflicts(ownership_map, {"": changed_files})
+    if not advisory:
+        typer.echo("No changed files match any declared ownership glob.")
+        raise typer.Exit(code=0)
+
+    typer.echo(
+        "Changed files matched by ownership declarations (advisory -- pass --role to "
+        "flag cross-role conflicts):"
+    )
+    for entry in advisory:
+        typer.echo(f"  {entry.path} -> owned by '{entry.owner_role}'")
+    raise typer.Exit(code=0)
 
 
 if __name__ == "__main__":
