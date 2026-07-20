@@ -9,7 +9,7 @@ optional extra or credentials and are off until configured.
 Requires `pip install "hivepilot[notifications]"` plus:
 
 - `HIVEPILOT_TELEGRAM_BOT_TOKEN` — bot token from `@BotFather`
-- `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` — JSON array of allowed chat IDs; empty means open
+- `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` — comma-separated or JSON array of allowed chat IDs, e.g. `123456,789012` or `[123456,789012]`; empty means open
 
 Start the bot:
 
@@ -92,7 +92,8 @@ on `PATH`; alternatively, run the `signal-cli-rest-api` container and point
 host itself.
 
 Configuration: `HIVEPILOT_SIGNAL_NUMBER` (the bot's own E.164 number),
-`HIVEPILOT_SIGNAL_ALLOWED_NUMBERS` (E.164 whitelist; empty means open),
+`HIVEPILOT_SIGNAL_ALLOWED_NUMBERS` (comma-separated or JSON array E.164 whitelist, e.g.
+`+15551234567,+15557654321`; empty means open),
 `HIVEPILOT_SIGNAL_CLI_PATH` (defaults to `signal-cli` on PATH),
 `HIVEPILOT_SIGNAL_REST_URL` (base URL of a running `signal-cli-rest-api`, rest mode only),
 `HIVEPILOT_SIGNAL_NOTIFICATION_NUMBER` (proactive notifications),

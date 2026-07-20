@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from hivepilot.config import Settings
 
@@ -388,3 +389,150 @@ class TestConfigHotReloadFlag:
         monkeypatch.setenv("HIVEPILOT_CONFIG_HOT_RELOAD", "true")
         s = Settings()
         assert s.config_hot_reload is True
+
+
+# ---------------------------------------------------------------------------
+# HIGH-severity fix — lenient CSV/JSON parsing for env `list[...]` fields.
+#
+# Root cause: pydantic-settings decodes a `list[...]` field's env value as
+# STRICT JSON before any validator runs, UNLESS the field is
+# `Annotated[..., NoDecode]`. A plain value ("123456"), a CSV value
+# ("123,456"), or an EMPTY value ("") is not valid JSON, so `Settings()`
+# raised `SettingsError` at import time — bricking the entire CLI/app,
+# since `hivepilot.config` constructs the module-level `settings` singleton
+# at import. This is the exact crash an operator hit with
+# `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS=123456`.
+#
+# Fix: every affected field is now `Annotated[list[X], NoDecode]` plus a
+# shared `mode="before"` validator (`_parse_env_list`) that accepts empty
+# (-> []), a bare/CSV string (-> split on ",", stripped), a JSON array
+# string (backward-compat, existing configs keep working), or an
+# already-constructed list (passthrough, e.g. tests building Settings
+# directly in Python).
+# ---------------------------------------------------------------------------
+
+
+class TestLenientEnvListParsing:
+    """Representative sample across the fix: an int-element field
+    (telegram_allowed_chat_ids), a str-element field
+    (slack_allowed_channel_ids), and plugins_disabled (the field the
+    existing JSON-array tests above already cover, used here as the CSV/
+    empty/plain regression counterpart)."""
+
+    # -- telegram_allowed_chat_ids: list[int] -----------------------------
+
+    def test_telegram_empty_env_value_no_longer_crashes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """THE regression guard: before the fix, an empty env value for a
+        list[...] field raised SettingsError at Settings() construction,
+        bricking the whole CLI/app (hivepilot.config is imported at
+        startup). After the fix, empty -> []."""
+        monkeypatch.setenv("HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS", "")
+        s = Settings()
+        assert s.telegram_allowed_chat_ids == []
+
+    def test_telegram_plain_single_value_coerces_to_int(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This is the exact operator-reported crash:
+        HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS=123456 (no brackets, no
+        quoting) must work, not just JSON."""
+        monkeypatch.setenv("HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS", "123456")
+        s = Settings()
+        assert s.telegram_allowed_chat_ids == [123456]
+
+    def test_telegram_csv_value_coerces_each_to_int(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS", "123,456")
+        s = Settings()
+        assert s.telegram_allowed_chat_ids == [123, 456]
+
+    def test_telegram_json_array_still_works(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Backward-compat: existing deployments using the pre-fix JSON
+        array convention keep working unchanged."""
+        monkeypatch.setenv("HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS", "[123, 456]")
+        s = Settings()
+        assert s.telegram_allowed_chat_ids == [123, 456]
+
+    def test_telegram_unset_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.telegram_allowed_chat_ids == []
+
+    def test_telegram_malformed_element_raises_clean_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuinely non-int element must give a clean pydantic
+        ValidationError (naming the field), not a bare JSONDecodeError and
+        not a crash that takes down unrelated fields too."""
+        monkeypatch.setenv("HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS", "abc")
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        assert "telegram_allowed_chat_ids" in str(exc_info.value)
+
+    def test_telegram_already_a_list_passes_through(self) -> None:
+        """Constructing Settings directly with a Python list (e.g. in a
+        test or programmatically) must keep working unchanged."""
+        s = Settings(telegram_allowed_chat_ids=[1, 2, 3])
+        assert s.telegram_allowed_chat_ids == [1, 2, 3]
+
+    # -- slack_allowed_channel_ids: list[str] -----------------------------
+
+    def test_slack_empty_env_value_is_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS", "")
+        s = Settings()
+        assert s.slack_allowed_channel_ids == []
+
+    def test_slack_plain_single_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS", "C123")
+        s = Settings()
+        assert s.slack_allowed_channel_ids == ["C123"]
+
+    def test_slack_csv_value_strips_whitespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS", "C1, C2")
+        s = Settings()
+        assert s.slack_allowed_channel_ids == ["C1", "C2"]
+
+    def test_slack_json_array_still_works(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS", '["C1", "C2"]')
+        s = Settings()
+        assert s.slack_allowed_channel_ids == ["C1", "C2"]
+
+    # -- plugins_disabled: list[str] (CSV/empty/plain counterpart to the --
+    # -- pre-existing TestPluginsDisabled JSON-only coverage above) -------
+
+    def test_plugins_disabled_empty_env_value_is_empty_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HIVEPILOT_PLUGINS_DISABLED", "")
+        s = Settings()
+        assert s.plugins_disabled == []
+
+    def test_plugins_disabled_csv_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_PLUGINS_DISABLED", "rtk,obsidian")
+        s = Settings()
+        assert s.plugins_disabled == ["rtk", "obsidian"]
+
+    # -- discovery_roots: list[str] with a non-empty default --------------
+
+    def test_discovery_roots_unset_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_DISCOVERY_ROOTS", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.discovery_roots == ["~/dev"]
+
+    def test_discovery_roots_csv_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_DISCOVERY_ROOTS", "~/dev,~/work")
+        s = Settings()
+        assert s.discovery_roots == ["~/dev", "~/work"]
+
+    # -- discord (list[int]) + signal (list[str]) spot checks -------------
+
+    def test_discord_allowed_guild_ids_plain_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_DISCORD_ALLOWED_GUILD_IDS", "111,222")
+        s = Settings()
+        assert s.discord_allowed_guild_ids == [111, 222]
+
+    def test_signal_allowed_numbers_plain_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_SIGNAL_ALLOWED_NUMBERS", "+15551234567")
+        s = Settings()
+        assert s.signal_allowed_numbers == ["+15551234567"]

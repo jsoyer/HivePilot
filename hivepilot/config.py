@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 from pathlib import Path
@@ -7,6 +8,27 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Fields populated from an env var that pydantic-settings would otherwise try
+# to strict-JSON-decode (see `_parse_env_list` below for the HIGH-severity
+# bug this fixes). Kept as a module-level tuple so it can be reused by the
+# shared `field_validator` decorator without repeating every name inline.
+_ENV_LIST_FIELDS = (
+    "plugins_disabled",
+    "plugins_capability_policy",
+    "discovery_roots",
+    "api_allowed_origins",
+    "secrets_allowed_dirs",
+    "telegram_allowed_chat_ids",
+    "ssh_options",
+    "sandbox_env_allowlist",
+    "dev_fallback_runners",
+    "slack_allowed_channel_ids",
+    "discord_allowed_guild_ids",
+    "discord_allowed_channel_ids",
+    "signal_allowed_numbers",
+    "governance_files",
+)
 
 
 def _xdg_config_dir() -> Path:
@@ -113,7 +135,7 @@ class Settings(BaseSettings):
     # which persists changes to .env; effective on next start only (plugins
     # load once at PluginManager construction, no live reload).
     # env: HIVEPILOT_PLUGINS_DISABLED
-    plugins_disabled: list[str] = Field(default_factory=list)
+    plugins_disabled: Annotated[list[str], NoDecode] = Field(default_factory=list)
     # Multi-directory plugin search: additional directories `_scan_local_plugins`
     # (hivepilot/plugins.py) scans for local-file plugins AFTER `base_dir/plugins`
     # (scanned first, always). Lets a deployment that overrides `base_dir` (e.g. a
@@ -145,6 +167,41 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [part for part in v.split(os.pathsep) if part]
         return v
+
+    # HIGH-severity fix: pydantic-settings strict-JSON-decodes every
+    # `list[...]` field's env value BEFORE any validator runs, unless the
+    # field is `Annotated[..., NoDecode]` (see `plugins_extra_dirs` above).
+    # Every field in `_ENV_LIST_FIELDS` is one of these `list[...]` fields —
+    # without `NoDecode` + this validator, a plain value
+    # (HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS=123456), a CSV value
+    # ("123,456"), or an EMPTY value ("") is not valid JSON and raises
+    # `SettingsError` at `Settings()` construction — which happens at
+    # IMPORT of `hivepilot.config` (see `settings = Settings()` at module
+    # bottom), bricking the entire CLI/app before a single command runs.
+    @field_validator(*_ENV_LIST_FIELDS, mode="before")
+    @classmethod
+    def _parse_env_list(cls, v: object) -> object:
+        # A list already (constructed directly in Python/tests, or a value
+        # some other source already parsed) passes through unchanged for
+        # pydantic to coerce element-wise.
+        if not isinstance(v, str):
+            return v
+        s = v.strip()
+        if not s:
+            return []
+        if s.startswith("["):
+            # JSON-array convention (backward-compat with every existing
+            # deployment/test using it, e.g. plugins_disabled today).
+            try:
+                return json.loads(s)
+            except (json.JSONDecodeError, ValueError):
+                pass  # fall through to CSV parsing below
+        # Plain single value or comma-separated list: split, strip each
+        # element, drop empties. Pydantic then coerces each string element
+        # to the field's declared type (e.g. "123" -> 123 for list[int]),
+        # raising a clean ValidationError on a genuinely non-coercible
+        # element rather than crashing the whole Settings() construction.
+        return [part.strip() for part in s.split(",") if part.strip()]
 
     # Phase 26b Approach A — URL of a JSON "plugin index" document (name/
     # description/author/homepage/install-hint/version/checksum) that
@@ -195,14 +252,14 @@ class Settings(BaseSettings):
     # docs/PLUGINS.md "Capability manifest & policy gate".
     # env: HIVEPILOT_PLUGINS_CAPABILITY_POLICY — JSON array, same convention
     # as plugins_disabled above.
-    plugins_capability_policy: list[str] = Field(default_factory=list)
-    discovery_roots: list[str] = Field(default_factory=lambda: ["~/dev"])
+    plugins_capability_policy: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    discovery_roots: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["~/dev"])
     api_host: str = "127.0.0.1"
     api_port: int = 8045
     api_root_path: str = ""  # set to "/hivepilot" when behind a path-prefix proxy
-    api_allowed_origins: list[str] = Field(default_factory=list)
+    api_allowed_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     chatops_token: str | None = None
-    secrets_allowed_dirs: list[str] = Field(default_factory=list)
+    secrets_allowed_dirs: Annotated[list[str], NoDecode] = Field(default_factory=list)
     token_ttl_days: int | None = None
     log_to_file: bool = False
     api_max_body_size: int = 1_048_576  # 1 MB
@@ -233,7 +290,7 @@ class Settings(BaseSettings):
     config_repo_load_plugins: bool = True
     domain: str | None = None  # public domain used by caddy + webhook auto-registration
     telegram_bot_token: str | None = None
-    telegram_allowed_chat_ids: list[int] = Field(default_factory=list)
+    telegram_allowed_chat_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     telegram_notification_chat_id: int | None = (
         None  # proactive notifications (approvals, run results)
     )
@@ -253,7 +310,9 @@ class Settings(BaseSettings):
     auto_commit_vault: bool = False  # git add/commit/push the Obsidian vault after a pipeline run
     event_webhook_url: str | None = None  # POST pipeline lifecycle events here (n8n, etc.)
     event_webhook_token: str | None = None  # optional bearer token for the event webhook
-    ssh_options: list[str] = Field(default_factory=list)  # extra ssh -o options for remote agents
+    ssh_options: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )  # extra ssh -o options for remote agents
     worker_token: str | None = None  # shared bearer token between hub and remote workers
     worker_port: int = 8900  # default port for `hivepilot worker`
     vault_addr: str | None = None  # HashiCorp Vault address (env: HIVEPILOT_VAULT_ADDR)
@@ -576,11 +635,13 @@ class Settings(BaseSettings):
     dev_sandbox: str = "none"
     # Env var allowlist used when dev_sandbox="bwrap".  Mirrors the default
     # from hivepilot.utils.sandbox.DEFAULT_ALLOWLIST; override to add extra keys.
-    sandbox_env_allowlist: list[str] = []  # empty = use DEFAULT_ALLOWLIST
+    sandbox_env_allowlist: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )  # empty = use DEFAULT_ALLOWLIST
     claude_max_concurrency: int = (
         1  # max concurrent claude steps (env: HIVEPILOT_CLAUDE_MAX_CONCURRENCY)
     )
-    dev_fallback_runners: list[str] = Field(
+    dev_fallback_runners: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["codex", "cursor"]
     )  # fallback runner order for developer role on claude quota (env: HIVEPILOT_DEV_FALLBACK_RUNNERS)
     dev_batch_size: int = Field(
@@ -729,19 +790,21 @@ class Settings(BaseSettings):
     slack_bot_token: str | None = None
     slack_signing_secret: str | None = None
     slack_app_token: str | None = None  # for Socket Mode (xapp-...)
-    slack_allowed_channel_ids: list[str] = Field(default_factory=list)
+    slack_allowed_channel_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     slack_notification_channel_id: str | None = None  # proactive notifications
     discord_bot_token: str | None = None
     discord_public_key: str | None = None  # Ed25519 public key for HTTP interactions
-    discord_allowed_guild_ids: list[int] = Field(default_factory=list)
-    discord_allowed_channel_ids: list[int] = Field(default_factory=list)
+    discord_allowed_guild_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    discord_allowed_channel_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     discord_notification_channel_id: int | None = None  # proactive notifications
     # Phase 23e — Signal bot (dual-mode). Signal has no cloud bot API / inbound
     # webhook (E2E P2P); the bot is a dedicated phone number driven either by
     # the `signal-cli` binary (PATH-gated, optional external dependency) or a
     # `signal-cli-rest-api` HTTP wrapper. See hivepilot/services/signal_bot.py.
     signal_number: str | None = None  # bot's own E.164 number, e.g. +15551234567
-    signal_allowed_numbers: list[str] = Field(default_factory=list)  # E.164 whitelist
+    signal_allowed_numbers: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )  # E.164 whitelist
     signal_cli_path: str = "signal-cli"  # binary name/path on PATH
     signal_rest_url: str | None = None  # base URL of a signal-cli-rest-api instance
     signal_notification_number: str | None = None  # proactive notifications
@@ -772,7 +835,7 @@ class Settings(BaseSettings):
     )
 
     # Governance file names (relative to governance_repo root) to inject into prompts.
-    governance_files: list[str] = Field(
+    governance_files: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "CLAUDE.md",
             "AGENTS.md",
