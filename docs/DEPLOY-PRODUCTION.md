@@ -9,6 +9,22 @@ observability) see [DEPLOYMENT.md](DEPLOYMENT.md). This doc is the
 Alpine-specific, copy-pasteable path — including OpenRC service scripts, since
 Alpine has no systemd.
 
+## Pick an install path (container OR bare-metal)
+
+HivePilot runs the same way whether it lives in a container or directly on the
+host — **Docker/Podman is a convenience, not a requirement.** Choose one:
+
+| Path | You get | Best when |
+| --- | --- | --- |
+| **A — Container** (Docker or Podman Compose) | An isolated, reproducible image (non-root, `HEALTHCHECK`, API + scheduler wired in `docker-compose.yml`), self-updating via image rebuild | You want a hands-off, reproducible prod deploy and already run a container engine. **Recommended for production.** |
+| **B — Bare-metal** (`scripts/install-alpine.sh`) | A plain venv at `/opt/hivepilot/venv` + `hivepilot` on `PATH`, run as OpenRC services. **No container engine, no docker installed.** | You don't want Docker/Podman on the host, or you're on a minimal/edge box, or you prefer OS-native service management. |
+
+Both are detailed in [2. Two install paths](#2-two-install-paths) below and produce
+an identical running system (same CLI, same `/data` layout, same green-gate
+checks). The container path installs and uses Docker/Podman; the bare-metal path
+never touches a container engine. The quick-start immediately below uses path A —
+skip to [2B](#b--bare-metal-via-scriptsinstall-alpinesh) for the bare-metal recipe.
+
 ## Quick-start (fresh Alpine → running, container path)
 
 The minimal sequence, assuming you already have a private config repo and a
@@ -47,8 +63,11 @@ before triggering a real pipeline run.
   `pipelines.yaml` / `policies.yaml` / `groups.yaml` / `schedules.yaml` /
   `model_profiles.yaml` / `prompts/` tree, in its own git repository. This is
   **not** part of the public HivePilot repo — see [Wire the config](#3-wire-the-config).
-- Git access to that config repo (an SSH deploy key or a token embedded in the
-  clone URL — never commit either into HivePilot's own repo or `.env`-in-image).
+- Git access to that config repo. Three supported ways to authenticate (see
+  [Wire the config](#3-wire-the-config)): an SSH deploy key (`git@`/`ssh://`
+  URL), a fine-grained read-only PAT in `HIVEPILOT_CONFIG_TOKEN` (HTTPS URL,
+  recommended), or a token embedded directly in an HTTPS clone URL. Never commit
+  any of them into HivePilot's own repo or bake them into the image.
 - At least one agent CLI you plan to run pipelines with (e.g. Claude Code) — see
   [Install the agent CLI(s)](#6-install-the-agent-cli-s). `doctor` and `validate`
   both work without one installed; only real pipeline runs need it.
@@ -229,13 +248,28 @@ hivepilot config sync
 hivepilot config status
 ```
 
-For a private repo, authenticate via an SSH deploy key (put the key on the
-host / mount it into the container and use an `ssh://` or `git@` URL — the
-key's own passphrase-less agent setup is outside HivePilot's scope) or a token
-embedded in an HTTPS URL, e.g.
-`https://<token>@github.com/you/hivepilot-config.git`. **Never hardcode the
-token in a committed file** — set `HIVEPILOT_CONFIG_REPO` via `.env` (mounted,
-not baked into the image) or the shell environment only.
+For a private repo, authenticate one of three ways:
+
+1. **SSH deploy key (recommended for the bare-metal path)** — put the key on the
+   host / mount it into the container and use an `ssh://` or `git@` URL. The
+   key's own (passphrase-less) agent setup is outside HivePilot's scope. On
+   Alpine this needs `openssh-client`, which `scripts/install-alpine.sh` installs
+   by default (skip with `HIVEPILOT_WITH_SSH=0`; the container image already has
+   git's SSH transport).
+2. **`HIVEPILOT_CONFIG_TOKEN` (recommended for the HTTPS/container path)** — set
+   it to a fine-grained, read-only PAT scoped to just the config repo, alongside
+   an `https://` `HIVEPILOT_CONFIG_REPO`. HivePilot sends it as a transient git
+   `Authorization` header at clone/fetch time; **it is never written to the
+   clone's `.git/config` on disk** (unlike option 3). Ignored for `ssh`/`git@`
+   URLs.
+3. **Token embedded in the HTTPS URL** — e.g.
+   `https://<token>@github.com/you/hivepilot-config.git`. Simplest, but the token
+   ends up persisted in the local clone's remote config; prefer option 2.
+
+`gh` (GitHub CLI) is **not** required for `config sync` — it uses plain `git`
+(GitPython) under the hood. **Never hardcode a token in a committed file** — set
+`HIVEPILOT_CONFIG_REPO` / `HIVEPILOT_CONFIG_TOKEN` via `.env` (mounted, not baked
+into the image) or the shell environment only.
 
 `config sync` clones the repo into `~/.local/share/hivepilot/config-repo`
 (`$XDG_DATA_HOME/hivepilot/config-repo`) and copies the managed files
@@ -318,9 +352,13 @@ official installer. It never runs unattended in a non-interactive context
 (CI, cron, a headless pipeline step) — the operator must be present to
 consent.
 
-For `gh` (GitHub CLI), there is no scripted installer in HivePilot — install
-it via Alpine's package manager (`apk add github-cli`, when available for your
-Alpine release/arch) or see
+`gh` (GitHub CLI) is used by the `github_pr` merge gate and gh-based
+agent/plugin installers. The bare-metal `scripts/install-alpine.sh` installs it
+**best-effort by default** from Alpine's *community* repo (skip with
+`HIVEPILOT_WITH_GH=0`); if the community repo isn't enabled on your host the
+installer skips it without failing. To add it manually — on the container path,
+or after a skipped bare-metal install — run `apk add github-cli` (enable the
+community repo first if needed) or see
 [docs.github.com/en/github-cli](https://docs.github.com/en/github-cli/github-cli/quickstart).
 `gh` is optional — HivePilot degrades gracefully without it; `doctor` reports
 its absence under `=== External binaries ===`.
@@ -455,7 +493,10 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
   (see the Dockerfile) — a non-zero exit means a hard failure (missing base
   dir, a mandatory binary reported missing).
 - **Updating**:
-  - Config only: `hivepilot config sync` on the running host/container.
+  - Config only: `hivepilot config sync`, then **restart the daemons** for most
+    changes to take effect — see [10. Reboot & config-refresh behavior](#10-reboot--config-refresh-behavior)
+    (only `schedules.yaml` is picked up live; roles/pipelines/tasks/policies are
+    read at process start).
   - The application itself: rebuild/re-pull the image
     (`docker compose build --pull && docker compose up -d`) for the container
     path, or re-run `HIVEPILOT_REPO_REF=<new-tag> sh scripts/install-alpine.sh`
@@ -463,6 +504,79 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
 - **Backup**: back up `state.db` and your config repo (the source of truth for
   `projects.yaml`/`tasks.yaml`/etc. — `/data`'s copy is a synced mirror, not
   the canonical copy).
+
+## 10. Reboot & config-refresh behavior
+
+Once configured, HivePilot runs as **two long-lived services** — you do not
+re-launch it per task:
+
+- `hivepilot api serve` — the HTTP API (port 8045).
+- `hivepilot schedule daemon --interval 30` — polls `schedules.yaml` and
+  dispatches due pipeline runs autonomously.
+
+Everything else (`run`, `run-pipeline`, `debate`, `config sync`, `validate`,
+`doctor`, `tokens …`) is a one-shot CLI command you run on demand, not a service.
+
+### Survives a host reboot
+
+Both services are wired to come back automatically: the Compose services carry a
+`restart:` policy, and the OpenRC path enables them at boot
+(`rc-update add … default`). **All durable state lives in `state.db` (SQLite)
+under `base_dir` (`/data`)** — run history, approvals, API tokens, the retry
+queue, and a **per-schedule last-run cursor**. As long as `/data` persists (the
+`hivepilot-data` named volume in Compose, or a backed-up `/data` on bare metal),
+after a reboot the scheduler **resumes from the persisted cursor** rather than
+re-firing every schedule at once: a schedule's next run is computed as
+`last_run + interval_minutes`, and `last_run` is read from `state.db`. So a
+reboot loses no history and does not cause a thundering herd of catch-up runs.
+
+> Corollary: if you do **not** persist `/data`, you lose tokens + history and the
+> scheduler treats every schedule as never-run on next start. Always mount/back
+> up `/data`.
+
+### Which config changes are picked up live vs. need a restart
+
+This is the key operational distinction (it answers "if I add a role, is a
+periodic `config sync` enough?"):
+
+| Config file | Refresh behavior | Restart needed? |
+| --- | --- | --- |
+| `schedules.yaml` | **Live** — the daemon re-reads it from disk on every tick (≤ `--interval`, default 30 s). Add/disable/retune a schedule and it takes effect within one interval. | No |
+| `roles.yaml` | **Cached at process start.** Role definitions are loaded once when the process boots and are never re-read by a running daemon. `config sync` updates the file on disk, but the running API/scheduler keep the old roles in memory. | **Yes** |
+| `pipelines.yaml`, `tasks.yaml`, `policies.yaml`, `groups.yaml`, `model_profiles.yaml` | Read when a run's orchestrator is constructed; to guarantee a change is applied (and because roles above always need it), treat these the same as roles. | **Yes (recommended)** |
+
+So: **a periodic `config sync` alone will NOT make a newly-added role take
+effect** — the file lands on disk but the long-running daemons hold role
+definitions from their last start. Adding/renaming/removing a role (or changing
+pipelines/tasks/policies) requires `config sync` **followed by a restart** of the
+API and scheduler. A periodic sync is only genuinely "live" for `schedules.yaml`.
+
+There is **no built-in periodic/auto `config sync`**, and `schedules.yaml`
+entries can only invoke a named task against projects (via the orchestrator) —
+they cannot run an arbitrary command like `config sync`. The recommended pattern
+is **event-driven, not polled**: have your config-repo CI/CD (or a small host
+cron / OpenRC periodic job) run `config sync` **and then a rolling restart** when
+you actually push a config change.
+
+Refresh recipes:
+
+```bash
+# Container (Compose): sync then restart both services.
+docker compose exec hivepilot hivepilot config sync
+docker compose restart hivepilot scheduler
+# (Use `docker compose up -d` instead of `restart` only when you also changed
+#  .env — a plain restart does not re-read .env; see step 7.)
+```
+
+```bash
+# Bare-metal (OpenRC): sync then restart both services.
+HIVEPILOT_BASE_DIR=/data /usr/local/bin/hivepilot config sync
+rc-service hivepilot-api restart
+rc-service hivepilot-scheduler restart
+```
+
+Only editing schedules? Skip the restart — the scheduler picks `schedules.yaml`
+up on its next tick.
 
 ## See also
 

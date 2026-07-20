@@ -22,9 +22,34 @@ REPO_REF="${HIVEPILOT_REPO_REF:-main}"
 echo "== HivePilot Alpine installer =="
 
 # 1. Install proven OS-level dependencies. No compiler toolchain needed.
-echo "-- Installing OS packages (python3, pip, git, curl, bash, ca-certificates)..."
-apk add --no-cache python3 py3-pip git curl bash ca-certificates
+#    openssh-client is required for cloning a PRIVATE config repo over SSH
+#    (git@github.com:you/config.git); Alpine's git package does NOT pull it in.
+#    Skip it with HIVEPILOT_WITH_SSH=0 if you only clone public/HTTPS repos.
+WITH_SSH="${HIVEPILOT_WITH_SSH:-1}"
+SSH_PKG=""
+[ "$WITH_SSH" = "1" ] && SSH_PKG="openssh-client"
+echo "-- Installing OS packages (python3, pip, git, curl, bash, ca-certificates${SSH_PKG:+, openssh-client})..."
+# shellcheck disable=SC2086  # SSH_PKG is an intentional optional-word split
+apk add --no-cache python3 py3-pip git curl bash ca-certificates $SSH_PKG
 echo "OK OS packages installed"
+
+# 1b. github-cli (gh) — OPTIONAL. Used by the github_pr merge gate and gh-based
+#     agent/plugin installers. It lives in Alpine's *community* repo (3.13+),
+#     which a minimal host may not have enabled — so this is best-effort and
+#     MUST NOT abort the install (note the `|| echo` under `set -e`). Skip
+#     entirely with HIVEPILOT_WITH_GH=0.
+WITH_GH="${HIVEPILOT_WITH_GH:-1}"
+if [ "$WITH_GH" = "1" ]; then
+  echo "-- Installing github-cli (optional; Alpine community repo)..."
+  if apk add --no-cache github-cli 2>/dev/null; then
+    echo "OK github-cli installed"
+  else
+    echo "NOTE: github-cli not installed (community repo not enabled, or"
+    echo "      unavailable for this Alpine release/arch). HivePilot works"
+    echo "      without it. To add it later, enable the community repo and run:"
+    echo "        apk add github-cli"
+  fi
+fi
 
 # 2. Create the venv if it doesn't already exist.
 if [ ! -d "$VENV_DIR" ]; then
@@ -88,6 +113,11 @@ echo ""
 echo "== Install complete =="
 echo "Next steps:"
 echo "  1. export HIVEPILOT_CONFIG_REPO=<your config repo URL>"
+echo "     - PUBLIC repo:        https://github.com/you/hivepilot-config.git (no auth)"
+echo "     - PRIVATE via SSH:    git@github.com:you/hivepilot-config.git"
+echo "                           (needs an SSH deploy key; openssh-client is installed)"
+echo "     - PRIVATE via HTTPS:  export HIVEPILOT_CONFIG_TOKEN=<fine-grained read-only PAT>"
+echo "                           (token is sent as an auth header, never written to disk)"
 echo "  2. hivepilot config sync       # pull projects/tasks/roles/pipelines config"
 echo "  3. hivepilot validate          # sanity-check the synced config"
 echo "  4. hivepilot doctor            # verify the installation + external tools"
