@@ -28,6 +28,7 @@ dispatches to `kind="claude"`):
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,29 @@ _PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "prompts" / "agen
 # (see model_profiles.yaml) — cheap and fast, appropriate for a per-message
 # classifier that runs on every free-text chat message when enabled.
 _DEFAULT_CONCIERGE_MODEL = "haiku"
+
+# Env var ClaudeRunner._run_api reads the Anthropic API key from (via
+# merge_environments, which starts from os.environ.copy()). The concierge's
+# own RunnerDefinition/RunnerPayload never set project.env/definition.env/
+# secrets, so checking os.environ directly here mirrors EXACTLY what
+# _run_api would see for this call — no separate resolution path to drift.
+_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+
+# `claude --print` (cli mode) blocks on an interactive permission prompt it
+# cannot show in a headless run unless `--permission-mode` is passed
+# (ClaudeRunner._build_invocation). This is the ONLY permission_mode value
+# used anywhere in this codebase for a headless claude invocation (see
+# roles.py's `developer` role, the sole other headless-claude caller) —
+# reused here rather than inventing a new one, per the same reasoning: the
+# classifier is a one-shot, tool-free JSON classification, so the elevated
+# scope this mode nominally grants is never exercised in practice.
+_CLI_PERMISSION_MODE = "bypassPermissions"
+
+# Per-call ceiling so a hung/slow `claude` CLI (or a slow API response)
+# degrades to the fail-closed answer instead of blocking the chat bot
+# process indefinitely — this is a per-message classification, not a
+# multi-minute agent task.
+_CLASSIFIER_TIMEOUT_SECONDS = 30
 
 _FALLBACK_ANSWER = (
     "I didn't quite get that. Try rephrasing your request, "
@@ -92,6 +116,51 @@ def _get_orchestrator() -> Any:
 
                 _orchestrator = Orchestrator()
     return _orchestrator
+
+
+# ---------------------------------------------------------------------------
+# Execution mode resolution — api (Anthropic Messages API) vs cli (the
+# operator's local `claude` CLI, subscription/OAuth-authenticated).
+# ---------------------------------------------------------------------------
+
+# Logged once (not per-message) so an always-on classifier on a
+# subscription-only box doesn't spam INFO on every chat message.
+_cli_fallback_logged = False
+_cli_fallback_lock = threading.Lock()
+
+
+def _has_api_key() -> bool:
+    """True if an Anthropic API key is present in the environment the
+    classifier's `claude` call would actually use — see `_API_KEY_ENV_VAR`."""
+    return bool(os.environ.get(_API_KEY_ENV_VAR))
+
+
+def _resolve_mode() -> str:
+    """Resolve the effective execution mode for the classifier's one-shot
+    `claude` invocation.
+
+    `settings.chatops_concierge_mode` ("api" default, or "cli") is the
+    configured mode. When it resolves to "api" but no `ANTHROPIC_API_KEY` is
+    present, this AUTO-FALLS-BACK to "cli" so a subscription/OAuth-only
+    deployment (no API key at all) works out of the box via the operator's
+    local `claude` CLI instead of always hitting the fail-closed fallback
+    answer. An explicit "cli" always stays "cli" regardless of key presence.
+    """
+    global _cli_fallback_logged
+    configured = (settings.chatops_concierge_mode or "api").strip().lower()
+    if configured not in ("api", "cli"):
+        logger.warning("concierge.unknown_mode_defaulting_to_api", mode=configured)
+        configured = "api"
+    if configured == "api" and not _has_api_key():
+        if not _cli_fallback_logged:
+            with _cli_fallback_lock:
+                if not _cli_fallback_logged:
+                    logger.info(
+                        "concierge: no ANTHROPIC_API_KEY, using claude CLI for classification"
+                    )
+                    _cli_fallback_logged = True
+        return "cli"
+    return configured
 
 
 # ---------------------------------------------------------------------------
@@ -365,11 +434,19 @@ def route(text: str, *, default_role: str, default_target: str | None) -> Concie
     prompt = _build_classifier_prompt(text, roster, snapshot)
 
     model = settings.chatops_concierge_model or _DEFAULT_CONCIERGE_MODEL
+    mode = _resolve_mode()
+    options: dict[str, Any] = {"mode": mode}
+    if mode == "cli":
+        # See `_CLI_PERMISSION_MODE` — without this, headless `claude --print`
+        # blocks on an interactive permission prompt it cannot show, hanging
+        # this call (and the chat bot) instead of returning promptly.
+        options["permission_mode"] = _CLI_PERMISSION_MODE
     runner_def = RunnerDefinition(
         name="concierge",
         kind=cast(RunnerKind, "claude"),
         model=model,
-        options={"mode": "api"},
+        options=options,
+        timeout_seconds=_CLASSIFIER_TIMEOUT_SECONDS,
     )
     prompt_file = str(_PROMPT_FILE) if _PROMPT_FILE.exists() else ""
     step = TaskStep(name="concierge", runner="claude", prompt_file=prompt_file)

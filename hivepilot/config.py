@@ -831,6 +831,15 @@ class Settings(BaseSettings):
     # Cheap/fast model for the classifier; None -> concierge_service picks a
     # sensible cheap default (currently "haiku").
     chatops_concierge_model: str | None = None
+    # How the classifier's one-shot `claude` call is dispatched: "api" (the
+    # Anthropic Messages API, default — cheap/fast when an API key is
+    # available) or "cli" (the operator's local `claude` CLI, subscription/
+    # OAuth-authenticated, no API key required). `concierge_service.route()`
+    # auto-falls-back "api" -> "cli" at call time when no ANTHROPIC_API_KEY is
+    # present in the environment, so a subscription-only deployment works out
+    # of the box even with this left at the default. See docs/INTEGRATIONS.md
+    # "Natural-language concierge (opt-in)".
+    chatops_concierge_mode: str = "api"
     linear_api_key: str | None = None
     linear_team_id: str | None = None  # default team for issue creation
     linear_default_project_id: str | None = None  # default project
