@@ -113,6 +113,16 @@ function PluginToggle({ name, toggled, onToggled, initialDisabled = false }: Plu
  *
  * Non-admin tokens (`useRole().can('admin')` false) see the exact same
  * read-only rows Sprint 1 shipped -- no toggle control renders at all.
+ *
+ * **Dedupe (loaded-but-pending-disable):** `data.plugins` (currently
+ * registered) and `data.disabled` (`settings.plugins_disabled`) are NOT
+ * mutually exclusive -- a plugin stays registered until the next restart
+ * (see `PluginToggle`'s docstring), so clicking "Disable" and reloading the
+ * tab shows that plugin in BOTH lists. Rendering it in both sections would
+ * contradict itself ("ok" + Disable up top, "disabled" + Enable below), so
+ * any name present in both is rendered ONCE, in the health section, with a
+ * "disable pending" badge -- the bottom "Disabled plugins" section is only
+ * for names that are `plugins_disabled` AND not currently loaded.
  */
 export function HealthView() {
   const { can } = useRole()
@@ -139,57 +149,86 @@ export function HealthView() {
           isEmpty={(data) => data.plugins.length === 0 && data.disabled.length === 0}
           emptyMessage="No plugins registered."
         >
-          {(data) => (
-            <div className="flex flex-col gap-4">
-              <ul className="flex flex-col gap-2">
-                {data.plugins.map((plugin) => (
-                  <li
-                    key={plugin.name}
-                    className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2"
-                  >
-                    <span className="font-medium">{plugin.name}</span>
-                    <Badge variant={STATUS_VARIANT[plugin.status]}>{plugin.status}</Badge>
-                    {plugin.detail && (
-                      <span className="text-sm text-muted-foreground">{plugin.detail}</span>
-                    )}
-                    {canAdmin && (
-                      <PluginToggle
-                        name={plugin.name}
-                        toggled={toggled[plugin.name]}
-                        onToggled={handleToggled}
-                      />
-                    )}
-                  </li>
-                ))}
-              </ul>
-              {data.disabled.length > 0 && (
-                <div className="flex flex-col gap-2 border-t border-border pt-4">
-                  <h3 className="text-sm font-semibold text-muted-foreground">
-                    Disabled plugins
-                  </h3>
-                  <ul className="flex flex-col gap-2">
-                    {data.disabled.map((name) => (
+          {(data) => {
+            const disabledNames = new Set(data.disabled)
+            const loadedNames = new Set(data.plugins.map((plugin) => plugin.name))
+            // A name in BOTH sets is loaded now but flagged in
+            // `plugins_disabled` -- it renders once, above, in the health
+            // list (with a "disable pending" badge), so exclude it here.
+            const trulyDisabled = data.disabled.filter((name) => !loadedNames.has(name))
+
+            return (
+              <div className="flex flex-col gap-4">
+                <ul className="flex flex-col gap-2">
+                  {data.plugins.map((plugin) => {
+                    // Seeded from the load-time snapshot; a local toggle this
+                    // session (`toggled[plugin.name]`) always overrides it, both
+                    // for the button label (via `PluginToggle`'s own precedence)
+                    // and for the badge below.
+                    const pendingFromLoad = disabledNames.has(plugin.name)
+                    const pendingDisable = toggled[plugin.name]
+                      ? toggled[plugin.name].disabled
+                      : pendingFromLoad
+
+                    return (
                       <li
-                        key={name}
-                        className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-2"
+                        key={plugin.name}
+                        className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2"
                       >
-                        <span className="font-medium">{name}</span>
-                        <Badge variant="outline">disabled</Badge>
+                        <span className="font-medium">{plugin.name}</span>
+                        <Badge variant={STATUS_VARIANT[plugin.status]}>{plugin.status}</Badge>
+                        {pendingDisable && (
+                          <Badge
+                            variant="outline"
+                            title="Flagged to disable — takes effect on the server's next restart. Currently still active."
+                          >
+                            disable pending · restart
+                          </Badge>
+                        )}
+                        {plugin.detail && (
+                          <span className="text-sm text-muted-foreground">{plugin.detail}</span>
+                        )}
                         {canAdmin && (
                           <PluginToggle
-                            name={name}
-                            toggled={toggled[name]}
+                            name={plugin.name}
+                            toggled={toggled[plugin.name]}
                             onToggled={handleToggled}
-                            initialDisabled
+                            initialDisabled={pendingFromLoad}
                           />
                         )}
                       </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
+                    )
+                  })}
+                </ul>
+                {trulyDisabled.length > 0 && (
+                  <div className="flex flex-col gap-2 border-t border-border pt-4">
+                    <h3 className="text-sm font-semibold text-muted-foreground">
+                      Disabled plugins
+                    </h3>
+                    <ul className="flex flex-col gap-2">
+                      {trulyDisabled.map((name) => (
+                        <li
+                          key={name}
+                          className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-2"
+                        >
+                          <span className="font-medium">{name}</span>
+                          <Badge variant="outline">disabled</Badge>
+                          {canAdmin && (
+                            <PluginToggle
+                              name={name}
+                              toggled={toggled[name]}
+                              onToggled={handleToggled}
+                              initialDisabled
+                            />
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )
+          }}
         </AsyncSection>
       </CardContent>
     </Card>
