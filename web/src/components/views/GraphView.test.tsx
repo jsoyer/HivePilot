@@ -272,4 +272,76 @@ describe('GraphView', () => {
   it('never renders untrusted graph content via dangerouslySetInnerHTML', () => {
     expect(graphViewSource).not.toContain('dangerouslySetInnerHTML')
   })
+
+  const ERROR_GRAPH: GraphData = {
+    source: 'pipeline',
+    nodes: [{ id: 'error', label: 'ValueError', kind: 'error', status: 'error', group: null, badges: [], meta: {} }],
+    edges: [],
+    layout_hint: null,
+  }
+
+  it('CRITICAL: shows a friendly hint (not a red error node) when a required param is missing', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(ERROR_GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const select = container.querySelector('#graph-source-select') as HTMLSelectElement
+    await act(async () => {
+      select.value = 'pipeline'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const hint = container.querySelector('[data-testid="graph-missing-param-hint"]')
+    expect(hint).not.toBeNull()
+    expect(hint?.textContent).toContain('pipeline')
+    expect(hint?.textContent).toContain('Load')
+    // No scary error card, and no error node handed to the canvas.
+    expect(container.querySelector('[data-testid="graph-error-node"]')).toBeNull()
+    expect(container.querySelector('[data-testid="graph-canvas-stub"]')).toBeNull()
+  })
+
+  it('CRITICAL: shows a clean error message (not a red error node) for a genuine backend error', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(ERROR_GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const select = container.querySelector('#graph-source-select') as HTMLSelectElement
+    await act(async () => {
+      select.value = 'pipeline'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const paramInput = container.querySelector('#graph-param-pipeline') as HTMLInputElement
+    await act(async () => {
+      setNativeValue(paramInput, 'unknown-pipeline')
+    })
+    const form = paramInput.closest('form') as HTMLFormElement
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const errorCard = container.querySelector('[data-testid="graph-error-node"]')
+    expect(errorCard).not.toBeNull()
+    expect(errorCard?.textContent).toContain('ValueError')
+    expect(container.querySelector('[data-testid="graph-missing-param-hint"]')).toBeNull()
+    expect(container.querySelector('[data-testid="graph-canvas-stub"]')).toBeNull()
+  })
 })
