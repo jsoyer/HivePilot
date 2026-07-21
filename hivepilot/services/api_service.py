@@ -1845,7 +1845,7 @@ def trigger_schedule(schedule_name: str, request: Request):
 # token gate, not this server, is what protects the data underneath; every
 # /v1/* call it makes is auth-enforced as normal).
 # ---------------------------------------------------------------------------
-from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 
 from hivepilot import webui  # noqa: E402
 
@@ -1861,6 +1861,20 @@ def _webui_enabled() -> bool:
 
 
 @app.get("/ui", include_in_schema=False)
+def redirect_webui_to_trailing_slash() -> RedirectResponse:
+    # The SPA's built assets use relative paths (`assets/index-*.js`), which
+    # the browser resolves against the *current directory* of the requested
+    # URL. At `/ui` (no trailing slash) that directory is `/`, so the asset
+    # requests land on non-existent root routes -> 404 -> blank page. At
+    # `/ui/` it's `/ui/`, matched by the `/ui/{sub_path:path}` route below.
+    # Redirecting here keeps `/ui` working as the documented entrypoint
+    # while only ever serving the bundle from under `/ui/`.
+    if not _webui_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return RedirectResponse(url="/ui/", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@app.get("/ui/", include_in_schema=False)
 @app.get("/ui/{sub_path:path}", include_in_schema=False)
 def serve_webui(sub_path: str = "") -> FileResponse:
     if not _webui_enabled():
@@ -1871,6 +1885,33 @@ def serve_webui(sub_path: str = "") -> FileResponse:
     # has already guaranteed the request can never escape STATIC_DIR before
     # we get here, so falling back to the index is always safe.
     file_path = webui.resolve_static_path(sub_path) or webui.INDEX_HTML
+    return FileResponse(str(file_path))
+
+
+# The committed build (hivepilot/webui/static/index.html) was produced by
+# Vite with `base: '/'`, so it references its own assets with root-absolute
+# paths (`/assets/index-*.js`, `/assets/index-*.css`, `/favicon.svg`) rather
+# than paths relative to `/ui/`. The browser therefore always requests these
+# at the root, regardless of `/ui` vs `/ui/` — so they must be served at the
+# root too, gated by the same `_webui_enabled()` check and the same
+# `webui.resolve_static_path()` traversal guard as `serve_webui` above.
+@app.get("/assets/{sub_path:path}", include_in_schema=False)
+def serve_webui_assets(sub_path: str) -> FileResponse:
+    if not _webui_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    file_path = webui.resolve_static_path(f"assets/{sub_path}")
+    if file_path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return FileResponse(str(file_path))
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def serve_webui_favicon() -> FileResponse:
+    if not _webui_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    file_path = webui.resolve_static_path("favicon.svg")
+    if file_path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return FileResponse(str(file_path))
 
 

@@ -56,6 +56,9 @@ def fake_static_dir(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (assets_dir / "index-test.js").write_text("console.log('mirador')", encoding="utf-8")
+    (assets_dir / "index-test.css").write_text("body{color:mirador}", encoding="utf-8")
+    (assets_dir / "geist-test.woff2").write_bytes(b"\x00mirador-font")
+    (static_dir / "favicon.svg").write_text("<svg><!-- mirador-favicon --></svg>", encoding="utf-8")
 
     monkeypatch.setattr(webui, "STATIC_DIR", static_dir)
     monkeypatch.setattr(webui, "INDEX_HTML", static_dir / "index.html")
@@ -64,13 +67,24 @@ def fake_static_dir(tmp_path, monkeypatch):
 
 class TestGating:
     def test_index_route_absent_when_flag_unset(self, api_client, disable_webui):
-        resp = api_client.get("/ui")
+        resp = api_client.get("/ui", follow_redirects=False)
         assert resp.status_code == 404
+
+    def test_no_slash_ui_redirects_to_trailing_slash_when_enabled(
+        self, api_client, enable_webui, fake_static_dir
+    ):
+        """`/ui` (no trailing slash) must redirect to `/ui/` — serving the
+        SPA shell directly at `/ui` would emit relative asset URLs
+        (`assets/index-*.js`) that the browser resolves against `/`
+        (no route there -> 404 -> blank page) instead of `/ui/`."""
+        resp = api_client.get("/ui", follow_redirects=False)
+        assert resp.status_code == 307
+        assert resp.headers["location"] == "/ui/"
 
     def test_index_route_200_when_enabled_and_assets_present(
         self, api_client, enable_webui, fake_static_dir
     ):
-        resp = api_client.get("/ui")
+        resp = api_client.get("/ui/", follow_redirects=False)
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
         assert "<div id='root'>" in resp.text
@@ -86,7 +100,16 @@ class TestGating:
         monkeypatch.setattr(webui, "STATIC_DIR", empty_dir)
         monkeypatch.setattr(webui, "INDEX_HTML", empty_dir / "index.html")
 
-        resp = api_client.get("/ui")
+        resp = api_client.get("/ui", follow_redirects=False)
+        assert resp.status_code == 404
+
+    def test_no_slash_ui_does_not_redirect_when_disabled(
+        self, api_client, disable_webui, fake_static_dir
+    ):
+        """A disabled webui must still 404 on `/ui` — never redirect into
+        a dead `/ui/` that then also 404s; the disabled-state contract is
+        a clean 404 at the entrypoint itself."""
+        resp = api_client.get("/ui", follow_redirects=False)
         assert resp.status_code == 404
 
     def test_spa_fallback_serves_index_for_unknown_subpath(
@@ -102,11 +125,63 @@ class TestGating:
         assert "mirador" in resp.text
 
 
+class TestRootAssetRoutes:
+    """The committed build (`hivepilot/webui/static/index.html`) references
+    assets with root-absolute paths (`/assets/index-*.js`, `/favicon.svg`)
+    because it was built with Vite `base: '/'`. The browser therefore
+    always requests these at the root — regardless of `/ui` vs `/ui/` —
+    so they must also be served at the root, gated the same way as the
+    `/ui/{sub_path}` route, reusing `webui.resolve_static_path`."""
+
+    def test_serves_real_js_asset_at_root(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/assets/index-test.js")
+        assert resp.status_code == 200
+        assert "mirador" in resp.text
+
+    def test_serves_real_css_asset_at_root(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/assets/index-test.css")
+        assert resp.status_code == 200
+        assert "mirador" in resp.text
+
+    def test_serves_real_font_asset_at_root(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/assets/geist-test.woff2")
+        assert resp.status_code == 200
+        assert resp.content == b"\x00mirador-font"
+
+    def test_serves_favicon_at_root(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/favicon.svg")
+        assert resp.status_code == 200
+        assert "mirador-favicon" in resp.text
+
+    def test_root_asset_404_for_unknown_file(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/assets/does-not-exist.js")
+        assert resp.status_code == 404
+
+    def test_root_asset_404_for_traversal(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/assets/%2e%2e/%2e%2e/%2e%2e/etc/passwd")
+        assert resp.status_code == 404
+        assert "root:" not in resp.text
+
+    def test_root_assets_404_when_webui_disabled(self, api_client, disable_webui, fake_static_dir):
+        assert api_client.get("/assets/index-test.js").status_code == 404
+        assert api_client.get("/favicon.svg").status_code == 404
+
+    def test_root_assets_404_when_no_build(self, api_client, enable_webui, tmp_path, monkeypatch):
+        from hivepilot import webui
+
+        empty_dir = tmp_path / "empty-static"
+        monkeypatch.setattr(webui, "STATIC_DIR", empty_dir)
+        monkeypatch.setattr(webui, "INDEX_HTML", empty_dir / "index.html")
+
+        assert api_client.get("/assets/index-test.js").status_code == 404
+        assert api_client.get("/favicon.svg").status_code == 404
+
+
 class TestNoSecretLeak:
     def test_served_html_has_no_bearer_token_or_secret_markers(
         self, api_client, enable_webui, fake_static_dir
     ):
-        resp = api_client.get("/ui")
+        resp = api_client.get("/ui/")
         body_lower = resp.text.lower()
         for marker in ("bearer ", "authorization:", "api_key", "secret", "hivepilot_"):
             assert marker not in body_lower
