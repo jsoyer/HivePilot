@@ -286,4 +286,94 @@ describe('HealthView', () => {
     expect(container.querySelector('button[aria-label="Enable tmux"]')).toBeNull()
     expect(container.querySelector('button[aria-label="Disable tmux"]')).toBeNull()
   })
+
+  // -------------------------------------------------------------------------
+  // Dedupe: a plugin that is BOTH currently-loaded (data.plugins) AND flagged
+  // for disable-on-restart (data.disabled) must render exactly once.
+  // -------------------------------------------------------------------------
+
+  const healthWithPendingDisable: PluginsHealthResponse = {
+    plugins: [
+      { name: 'rtk', status: 'ok', detail: 'reachable' },
+      { name: 'tmux', status: 'ok', detail: 'session active' },
+    ],
+    // tmux is active right now AND already flagged in plugins_disabled --
+    // the "disable" click from a previous session hasn't taken effect yet
+    // because the API process hasn't restarted.
+    disabled: ['tmux'],
+  }
+
+  it('CRITICAL: a plugin in both plugins and disabled renders exactly once, in the health section, with a pending-disable badge', async () => {
+    fetchPluginsHealth.mockResolvedValue(healthWithPendingDisable)
+    mockRole('admin', 3)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const tmuxRows = Array.from(container.querySelectorAll('li')).filter((li) =>
+      li.textContent?.includes('tmux'),
+    )
+    expect(tmuxRows).toHaveLength(1)
+    expect(tmuxRows[0].textContent).toMatch(/disable pending/i)
+    // Seeded as already-flagged: the toggle should read "Enable" (undo the
+    // pending disable), not "Disable" (which would be a no-op re-flag).
+    expect(tmuxRows[0].querySelector('button[aria-label="Enable tmux"]')).not.toBeNull()
+    expect(tmuxRows[0].querySelector('button[aria-label="Disable tmux"]')).toBeNull()
+
+    // No "Disabled plugins" section at all -- tmux was the only disabled
+    // name and it's already accounted for above.
+    expect(container.textContent).not.toMatch(/disabled plugins/i)
+  })
+
+  it('keeps a truly-disabled plugin (not loaded) in the "Disabled plugins" section when another plugin is both loaded and pending-disable', async () => {
+    fetchPluginsHealth.mockResolvedValue({
+      plugins: healthWithPendingDisable.plugins,
+      disabled: [...healthWithPendingDisable.disabled, 'obsidian'],
+    } satisfies PluginsHealthResponse)
+    mockRole('admin', 3)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    // obsidian is not loaded -- it belongs in "Disabled plugins" with Enable.
+    expect(container.textContent).toMatch(/disabled plugins/i)
+    expect(container.querySelector('button[aria-label="Enable obsidian"]')).not.toBeNull()
+
+    // tmux is loaded -- still rendered exactly once, in the health section.
+    const tmuxRows = Array.from(container.querySelectorAll('li')).filter((li) =>
+      li.textContent?.includes('tmux'),
+    )
+    expect(tmuxRows).toHaveLength(1)
+    expect(tmuxRows[0].textContent).toMatch(/disable pending/i)
+  })
+
+  it('clicking Enable on a pending-disable-but-active plugin clears the pending badge and flips to Disable', async () => {
+    fetchPluginsHealth.mockResolvedValue(healthWithPendingDisable)
+    mockRole('admin', 3)
+    togglePlugin.mockResolvedValue({ name: 'tmux', disabled: false, restart_required: true })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const enableButton = container.querySelector(
+      'button[aria-label="Enable tmux"]',
+    ) as HTMLButtonElement
+    const tmuxRow = enableButton.closest('li') as HTMLElement
+
+    await act(async () => {
+      enableButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(togglePlugin).toHaveBeenCalledWith('tmux')
+    expect(tmuxRow.querySelector('button[aria-label="Disable tmux"]')).not.toBeNull()
+    expect(tmuxRow.textContent).not.toMatch(/disable pending/i)
+  })
 })
