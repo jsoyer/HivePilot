@@ -159,25 +159,40 @@ class TestConciergeModeResolution:
         runner_def, _ = orch.registry.capture_definition.call_args.args
         assert runner_def.options.get("mode") == "cli"
 
-    def test_cli_mode_sets_non_interactive_permission_mode(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Regression guard: `claude --print` hangs on an interactive
-        permission prompt in cli mode unless `--permission-mode` is passed
-        (ClaudeRunner._build_invocation reads `definition.options
-        ["permission_mode"]`; roles.py's developer role — the only other
-        headless-claude caller in this codebase — sets the same field for the
-        same reason). If this regresses, the classifier silently hangs the
-        chat bot process instead of degrading to the fail-closed answer."""
+    def test_cli_mode_disables_all_tools(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SECURITY: the classifier prompt embeds untrusted chat text. cli
+        mode must run with NO tools available at all (`--tools ""` — see
+        ClaudeRunner._resolve_tools) so a prompt-injected instruction has
+        nothing to invoke. This is deny-by-default (tool set structurally
+        empty), not merely permission-gated."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
         raw = json.dumps({"kind": "answer", "answer_text": "ok"})
         orch = _orch_with_capture(return_value=raw)
         self._route(orch)
         runner_def, _ = orch.registry.capture_definition.call_args.args
-        assert runner_def.options.get("permission_mode") == "bypassPermissions"
+        assert runner_def.options.get("tools") == ""
 
-    def test_api_mode_does_not_set_permission_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cli_mode_never_sets_bypass_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regression guard: bypassPermissions must NEVER be reintroduced on
+        the concierge path — with no tools available (see test above) there
+        is nothing to gate behind a permission mode, and bypassPermissions
+        would grant exactly the blanket tool authority the no-tools
+        restriction exists to deny."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        self._route(orch)
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert runner_def.options.get("permission_mode") != "bypassPermissions"
+        assert "permission_mode" not in runner_def.options
+
+    def test_api_mode_does_not_set_tools_or_permission_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """api mode never has tool access at all (it's a raw Messages API
+        call, see `_run_api`) — no need for either option there."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
         monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "api")
         raw = json.dumps({"kind": "answer", "answer_text": "ok"})
@@ -185,6 +200,30 @@ class TestConciergeModeResolution:
         self._route(orch)
         runner_def, _ = orch.registry.capture_definition.call_args.args
         assert "permission_mode" not in runner_def.options
+        assert "tools" not in runner_def.options
+
+    def test_cli_no_tools_invariant_violation_refuses_and_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defense in depth: if the no-tools restriction were ever missing
+        from the cli definition (e.g. a future edit to
+        `_build_classifier_options` drops the `tools` assignment), the hard
+        invariant check in `route()` must refuse to run the cli classifier at
+        all and fail closed — never call `capture_definition` with a
+        tool-capable cli session on untrusted input."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        # Simulate the no-tools restriction failing to attach — a options
+        # dict missing "tools" entirely, which is exactly what a regression
+        # in _build_classifier_options would produce.
+        monkeypatch.setattr(
+            concierge_service, "_build_classifier_options", lambda mode: {"mode": mode}
+        )
+        orch = _orch_with_capture(return_value=json.dumps({"kind": "answer", "answer_text": "ok"}))
+        decision = self._route(orch)
+        assert decision.kind == "answer"
+        assert decision.answer_text == concierge_service._FALLBACK_ANSWER
+        orch.registry.capture_definition.assert_not_called()
 
     def test_cli_mode_classification_success_returns_real_decision(
         self, monkeypatch: pytest.MonkeyPatch

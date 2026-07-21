@@ -140,6 +140,14 @@ controls how the classifier's `claude` call is dispatched:
   logging it once — so a turn-key subscription-only box works with zero extra
   configuration. Set `HIVEPILOT_CHATOPS_CONCIERGE_MODE=cli` explicitly to always use the CLI
   path regardless of whether a key is present.
+- **`cli` mode runs the classifier with NO tools available at all** (`claude --tools ""`) and
+  never with an elevated permission mode (no `bypassPermissions`). The classifier's prompt
+  embeds the free-text chat message being classified — untrusted, potentially
+  attacker-controlled input — so the session it runs in must be structurally incapable of
+  invoking Bash/Edit/WebFetch/etc, not merely permission-gated; a prompt-injected instruction
+  has nothing to invoke. This is a hard invariant enforced in code: if the no-tools
+  restriction can't be attached to a `cli`-mode request for any reason, the concierge refuses
+  to run it and returns the fail-closed answer instead of ever spawning a tool-capable session.
 
 How it behaves once enabled:
 

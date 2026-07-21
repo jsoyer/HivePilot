@@ -96,6 +96,74 @@ def test_step_metadata_overrides_global_permission_mode(tmp_path: Path, monkeypa
     assert args[args.index("--permission-mode") + 1] == "bypassPermissions"
 
 
+class TestToolsRestriction:
+    """`--tools` (verified via `claude --help`: "Specify the list of available
+    tools from the built-in set. Use \"\" to disable all tools, \"default\" to
+    use all tools, or specify tool names.") lets a caller run a headless
+    `claude` session with NO tools available at all — not merely
+    permission-gated, structurally absent. Additive: unset by default, so
+    existing invocations are byte-identical."""
+
+    def _payload(self, tmp_path: Path, *, step_metadata: dict | None = None) -> RunnerPayload:
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        return RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(
+                name="s", runner="claude", prompt_file=str(pf), metadata=step_metadata or {}
+            ),
+            metadata={},
+            secrets={},
+        )
+
+    def test_no_tools_flag_by_default(self, tmp_path: Path) -> None:
+        """Byte-identical to before this feature existed when unset."""
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude"), settings
+        )
+        args, _ = runner._build_invocation(self._payload(tmp_path))
+        assert "--tools" not in args
+
+    def test_tools_flag_from_definition_options_empty_string_disables_all(
+        self, tmp_path: Path
+    ) -> None:
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude", options={"tools": ""}),
+            settings,
+        )
+        args, _ = runner._build_invocation(self._payload(tmp_path))
+        assert "--tools" in args
+        assert args[args.index("--tools") + 1] == ""
+
+    def test_tools_flag_from_definition_options_list_joined_with_comma(
+        self, tmp_path: Path
+    ) -> None:
+        runner = ClaudeRunner(
+            RunnerDefinition(
+                name="claude",
+                kind="claude",
+                command="claude",
+                options={"tools": ["Bash", "Edit"]},
+            ),
+            settings,
+        )
+        args, _ = runner._build_invocation(self._payload(tmp_path))
+        assert args[args.index("--tools") + 1] == "Bash,Edit"
+
+    def test_step_metadata_tools_overrides_definition_options(self, tmp_path: Path) -> None:
+        runner = ClaudeRunner(
+            RunnerDefinition(
+                name="claude", kind="claude", command="claude", options={"tools": "default"}
+            ),
+            settings,
+        )
+        payload = self._payload(tmp_path, step_metadata={"tools": ""})
+        args, _ = runner._build_invocation(payload)
+        assert args[args.index("--tools") + 1] == ""
+
+
 def test_capture_returns_agent_stdout(tmp_path: Path) -> None:
     from unittest.mock import MagicMock, patch
 

@@ -59,15 +59,28 @@ _DEFAULT_CONCIERGE_MODEL = "haiku"
 # _run_api would see for this call — no separate resolution path to drift.
 _API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 
-# `claude --print` (cli mode) blocks on an interactive permission prompt it
-# cannot show in a headless run unless `--permission-mode` is passed
-# (ClaudeRunner._build_invocation). This is the ONLY permission_mode value
-# used anywhere in this codebase for a headless claude invocation (see
-# roles.py's `developer` role, the sole other headless-claude caller) —
-# reused here rather than inventing a new one, per the same reasoning: the
-# classifier is a one-shot, tool-free JSON classification, so the elevated
-# scope this mode nominally grants is never exercised in practice.
-_CLI_PERMISSION_MODE = "bypassPermissions"
+# SECURITY (cli mode only — the api path never has tool access at all, see
+# `_run_api`, so this doesn't apply there): the classifier prompt embeds
+# UNTRUSTED, attacker-controlled input — the free-text chat message being
+# classified — inside a live `claude` session. A crafted message is a
+# prompt-injection vector: if that session had ANY tool available, an
+# injected instruction could make it invoke Bash/Edit/WebFetch/etc, which is
+# remote code execution triggered by a chat message, with no confirmation
+# gate in front of it (the confirm/approval flow only runs AFTER this call
+# returns a *parsed* decision — it cannot protect against something that
+# already executed inside the subprocess).
+#
+# The fix is structural, not permission-based: `--tools ""` (see
+# `hivepilot.runners.claude_runner.ClaudeRunner._resolve_tools`) makes NO
+# tools available to the session — not merely gated behind a permission
+# prompt, but absent from the tool set entirely, so there is nothing for an
+# injected instruction to invoke. Because nothing can ever require
+# approval, no `--permission-mode` is needed either (there is nothing to
+# prompt for) — `bypassPermissions` (or any other permission_mode) MUST
+# NEVER be set on this path; that would grant exactly the blanket tool
+# authority this no-tools restriction exists to deny. Use the runner's
+# ordinary default permission-mode resolution (i.e. don't touch it here).
+_CLASSIFIER_NO_TOOLS = ""  # claude --tools "": "Use \"\" to disable all tools" (claude --help)
 
 # Per-call ceiling so a hung/slow `claude` CLI (or a slow API response)
 # degrades to the fail-closed answer instead of blocking the chat bot
@@ -161,6 +174,28 @@ def _resolve_mode() -> str:
                     _cli_fallback_logged = True
         return "cli"
     return configured
+
+
+def _build_classifier_options(mode: str) -> dict[str, Any]:
+    """Build the `RunnerDefinition.options` for the classifier's `claude`
+    call given the resolved *mode*.
+
+    A separate, independently-testable function (not inlined into `route()`)
+    so `route()`'s hard no-tools invariant check (see its body) is checking
+    this function's ACTUAL output rather than trusting that a shared flag
+    was set correctly — a genuine regression here (e.g. a future edit that
+    drops the `tools` assignment) is caught by that check rather than
+    silently producing a tool-capable cli session on untrusted input.
+    """
+    options: dict[str, Any] = {"mode": mode}
+    if mode == "cli":
+        # See `_CLASSIFIER_NO_TOOLS` above — untrusted chat text reaches this
+        # session, so it must NEVER have tool access. Deliberately NOT
+        # setting permission_mode here (in particular, never
+        # "bypassPermissions") — with no tools available there is nothing to
+        # gate behind a permission mode in the first place.
+        options["tools"] = _CLASSIFIER_NO_TOOLS
+    return options
 
 
 # ---------------------------------------------------------------------------
@@ -435,12 +470,21 @@ def route(text: str, *, default_role: str, default_target: str | None) -> Concie
 
     model = settings.chatops_concierge_model or _DEFAULT_CONCIERGE_MODEL
     mode = _resolve_mode()
-    options: dict[str, Any] = {"mode": mode}
-    if mode == "cli":
-        # See `_CLI_PERMISSION_MODE` — without this, headless `claude --print`
-        # blocks on an interactive permission prompt it cannot show, hanging
-        # this call (and the chat bot) instead of returning promptly.
-        options["permission_mode"] = _CLI_PERMISSION_MODE
+    options = _build_classifier_options(mode)
+
+    # HARD INVARIANT: the cli classifier must never run tool-capable on
+    # untrusted input. This check is deliberately decoupled from
+    # `_build_classifier_options` (a separate function, re-reading its
+    # output rather than trusting a shared flag) and is a runtime check —
+    # not a bare `assert`, which can be stripped by `python -O` — so it
+    # holds even if a future edit to that function forgets to wire the
+    # no-tools restriction: refuse to spawn the cli session at all rather
+    # than ever risk a tool-capable claude process on attacker-controlled
+    # concierge input.
+    if mode == "cli" and options.get("tools") != _CLASSIFIER_NO_TOOLS:
+        logger.error("concierge.cli_no_tools_invariant_violated_refusing")
+        return ConciergeDecision(kind="answer", answer_text=_FALLBACK_ANSWER)
+
     runner_def = RunnerDefinition(
         name="concierge",
         kind=cast(RunnerKind, "claude"),
