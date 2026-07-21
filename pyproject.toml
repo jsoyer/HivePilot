@@ -245,3 +245,10 @@ include = ["hivepilot*"]
 # `pip install hivepilot[webui]` needs zero Node. "**/*" covers the nested
 # assets/ subdirectory (JS/CSS/font chunks) as well as index.html/favicon.svg.
 "hivepilot.webui" = ["static/**/*"]
+# Ship the internal, code-owned concierge classifier prompt
+# (hivepilot/prompts/concierge.md) inside the wheel — it lives INSIDE the
+# package (unlike the top-level prompts/agents/ tree, which is
+# operator-editable and installer-seeded, not packaged) because
+# services/concierge_service.py requires a non-empty prompt_file on every
+# pip install. See concierge_service.py's PACKAGING NOTE.
+"hivepilot" = ["prompts/*.md"]

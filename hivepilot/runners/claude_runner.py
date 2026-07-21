@@ -302,6 +302,21 @@ class ClaudeRunner(BaseRunner):
         )
         if permission_mode:
             args.extend(["--permission-mode", permission_mode])
+        # `--tools <tools...>` (per `claude --help`) is VARIADIC — it greedily
+        # consumes every subsequent bare token as another tool name, including
+        # the positional prompt appended below. With `--tools ""` this makes
+        # claude see argv as `--tools "" "<prompt>"` (tools=["", "<prompt>"]),
+        # so NO prompt reaches `--print` and claude exits 1 with "Input must
+        # be provided either through stdin or as a prompt argument when using
+        # --print" (empirically reproduced against the real `claude` binary).
+        # `--` is the standard end-of-options separator: it tells claude's
+        # arg parser to stop treating subsequent tokens as option values, so
+        # the prompt is unambiguously positional again (also empirically
+        # verified). Only emitted when `--tools` was actually added — every
+        # invocation that doesn't set `tools` stays byte-identical to before
+        # this fix (see `TestToolsRestriction`/argv tests).
+        if tools is not None:
+            args.append("--")
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}

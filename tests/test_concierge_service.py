@@ -11,6 +11,7 @@ is the primary thing under test — see CLAUDE.md's Anti-Goodhart guidance.
 from __future__ import annotations
 
 import json
+import pathlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -497,6 +498,69 @@ class TestRosterBuild:
         roster = concierge_service._build_roster()  # must not raise
 
         assert roster[0]["mission"] == ""
+
+
+class TestPromptFilePackaging:
+    """Regression coverage for the production bug: the classifier prompt
+    wasn't shipped in the wheel (top-level prompts/ isn't packaged), so
+    ClaudeRunner always raised "requires a prompt_file for Claude runner"
+    and the classifier silently fell back to the fallback answer on EVERY
+    pip-installed box. See concierge_service.py's PACKAGING NOTE."""
+
+    def test_prompt_file_lives_inside_the_hivepilot_package(self) -> None:
+        # `hivepilot/prompts/concierge.md` — package-relative, not
+        # repo-relative — so `hivepilot.prompts` is a subdirectory of the
+        # importable `hivepilot` package and ships via package-data in any
+        # `pip install`, unlike the old repo-relative `prompts/agents/`.
+        import hivepilot
+
+        package_dir = pathlib.Path(hivepilot.__file__).resolve().parent
+        assert concierge_service._PROMPT_FILE.is_relative_to(package_dir)
+        assert concierge_service._PROMPT_FILE.name == "concierge.md"
+
+    def test_prompt_file_exists_in_the_repo_checkout(self) -> None:
+        assert concierge_service._PROMPT_FILE.exists()
+
+    def test_resolve_prompt_file_returns_packaged_path_when_present(self) -> None:
+        resolved = concierge_service._resolve_prompt_file()
+        assert resolved == str(concierge_service._PROMPT_FILE)
+        assert resolved  # never empty
+
+    def test_resolve_prompt_file_falls_back_to_temp_file_when_missing(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # Simulate the exact production bug: _PROMPT_FILE doesn't exist at
+        # runtime. `_resolve_prompt_file` must NEVER return "" in that case
+        # (an empty prompt_file is what made ClaudeRunner raise).
+        missing = tmp_path / "does-not-exist" / "concierge.md"
+        monkeypatch.setattr(concierge_service, "_PROMPT_FILE", missing)
+        monkeypatch.setattr(concierge_service, "_prompt_fallback_path", None)
+
+        resolved = concierge_service._resolve_prompt_file()
+
+        assert resolved != ""
+        assert pathlib.Path(resolved).exists()
+        assert pathlib.Path(resolved).read_text(encoding="utf-8") == (
+            concierge_service._CLASSIFIER_PROMPT_TEXT
+        )
+
+    def test_route_never_sends_empty_prompt_file_even_when_packaged_file_missing(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        missing = tmp_path / "does-not-exist" / "concierge.md"
+        monkeypatch.setattr(concierge_service, "_PROMPT_FILE", missing)
+        monkeypatch.setattr(concierge_service, "_prompt_fallback_path", None)
+
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                "hi", default_role="developer", default_target="acme"
+            )
+
+        assert decision.kind == "answer"  # classification still succeeded
+        _, payload = orch.registry.capture_definition.call_args.args
+        assert payload.step.prompt_file  # never "" — the bug this guards against
 
     def test_roster_tolerates_list_roles_error(self, monkeypatch) -> None:
         def _raise():
