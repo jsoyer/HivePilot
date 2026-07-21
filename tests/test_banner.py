@@ -19,11 +19,11 @@ def test_banner_art_is_non_empty() -> None:
 
 
 def test_banner_art_reads_as_a_bee() -> None:
-    # Stable markers of the finalized bumblebee art: striped abdomen (`:::`)
-    # and a stinger -- not a hardcoded full-string match, so the art can
-    # still be tweaked without brittle test churn.
-    assert ":::" in BANNER_ART
-    assert "\\_|" in BANNER_ART
+    # Stable markers of the side-profile bumblebee art: "HIVE" spelled out
+    # in the abdomen and a stinger -- not a hardcoded full-string match, so
+    # the art can still be tweaked without brittle test churn.
+    assert "H I V E" in BANNER_ART
+    assert "===>" in BANNER_ART
 
 
 def test_banner_art_lines_fit_80_columns() -> None:
