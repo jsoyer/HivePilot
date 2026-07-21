@@ -119,12 +119,14 @@ class TestToolsRestriction:
         )
 
     def test_no_tools_flag_by_default(self, tmp_path: Path) -> None:
-        """Byte-identical to before this feature existed when unset."""
+        """Byte-identical to before this feature existed when unset — no
+        `--` end-of-options separator either (see TestToolsPromptDelivery)."""
         runner = ClaudeRunner(
             RunnerDefinition(name="claude", kind="claude", command="claude"), settings
         )
         args, _ = runner._build_invocation(self._payload(tmp_path))
         assert "--tools" not in args
+        assert "--" not in args
 
     def test_tools_flag_from_definition_options_empty_string_disables_all(
         self, tmp_path: Path
@@ -162,6 +164,67 @@ class TestToolsRestriction:
         payload = self._payload(tmp_path, step_metadata={"tools": ""})
         args, _ = runner._build_invocation(payload)
         assert args[args.index("--tools") + 1] == ""
+
+
+class TestToolsPromptDelivery:
+    """Regression coverage for a production bug: `--tools <tools...>` is
+    VARIADIC (per `claude --help`), so `... --tools "" "<prompt>"` makes
+    claude's arg parser swallow the positional prompt as ANOTHER `--tools`
+    value (tools=["", "<prompt>"]) — no prompt ever reaches `--print`, and
+    the real `claude` binary exits 1 with "Input must be provided either
+    through stdin or as a prompt argument when using --print". This test
+    would FAIL under the old "prompt positional right after variadic
+    --tools" argv shape (no `--` separator)."""
+
+    def _payload(self, tmp_path: Path) -> RunnerPayload:
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        return RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+            metadata={},
+            secrets={},
+        )
+
+    def test_end_of_options_separator_precedes_prompt_when_tools_set(self, tmp_path: Path) -> None:
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude", options={"tools": ""}),
+            settings,
+        )
+        args, _ = runner._build_invocation(self._payload(tmp_path))
+        # The prompt must be the LAST argv element, immediately preceded by
+        # a bare `--`, so claude's parser can never re-attach it to the
+        # preceding variadic `--tools` flag.
+        assert args[-2] == "--"
+        assert args[-1] not in ("", "--tools")
+        assert args.index("--") > args.index("--tools")
+
+    def test_end_of_options_separator_after_permission_mode_too(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """`--` must be the LAST flag emitted — after every other flag,
+        including ones added after `--tools` in `_build_invocation` (e.g.
+        `--permission-mode`) — not merely right after `--tools`."""
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude", options={"tools": ""}),
+            settings,
+        )
+        monkeypatch.setattr(runner.settings, "claude_permission_mode", "acceptEdits", raising=False)
+        args, _ = runner._build_invocation(self._payload(tmp_path))
+        assert args[-2] == "--"
+        assert args.index("--") > args.index("--permission-mode")
+
+    def test_no_separator_when_tools_unset_argv_unchanged(self, tmp_path: Path) -> None:
+        """No-tools callers keep the EXACT pre-fix argv shape: prompt is the
+        last element, no `--` inserted anywhere."""
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude"), settings
+        )
+        args, _ = runner._build_invocation(self._payload(tmp_path))
+        assert "--" not in args
+        assert args[-1] != "--"
 
 
 def test_capture_returns_agent_stdout(tmp_path: Path) -> None:
