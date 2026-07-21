@@ -74,7 +74,11 @@ class TestRouteApiModeCall:
     def test_capture_definition_called_with_api_mode_and_model(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # An ANTHROPIC_API_KEY must be present for "api" mode to stay "api" —
+        # see TestConciergeModeResolution for the no-key auto-fallback path.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
         monkeypatch.setattr(concierge_service.settings, "chatops_concierge_model", "haiku")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "api")
         raw = json.dumps({"kind": "answer", "answer_text": "ok"})
         orch = _orch_with_capture(return_value=raw)
         with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
@@ -95,6 +99,168 @@ class TestRouteApiModeCall:
             concierge_service.route("hi", default_role="developer", default_target="acme")
         runner_def, _ = orch.registry.capture_definition.call_args.args
         assert runner_def.model  # some sensible non-empty default
+
+
+class TestConciergeModeResolution:
+    """`settings.chatops_concierge_mode` ("api" | "cli") + the automatic
+    api -> cli fallback when no ANTHROPIC_API_KEY is present, so the
+    classifier works on a subscription/OAuth-only box (the operator's
+    `claude` CLI) with zero config. See docs/INTEGRATIONS.md."""
+
+    def _route(self, orch: MagicMock, text: str = "hi") -> concierge_service.ConciergeDecision:
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            return concierge_service.route(text, default_role="developer", default_target="acme")
+
+    def test_api_mode_with_key_present_stays_api(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "api")
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        self._route(orch)
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert runner_def.options.get("mode") == "api"
+
+    def test_api_mode_without_key_auto_falls_back_to_cli(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "api")
+        monkeypatch.setattr(concierge_service, "_cli_fallback_logged", False)
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "logger", MagicMock()) as mock_logger:
+            self._route(orch)
+            assert mock_logger.info.call_count == 1
+            logged_msg = mock_logger.info.call_args.args[0]
+            assert "ANTHROPIC_API_KEY" in logged_msg
+            assert "claude CLI" in logged_msg
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert runner_def.options.get("mode") == "cli"
+
+    def test_no_key_fallback_logs_only_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "api")
+        monkeypatch.setattr(concierge_service, "_cli_fallback_logged", False)
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "logger", MagicMock()) as mock_logger:
+            self._route(orch)
+            self._route(orch)
+            assert mock_logger.info.call_count == 1
+
+    def test_explicit_cli_mode_used_regardless_of_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        self._route(orch)
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert runner_def.options.get("mode") == "cli"
+
+    def test_cli_mode_disables_all_tools(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SECURITY: the classifier prompt embeds untrusted chat text. cli
+        mode must run with NO tools available at all (`--tools ""` — see
+        ClaudeRunner._resolve_tools) so a prompt-injected instruction has
+        nothing to invoke. This is deny-by-default (tool set structurally
+        empty), not merely permission-gated."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        self._route(orch)
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert runner_def.options.get("tools") == ""
+
+    def test_cli_mode_never_sets_bypass_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regression guard: bypassPermissions must NEVER be reintroduced on
+        the concierge path — with no tools available (see test above) there
+        is nothing to gate behind a permission mode, and bypassPermissions
+        would grant exactly the blanket tool authority the no-tools
+        restriction exists to deny."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        self._route(orch)
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert runner_def.options.get("permission_mode") != "bypassPermissions"
+        assert "permission_mode" not in runner_def.options
+
+    def test_api_mode_does_not_set_tools_or_permission_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """api mode never has tool access at all (it's a raw Messages API
+        call, see `_run_api`) — no need for either option there."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "api")
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        self._route(orch)
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert "permission_mode" not in runner_def.options
+        assert "tools" not in runner_def.options
+
+    def test_cli_no_tools_invariant_violation_refuses_and_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defense in depth: if the no-tools restriction were ever missing
+        from the cli definition (e.g. a future edit to
+        `_build_classifier_options` drops the `tools` assignment), the hard
+        invariant check in `route()` must refuse to run the cli classifier at
+        all and fail closed — never call `capture_definition` with a
+        tool-capable cli session on untrusted input."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        # Simulate the no-tools restriction failing to attach — a options
+        # dict missing "tools" entirely, which is exactly what a regression
+        # in _build_classifier_options would produce.
+        monkeypatch.setattr(
+            concierge_service, "_build_classifier_options", lambda mode: {"mode": mode}
+        )
+        orch = _orch_with_capture(return_value=json.dumps({"kind": "answer", "answer_text": "ok"}))
+        decision = self._route(orch)
+        assert decision.kind == "answer"
+        assert decision.answer_text == concierge_service._FALLBACK_ANSWER
+        orch.registry.capture_definition.assert_not_called()
+
+    def test_cli_mode_classification_success_returns_real_decision(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Proves the non-api path produces a real, validated decision — not
+        just the fallback answer."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        raw = json.dumps(
+            {"kind": "route", "role_key": "developer", "target": "acme", "order": "fix the bug"}
+        )
+        orch = _orch_with_capture(return_value=raw)
+        decision = self._route(orch, "ask Gustave to fix the bug")
+        assert decision.kind == "route"
+        assert decision.role_key == "developer"
+        assert decision.target == "acme"
+        assert decision.destructive is True
+
+    def test_cli_mode_timeout_still_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_mode", "cli")
+        orch = _orch_with_capture(side_effect=TimeoutError("claude cli timed out"))
+        decision = self._route(orch, "do something")
+        assert decision.kind == "answer"
+        assert decision.answer_text == concierge_service._FALLBACK_ANSWER
+
+    def test_classifier_sets_a_sane_capture_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A per-call timeout on the classifier's RunnerDefinition means a
+        hung `claude` CLI degrades to the fail-closed answer instead of
+        blocking the bot process indefinitely."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        self._route(orch)
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert isinstance(runner_def.timeout_seconds, int)
+        assert 0 < runner_def.timeout_seconds <= 120
 
 
 class TestRouteKind:

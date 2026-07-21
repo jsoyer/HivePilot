@@ -28,6 +28,7 @@ dispatches to `kind="claude"`):
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,42 @@ _PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "prompts" / "agen
 # (see model_profiles.yaml) — cheap and fast, appropriate for a per-message
 # classifier that runs on every free-text chat message when enabled.
 _DEFAULT_CONCIERGE_MODEL = "haiku"
+
+# Env var ClaudeRunner._run_api reads the Anthropic API key from (via
+# merge_environments, which starts from os.environ.copy()). The concierge's
+# own RunnerDefinition/RunnerPayload never set project.env/definition.env/
+# secrets, so checking os.environ directly here mirrors EXACTLY what
+# _run_api would see for this call — no separate resolution path to drift.
+_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+
+# SECURITY (cli mode only — the api path never has tool access at all, see
+# `_run_api`, so this doesn't apply there): the classifier prompt embeds
+# UNTRUSTED, attacker-controlled input — the free-text chat message being
+# classified — inside a live `claude` session. A crafted message is a
+# prompt-injection vector: if that session had ANY tool available, an
+# injected instruction could make it invoke Bash/Edit/WebFetch/etc, which is
+# remote code execution triggered by a chat message, with no confirmation
+# gate in front of it (the confirm/approval flow only runs AFTER this call
+# returns a *parsed* decision — it cannot protect against something that
+# already executed inside the subprocess).
+#
+# The fix is structural, not permission-based: `--tools ""` (see
+# `hivepilot.runners.claude_runner.ClaudeRunner._resolve_tools`) makes NO
+# tools available to the session — not merely gated behind a permission
+# prompt, but absent from the tool set entirely, so there is nothing for an
+# injected instruction to invoke. Because nothing can ever require
+# approval, no `--permission-mode` is needed either (there is nothing to
+# prompt for) — `bypassPermissions` (or any other permission_mode) MUST
+# NEVER be set on this path; that would grant exactly the blanket tool
+# authority this no-tools restriction exists to deny. Use the runner's
+# ordinary default permission-mode resolution (i.e. don't touch it here).
+_CLASSIFIER_NO_TOOLS = ""  # claude --tools "": "Use \"\" to disable all tools" (claude --help)
+
+# Per-call ceiling so a hung/slow `claude` CLI (or a slow API response)
+# degrades to the fail-closed answer instead of blocking the chat bot
+# process indefinitely — this is a per-message classification, not a
+# multi-minute agent task.
+_CLASSIFIER_TIMEOUT_SECONDS = 30
 
 _FALLBACK_ANSWER = (
     "I didn't quite get that. Try rephrasing your request, "
@@ -92,6 +129,73 @@ def _get_orchestrator() -> Any:
 
                 _orchestrator = Orchestrator()
     return _orchestrator
+
+
+# ---------------------------------------------------------------------------
+# Execution mode resolution — api (Anthropic Messages API) vs cli (the
+# operator's local `claude` CLI, subscription/OAuth-authenticated).
+# ---------------------------------------------------------------------------
+
+# Logged once (not per-message) so an always-on classifier on a
+# subscription-only box doesn't spam INFO on every chat message.
+_cli_fallback_logged = False
+_cli_fallback_lock = threading.Lock()
+
+
+def _has_api_key() -> bool:
+    """True if an Anthropic API key is present in the environment the
+    classifier's `claude` call would actually use — see `_API_KEY_ENV_VAR`."""
+    return bool(os.environ.get(_API_KEY_ENV_VAR))
+
+
+def _resolve_mode() -> str:
+    """Resolve the effective execution mode for the classifier's one-shot
+    `claude` invocation.
+
+    `settings.chatops_concierge_mode` ("api" default, or "cli") is the
+    configured mode. When it resolves to "api" but no `ANTHROPIC_API_KEY` is
+    present, this AUTO-FALLS-BACK to "cli" so a subscription/OAuth-only
+    deployment (no API key at all) works out of the box via the operator's
+    local `claude` CLI instead of always hitting the fail-closed fallback
+    answer. An explicit "cli" always stays "cli" regardless of key presence.
+    """
+    global _cli_fallback_logged
+    configured = (settings.chatops_concierge_mode or "api").strip().lower()
+    if configured not in ("api", "cli"):
+        logger.warning("concierge.unknown_mode_defaulting_to_api", mode=configured)
+        configured = "api"
+    if configured == "api" and not _has_api_key():
+        if not _cli_fallback_logged:
+            with _cli_fallback_lock:
+                if not _cli_fallback_logged:
+                    logger.info(
+                        "concierge: no ANTHROPIC_API_KEY, using claude CLI for classification"
+                    )
+                    _cli_fallback_logged = True
+        return "cli"
+    return configured
+
+
+def _build_classifier_options(mode: str) -> dict[str, Any]:
+    """Build the `RunnerDefinition.options` for the classifier's `claude`
+    call given the resolved *mode*.
+
+    A separate, independently-testable function (not inlined into `route()`)
+    so `route()`'s hard no-tools invariant check (see its body) is checking
+    this function's ACTUAL output rather than trusting that a shared flag
+    was set correctly — a genuine regression here (e.g. a future edit that
+    drops the `tools` assignment) is caught by that check rather than
+    silently producing a tool-capable cli session on untrusted input.
+    """
+    options: dict[str, Any] = {"mode": mode}
+    if mode == "cli":
+        # See `_CLASSIFIER_NO_TOOLS` above — untrusted chat text reaches this
+        # session, so it must NEVER have tool access. Deliberately NOT
+        # setting permission_mode here (in particular, never
+        # "bypassPermissions") — with no tools available there is nothing to
+        # gate behind a permission mode in the first place.
+        options["tools"] = _CLASSIFIER_NO_TOOLS
+    return options
 
 
 # ---------------------------------------------------------------------------
@@ -365,11 +469,28 @@ def route(text: str, *, default_role: str, default_target: str | None) -> Concie
     prompt = _build_classifier_prompt(text, roster, snapshot)
 
     model = settings.chatops_concierge_model or _DEFAULT_CONCIERGE_MODEL
+    mode = _resolve_mode()
+    options = _build_classifier_options(mode)
+
+    # HARD INVARIANT: the cli classifier must never run tool-capable on
+    # untrusted input. This check is deliberately decoupled from
+    # `_build_classifier_options` (a separate function, re-reading its
+    # output rather than trusting a shared flag) and is a runtime check —
+    # not a bare `assert`, which can be stripped by `python -O` — so it
+    # holds even if a future edit to that function forgets to wire the
+    # no-tools restriction: refuse to spawn the cli session at all rather
+    # than ever risk a tool-capable claude process on attacker-controlled
+    # concierge input.
+    if mode == "cli" and options.get("tools") != _CLASSIFIER_NO_TOOLS:
+        logger.error("concierge.cli_no_tools_invariant_violated_refusing")
+        return ConciergeDecision(kind="answer", answer_text=_FALLBACK_ANSWER)
+
     runner_def = RunnerDefinition(
         name="concierge",
         kind=cast(RunnerKind, "claude"),
         model=model,
-        options={"mode": "api"},
+        options=options,
+        timeout_seconds=_CLASSIFIER_TIMEOUT_SECONDS,
     )
     prompt_file = str(_PROMPT_FILE) if _PROMPT_FILE.exists() else ""
     step = TaskStep(name="concierge", runner="claude", prompt_file=prompt_file)

@@ -276,6 +276,21 @@ class ClaudeRunner(BaseRunner):
         skill_system_prompt = payload.metadata.get(_SKILL_SYSTEM_PROMPT_KEY)
         if skill_system_prompt:
             args.extend(["--append-system-prompt", str(skill_system_prompt)])
+        # Tool availability restriction (additive — absent by default, so
+        # existing invocations are byte-identical). `--tools` (verified via
+        # `claude --help` on the installed CLI): "Specify the list of
+        # available tools from the built-in set. Use \"\" to disable all
+        # tools, \"default\" to use all tools, or specify tool names."
+        # Deliberately preferred over `--allowedTools`/`--disallowedTools`:
+        # those only gate the PERMISSION PROMPT for named tools (and a
+        # disallow-list fails OPEN for any tool name it doesn't enumerate),
+        # whereas `--tools ""` makes the tool set structurally EMPTY — an
+        # allowlist that grants nothing, closed by default. A per-step
+        # override wins over the runner definition's option, same
+        # resolution order as permission_mode below.
+        tools = self._resolve_tools(payload)
+        if tools is not None:
+            args.extend(["--tools", tools])
         # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
         # agent actually write code in headless --print mode. Without it claude
         # blocks on an interactive permission prompt it cannot show and the run
@@ -327,6 +342,27 @@ class ClaudeRunner(BaseRunner):
             )
             return {}
         return {"MAX_THINKING_TOKENS": str(tokens)}
+
+    def _resolve_tools(self, payload: RunnerPayload) -> str | None:
+        """Resolve the `--tools` value for *payload*, or `None` if unset
+        (meaning: don't emit the flag at all — byte-identical to before this
+        option existed).
+
+        `None`-checked explicitly (not `payload.step.metadata.get(...) or
+        self.definition.options.get(...)`) because the whole point of this
+        option is to support the empty string `""` ("disable all tools"),
+        which is falsy and would be silently skipped by an `or` chain. A
+        `list[str]` is comma-joined into the single CLI argument `--tools`
+        expects; a `str` (including `""`) is passed through verbatim.
+        """
+        value = payload.step.metadata.get("tools")
+        if value is None:
+            value = self.definition.options.get("tools")
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            return ",".join(str(v) for v in value)
+        return str(value)
 
     def _permission_mode(self, payload: RunnerPayload) -> str | None:
         """Resolve the effective permission mode for *payload* (same logic as _build_invocation)."""

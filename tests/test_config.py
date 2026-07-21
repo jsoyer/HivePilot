@@ -36,6 +36,25 @@ class TestObsidianVaultConfig:
         assert isinstance(s.obsidian_vault, Path)
 
 
+class TestChatopsConciergeModeConfig:
+    """`chatops_concierge_mode` — "api" (default) | "cli". Governs whether
+    the natural-language concierge classifier dispatches its `claude` call
+    via the Anthropic Messages API or the operator's local `claude` CLI
+    (subscription/OAuth, no API key needed). See
+    hivepilot.services.concierge_service._resolve_mode for the runtime
+    api -> cli auto-fallback when no ANTHROPIC_API_KEY is present."""
+
+    def test_default_is_api(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CHATOPS_CONCIERGE_MODE", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.chatops_concierge_mode == "api"
+
+    def test_env_override_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CHATOPS_CONCIERGE_MODE", "cli")
+        s = Settings()
+        assert s.chatops_concierge_mode == "cli"
+
+
 class TestPluginsSourceConfig:
     """`plugins_source_repo` / `plugins_source_ref` — where `hivepilot plugins
     install` fetches curated built-in example plugins from (Sprint:

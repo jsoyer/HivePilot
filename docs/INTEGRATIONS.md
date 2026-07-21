@@ -123,7 +123,31 @@ Enable it:
 export HIVEPILOT_CHATOPS_CONCIERGE_ENABLED=true   # opt-in, default OFF
 export HIVEPILOT_CHATOPS_DEFAULT_ROLE=ceo          # role addressed when the user doesn't name one (default: ceo)
 export HIVEPILOT_CHATOPS_CONCIERGE_MODEL=haiku     # cheap/fast classifier model (default: a built-in cheap model)
+export HIVEPILOT_CHATOPS_CONCIERGE_MODE=api        # "api" (default) or "cli" — see below
 ```
+
+**No `ANTHROPIC_API_KEY`? The concierge still works.** `HIVEPILOT_CHATOPS_CONCIERGE_MODE`
+controls how the classifier's `claude` call is dispatched:
+
+- `api` (default) — the Anthropic Messages API, using the cheap/fast model above. Cheapest
+  and fastest option **when an API key is available**.
+- `cli` — the operator's local `claude` CLI (subscription/OAuth-authenticated), so **no
+  `ANTHROPIC_API_KEY` is required at all**. This is the mode a subscription-only deployment
+  (e.g. the bare-metal/Alpine install running `claude` interactively via a Claude
+  subscription, no API key configured) needs.
+- Left at the default `api` with no `ANTHROPIC_API_KEY` present in the environment, the
+  concierge **automatically falls back to `cli`** the first time it classifies a message —
+  logging it once — so a turn-key subscription-only box works with zero extra
+  configuration. Set `HIVEPILOT_CHATOPS_CONCIERGE_MODE=cli` explicitly to always use the CLI
+  path regardless of whether a key is present.
+- **`cli` mode runs the classifier with NO tools available at all** (`claude --tools ""`) and
+  never with an elevated permission mode (no `bypassPermissions`). The classifier's prompt
+  embeds the free-text chat message being classified — untrusted, potentially
+  attacker-controlled input — so the session it runs in must be structurally incapable of
+  invoking Bash/Edit/WebFetch/etc, not merely permission-gated; a prompt-injected instruction
+  has nothing to invoke. This is a hard invariant enforced in code: if the no-tools
+  restriction can't be attached to a `cli`-mode request for any reason, the concierge refuses
+  to run it and returns the fail-closed answer instead of ever spawning a tool-capable session.
 
 How it behaves once enabled:
 
