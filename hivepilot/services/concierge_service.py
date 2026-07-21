@@ -17,18 +17,30 @@ dispatches to `kind="claude"`):
 
 1. `RunnerPayload.project` is a real minimal `ProjectConfig`, not `None`
    (`_build_prompt`/`_run_api` read `payload.project.path` unconditionally).
-2. `TaskStep.prompt_file` points at a real, checked-in file
-   (`prompts/agents/concierge.md`, the STABLE classifier instructions —
+2. `TaskStep.prompt_file` points at a real, packaged file
+   (`hivepilot/prompts/concierge.md`, the STABLE classifier instructions —
    output contract + destructive-action table), not `""`
    (`_assemble_prompt` raises `ValueError` on an empty `prompt_file`). The
    per-message roster/user-text/grounding snapshot is the VOLATILE part,
    threaded through `metadata["extra_prompt"]` as specced.
+
+PACKAGING NOTE: this prompt lives INSIDE the `hivepilot` package
+(`hivepilot/prompts/concierge.md`), unlike the user-editable role prompts in
+the top-level `prompts/agents/` tree (`roles._PROMPTS_DIR`), which is seeded
+by the installer and deliberately NOT shipped by pip
+(`[tool.setuptools.packages.find]` only includes `hivepilot*`). The
+classifier prompt is an internal, code-owned instruction set — not something
+an operator is meant to edit — so it MUST ship inside the wheel or every
+pip-installed box silently fails-closed on every chat message (see
+`_PROMPT_FILE` and `_resolve_prompt_file` below for the belt-and-suspenders
+fallback in case this ever regresses).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,9 +54,66 @@ from hivepilot.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Stable classifier instructions (destructive-action table + JSON output
-# contract) — see module docstring point 2. Repo-relative:
-# <repo_root>/prompts/agents/concierge.md, mirroring `roles._PROMPTS_DIR`.
-_PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "prompts" / "agents" / "concierge.md"
+# contract) — see module docstring point 2 and the PACKAGING NOTE above.
+# Package-relative (NOT repo-relative): `hivepilot/prompts/concierge.md`,
+# `parent.parent` from this file (`hivepilot/services/concierge_service.py`)
+# is the `hivepilot/` package dir — this resolves correctly both in a repo
+# checkout AND inside an installed wheel, because `hivepilot/prompts/*.md`
+# is declared in `[tool.setuptools.package-data]`.
+_PROMPT_FILE = Path(__file__).resolve().parent.parent / "prompts" / "concierge.md"
+
+# Minimal, hardcoded last-resort fallback — only used if reading the
+# packaged `_PROMPT_FILE` at import time also fails (should never happen in
+# a correctly built wheel; this exists purely so `_CLASSIFIER_PROMPT_TEXT`
+# is never empty, which would defeat the point of the temp-file fallback in
+# `_resolve_prompt_file`).
+_HARDCODED_FALLBACK_PROMPT_TEXT = (
+    "You are the HivePilot concierge classifier. Read the user's message "
+    "and the roster/context supplied via extra_prompt, then respond with a "
+    'single JSON object: {"kind": "answer"|"route"|"action", '
+    '"answer_text": str|null, "role_key": str|null, "target": '
+    'str|null, "order": str|null, "action": str|null, "params": '
+    'object|null}. If uncertain, always respond with kind="answer".'
+)
+
+# Read the packaged prompt file ONCE at import time so `_resolve_prompt_file`
+# never needs to touch disk on the hot path when `_PROMPT_FILE` exists (the
+# common case). Read from the SAME `_PROMPT_FILE` used at call time — never
+# hand-maintain a second copy of the text, which could silently drift from
+# the checked-in file.
+try:
+    _CLASSIFIER_PROMPT_TEXT = _PROMPT_FILE.read_text(encoding="utf-8")
+except OSError:
+    _CLASSIFIER_PROMPT_TEXT = _HARDCODED_FALLBACK_PROMPT_TEXT
+
+# Cached path to a temp-file copy of `_CLASSIFIER_PROMPT_TEXT`, created lazily
+# (once) by `_resolve_prompt_file` only if `_PROMPT_FILE` is ever missing at
+# call time. Guarded by `_prompt_fallback_lock` like `_orchestrator` below.
+_prompt_fallback_path: str | None = None
+_prompt_fallback_lock = threading.Lock()
+
+
+def _resolve_prompt_file() -> str:
+    """Return a path to the classifier prompt that is GUARANTEED to exist
+    and be non-empty — never `""` (an empty `prompt_file` makes
+    `ClaudeRunner` raise, which is exactly the packaging bug this guards
+    against; see module PACKAGING NOTE). Prefers the packaged
+    `_PROMPT_FILE`; falls back to a cached temp-file copy of
+    `_CLASSIFIER_PROMPT_TEXT` (read from that same packaged file at import
+    time) if `_PROMPT_FILE` is somehow missing at runtime."""
+    if _PROMPT_FILE.exists():
+        return str(_PROMPT_FILE)
+
+    global _prompt_fallback_path
+    with _prompt_fallback_lock:
+        if _prompt_fallback_path is None or not Path(_prompt_fallback_path).exists():
+            logger.warning("concierge.prompt_file_missing_using_temp_fallback")
+            fd, path = tempfile.mkstemp(prefix="hivepilot-concierge-prompt-", suffix=".md")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(_CLASSIFIER_PROMPT_TEXT)
+            _prompt_fallback_path = path
+        return _prompt_fallback_path
+
 
 # Sensible cheap/fast default when settings.chatops_concierge_model is unset.
 # "haiku" is a recognised model alias in this codebase's automation tier
@@ -492,7 +561,7 @@ def route(text: str, *, default_role: str, default_target: str | None) -> Concie
         options=options,
         timeout_seconds=_CLASSIFIER_TIMEOUT_SECONDS,
     )
-    prompt_file = str(_PROMPT_FILE) if _PROMPT_FILE.exists() else ""
+    prompt_file = _resolve_prompt_file()
     step = TaskStep(name="concierge", runner="claude", prompt_file=prompt_file)
     payload = RunnerPayload(
         project_name="concierge",
