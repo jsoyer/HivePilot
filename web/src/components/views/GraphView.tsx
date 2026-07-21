@@ -64,6 +64,33 @@ export function GraphView() {
     [selectedSourceName, selectedNodeId],
   )
 
+  // `run_graph_fetch` (`hivepilot/graph.py`) never raises: a source that
+  // throws, or returns malformed data, degrades to a SINGLE synthetic
+  // node — `id="error"`, `kind="error"`, `status="error"`, no edges, and a
+  // label that is ONLY the exception TYPE name (e.g. "ValueError"), never
+  // the message (no-secret-leak discipline). Rendering that as a graph node
+  // on the canvas reads as a scary crash; detect it here (by the exact
+  // id/kind/status/no-edges signature the backend always constructs, not by
+  // string-matching the label) and render a friendly message INSTEAD of
+  // handing it to `GraphCanvas`.
+  const errorNode: GraphNode | null = useMemo(() => {
+    if (!graphData) return null
+    if (graphData.nodes.length !== 1 || graphData.edges.length > 0) return null
+    const node = graphData.nodes[0]
+    return node.id === 'error' && node.kind === 'error' && node.status === 'error' ? node : null
+  }, [graphData])
+
+  // Missing-required-param is distinguished from a genuine backend error
+  // using information the frontend already trusts (`GraphSourceSummary.
+  // params` + the params the user actually submitted) rather than
+  // string-matching the exception label — the backend deliberately never
+  // sends the real exception message, so the label alone ("ValueError")
+  // can't tell "no pipeline given" apart from "unknown pipeline: foo".
+  const missingParams = useMemo(() => {
+    if (!selectedSource) return []
+    return selectedSource.params.filter((param) => !(appliedParams[param] ?? '').trim())
+  }, [selectedSource, appliedParams])
+
   const kindCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const node of graphData?.nodes ?? []) {
@@ -215,7 +242,36 @@ export function GraphView() {
               </>
             )}
 
-            {graphState.status === 'success' && graphData && (
+            {graphState.status === 'success' && graphData && errorNode && (
+              <>
+                {missingParams.length > 0 ? (
+                  <div
+                    data-testid="graph-missing-param-hint"
+                    className="rounded-lg border border-dashed border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground"
+                  >
+                    This source needs {missingParams.length === 1 ? 'a parameter' : 'parameters'} to load
+                    data. Enter{' '}
+                    {missingParams.map((param, index) => (
+                      <span key={param}>
+                        {index > 0 && (index === missingParams.length - 1 ? ' and ' : ', ')}
+                        <span className="font-medium text-foreground">{param}</span>
+                      </span>
+                    ))}{' '}
+                    above and click <span className="font-medium text-foreground">Load</span>.
+                  </div>
+                ) : (
+                  <div
+                    role="alert"
+                    data-testid="graph-error-node"
+                    className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+                  >
+                    Failed to load this graph ({errorNode.label}). Try again or choose a different source.
+                  </div>
+                )}
+              </>
+            )}
+
+            {graphState.status === 'success' && graphData && !errorNode && (
               <>
                 {kindCounts.size > 0 && (
                   <div className="flex flex-wrap gap-2" data-testid="graph-kind-filters">
