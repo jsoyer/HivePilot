@@ -62,6 +62,7 @@ export const en = {
   'nav.approvals': 'Approvals',
   'nav.runs': 'Runs',
   'nav.graph': 'Graph',
+  'nav.reality': 'Réalité',
 
   // ---- health status words (shared: header pills + Health tab badges) --
   'health.status.ok': 'ok',
@@ -203,6 +204,42 @@ export const en = {
   'runs.insufficientRoleStop': 'Insufficient role — your token can no longer stop this run.',
   'runs.started': 'Started',
   'runs.finished': 'Finished',
+
+  // ---- Réalité view (memory-quality dashboard) ------------------------
+  'reality.kpiTitle': 'Memory quality',
+  'reality.searchSuccessRate': 'Search success rate',
+  'reality.noResultSearches': 'No-result searches',
+  'reality.avgFreshness': 'Avg. recall freshness',
+  'reality.declaredReliability': 'Declared reliability',
+  'reality.onNSearches': 'on {count} searches',
+  'reality.onNEvaluations': 'on {count} evaluations',
+  'reality.noSamples': 'No data',
+  'reality.noKpiData': 'No searches or evaluations recorded in this window.',
+  'reality.gapsTitle': 'Gaps by namespace',
+  'reality.gapsDescription': 'No-result searches grouped by namespace, most gaps first',
+  'reality.noGaps': 'No search gaps recorded.',
+  'reality.topQueriesLabel': 'top queries:',
+  'reality.evaluationsTitle': 'Recent evaluations',
+  'reality.evaluationsDescription': 'Human "was this memory useful?" feedback',
+  'reality.noEvaluations': 'No evaluations recorded yet.',
+  'reality.useful': 'Useful',
+  'reality.notUseful': 'Not useful',
+  'reality.journalTitle': 'Activity journal',
+  'reality.journalDescription': 'Most recent memory events (search / read / store), most recent first',
+  'reality.noJournal': 'No memory activity recorded yet.',
+  'reality.colTs': 'Time',
+  'reality.colOp': 'Operation',
+  'reality.colNamespace': 'Namespace',
+  'reality.colQuery': 'Query / key',
+  'reality.colResult': 'Result',
+  'reality.colFreshness': 'Freshness',
+  'reality.colActor': 'Actor',
+  'reality.emptyState':
+    'No memory activity recorded yet — the Réalité view populates as agents search/store memory (mem0).',
+  'reality.requiresTokenLead': 'This section requires a',
+  'reality.requiresTokenTail': 'higher-privilege token.',
+  'reality.requiresTokenNote':
+    'Your current token can still use the other Mirador tabs — only this section needs a higher role.',
 } as const
 
 /** Every valid translation key — derived from `en`, the single source of

@@ -618,3 +618,91 @@ export function fetchGraphNode(source: string, nodeId: string): Promise<GraphDet
   )
 }
 
+// ---------------------------------------------------------------------------
+// GET /v1/memory/reality, /v1/memory/gaps, /v1/memory/evaluations,
+// /v1/memory/journal — backs Mirador's "Réalité" memory-quality view. Shapes
+// transcribed directly from `hivepilot/services/memory_service.py`'s
+// `reality_summary`/`gaps_by_namespace`/`recent_evaluations`/
+// `activity_journal` and `api_service.py`'s `memory_reality`/`memory_gaps`/
+// `list_memory_evaluations`/`memory_journal` endpoints — read those before
+// changing anything here.
+//
+// All four are `require_role("read")` server-side — the same floor the
+// token gate itself already checks, so a token that passed the gate should
+// never genuinely 403 here today. `on403: 'forbidden'` is still opted into
+// (mirroring `fetchMemories`/`fetchPanel`/`fetchGraph` above) purely as
+// defense-in-depth: if a future tenant-scoping change ever raises this
+// floor, a 403 must not silently clear an otherwise-valid token out from
+// under every other tab — `RealityView` peels `ApiForbiddenError` off per
+// section, exactly like `GraphView`'s per-source handling.
+//
+// `namespace` / `query_or_key` / `note` / `actor` / `top_queries` are all
+// caller-influenced free text (whatever a plugin passed to
+// `memory_service.record_*`, e.g. `plugins/mem0.py`) — UNTRUSTED, same trust
+// class as `PanelData`/`GraphDetail` above. `RealityView` renders every one
+// of them via plain JSX interpolation only, never `dangerouslySetInnerHTML`.
+// ---------------------------------------------------------------------------
+
+export interface MemoryReality {
+  search_success_rate: number
+  total_searches: number
+  no_result_count: number
+  avg_freshness_seconds: number
+  declared_reliability: number
+  total_evaluations: number
+}
+
+export function fetchMemoryReality(days = 30): Promise<MemoryReality> {
+  return apiFetch<MemoryReality>(`/v1/memory/reality?days=${days}`, { on403: 'forbidden' })
+}
+
+export interface MemoryGap {
+  namespace: string
+  no_result_count: number
+  top_queries: string[]
+}
+
+export interface MemoryGapsResponse {
+  gaps: MemoryGap[]
+}
+
+export function fetchMemoryGaps(days = 30): Promise<MemoryGapsResponse> {
+  return apiFetch<MemoryGapsResponse>(`/v1/memory/gaps?days=${days}`, { on403: 'forbidden' })
+}
+
+export interface MemoryEvaluation {
+  ts: string
+  namespace: string
+  ref_key: string | null
+  useful: boolean | null
+  note: string | null
+  actor: string
+}
+
+export interface MemoryEvaluationsResponse {
+  evaluations: MemoryEvaluation[]
+}
+
+export function fetchMemoryEvaluations(limit = 50): Promise<MemoryEvaluationsResponse> {
+  return apiFetch<MemoryEvaluationsResponse>(`/v1/memory/evaluations?limit=${limit}`, { on403: 'forbidden' })
+}
+
+export interface MemoryJournalEntry {
+  ts: string
+  op: string
+  namespace: string
+  query_or_key: string | null
+  result_count: number | null
+  found: boolean | null
+  freshness_seconds: number | null
+  actor: string
+}
+
+export interface MemoryJournalResponse {
+  journal: MemoryJournalEntry[]
+}
+
+export function fetchMemoryJournal(limit = 50): Promise<MemoryJournalResponse> {
+  return apiFetch<MemoryJournalResponse>(`/v1/memory/journal?limit=${limit}`, { on403: 'forbidden' })
+}
+

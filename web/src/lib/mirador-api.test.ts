@@ -16,6 +16,10 @@ import {
   fetchApprovalLatency,
   fetchApprovals,
   fetchMemories,
+  fetchMemoryEvaluations,
+  fetchMemoryGaps,
+  fetchMemoryJournal,
+  fetchMemoryReality,
   postApproval,
   fetchPanel,
   fetchPanels,
@@ -143,5 +147,25 @@ describe('mirador-api fetch wrappers', () => {
       body: JSON.stringify({ approver: 'web', approve: false, reason: 'not this time' }),
       on403: 'forbidden',
     })
+  })
+
+  it('fetchMemoryReality calls GET /v1/memory/reality with a days window and opts into on403: "forbidden"', async () => {
+    await fetchMemoryReality(30)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/memory/reality?days=30', { on403: 'forbidden' })
+  })
+
+  it('fetchMemoryGaps calls GET /v1/memory/gaps with a days window and opts into on403: "forbidden"', async () => {
+    await fetchMemoryGaps(30)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/memory/gaps?days=30', { on403: 'forbidden' })
+  })
+
+  it('fetchMemoryEvaluations calls GET /v1/memory/evaluations with a limit and opts into on403: "forbidden"', async () => {
+    await fetchMemoryEvaluations(50)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/memory/evaluations?limit=50', { on403: 'forbidden' })
+  })
+
+  it('fetchMemoryJournal calls GET /v1/memory/journal with a limit and opts into on403: "forbidden"', async () => {
+    await fetchMemoryJournal(50)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/memory/journal?limit=50', { on403: 'forbidden' })
   })
 })
