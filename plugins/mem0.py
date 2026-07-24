@@ -170,6 +170,18 @@ upon. Operators running both plugins together and wanting recall-then-
 compress should rename files to control ``sorted()`` order (e.g.
 ``a_mem0.py`` / ``b_headroom.py``) — see ``docs/PLUGINS.md``.
 
+**Memory-quality instrumentation (single-tenant today).** ``recall``/
+``store`` both report events to ``hivepilot.services.memory_service``
+(``record_search``/``record_store`` — see that module's own docstring) for
+Mirador's "Réalité" view. Neither hook has a real ``tenant`` signal
+reachable in its kwargs (``RunnerPayload``/``TaskConfig`` carry no
+``tenant`` field), so every event this plugin reports lands under
+``tenant="default"`` — see the inline comment at each ``record_search``/
+``record_store`` call site for the full investigation. Not a bug: a
+single-tenant deployment is unaffected; a multi-tenant one won't see mem0
+activity attributed to a non-default tenant until a real signal exists to
+thread through.
+
 Deliberately NOT a ``@dataclass``: local-file plugins are loaded via
 ``importlib.util.spec_from_file_location()`` / ``exec_module()``
 (``hivepilot.plugins._scan_local_plugins``), which never registers the
@@ -362,6 +374,46 @@ def _extract_memory_texts(results: Any) -> list[str]:
     return texts
 
 
+def _freshness_seconds(results: Any) -> float | None:
+    """Best-effort age (in seconds) of the most-relevant returned memory —
+    memory-quality instrumentation only, NEVER raises (always called from
+    inside `recall`'s own instrumentation try/except, but degrades to
+    `None` internally too, consistent with `_extract_memory_texts`'s
+    "tolerant of unrecognized shapes" contract).
+
+    mem0's response shape/timestamp field isn't pinned (see
+    `_extract_memory_texts`'s docstring) — this looks for a `ts` or
+    `created_at` string (ISO-8601) on the FIRST returned item (highest
+    relevance rank) or its `metadata` sub-dict, since `store()`'s own
+    `_provenance_metadata` writes exactly a `ts` field in that shape. Returns
+    `None` when no such timestamp is reachable, parseable, or non-negative —
+    a real value is reported only when one is genuinely available, never
+    fabricated.
+    """
+    try:
+        items: Any = results
+        if isinstance(results, dict):
+            items = results.get("results", results.get("memories", []))
+        if not isinstance(items, list) or not items:
+            return None
+        first = items[0]
+        if not isinstance(first, dict):
+            return None
+        candidate_meta = first.get("metadata")
+        ts_value = first.get("ts") or first.get("created_at")
+        if ts_value is None and isinstance(candidate_meta, dict):
+            ts_value = candidate_meta.get("ts") or candidate_meta.get("created_at")
+        if not isinstance(ts_value, str) or not ts_value:
+            return None
+        ts = datetime.fromisoformat(ts_value)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        return age if age >= 0 else None
+    except Exception:  # noqa: BLE001 — best-effort, never raises
+        return None
+
+
 def recall(**kwargs: Any) -> None:
     """Search mem0 for relevant memories and inject them into `extra_prompt`.
 
@@ -406,6 +458,39 @@ def recall(**kwargs: Any) -> None:
 
         results = client.search(query, user_id=key)
         memories = _extract_memory_texts(results)[:_MAX_MEMORIES]
+
+        # Memory-quality instrumentation (best-effort, own try/except so a
+        # raising `record_search` can NEVER affect recall's real behavior —
+        # see the "instrumentation must never break recall" tests in
+        # tests/test_mem0.py::TestRecallInstrumentsMemoryService). Reported
+        # regardless of whether any memories were found: a no-result search
+        # is exactly the signal Mirador's "Réalité" gaps view surfaces.
+        #
+        # `tenant` is deliberately OMITTED here (defaults to
+        # `memory_service.record_search`'s own `tenant="default"`): neither
+        # `RunnerPayload` (`hivepilot/runners/base.py`) nor `TaskConfig`
+        # (`hivepilot/models.py`) carries a `tenant` field, and this
+        # `before_step` hook call (`Orchestrator._execute_task`,
+        # `hivepilot/orchestrator.py`) doesn't thread `run_id` either (unlike
+        # the `after_step` call `store()` receives below) — so there is no
+        # real tenant signal reachable here to attribute this event to.
+        # Investigated, not invented: every recall-recorded event lands under
+        # `tenant="default"` until a real signal is threaded down to this
+        # hook (see `api_service.py`'s memory-endpoints section and this
+        # module's own module docstring for the same limitation, documented
+        # once each at the two places an operator would actually look).
+        try:
+            from hivepilot.services import memory_service
+
+            memory_service.record_search(
+                namespace=key,
+                query=query,
+                result_count=len(memories),
+                actor=role or "system",
+                freshness_seconds=_freshness_seconds(results),
+            )
+        except Exception as instr_exc:  # noqa: BLE001 — instrumentation must never break recall
+            logger.warning("plugin.mem0.instrumentation_failed", op="search", error=str(instr_exc))
 
         if memories:
             block = "Relevant memories:\n" + "\n".join(f"- {m}" for m in memories)
@@ -515,6 +600,35 @@ def store(**kwargs: Any) -> None:
         provenance = _provenance_metadata(payload, role, run_id=run_id, confidence=confidence)
         client.add(content, user_id=key, metadata=provenance)
         logger.info("plugin.mem0.stored", key=key, step=step_name, category=provenance["category"])
+
+        # Memory-quality instrumentation (best-effort, own try/except so a
+        # raising `record_store` can NEVER affect store's real behavior —
+        # see the "instrumentation must never break store" tests in
+        # tests/test_mem0.py::TestStoreInstrumentsMemoryService). Only
+        # reached once `client.add` has actually succeeded — a call that
+        # no-op'd above (no salient content) never fires this.
+        #
+        # `tenant` is deliberately OMITTED here too (same `tenant="default"`
+        # fallback as `recall`'s `record_search` call above). Unlike
+        # `recall`, this `after_step` hook call DOES receive `run_id` in
+        # `kwargs` (threaded by `Orchestrator._execute_task` — see
+        # `_provenance_metadata`'s own docstring above), which COULD resolve
+        # a real tenant via `state_service.get_run(run_id)["tenant"]` — but
+        # that's a genuinely new coupling this file doesn't otherwise have
+        # (no `state_service` import today) plus an extra DB round-trip per
+        # `store()` call, purely to attribute HALF of a recall/store pair
+        # correctly (`recall` still couldn't do it — `before_step` never
+        # receives `run_id`), which would make the two events for the SAME
+        # step land under DIFFERENT tenants. Investigated, not invented:
+        # left symmetric with `recall` until a real signal is threaded into
+        # `before_step` too, so a future fix can attribute BOTH consistently
+        # rather than only one.
+        try:
+            from hivepilot.services import memory_service
+
+            memory_service.record_store(namespace=key, key=key, actor=role or "system")
+        except Exception as instr_exc:  # noqa: BLE001 — instrumentation must never break store
+            logger.warning("plugin.mem0.instrumentation_failed", op="store", error=str(instr_exc))
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
         logger.warning("plugin.mem0.store_failed", error=str(exc))
 

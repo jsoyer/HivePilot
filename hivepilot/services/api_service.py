@@ -9,10 +9,20 @@ from pathlib import Path
 from time import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import generate_latest
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from hivepilot import roles
 from hivepilot.config import settings
@@ -21,6 +31,7 @@ from hivepilot.services import (
     analytics_service,
     async_run_service,
     chatops_service,
+    memory_service,
     notification_service,
     policy_service,
     state_service,
@@ -1132,6 +1143,119 @@ def analytics_cost(
             return _csv_response(rows, _COST_CSV_FIELDS)
         return _pdf_response(rows, "Analytics Cost", _COST_CSV_FIELDS)
     return data
+
+
+# ---------------------------------------------------------------------------
+# Memory-quality instrumentation subsystem — backs Mirador's "Réalité" view.
+# Sibling to the analytics endpoints above, same shape: every GET endpoint
+# Depends(require_role("read")), tenant-filtered from the caller's token via
+# `_memory_tenant` (mirrors `_analytics_tenant`: admin -> unscoped/`None`,
+# every other caller -> their own tenant, NEVER leaking cross-tenant rows —
+# see `memory_service.py`'s own tenant-scoping docstring). The one write
+# endpoint, `POST /v1/memory/evaluations`, requires the higher `"run"` rank
+# (mirrors `POST /v1/runs`'s gate — this is a mutation, not a read) and
+# ALWAYS records for the caller's own token tenant (`caller.tenant`, never
+# `_memory_tenant`'s admin-unscoped `None`) — a caller can never write into
+# another tenant's evaluation log, regardless of role.
+#
+# Everything here is OPT-IN and additive: when nothing has been instrumented
+# (no plugin calls `memory_service.record_*` — see `plugins/mem0.py`'s
+# `recall`/`store` wiring), the underlying tables stay empty and every
+# endpoint below returns zeros/`[]` — NEVER fabricated data.
+#
+# **Known limitation (single-tenant events today).** These endpoints
+# themselves are correctly tenant-scoped (see above), but the ONLY current
+# writer — `plugins/mem0.py`'s `recall`/`store` hooks — has no tenant signal
+# reachable in its hook payload/kwargs (`RunnerPayload` and `TaskConfig` carry
+# no `tenant` field; see `plugins/mem0.py`'s instrumentation call sites for
+# the full investigation) and so every event lands under `tenant="default"`.
+# In a multi-tenant deployment, a non-admin caller whose own tenant isn't
+# `"default"` will therefore see an empty Réalité view even once mem0 is
+# active, until a real tenant signal is threaded down to the hook — that is
+# NOT a bug in the scoping here, it's a gap in what the writer can attribute
+# today.
+# ---------------------------------------------------------------------------
+
+
+def _memory_tenant(caller: token_service.TokenEntry) -> str | None:
+    return None if caller.role == "admin" else caller.tenant
+
+
+@v1.get("/memory/reality")
+@app.get("/memory/reality")
+def memory_reality(
+    days: int = 30,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    return memory_service.reality_summary(tenant=_memory_tenant(caller), days=days)
+
+
+@v1.get("/memory/gaps")
+@app.get("/memory/gaps")
+def memory_gaps(
+    days: int = 30,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    return {"gaps": memory_service.gaps_by_namespace(tenant=_memory_tenant(caller), days=days)}
+
+
+@v1.get("/memory/evaluations")
+@app.get("/memory/evaluations")
+def list_memory_evaluations(
+    limit: int = Query(50, ge=1, le=500),
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    return {
+        "evaluations": memory_service.recent_evaluations(tenant=_memory_tenant(caller), limit=limit)
+    }
+
+
+@v1.get("/memory/journal")
+@app.get("/memory/journal")
+def memory_journal(
+    limit: int = Query(50, ge=1, le=500),
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    return {"journal": memory_service.activity_journal(tenant=_memory_tenant(caller), limit=limit)}
+
+
+class MemoryEvaluationRequest(BaseModel):
+    namespace: str = Field(..., min_length=1, max_length=200)
+    useful: bool
+    ref_key: str | None = Field(None, max_length=200)
+    note: str | None = Field(None, max_length=2000)
+
+    @field_validator("namespace")
+    @classmethod
+    def _namespace_non_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("namespace must not be empty")
+        return v
+
+
+@v1.post("/memory/evaluations")
+@app.post("/memory/evaluations")
+def record_memory_evaluation(
+    body: MemoryEvaluationRequest,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    """Record a human evaluation ("was this memory useful?"). ALWAYS
+    recorded for the caller's own token tenant (`caller.tenant`) — there is
+    no `tenant` field on the request body, so a caller can never write into
+    another tenant's evaluation log. `actor` is the best available real
+    identity signal off the token (`caller.note`, the token's free-text
+    label — see `hivepilot cli.py`'s `token add --note`), falling back to
+    the token's `role` when no note was set; never fabricated.
+    """
+    memory_service.record_evaluation(
+        namespace=body.namespace,
+        useful=body.useful,
+        ref_key=body.ref_key,
+        note=body.note,
+        actor=caller.note or caller.role,
+        tenant=caller.tenant,
+    )
+    return {"recorded": True}
 
 
 # ---------------------------------------------------------------------------
