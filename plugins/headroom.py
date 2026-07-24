@@ -158,6 +158,26 @@ def before_step(**kwargs: Any) -> None:
                 chars_after=chars_after,
                 ratio=ratio,
             )
+            # Aggregate/persist this compression for the Headroom efficiency
+            # panel (plugins/headroom_panel.py). Best-effort: record_compression
+            # itself never raises (see hivepilot.services.headroom_metrics), but
+            # this call is defensively wrapped too so a future change to that
+            # module can never turn metrics recording into a pipeline-breaking
+            # failure here -- log at debug (this is instrumentation, not a
+            # user-facing failure) and continue.
+            try:
+                from hivepilot.services import headroom_metrics
+
+                step_name = getattr(step, "name", None) if step is not None else None
+                headroom_metrics.record_compression(
+                    tenant="default",
+                    step=step_name,
+                    chars_before=chars_before,
+                    chars_after=chars_after,
+                    ratio=ratio,
+                )
+            except Exception as metrics_exc:  # noqa: BLE001 — never break the caller
+                logger.debug("plugin.headroom.record_compression_failed", error=str(metrics_exc))
 
         # Only mark this metadata dict as "done" when we actually attempted a
         # compression pass — an empty/no-compressible-fields payload leaves
