@@ -965,6 +965,178 @@ class TestStoreInternalErrorIsSwallowed:
         assert mock_logger.warning.called
 
 
+class TestRecallInstrumentsMemoryService:
+    """`recall()` reports a `memory_service.record_search` event (memory-quality
+    instrumentation subsystem) after every real `client.search()` call — the
+    signal Mirador's "Réalité" view is built on. Best-effort: a raising
+    `record_search` must never break `recall()` itself."""
+
+    def test_recall_records_search_with_result_count_and_actor(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hivepilot.services.memory_service as memory_service_module
+
+        recorded: dict[str, object] = {}
+        monkeypatch.setattr(
+            memory_service_module, "record_search", lambda **kw: recorded.update(kw)
+        )
+
+        payload = _payload(tmp_path)
+        mock_client = MagicMock()
+        mock_client.search.return_value = [{"memory": "m1"}, {"memory": "m2"}]
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.recall(payload=payload, role="developer")
+
+        assert recorded["result_count"] == 2
+        assert recorded["actor"] == "developer"
+        assert recorded["namespace"] == mem0_module._memory_key(payload, "developer")
+
+    def test_recall_records_zero_result_search(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No-result searches are exactly what Mirador's gaps view surfaces —
+        `recall` must report them, not just successful ones."""
+        import hivepilot.services.memory_service as memory_service_module
+
+        recorded: dict[str, object] = {}
+        monkeypatch.setattr(
+            memory_service_module, "record_search", lambda **kw: recorded.update(kw)
+        )
+
+        payload = _payload(tmp_path)
+        mock_client = MagicMock()
+        mock_client.search.return_value = []
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.recall(payload=payload)
+
+        assert recorded["result_count"] == 0
+
+    def test_recall_survives_record_search_raising(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hivepilot.services.memory_service as memory_service_module
+
+        def _boom(**kwargs: object) -> None:
+            raise RuntimeError("instrumentation exploded")
+
+        monkeypatch.setattr(memory_service_module, "record_search", _boom)
+
+        payload = _payload(tmp_path)
+        mock_client = MagicMock()
+        mock_client.search.return_value = [{"memory": "m1"}]
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.recall(payload=payload)  # must not raise
+
+        # recall's real effect (memory injection + idempotency sentinel) is
+        # completely unaffected by the instrumentation failure.
+        assert "m1" in payload.metadata["extra_prompt"]
+        assert payload.metadata[mem0_module._SENTINEL_KEY] is True
+
+    def test_recall_idempotent_short_circuit_records_search_once(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The idempotency guard (already-recalled sentinel) short-circuits
+        BEFORE `client.search()` runs, so a second `recall()` call for the
+        same shared metadata dict must not double-record a search event."""
+        import hivepilot.services.memory_service as memory_service_module
+
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(memory_service_module, "record_search", lambda **kw: calls.append(kw))
+
+        shared_metadata: dict[str, object] = {}
+        payload_1 = RunnerPayload(
+            project_name="proj",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="step-1", runner="claude"),
+            metadata=shared_metadata,
+            secrets={},
+        )
+        payload_2 = RunnerPayload(
+            project_name="proj",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="step-2", runner="claude"),
+            metadata=shared_metadata,
+            secrets={},
+        )
+        mock_client = MagicMock()
+        mock_client.search.return_value = [{"memory": "one memory"}]
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.recall(payload=payload_1)
+            mem0_module.recall(payload=payload_2)
+
+        assert len(calls) == 1
+
+
+class TestStoreInstrumentsMemoryService:
+    """`store()` reports a `memory_service.record_store` event after every
+    real `client.add()` call. Best-effort: a raising `record_store` must
+    never break `store()` itself."""
+
+    def test_store_records_store_with_actor(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hivepilot.services.memory_service as memory_service_module
+
+        recorded: dict[str, object] = {}
+        monkeypatch.setattr(memory_service_module, "record_store", lambda **kw: recorded.update(kw))
+
+        payload = _payload(tmp_path, prior_context="some prior context")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload, role="developer")
+
+        assert mock_client.add.called
+        assert recorded["actor"] == "developer"
+        assert recorded["namespace"] == mem0_module._memory_key(payload, "developer")
+
+    def test_store_survives_record_store_raising(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hivepilot.services.memory_service as memory_service_module
+
+        def _boom(**kwargs: object) -> None:
+            raise RuntimeError("instrumentation exploded")
+
+        monkeypatch.setattr(memory_service_module, "record_store", _boom)
+
+        payload = _payload(tmp_path, prior_context="some prior context")
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)  # must not raise
+
+        # store's real effect (persisting to mem0) is completely unaffected
+        # by the instrumentation failure.
+        assert mock_client.add.called
+
+    def test_store_skips_instrumentation_when_nothing_salient(
+        self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`store()` already no-ops (never calls `client.add`) when there's no
+        salient content beyond bare task identity — instrumentation must not
+        fire for a call that never actually stored anything."""
+        import hivepilot.services.memory_service as memory_service_module
+
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(memory_service_module, "record_store", lambda **kw: calls.append(kw))
+
+        payload = _payload(tmp_path)  # no extra_prompt/prior_context/output
+        mock_client = MagicMock()
+
+        with patch.object(mem0_module, "_get_client", return_value=mock_client):
+            mem0_module.store(payload=payload)
+
+        assert not mock_client.add.called
+        assert calls == []
+
+
 class TestPluginManagerDiscoversMem0:
     def test_plugin_manager_registers_both_hooks(self, monkeypatch) -> None:
         from hivepilot import plugins as plugins_mod
