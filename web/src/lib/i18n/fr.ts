@@ -76,6 +76,7 @@ export const fr: Record<TranslationKey, string> = {
   'analytics.succeeded': 'Réussies',
   'analytics.runsCount': '{count} exécutions',
   'analytics.failed': 'Échouées',
+  'analytics.noAttempts': '{count} ignorées, aucune tentative',
   'analytics.other': 'Autres',
   'analytics.trendTitle': 'Tendance',
   'analytics.trendDescription': 'Exécutions par jour',

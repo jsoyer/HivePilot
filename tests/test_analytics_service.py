@@ -154,6 +154,36 @@ class TestCanonicalOutcome:
 
 
 # ---------------------------------------------------------------------------
+# _attempt_success_rate (unit-level -- the actual metric-truth fix)
+# ---------------------------------------------------------------------------
+
+
+class TestAttemptSuccessRate:
+    def test_excludes_skipped_and_other_from_denominator(self) -> None:
+        counts = {"succeeded": 3, "failed": 1, "skipped": 2, "other": 5}
+        # 3 / (3 + 1) == 0.75, NOT 3 / 11.
+        assert analytics_service._attempt_success_rate(counts) == 0.75
+
+    def test_none_when_zero_attempts_all_skipped(self) -> None:
+        counts = {"succeeded": 0, "failed": 0, "skipped": 4, "other": 0}
+        assert analytics_service._attempt_success_rate(counts) is None
+
+    def test_none_when_all_counts_zero(self) -> None:
+        counts = {"succeeded": 0, "failed": 0, "skipped": 0, "other": 0}
+        assert analytics_service._attempt_success_rate(counts) is None
+
+    def test_all_failed_is_zero_not_none(self) -> None:
+        """Distinct from the "no attempts" case: an attempted-and-failed
+        group has a real 0.0 success rate, not `None`."""
+        counts = {"succeeded": 0, "failed": 3, "skipped": 0, "other": 0}
+        assert analytics_service._attempt_success_rate(counts) == 0.0
+
+    def test_all_succeeded_is_one(self) -> None:
+        counts = {"succeeded": 5, "failed": 0, "skipped": 0, "other": 0}
+        assert analytics_service._attempt_success_rate(counts) == 1.0
+
+
+# ---------------------------------------------------------------------------
 # run_summary
 # ---------------------------------------------------------------------------
 
@@ -187,6 +217,52 @@ class TestRunSummary:
         assert round(sum(rates.values()), 6) == 1.0
         assert rates["failed"] == 0.5
 
+    def test_success_rate_excludes_skipped_from_denominator(self) -> None:
+        """A group of 3 succeeded + 1 failed + 2 skipped must report
+        success_rate = 3/4 = 0.75 (skipped excluded from the denominator),
+        NOT 3/6 = 0.5 (the old bug: every bucket divided by `total`)."""
+        _seed_run(status="success")
+        _seed_run(status="success")
+        _seed_run(status="success")
+        _seed_run(status="failed")
+        _seed_run(status="deferred")
+        _seed_run(status="deferred")
+
+        result = analytics_service.run_summary(days=None)
+
+        assert result["total"] == 6
+        assert result["outcomes"] == {
+            "succeeded": 3,
+            "failed": 1,
+            "skipped": 2,
+            "other": 0,
+        }
+        assert result["success_rate"] == 0.75
+        # outcome_rates (the pre-existing, total-denominator rates) are
+        # untouched by this fix -- succeeded/total stays 3/6.
+        assert result["outcome_rates"]["succeeded"] == 0.5
+
+    def test_success_rate_is_none_when_group_is_100_percent_skipped(self) -> None:
+        """A 100%-SKIPPED group has zero attempts (succeeded + failed == 0):
+        success_rate must be `None`, never `0.0` -- `0.0` would look
+        identical to "every attempt failed", which is a different, and much
+        more alarming, signal than "nothing was attempted at all"."""
+        _seed_run(status="deferred")
+        _seed_run(status="deferred")
+        _seed_run(status="deferred")
+
+        result = analytics_service.run_summary(days=None)
+
+        assert result["total"] == 3
+        assert result["outcomes"]["skipped"] == 3
+        assert result["outcomes"]["failed"] == 0
+        assert result["success_rate"] is None
+
+    def test_success_rate_none_when_no_runs_at_all(self) -> None:
+        result = analytics_service.run_summary(days=None)
+        assert result["total"] == 0
+        assert result["success_rate"] is None
+
     def test_grouped_by_project(self) -> None:
         _seed_run(project="alpha", status="success")
         _seed_run(project="alpha", status="failed")
@@ -196,7 +272,25 @@ class TestRunSummary:
         assert result["by_project"]["alpha"]["total"] == 2
         assert result["by_project"]["alpha"]["outcomes"]["succeeded"] == 1
         assert result["by_project"]["alpha"]["outcomes"]["failed"] == 1
+        assert result["by_project"]["alpha"]["success_rate"] == 0.5
         assert result["by_project"]["beta"]["total"] == 1
+        assert result["by_project"]["beta"]["success_rate"] == 1.0
+
+    def test_grouped_by_project_100_percent_skipped_group_success_rate_is_none(self) -> None:
+        """A single group (`by_project`) that's 100% SKIPPED must not report
+        a misleading 0% success_rate -- it must be `None`, distinct from a
+        group that actually attempted and failed every run."""
+        _seed_run(project="alpha", status="success")
+        _seed_run(project="quiet", status="deferred")
+        _seed_run(project="quiet", status="deferred")
+
+        result = analytics_service.run_summary(days=None)
+
+        assert result["by_project"]["quiet"]["total"] == 2
+        assert result["by_project"]["quiet"]["outcomes"]["skipped"] == 2
+        assert result["by_project"]["quiet"]["success_rate"] is None
+        # The healthy group is unaffected.
+        assert result["by_project"]["alpha"]["success_rate"] == 1.0
 
     def test_grouped_by_task(self) -> None:
         _seed_run(task="build", status="success")
@@ -575,6 +669,18 @@ class TestStepsByProvider:
         result = analytics_service.steps_by_provider(days=None)
         row = next(r for r in result if r["provider"] == "claude")
         assert round(sum(row["outcome_rates"].values()), 6) == 1.0
+
+    def test_success_rate_none_for_all_skipped_provider_group(self) -> None:
+        """A provider whose steps are all skipped (`deferred`) must report
+        `success_rate: None`, not a misleading `0.0`."""
+        run1 = _seed_run()
+        _seed_step(run1, "s1", "deferred", provider="codex")
+        _seed_step(run1, "s2", "deferred", provider="codex")
+
+        result = analytics_service.steps_by_provider(days=None)
+        row = next(r for r in result if r["provider"] == "codex")
+        assert row["outcomes"]["skipped"] == 2
+        assert row["success_rate"] is None
 
     def test_empty_db_returns_empty_list(self) -> None:
         assert analytics_service.steps_by_provider(days=None) == []

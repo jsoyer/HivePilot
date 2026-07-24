@@ -32,6 +32,9 @@ const summary: AnalyticsSummary = {
   total: 12,
   outcomes: { succeeded: 9, failed: 2, skipped: 0, other: 1 },
   outcome_rates: { succeeded: 0.75, failed: 0.1667, skipped: 0, other: 0.0833 },
+  // success_rate excludes skipped/other from the denominator: 9 / (9 + 2) = 0.8182
+  // (distinct from outcome_rates.succeeded = 9 / 12 = 0.75, the pre-fix semantics).
+  success_rate: 0.8182,
   by_project: {},
   by_task: {},
   by_raw_status: {},
@@ -99,7 +102,7 @@ describe('AnalyticsView', () => {
     })
 
     expect(container.textContent).toContain('12')
-    expect(container.textContent).toContain('75%')
+    expect(container.textContent).toContain('82%')
     expect(container.querySelectorAll('svg rect').length).toBe(2)
     expect(container.textContent).toContain('deploy')
     expect(container.textContent).toContain('failed')
@@ -111,6 +114,7 @@ describe('AnalyticsView', () => {
       total: 0,
       outcomes: { succeeded: 0, failed: 0, skipped: 0, other: 0 },
       outcome_rates: { succeeded: 0, failed: 0, skipped: 0, other: 0 },
+      success_rate: null,
       by_project: {},
       by_task: {},
       by_raw_status: {},
@@ -139,6 +143,51 @@ describe('AnalyticsView', () => {
     })
 
     expect(container.textContent).toMatch(/no runs recorded/i)
+  })
+
+  it('renders a 100%-skipped group as "—" (not "0%") for the succeeded stat', async () => {
+    mocks.fetchAnalyticsSummary.mockResolvedValue({
+      total: 3,
+      outcomes: { succeeded: 0, failed: 0, skipped: 3, other: 0 },
+      outcome_rates: { succeeded: 0, failed: 0, skipped: 1, other: 0 },
+      success_rate: null,
+      by_project: {},
+      by_task: {},
+      by_raw_status: {},
+    } satisfies AnalyticsSummary)
+    mocks.fetchAnalyticsTrends.mockResolvedValue({ bucket: 'day', series: [] } satisfies AnalyticsTrends)
+    mocks.fetchAnalyticsDurations.mockResolvedValue({
+      overall: { count: 0, min: 0, max: 0, avg: 0, p50: 0, p95: 0, p99: 0 },
+      by_project: {},
+      by_task: {},
+    } satisfies AnalyticsDurations)
+    mocks.fetchStepFailures.mockResolvedValue({ hotspots: [] } satisfies StepFailuresResponse)
+    mocks.fetchApprovalLatency.mockResolvedValue({
+      count: 0,
+      min: 0,
+      max: 0,
+      avg: 0,
+      p50: 0,
+      p95: 0,
+      p99: 0,
+    } satisfies ApprovalLatency)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // total > 0 so the volume section renders (not the "no runs" empty state).
+    expect(container.textContent).toContain('3')
+    const succeededCard = Array.from(container.querySelectorAll('[data-slot="stat-card"]')).find(
+      (card) => card.textContent?.includes('Succeeded'),
+    )
+    expect(succeededCard).toBeTruthy()
+    // The succeeded stat renders "—" (unattempted), never a misleading "0%"
+    // (a 0% here would look identical to "every run failed").
+    expect(succeededCard?.querySelector('[data-slot="stat-card-value"]')?.textContent).toBe('—')
+    expect(succeededCard?.textContent).toMatch(/3 skipped, no attempts/i)
   })
 
   it('shows an error card for a section whose endpoint rejects, without breaking the others', async () => {

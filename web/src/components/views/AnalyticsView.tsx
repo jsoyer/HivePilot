@@ -56,9 +56,13 @@ export function AnalyticsView() {
                   <StatCard
                     icon={<CheckCircle2 className="size-4" />}
                     label={t('analytics.succeeded')}
-                    value={pct(data.outcome_rates.succeeded)}
-                    sub={t('analytics.runsCount', { count: data.outcomes.succeeded })}
-                    tone="positive"
+                    value={data.success_rate === null ? '—' : pct(data.success_rate)}
+                    sub={
+                      data.success_rate === null
+                        ? t('analytics.noAttempts', { count: data.outcomes.skipped })
+                        : t('analytics.runsCount', { count: data.outcomes.succeeded })
+                    }
+                    tone={data.success_rate === null ? 'default' : 'positive'}
                   />
                   <StatCard
                     icon={<XCircle className="size-4" />}
