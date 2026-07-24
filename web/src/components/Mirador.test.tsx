@@ -262,6 +262,56 @@ describe('Mirador', () => {
     expect(container.textContent).toContain('Tableau de bord HivePilot')
     expect(window.localStorage.getItem(LANG_STORAGE_KEY)).toBe(JSON.stringify('fr'))
   })
+
+  // Command palette (P1b): CommandPalette.test.tsx unit-tests the palette's
+  // own filtering/keyboard/i18n/focus behavior in isolation — these two
+  // tests only prove the SHELL wiring: the header affordance opens the real
+  // palette, and a real nav command actually flips `Mirador`'s (now
+  // controlled) `Tabs` state and renders the target view.
+  it('opens the command palette from the header search button', async () => {
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    const searchButton = container.querySelector('[aria-label="Search"]') as HTMLElement
+    expect(searchButton).not.toBeNull()
+
+    await act(async () => {
+      click(searchButton)
+      await Promise.resolve()
+    })
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('Cost')
+  })
+
+  it('switches the active view when a nav command is run from the command palette', async () => {
+    const searchButton = container.querySelector('[aria-label="Search"]') as HTMLElement
+    await act(async () => {
+      click(searchButton)
+      await Promise.resolve()
+    })
+
+    const input = document.body.querySelector('input') as HTMLInputElement
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      nativeSetter?.call(input, 'Cost')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    const costOption = Array.from(document.body.querySelectorAll('[role="option"]')).find(
+      (el) => el.textContent === 'Cost',
+    ) as HTMLElement
+    await act(async () => {
+      click(costOption)
+      await Promise.resolve()
+    })
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    const costTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Cost',
+    ) as HTMLElement
+    expect(costTab.getAttribute('aria-selected')).toBe('true')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toContain('Cost & tokens')
+  })
 })
 
 describe('Mirador — dynamic plugin panel tabs', () => {

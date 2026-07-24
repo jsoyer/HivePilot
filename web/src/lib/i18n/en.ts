@@ -26,6 +26,15 @@ export const en = {
 
   // ---- header / shell ----------------------------------------------------
   'header.subtitle': 'HivePilot insight dashboard',
+  'header.search': 'Search',
+
+  // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
+  'palette.title': 'Command palette',
+  'palette.placeholder': 'Search views and actions…',
+  'palette.noResults': 'No matching commands.',
+  'palette.actionsGroup': 'Actions',
+  'palette.toggleTheme': 'Toggle theme (light/dark)',
+  'palette.toggleLanguage': 'Switch language (EN/FR)',
 
   // ---- nav -----------------------------------------------------------
   'nav.overview': 'Overview',

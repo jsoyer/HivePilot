@@ -26,6 +26,15 @@ export const fr: Record<TranslationKey, string> = {
 
   // ---- header / shell ----------------------------------------------------
   'header.subtitle': 'Tableau de bord HivePilot',
+  'header.search': 'Rechercher',
+
+  // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
+  'palette.title': 'Palette de commandes',
+  'palette.placeholder': 'Rechercher des vues et actions…',
+  'palette.noResults': 'Aucune commande correspondante.',
+  'palette.actionsGroup': 'Actions',
+  'palette.toggleTheme': 'Changer de thème (clair/sombre)',
+  'palette.toggleLanguage': 'Changer de langue (EN/FR)',
 
   // ---- nav -----------------------------------------------------------
   'nav.overview': "Vue d'ensemble",

@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   Menu,
   PlayCircle,
+  Search,
   Workflow,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -16,6 +17,7 @@ import { LanguageProvider, useT } from '@/lib/i18n'
 import { fetchPanels } from '@/lib/mirador-api'
 import { RoleProvider } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
+import { CommandPalette } from './CommandPalette'
 import { buildNavGroups, type NavItem } from './nav/nav-config'
 import { LanguageToggle } from './nav/LanguageToggle'
 import { SidebarNav } from './nav/SidebarNav'
@@ -85,12 +87,23 @@ function panelTabValue(name: string): string {
  * wrap around the actual shell (`MiradorShell`) — `useT()` needs a provider
  * ABOVE it in the tree, so it can't be called from the same component that
  * defines the provider.
+ *
+ * ⌘K command palette (P1b): the `Tabs` root below is now CONTROLLED
+ * (`value`/`onValueChange` instead of `defaultValue`) — `activeView` is
+ * lifted up here so `CommandPalette`'s nav commands (rendered as a header
+ * sibling, outside the `Tabs` tree) can set the SAME state `SidebarNav`'s
+ * `TabsTrigger`s set, without needing access to Base UI's internal Tabs
+ * context. This is a UI-state-plumbing change only — the sidebar's own
+ * click-to-switch behavior is unchanged, it now just flows through
+ * `onValueChange` instead of Base UI's uncontrolled default.
  */
 function MiradorShell() {
   const t = useT()
   const panelsState = useAsyncData(() => fetchPanels(), [])
   const pluginPanels = panelsState.status === 'success' ? panelsState.data.panels : []
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [activeView, setActiveView] = useState('analytics')
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   const navItems: NavItem[] = [
     ...BUILTIN_TABS.map((tab) => ({ value: tab.value, label: t(tab.labelKey), Icon: tab.Icon })),
@@ -129,12 +142,37 @@ function MiradorShell() {
             <span className="truncate text-xs text-muted-foreground">{t('header.subtitle')}</span>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2 text-muted-foreground"
+              onClick={() => setPaletteOpen(true)}
+              aria-label={t('header.search')}
+            >
+              <Search className="size-4" />
+              <span className="hidden sm:inline">{t('header.search')}</span>
+              <kbd className="hidden rounded border border-border bg-muted px-1 text-[10px] font-medium sm:inline">
+                ⌘K
+              </kbd>
+            </Button>
             <StatusPills />
             <LanguageToggle />
             <ThemeToggle />
           </div>
         </header>
-        <Tabs defaultValue="analytics" orientation="vertical" className="min-h-0 flex-1 items-stretch">
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          navGroups={navGroups}
+          onNavigate={setActiveView}
+        />
+        <Tabs
+          value={activeView}
+          onValueChange={(value) => setActiveView(String(value))}
+          orientation="vertical"
+          className="min-h-0 flex-1 items-stretch"
+        >
           <SidebarNav
             groups={navGroups}
             mobileOpen={mobileNavOpen}
