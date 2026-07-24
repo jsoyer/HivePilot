@@ -9,4 +9,14 @@ describe('GraphCanvas source', () => {
   it('never uses dangerouslySetInnerHTML — all node/edge content is untrusted, GraphNode-authored text', () => {
     expect(source).not.toContain('dangerouslySetInnerHTML')
   })
+
+  it('mobile-first: gives the canvas wrapper an explicit viewport-relative height on mobile, capped back to the desktop height at lg:', () => {
+    // @xyflow/react needs an explicit height — it can't rely on a flex/grid
+    // sibling for sizing. Below `lg:` it must be viewport-relative (a fixed
+    // px height would either be way too tall or too short across phone
+    // sizes); at `lg:` it must be restored to the original desktop height
+    // so desktop stays visually unchanged.
+    expect(source).toMatch(/h-\[60vh\]/)
+    expect(source).toMatch(/lg:h-\[600px\]/)
+  })
 })

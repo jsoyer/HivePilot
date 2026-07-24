@@ -78,6 +78,15 @@ describe('Mirador', () => {
     expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals', 'Runs', 'Graph'])
   })
 
+  it('wraps the tab bar in a horizontally-scrollable container (mobile: tabs never force page-level horizontal overflow)', () => {
+    const scrollContainer = container.querySelector('[data-testid="mirador-tabs-scroll"]')
+    expect(scrollContainer).not.toBeNull()
+    expect(scrollContainer?.className).toContain('overflow-x-auto')
+    // The scroll affordance must actually wrap the real tablist, not sit
+    // beside it — otherwise the tabs could still overflow the page.
+    expect(scrollContainer?.querySelector('[role="tablist"]')).not.toBeNull()
+  })
+
   it('shows the real Analytics view by default', async () => {
     await act(async () => {
       await Promise.resolve()
