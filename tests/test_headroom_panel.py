@@ -29,9 +29,7 @@ from hivepilot.services import headroom_metrics
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PLUGIN_PATH = _REPO_ROOT / "plugins" / "headroom_panel.py"
 
-_spec = importlib.util.spec_from_file_location(
-    "hivepilot_test_headroom_panel_plugin", _PLUGIN_PATH
-)
+_spec = importlib.util.spec_from_file_location("hivepilot_test_headroom_panel_plugin", _PLUGIN_PATH)
 assert _spec and _spec.loader
 headroom_panel = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(headroom_panel)

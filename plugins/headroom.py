@@ -177,9 +177,7 @@ def before_step(**kwargs: Any) -> None:
                     ratio=ratio,
                 )
             except Exception as metrics_exc:  # noqa: BLE001 — never break the caller
-                logger.debug(
-                    "plugin.headroom.record_compression_failed", error=str(metrics_exc)
-                )
+                logger.debug("plugin.headroom.record_compression_failed", error=str(metrics_exc))
 
         # Only mark this metadata dict as "done" when we actually attempted a
         # compression pass — an empty/no-compressible-fields payload leaves
