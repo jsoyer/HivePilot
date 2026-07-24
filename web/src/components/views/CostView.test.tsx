@@ -36,6 +36,8 @@ const providers: AnalyticsProviders = {
       total: 15,
       outcomes: { succeeded: 13, failed: 1, skipped: 0, other: 1 },
       outcome_rates: { succeeded: 0.8667, failed: 0.0667, skipped: 0, other: 0.0667 },
+      // 13 / (13 + 1) = 0.9286 -- excludes the 1 "other" run from the denominator.
+      success_rate: 0.9286,
     },
   ],
   by_model: [
@@ -44,6 +46,7 @@ const providers: AnalyticsProviders = {
       total: 15,
       outcomes: { succeeded: 13, failed: 1, skipped: 0, other: 1 },
       outcome_rates: { succeeded: 0.8667, failed: 0.0667, skipped: 0, other: 0.0667 },
+      success_rate: 0.9286,
     },
   ],
 }

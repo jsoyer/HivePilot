@@ -129,6 +129,7 @@ class TestAnalyticsSummaryContract:
             "total",
             "outcomes",
             "outcome_rates",
+            "success_rate",
             "by_project",
             "by_task",
             "by_raw_status",
@@ -136,7 +137,7 @@ class TestAnalyticsSummaryContract:
         assert set(data["outcomes"].keys()) == {"succeeded", "failed", "skipped", "other"}
         assert set(data["outcome_rates"].keys()) == {"succeeded", "failed", "skipped", "other"}
         group = data["by_project"]["mirador-p"]
-        assert set(group.keys()) == {"total", "outcomes", "outcome_rates"}
+        assert set(group.keys()) == {"total", "outcomes", "outcome_rates", "success_rate"}
 
 
 # ---------------------------------------------------------------------------
@@ -215,9 +216,21 @@ class TestAnalyticsProvidersContract:
         assert set(data.keys()) == {"by_provider", "by_model"}
         assert len(data["by_provider"]) >= 1
         provider_row = data["by_provider"][0]
-        assert set(provider_row.keys()) == {"provider", "total", "outcomes", "outcome_rates"}
+        assert set(provider_row.keys()) == {
+            "provider",
+            "total",
+            "outcomes",
+            "outcome_rates",
+            "success_rate",
+        }
         model_row = data["by_model"][0]
-        assert set(model_row.keys()) == {"model", "total", "outcomes", "outcome_rates"}
+        assert set(model_row.keys()) == {
+            "model",
+            "total",
+            "outcomes",
+            "outcome_rates",
+            "success_rate",
+        }
 
 
 # ---------------------------------------------------------------------------

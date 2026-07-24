@@ -75,6 +75,7 @@ export const en = {
   'analytics.succeeded': 'Succeeded',
   'analytics.runsCount': '{count} runs',
   'analytics.failed': 'Failed',
+  'analytics.noAttempts': '{count} skipped, no attempts',
   'analytics.other': 'Other',
   'analytics.trendTitle': 'Trend',
   'analytics.trendDescription': 'Runs per day',

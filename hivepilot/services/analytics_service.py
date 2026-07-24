@@ -226,6 +226,26 @@ def _outcome_rates(counts: dict[str, int], total: int) -> dict[str, float]:
     return {k: round(v / total, 4) for k, v in counts.items()}
 
 
+def _attempt_success_rate(counts: dict[str, int]) -> float | None:
+    """``succeeded / (succeeded + failed)`` -- i.e. the success rate among
+    runs that were actually *attempted* to completion.
+
+    Unlike ``_outcome_rates()["succeeded"]`` (which divides by *every* run,
+    including SKIPPED/OTHER), this denominator deliberately EXCLUDES
+    SKIPPED and OTHER: a run that was deferred/skipped never got a chance
+    to succeed or fail, so it must not silently deflate the success rate
+    toward 0%. A group that is 100% SKIPPED has zero attempts, so this
+    returns ``None`` (never ``0.0``) -- the caller/consumer can then render
+    a distinct "skipped" signal instead of a misleading "0% success".
+    """
+    succeeded = counts.get(Outcome.SUCCEEDED.value, 0)
+    failed = counts.get(Outcome.FAILED.value, 0)
+    attempts = succeeded + failed
+    if attempts == 0:
+        return None
+    return round(succeeded / attempts, 4)
+
+
 def _group_by(runs: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for run in runs:
@@ -241,6 +261,7 @@ def _group_outcome_summary(runs: list[dict[str, Any]], key: str) -> dict[str, di
             "total": len(group_runs),
             "outcomes": counts,
             "outcome_rates": _outcome_rates(counts, len(group_runs)),
+            "success_rate": _attempt_success_rate(counts),
         }
     return result
 
@@ -271,6 +292,7 @@ def run_summary(
         "total": total,
         "outcomes": outcomes,
         "outcome_rates": _outcome_rates(outcomes, total),
+        "success_rate": _attempt_success_rate(outcomes),
         "by_project": _group_outcome_summary(runs, "project"),
         "by_task": _group_outcome_summary(runs, "task"),
         "by_raw_status": dict(raw_status_counts),
@@ -486,6 +508,7 @@ def _steps_grouped_by(
                 "total": total,
                 "outcomes": counts,
                 "outcome_rates": _outcome_rates(counts, total),
+                "success_rate": _attempt_success_rate(counts),
             }
         )
     result.sort(key=lambda r: -r["total"])

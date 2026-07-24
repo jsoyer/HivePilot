@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     total: 0,
     outcomes: { succeeded: 0, failed: 0, skipped: 0, other: 0 },
     outcome_rates: { succeeded: 0, failed: 0, skipped: 0, other: 0 },
+    success_rate: null,
     by_project: {},
     by_task: {},
     by_raw_status: {},

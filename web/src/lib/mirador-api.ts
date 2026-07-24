@@ -25,10 +25,21 @@ export interface OutcomeCounts {
 
 export type OutcomeRates = OutcomeCounts
 
+/**
+ * `succeeded / (succeeded + failed)` -- deliberately EXCLUDES `skipped`/
+ * `other` from the denominator, unlike `OutcomeRates.succeeded` (which
+ * divides by every run). `null` when there were zero attempts (e.g. a
+ * group that's 100% skipped) -- never `0`, which would look identical to
+ * "every attempt failed". See `hivepilot/services/analytics_service.py`'s
+ * `_attempt_success_rate`.
+ */
+export type SuccessRate = number | null
+
 export interface GroupOutcomeSummary {
   total: number
   outcomes: OutcomeCounts
   outcome_rates: OutcomeRates
+  success_rate: SuccessRate
 }
 
 export interface DurationStats {
@@ -49,6 +60,7 @@ export interface AnalyticsSummary {
   total: number
   outcomes: OutcomeCounts
   outcome_rates: OutcomeRates
+  success_rate: SuccessRate
   by_project: Record<string, GroupOutcomeSummary>
   by_task: Record<string, GroupOutcomeSummary>
   by_raw_status: Record<string, number>
@@ -130,6 +142,7 @@ export interface ProviderBreakdown {
   total: number
   outcomes: OutcomeCounts
   outcome_rates: OutcomeRates
+  success_rate: SuccessRate
 }
 
 export interface ModelBreakdown {
@@ -137,6 +150,7 @@ export interface ModelBreakdown {
   total: number
   outcomes: OutcomeCounts
   outcome_rates: OutcomeRates
+  success_rate: SuccessRate
 }
 
 export interface AnalyticsProviders {
