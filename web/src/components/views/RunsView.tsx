@@ -6,9 +6,11 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
+import { useT } from '@/lib/i18n'
 import { cancelRun, createRun, fetchRuns, type RunSummary } from '@/lib/mirador-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
+import { AsyncSection } from './AsyncSection'
 
 /** Poll cadence for `GET /v1/runs` — status transitions (running ->
  * success/failed/pending) show up without a manual refresh. Must stay
@@ -47,6 +49,7 @@ interface NewRunFormProps {
  * instead of waiting for the next poll tick.
  */
 function NewRunForm({ onCreated }: NewRunFormProps) {
+  const t = useT()
   const [task, setTask] = useState('')
   const [project, setProject] = useState('')
   const [extraPrompt, setExtraPrompt] = useState('')
@@ -74,11 +77,7 @@ function NewRunForm({ onCreated }: NewRunFormProps) {
       setAutoGit(false)
       onCreated()
     } catch (err) {
-      setError(
-        err instanceof ApiForbiddenError
-          ? 'Insufficient role — your token can no longer trigger runs.'
-          : describeApiError(err),
-      )
+      setError(err instanceof ApiForbiddenError ? t('runs.insufficientRoleCreate') : describeApiError(err))
     } finally {
       setSubmitting(false)
     }
@@ -89,26 +88,26 @@ function NewRunForm({ onCreated }: NewRunFormProps) {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1">
           <label htmlFor="new-run-task" className="text-sm font-medium">
-            Task
+            {t('common.task')}
           </label>
           <Input
             id="new-run-task"
             value={task}
             onChange={(event) => setTask(event.target.value)}
-            placeholder="e.g. deploy"
+            placeholder={t('runs.taskPlaceholder')}
             required
             disabled={submitting}
           />
         </div>
         <div className="flex flex-col gap-1">
           <label htmlFor="new-run-project" className="text-sm font-medium">
-            Project
+            {t('common.project')}
           </label>
           <Input
             id="new-run-project"
             value={project}
             onChange={(event) => setProject(event.target.value)}
-            placeholder="e.g. acme-web"
+            placeholder={t('runs.projectPlaceholder')}
             required
             disabled={submitting}
           />
@@ -116,13 +115,13 @@ function NewRunForm({ onCreated }: NewRunFormProps) {
       </div>
       <div className="flex flex-col gap-1">
         <label htmlFor="new-run-extra-prompt" className="text-sm font-medium">
-          Extra prompt (optional)
+          {t('runs.extraPromptLabel')}
         </label>
         <textarea
           id="new-run-extra-prompt"
           value={extraPrompt}
           onChange={(event) => setExtraPrompt(event.target.value)}
-          placeholder="Additional context for this run…"
+          placeholder={t('runs.extraPromptPlaceholder')}
           disabled={submitting}
           rows={3}
           className="w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
@@ -136,15 +135,15 @@ function NewRunForm({ onCreated }: NewRunFormProps) {
           disabled={submitting}
           className="size-4 rounded border-input"
         />
-        Auto-commit/push git actions
+        {t('runs.autoGitLabel')}
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" disabled={!canSubmit}>
-          {submitting ? 'Starting…' : 'New Run'}
+          {submitting ? t('common.starting') : t('runs.newRunButton')}
         </Button>
         {submitting && (
           <span role="status" className="text-sm text-muted-foreground">
-            Starting…
+            {t('common.starting')}
           </span>
         )}
       </div>
@@ -176,22 +175,19 @@ interface StopButtonProps {
  * poll loop, not a bug) surfaces as an inline error, never a crash.
  */
 function StopButton({ run, onStopped }: StopButtonProps) {
+  const t = useT()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function handleStop() {
-    if (!window.confirm(`Stop run #${run.id} (${run.task} on ${run.project})?`)) return
+    if (!window.confirm(t('runs.stopConfirm', { id: run.id, task: run.task, project: run.project }))) return
     setSubmitting(true)
     setError(null)
     try {
       await cancelRun(run.id)
       onStopped()
     } catch (err) {
-      setError(
-        err instanceof ApiForbiddenError
-          ? 'Insufficient role — your token can no longer stop this run.'
-          : describeApiError(err),
-      )
+      setError(err instanceof ApiForbiddenError ? t('runs.insufficientRoleStop') : describeApiError(err))
     } finally {
       setSubmitting(false)
     }
@@ -206,9 +202,9 @@ function StopButton({ run, onStopped }: StopButtonProps) {
         onClick={() => {
           void handleStop()
         }}
-        aria-label={`Stop run ${run.id}`}
+        aria-label={t('runs.stopAriaLabel', { id: run.id })}
       >
-        {submitting ? 'Stopping…' : 'Stop'}
+        {submitting ? t('common.stopping') : t('runs.stopButton')}
       </Button>
       {error && (
         <div role="alert" className="text-sm text-destructive">
@@ -229,17 +225,22 @@ function StopButton({ run, onStopped }: StopButtonProps) {
  *
  * `GET /v1/runs` itself requires a `run`-rank token (stricter than the
  * token gate's own `read` floor) — a plain `read` token 403s and sees a
- * graceful message, same pattern as `ApprovalsView`/`Mem0View`.
+ * graceful message, rendered BEFORE `AsyncSection` (same carve-out pattern
+ * as `ApprovalsView`/`Mem0View`/`GraphView` — none of which route their
+ * endpoint-specific 403 message through `AsyncSection`, which only knows
+ * the generic error case).
  *
  * Never renders `RunSummary.detail` (untrusted free text, same caveat as
  * `Approval.metadata` elsewhere in this app) — only the typed, structural
  * fields (id/project/task/status/started/finished).
  */
 export function RunsView() {
+  const t = useT()
   const { can } = useRole()
   const canRun = can('run')
   const [refreshKey, setRefreshKey] = useState(0)
   const state = useAsyncData(() => fetchRuns(), [refreshKey])
+  const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   // Poll on an interval, cleaned up on unmount (or before the next interval
   // is registered) so a stale timer from a previous mount never leaks.
@@ -261,101 +262,79 @@ export function RunsView() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Runs</CardTitle>
+        <CardTitle>{t('nav.runs')}</CardTitle>
         <CardDescription>
-          {canRun
-            ? 'Trigger a new run and watch its status update live.'
-            : 'Recent runs (read-only — a run-rank token can trigger new ones).'}
+          {canRun ? t('runs.descriptionCanRun') : t('runs.descriptionReadOnly')}
         </CardDescription>
       </CardHeader>
       <CardContent>
         {canRun && <NewRunForm onCreated={handleCreated} />}
 
-        {state.status === 'loading' && (
-          <div role="status" className="animate-pulse text-sm text-muted-foreground">
-            Loading…
+        {isForbidden && (
+          <div
+            data-testid="runs-forbidden"
+            className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
+          >
+            {t('common.requiresRunRankLead')} <span className="font-medium text-foreground">run-rank</span>{' '}
+            {t('common.requiresRunRankTail')}
           </div>
         )}
 
-        {state.status === 'error' && (
-          <>
-            {state.error instanceof ApiForbiddenError ? (
-              <div
-                data-testid="runs-forbidden"
-                className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
-              >
-                This view requires a <span className="font-medium text-foreground">run-rank</span> (or
-                higher) token. Your current token can still use the other Mirador tabs — only this list
-                needs a higher role.
-              </div>
-            ) : (
-              <div
-                role="alert"
-                className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
-              >
-                {describeApiError(state.error)}
-              </div>
-            )}
-          </>
-        )}
-
-        {state.status === 'success' && state.data.length === 0 && (
-          <p className="text-sm text-muted-foreground">No runs yet.</p>
-        )}
-
-        {state.status === 'success' && state.data.length > 0 && (
-          <Table className="block sm:table">
-            <TableHeader className="hidden sm:table-header-group">
-              <TableRow>
-                <TableHead>Run</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Task</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead>Finished</TableHead>
-                {canRun && <TableHead>Actions</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody className="block sm:table-row-group">
-              {state.data.map((run: RunSummary) => (
-                <TableRow
-                  key={run.id}
-                  className="mb-3 block rounded-lg border border-border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:border-t-0 sm:p-0"
-                >
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Run:</span>#{run.id}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Project:</span>
-                    {run.project}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Task:</span>
-                    {run.task}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Status:</span>
-                    <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Started:</span>
-                    {formatTimestamp(run.started_at)}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Finished:</span>
-                    {formatTimestamp(run.finished_at)}
-                  </TableCell>
-                  {canRun && (
-                    <TableCell className="block pt-2 sm:table-cell sm:pt-2">
-                      {run.status === 'running' && (
-                        <StopButton run={run} onStopped={handleStopped} />
+        {!isForbidden && (
+          <AsyncSection state={state} isEmpty={(data) => data.length === 0} emptyMessage={t('runs.noRuns')}>
+            {(data) => (
+              <Table className="block sm:table">
+                <TableHeader className="hidden sm:table-header-group">
+                  <TableRow>
+                    <TableHead>{t('common.run')}</TableHead>
+                    <TableHead>{t('common.project')}</TableHead>
+                    <TableHead>{t('common.task')}</TableHead>
+                    <TableHead>{t('common.status')}</TableHead>
+                    <TableHead>{t('runs.started')}</TableHead>
+                    <TableHead>{t('runs.finished')}</TableHead>
+                    {canRun && <TableHead>{t('common.actions')}</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="block sm:table-row-group">
+                  {data.map((run: RunSummary) => (
+                    <TableRow
+                      key={run.id}
+                      className="mb-3 block rounded-lg border border-border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:border-t-0 sm:p-0"
+                    >
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.run')}:</span>#{run.id}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.project')}:</span>
+                        {run.project}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.task')}:</span>
+                        {run.task}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.status')}:</span>
+                        <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('runs.started')}:</span>
+                        {formatTimestamp(run.started_at)}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('runs.finished')}:</span>
+                        {formatTimestamp(run.finished_at)}
+                      </TableCell>
+                      {canRun && (
+                        <TableCell className="block pt-2 sm:table-cell sm:pt-2">
+                          {run.status === 'running' && <StopButton run={run} onStopped={handleStopped} />}
+                        </TableCell>
                       )}
-                    </TableCell>
-                  )}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </AsyncSection>
         )}
       </CardContent>
     </Card>

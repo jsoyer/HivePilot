@@ -4,9 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiForbiddenError } from '@/lib/api'
-import { describeApiError } from '@/lib/format-error'
+import { useT } from '@/lib/i18n'
 import { fetchMemories, type MemoriesResponse } from '@/lib/mirador-api'
 import { useAsyncData } from '@/lib/use-async-data'
+import { AsyncSection } from './AsyncSection'
 
 const LIMIT = 20
 
@@ -24,9 +25,12 @@ const LIMIT = 20
  * `{ on403: 'forbidden' }` for exactly this reason: a 403 throws
  * `ApiForbiddenError` and leaves the token untouched. This view then
  * special-cases that one error type into a graceful "requires an admin
- * token" message instead of the generic error card.
+ * token" message instead of the generic error card — rendered BEFORE
+ * `AsyncSection` (which handles every other loading/error/empty case) since
+ * `AsyncSection` has no concept of this one endpoint-specific 403 carve-out.
  */
 export function Mem0View() {
+  const t = useT()
   const [inputValue, setInputValue] = useState('')
   const [submittedQuery, setSubmittedQuery] = useState<string | null>(null)
 
@@ -45,91 +49,76 @@ export function Mem0View() {
   }
 
   const hasSearched = submittedQuery !== null
+  const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Mem0 memory search</CardTitle>
-        <CardDescription>Semantic search over the mem0 store — requires an admin token</CardDescription>
+        <CardTitle>{t('mem0.title')}</CardTitle>
+        <CardDescription>{t('mem0.description')}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <form className="flex gap-2" onSubmit={handleSubmit}>
           <Input
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
-            placeholder="Search memories…"
-            aria-label="Search memories"
+            placeholder={t('mem0.searchPlaceholder')}
+            aria-label={t('mem0.searchAriaLabel')}
           />
           <Button type="submit" disabled={!inputValue.trim()}>
-            Search
+            {t('mem0.searchButton')}
           </Button>
         </form>
 
-        {!hasSearched && (
-          <p className="text-sm text-muted-foreground">Enter a search query above to look up memories.</p>
-        )}
+        {!hasSearched && <p className="text-sm text-muted-foreground">{t('mem0.searchHint')}</p>}
 
-        {hasSearched && state.status === 'loading' && (
-          <div role="status" className="animate-pulse text-sm text-muted-foreground">
-            Searching…
+        {hasSearched && isForbidden && (
+          <div
+            data-testid="mem0-forbidden"
+            className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
+          >
+            {t('mem0.requiresTokenLead')} <span className="font-medium text-foreground">admin</span>{' '}
+            {t('mem0.requiresTokenTail')} {t('mem0.requiresTokenNote')}
           </div>
         )}
 
-        {hasSearched && state.status === 'error' && (
-          <>
-            {state.error instanceof ApiForbiddenError ? (
-              <div
-                data-testid="mem0-forbidden"
-                className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
-              >
-                This view requires an <span className="font-medium text-foreground">admin</span> token.
-                Your current token can still use the other Mirador tabs — only Mem0 search needs a
-                higher role.
-              </div>
-            ) : (
-              <div
-                role="alert"
-                className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
-              >
-                {describeApiError(state.error)}
-              </div>
-            )}
-          </>
-        )}
-
-        {hasSearched && state.status === 'success' && state.data && !state.data.configured && (
-          <div className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
-            {state.data.detail ?? 'mem0 is not configured.'}
-          </div>
-        )}
-
-        {hasSearched && state.status === 'success' && state.data?.configured && state.data.memories.length === 0 && (
-          <p className="text-sm text-muted-foreground">No memories found for that query.</p>
-        )}
-
-        {hasSearched && state.status === 'success' && state.data?.configured && state.data.memories.length > 0 && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Category</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Task</TableHead>
-                <TableHead>Timestamp</TableHead>
-                <TableHead>Memory</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {state.data.memories.map((item, index) => (
-                <TableRow key={item.id ?? index}>
-                  <TableCell>{item.metadata?.category ?? '—'}</TableCell>
-                  <TableCell>{item.metadata?.project ?? '—'}</TableCell>
-                  <TableCell>{item.metadata?.task ?? '—'}</TableCell>
-                  <TableCell>{item.metadata?.ts ?? '—'}</TableCell>
-                  <TableCell className="whitespace-normal">{item.memory}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        {hasSearched && !isForbidden && (
+          <AsyncSection
+            state={state}
+            isEmpty={(data) => data !== null && data.configured && data.memories.length === 0}
+            emptyMessage={t('mem0.noResults')}
+          >
+            {(data) =>
+              data === null ? null : !data.configured ? (
+                <div className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
+                  {data.detail ?? t('mem0.notConfigured')}
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('mem0.category')}</TableHead>
+                      <TableHead>{t('common.project')}</TableHead>
+                      <TableHead>{t('common.task')}</TableHead>
+                      <TableHead>{t('mem0.timestamp')}</TableHead>
+                      <TableHead>{t('mem0.memory')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.memories.map((item, index) => (
+                      <TableRow key={item.id ?? index}>
+                        <TableCell>{item.metadata?.category ?? '—'}</TableCell>
+                        <TableCell>{item.metadata?.project ?? '—'}</TableCell>
+                        <TableCell>{item.metadata?.task ?? '—'}</TableCell>
+                        <TableCell>{item.metadata?.ts ?? '—'}</TableCell>
+                        <TableCell className="whitespace-normal">{item.memory}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )
+            }
+          </AsyncSection>
         )}
       </CardContent>
     </Card>

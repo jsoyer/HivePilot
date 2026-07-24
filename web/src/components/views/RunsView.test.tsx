@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { RunSummary } from '@/lib/mirador-api'
 import type { Role } from '@/lib/role-context'
 
@@ -404,5 +405,43 @@ describe('RunsView', () => {
 
     const alert = container.querySelector('[role="alert"]')
     expect(alert?.textContent).toMatch(/insufficient role/i)
+  })
+
+  it('renders French title, description, and form labels when the language is fr (P1a)', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchRuns.mockResolvedValue([SAMPLE_RUN])
+    mockRole('run', 1)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <RunsView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Exécutions')
+    expect(container.textContent).toContain('Nouvelle exécution')
+    expect(container.textContent).toContain('Projet')
+    expect(container.textContent).toContain('Démarrée')
+    expect(container.textContent).toContain('Terminée')
+  })
+
+  it('renders the French empty state when the language is fr', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchRuns.mockResolvedValue([])
+    mockRole('read', 0)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <RunsView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Aucune exécution pour le moment.')
   })
 })

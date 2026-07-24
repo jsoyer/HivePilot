@@ -6,9 +6,11 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
+import { useT } from '@/lib/i18n'
 import { type Approval, fetchApprovals, postApproval } from '@/lib/mirador-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
+import { AsyncSection } from './AsyncSection'
 
 /** `requested_at` is a SQL `TIMESTAMP` string — render it in the viewer's
  * locale, falling back to the raw string if it doesn't parse. */
@@ -39,6 +41,7 @@ interface RowActionsProps {
  * still handled gracefully rather than crashing the row.
  */
 function RowActions({ approval, onDone }: RowActionsProps) {
+  const t = useT()
   const [denyOpen, setDenyOpen] = useState(false)
   const [reason, setReason] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -52,9 +55,7 @@ function RowActions({ approval, onDone }: RowActionsProps) {
       onDone()
     } catch (err) {
       setError(
-        err instanceof ApiForbiddenError
-          ? 'Insufficient role — your token can no longer approve/deny this run.'
-          : describeApiError(err),
+        err instanceof ApiForbiddenError ? t('approvals.insufficientRoleApprove') : describeApiError(err),
       )
       setSubmitting(false)
     }
@@ -69,22 +70,22 @@ function RowActions({ approval, onDone }: RowActionsProps) {
           onClick={() => {
             void submit(true)
           }}
-          aria-label={`Approve run ${approval.run_id}`}
+          aria-label={t('approvals.approveAriaLabel', { id: approval.run_id })}
         >
-          Approve
+          {t('approvals.approve')}
         </Button>
         <Button
           size="sm"
           variant="destructive"
           disabled={submitting}
           onClick={() => setDenyOpen((open) => !open)}
-          aria-label={`Deny run ${approval.run_id}`}
+          aria-label={t('approvals.denyAriaLabel', { id: approval.run_id })}
         >
-          Deny
+          {t('approvals.deny')}
         </Button>
         {submitting && (
           <span role="status" className="text-sm text-muted-foreground">
-            Processing…
+            {t('common.processing')}
           </span>
         )}
       </div>
@@ -94,8 +95,8 @@ function RowActions({ approval, onDone }: RowActionsProps) {
           <Input
             value={reason}
             onChange={(event) => setReason(event.target.value)}
-            placeholder="Reason for denial (required)…"
-            aria-label={`Denial reason for run ${approval.run_id}`}
+            placeholder={t('approvals.reasonPlaceholder')}
+            aria-label={t('approvals.denialReasonAriaLabel', { id: approval.run_id })}
             disabled={submitting}
           />
           <Button
@@ -106,7 +107,7 @@ function RowActions({ approval, onDone }: RowActionsProps) {
               void submit(false)
             }}
           >
-            Confirm deny
+            {t('approvals.confirmDeny')}
           </Button>
         </div>
       )}
@@ -128,8 +129,10 @@ function RowActions({ approval, onDone }: RowActionsProps) {
  * but:
  *  - `GET /v1/approvals` itself requires a `run`-rank token (stricter than
  *    the token gate's own `read` floor) — a `read` token 403s and sees a
- *    graceful "requires a run token" message, same pattern as
- *    `Mem0View`/`PanelView`.
+ *    graceful "requires a run token" message, rendered BEFORE `AsyncSection`
+ *    (same carve-out pattern as `Mem0View`/`PanelView`/`GraphView` — none of
+ *    which route their endpoint-specific 403 message through
+ *    `AsyncSection`, which only knows the generic error case).
  *  - Approve/Deny buttons only render for `useRole().can('approve')` — a
  *    `run`-rank (or lower, once the list loads) token sees the list
  *    read-only, no action controls.
@@ -139,10 +142,12 @@ function RowActions({ approval, onDone }: RowActionsProps) {
  * fields (run id / project / task / requested-at / status).
  */
 export function ApprovalsView() {
+  const t = useT()
   const { can } = useRole()
   const canApprove = can('approve')
   const [refreshKey, setRefreshKey] = useState(0)
   const state = useAsyncData(() => fetchApprovals(), [refreshKey])
+  const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   function handleDone() {
     setRefreshKey((key) => key + 1)
@@ -151,92 +156,72 @@ export function ApprovalsView() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Approvals</CardTitle>
+        <CardTitle>{t('nav.approvals')}</CardTitle>
         <CardDescription>
-          {canApprove
-            ? 'Pending pipeline approvals — approve or deny below.'
-            : 'Pending pipeline approvals (read-only — an approve-rank token can act on these).'}
+          {canApprove ? t('approvals.descriptionCanApprove') : t('approvals.descriptionReadOnly')}
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {state.status === 'loading' && (
-          <div role="status" className="animate-pulse text-sm text-muted-foreground">
-            Loading…
+        {isForbidden && (
+          <div
+            data-testid="approvals-forbidden"
+            className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
+          >
+            {t('common.requiresRunRankLead')} <span className="font-medium text-foreground">run-rank</span>{' '}
+            {t('common.requiresRunRankTail')}
           </div>
         )}
 
-        {state.status === 'error' && (
-          <>
-            {state.error instanceof ApiForbiddenError ? (
-              <div
-                data-testid="approvals-forbidden"
-                className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
-              >
-                This view requires a <span className="font-medium text-foreground">run-rank</span> (or
-                higher) token. Your current token can still use the other Mirador tabs — only this list
-                needs a higher role.
-              </div>
-            ) : (
-              <div
-                role="alert"
-                className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
-              >
-                {describeApiError(state.error)}
-              </div>
+        {!isForbidden && (
+          <AsyncSection state={state} isEmpty={(data) => data.length === 0} emptyMessage={t('approvals.noPending')}>
+            {(data) => (
+              <Table className="block sm:table">
+                <TableHeader className="hidden sm:table-header-group">
+                  <TableRow>
+                    <TableHead>{t('common.run')}</TableHead>
+                    <TableHead>{t('common.project')}</TableHead>
+                    <TableHead>{t('common.task')}</TableHead>
+                    <TableHead>{t('approvals.requested')}</TableHead>
+                    <TableHead>{t('common.status')}</TableHead>
+                    {canApprove && <TableHead>{t('common.actions')}</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="block sm:table-row-group">
+                  {data.map((approval) => (
+                    <TableRow
+                      key={approval.run_id}
+                      className="mb-3 block rounded-lg border border-border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:border-t-0 sm:p-0"
+                    >
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.run')}:</span>#{approval.run_id}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.project')}:</span>
+                        {approval.project}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.task')}:</span>
+                        {approval.task}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('approvals.requested')}:</span>
+                        {formatRequestedAt(approval.requested_at)}
+                      </TableCell>
+                      <TableCell className="block sm:table-cell">
+                        <span className="mr-1 font-medium sm:hidden">{t('common.status')}:</span>
+                        <Badge variant="secondary">{approval.status}</Badge>
+                      </TableCell>
+                      {canApprove && (
+                        <TableCell className="block pt-2 sm:table-cell sm:pt-2">
+                          <RowActions approval={approval} onDone={handleDone} />
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
-          </>
-        )}
-
-        {state.status === 'success' && state.data.length === 0 && (
-          <p className="text-sm text-muted-foreground">No pending approvals.</p>
-        )}
-
-        {state.status === 'success' && state.data.length > 0 && (
-          <Table className="block sm:table">
-            <TableHeader className="hidden sm:table-header-group">
-              <TableRow>
-                <TableHead>Run</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Task</TableHead>
-                <TableHead>Requested</TableHead>
-                <TableHead>Status</TableHead>
-                {canApprove && <TableHead>Actions</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody className="block sm:table-row-group">
-              {state.data.map((approval) => (
-                <TableRow
-                  key={approval.run_id}
-                  className="mb-3 block rounded-lg border border-border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:border-t-0 sm:p-0"
-                >
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Run:</span>#{approval.run_id}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Project:</span>
-                    {approval.project}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Task:</span>
-                    {approval.task}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Requested:</span>
-                    {formatRequestedAt(approval.requested_at)}
-                  </TableCell>
-                  <TableCell className="block sm:table-cell">
-                    <span className="mr-1 font-medium sm:hidden">Status:</span>
-                    <Badge variant="secondary">{approval.status}</Badge>
-                  </TableCell>
-                  {canApprove && (
-                    <TableCell className="block pt-2 sm:table-cell sm:pt-2">
-                      <RowActions approval={approval} onDone={handleDone} />
-                    </TableCell>
-                  )}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          </AsyncSection>
         )}
       </CardContent>
     </Card>
