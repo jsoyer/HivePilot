@@ -50,6 +50,14 @@ describe('buildNavGroups', () => {
     expect(groups[0]?.items.map((i) => i.value)).toEqual(['mem0'])
   })
 
+  it('places the Réalité memory-quality view alongside Mem0 in the "nav.memory" group', () => {
+    const items = [item('mem0'), item('reality')]
+    const groups = buildNavGroups(items)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.label).toBe('nav.memory')
+    expect(groups[0]?.items.map((i) => i.value)).toEqual(['mem0', 'reality'])
+  })
+
   it('returns an empty array for an empty input', () => {
     expect(buildNavGroups([])).toEqual([])
   })
