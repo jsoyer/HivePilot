@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { Approval } from '@/lib/mirador-api'
 import type { Role } from '@/lib/role-context'
 
@@ -268,5 +269,43 @@ describe('ApprovalsView', () => {
 
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(container.textContent).toMatch(/run-rank/i)
+  })
+
+  it('renders French title, description, and table headers when the language is fr (P1a)', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchApprovals.mockResolvedValue([SAMPLE_APPROVAL])
+    mockRole('approve', 2)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <ApprovalsView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Approbations')
+    expect(container.textContent).toContain('Projet')
+    expect(container.textContent).toContain('Tâche')
+    expect(container.textContent).toContain('Approuver')
+    expect(container.textContent).toContain('Refuser')
+  })
+
+  it('renders the French empty state when the language is fr', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchApprovals.mockResolvedValue([])
+    mockRole('approve', 2)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <ApprovalsView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Aucune approbation en attente.')
   })
 })

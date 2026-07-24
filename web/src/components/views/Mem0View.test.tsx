@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
+import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { MemoriesResponse } from '@/lib/mirador-api'
 
 const { fetchMemories } = vi.hoisted(() => ({ fetchMemories: vi.fn() }))
@@ -137,5 +138,41 @@ describe('Mem0View', () => {
     const alert = container.querySelector('[role="alert"]')
     expect(alert?.textContent).toContain('network down')
     expect(alert?.textContent).not.toMatch(/admin/i)
+  })
+
+  it('renders French title, search hint, and table headers when the language is fr (P1a)', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchMemories.mockResolvedValue({
+      configured: true,
+      memories: [
+        {
+          memory: 'Le pipeline de déploiement relance en cas de rate_limit.',
+          metadata: { category: 'runbook', project: 'hivepilot', task: 'deploy', ts: '2026-07-10T12:00:00Z' },
+        },
+      ],
+    } satisfies MemoriesResponse)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <Mem0View />
+        </LanguageProvider>,
+      )
+    })
+    expect(container.textContent).toContain('Recherche de mémoire Mem0')
+    expect(container.textContent).toContain('Saisissez une recherche ci-dessus pour consulter les mémoires.')
+
+    const input = container.querySelector('input[aria-label="Rechercher des mémoires"]') as HTMLInputElement
+    const form = container.querySelector('form') as HTMLFormElement
+    await act(async () => {
+      setNativeValue(input, 'deploy')
+    })
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Catégorie')
+    expect(container.textContent).toContain('Horodatage')
   })
 })

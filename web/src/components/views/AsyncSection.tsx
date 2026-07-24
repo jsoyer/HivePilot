@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react'
 import { describeApiError } from '@/lib/format-error'
+import { useT } from '@/lib/i18n'
 import type { AsyncState } from '@/lib/use-async-data'
 
 interface AsyncSectionProps<T> {
   state: AsyncState<T>
   /** Whether the resolved data should render as the "no data yet" empty state. */
   isEmpty: (data: T) => boolean
+  /** Defaults to the translated `common.noDataYet` when omitted. */
   emptyMessage?: string
   /** Override the default `describeApiError`-based message (e.g. Mem0's
    * dedicated admin-required card, which does NOT go through this — it
@@ -20,17 +22,13 @@ interface AsyncSectionProps<T> {
  * can ever render a blank screen or leave an unhandled promise rejection
  * silently on screen.
  */
-export function AsyncSection<T>({
-  state,
-  isEmpty,
-  emptyMessage = 'No data yet.',
-  errorMessage,
-  children,
-}: AsyncSectionProps<T>) {
+export function AsyncSection<T>({ state, isEmpty, emptyMessage, errorMessage, children }: AsyncSectionProps<T>) {
+  const t = useT()
+
   if (state.status === 'loading') {
     return (
       <div role="status" className="animate-pulse text-sm text-muted-foreground">
-        Loading…
+        {t('common.loading')}
       </div>
     )
   }
@@ -48,7 +46,7 @@ export function AsyncSection<T>({
   }
 
   if (isEmpty(state.data)) {
-    return <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+    return <p className="text-sm text-muted-foreground">{emptyMessage ?? t('common.noDataYet')}</p>
   }
 
   return <>{children(state.data)}</>

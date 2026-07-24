@@ -23,6 +23,19 @@ export const en = {
   'common.lastDays': 'Last {days} days',
   'common.lastDaysLower': 'last {days} days',
   'common.and': ' and ',
+  'common.loading': 'Loading…',
+  'common.noDataYet': 'No data yet.',
+  'common.project': 'Project',
+  'common.task': 'Task',
+  'common.status': 'Status',
+  'common.run': 'Run',
+  'common.actions': 'Actions',
+  'common.processing': 'Processing…',
+  'common.starting': 'Starting…',
+  'common.stopping': 'Stopping…',
+  'common.requiresRunRankLead': 'This view requires a',
+  'common.requiresRunRankTail':
+    '(or higher) token. Your current token can still use the other Mirador tabs — only this list needs a higher role.',
 
   // ---- header / shell ----------------------------------------------------
   'header.subtitle': 'HivePilot insight dashboard',
@@ -138,6 +151,57 @@ export const en = {
   'graph.loadingDetail': 'Loading detail…',
   'graph.nodeRequiresTokenLead': "This node's detail requires a",
   'graph.nodeRequiresTokenTail': 'token.',
+
+  // ---- Mem0 view ---------------------------------------------------------
+  'mem0.title': 'Mem0 memory search',
+  'mem0.description': 'Semantic search over the mem0 store — requires an admin token',
+  'mem0.searchPlaceholder': 'Search memories…',
+  'mem0.searchAriaLabel': 'Search memories',
+  'mem0.searchButton': 'Search',
+  'mem0.searchHint': 'Enter a search query above to look up memories.',
+  'mem0.requiresTokenLead': 'This view requires an',
+  'mem0.requiresTokenTail': 'token.',
+  'mem0.requiresTokenNote':
+    'Your current token can still use the other Mirador tabs — only Mem0 search needs a higher role.',
+  'mem0.notConfigured': 'mem0 is not configured.',
+  'mem0.noResults': 'No memories found for that query.',
+  'mem0.category': 'Category',
+  'mem0.timestamp': 'Timestamp',
+  'mem0.memory': 'Memory',
+
+  // ---- Approvals view ------------------------------------------------------
+  'approvals.descriptionCanApprove': 'Pending pipeline approvals — approve or deny below.',
+  'approvals.descriptionReadOnly':
+    'Pending pipeline approvals (read-only — an approve-rank token can act on these).',
+  'approvals.noPending': 'No pending approvals.',
+  'approvals.requested': 'Requested',
+  'approvals.approve': 'Approve',
+  'approvals.deny': 'Deny',
+  'approvals.approveAriaLabel': 'Approve run {id}',
+  'approvals.denyAriaLabel': 'Deny run {id}',
+  'approvals.denialReasonAriaLabel': 'Denial reason for run {id}',
+  'approvals.reasonPlaceholder': 'Reason for denial (required)…',
+  'approvals.confirmDeny': 'Confirm deny',
+  'approvals.insufficientRoleApprove':
+    'Insufficient role — your token can no longer approve/deny this run.',
+
+  // ---- Runs view -----------------------------------------------------------
+  'runs.descriptionCanRun': 'Trigger a new run and watch its status update live.',
+  'runs.descriptionReadOnly': 'Recent runs (read-only — a run-rank token can trigger new ones).',
+  'runs.noRuns': 'No runs yet.',
+  'runs.taskPlaceholder': 'e.g. deploy',
+  'runs.projectPlaceholder': 'e.g. acme-web',
+  'runs.extraPromptLabel': 'Extra prompt (optional)',
+  'runs.extraPromptPlaceholder': 'Additional context for this run…',
+  'runs.autoGitLabel': 'Auto-commit/push git actions',
+  'runs.newRunButton': 'New Run',
+  'runs.insufficientRoleCreate': 'Insufficient role — your token can no longer trigger runs.',
+  'runs.stopButton': 'Stop',
+  'runs.stopAriaLabel': 'Stop run {id}',
+  'runs.stopConfirm': 'Stop run #{id} ({task} on {project})?',
+  'runs.insufficientRoleStop': 'Insufficient role — your token can no longer stop this run.',
+  'runs.started': 'Started',
+  'runs.finished': 'Finished',
 } as const
 
 /** Every valid translation key — derived from `en`, the single source of
