@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
+import { useT } from '@/lib/i18n'
 import { fetchPluginsHealth, togglePlugin, type PluginHealthStatus } from '@/lib/mirador-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
@@ -54,6 +55,7 @@ interface PluginToggleProps {
  * supported server-side via the union allowlist) has a row to click too.
  */
 function PluginToggle({ name, toggled, onToggled, initialDisabled = false }: PluginToggleProps) {
+  const t = useT()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -64,17 +66,14 @@ function PluginToggle({ name, toggled, onToggled, initialDisabled = false }: Plu
       const result = await togglePlugin(name)
       onToggled(name, { disabled: result.disabled, restartRequired: result.restart_required })
     } catch (err) {
-      setError(
-        err instanceof ApiForbiddenError
-          ? 'Insufficient role — your token can no longer toggle plugins.'
-          : describeApiError(err),
-      )
+      setError(err instanceof ApiForbiddenError ? t('health.insufficientRole') : describeApiError(err))
     } finally {
       setSubmitting(false)
     }
   }
 
   const isDisabled = toggled?.disabled ?? initialDisabled
+  const actionLabel = isDisabled ? t('common.enable') : t('common.disable')
 
   return (
     <div className="flex flex-col gap-1">
@@ -86,14 +85,14 @@ function PluginToggle({ name, toggled, onToggled, initialDisabled = false }: Plu
           onClick={() => {
             void handleClick()
           }}
-          aria-label={`${isDisabled ? 'Enable' : 'Disable'} ${name}`}
-          title="Takes effect on next restart only — no live reload."
+          aria-label={`${actionLabel} ${name}`}
+          title={t('health.restartTakesEffectTitle')}
         >
-          {submitting ? 'Working…' : isDisabled ? 'Enable' : 'Disable'}
+          {submitting ? t('common.working') : actionLabel}
         </Button>
         {toggled?.restartRequired && (
-          <Badge variant="outline" title="This change applies on the API server's next restart.">
-            restart required
+          <Badge variant="outline" title={t('health.restartAppliesTitle')}>
+            {t('health.restartRequired')}
           </Badge>
         )}
       </div>
@@ -125,6 +124,7 @@ function PluginToggle({ name, toggled, onToggled, initialDisabled = false }: Plu
  * for names that are `plugins_disabled` AND not currently loaded.
  */
 export function HealthView() {
+  const t = useT()
   const { can } = useRole()
   const canAdmin = can('admin')
   const health = useAsyncData(() => fetchPluginsHealth(), [])
@@ -137,17 +137,17 @@ export function HealthView() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Plugin health</CardTitle>
+        <CardTitle>{t('health.title')}</CardTitle>
         <CardDescription>
-          Process-global plugin status, same as `hivepilot plugins health`.
-          {canAdmin && ' Enable/disable applies on the server’s next restart only.'}
+          {t('health.description')}
+          {canAdmin && t('health.restartNote')}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <AsyncSection
           state={health}
           isEmpty={(data) => data.plugins.length === 0 && data.disabled.length === 0}
-          emptyMessage="No plugins registered."
+          emptyMessage={t('health.noPlugins')}
         >
           {(data) => {
             const disabledNames = new Set(data.disabled)
@@ -176,13 +176,12 @@ export function HealthView() {
                         className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2"
                       >
                         <span className="font-medium">{plugin.name}</span>
-                        <Badge variant={STATUS_VARIANT[plugin.status]}>{plugin.status}</Badge>
+                        <Badge variant={STATUS_VARIANT[plugin.status]}>
+                          {t(`health.status.${plugin.status}`)}
+                        </Badge>
                         {pendingDisable && (
-                          <Badge
-                            variant="outline"
-                            title="Flagged to disable — takes effect on the server's next restart. Currently still active."
-                          >
-                            disable pending · restart
+                          <Badge variant="outline" title={t('health.pendingBadgeTitle')}>
+                            {t('health.disablePending')}
                           </Badge>
                         )}
                         {plugin.detail && (
@@ -203,7 +202,7 @@ export function HealthView() {
                 {trulyDisabled.length > 0 && (
                   <div className="flex flex-col gap-2 border-t border-border pt-4">
                     <h3 className="text-sm font-semibold text-muted-foreground">
-                      Disabled plugins
+                      {t('health.disabledPlugins')}
                     </h3>
                     <ul className="flex flex-col gap-2">
                       {trulyDisabled.map((name) => (
@@ -212,7 +211,7 @@ export function HealthView() {
                           className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-2"
                         >
                           <span className="font-medium">{name}</span>
-                          <Badge variant="outline">disabled</Badge>
+                          <Badge variant="outline">{t('health.disabled')}</Badge>
                           {canAdmin && (
                             <PluginToggle
                               name={name}

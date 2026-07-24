@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge'
+import { useT } from '@/lib/i18n'
 import { fetchPluginsHealth, type PluginHealthStatus } from '@/lib/mirador-api'
 import { useAsyncData } from '@/lib/use-async-data'
 
@@ -25,6 +26,7 @@ const STATUS_VARIANT: Record<PluginHealthStatus, 'secondary' | 'outline' | 'dest
  * remains the place to see the full picture (including the error itself).
  */
 export function StatusPills() {
+  const t = useT()
   const health = useAsyncData(() => fetchPluginsHealth(), [])
 
   if (health.status !== 'success' || health.data.plugins.length === 0) {
@@ -33,16 +35,19 @@ export function StatusPills() {
 
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid="status-pills">
-      {health.data.plugins.map((plugin) => (
-        <Badge
-          key={plugin.name}
-          data-testid="status-pill"
-          variant={STATUS_VARIANT[plugin.status]}
-          title={plugin.detail || `${plugin.name}: ${plugin.status}`}
-        >
-          {plugin.name} {plugin.status}
-        </Badge>
-      ))}
+      {health.data.plugins.map((plugin) => {
+        const statusText = t(`health.status.${plugin.status}`)
+        return (
+          <Badge
+            key={plugin.name}
+            data-testid="status-pill"
+            variant={STATUS_VARIANT[plugin.status]}
+            title={plugin.detail || `${plugin.name}: ${statusText}`}
+          >
+            {plugin.name} {statusText}
+          </Badge>
+        )
+      })}
     </div>
   )
 }

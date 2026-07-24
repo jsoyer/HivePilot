@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type {
   AnalyticsDurations,
   AnalyticsSummary,
@@ -158,5 +159,28 @@ describe('AnalyticsView', () => {
     // The other sections still rendered their data — one failure doesn't
     // blank the whole panel.
     expect(container.textContent).toContain('deploy')
+  })
+
+  it('renders French card titles and StatCard labels when the language is fr (P1a)', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    mocks.fetchAnalyticsSummary.mockResolvedValue(summary)
+    mocks.fetchAnalyticsTrends.mockResolvedValue(trends)
+    mocks.fetchAnalyticsDurations.mockResolvedValue(durations)
+    mocks.fetchStepFailures.mockResolvedValue(hotspots)
+    mocks.fetchApprovalLatency.mockResolvedValue(approvalLatency)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <AnalyticsView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Volume et résultats')
+    expect(container.textContent).toContain('Exécutions totales')
+    expect(container.textContent).toContain('Réussies')
   })
 })

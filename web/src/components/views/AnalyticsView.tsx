@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { StatCard } from '@/components/dashboard/StatCard'
+import { useT } from '@/lib/i18n'
 import {
   fetchAnalyticsDurations,
   fetchAnalyticsSummary,
@@ -27,6 +28,7 @@ function pct(rate: number): string {
  * failing never blanks the rest of the panel.
  */
 export function AnalyticsView() {
+  const t = useT()
   const summary = useAsyncData(() => fetchAnalyticsSummary(DAYS), [DAYS])
   const trends = useAsyncData(() => fetchAnalyticsTrends(DAYS, 'day'), [DAYS])
   const durations = useAsyncData(() => fetchAnalyticsDurations(DAYS), [DAYS])
@@ -37,32 +39,32 @@ export function AnalyticsView() {
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
-          <CardTitle>Volume &amp; outcomes</CardTitle>
-          <CardDescription>Last {DAYS} days</CardDescription>
+          <CardTitle>{t('analytics.volumeTitle')}</CardTitle>
+          <CardDescription>{t('common.lastDays', { days: DAYS })}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <AsyncSection state={summary} isEmpty={(data) => data.total === 0} emptyMessage="No runs recorded in this window.">
+          <AsyncSection state={summary} isEmpty={(data) => data.total === 0} emptyMessage={t('analytics.noRuns')}>
             {(data) => (
               <>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <StatCard
                     icon={<Activity className="size-4" />}
-                    label="Total runs"
+                    label={t('analytics.totalRuns')}
                     value={data.total}
-                    sub={`last ${DAYS} days`}
+                    sub={t('common.lastDaysLower', { days: DAYS })}
                   />
                   <StatCard
                     icon={<CheckCircle2 className="size-4" />}
-                    label="Succeeded"
+                    label={t('analytics.succeeded')}
                     value={pct(data.outcome_rates.succeeded)}
-                    sub={`${data.outcomes.succeeded} runs`}
+                    sub={t('analytics.runsCount', { count: data.outcomes.succeeded })}
                     tone="positive"
                   />
                   <StatCard
                     icon={<XCircle className="size-4" />}
-                    label="Failed"
+                    label={t('analytics.failed')}
                     value={pct(data.outcome_rates.failed)}
-                    sub={`${data.outcomes.failed} runs`}
+                    sub={t('analytics.runsCount', { count: data.outcomes.failed })}
                     tone="danger"
                   />
                 </div>
@@ -70,19 +72,19 @@ export function AnalyticsView() {
                   segments={[
                     {
                       key: 'succeeded',
-                      label: 'Succeeded',
+                      label: t('analytics.succeeded'),
                       value: data.outcomes.succeeded,
                       colorClass: 'bg-emerald-500',
                     },
                     {
                       key: 'failed',
-                      label: 'Failed',
+                      label: t('analytics.failed'),
                       value: data.outcomes.failed,
                       colorClass: 'bg-destructive',
                     },
                     {
                       key: 'other',
-                      label: 'Other',
+                      label: t('analytics.other'),
                       value: data.outcomes.other,
                       colorClass: 'bg-muted-foreground/40',
                     },
@@ -97,14 +99,14 @@ export function AnalyticsView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Trend</CardTitle>
-          <CardDescription>Runs per day</CardDescription>
+          <CardTitle>{t('analytics.trendTitle')}</CardTitle>
+          <CardDescription>{t('analytics.trendDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <AsyncSection
             state={trends}
             isEmpty={(data) => data.series.length === 0}
-            emptyMessage="No trend data for this window."
+            emptyMessage={t('analytics.noTrend')}
           >
             {(data) => <TrendBarChart series={data.series} />}
           </AsyncSection>
@@ -113,14 +115,14 @@ export function AnalyticsView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Duration percentiles</CardTitle>
-          <CardDescription>Finished runs, p50 / p95 / p99</CardDescription>
+          <CardTitle>{t('analytics.durationTitle')}</CardTitle>
+          <CardDescription>{t('analytics.durationDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <AsyncSection
             state={durations}
             isEmpty={(data) => data.overall.count === 0}
-            emptyMessage="No finished runs yet."
+            emptyMessage={t('analytics.noDuration')}
           >
             {(data) => <PercentileBars stats={data.overall} />}
           </AsyncSection>
@@ -129,22 +131,22 @@ export function AnalyticsView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Step failure hotspots</CardTitle>
-          <CardDescription>Highest-failure-count steps first</CardDescription>
+          <CardTitle>{t('analytics.hotspotsTitle')}</CardTitle>
+          <CardDescription>{t('analytics.hotspotsDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <AsyncSection
             state={hotspots}
             isEmpty={(data) => data.hotspots.length === 0}
-            emptyMessage="No step failures recorded."
+            emptyMessage={t('analytics.noHotspots')}
           >
             {(data) => (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Step</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Count</TableHead>
+                    <TableHead>{t('analytics.step')}</TableHead>
+                    <TableHead>{t('analytics.status')}</TableHead>
+                    <TableHead>{t('analytics.count')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -164,20 +166,20 @@ export function AnalyticsView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Approval latency</CardTitle>
-          <CardDescription>Time from request to decision</CardDescription>
+          <CardTitle>{t('analytics.approvalLatencyTitle')}</CardTitle>
+          <CardDescription>{t('analytics.approvalLatencyDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <AsyncSection
             state={approvalLatency}
             isEmpty={(data) => data.count === 0}
-            emptyMessage="No actioned approvals yet."
+            emptyMessage={t('analytics.noApprovals')}
           >
             {(data) => (
               <div className="flex flex-col gap-4">
                 <StatCard
                   icon={<Clock className="size-4" />}
-                  label="Actioned approvals"
+                  label={t('analytics.actionedApprovals')}
                   value={data.count}
                 />
                 <PercentileBars stats={data} />

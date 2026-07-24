@@ -8,12 +8,18 @@ import type { LucideIcon } from 'lucide-react'
  * (Approvals/Runs) — not called out by name in the sprint's suggested
  * grouping, but required by "don't drop any tab", and it's exactly the 4th
  * named group the mockup describes.
+ *
+ * FR/EN i18n (P1a): `label` here is a `TranslationKey` (see `@/lib/i18n`),
+ * NOT display text — `buildNavGroups` stays language-agnostic, and the
+ * caller (`Mirador.tsx`, which has `useT()` in scope) resolves each group's
+ * `label` to display text right before rendering. This keeps `SidebarNav`
+ * itself free of any i18n dependency.
  */
 export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
-  { label: "Vue d'ensemble", values: ['analytics', 'cost'] },
-  { label: 'Agents', values: ['approvals', 'runs'] },
-  { label: 'Système', values: ['health', 'graph'] },
-  { label: 'Mémoire', values: ['mem0'] },
+  { label: 'nav.overview', values: ['analytics', 'cost'] },
+  { label: 'nav.agents', values: ['approvals', 'runs'] },
+  { label: 'nav.system', values: ['health', 'graph'] },
+  { label: 'nav.memory', values: ['mem0'] },
 ]
 
 export interface NavItem {
@@ -27,12 +33,12 @@ export interface NavGroup {
   items: NavItem[]
 }
 
-/** Label for the fallback group holding any item not covered by
+/** Translation key for the fallback group holding any item not covered by
  * `NAV_GROUP_ORDER` — dynamic plugin-panel tabs land here by construction
  * (they're never in the static table), and it also protects a future
  * built-in tab added without updating `NAV_GROUP_ORDER` from silently
  * disappearing from the sidebar. */
-export const FALLBACK_GROUP_LABEL = 'Panels'
+export const FALLBACK_GROUP_LABEL = 'nav.panels'
 
 /**
  * Groups a flat list of nav items per `NAV_GROUP_ORDER`, preserving each

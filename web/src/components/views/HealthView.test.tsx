@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { PluginsHealthResponse } from '@/lib/mirador-api'
 import type { Role } from '@/lib/role-context'
 
@@ -375,5 +376,25 @@ describe('HealthView', () => {
     expect(togglePlugin).toHaveBeenCalledWith('tmux')
     expect(tmuxRow.querySelector('button[aria-label="Disable tmux"]')).not.toBeNull()
     expect(tmuxRow.textContent).not.toMatch(/disable pending/i)
+  })
+
+  it('renders French title and status words when the language is fr (P1a)', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchPluginsHealth.mockResolvedValue(health)
+    mockRole('admin', 3)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <HealthView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('État des plugins')
+    expect(container.textContent).toContain('dégradé')
+    expect(container.textContent).toContain('erreur')
+    expect(container.querySelector('button[aria-label="Désactiver rtk"]')).not.toBeNull()
   })
 })

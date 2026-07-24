@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { AnalyticsCost, AnalyticsProviders } from '@/lib/mirador-api'
 
 const mocks = vi.hoisted(() => ({
@@ -121,5 +122,25 @@ describe('CostView', () => {
     })
 
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('cost endpoint down')
+  })
+
+  it('renders French card titles and StatCard labels when the language is fr (P1a)', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    mocks.fetchAnalyticsCost.mockResolvedValue(cost)
+    mocks.fetchAnalyticsProviders.mockResolvedValue(providers)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <CostView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Coûts et tokens')
+    expect(container.textContent).toContain('Coût total')
+    expect(container.textContent).toContain("Tokens d'entrée")
   })
 })

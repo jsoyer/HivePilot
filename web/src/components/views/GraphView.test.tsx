@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
+import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { GraphData, GraphDetail, GraphSourcesResponse } from '@/lib/mirador-api'
 // `?raw` — a Vite-native import (see `vite/client.d.ts`), not a Node `fs`
 // read, so this works identically under `vitest run` and the production
@@ -363,5 +364,26 @@ describe('GraphView', () => {
     expect(errorCard?.textContent).toContain('ValueError')
     expect(container.querySelector('[data-testid="graph-missing-param-hint"]')).toBeNull()
     expect(container.querySelector('[data-testid="graph-canvas-stub"]')).toBeNull()
+  })
+
+  it('renders French title and copy when the language is fr (P1a)', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <GraphView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Graphe')
+    expect(container.textContent).toContain('Source')
+    expect(container.textContent).toContain('Sélectionnez un nœud pour voir le détail.')
   })
 })
