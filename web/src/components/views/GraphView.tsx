@@ -295,7 +295,15 @@ export function GraphView() {
                 )}
 
                 {graphData.nodes.length > 0 && (
-                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                  // Mobile-first: a single column (canvas, then the detail
+                  // pane full-width below it) below `lg:`; only becomes a
+                  // canvas+320px-detail-pane row at `lg:` (>=1024px), where
+                  // a phone-cramped side-by-side layout stops being an
+                  // issue.
+                  <div
+                    className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]"
+                    data-testid="graph-layout-row"
+                  >
                     <GraphCanvas
                       nodes={visibleNodes}
                       edges={visibleEdges}

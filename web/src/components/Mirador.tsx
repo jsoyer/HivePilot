@@ -58,24 +58,38 @@ export function Mirador() {
     // app-wide via useRole() — see @/lib/role-context. Provider wrap only;
     // no other logic changes here.
     <RoleProvider>
-      <div className="min-h-screen bg-background p-6 text-foreground">
-        <header className="mb-6 flex items-center gap-3">
+      <div className="min-h-screen bg-background px-3 py-4 text-foreground sm:p-6">
+        <header className="mb-6 flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold">Mirador</h1>
           <Badge variant="secondary">HivePilot insight dashboard</Badge>
         </header>
         <Tabs defaultValue="analytics">
-          <TabsList>
-            {BUILTIN_TABS.map((tab) => (
-              <TabsTrigger key={tab.value} value={tab.value}>
-                {tab.label}
-              </TabsTrigger>
-            ))}
-            {pluginPanels.map((panel) => (
-              <TabsTrigger key={panel.name} value={panelTabValue(panel.name)}>
-                {panel.title}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          {/* Mobile-first: the tab bar (Analytics/Cost/Health/Mem0/Approvals/
+              Runs/Graph, plus any dynamic plugin panels) can outgrow a
+              narrow viewport — `TabsList` is `w-fit` and every
+              `TabsTrigger` is `whitespace-nowrap`, so it never wraps.
+              Wrapping it in its own `overflow-x-auto` container confines
+              that overflow to a horizontally-scrollable strip instead of
+              forcing the whole page to scroll sideways. `w-max` on
+              `TabsList` keeps it pinned to its natural (unsquished) width
+              so tabs never get crushed. Its default height (h-8, 32px) is
+              a bit under the ~40px touch-target floor, so mobile bumps it
+              to h-10 (40px) — reverted back to the original h-8 from `sm:`
+              up, so desktop stays pixel-identical. */}
+          <div className="-mx-1 overflow-x-auto px-1" data-testid="mirador-tabs-scroll">
+            <TabsList className="w-max group-data-horizontal/tabs:h-10 sm:group-data-horizontal/tabs:h-8">
+              {BUILTIN_TABS.map((tab) => (
+                <TabsTrigger key={tab.value} value={tab.value}>
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+              {pluginPanels.map((panel) => (
+                <TabsTrigger key={panel.name} value={panelTabValue(panel.name)}>
+                  {panel.title}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
           {BUILTIN_TABS.map(({ value, Panel }) => (
             <TabsContent key={value} value={value} className="mt-4">
               <Panel />

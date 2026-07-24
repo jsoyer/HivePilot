@@ -273,6 +273,26 @@ describe('GraphView', () => {
     expect(graphViewSource).not.toContain('dangerouslySetInnerHTML')
   })
 
+  it('mobile-first: the canvas + detail-pane row stacks vertically (grid-cols-1) and only goes side-by-side at lg:', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const layoutRow = container.querySelector('[data-testid="graph-layout-row"]')
+    expect(layoutRow).not.toBeNull()
+    // Single column (stacked: canvas on top, detail pane below) below `lg:`,
+    // an explicit two-column row only from `lg:` up — never side-by-side on
+    // a narrow screen.
+    expect(layoutRow?.className).toContain('grid-cols-1')
+    expect(layoutRow?.className).toMatch(/lg:grid-cols-/)
+  })
+
   const ERROR_GRAPH: GraphData = {
     source: 'pipeline',
     nodes: [{ id: 'error', label: 'ValueError', kind: 'error', status: 'error', group: null, badges: [], meta: {} }],

@@ -184,7 +184,14 @@ export function GraphCanvas({ nodes, edges, layoutHint, selectedNodeId, onNodeCl
   )
 
   return (
-    <div className="h-[600px] w-full overflow-hidden rounded-lg border border-border">
+    // Mobile-first: `@xyflow/react` needs an explicit height on its own
+    // wrapper — it can't infer one from a grid/flex sibling (`GraphView`'s
+    // detail pane) the way ordinary block content can. Below `lg:` this
+    // uses a viewport-relative height (a fixed px height would be way too
+    // tall on a short phone screen, or too short on a tall one); at `lg:`
+    // it's pinned back to the original `600px` desktop height so desktop
+    // stays pixel-identical to before.
+    <div className="h-[60vh] w-full overflow-hidden rounded-lg border border-border lg:h-[600px]">
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
