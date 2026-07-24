@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { LayoutGrid } from 'lucide-react'
-import { buildNavGroups, NAV_GROUP_ORDER, type NavItem } from './nav-config'
+import { buildNavGroups, FALLBACK_GROUP_LABEL, NAV_GROUP_ORDER, type NavItem } from './nav-config'
 
 function item(value: string): NavItem {
   return { value, label: value, Icon: LayoutGrid }
@@ -38,7 +38,7 @@ describe('buildNavGroups', () => {
     const items = [item('analytics'), item('panel-rtk-status'), item('panel-secure-panel')]
     const groups = buildNavGroups(items)
 
-    const panelsGroup = groups.find((g) => g.label === 'Panels')
+    const panelsGroup = groups.find((g) => g.label === FALLBACK_GROUP_LABEL)
     expect(panelsGroup).toBeDefined()
     expect(panelsGroup?.items.map((i) => i.value)).toEqual(['panel-rtk-status', 'panel-secure-panel'])
   })

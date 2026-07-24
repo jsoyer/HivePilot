@@ -52,13 +52,16 @@ vi.mock('@/lib/mirador-api', async (importOriginal) => {
   return { ...actual, ...mocks }
 })
 
+import { LANG_STORAGE_KEY } from '@/lib/i18n'
 import { Mirador } from './Mirador'
 
 // The sidebar's grouped nav order (P0b) — see `./nav/nav-config.ts`'s
-// `NAV_GROUP_ORDER`: Vue d'ensemble (Analytics/Cost), Agents
-// (Approvals/Runs), Système (Health/Graph), Mémoire (Mem0). Every built-in
-// tab is still reachable, just reordered by group instead of the old flat
-// declaration order.
+// `NAV_GROUP_ORDER`: Overview (Analytics/Cost), Agents (Approvals/Runs),
+// System (Health/Graph), Memory (Mem0). Every built-in tab is still
+// reachable, just reordered by group instead of the old flat declaration
+// order. Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n —
+// see the "language toggle" describe block for the French-language
+// assertions of the same shell).
 const GROUPED_TAB_ORDER = ['Analytics', 'Cost', 'Approvals', 'Runs', 'Health', 'Graph', 'Mem0']
 
 let container: HTMLDivElement
@@ -97,11 +100,11 @@ describe('Mirador', () => {
     expect(tabs).toEqual(GROUPED_TAB_ORDER)
   })
 
-  it('groups the sidebar into labelled sections', () => {
-    expect(container.textContent).toContain("Vue d'ensemble")
+  it('groups the sidebar into labelled sections (English default)', () => {
+    expect(container.textContent).toContain('Overview')
     expect(container.textContent).toContain('Agents')
-    expect(container.textContent).toContain('Système')
-    expect(container.textContent).toContain('Mémoire')
+    expect(container.textContent).toContain('System')
+    expect(container.textContent).toContain('Memory')
   })
 
   it('shows the real Analytics view by default', async () => {
@@ -240,6 +243,24 @@ describe('Mirador', () => {
       await Promise.resolve()
     })
     expect(document.documentElement.classList.contains('dark')).toBe(false)
+  })
+
+  it('renders a language toggle in the header that switches the shell to French live and persists it', async () => {
+    const langToggle = container.querySelector('[aria-label*="French"]') as HTMLElement
+    expect(langToggle).not.toBeNull()
+    expect(container.textContent).toContain('Overview')
+    expect(container.textContent).not.toContain("Vue d'ensemble")
+
+    await act(async () => {
+      click(langToggle)
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain("Vue d'ensemble")
+    expect(container.textContent).toContain('Système')
+    expect(container.textContent).toContain('Mémoire')
+    expect(container.textContent).toContain('Tableau de bord HivePilot')
+    expect(window.localStorage.getItem(LANG_STORAGE_KEY)).toBe(JSON.stringify('fr'))
   })
 })
 

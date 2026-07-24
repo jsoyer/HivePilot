@@ -2,6 +2,7 @@ import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, DollarSign } from 'luc
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { StatCard } from '@/components/dashboard/StatCard'
+import { useT } from '@/lib/i18n'
 import { fetchAnalyticsCost, fetchAnalyticsProviders } from '@/lib/mirador-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
@@ -23,6 +24,7 @@ function formatCost(n: number): string {
  * Both fetch independently so one failing doesn't blank the other.
  */
 export function CostView() {
+  const t = useT()
   const cost = useAsyncData(() => fetchAnalyticsCost(DAYS), [DAYS])
   const providers = useAsyncData(() => fetchAnalyticsProviders(DAYS), [DAYS])
 
@@ -30,38 +32,38 @@ export function CostView() {
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
-          <CardTitle>Cost &amp; tokens</CardTitle>
-          <CardDescription>Last {DAYS} days</CardDescription>
+          <CardTitle>{t('cost.title')}</CardTitle>
+          <CardDescription>{t('common.lastDays', { days: DAYS })}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <AsyncSection
             state={cost}
             isEmpty={(data) => data.overall.total_steps === 0}
-            emptyMessage="No cost data yet."
+            emptyMessage={t('cost.noCost')}
           >
             {(data) => (
               <>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <StatCard
                     icon={<DollarSign className="size-4" />}
-                    label="Total cost"
+                    label={t('cost.totalCost')}
                     value={formatCost(data.overall.cost_usd)}
                     tone="positive"
                   />
                   <StatCard
                     icon={<ArrowDownToLine className="size-4" />}
-                    label="Input tokens"
+                    label={t('cost.inputTokens')}
                     value={formatTokens(data.overall.input_tokens)}
                   />
                   <StatCard
                     icon={<ArrowUpFromLine className="size-4" />}
-                    label="Output tokens"
+                    label={t('cost.outputTokens')}
                     value={formatTokens(data.overall.output_tokens)}
                   />
                   {data.overall.unpriced_steps > 0 && (
                     <StatCard
                       icon={<AlertTriangle className="size-4" />}
-                      label="Unpriced steps"
+                      label={t('cost.unpricedSteps')}
                       value={data.overall.unpriced_steps}
                       tone="warning"
                     />
@@ -72,11 +74,11 @@ export function CostView() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Provider</TableHead>
-                        <TableHead>Steps</TableHead>
-                        <TableHead>Tokens (in/out)</TableHead>
-                        <TableHead>Cost</TableHead>
-                        <TableHead>Unpriced</TableHead>
+                        <TableHead>{t('cost.provider')}</TableHead>
+                        <TableHead>{t('cost.steps')}</TableHead>
+                        <TableHead>{t('cost.tokensInOut')}</TableHead>
+                        <TableHead>{t('cost.costLabel')}</TableHead>
+                        <TableHead>{t('cost.unpriced')}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -99,11 +101,11 @@ export function CostView() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Model</TableHead>
-                        <TableHead>Steps</TableHead>
-                        <TableHead>Tokens (in/out)</TableHead>
-                        <TableHead>Cost</TableHead>
-                        <TableHead>Unpriced</TableHead>
+                        <TableHead>{t('cost.model')}</TableHead>
+                        <TableHead>{t('cost.steps')}</TableHead>
+                        <TableHead>{t('cost.tokensInOut')}</TableHead>
+                        <TableHead>{t('cost.costLabel')}</TableHead>
+                        <TableHead>{t('cost.unpriced')}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -129,14 +131,14 @@ export function CostView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Provider &amp; model volume</CardTitle>
-          <CardDescription>Step counts and outcome split</CardDescription>
+          <CardTitle>{t('cost.providerVolumeTitle')}</CardTitle>
+          <CardDescription>{t('cost.providerVolumeDescription')}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <AsyncSection
             state={providers}
             isEmpty={(data) => data.by_provider.length === 0 && data.by_model.length === 0}
-            emptyMessage="No provider/model data yet."
+            emptyMessage={t('cost.noProviderData')}
           >
             {(data) => (
               <>
@@ -144,10 +146,10 @@ export function CostView() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Provider</TableHead>
-                        <TableHead>Total</TableHead>
-                        <TableHead>Succeeded</TableHead>
-                        <TableHead>Failed</TableHead>
+                        <TableHead>{t('cost.provider')}</TableHead>
+                        <TableHead>{t('cost.total')}</TableHead>
+                        <TableHead>{t('cost.succeeded')}</TableHead>
+                        <TableHead>{t('cost.failed')}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>

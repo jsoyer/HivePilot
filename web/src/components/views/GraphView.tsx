@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
+import { useT } from '@/lib/i18n'
 import {
   fetchGraph,
   fetchGraphNode,
@@ -30,6 +31,7 @@ import { PanelRenderer } from './PanelRenderer'
  * premature/garbage request).
  */
 export function GraphView() {
+  const t = useT()
   const sourcesState = useAsyncData(() => fetchGraphSources(), [])
   const sources = sourcesState.status === 'success' ? sourcesState.data.sources : []
 
@@ -141,15 +143,13 @@ export function GraphView() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Graph</CardTitle>
-        <CardDescription>
-          Graph-native views of HivePilot's own state — pan/zoom the canvas, click a node for detail.
-        </CardDescription>
+        <CardTitle>{t('graph.title')}</CardTitle>
+        <CardDescription>{t('graph.description')}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {sourcesState.status === 'loading' && (
           <div role="status" className="animate-pulse text-sm text-muted-foreground">
-            Loading sources…
+            {t('graph.loadingSources')}
           </div>
         )}
 
@@ -163,7 +163,7 @@ export function GraphView() {
         )}
 
         {sourcesState.status === 'success' && sources.length === 0 && (
-          <p className="text-sm text-muted-foreground">No graph sources registered.</p>
+          <p className="text-sm text-muted-foreground">{t('graph.noSources')}</p>
         )}
 
         {sourcesState.status === 'success' && sources.length > 0 && (
@@ -171,7 +171,7 @@ export function GraphView() {
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-1">
                 <label htmlFor="graph-source-select" className="text-sm font-medium">
-                  Source
+                  {t('graph.source')}
                 </label>
                 <select
                   id="graph-source-select"
@@ -205,7 +205,7 @@ export function GraphView() {
                     </div>
                   ))}
                   <Button type="submit" size="sm">
-                    Load
+                    {t('common.load')}
                   </Button>
                 </form>
               )}
@@ -213,7 +213,7 @@ export function GraphView() {
 
             {graphState.status === 'loading' && (
               <div role="status" className="animate-pulse text-sm text-muted-foreground">
-                Loading graph…
+                {t('graph.loadingGraph')}
               </div>
             )}
 
@@ -224,12 +224,11 @@ export function GraphView() {
                     data-testid="graph-forbidden"
                     className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
                   >
-                    This source requires a{' '}
+                    {t('graph.requiresTokenLead')}{' '}
                     <span className="font-medium text-foreground">
-                      {selectedSource?.min_role ?? 'higher-privilege'}
+                      {selectedSource?.min_role ?? t('graph.higherPrivilege')}
                     </span>{' '}
-                    token. Your current token can still use the other Mirador tabs — only this graph
-                    source needs a higher role.
+                    {t('graph.requiresTokenTail')} {t('graph.requiresTokenNote')}
                   </div>
                 ) : (
                   <div
@@ -249,15 +248,18 @@ export function GraphView() {
                     data-testid="graph-missing-param-hint"
                     className="rounded-lg border border-dashed border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground"
                   >
-                    This source needs {missingParams.length === 1 ? 'a parameter' : 'parameters'} to load
-                    data. Enter{' '}
+                    {t('graph.missingParamHintLead', {
+                      countLabel:
+                        missingParams.length === 1 ? t('graph.aParameter') : t('graph.parameters'),
+                    })}{' '}
                     {missingParams.map((param, index) => (
                       <span key={param}>
-                        {index > 0 && (index === missingParams.length - 1 ? ' and ' : ', ')}
+                        {index > 0 && (index === missingParams.length - 1 ? t('common.and') : ', ')}
                         <span className="font-medium text-foreground">{param}</span>
                       </span>
                     ))}{' '}
-                    above and click <span className="font-medium text-foreground">Load</span>.
+                    {t('graph.missingParamHintTail')}{' '}
+                    <span className="font-medium text-foreground">{t('common.load')}</span>.
                   </div>
                 ) : (
                   <div
@@ -265,7 +267,7 @@ export function GraphView() {
                     data-testid="graph-error-node"
                     className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
                   >
-                    Failed to load this graph ({errorNode.label}). Try again or choose a different source.
+                    {t('graph.failedToLoad', { label: errorNode.label })}
                   </div>
                 )}
               </>
@@ -291,7 +293,7 @@ export function GraphView() {
                 )}
 
                 {graphData.nodes.length === 0 && (
-                  <p className="text-sm text-muted-foreground">This source has no nodes yet.</p>
+                  <p className="text-sm text-muted-foreground">{t('graph.noNodes')}</p>
                 )}
 
                 {graphData.nodes.length > 0 && (
@@ -314,12 +316,12 @@ export function GraphView() {
 
                     <div className="rounded-lg border border-border p-3" data-testid="graph-detail-pane">
                       {selectedNodeId === null && (
-                        <p className="text-sm text-muted-foreground">Select a node for detail.</p>
+                        <p className="text-sm text-muted-foreground">{t('graph.selectNodeForDetail')}</p>
                       )}
 
                       {selectedNodeId !== null && detailState.status === 'loading' && (
                         <div role="status" className="animate-pulse text-sm text-muted-foreground">
-                          Loading detail…
+                          {t('graph.loadingDetail')}
                         </div>
                       )}
 
@@ -330,11 +332,11 @@ export function GraphView() {
                               data-testid="graph-detail-forbidden"
                               className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
                             >
-                              This node's detail requires a{' '}
+                              {t('graph.nodeRequiresTokenLead')}{' '}
                               <span className="font-medium text-foreground">
-                                {selectedSource?.min_role ?? 'higher-privilege'}
+                                {selectedSource?.min_role ?? t('graph.higherPrivilege')}
                               </span>{' '}
-                              token.
+                              {t('graph.nodeRequiresTokenTail')}
                             </div>
                           ) : (
                             <div
