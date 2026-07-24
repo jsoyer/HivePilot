@@ -170,6 +170,18 @@ upon. Operators running both plugins together and wanting recall-then-
 compress should rename files to control ``sorted()`` order (e.g.
 ``a_mem0.py`` / ``b_headroom.py``) — see ``docs/PLUGINS.md``.
 
+**Memory-quality instrumentation (single-tenant today).** ``recall``/
+``store`` both report events to ``hivepilot.services.memory_service``
+(``record_search``/``record_store`` — see that module's own docstring) for
+Mirador's "Réalité" view. Neither hook has a real ``tenant`` signal
+reachable in its kwargs (``RunnerPayload``/``TaskConfig`` carry no
+``tenant`` field), so every event this plugin reports lands under
+``tenant="default"`` — see the inline comment at each ``record_search``/
+``record_store`` call site for the full investigation. Not a bug: a
+single-tenant deployment is unaffected; a multi-tenant one won't see mem0
+activity attributed to a non-default tenant until a real signal exists to
+thread through.
+
 Deliberately NOT a ``@dataclass``: local-file plugins are loaded via
 ``importlib.util.spec_from_file_location()`` / ``exec_module()``
 (``hivepilot.plugins._scan_local_plugins``), which never registers the
@@ -453,6 +465,20 @@ def recall(**kwargs: Any) -> None:
         # tests/test_mem0.py::TestRecallInstrumentsMemoryService). Reported
         # regardless of whether any memories were found: a no-result search
         # is exactly the signal Mirador's "Réalité" gaps view surfaces.
+        #
+        # `tenant` is deliberately OMITTED here (defaults to
+        # `memory_service.record_search`'s own `tenant="default"`): neither
+        # `RunnerPayload` (`hivepilot/runners/base.py`) nor `TaskConfig`
+        # (`hivepilot/models.py`) carries a `tenant` field, and this
+        # `before_step` hook call (`Orchestrator._execute_task`,
+        # `hivepilot/orchestrator.py`) doesn't thread `run_id` either (unlike
+        # the `after_step` call `store()` receives below) — so there is no
+        # real tenant signal reachable here to attribute this event to.
+        # Investigated, not invented: every recall-recorded event lands under
+        # `tenant="default"` until a real signal is threaded down to this
+        # hook (see `api_service.py`'s memory-endpoints section and this
+        # module's own module docstring for the same limitation, documented
+        # once each at the two places an operator would actually look).
         try:
             from hivepilot.services import memory_service
 
@@ -581,6 +607,22 @@ def store(**kwargs: Any) -> None:
         # tests/test_mem0.py::TestStoreInstrumentsMemoryService). Only
         # reached once `client.add` has actually succeeded — a call that
         # no-op'd above (no salient content) never fires this.
+        #
+        # `tenant` is deliberately OMITTED here too (same `tenant="default"`
+        # fallback as `recall`'s `record_search` call above). Unlike
+        # `recall`, this `after_step` hook call DOES receive `run_id` in
+        # `kwargs` (threaded by `Orchestrator._execute_task` — see
+        # `_provenance_metadata`'s own docstring above), which COULD resolve
+        # a real tenant via `state_service.get_run(run_id)["tenant"]` — but
+        # that's a genuinely new coupling this file doesn't otherwise have
+        # (no `state_service` import today) plus an extra DB round-trip per
+        # `store()` call, purely to attribute HALF of a recall/store pair
+        # correctly (`recall` still couldn't do it — `before_step` never
+        # receives `run_id`), which would make the two events for the SAME
+        # step land under DIFFERENT tenants. Investigated, not invented:
+        # left symmetric with `recall` until a real signal is threaded into
+        # `before_step` too, so a future fix can attribute BOTH consistently
+        # rather than only one.
         try:
             from hivepilot.services import memory_service
 

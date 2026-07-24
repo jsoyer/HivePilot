@@ -39,6 +39,15 @@ by the given tenant when one is provided; there is no code path in this
 module that can return another tenant's rows when a concrete tenant string
 is passed in — the security-critical invariant `tests/test_memory_service.py`
 `TestTenantIsolation` asserts directly.
+
+**Known limitation: writers may not always have a real tenant.** This
+module's own scoping is correct end-to-end (every `record_*`/query function
+above takes/filters an explicit ``tenant``), but a *caller* that has no
+tenant signal available (e.g. `plugins/mem0.py`'s `recall`/`store` hooks —
+see their own docstrings) falls back to the ``tenant="default"`` default on
+every `record_*` function. Until such a caller has a real tenant to thread
+through, its events are effectively single-tenant (`"default"`) data —
+that's a gap in what the CALLER can attribute, not a scoping bug here.
 """
 
 from __future__ import annotations
@@ -110,6 +119,17 @@ def init_db() -> None:
 
 # ---------------------------------------------------------------------------
 # Recording — best-effort, NEVER raise into the caller (see module docstring).
+#
+# NOT redacted through `config_provenance.redact_text` (unlike
+# `plugins/mem0.py`'s `store()` CONTENT path, which explicitly does redact —
+# see that function's own "Defense-in-depth" comment). `namespace`/
+# `query`/`key` here are task/step identity keys (e.g. `project:task[:role]`
+# — see `plugins/mem0.py`'s `_memory_key`) or a short task/step-derived
+# search query, never resolved secret VALUES or arbitrary user/agent
+# content — there is no path today where a `${secret:NAME}` value could
+# land in one of these fields. If a future caller ever derives one of these
+# from free-text content instead of a task/step identifier, it MUST redact
+# before calling into this module — this module does not do it for you.
 # ---------------------------------------------------------------------------
 
 

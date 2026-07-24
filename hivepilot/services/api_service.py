@@ -9,10 +9,20 @@ from pathlib import Path
 from time import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import generate_latest
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from hivepilot import roles
 from hivepilot.config import settings
@@ -1152,6 +1162,18 @@ def analytics_cost(
 # (no plugin calls `memory_service.record_*` — see `plugins/mem0.py`'s
 # `recall`/`store` wiring), the underlying tables stay empty and every
 # endpoint below returns zeros/`[]` — NEVER fabricated data.
+#
+# **Known limitation (single-tenant events today).** These endpoints
+# themselves are correctly tenant-scoped (see above), but the ONLY current
+# writer — `plugins/mem0.py`'s `recall`/`store` hooks — has no tenant signal
+# reachable in its hook payload/kwargs (`RunnerPayload` and `TaskConfig` carry
+# no `tenant` field; see `plugins/mem0.py`'s instrumentation call sites for
+# the full investigation) and so every event lands under `tenant="default"`.
+# In a multi-tenant deployment, a non-admin caller whose own tenant isn't
+# `"default"` will therefore see an empty Réalité view even once mem0 is
+# active, until a real tenant signal is threaded down to the hook — that is
+# NOT a bug in the scoping here, it's a gap in what the writer can attribute
+# today.
 # ---------------------------------------------------------------------------
 
 
@@ -1180,7 +1202,7 @@ def memory_gaps(
 @v1.get("/memory/evaluations")
 @app.get("/memory/evaluations")
 def list_memory_evaluations(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=500),
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> dict[str, Any]:
     return {
@@ -1191,17 +1213,17 @@ def list_memory_evaluations(
 @v1.get("/memory/journal")
 @app.get("/memory/journal")
 def memory_journal(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=500),
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> dict[str, Any]:
     return {"journal": memory_service.activity_journal(tenant=_memory_tenant(caller), limit=limit)}
 
 
 class MemoryEvaluationRequest(BaseModel):
-    namespace: str
+    namespace: str = Field(..., min_length=1, max_length=200)
     useful: bool
-    ref_key: str | None = None
-    note: str | None = None
+    ref_key: str | None = Field(None, max_length=200)
+    note: str | None = Field(None, max_length=2000)
 
     @field_validator("namespace")
     @classmethod

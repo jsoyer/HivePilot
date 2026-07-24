@@ -285,6 +285,94 @@ class TestPostMemoryEvaluationValidation:
         assert evals[0]["ref_key"] == "k1"
         assert evals[0]["note"] == "stale"
 
+    def test_overlong_namespace_rejected(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("run")
+        resp = api_client.post(
+            "/v1/memory/evaluations",
+            json={"namespace": "n" * 201, "useful": True},
+            headers=_auth(raw),
+        )
+        assert resp.status_code == 422
+
+    def test_overlong_note_rejected(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("run")
+        resp = api_client.post(
+            "/v1/memory/evaluations",
+            json={"namespace": "ns", "useful": True, "note": "x" * 2001},
+            headers=_auth(raw),
+        )
+        assert resp.status_code == 422
+
+    def test_overlong_ref_key_rejected(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("run")
+        resp = api_client.post(
+            "/v1/memory/evaluations",
+            json={"namespace": "ns", "useful": True, "ref_key": "k" * 201},
+            headers=_auth(raw),
+        )
+        assert resp.status_code == 422
+
+    def test_note_at_max_length_accepted(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("run")
+        resp = api_client.post(
+            "/v1/memory/evaluations",
+            json={"namespace": "ns", "useful": True, "note": "x" * 2000},
+            headers=_auth(raw),
+        )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# limit bounding (Query(ge=1, le=500)) — a negative/huge limit must never
+# translate into an unbounded SQLite `LIMIT`, which would let a read-role
+# caller fetch every row of their own tenant's history in one request.
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryLimitBounding:
+    @pytest.mark.parametrize("path", ["/v1/memory/evaluations", "/v1/memory/journal"])
+    def test_negative_limit_rejected(self, api_client, tmp_tokens_file, path):
+        raw, _ = add_token("read")
+        resp = api_client.get(f"{path}?limit=-1", headers=_auth(raw))
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("path", ["/v1/memory/evaluations", "/v1/memory/journal"])
+    def test_zero_limit_rejected(self, api_client, tmp_tokens_file, path):
+        raw, _ = add_token("read")
+        resp = api_client.get(f"{path}?limit=0", headers=_auth(raw))
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("path", ["/v1/memory/evaluations", "/v1/memory/journal"])
+    def test_huge_limit_rejected(self, api_client, tmp_tokens_file, path):
+        raw, _ = add_token("read")
+        resp = api_client.get(f"{path}?limit=99999", headers=_auth(raw))
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("path", ["/v1/memory/evaluations", "/v1/memory/journal"])
+    def test_max_allowed_limit_accepted(self, api_client, tmp_tokens_file, path):
+        raw, _ = add_token("read")
+        resp = api_client.get(f"{path}?limit=500", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_negative_limit_never_returns_all_rows(self, api_client, tmp_tokens_file):
+        """Defense-in-depth: even if validation were ever bypassed, prove the
+        actual concern (an unbounded SQLite `LIMIT -1`) can't leak every row —
+        this asserts on the ACTUAL 422 rejection behavior, not just the
+        status code, matching the real attack this bound closes."""
+        from hivepilot.services import memory_service
+
+        for i in range(5):
+            memory_service.record_store(namespace="ns", key=f"k{i}", actor="x", tenant="acme")
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/memory/journal?limit=-1", headers=_auth(raw))
+        assert resp.status_code == 422
+
+        # A valid, bounded request still works and respects the real limit.
+        resp_ok = api_client.get("/v1/memory/journal?limit=2", headers=_auth(raw))
+        assert resp_ok.status_code == 200
+        assert len(resp_ok.json()["journal"]) == 2
+
 
 # ---------------------------------------------------------------------------
 # Unversioned routes also registered (matches the analytics precedent).
