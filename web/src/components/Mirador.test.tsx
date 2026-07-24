@@ -3,10 +3,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
 
-// Mirador wires six real data views (Analytics/Cost/Health/Mem0/Approvals/Runs) — mock
-// every endpoint they call so this test exercises the shell (tabs, default
-// view, switching) without depending on network behavior. Each view's own
-// loading/error/empty/data states are covered by its dedicated test file.
+// Mirador wires seven real data views (Analytics/Cost/Health/Mem0/Approvals/
+// Runs/Graph) — mock every endpoint they call so this test exercises the
+// shell (sidebar nav, header, default view, switching) without depending on
+// network behavior. Each view's own loading/error/empty/data states are
+// covered by its dedicated test file. `fetchPluginsHealth` also backs the
+// header's `StatusPills` (P0b) in addition to `HealthView` — one mock, both
+// consumers.
 const mocks = vi.hoisted(() => ({
   fetchAnalyticsSummary: vi.fn().mockResolvedValue({
     total: 0,
@@ -51,10 +54,18 @@ vi.mock('@/lib/mirador-api', async (importOriginal) => {
 
 import { Mirador } from './Mirador'
 
+// The sidebar's grouped nav order (P0b) — see `./nav/nav-config.ts`'s
+// `NAV_GROUP_ORDER`: Vue d'ensemble (Analytics/Cost), Agents
+// (Approvals/Runs), Système (Health/Graph), Mémoire (Mem0). Every built-in
+// tab is still reachable, just reordered by group instead of the old flat
+// declaration order.
+const GROUPED_TAB_ORDER = ['Analytics', 'Cost', 'Approvals', 'Runs', 'Health', 'Graph', 'Mem0']
+
 let container: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
+  window.localStorage.clear()
   for (const mock of Object.values(mocks)) mock.mockClear()
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -69,22 +80,28 @@ afterEach(() => {
     root.unmount()
   })
   container.remove()
+  window.localStorage.clear()
+  document.documentElement.classList.remove('dark')
 })
 
+function click(el: Element) {
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
 describe('Mirador', () => {
-  it('renders the Mirador title and all seven tabs', () => {
+  it('renders the Mirador title and subtitle, and every tab reachable via the sidebar', () => {
     expect(container.textContent).toContain('Mirador')
+    expect(container.textContent).toContain('HivePilot insight dashboard')
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals', 'Runs', 'Graph'])
+    expect(tabs).toEqual(GROUPED_TAB_ORDER)
   })
 
-  it('wraps the tab bar in a horizontally-scrollable container (mobile: tabs never force page-level horizontal overflow)', () => {
-    const scrollContainer = container.querySelector('[data-testid="mirador-tabs-scroll"]')
-    expect(scrollContainer).not.toBeNull()
-    expect(scrollContainer?.className).toContain('overflow-x-auto')
-    // The scroll affordance must actually wrap the real tablist, not sit
-    // beside it — otherwise the tabs could still overflow the page.
-    expect(scrollContainer?.querySelector('[role="tablist"]')).not.toBeNull()
+  it('groups the sidebar into labelled sections', () => {
+    expect(container.textContent).toContain("Vue d'ensemble")
+    expect(container.textContent).toContain('Agents')
+    expect(container.textContent).toContain('Système')
+    expect(container.textContent).toContain('Mémoire')
   })
 
   it('shows the real Analytics view by default', async () => {
@@ -96,14 +113,13 @@ describe('Mirador', () => {
     expect(analyticsTab?.getAttribute('aria-selected')).toBe('true')
   })
 
-  it('switches to the real Cost view when the Cost tab is clicked', async () => {
+  it('switches to the real Cost view when the Cost item is clicked', async () => {
     const costTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
       (el) => el.textContent === 'Cost',
     ) as HTMLElement
 
     await act(async () => {
-      costTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-      costTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      click(costTab)
       await Promise.resolve()
     })
 
@@ -112,32 +128,118 @@ describe('Mirador', () => {
     expect(panel?.textContent).toContain('Cost & tokens')
   })
 
-  it('switches to the real Health view when the Health tab is clicked', async () => {
+  it('switches to the real Health view when the Health item is clicked', async () => {
     const healthTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
       (el) => el.textContent === 'Health',
     ) as HTMLElement
 
     await act(async () => {
-      healthTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-      healthTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      click(healthTab)
       await Promise.resolve()
     })
 
     expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Plugin health')
   })
 
-  it('switches to the real Mem0 view when the Mem0 tab is clicked', async () => {
+  it('switches to the real Mem0 view when the Mem0 item is clicked', async () => {
     const mem0Tab = Array.from(container.querySelectorAll('[role="tab"]')).find(
       (el) => el.textContent === 'Mem0',
     ) as HTMLElement
 
     await act(async () => {
-      mem0Tab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-      mem0Tab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      click(mem0Tab)
       await Promise.resolve()
     })
 
     expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Mem0 memory search')
+  })
+
+  it('opens the mobile nav drawer from the header hamburger, and closes it on item click', async () => {
+    const nav = container.querySelector('[data-slot="sidebar-nav"]') as HTMLElement
+    expect(nav.getAttribute('data-mobile-open')).toBe('false')
+
+    const hamburger = container.querySelector('[data-testid="mobile-nav-trigger"]') as HTMLElement
+    await act(async () => {
+      click(hamburger)
+      await Promise.resolve()
+    })
+    expect(nav.getAttribute('data-mobile-open')).toBe('true')
+    expect(container.querySelector('[data-testid="sidebar-backdrop"]')).not.toBeNull()
+
+    const runsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Runs',
+    ) as HTMLElement
+    await act(async () => {
+      click(runsTab)
+      await Promise.resolve()
+    })
+    expect(nav.getAttribute('data-mobile-open')).toBe('false')
+  })
+
+  it('renders header status pills once plugin health resolves', async () => {
+    mocks.fetchPluginsHealth.mockResolvedValue({
+      plugins: [{ name: 'store', status: 'ok', detail: '' }],
+      disabled: [],
+    })
+
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root.render(<Mirador />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const pills = container.querySelector('[data-testid="status-pills"]')
+    expect(pills).not.toBeNull()
+    expect(pills?.textContent).toContain('store')
+  })
+
+  it('never crashes the header when plugin health fails to load', async () => {
+    mocks.fetchPluginsHealth.mockRejectedValue(new Error('boom'))
+
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root.render(<Mirador />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Mirador')
+    expect(container.querySelector('[data-testid="status-pills"]')).toBeNull()
+  })
+
+  it('renders a theme toggle in the header that flips the .dark class', async () => {
+    // No persisted theme and no pre-existing `.dark` class at mount time
+    // (this file's top-level `beforeEach` clears both) — `useTheme` starts
+    // from 'light' in that case (see `use-theme.test.tsx`), so the first
+    // click flips to dark.
+    const toggle = container.querySelector('[aria-label*="theme"]') as HTMLElement
+    expect(toggle).not.toBeNull()
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+
+    await act(async () => {
+      click(toggle)
+      await Promise.resolve()
+    })
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+
+    await act(async () => {
+      click(toggle)
+      await Promise.resolve()
+    })
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
   })
 })
 
@@ -155,7 +257,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     container.remove()
   })
 
-  it('adds one tab per panel returned by fetchPanels, after the built-in tabs', async () => {
+  it('adds one item per panel returned by fetchPanels, after the grouped built-in items', async () => {
     mocks.fetchPanels.mockResolvedValue({
       panels: [
         { name: 'rtk-status', title: 'RTK Status', min_role: 'read' },
@@ -173,17 +275,8 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     })
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual([
-      'Analytics',
-      'Cost',
-      'Health',
-      'Mem0',
-      'Approvals',
-      'Runs',
-      'Graph',
-      'RTK Status',
-      'Secure Panel',
-    ])
+    expect(tabs).toEqual([...GROUPED_TAB_ORDER, 'RTK Status', 'Secure Panel'])
+    expect(container.textContent).toContain('Panels')
   })
 
   it('switches to a dynamic panel tab and renders its data via PanelRenderer', async () => {
@@ -209,8 +302,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     ) as HTMLElement
 
     await act(async () => {
-      panelTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-      panelTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      click(panelTab)
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -242,8 +334,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     ) as HTMLElement
 
     await act(async () => {
-      panelTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-      panelTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      click(panelTab)
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -254,7 +345,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
-  it('renders no extra tabs when fetchPanels resolves with an empty list', async () => {
+  it('renders no extra items when fetchPanels resolves with an empty list', async () => {
     for (const mock of Object.values(mocks)) mock.mockClear()
     mocks.fetchPanels.mockResolvedValue({ panels: [] })
 
@@ -268,6 +359,6 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     })
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(['Analytics', 'Cost', 'Health', 'Mem0', 'Approvals', 'Runs', 'Graph'])
+    expect(tabs).toEqual(GROUPED_TAB_ORDER)
   })
 })
