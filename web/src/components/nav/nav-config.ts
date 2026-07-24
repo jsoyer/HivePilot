@@ -19,7 +19,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   { label: 'nav.overview', values: ['analytics', 'cost'] },
   { label: 'nav.agents', values: ['approvals', 'runs'] },
   { label: 'nav.system', values: ['health', 'graph'] },
-  { label: 'nav.memory', values: ['mem0'] },
+  { label: 'nav.memory', values: ['mem0', 'reality'] },
 ]
 
 export interface NavItem {

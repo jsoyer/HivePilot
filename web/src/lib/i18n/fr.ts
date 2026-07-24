@@ -62,6 +62,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.approvals': 'Approbations',
   'nav.runs': 'Exécutions',
   'nav.graph': 'Graphe',
+  'nav.reality': 'Réalité',
 
   // ---- health status words (shared: header pills + Health tab badges) --
   'health.status.ok': 'ok',
@@ -204,4 +205,41 @@ export const fr: Record<TranslationKey, string> = {
   'runs.insufficientRoleStop': 'Rôle insuffisant — votre jeton ne peut plus arrêter cette exécution.',
   'runs.started': 'Démarrée',
   'runs.finished': 'Terminée',
+
+  // ---- Réalité view (tableau de bord de qualité de la mémoire) ---------
+  'reality.kpiTitle': 'Qualité de la mémoire',
+  'reality.searchSuccessRate': 'Taux de succès des recherches',
+  'reality.noResultSearches': 'Recherches sans résultat',
+  'reality.avgFreshness': 'Fraîcheur moyenne des rappels',
+  'reality.declaredReliability': 'Fiabilité déclarée',
+  'reality.onNSearches': 'sur {count} recherches',
+  'reality.onNEvaluations': 'sur {count} évaluations',
+  'reality.noSamples': 'Aucune donnée',
+  'reality.noKpiData': 'Aucune recherche ni évaluation enregistrée sur cette période.',
+  'reality.gapsTitle': 'Lacunes par namespace',
+  'reality.gapsDescription': 'Recherches sans résultat regroupées par namespace, les plus nombreuses en premier',
+  'reality.noGaps': 'Aucune lacune de recherche enregistrée.',
+  'reality.topQueriesLabel': 'requêtes principales :',
+  'reality.evaluationsTitle': 'Évaluations récentes',
+  'reality.evaluationsDescription': 'Retour humain « cette mémoire était-elle utile ? »',
+  'reality.noEvaluations': "Aucune évaluation enregistrée pour l'instant.",
+  'reality.useful': 'Utile',
+  'reality.notUseful': 'Pas utile',
+  'reality.journalTitle': 'Journal récent',
+  'reality.journalDescription':
+    'Événements mémoire les plus récents (recherche / lecture / stockage), les plus récents en premier',
+  'reality.noJournal': "Aucune activité mémoire enregistrée pour l'instant.",
+  'reality.colTs': 'Heure',
+  'reality.colOp': 'Opération',
+  'reality.colNamespace': 'Namespace',
+  'reality.colQuery': 'Requête / clé',
+  'reality.colResult': 'Résultat',
+  'reality.colFreshness': 'Fraîcheur',
+  'reality.colActor': 'Acteur',
+  'reality.emptyState':
+    "Aucune activité mémoire enregistrée pour le moment — la vue Réalité se remplit à mesure que les agents recherchent ou stockent de la mémoire (mem0).",
+  'reality.requiresTokenLead': 'Cette section nécessite un rôle',
+  'reality.requiresTokenTail': 'à privilège supérieur.',
+  'reality.requiresTokenNote':
+    'Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule cette section nécessite un rôle supérieur.',
 }

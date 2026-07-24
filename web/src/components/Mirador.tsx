@@ -3,6 +3,7 @@ import {
   CheckSquare,
   Database,
   DollarSign,
+  Gauge,
   HeartPulse,
   LayoutGrid,
   Menu,
@@ -30,6 +31,7 @@ import { GraphView } from './views/GraphView'
 import { HealthView } from './views/HealthView'
 import { Mem0View } from './views/Mem0View'
 import { PanelView } from './views/PanelView'
+import { RealityView } from './views/RealityView'
 import { RunsView } from './views/RunsView'
 
 // FR/EN i18n (P1a): `labelKey` is a `TranslationKey` (see `@/lib/i18n`), NOT
@@ -41,6 +43,10 @@ const BUILTIN_TABS = [
   { value: 'cost', labelKey: 'nav.cost', Panel: CostView, Icon: DollarSign },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
   { value: 'mem0', labelKey: 'nav.mem0', Panel: Mem0View, Icon: Database },
+  // Mirador "Vigie" memory-quality view: read-only for any token, grouped
+  // with Mem0 under the "Mémoire" nav group (see nav-config.ts). Backed by
+  // `/v1/memory/*` — reality/gaps/evaluations/journal, see RealityView.
+  { value: 'reality', labelKey: 'nav.reality', Panel: RealityView, Icon: Gauge },
   // Mirador actionable dashboard PRD, Sprint 2: read-only for any token,
   // Approve/Deny controls inside gate themselves on useRole().can('approve')
   // — see ApprovalsView.
@@ -64,10 +70,11 @@ function panelTabValue(name: string): string {
 /**
  * The Mirador app shell — dark, grouped-sidebar insight dashboard (P0b:
  * sidebar nav + enriched header, upgrading the original flat top tab bar).
- * Seven built-in items (Analytics / Cost / Health / Mem0 / Approvals / Runs
- * / Graph, wired to real HivePilot API data — `/v1/analytics/*`,
- * `/v1/plugins/health`, `/v1/memories`, `/v1/approvals`, `/v1/runs`,
- * `/v1/graph/*`, see `./views/*` and `@/lib/mirador-api`), grouped by
+ * Eight built-in items (Analytics / Cost / Health / Mem0 / Réalité /
+ * Approvals / Runs / Graph, wired to real HivePilot API data —
+ * `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`, `/v1/memory/*`,
+ * `/v1/approvals`, `/v1/runs`, `/v1/graph/*`, see `./views/*` and
+ * `@/lib/mirador-api`), grouped by
  * `./nav/nav-config`'s `buildNavGroups`, plus one DYNAMIC item per
  * plugin-contributed `panel` (Sprint 3 web surface, `GET /v1/panels`) —
  * ungrouped panels fall into a trailing "Panels" group automatically (see

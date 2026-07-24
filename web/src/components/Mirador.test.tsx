@@ -45,6 +45,21 @@ const mocks = vi.hoisted(() => ({
   // own source list on mount — mocked empty so this shell test never makes
   // a real network call, same as every other built-in tab above.
   fetchGraphSources: vi.fn().mockResolvedValue({ sources: [] }),
+  // Réalité tab: RealityView fetches all four `/v1/memory/*` endpoints on
+  // mount — mocked to a genuinely-empty (but successful) response so this
+  // shell test exercises tab switching only, not RealityView's own
+  // data/empty/error states (covered by RealityView.test.tsx).
+  fetchMemoryReality: vi.fn().mockResolvedValue({
+    search_success_rate: 0,
+    total_searches: 0,
+    no_result_count: 0,
+    avg_freshness_seconds: 0,
+    declared_reliability: 0,
+    total_evaluations: 0,
+  }),
+  fetchMemoryGaps: vi.fn().mockResolvedValue({ gaps: [] }),
+  fetchMemoryEvaluations: vi.fn().mockResolvedValue({ evaluations: [] }),
+  fetchMemoryJournal: vi.fn().mockResolvedValue({ journal: [] }),
 }))
 
 vi.mock('@/lib/mirador-api', async (importOriginal) => {
@@ -57,12 +72,13 @@ import { Mirador } from './Mirador'
 
 // The sidebar's grouped nav order (P0b) — see `./nav/nav-config.ts`'s
 // `NAV_GROUP_ORDER`: Overview (Analytics/Cost), Agents (Approvals/Runs),
-// System (Health/Graph), Memory (Mem0). Every built-in tab is still
+// System (Health/Graph), Memory (Mem0/Réalité). Every built-in tab is still
 // reachable, just reordered by group instead of the old flat declaration
 // order. Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n —
 // see the "language toggle" describe block for the French-language
-// assertions of the same shell).
-const GROUPED_TAB_ORDER = ['Analytics', 'Cost', 'Approvals', 'Runs', 'Health', 'Graph', 'Mem0']
+// assertions of the same shell). "Réalité" itself is a proper noun, kept
+// untranslated in both dictionaries (see en.ts/fr.ts's `nav.reality`).
+const GROUPED_TAB_ORDER = ['Analytics', 'Cost', 'Approvals', 'Runs', 'Health', 'Graph', 'Mem0', 'Réalité']
 
 let container: HTMLDivElement
 let root: Root
@@ -155,6 +171,22 @@ describe('Mirador', () => {
     })
 
     expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Mem0 memory search')
+  })
+
+  it('switches to the real Réalité view when the Réalité item is clicked', async () => {
+    const realityTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Réalité',
+    ) as HTMLElement
+
+    await act(async () => {
+      click(realityTab)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(realityTab.getAttribute('aria-selected')).toBe('true')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toMatch(/no memory activity recorded yet/i)
   })
 
   it('opens the mobile nav drawer from the header hamburger, and closes it on item click', async () => {
