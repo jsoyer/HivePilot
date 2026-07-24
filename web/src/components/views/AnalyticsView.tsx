@@ -1,6 +1,8 @@
-import { Badge } from '@/components/ui/badge'
+import { Activity, CheckCircle2, Clock, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { DistributionBar } from '@/components/dashboard/DistributionBar'
+import { StatCard } from '@/components/dashboard/StatCard'
 import {
   fetchAnalyticsDurations,
   fetchAnalyticsSummary,
@@ -38,15 +40,56 @@ export function AnalyticsView() {
           <CardTitle>Volume &amp; outcomes</CardTitle>
           <CardDescription>Last {DAYS} days</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
           <AsyncSection state={summary} isEmpty={(data) => data.total === 0} emptyMessage="No runs recorded in this window.">
             {(data) => (
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">{data.total} total runs</Badge>
-                <Badge>{pct(data.outcome_rates.succeeded)} succeeded</Badge>
-                <Badge variant="destructive">{pct(data.outcome_rates.failed)} failed</Badge>
-                <Badge variant="outline">{pct(data.outcome_rates.other)} other</Badge>
-              </div>
+              <>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <StatCard
+                    icon={<Activity className="size-4" />}
+                    label="Total runs"
+                    value={data.total}
+                    sub={`last ${DAYS} days`}
+                  />
+                  <StatCard
+                    icon={<CheckCircle2 className="size-4" />}
+                    label="Succeeded"
+                    value={pct(data.outcome_rates.succeeded)}
+                    sub={`${data.outcomes.succeeded} runs`}
+                    tone="positive"
+                  />
+                  <StatCard
+                    icon={<XCircle className="size-4" />}
+                    label="Failed"
+                    value={pct(data.outcome_rates.failed)}
+                    sub={`${data.outcomes.failed} runs`}
+                    tone="danger"
+                  />
+                </div>
+                <DistributionBar
+                  segments={[
+                    {
+                      key: 'succeeded',
+                      label: 'Succeeded',
+                      value: data.outcomes.succeeded,
+                      colorClass: 'bg-emerald-500',
+                    },
+                    {
+                      key: 'failed',
+                      label: 'Failed',
+                      value: data.outcomes.failed,
+                      colorClass: 'bg-destructive',
+                    },
+                    {
+                      key: 'other',
+                      label: 'Other',
+                      value: data.outcomes.other,
+                      colorClass: 'bg-muted-foreground/40',
+                    },
+                  ]}
+                  total={data.total}
+                />
+              </>
             )}
           </AsyncSection>
         </CardContent>
@@ -131,8 +174,12 @@ export function AnalyticsView() {
             emptyMessage="No actioned approvals yet."
           >
             {(data) => (
-              <div className="flex flex-col gap-2">
-                <Badge variant="secondary">{data.count} actioned approvals</Badge>
+              <div className="flex flex-col gap-4">
+                <StatCard
+                  icon={<Clock className="size-4" />}
+                  label="Actioned approvals"
+                  value={data.count}
+                />
                 <PercentileBars stats={data} />
               </div>
             )}

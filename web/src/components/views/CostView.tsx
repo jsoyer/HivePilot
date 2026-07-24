@@ -1,6 +1,7 @@
-import { Badge } from '@/components/ui/badge'
+import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, DollarSign } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { StatCard } from '@/components/dashboard/StatCard'
 import { fetchAnalyticsCost, fetchAnalyticsProviders } from '@/lib/mirador-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
@@ -40,12 +41,30 @@ export function CostView() {
           >
             {(data) => (
               <>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">{formatCost(data.overall.cost_usd)} total</Badge>
-                  <Badge variant="outline">{formatTokens(data.overall.input_tokens)} input tokens</Badge>
-                  <Badge variant="outline">{formatTokens(data.overall.output_tokens)} output tokens</Badge>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <StatCard
+                    icon={<DollarSign className="size-4" />}
+                    label="Total cost"
+                    value={formatCost(data.overall.cost_usd)}
+                    tone="positive"
+                  />
+                  <StatCard
+                    icon={<ArrowDownToLine className="size-4" />}
+                    label="Input tokens"
+                    value={formatTokens(data.overall.input_tokens)}
+                  />
+                  <StatCard
+                    icon={<ArrowUpFromLine className="size-4" />}
+                    label="Output tokens"
+                    value={formatTokens(data.overall.output_tokens)}
+                  />
                   {data.overall.unpriced_steps > 0 && (
-                    <Badge variant="destructive">{data.overall.unpriced_steps} unpriced steps</Badge>
+                    <StatCard
+                      icon={<AlertTriangle className="size-4" />}
+                      label="Unpriced steps"
+                      value={data.overall.unpriced_steps}
+                      tone="warning"
+                    />
                   )}
                 </div>
 
