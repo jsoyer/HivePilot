@@ -521,6 +521,14 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_DRIFT_PANEL_ENABLED / _AUTOPILOT_PANEL_ENABLED
     drift_panel_enabled: bool = False
     autopilot_panel_enabled: bool = False
+    # A third `panel`-type plugin (Headroom Efficiency Panel sprint) -- opt-IN,
+    # dormant by default, same pattern as drift_panel_enabled/
+    # autopilot_panel_enabled above. `headroom_panel` (plugins/headroom_panel.py)
+    # is a stats-only summary over the cumulative headroom compression
+    # efficiency `hivepilot.services.headroom_metrics` records. Required by
+    # tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag.
+    # env: HIVEPILOT_HEADROOM_PANEL_ENABLED
+    headroom_panel_enabled: bool = False
     # Two more opt-in `skill`-type plugins -- dormant by default, same
     # pattern as sample_skill_enabled above. `shadcn` (plugins/shadcn.py)
     # is a Mirador web accelerator (shadcn/ui + Tailwind conventions for
