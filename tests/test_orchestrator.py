@@ -9,8 +9,11 @@ Covers:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch resolution
 from hivepilot.models import PipelineConfig, PipelineStage
@@ -3138,3 +3141,277 @@ class TestProjectAutoClone:
 
         failed_calls = [c for c in mock_complete_run.call_args_list if c.args[1] == "failed"]
         assert len(failed_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# First-class monorepo modules (monorepo-modules PRD) — `run_task(
+# project_names=["<project>/<module>"])` end-to-end: target resolution +
+# working-directory scoping through the REAL public `run_task` entry point
+# (the same one cli.py/api_service/concierge all call).
+# ---------------------------------------------------------------------------
+
+
+class TestRunTaskModuleTargeting:
+    def _orch_with_monorepo_project(self, tmp_path):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        proj_path = tmp_path / "noxys"
+        (proj_path / "apps" / "detection-core").mkdir(parents=True)
+        orch.projects.projects["noxys"] = ProjectConfig(
+            path=proj_path,
+            modules={"detection-core": "apps/detection-core"},
+        )
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        return orch, proj_path
+
+    def _run(self, orch, project_names, tmp_path):
+        from hivepilot.services.policy_service import Policy
+
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        captured_payloads = []
+
+        def _capture(payload):
+            captured_payloads.append(payload)
+            return "output"
+
+        fake_runner.capture.side_effect = _capture
+        orch.registry.get_runner.return_value = fake_runner
+
+        with (
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch(
+                "hivepilot.orchestrator.policy_service.enforce_policy",
+                return_value=Policy(),
+            ),
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+            patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+        ):
+            results = orch.run_task(
+                project_names=project_names,
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+            )
+        return results, captured_payloads
+
+    def test_module_target_scopes_working_dir_to_subpath(self, tmp_path) -> None:
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+
+        results, captured = self._run(orch, ["noxys/detection-core"], tmp_path)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path / "apps" / "detection-core"
+
+    def test_plain_project_target_keeps_repo_root_cwd(self, tmp_path) -> None:
+        """Byte-identical: a plain project target (no `/module`) never
+        scopes the working dir -- the runner payload's `project.path` stays
+        the repo root, exactly as before this feature existed."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+
+        results, captured = self._run(orch, ["noxys"], tmp_path)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path
+
+    def test_unknown_module_target_raises_clear_error(self, tmp_path) -> None:
+        orch, _proj_path = self._orch_with_monorepo_project(tmp_path)
+
+        with pytest.raises(ValueError, match="detection-core"):
+            self._run(orch, ["noxys/no-such-module"], tmp_path)
+
+    def test_backward_compat_project_without_modules_unaffected(self, tmp_path) -> None:
+        """A project that never declares `modules` behaves exactly as
+        before this PRD -- plain project targeting, repo-root cwd."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        proj_path = tmp_path / "plainproj"
+        proj_path.mkdir(parents=True)
+        orch.projects.projects["plainproj"] = ProjectConfig(path=proj_path)
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+
+        results, captured = self._run(orch, ["plainproj"], tmp_path)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert captured[0].project.path == proj_path
+        assert captured[0].project.modules == {}
+
+
+# ---------------------------------------------------------------------------
+# F1 fix (post-review) — approval-resume must not silently broaden a
+# module-scoped run back to the repo root. `run_task`'s `require_approval`
+# path persists the ORIGINAL target string into `approval_meta["target"]`;
+# `run_approved` re-resolves it via `_resolve_run_target` so the approved
+# run executes in the SAME subdir the operator approved.
+# ---------------------------------------------------------------------------
+
+
+class TestRunApprovedModuleTargeting:
+    def _orch_with_monorepo_project(self, tmp_path):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        proj_path = tmp_path / "noxys"
+        (proj_path / "apps" / "detection-core").mkdir(parents=True)
+        orch.projects.projects["noxys"] = ProjectConfig(
+            path=proj_path,
+            modules={"detection-core": "apps/detection-core"},
+        )
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        return orch, proj_path
+
+    def _wire_capturing_runner(self, orch):
+        captured_payloads = []
+
+        def _capture(payload):
+            captured_payloads.append(payload)
+            return "output"
+
+        fake_runner = MagicMock()
+        fake_runner.capture.side_effect = _capture
+        orch.registry = MagicMock()
+        orch.registry.get_runner.return_value = fake_runner
+        return captured_payloads
+
+    def _request_approval(self, orch, project_names, tmp_path):
+        """Drive the REAL `run_task` require_approval path and return the
+        `approval_meta` dict `record_approval_request` was called with."""
+        from hivepilot.services.policy_service import Policy
+
+        recorded: dict = {}
+
+        def _record(run_id, project_name, task_name, meta):
+            recorded.update(meta)
+
+        with (
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch(
+                "hivepilot.orchestrator.policy_service.enforce_policy",
+                return_value=Policy(require_approval=True),
+            ),
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+            patch(
+                "hivepilot.orchestrator.state_service.record_approval_request",
+                side_effect=_record,
+            ),
+            patch("hivepilot.orchestrator.notification_service.send_approval_keyboard"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+        ):
+            results = orch.run_task(
+                project_names=project_names,
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+            )
+        assert len(results) == 1
+        assert results[0].success is False  # pending approval, not yet run
+        return recorded
+
+    def _approve(self, orch, approval_row, captured_payloads):
+        from hivepilot.services.policy_service import Policy
+
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval_row),
+            patch("hivepilot.orchestrator.state_service.update_approval"),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=Policy()),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            result = orch.run_approved(run_id=1, approve=True, approver="me")
+        return result
+
+    def test_module_target_approval_resume_scopes_working_dir(self, tmp_path) -> None:
+        """The core F1 regression test: an approved `noxys/detection-core`
+        run must execute scoped to the subdir, not the repo root."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+        captured = self._wire_capturing_runner(orch)
+
+        meta = self._request_approval(orch, ["noxys/detection-core"], tmp_path)
+        assert meta.get("target") == "noxys/detection-core"
+
+        approval_row = {
+            "status": "pending",
+            "project": "noxys",
+            "task": "x",
+            "metadata": json.dumps(meta),
+        }
+        result = self._approve(orch, approval_row, captured)
+
+        assert result.success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path / "apps" / "detection-core"
+
+    def test_plain_project_approval_resume_unchanged(self, tmp_path) -> None:
+        """Byte-identical: a plain-project approval (no module) still
+        resumes at the repo root."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+        captured = self._wire_capturing_runner(orch)
+
+        meta = self._request_approval(orch, ["noxys"], tmp_path)
+        assert meta.get("target") == "noxys"
+
+        approval_row = {
+            "status": "pending",
+            "project": "noxys",
+            "task": "x",
+            "metadata": json.dumps(meta),
+        }
+        result = self._approve(orch, approval_row, captured)
+
+        assert result.success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path
+
+    def test_old_style_approval_metadata_without_target_key_still_resumes(self, tmp_path) -> None:
+        """An approval row recorded BEFORE this PRD (no `target` key at
+        all) must still resume cleanly at the project root -- no crash, no
+        KeyError, byte-identical to pre-PRD behaviour."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+        captured = self._wire_capturing_runner(orch)
+
+        old_style_meta = {
+            "task": "x",
+            "project": "noxys",
+            "extra_prompt": None,
+            "auto_git": False,
+        }
+        approval_row = {
+            "status": "pending",
+            "project": "noxys",
+            "task": "x",
+            "metadata": json.dumps(old_style_meta),
+        }
+        result = self._approve(orch, approval_row, captured)
+
+        assert result.success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path

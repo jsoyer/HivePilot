@@ -26,7 +26,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from hivepilot.config import settings
-from hivepilot.models import ProjectConfig
+from hivepilot.models import ProjectConfig, ProjectsFile
 from hivepilot.services import project_service
 
 
@@ -140,3 +140,99 @@ def test_ensure_checkout_mkdir_permission_error_wraps_to_runtime_error(
     assert "PermissionError" in message
     assert "internal/secret/mount-detail" not in message
     fake_repo.clone_from.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# resolve_project_target — `<project>/<module>` run-target resolution
+# (monorepo-modules PRD)
+# ---------------------------------------------------------------------------
+
+
+def _projects_file(tmp_path: Path, **projects: ProjectConfig) -> ProjectsFile:
+    return ProjectsFile(projects=projects)
+
+
+def _monorepo_project(tmp_path: Path) -> ProjectConfig:
+    (tmp_path / "apps" / "detection-core").mkdir(parents=True)
+    (tmp_path / "apps" / "workers" / "adjudication").mkdir(parents=True)
+    return ProjectConfig(
+        path=tmp_path,
+        modules={
+            "detection-core": "apps/detection-core",
+            "adjudication": "apps/workers/adjudication",
+        },
+    )
+
+
+def test_resolve_project_target_project_slash_module(tmp_path: Path) -> None:
+    noxys = _monorepo_project(tmp_path)
+    projects = _projects_file(tmp_path, noxys=noxys)
+
+    project, module_subdir = project_service.resolve_project_target(
+        "noxys/detection-core", projects
+    )
+
+    assert project is noxys
+    assert module_subdir == "apps/detection-core"
+
+
+def test_resolve_project_target_plain_project_no_module(tmp_path: Path) -> None:
+    noxys = _monorepo_project(tmp_path)
+    projects = _projects_file(tmp_path, noxys=noxys)
+
+    project, module_subdir = project_service.resolve_project_target("noxys", projects)
+
+    assert project is noxys
+    assert module_subdir is None
+
+
+def test_resolve_project_target_unknown_module_raises_clear_error(tmp_path: Path) -> None:
+    noxys = _monorepo_project(tmp_path)
+    projects = _projects_file(tmp_path, noxys=noxys)
+
+    with pytest.raises(ValueError, match="detection-core") as exc_info:
+        project_service.resolve_project_target("noxys/no-such-module", projects)
+
+    message = str(exc_info.value)
+    assert "no-such-module" in message
+    assert "detection-core" in message
+    assert "adjudication" in message
+
+
+def test_resolve_project_target_unknown_project_raises_clear_error(tmp_path: Path) -> None:
+    projects = _projects_file(tmp_path)
+
+    with pytest.raises(ValueError, match="Unknown project"):
+        project_service.resolve_project_target("nope", projects)
+
+
+def test_resolve_project_target_slash_unknown_project_raises_clear_error(tmp_path: Path) -> None:
+    projects = _projects_file(tmp_path)
+
+    with pytest.raises(ValueError, match="Unknown project"):
+        project_service.resolve_project_target("nope/some-module", projects)
+
+
+def test_resolve_project_target_project_without_modules_and_slash_target_raises(
+    tmp_path: Path,
+) -> None:
+    """A project with no `modules` configured + a `/module` target must fail
+    with a clear, actionable error -- not a confusing KeyError."""
+    plain = ProjectConfig(path=tmp_path)
+    projects = _projects_file(tmp_path, noxys=plain)
+
+    with pytest.raises(ValueError, match="no modules"):
+        project_service.resolve_project_target("noxys/detection-core", projects)
+
+
+def test_resolve_project_target_uses_load_projects_when_none_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    noxys = _monorepo_project(tmp_path)
+    projects = _projects_file(tmp_path, noxys=noxys)
+    monkeypatch.setattr(project_service, "load_projects", lambda *a, **kw: projects)
+
+    project, module_subdir = project_service.resolve_project_target("noxys/adjudication")
+
+    assert project is noxys
+    assert module_subdir == "apps/workers/adjudication"

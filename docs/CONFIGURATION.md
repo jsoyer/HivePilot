@@ -65,6 +65,57 @@ Secrets-related environment settings (`HIVEPILOT_` prefix): `KMS_PROVIDER` /
 secret cache TTL (default `0` = disabled; flush with `hivepilot secrets
 cache-clear`). See [SECURITY.md](SECURITY.md).
 
+### Monorepo modules — `modules:` / `ui_surfaces:` and `project/module` targeting
+
+A project can declare `modules`: a map of module name → subpath (relative to `path`) inside
+the repo. A run can then target `<project>/<module>` to scope the agent's working directory
+to that subdirectory instead of the repo root — a single `git clone` (via `owner_repo` /
+`ensure_checkout`, unchanged) is shared across every module target.
+
+- `modules: dict[str, str]` (default `{}`) — module name → subpath relative to `path`.
+  Validated at load time: a subpath must resolve to a location *inside* `path` — an absolute
+  path or a `..`-escaping subpath (e.g. `../../etc`) is rejected outright (fails to load)
+  rather than silently scoping an agent outside the repo checkout.
+- `ui_surfaces: list[str]` (default `[]`) — module names (a subset of `modules`' keys) that
+  are UI surfaces; pure metadata for callers, not consumed by run dispatch itself.
+
+```yaml
+projects:
+  noxys:
+    path: /home/jerome/code/noxys
+    owner_repo: acme-org/noxys
+    modules:
+      detection-core: apps/detection-core
+      adjudication: apps/workers/adjudication
+    ui_surfaces:
+      - detection-core
+```
+
+```bash
+# Scoped to apps/detection-core/ — the agent's working directory and any
+# git diff/commit actions all operate inside the subdirectory.
+hivepilot run noxys/detection-core ship
+
+# Unscoped — repo root, byte-identical to a project with no `modules` declared.
+hivepilot run noxys ship
+```
+
+Target resolution order: an exact project name always wins first; then a `<project>/<module>`
+split (the module is looked up in that project's `modules` map — an unknown module fails with
+a clear error listing the available ones); then a group name (`groups.yaml`). A project with
+no `modules` configured plus a `/module` target also fails with a clear, actionable error.
+
+Cross-module work (a change that spans multiple modules, or any repo-wide operation such as a
+release, a full-repo scan, or a PR) still targets the **project**, not a module — run
+`hivepilot run noxys <task>` for anything that isn't scoped to one module's subtree. Module
+targeting is a working-directory scope for the agent, not a build/dependency graph.
+
+This first-class monorepo-modules feature replaces the older workaround pattern of declaring
+one sibling `ProjectConfig` per module (each pointed at the same clone) plus a `single_repo:
+true` group (see `groups.yaml` → `Group` below) purely to fan a pipeline out over subtrees of
+one repo. Projects that don't declare `modules` are entirely unaffected — every field is
+additive and defaults to empty.
+
 ## tasks.yaml — `runners:` + `tasks:`
 
 Defines reusable runner definitions and the tasks (sequences of steps) that use them.

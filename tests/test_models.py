@@ -9,6 +9,7 @@ from hivepilot.models import (
     KNOWN_RUNNER_KINDS,
     Group,
     PipelineStage,
+    ProjectConfig,
     RunnerDefinition,
     RunnerKind,
     TaskStep,
@@ -233,3 +234,61 @@ def test_task_step_effort_rejects_invalid_level() -> None:
 def test_task_step_effort_defaults_to_none() -> None:
     step = TaskStep(name="x", runner="claude")
     assert step.effort is None
+
+
+# ---------------------------------------------------------------------------
+# ProjectConfig.modules / ui_surfaces — first-class monorepo module support
+# (monorepo-modules PRD). Additive fields: default empty everywhere -> zero
+# behaviour change for a project that doesn't declare `modules`.
+# ---------------------------------------------------------------------------
+
+
+def test_project_config_modules_defaults_to_empty(tmp_path) -> None:
+    project = ProjectConfig(path=tmp_path)
+    assert project.modules == {}
+    assert project.ui_surfaces == []
+
+
+def test_project_config_accepts_modules_map(tmp_path) -> None:
+    (tmp_path / "apps" / "detection-core").mkdir(parents=True)
+    (tmp_path / "apps" / "workers" / "adjudication").mkdir(parents=True)
+    project = ProjectConfig(
+        path=tmp_path,
+        modules={
+            "detection-core": "apps/detection-core",
+            "adjudication": "apps/workers/adjudication",
+        },
+        ui_surfaces=["detection-core"],
+    )
+    assert project.modules == {
+        "detection-core": "apps/detection-core",
+        "adjudication": "apps/workers/adjudication",
+    }
+    assert project.ui_surfaces == ["detection-core"]
+
+
+def test_project_config_rejects_dotdot_traversal_module_subpath(tmp_path) -> None:
+    """SECURITY: a module subpath that escapes `project.path` via `..` must
+    never be accepted — otherwise a malicious/typo'd `modules:` entry could
+    let an agent operate outside the repo checkout entirely."""
+    with pytest.raises(pydantic.ValidationError, match="escapes|outside|traversal"):
+        ProjectConfig(path=tmp_path, modules={"evil": "../../etc"})
+
+
+def test_project_config_rejects_absolute_module_subpath(tmp_path) -> None:
+    """SECURITY: an absolute subpath must never be accepted either — it would
+    silently ignore `project.path` entirely and scope the agent to an
+    attacker/typo-controlled absolute filesystem location."""
+    with pytest.raises(pydantic.ValidationError, match="absolute|outside"):
+        ProjectConfig(path=tmp_path, modules={"evil": "/etc/passwd"})
+
+
+def test_project_config_module_subpath_must_resolve_inside_project_path(tmp_path) -> None:
+    """A subpath like `foo/../../bar` that arithmetically stays inside via
+    naive string checks but `.resolve()`s to outside `project.path` must
+    also be rejected — the check MUST be on the resolved path, not the raw
+    string (a bare `..` substring check is insufficient and easy to bypass)."""
+    sibling = tmp_path.parent / "sibling-escape"
+    rel = f"../{sibling.name}"
+    with pytest.raises(pydantic.ValidationError):
+        ProjectConfig(path=tmp_path, modules={"evil": rel})

@@ -209,10 +209,61 @@ class ProjectConfig(BaseModel):
     # SecretResolver consumes). Referenced from `env` values via the
     # ${secret:NAME} syntax and resolved lazily at step-assembly time.
     secrets: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # ---- Monorepo modules (monorepo-modules PRD) ----
+    # Module name -> subpath RELATIVE to `path`, e.g.
+    # `{"detection-core": "apps/detection-core"}`. A run can target
+    # `<project>/<module>` (see `hivepilot.services.project_service.
+    # resolve_project_target`) to scope the agent's working directory to
+    # `path / modules[module]` instead of the repo root. Additive, defaults
+    # to empty -> zero behaviour change for a project that doesn't declare
+    # `modules` (every existing project is unaffected).
+    modules: dict[str, str] = Field(default_factory=dict)
+    # Module names (a subset of `modules`' keys) that are UI surfaces --
+    # pure metadata for callers (e.g. a future "which modules have a UI"
+    # filter); not consumed anywhere in this sprint.
+    ui_surfaces: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def expand_path(self) -> ProjectConfig:
         self.path = self.path.expanduser().resolve()
+        return self
+
+    @model_validator(mode="after")
+    def validate_modules(self) -> ProjectConfig:
+        """SECURITY: every `modules` subpath must resolve to a location
+        INSIDE `path` — reject (fail closed, raise) any subpath that is
+        absolute or escapes via `..` (e.g. `../../etc`), so a malicious or
+        typo'd `modules:` entry can never let an agent operate outside the
+        project's repo checkout. Validated here at load time (config
+        parsing), not deferred to run time, so a bad entry fails loudly the
+        moment projects.yaml is loaded — the same fail-closed posture the
+        rest of this module already applies to config-layer values (see
+        `DebateConfig`).
+
+        Checked against the RESOLVED path (`.resolve()`), never a raw
+        string/substring check — a naive `".." in subpath` guard is easy to
+        bypass (e.g. `foo/../../bar`) and would still fail-open.
+        """
+        if not self.modules:
+            return self
+        root = self.path  # already resolved by `expand_path` (runs first)
+        for name, subpath in self.modules.items():
+            candidate = Path(subpath)
+            if candidate.is_absolute():
+                raise ValueError(
+                    f"ProjectConfig.modules['{name}'] = {subpath!r} is an absolute "
+                    f"path — module subpaths must be relative to the project's "
+                    f"path and stay inside it."
+                )
+            resolved = (root / candidate).resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"ProjectConfig.modules['{name}'] = {subpath!r} escapes "
+                    f"outside the project path {root} — module subpaths must "
+                    f"resolve to a location inside the project's checkout."
+                ) from exc
         return self
 
 

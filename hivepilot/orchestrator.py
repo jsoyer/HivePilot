@@ -80,6 +80,7 @@ from hivepilot.services.project_service import (
     load_pipelines,
     load_projects,
     load_tasks,
+    resolve_project_target,
 )
 from hivepilot.services.secret_refs import resolve_secret_refs
 from hivepilot.services.secrets_service import secret_resolver
@@ -1206,7 +1207,31 @@ class Orchestrator:
         if task_name not in self.tasks.tasks:
             raise ValueError(f"Unknown task: {task_name}")
         task = self.tasks.tasks[task_name]
-        projects = [self._project(name) for name in project_names]
+        # monorepo-modules PRD: each target may be a plain project name or a
+        # `<project>/<module>` string -- resolved together so the module's
+        # subdir (if any) can be threaded down to `_execute_task` below,
+        # keyed by `project.path.name` (the same key every other per-project
+        # dict in this loop already uses). A plain target's `module_subdir`
+        # is always `None`, so `working_subdirs` stays empty and every
+        # existing call is byte-identical.
+        project_names = list(project_names)
+        _resolved_targets = [self._resolve_run_target(name) for name in project_names]
+        projects = [project for project, _module_subdir in _resolved_targets]
+        working_subdirs: dict[str, str] = {
+            project.path.name: module_subdir
+            for project, module_subdir in _resolved_targets
+            if module_subdir
+        }
+        # monorepo-modules PRD (F1 fix): the ORIGINAL target string per
+        # project, keyed the same way -- persisted into `approval_meta`
+        # below so `run_approved` can re-resolve the module subdir on
+        # resume (mirrors `resume_pipeline`'s `meta["projects"]` pattern:
+        # persist the raw target, re-resolve via the SAME resolver on
+        # resume, rather than only the derived path).
+        targets_by_project_key: dict[str, str] = {
+            project.path.name: name
+            for name, (project, _module_subdir) in zip(project_names, _resolved_targets)
+        }
         run_dir = create_run_directory()
         limit = concurrency or settings.concurrency_limit
         results: list[RunResult] = []
@@ -1246,6 +1271,15 @@ class Orchestrator:
                 approval_meta = {
                     "task": task_name,
                     "project": project.path.name,
+                    # monorepo-modules PRD (F1 fix): the ORIGINAL target
+                    # string (e.g. "noxys/detection-core") -- `run_approved`
+                    # re-resolves it via `_resolve_run_target` on resume so
+                    # the approved run executes in the SAME module subdir
+                    # the operator actually approved, instead of silently
+                    # broadening back to the repo root. Falls back to
+                    # `project.path.name` (byte-identical, no module) when
+                    # the target isn't found in the map (should not happen).
+                    "target": targets_by_project_key.get(project.path.name, project.path.name),
                     "extra_prompt": extra_prompt,
                     "auto_git": auto_git,
                 }
@@ -1401,6 +1435,7 @@ class Orchestrator:
                     stage_effort=stage_effort,
                     stage=stage,
                     pipeline=pipeline,
+                    working_subdir=working_subdirs.get(project.path.name),
                 ): project
                 for project in immediate_projects
             }
@@ -3364,6 +3399,39 @@ class Orchestrator:
         _dry_run = metadata.get("dry_run", True) if _is_step_checkpoint else True
         _stage_skills = metadata.get("stage_skills") if _is_step_checkpoint else None
 
+        # monorepo-modules PRD (F1 fix): recover the `working_subdir` the
+        # operator actually approved -- without this, an approved
+        # `<project>/<module>` run would silently execute at the repo ROOT
+        # instead of the approved module subdir (scope broadening).
+        #
+        # A step-checkpoint's own `checkpoint_meta` already carries the
+        # fully-resolved `working_subdir` directly (set inside
+        # `_execute_task_body`, which has it as a parameter -- no
+        # re-resolution needed). The top-level `require_approval` path
+        # instead persists the ORIGINAL `target` string (mirrors
+        # `resume_pipeline`'s `meta["projects"]` pattern) and re-resolves it
+        # here via the SAME `_resolve_run_target` `run_task` used -- so a
+        # `modules:` config change between request and approval is caught
+        # (fails this resume closed) rather than silently falling back to
+        # an unscoped repo-root run. Old approval rows with no `target` key
+        # (pre-existing, or the plain-project case) resolve `working_subdir`
+        # to `None` -- byte-identical to before this PRD.
+        working_subdir: str | None = None
+        if _is_step_checkpoint:
+            working_subdir = metadata.get("working_subdir")
+        else:
+            _target = metadata.get("target")
+            if _target:
+                try:
+                    _, working_subdir = self._resolve_run_target(_target)
+                except ValueError as exc:
+                    state_service.complete_run(run_id, "failed", str(exc))
+                    notification_service.send_notification(
+                        f"⛔ Run {run_id} for {project_name}:{task_name} failed after "
+                        f"approval — approved target '{_target}' no longer resolves ({exc})"
+                    )
+                    return RunResult(project_name, task_name, False, str(exc))
+
         # Phase 21 Sprint 3 -- CVE gate defense-in-depth. `require_approval`
         # and `block_on_severity` are independent gates in `_run_task_body`
         # (an `if`/`elif`, not both): a project configured with BOTH only
@@ -3425,6 +3493,7 @@ class Orchestrator:
                 resume_outputs=_resume_outputs,
                 approved_step_index=_approved_step_index,
                 stage_skills=_stage_skills,
+                working_subdir=working_subdir,
             )
         except StepApprovalPending as exc:
             # A LATER step in the same task also requires approval —
@@ -3812,6 +3881,7 @@ class Orchestrator:
         stage_effort: EffortLevel | None = None,
         stage: "PipelineStage | None" = None,
         pipeline: "PipelineConfig | None" = None,
+        working_subdir: str | None = None,
     ) -> str | None:
         """Thin OpenTelemetry-tracing wrapper around `_execute_task_body`.
 
@@ -3825,6 +3895,11 @@ class Orchestrator:
         tracing is off/unavailable, `get_tracer()` returns a no-op tracer, so
         this wrapper adds negligible overhead and never changes control
         flow, return values, or propagated exceptions.
+
+        `working_subdir` (monorepo-modules PRD) is the module subpath
+        (relative to `project.path`) resolved from a `<project>/<module>`
+        run target — `None` (the default) for a plain project target,
+        keeping every existing call byte-identical.
         """
         from hivepilot.services.quota import QuotaDeferredError
 
@@ -3863,6 +3938,7 @@ class Orchestrator:
                     stage_effort=stage_effort,
                     stage=stage,
                     pipeline=pipeline,
+                    working_subdir=working_subdir,
                 )
             except StepApprovalPending:
                 _task_span.set_attribute("hivepilot.task.status", "paused")
@@ -3902,6 +3978,7 @@ class Orchestrator:
         stage_effort: EffortLevel | None = None,
         stage: "PipelineStage | None" = None,
         pipeline: "PipelineConfig | None" = None,
+        working_subdir: str | None = None,
     ) -> str | None:
         """Execute *task*'s steps for *project*.
 
@@ -3938,6 +4015,15 @@ class Orchestrator:
         directly. Both default ``None`` for a plain (non-pipeline) task run,
         resolving to the settings floor only — byte-identical to pre-
         Sprint-2 behaviour.
+
+        ``working_subdir`` (monorepo-modules PRD) scopes the RUNNER's
+        effective working directory (never git actions -- see
+        ``_runner_project`` vs ``_exec_project`` below) to
+        ``project.path / working_subdir`` — resolved from a
+        ``<project>/<module>`` run target via ``_resolve_run_target``.
+        ``None`` (the default) makes ``_runner_project`` path-identical to
+        ``_exec_project``, so a plain project-target run is byte-identical
+        to before this field existed.
         """
         logger.info("task.start", project=project.path.name, task=task_name)
         metadata: dict[str, Any] = {
@@ -4075,9 +4161,61 @@ class Orchestrator:
 
         with _wt_ctx as _exec_path:
             # Build a shallow copy of the project with the worktree path so both
-            # the runner CWD and git actions operate there (branches/commits live
-            # in the shared .git; the real working tree is never touched).
+            # git actions and (a plain, non-module run's) runner CWD operate
+            # there (branches/commits live in the shared .git; the real
+            # working tree is never touched). `_exec_project` ALWAYS stays at
+            # the repo/worktree ROOT -- git plumbing (GitPython's `Repo()` in
+            # `perform_git_actions`) requires a directory that directly
+            # contains `.git`; a module subdirectory doesn't, and would raise
+            # `InvalidGitRepositoryError`. Branches/commits are a whole-repo
+            # concept regardless of which module an agent was scoped to.
             _exec_project = project.model_copy(update={"path": _exec_path})
+
+            # monorepo-modules PRD: a `<project>/<module>` run target scopes
+            # ONLY the runner's effective cwd (never git actions, see above)
+            # to `working_subdir` WITHIN `_exec_path` -- the repo root for a
+            # plain run, or the isolated worktree root when worktree
+            # isolation is also on (the two features compose: a module
+            # target still gets its own worktree). `ensure_checkout` (run
+            # once, earlier, on `project.path`) is untouched -- a module
+            # target never clones; it only scopes the cwd within the
+            # existing checkout. `working_subdir` is `None` for a plain
+            # project target, so `_runner_project` is path-identical to
+            # `_exec_project` and every runner-dispatch site below is
+            # byte-identical to before this feature existed.
+            _runner_path = _exec_path / working_subdir if working_subdir else _exec_path
+            if working_subdir:
+                # F4 (defense-in-depth): re-validate AT RUNTIME, not just at
+                # projects.yaml LOAD time (`ProjectConfig.validate_modules`
+                # in models.py). A symlink could be planted inside the
+                # checkout AFTER config load (or land there via a fresh
+                # clone/pull between the load and this dispatch) that makes
+                # a subpath which was safe at load time resolve OUTSIDE the
+                # checkout by the time a run actually executes. Re-check
+                # right here, immediately before the path becomes the
+                # runner's cwd, and fail closed with a clear error rather
+                # than ever handing a runner a cwd outside the intended
+                # checkout.
+                _resolved_exec_path = _exec_path.resolve()
+                _resolved_runner_path = _runner_path.resolve()
+                try:
+                    _resolved_runner_path.relative_to(_resolved_exec_path)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"Module subdir '{working_subdir}' resolves outside the "
+                        f"checkout at {_exec_path} -- refusing to scope the "
+                        f"runner's working directory there."
+                    ) from exc
+                if not _resolved_runner_path.is_dir():
+                    raise RuntimeError(
+                        f"Module subdir '{working_subdir}' not found in the "
+                        f"checkout at {_exec_path} (expected {_runner_path})."
+                    )
+            _runner_project = (
+                project.model_copy(update={"path": _runner_path})
+                if working_subdir
+                else _exec_project
+            )
 
             outputs: list[str] = list(resume_outputs or [])
             for step_idx, step in enumerate(task.steps):
@@ -4108,10 +4246,10 @@ class Orchestrator:
                     raise RunCancelled(
                         f"Run {run_id} cancelled by operator before step '{step.name}'."
                     )
-                secrets = self._resolve_secrets(step, _exec_project, policy)
+                secrets = self._resolve_secrets(step, _runner_project, policy)
                 payload = RunnerPayload(
-                    project_name=_exec_project.path.name,
-                    project=_exec_project,
+                    project_name=_runner_project.path.name,
+                    project=_runner_project,
                     task_name=task_name,
                     step=step,
                     metadata=metadata,
@@ -4333,6 +4471,17 @@ class Orchestrator:
                                         "stage_skills": list(stage_skills)
                                         if stage_skills
                                         else None,
+                                        # monorepo-modules PRD (F1 fix): already
+                                        # fully resolved here (this function's own
+                                        # `working_subdir` param) -- persisted
+                                        # directly (no re-resolution needed on
+                                        # resume, unlike the top-level
+                                        # `require_approval` path's `target`
+                                        # string) so a step-checkpoint resume of a
+                                        # module-scoped task keeps executing in
+                                        # the same subdir. `None` for a plain
+                                        # project target, byte-identical.
+                                        "working_subdir": working_subdir,
                                     }
                                     state_service.record_approval_request(
                                         run_id, project.path.name, task_name, checkpoint_meta
@@ -4393,7 +4542,7 @@ class Orchestrator:
                                 "step.simulate",
                                 step=step.name,
                                 runner=runner_key,
-                                project=_exec_project.path.name,
+                                project=_runner_project.path.name,
                             )
                             outputs.append(f"[simulated {runner_key}]")
                         elif task.role:
@@ -4616,12 +4765,18 @@ class Orchestrator:
             # (`git diff` in the worktree — `perform_git_actions`/`task.git`
             # hasn't run `git commit` yet at this point).
             if effective_debate.review_target is not None:
+                # `_git_diff` shells out to the `git` CLI (auto-discovers the
+                # repo root from any subdirectory) and reviews the WHOLE
+                # diff regardless of cwd, so it stays on `_exec_project`
+                # (repo/worktree root) -- reviewers are runner dispatches
+                # like any other step, so they get `_runner_project`
+                # (module-scoped when a module target is active).
                 _review_subject = self._git_diff(_exec_project.path)
                 self._run_review(
                     stage=stage,
                     pipeline=pipeline,
                     effective=effective_debate,
-                    project=_exec_project,
+                    project=_runner_project,
                     policy=policy,
                     subject=_review_subject,
                     simulate=simulate,
@@ -4727,6 +4882,24 @@ class Orchestrator:
         if name not in self.projects.projects:
             raise ValueError(f"Unknown project: {name}")
         return self.projects.projects[name]
+
+    def _resolve_run_target(self, name: str) -> tuple[ProjectConfig, str | None]:
+        """Resolve a single `run_task` target -- a plain project name or a
+        `<project>/<module>` string (monorepo-modules PRD) -- into
+        `(project, module_subdir)`. `module_subdir` is `None` for a plain
+        project target.
+
+        A target with no `"/"` delegates ENTIRELY to `_project` (never
+        touches `resolve_project_target`) -- byte-identical to before this
+        PRD, including for callers that monkeypatch/override `_project`
+        itself (a pre-existing pattern several tests rely on). Only a
+        `"/"`-containing target reaches `resolve_project_target` (see
+        `hivepilot.services.project_service` for the resolution order +
+        error messages, which mirror `_project`'s "Unknown project" shape
+        for the plain-name case)."""
+        if "/" not in name:
+            return self._project(name), None
+        return resolve_project_target(name, self.projects)
 
     def remediation_gate_present(self, project_name: str, task_name: str) -> bool:
         """Preflight, side-effect-free check: would running *task_name*
