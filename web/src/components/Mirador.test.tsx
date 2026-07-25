@@ -32,6 +32,10 @@ const mocks = vi.hoisted(() => ({
     overall: { total_steps: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0, unpriced_steps: 0 },
     by_provider: [],
     by_model: [],
+    by_project: [],
+    by_role: null,
+    by_role_note: 'by_role is unavailable',
+    unpriced_models: [],
   }),
   fetchAnalyticsProviders: vi.fn().mockResolvedValue({ by_provider: [], by_model: [] }),
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
@@ -61,6 +65,16 @@ const mocks = vi.hoisted(() => ({
   fetchMemoryGaps: vi.fn().mockResolvedValue({ gaps: [] }),
   fetchMemoryEvaluations: vi.fn().mockResolvedValue({ evaluations: [] }),
   fetchMemoryJournal: vi.fn().mockResolvedValue({ journal: [] }),
+  // Home command-center tab (default landing view): fetches its own
+  // approvals/runs/efficiency/today's-summary — mocked genuinely-empty so
+  // this shell test exercises tab switching only, not HomeView's own
+  // data/empty/error states (covered by HomeView.test.tsx).
+  fetchApprovals: vi.fn().mockResolvedValue([]),
+  fetchRuns: vi.fn().mockResolvedValue([]),
+  fetchEfficiency: vi.fn().mockResolvedValue({
+    headroom: { total_compressions: 0, chars_saved: 0, avg_ratio: 0, p95_ratio: 0, est_tokens_saved: 0 },
+    rtk: null,
+  }),
 }))
 
 vi.mock('@/lib/mirador-api', async (importOriginal) => {
@@ -71,15 +85,16 @@ vi.mock('@/lib/mirador-api', async (importOriginal) => {
 import { LANG_STORAGE_KEY } from '@/lib/i18n'
 import { Mirador } from './Mirador'
 
-// The sidebar's grouped nav order (P0b) — see `./nav/nav-config.ts`'s
-// `NAV_GROUP_ORDER`: Overview (Analytics/Cost), Agents (Approvals/Runs),
-// System (Health/Graph), Memory (Mem0/Réalité). Every built-in tab is still
-// reachable, just reordered by group instead of the old flat declaration
-// order. Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n —
-// see the "language toggle" describe block for the French-language
-// assertions of the same shell). "Réalité" itself is a proper noun, kept
-// untranslated in both dictionaries (see en.ts/fr.ts's `nav.reality`).
-const GROUPED_TAB_ORDER = ['Analytics', 'Cost', 'Approvals', 'Runs', 'Health', 'Graph', 'Mem0', 'Réalité']
+// The sidebar's grouped nav order (P0b, + Home command-center sprint) —
+// see `./nav/nav-config.ts`'s `NAV_GROUP_ORDER`: Command Center (Home),
+// Overview (Analytics/Cost), Agents (Approvals/Runs), System (Health/
+// Graph), Memory (Mem0/Réalité). Every built-in tab is still reachable,
+// just reordered by group instead of the old flat declaration order.
+// Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n — see the
+// "language toggle" describe block for the French-language assertions of
+// the same shell). "Réalité" itself is a proper noun, kept untranslated in
+// both dictionaries (see en.ts/fr.ts's `nav.reality`).
+const GROUPED_TAB_ORDER = ['Home', 'Analytics', 'Cost', 'Approvals', 'Runs', 'Health', 'Graph', 'Mem0', 'Réalité']
 
 let container: HTMLDivElement
 let root: Root
@@ -118,19 +133,37 @@ describe('Mirador', () => {
   })
 
   it('groups the sidebar into labelled sections (English default)', () => {
+    expect(container.textContent).toContain('Command Center')
     expect(container.textContent).toContain('Overview')
     expect(container.textContent).toContain('Agents')
     expect(container.textContent).toContain('System')
     expect(container.textContent).toContain('Memory')
   })
 
-  it('shows the real Analytics view by default', async () => {
+  it('shows the real Home view by default', async () => {
     await act(async () => {
       await Promise.resolve()
+      await Promise.resolve()
     })
-    expect(container.textContent).toContain('Volume & outcomes')
-    const analyticsTab = container.querySelector('[role="tab"]')
-    expect(analyticsTab?.getAttribute('aria-selected')).toBe('true')
+    expect(container.textContent).toContain('Your fleet at a glance')
+    const homeTab = container.querySelector('[role="tab"]')
+    expect(homeTab?.textContent).toBe('Home')
+    expect(homeTab?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('switches to the real Analytics view when the Analytics item is clicked', async () => {
+    const analyticsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Analytics',
+    ) as HTMLElement
+
+    await act(async () => {
+      click(analyticsTab)
+      await Promise.resolve()
+    })
+
+    expect(analyticsTab.getAttribute('aria-selected')).toBe('true')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toContain('Volume & outcomes')
   })
 
   it('switches to the real Cost view when the Cost item is clicked', async () => {

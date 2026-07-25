@@ -50,6 +50,8 @@ export const en = {
   'palette.toggleLanguage': 'Switch language (EN/FR)',
 
   // ---- nav -----------------------------------------------------------
+  'nav.commandCenter': 'Command Center',
+  'nav.home': 'Home',
   'nav.overview': 'Overview',
   'nav.agents': 'Agents',
   'nav.system': 'System',
@@ -240,6 +242,39 @@ export const en = {
   'reality.requiresTokenTail': 'higher-privilege token.',
   'reality.requiresTokenNote':
     'Your current token can still use the other Mirador tabs — only this section needs a higher role.',
+
+  // ---- Home view (command center, default landing view) ----------------
+  'home.subtitle': 'Your fleet at a glance — click any figure to dig in.',
+  'home.kpiSpendToday': 'Spend today',
+  'home.kpiSpendSub': 'last 24h',
+  'home.kpiTokensSaved': 'Tokens saved',
+  'home.kpiTokensSavedSub': 'headroom + rtk, combined',
+  'home.kpiRunsSuccess': 'Runs · success rate',
+  'home.kpiRunsSub': 'last 24h',
+  'home.kpiMemoryHealth': 'Memory health',
+  'home.kpiPendingApprovals': 'Pending approvals',
+  'home.kpiRequiresRole': 'Requires a higher-role token',
+  'home.notAvailable': 'Not available',
+  'home.noData': 'No data',
+  'home.needsAttentionTitle': 'Needs attention',
+  'home.needsAttentionDescription': 'Oldest pending approvals first, then recent failed runs.',
+  'home.allClear': 'All clear — nothing needs your attention right now.',
+  'home.attentionApprovalBadge': 'Approval',
+  'home.attentionFailedRunBadge': 'Failed run',
+  'home.ageAgo': '{age} ago',
+  'home.needsAttentionForbidden': 'Approvals and runs require a run-rank (or higher) token to preview here.',
+  'home.sweepTitle': 'The Sweep',
+  'home.sweepDescription': 'Live status of running and recent pipeline runs.',
+  'home.sweepEmpty': 'No active or recent runs yet.',
+  'home.sweepLegendRunning': 'Running',
+  'home.sweepLegendWaiting': 'Awaiting approval',
+  'home.sweepLegendFailed': 'Failed',
+  'home.sweepLegendIdle': 'Idle / other',
+  'home.activityFeedTitle': 'Activity feed',
+  'home.activityFeedDescription': 'Most recent runs and approvals, newest first.',
+  'home.activityFeedEmpty': 'No activity yet.',
+  'home.activityRunLabel': 'Run',
+  'home.activityApprovalLabel': 'Approval',
 } as const
 
 /** Every valid translation key — derived from `en`, the single source of

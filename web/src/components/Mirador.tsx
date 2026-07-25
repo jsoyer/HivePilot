@@ -5,6 +5,7 @@ import {
   DollarSign,
   Gauge,
   HeartPulse,
+  LayoutDashboard,
   LayoutGrid,
   Menu,
   PlayCircle,
@@ -29,6 +30,7 @@ import { ApprovalsView } from './views/ApprovalsView'
 import { CostView } from './views/CostView'
 import { GraphView } from './views/GraphView'
 import { HealthView } from './views/HealthView'
+import { HomeView } from './views/HomeView'
 import { Mem0View } from './views/Mem0View'
 import { PanelView } from './views/PanelView'
 import { RealityView } from './views/RealityView'
@@ -38,7 +40,16 @@ import { RunsView } from './views/RunsView'
 // display text — resolved to the current language via `t()` where
 // `navItems` is built below, in `MiradorShell` (which has `useT()` in
 // scope, unlike this module-level constant).
+// Mirador Home command-center sprint: Home is the FIRST built-in tab and
+// the default landing view (`activeView` below). Its `Panel` here (`() =>
+// <HomeView onNavigate={...} />`) is a thin wrapper only used by the
+// generic `BUILTIN_TABS.map` render loop below — the wrapper is defined
+// inline per-render (see `MiradorShell`) so it can close over the real
+// `setActiveView`, keeping `HomeView` itself a plain, directly-testable
+// component that takes `onNavigate` as an explicit prop rather than reading
+// shell state from context.
 const BUILTIN_TABS = [
+  { value: 'home', labelKey: 'nav.home', Panel: HomeView, Icon: LayoutDashboard },
   { value: 'analytics', labelKey: 'nav.analytics', Panel: AnalyticsView, Icon: Activity },
   { value: 'cost', labelKey: 'nav.cost', Panel: CostView, Icon: DollarSign },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
@@ -70,11 +81,11 @@ function panelTabValue(name: string): string {
 /**
  * The Mirador app shell — dark, grouped-sidebar insight dashboard (P0b:
  * sidebar nav + enriched header, upgrading the original flat top tab bar).
- * Eight built-in items (Analytics / Cost / Health / Mem0 / Réalité /
- * Approvals / Runs / Graph, wired to real HivePilot API data —
- * `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`, `/v1/memory/*`,
- * `/v1/approvals`, `/v1/runs`, `/v1/graph/*`, see `./views/*` and
- * `@/lib/mirador-api`), grouped by
+ * Nine built-in items (Home / Analytics / Cost / Health / Mem0 / Réalité /
+ * Approvals / Runs / Graph, wired to real HivePilot API data — `/v1/models`,
+ * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`,
+ * `/v1/memory/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`, see `./views/*`
+ * and `@/lib/mirador-api`), grouped by
  * `./nav/nav-config`'s `buildNavGroups`, plus one DYNAMIC item per
  * plugin-contributed `panel` (Sprint 3 web surface, `GET /v1/panels`) —
  * ungrouped panels fall into a trailing "Panels" group automatically (see
@@ -103,13 +114,19 @@ function panelTabValue(name: string): string {
  * context. This is a UI-state-plumbing change only — the sidebar's own
  * click-to-switch behavior is unchanged, it now just flows through
  * `onValueChange` instead of Base UI's uncontrolled default.
+ *
+ * Home command-center sprint: `activeView`'s initial value is now `'home'`
+ * (was `'analytics'`) — Home is the default landing view, first in both
+ * `BUILTIN_TABS` and `nav-config.ts`'s `NAV_GROUP_ORDER`.
  */
 function MiradorShell() {
   const t = useT()
   const panelsState = useAsyncData(() => fetchPanels(), [])
   const pluginPanels = panelsState.status === 'success' ? panelsState.data.panels : []
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [activeView, setActiveView] = useState('analytics')
+  // Mirador Home command-center sprint: Home is the default landing view
+  // (was 'analytics').
+  const [activeView, setActiveView] = useState('home')
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   const navItems: NavItem[] = [
@@ -188,7 +205,12 @@ function MiradorShell() {
           <main className="min-w-0 flex-1 overflow-x-hidden p-3 sm:p-6">
             {BUILTIN_TABS.map(({ value, Panel }) => (
               <TabsContent key={value} value={value}>
-                <Panel />
+                {/* HomeView is the one built-in tab that takes a prop
+                 * (`onNavigate`, wired to the SAME `setActiveView` the
+                 * sidebar/palette use, so its hero KPI deep links behave
+                 * identically to clicking a nav item) — every other
+                 * built-in Panel is prop-less. */}
+                {value === 'home' ? <HomeView onNavigate={setActiveView} /> : <Panel />}
               </TabsContent>
             ))}
             {pluginPanels.map((panel) => (
