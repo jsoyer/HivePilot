@@ -1193,6 +1193,72 @@ def efficiency_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint — GET /v1/agents, GET /v1/lessons,
+# GET /v1/verdicts. Same shape as /v1/models and /v1/efficiency above:
+# Depends(require_role("read")), tenant-filtered via `_analytics_tenant`.
+# `limit`/`days` are bounded (ge=1, sane le=) — closes the gap the
+# unbounded `days: int = 30` params on the older analytics endpoints above
+# have (see this sprint's spec: "follow the safest existing pattern",
+# i.e. the `Query(50, ge=1, le=500)` convention already used by
+# GET /v1/memory/evaluations and GET /v1/memory/journal).
+# ---------------------------------------------------------------------------
+
+
+@v1.get("/agents")
+@app.get("/agents")
+def agents_endpoint(
+    days: int | None = Query(None, ge=1, le=3650),
+    project: str | None = None,
+    task: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Per-role agent activity roster (Mirador Agent Panels backend
+    sprint): the full role roster (`hivepilot.roles.list_roles()`)
+    LEFT-JOINed with real per-role activity derived from `steps.role` — see
+    `analytics_service.agents_summary`'s docstring for the full honesty
+    contract (unattributed roles, the NULL-role "unknown" bucket, no
+    fabricated latency)."""
+    return analytics_service.agents_summary(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+
+
+@v1.get("/lessons")
+@app.get("/lessons")
+def lessons_endpoint(
+    role: str | None = None,
+    limit: int = Query(50, ge=1, le=500),
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Recent lessons, optionally filtered by `role`, plus a per-role
+    aggregation (total / validated count / average score) — see
+    `analytics_service.lessons_summary`'s docstring. Tenant-scoped via
+    `state_service.list_lessons_by_tenant`'s fail-closed `LEFT JOIN runs`
+    (never `list_lessons`, which stays project-required/tenant-unaware for
+    its own existing callers)."""
+    return analytics_service.lessons_summary(
+        tenant=_analytics_tenant(caller), role=role, limit=limit
+    )
+
+
+@v1.get("/verdicts")
+@app.get("/verdicts")
+def verdicts_endpoint(
+    role: str | None = None,
+    limit: int = Query(50, ge=1, le=500),
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Recent verdicts, optionally filtered by `role`, plus a per-role
+    decision/kind aggregation — see `analytics_service.verdicts_summary`'s
+    docstring. Tenant-scoped via `state_service.list_verdicts`'s
+    fail-closed `LEFT JOIN runs` (never `list_recent_verdicts`, which stays
+    unfiltered-by-tenant for its own existing caller)."""
+    return analytics_service.verdicts_summary(
+        tenant=_analytics_tenant(caller), role=role, limit=limit
+    )
+
+
+# ---------------------------------------------------------------------------
 # Autopilot (guarded objective queue + fail-closed dispatch gate) — read +
 # control surface for Mirador. Backed by `hivepilot.services.autopilot_queue`
 # (the same service the `autopilot` CLI command group wraps) and the

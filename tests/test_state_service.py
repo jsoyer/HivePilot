@@ -408,6 +408,325 @@ class TestRecordStepUsage:
 
 
 # ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint — steps.role (idempotent migration +
+# record_step persistence). Mirrors the provider/model and usage migrations
+# above exactly: additive ALTER TABLE ... ADD COLUMN, guarded by
+# column_exists, NULL for every pre-migration row -- never backfilled with a
+# guess.
+# ---------------------------------------------------------------------------
+
+
+class TestStepsRoleMigration:
+    def test_column_exists_after_init_db(self) -> None:
+        init_db()
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "role")
+
+    def test_init_db_is_idempotent(self) -> None:
+        init_db()
+        init_db()  # must not raise "duplicate column name"
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "role")
+
+    def test_pre_existing_db_without_role_column_gets_it(self) -> None:
+        """Simulates a pre-this-sprint DB (has provider/model/usage columns
+        but not role): recreate steps in that shape, confirm init_db()
+        backfills the column without touching existing rows."""
+        state_service.init_db()  # creates the full up-to-date schema once
+
+        with db.connect() as conn:
+            conn.execute("DROP TABLE steps")
+            conn.execute(
+                """
+                CREATE TABLE steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER,
+                    step TEXT,
+                    status TEXT,
+                    detail TEXT,
+                    provider TEXT,
+                    model TEXT,
+                    input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    cost_usd REAL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO steps (run_id, step, status, provider, model) VALUES (?, ?, ?, ?, ?)",
+                (1, "legacy-step", "success", "claude", "claude-sonnet-4-6"),
+            )
+
+        with db.connect() as conn:
+            assert not db.column_exists(conn, "steps", "role")
+
+        init_db()  # idempotent migration must backfill the missing column
+
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "role")
+            row = conn.execute("SELECT * FROM steps WHERE step='legacy-step'").fetchone()
+        assert row is not None
+        assert row["provider"] == "claude"  # existing row untouched
+        assert row["role"] is None  # backfilled -> NULL, never an invented role
+
+
+class TestRecordStepRole:
+    def test_persists_role_when_given(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "success", role="developer")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["role"] == "developer"
+
+    def test_role_null_when_omitted(self) -> None:
+        """Backward-compat: existing callers that never pass role still
+        work and persist NULL — never an invented value."""
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "success")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["role"] is None
+
+    def test_fully_backward_compat_positional_call(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "failed", "boom")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["detail"] == "boom"
+        assert rows[0]["role"] is None
+
+
+# ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint — state_service.list_verdicts /
+# list_lessons_by_tenant: tenant-scoped, role-filterable reads backing the
+# new GET /v1/verdicts / GET /v1/lessons endpoints. Neither `verdicts` nor
+# `lessons` carries its own `tenant` column -- both resolve it via a LEFT
+# JOIN back to `runs.tenant` on `run_id`. A concrete `tenant` filter is
+# fail-closed: a row whose run_id is NULL or doesn't match ANY run can never
+# satisfy `r.tenant=?`, so it is excluded from every non-admin (tenant-
+# scoped) call -- only an unscoped (`tenant=None`, admin) call can see a
+# row whose tenant is unresolvable.
+# ---------------------------------------------------------------------------
+
+
+class TestListVerdicts:
+    def test_tenant_isolation_via_run_join(self) -> None:
+        run_acme = record_run_start("p", "t", tenant="acme")
+        run_other = record_run_start("p", "t", tenant="other")
+        state_service.record_verdict(
+            run_id=run_acme,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_other,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="reject",
+            confidence=0.9,
+        )
+        rows = state_service.list_verdicts(tenant="acme")
+        assert len(rows) == 1
+        assert rows[0]["decision"] == "approve"
+
+    def test_unscoped_admin_sees_all_tenants(self) -> None:
+        run_acme = record_run_start("p", "t", tenant="acme")
+        run_other = record_run_start("p", "t", tenant="other")
+        state_service.record_verdict(
+            run_id=run_acme,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_other,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="reject",
+            confidence=0.9,
+        )
+        rows = state_service.list_verdicts(tenant=None)
+        assert len(rows) == 2
+
+    def test_role_filter(self) -> None:
+        run_id = record_run_start("p", "t", tenant="acme")
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="developer",
+            kind="debate",
+            decision="approve",
+            confidence=0.9,
+        )
+        rows = state_service.list_verdicts(tenant="acme", role="reviewer")
+        assert len(rows) == 1
+        assert rows[0]["role"] == "reviewer"
+
+    def test_orphan_run_id_excluded_from_tenant_scoped_query(self) -> None:
+        """A verdict pointing at a run_id that doesn't exist (or a NULL
+        run_id) can never resolve a tenant -- must be excluded from a
+        concrete tenant filter (fail closed), never misattributed."""
+        state_service.record_verdict(
+            run_id=None,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        assert state_service.list_verdicts(tenant="acme") == []
+        assert len(state_service.list_verdicts(tenant=None)) == 1
+
+    def test_does_not_weaken_list_recent_verdicts(self) -> None:
+        """list_recent_verdicts stays exactly as before -- unfiltered by
+        tenant, run_id-filterable only."""
+        run_id = record_run_start("p", "t", tenant="acme")
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        rows = state_service.list_recent_verdicts(run_id=run_id)
+        assert len(rows) == 1
+
+
+class TestListLessonsByTenant:
+    def test_tenant_isolation_via_run_join(self) -> None:
+        run_acme = record_run_start("p", "t", tenant="acme")
+        run_other = record_run_start("p", "t", tenant="other")
+        state_service.record_lesson(
+            run_id=run_acme,
+            project="p",
+            role="developer",
+            task="t",
+            text="lesson acme",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        state_service.record_lesson(
+            run_id=run_other,
+            project="p",
+            role="developer",
+            task="t",
+            text="lesson other",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        rows = state_service.list_lessons_by_tenant(tenant="acme")
+        assert len(rows) == 1
+        assert rows[0]["text"] == "lesson acme"
+
+    def test_unscoped_admin_sees_all_tenants(self) -> None:
+        run_acme = record_run_start("p", "t", tenant="acme")
+        run_other = record_run_start("p", "t", tenant="other")
+        state_service.record_lesson(
+            run_id=run_acme,
+            project="p",
+            role="developer",
+            task="t",
+            text="lesson acme",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        state_service.record_lesson(
+            run_id=run_other,
+            project="p",
+            role="developer",
+            task="t",
+            text="lesson other",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        assert len(state_service.list_lessons_by_tenant(tenant=None)) == 2
+
+    def test_role_filter(self) -> None:
+        run_id = record_run_start("p", "t", tenant="acme")
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="developer",
+            task="t",
+            text="dev lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="reviewer",
+            task="t",
+            text="reviewer lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        rows = state_service.list_lessons_by_tenant(tenant="acme", role="reviewer")
+        assert len(rows) == 1
+        assert rows[0]["role"] == "reviewer"
+
+    def test_orphan_run_id_excluded_from_tenant_scoped_query(self) -> None:
+        state_service.record_lesson(
+            run_id=None,
+            project="p",
+            role="developer",
+            task="t",
+            text="orphan lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        assert state_service.list_lessons_by_tenant(tenant="acme") == []
+        assert len(state_service.list_lessons_by_tenant(tenant=None)) == 1
+
+    def test_does_not_weaken_list_lessons(self) -> None:
+        """list_lessons stays exactly as before -- project-required,
+        validated_only defaulting to True."""
+        run_id = record_run_start("p", "t", tenant="acme")
+        state_service.record_lesson(
+            run_id=run_id,
+            project="lessons-proj",
+            role="developer",
+            task="t",
+            text="candidate",
+            score=None,
+            confidence=None,
+            category="test",
+            validated=False,
+        )
+        assert state_service.list_lessons("lessons-proj") == []  # validated_only=True default
+        assert len(state_service.list_lessons("lessons-proj", validated_only=False)) == 1
+
+
+# ---------------------------------------------------------------------------
 # Phase 20 D3 review — get_schedule_last_run must return a tz-aware UTC
 # datetime (was returning a NAIVE datetime parsed from SQLite's
 # CURRENT_TIMESTAMP, which raised TypeError when compared/subtracted against

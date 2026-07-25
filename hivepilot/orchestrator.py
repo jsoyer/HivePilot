@@ -431,6 +431,7 @@ def _record_step_success(
     provider: str | None,
     model: str | None,
     usage: UsageInfo | None,
+    role: str | None = None,
 ) -> None:
     """Call ``state_service.record_step`` for a successful step, threading
     captured usage (Phase 24b.2a — opt-in usage capture) when present.
@@ -440,9 +441,15 @@ def _record_step_success(
     Phase 24b.1 callers/tests stay byte-compatible. When *usage* carries an
     actual model (from the JSON envelope), it overrides *model* — this closes
     the 24b.1 gap where profile/default-model claude steps persisted None.
+
+    ``role`` is additive and optional (Mirador Agent Panels backend sprint —
+    per-role activity attribution): the caller's already-resolved
+    ``task.role`` (``None`` for a non-role task, never invented here).
     """
     if usage is None:
-        state_service.record_step(run_id, step_name, "success", provider=provider, model=model)
+        state_service.record_step(
+            run_id, step_name, "success", provider=provider, model=model, role=role
+        )
         return
     state_service.record_step(
         run_id,
@@ -453,6 +460,7 @@ def _record_step_success(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         cost_usd=usage.cost_usd,
+        role=role,
     )
 
 
@@ -4195,10 +4203,14 @@ class Orchestrator:
                 else:
                     run_engine(task=task, project=project, payload=payload)
                 if run_id:
-                    state_service.record_step(run_id, placeholder_step.name, "success")
+                    state_service.record_step(
+                        run_id, placeholder_step.name, "success", role=task.role
+                    )
             except Exception as exc:
                 if run_id:
-                    state_service.record_step(run_id, placeholder_step.name, "failed", str(exc))
+                    state_service.record_step(
+                        run_id, placeholder_step.name, "failed", str(exc), role=task.role
+                    )
                 raise
             logger.info("task.end", project=project.path.name, task=task_name)
             return None
@@ -4220,7 +4232,9 @@ class Orchestrator:
                     task_name=task_name,
                 )
                 if run_id:
-                    state_service.record_step(run_id, f"{task.role}-debate", "success")
+                    state_service.record_step(
+                        run_id, f"{task.role}-debate", "success", role=task.role
+                    )
                 logger.info("task.end", project=project.path.name, task=task_name)
                 adr_path = adr.get("path") if adr else None
                 return "dual-model debate → synthesis" + (f" ({adr_path})" if adr_path else "")
@@ -4768,7 +4782,9 @@ class Orchestrator:
                                 if _used_runner_def is not None
                                 else (None, None)
                             )
-                            _record_step_success(run_id, step.name, _provider, _model, _usage)
+                            _record_step_success(
+                                run_id, step.name, _provider, _model, _usage, role=task.role
+                            )
                         _step_span.set_attribute("hivepilot.step.status", "success")
                         # Close the store()-redaction hole (auto-learning-
                         # lessons-loop PRD, Sprint 1): `after_step` fans out
@@ -4863,6 +4879,7 @@ class Orchestrator:
                                 str(exc),
                                 provider=_provider,
                                 model=_model,
+                                role=task.role,
                             )
                         if step.allow_failure:
                             logger.warning("step.failure_allowed", step=step.name, error=str(exc))

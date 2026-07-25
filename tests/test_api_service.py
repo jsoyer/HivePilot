@@ -579,9 +579,19 @@ class TestAnalyticsCostByProjectAndRole:
                 "unpriced_steps": 0,
             }
         ]
-        # role isn't trackable in current data — honest null + reason, never
-        # fabricated as an empty-but-present breakdown.
-        assert data["by_role"] is None
+        # No role was threaded into this seeded step -> role=NULL -> the
+        # honest "unknown" bucket (Mirador Agent Panels backend sprint:
+        # steps.role now exists, so by_role is a REAL breakdown).
+        assert data["by_role"] == [
+            {
+                "role": "unknown",
+                "total_steps": 1,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 1.0,
+                "unpriced_steps": 0,
+            }
+        ]
         assert isinstance(data["by_role_note"], str) and data["by_role_note"]
         assert data["unpriced_models"] == []
 
@@ -738,6 +748,279 @@ class TestEfficiencyEndpoint:
         raw_other, _ = add_token("read", tenant="other")
         resp_other = api_client.get("/v1/efficiency", headers=_auth(raw_other))
         assert resp_other.json()["headroom"]["total_compressions"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint — GET /v1/agents
+# ---------------------------------------------------------------------------
+
+
+class TestAgentsEndpoint:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/agents")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/agents", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/agents", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_empty_db_full_roster_honestly_empty_not_500(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/agents", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        names = {a["name"] for a in data["agents"]}
+        assert "developer" in names
+        for agent in data["agents"]:
+            assert agent["attributed"] is False
+            assert agent["success_rate"] is None
+        assert "unknown" in data
+        assert isinstance(data["note"], str) and data["note"]
+
+    def test_reflects_seeded_step_role(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="success")
+        state_service.record_step(run_id, "s1", "success", cost_usd=1.0, role="developer")
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/agents", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        dev = next(a for a in data["agents"] if a["name"] == "developer")
+        assert dev["attributed"] is True
+        assert dev["step_count"] == 1
+        assert dev["cost_usd"] == 1.0
+
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="success", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="success", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", cost_usd=1.0, role="developer")
+        state_service.record_step(run_other, "s1", "success", cost_usd=1.0, role="developer")
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/agents", headers=_auth(raw))
+        assert resp.status_code == 200
+        dev = next(a for a in resp.json()["agents"] if a["name"] == "developer")
+        assert dev["step_count"] == 1
+
+    def test_admin_sees_all_tenants(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="success", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="success", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", cost_usd=1.0, role="developer")
+        state_service.record_step(run_other, "s1", "success", cost_usd=1.0, role="developer")
+
+        raw, _ = add_token("admin")
+        resp = api_client.get("/v1/agents", headers=_auth(raw))
+        assert resp.status_code == 200
+        dev = next(a for a in resp.json()["agents"] if a["name"] == "developer")
+        assert dev["step_count"] == 2
+
+    def test_invalid_days_rejected(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/agents?days=0", headers=_auth(raw))
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint — GET /v1/lessons
+# ---------------------------------------------------------------------------
+
+
+class TestLessonsEndpoint:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/lessons")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/lessons", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/lessons", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_empty_db_not_500(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/lessons", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["lessons"] == []
+        assert data["by_role"] == {}
+
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="success", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="success", tenant="other")
+        state_service.record_lesson(
+            run_id=run_acme,
+            project="p",
+            role="developer",
+            task="t",
+            text="acme lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        state_service.record_lesson(
+            run_id=run_other,
+            project="p",
+            role="developer",
+            task="t",
+            text="other lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/lessons", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["lessons"]) == 1
+        assert data["lessons"][0]["text"] == "acme lesson"
+
+    def test_role_filter(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="success", tenant="acme")
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="developer",
+            task="t",
+            text="dev lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="reviewer",
+            task="t",
+            text="reviewer lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/lessons?role=reviewer", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["lessons"]) == 1
+        assert data["lessons"][0]["role"] == "reviewer"
+
+    def test_invalid_limit_rejected(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/lessons?limit=0", headers=_auth(raw))
+        assert resp.status_code == 422
+        resp = api_client.get("/v1/lessons?limit=100000", headers=_auth(raw))
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint — GET /v1/verdicts
+# ---------------------------------------------------------------------------
+
+
+class TestVerdictsEndpoint:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/verdicts")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/verdicts", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/verdicts", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_empty_db_not_500(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/verdicts", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["verdicts"] == []
+        assert data["by_role"] == {}
+
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="success", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="success", tenant="other")
+        state_service.record_verdict(
+            run_id=run_acme,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_other,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="reject",
+            confidence=0.9,
+        )
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/verdicts", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["verdicts"]) == 1
+        assert data["verdicts"][0]["decision"] == "approve"
+
+    def test_role_filter_and_aggregation(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="success", tenant="acme")
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="developer",
+            kind="debate",
+            decision="approve",
+            confidence=0.9,
+        )
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/verdicts?role=reviewer", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["verdicts"]) == 1
+        assert data["by_role"]["reviewer"]["decision_counts"] == {"approve": 1}
+
+    def test_invalid_limit_rejected(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/verdicts?limit=0", headers=_auth(raw))
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

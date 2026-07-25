@@ -679,7 +679,9 @@ class TestStepProviderModelThreading:
                 run_id=1,
             )
 
-        mock_step.assert_called_once_with(1, "s", "success", provider="codex", model="gpt-5.5")
+        mock_step.assert_called_once_with(
+            1, "s", "success", provider="codex", model="gpt-5.5", role="reviewer"
+        )
 
     def test_role_step_failure_records_provider_and_model(self) -> None:
         """A failed step must still thread provider/model — the runner that
@@ -710,7 +712,7 @@ class TestStepProviderModelThreading:
             )
 
         mock_step.assert_called_once_with(
-            1, "s", "failed", "boom", provider="codex", model="gpt-5.5"
+            1, "s", "failed", "boom", provider="codex", model="gpt-5.5", role="reviewer"
         )
 
     def test_fallback_records_the_runner_that_actually_succeeded(self) -> None:
@@ -789,7 +791,9 @@ class TestStepProviderModelThreading:
                 run_id=1,
             )
 
-        mock_step.assert_called_once_with(1, "s", "success", provider="shell", model=None)
+        mock_step.assert_called_once_with(
+            1, "s", "success", provider="shell", model=None, role=None
+        )
 
     def test_step_metadata_model_override_wins_over_runner_definition(self) -> None:
         """A step's own `metadata['model']` override (if set) takes priority
@@ -828,7 +832,7 @@ class TestStepProviderModelThreading:
             )
 
         mock_step.assert_called_once_with(
-            1, "s", "success", provider="codex", model="override-model"
+            1, "s", "success", provider="codex", model="override-model", role="reviewer"
         )
 
     def test_role_with_no_effort_builds_runner_definition_with_effort_none(self) -> None:
@@ -928,9 +932,10 @@ class TestStepProviderModelThreading:
 class TestUsageThreading:
     def test_no_usage_captured_keeps_existing_call_signature(self) -> None:
         """When pop_last_usage() returns None (flag off / non-claude runner /
-        no capture), record_step must be called EXACTLY as it was before this
-        sprint — no input_tokens/output_tokens/cost_usd kwargs at all. This
-        guarantees Phase 24b.1 callers/tests remain byte-compatible."""
+        no capture), record_step must be called with no input_tokens/
+        output_tokens/cost_usd kwargs at all (Phase 24b.1/24b.2a stay
+        byte-compatible) -- `role` is the only additive kwarg beyond that
+        (Mirador Agent Panels backend sprint)."""
         from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
@@ -957,7 +962,9 @@ class TestUsageThreading:
                 run_id=1,
             )
 
-        mock_step.assert_called_once_with(1, "s", "success", provider="codex", model="gpt-5.5")
+        mock_step.assert_called_once_with(
+            1, "s", "success", provider="codex", model="gpt-5.5", role="reviewer"
+        )
 
     def test_captured_usage_threads_tokens_and_cost(self) -> None:
         from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
@@ -997,6 +1004,7 @@ class TestUsageThreading:
             input_tokens=100,
             output_tokens=50,
             cost_usd=0.02,
+            role="reviewer",
         )
 
     def test_captured_usage_model_overrides_resolved_model(self) -> None:
@@ -1065,7 +1073,7 @@ class TestUsageThreading:
             )
 
         mock_step.assert_called_once_with(
-            1, "s", "failed", "boom", provider="codex", model="gpt-5.5"
+            1, "s", "failed", "boom", provider="codex", model="gpt-5.5", role="reviewer"
         )
 
 
