@@ -260,6 +260,41 @@ class TestPerStageArtifact:
         written_files = list(runs_dir.glob("*.md"))
         assert written_files == [], f"dry_run=True must not write files; found: {written_files}"
 
+    def test_orchestrator_threads_producing_task_role(self) -> None:
+        """run_pipeline passes the producing task's `role` string through to
+        write_stage_artifact (vault-canonical-artifacts PRD) — None when the
+        task has no role, the exact role string otherwise."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline("cto-review")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.tasks.tasks = {"cto-review": TaskConfig(description="d", role="cto")}
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=5),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch(
+                "hivepilot.orchestrator.write_stage_artifact", return_value=None
+            ) as mock_artifact,
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(
+                orch,
+                "run_task",
+                side_effect=lambda **kwargs: [RunResult("proj", kwargs["task_name"], True)],
+            ),
+        ):
+            orch.run_pipeline(
+                project_names=["proj"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert mock_artifact.call_count == 1
+        assert mock_artifact.call_args.kwargs["role"] == "cto"
+
 
 # ---------------------------------------------------------------------------
 # _runner_for_stage tests
