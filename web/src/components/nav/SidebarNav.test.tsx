@@ -176,4 +176,26 @@ describe('SidebarNav', () => {
       expect(tab.className).toMatch(/min-h-10/)
     }
   })
+
+  it('IA/Cyber identity: every item has a leading status dot, and the active item is tinted/striped', () => {
+    act(() => {
+      root.render(<Harness />)
+    })
+    const analyticsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Analytics',
+    ) as HTMLElement
+    expect(analyticsTab.querySelector('[data-slot="nav-item-dot"]')).not.toBeNull()
+    // `defaultValue="analytics"` in the harness — this trigger starts active.
+    expect(analyticsTab.getAttribute('aria-selected')).toBe('true')
+    expect(analyticsTab.className).toMatch(/data-active:/)
+
+    const costTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Cost',
+    ) as HTMLElement
+    act(() => {
+      click(costTab)
+    })
+    expect(costTab.getAttribute('aria-selected')).toBe('true')
+    expect(analyticsTab.getAttribute('aria-selected')).toBe('false')
+  })
 })

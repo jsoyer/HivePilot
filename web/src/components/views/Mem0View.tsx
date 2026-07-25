@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ApiForbiddenError } from '@/lib/api'
 import { useT } from '@/lib/i18n'
 import { fetchMemories, type MemoriesResponse } from '@/lib/mirador-api'
-import { useAsyncData } from '@/lib/use-async-data'
+import { type AsyncState, useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 
 const LIMIT = 20
@@ -49,7 +49,20 @@ export function Mem0View() {
   }
 
   const hasSearched = submittedQuery !== null
-  const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
+  // `useAsyncData`'s stale-while-revalidate keeps the state as `'success'`
+  // (with `isRefreshing: true`) across a dep-triggered refetch instead of
+  // resetting to `'loading'` — correct for a passive poll, but this view's
+  // very FIRST real search is a dep change away from an already-`'success'`
+  // sentinel state (`data: null`, from the guard fetch above that never
+  // calls the real endpoint). Re-synthesize that one case back into
+  // `'loading'` so the search still gets an honest in-flight indicator;
+  // once a real result has landed, later re-searches correctly keep the
+  // previous table visible instead of flashing back to a skeleton.
+  const effectiveState: AsyncState<MemoriesResponse | null> =
+    state.status === 'success' && state.data === null && state.isRefreshing === true
+      ? { status: 'loading' }
+      : state
+  const isForbidden = effectiveState.status === 'error' && effectiveState.error instanceof ApiForbiddenError
 
   return (
     <Card>
@@ -84,7 +97,7 @@ export function Mem0View() {
 
         {hasSearched && !isForbidden && (
           <AsyncSection
-            state={state}
+            state={effectiveState}
             isEmpty={(data) => data !== null && data.configured && data.memories.length === 0}
             emptyMessage={t('mem0.noResults')}
           >

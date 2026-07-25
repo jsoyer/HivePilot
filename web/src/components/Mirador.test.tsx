@@ -218,7 +218,9 @@ function click(el: Element) {
 describe('Mirador', () => {
   it('renders the Mirador title and subtitle, and every tab reachable via the sidebar', () => {
     expect(container.textContent).toContain('Mirador')
-    expect(container.textContent).toContain('HivePilot insight dashboard')
+    expect(container.textContent).toContain('cyber ops console')
+    // IA/Cyber identity: the brand mark next to the wordmark.
+    expect(container.querySelector('[data-slot="brand-mark"]')).not.toBeNull()
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
     expect(tabs).toEqual(GROUPED_TAB_ORDER)
   })
@@ -488,7 +490,7 @@ describe('Mirador', () => {
     expect(container.textContent).toContain("Vue d'ensemble")
     expect(container.textContent).toContain('Système')
     expect(container.textContent).toContain('Mémoire')
-    expect(container.textContent).toContain('Tableau de bord HivePilot')
+    expect(container.textContent).toContain("console d'opérations cyber")
     expect(window.localStorage.getItem(LANG_STORAGE_KEY)).toBe(JSON.stringify('fr'))
   })
 

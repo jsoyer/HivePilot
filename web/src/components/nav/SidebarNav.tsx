@@ -96,9 +96,23 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
                   key={item.value}
                   value={item.value}
                   onClick={onCloseMobile}
-                  className="min-h-10 w-full justify-start gap-2 rounded-md px-2 text-sm"
+                  className={cn(
+                    // IA/Cyber identity: the active item gets a subtle
+                    // phosphor gradient tint + a left "on" stripe (mirrors
+                    // the reference mockup's `.nav a.on`) — `group/navitem`
+                    // lets the leading status dot below react to the SAME
+                    // Base UI `data-active` attribute this trigger already
+                    // uses for its own styling.
+                    'group/navitem min-h-10 w-full justify-start gap-2 rounded-md border-l-2 border-l-transparent px-2 text-sm',
+                    'data-active:border-l-[var(--color-good)] data-active:bg-gradient-to-r data-active:from-[var(--color-good)]/10 data-active:to-transparent',
+                  )}
                   title={item.label}
                 >
+                  <span
+                    data-slot="nav-item-dot"
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40 group-data-active/navitem:bg-[var(--color-good)] group-data-active/navitem:shadow-[0_0_6px_var(--color-good)]"
+                  />
                   <item.Icon className="size-4 shrink-0" />
                   <span className={cn(collapsed && 'lg:sr-only')}>{item.label}</span>
                 </TabsTrigger>

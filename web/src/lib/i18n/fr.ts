@@ -38,7 +38,7 @@ export const fr: Record<TranslationKey, string> = {
     '(ou supérieur). Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule cette liste nécessite un rôle supérieur.',
 
   // ---- header / shell ----------------------------------------------------
-  'header.subtitle': 'Tableau de bord HivePilot',
+  'header.subtitle': "console d'opérations cyber",
   'header.search': 'Rechercher',
 
   // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
@@ -305,6 +305,8 @@ export const fr: Record<TranslationKey, string> = {
 
   // ---- Home view (centre de commandement, vue d'accueil par défaut) ----
   'home.subtitle': "Votre flotte en un coup d'œil — cliquez sur un chiffre pour l'explorer.",
+  'home.kpiSectionTitle': 'Posture',
+  'home.refreshingLabel': 'Actualisation',
   'home.kpiSpendToday': 'Dépense du jour',
   'home.kpiSpendSub': 'dernières 24h',
   'home.kpiTokensSaved': 'Tokens économisés',

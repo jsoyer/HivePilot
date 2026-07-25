@@ -38,7 +38,10 @@ export const en = {
     '(or higher) token. Your current token can still use the other Mirador tabs — only this list needs a higher role.',
 
   // ---- header / shell ----------------------------------------------------
-  'header.subtitle': 'HivePilot insight dashboard',
+  // IA/Cyber identity: the brand eyebrow under "Mirador" — mirrors the
+  // reference mockup's `.brand span` ("cyber ops console"), replacing the
+  // prior generic "HivePilot insight dashboard" subtitle.
+  'header.subtitle': 'cyber ops console',
   'header.search': 'Search',
 
   // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
@@ -299,6 +302,10 @@ export const en = {
 
   // ---- Home view (command center, default landing view) ----------------
   'home.subtitle': 'Your fleet at a glance — click any figure to dig in.',
+  // IA/Cyber identity: the numbered "01 Posture" section header above the
+  // hero KPI grid (see `SectionHeader`).
+  'home.kpiSectionTitle': 'Posture',
+  'home.refreshingLabel': 'Refreshing',
   'home.kpiSpendToday': 'Spend today',
   'home.kpiSpendSub': 'last 24h',
   'home.kpiTokensSaved': 'Tokens saved',

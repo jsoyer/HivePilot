@@ -3,11 +3,23 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import type { VizTone } from './Sparkline'
 
-const TONE_CLASSES: Record<VizTone, { chip: string; value: string }> = {
-  default: { chip: 'bg-muted text-muted-foreground', value: 'text-foreground' },
-  good: { chip: 'bg-[var(--color-good)]/10 text-[var(--color-good)]', value: 'text-[var(--color-good)]' },
-  warn: { chip: 'bg-[var(--color-warn)]/10 text-[var(--color-warn)]', value: 'text-[var(--color-warn)]' },
-  crit: { chip: 'bg-[var(--color-crit)]/10 text-[var(--color-crit)]', value: 'text-[var(--color-crit)]' },
+const TONE_CLASSES: Record<VizTone, { chip: string; value: string; stripe: string }> = {
+  default: { chip: 'bg-muted text-muted-foreground', value: 'text-foreground', stripe: '' },
+  good: {
+    chip: 'bg-[var(--color-good)]/10 text-[var(--color-good)]',
+    value: 'text-[var(--color-good)]',
+    stripe: 'border-l-2 border-l-[var(--color-good)]',
+  },
+  warn: {
+    chip: 'bg-[var(--color-warn)]/10 text-[var(--color-warn)]',
+    value: 'text-[var(--color-warn)]',
+    stripe: 'border-l-2 border-l-[var(--color-warn)]',
+  },
+  crit: {
+    chip: 'bg-[var(--color-crit)]/10 text-[var(--color-crit)]',
+    value: 'text-[var(--color-crit)]',
+    stripe: 'border-l-2 border-l-[var(--color-crit)]',
+  },
 }
 
 const TREND_CLASSES: Record<'good' | 'crit', string> = {
@@ -62,7 +74,11 @@ export function MetricReadout({
   const trendTone = trend?.tone ?? (trend?.direction === 'up' ? 'good' : 'crit')
 
   return (
-    <Card data-slot="metric-readout" data-tone={tone} className={cn('w-full', className)}>
+    <Card
+      data-slot="metric-readout"
+      data-tone={tone}
+      className={cn('w-full', toneClasses.stripe, className)}
+    >
       <CardContent className="flex items-start gap-3">
         {icon && (
           <span
@@ -78,13 +94,13 @@ export function MetricReadout({
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <span
             data-slot="metric-readout-label"
-            className="text-xs font-medium tracking-wide text-muted-foreground uppercase"
+            className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase"
           >
             {label}
           </span>
           <span
             data-slot="metric-readout-value"
-            className={cn('metric-mono text-3xl leading-none', toneClasses.value)}
+            className={cn('metric-mono text-2xl leading-none font-semibold', toneClasses.value)}
           >
             {value}
           </span>
