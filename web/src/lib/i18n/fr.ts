@@ -65,6 +65,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.health': 'Santé',
   'nav.approvals': 'Approbations',
   'nav.runs': 'Exécutions',
+  'nav.autopilot': 'Autopilote',
   'nav.graph': 'Graphe',
 
   // ---- health status words (shared: header pills + Health tab badges) --
@@ -368,4 +369,37 @@ export const fr: Record<TranslationKey, string> = {
   'efficiency.rtkCommands': 'Commandes suivies',
   'efficiency.rtkSavedSeriesTitle': 'Tendance des économies',
   'efficiency.noSavedSeries': "Aucune série journalière enregistrée pour le moment.",
+
+  // ---- Autopilot view ---------------------------------------------------
+  'autopilot.description':
+    "La file d'objectifs surveillée — mettez en pause, reprenez, et surveillez ce qu'elle déclenche.",
+  'autopilot.statusLabel': 'Statut',
+  'autopilot.active': 'Actif',
+  'autopilot.paused': 'En pause',
+  'autopilot.queueDepthLabel': 'Profondeur de la file',
+  'autopilot.pauseButton': 'Mettre en pause',
+  'autopilot.resumeButton': 'Reprendre',
+  'autopilot.pauseConfirm':
+    "Mettre l'autopilote en pause ? Il arrêtera de déclencher de nouveaux objectifs jusqu'à la reprise.",
+  'autopilot.resumeConfirm':
+    "Reprendre l'autopilote ? Il recommencera à déclencher les objectifs en file.",
+  'autopilot.insufficientRole':
+    "Rôle insuffisant — votre jeton ne peut plus mettre en pause/reprendre l'autopilote.",
+  'autopilot.controlRequiresRunRole':
+    'Nécessite un jeton de rang run (ou supérieur) pour mettre en pause/reprendre.',
+  'autopilot.forbidden': "Impossible de charger l'état de l'autopilote pour le tenant de votre jeton.",
+  'autopilot.budgetTitle': 'Budget',
+  'autopilot.dailyBudget': 'Budget quotidien',
+  'autopilot.spentToday': "Dépensé aujourd'hui",
+  'autopilot.remaining': 'Restant',
+  'autopilot.unknown': 'inconnu',
+  'autopilot.noBudget': 'Aucun budget quotidien configuré.',
+  'autopilot.budgetBurn': 'Consommation du budget',
+  'autopilot.queueTitle': "File d'objectifs",
+  'autopilot.queueEmpty': 'File vide.',
+  'autopilot.enqueuedAgo': 'ajoutée il y a {age}',
+  'autopilot.dispatchesTitle': 'Dispatches récents',
+  'autopilot.dispatchesEmpty': 'Aucun dispatch pour le moment.',
+  'autopilot.allowlistTitle': 'Pipelines autorisés',
+  'autopilot.allowlistEmpty': "Rien n'est autorisé — l'autopilote est effectivement inactif.",
 }

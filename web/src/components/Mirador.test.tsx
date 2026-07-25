@@ -108,6 +108,21 @@ const mocks = vi.hoisted(() => ({
     headroom: { total_compressions: 0, chars_saved: 0, avg_ratio: 0, p95_ratio: 0, est_tokens_saved: 0 },
     rtk: null,
   }),
+  // Mirador Autopilot view sprint: the Autopilot tab's GET /v1/autopilot —
+  // mocked genuinely-empty/real-shaped so this shell test exercises tab
+  // switching only, not AutopilotView's own data/empty/error states
+  // (covered by AutopilotView.test.tsx).
+  fetchAutopilot: vi.fn().mockResolvedValue({
+    tenant: 'default',
+    paused: false,
+    queue: [],
+    queue_depth: 0,
+    budget_daily_usd: null,
+    budget_spent_today: null,
+    budget_remaining: null,
+    recent_dispatches: [],
+    auto_dispatch_allowlist: [],
+  }),
 }))
 
 vi.mock('@/lib/mirador-api', async (importOriginal) => {
@@ -143,6 +158,7 @@ const GROUPED_TAB_ORDER = [
   'Home',
   'Runs',
   'Approvals',
+  'Autopilot',
   'Cost',
   'Models',
   'Efficiency',
@@ -234,6 +250,23 @@ describe('Mirador', () => {
     expect(analyticsTab.getAttribute('aria-selected')).toBe('true')
     const panel = container.querySelector('[role="tabpanel"]')
     expect(panel?.textContent).toContain('Volume & outcomes')
+  })
+
+  it('switches to the real Autopilot view when the Autopilot item is clicked (reachable via the sidebar)', async () => {
+    const autopilotTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Autopilot',
+    ) as HTMLElement
+    expect(autopilotTab).not.toBeUndefined()
+
+    await act(async () => {
+      click(autopilotTab)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(autopilotTab.getAttribute('aria-selected')).toBe('true')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toContain('Active')
   })
 
   it('switches to the real Cost view when the Cost item is clicked', async () => {

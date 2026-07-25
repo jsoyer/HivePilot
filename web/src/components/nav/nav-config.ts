@@ -35,7 +35,11 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // Home. Replaces the "Agents" group at this same top-adjacent slot -- the
   // rename better describes what the group is FOR (operating runs), not
   // just which role triggers them.
-  { label: 'nav.operate', values: ['runs', 'approvals'] },
+  // Mirador Autopilot view sprint: Autopilot (GET/POST /v1/autopilot — the
+  // guarded objective queue's control surface) joins the same group — it's
+  // an "operate" concern (pause/resume, watch what's queued/dispatched),
+  // not a Spend/Overview/System one.
+  { label: 'nav.operate', values: ['runs', 'approvals', 'autopilot'] },
   // Mirador Spend section sprint: Cost moves out of "Overview" into its own
   // "Spend" group alongside the two new views (Models/Efficiency) — the
   // operator's complaint this sprint answers ("la conso marche pas, rien
