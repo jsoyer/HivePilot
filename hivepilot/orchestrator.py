@@ -3238,17 +3238,21 @@ class Orchestrator:
             if producing_role and producing_role.outputs:
                 outputs_by_key.update(_stage_outputs_by_key(stage_output, producing_role.outputs))
 
-            # Declared-scope gate (only_modules follow-up): any stage's output
-            # can declare the run's touched-surfaces scope via a `SURFACES:`
-            # line (`_parse_surfaces`). A non-None result REPLACES
-            # `selected_modules` for every later stage's gate check above --
-            # the most recent explicit declaration always wins. A stage that
-            # never emits a `SURFACES:` line leaves `selected_modules`
-            # untouched (fail-safe: stays `None`, or stays at whatever an
-            # earlier stage declared).
-            _surfaces = _parse_surfaces(stage_output)
-            if _surfaces is not None:
-                selected_modules = _surfaces
+            # Declared-scope gate (only_modules follow-up), RESTRICTED to the
+            # designated planning stage: only a stage explicitly flagged
+            # `declares_surfaces=True` may declare the run's touched-surfaces
+            # scope via a `SURFACES:` line (`_parse_surfaces`). Every other
+            # stage's output is never scanned for a `SURFACES:` line, no
+            # matter what it contains -- this is what stops an arbitrary
+            # agent from hijacking the design scope. A non-None result from
+            # the flagged stage REPLACES `selected_modules` for every later
+            # stage's gate check above. A stage that isn't flagged (the
+            # default) leaves `selected_modules` untouched (fail-safe: stays
+            # `None`, or stays at whatever the flagged stage declared).
+            if stage.declares_surfaces:
+                _surfaces = _parse_surfaces(stage_output)
+                if _surfaces is not None:
+                    selected_modules = _surfaces
 
             prior_chunks.append(f"## {self._agent_name(stage)} ({stage.name})\n{stage_output}")
             write_stage_artifact(
