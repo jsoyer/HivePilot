@@ -119,14 +119,16 @@ class TestToolsRestriction:
         )
 
     def test_no_tools_flag_by_default(self, tmp_path: Path) -> None:
-        """Byte-identical to before this feature existed when unset — no
-        `--` end-of-options separator either (see TestToolsPromptDelivery)."""
+        """`--tools` itself stays byte-identical to before this feature
+        existed when unset. The `--` end-of-options separator is now
+        unconditional (see TestToolsPromptDelivery) — always present
+        immediately before the prompt regardless of `--tools`."""
         runner = ClaudeRunner(
             RunnerDefinition(name="claude", kind="claude", command="claude"), settings
         )
         args, _ = runner._build_invocation(self._payload(tmp_path))
         assert "--tools" not in args
-        assert "--" not in args
+        assert args[-2] == "--"
 
     def test_tools_flag_from_definition_options_empty_string_disables_all(
         self, tmp_path: Path
@@ -174,7 +176,13 @@ class TestToolsPromptDelivery:
     the real `claude` binary exits 1 with "Input must be provided either
     through stdin or as a prompt argument when using --print". This test
     would FAIL under the old "prompt positional right after variadic
-    --tools" argv shape (no `--` separator)."""
+    --tools" argv shape (no `--` separator).
+
+    The end-of-options separator (`--`) is now UNCONDITIONAL — emitted
+    immediately before the prompt on EVERY invocation, not only when
+    `--tools` is set — because any other variadic flag (e.g. `--add-dir`,
+    used for skill scratch dirs) is equally capable of swallowing the
+    prompt. See `TestSkillAddDirPromptDelivery` below for that exact case."""
 
     def _payload(self, tmp_path: Path) -> RunnerPayload:
         pf = tmp_path / "p.md"
@@ -216,15 +224,102 @@ class TestToolsPromptDelivery:
         assert args[-2] == "--"
         assert args.index("--") > args.index("--permission-mode")
 
-    def test_no_separator_when_tools_unset_argv_unchanged(self, tmp_path: Path) -> None:
-        """No-tools callers keep the EXACT pre-fix argv shape: prompt is the
-        last element, no `--` inserted anywhere."""
+    def test_separator_present_when_tools_unset_prompt_still_last(self, tmp_path: Path) -> None:
+        """No-tools callers still get the unconditional `--` separator
+        immediately before the prompt (the prompt itself remains the last
+        element, so nothing downstream that only looked at `args[-1]` for
+        the prompt is broken by this change)."""
         runner = ClaudeRunner(
             RunnerDefinition(name="claude", kind="claude", command="claude"), settings
         )
         args, _ = runner._build_invocation(self._payload(tmp_path))
-        assert "--" not in args
+        assert args.count("--") == 1
+        assert args[-2] == "--"
         assert args[-1] != "--"
+
+    def test_separator_appears_exactly_once_regardless_of_flags(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """`--` must appear EXACTLY once, positioned immediately before the
+        prompt, no matter how many flags precede it (`--tools` and
+        `--permission-mode` here)."""
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude", options={"tools": ""}),
+            settings,
+        )
+        monkeypatch.setattr(runner.settings, "claude_permission_mode", "acceptEdits", raising=False)
+        args, _ = runner._build_invocation(self._payload(tmp_path))
+        assert args.count("--") == 1
+        assert args[-2] == "--"
+
+
+class TestSkillAddDirPromptDelivery:
+    """Regression coverage for the SAME class of bug as
+    `TestToolsPromptDelivery`, but for `--add-dir` (used to grant Claude
+    access to a skill's ephemeral scratch directory — see
+    `ClaudeRunner.apply_skill`). `--add-dir <dirs...>` is ALSO variadic, so
+    without an unconditional `--` separator it would swallow the positional
+    prompt exactly like `--tools` did — breaking EVERY task with a skill
+    applied (confirmed against the real `claude` binary:
+    `claude --print --add-dir /tmp "hi"` fails, `claude --print --add-dir
+    /tmp -- "hi"` works)."""
+
+    def _payload_with_skill_scratch(self, tmp_path: Path) -> RunnerPayload:
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        scratch_dir = tmp_path / "scratch"
+        scratch_dir.mkdir()
+        return RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+            metadata={"skill_scratch_dir": str(scratch_dir)},
+            secrets={},
+        )
+
+    def test_add_dir_flag_does_not_swallow_prompt(self, tmp_path: Path) -> None:
+        """A skill-applied payload (skill_scratch_dir set → `--add-dir` in
+        argv) must still deliver the prompt: `--` immediately precedes it,
+        and the prompt survives as the final argv element."""
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude"), settings
+        )
+        payload = self._payload_with_skill_scratch(tmp_path)
+        args, _ = runner._build_invocation(payload)
+
+        assert "--add-dir" in args
+        assert args.count("--") == 1
+        assert args[-2] == "--"
+        assert args.index("--") > args.index("--add-dir")
+        # The prompt is intact (not merged into --add-dir's variadic list).
+        assert args[-1] not in ("", "--add-dir")
+        assert "do it" in args[-1]
+
+    def test_plain_payload_no_tools_no_skill_still_ends_with_separator_then_prompt(
+        self, tmp_path: Path
+    ) -> None:
+        """No tools, no skill: argv still ends with `-- <prompt>` and the
+        prompt is intact (unconditional separator applies universally)."""
+        pf = tmp_path / "p.md"
+        pf.write_text("plain task", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+            metadata={},
+            secrets={},
+        )
+        runner = ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude"), settings
+        )
+        args, _ = runner._build_invocation(payload)
+
+        assert "--add-dir" not in args
+        assert args.count("--") == 1
+        assert args[-2] == "--"
+        assert "plain task" in args[-1]
 
 
 def test_capture_returns_agent_stdout(tmp_path: Path) -> None:
