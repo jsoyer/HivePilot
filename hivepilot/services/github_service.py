@@ -94,9 +94,15 @@ def create_release(
     )
 
 
-def build_repo_url(repo: str, protocol: str) -> str:
-    # No `project` is available at this call site (pre-existing signature --
-    # kept unchanged so every caller, e.g. `project_service.ensure_checkout`,
-    # keeps working). Phase 1 only ever has one provider registered, so this
-    # always resolves to the default GitHub provider.
-    return FORGE_MAP["github"].build_repo_url(repo, protocol)
+def build_repo_url(repo: str, protocol: str, project: ProjectConfig | None = None) -> str:
+    """Build *repo*'s clone URL via its forge provider.
+
+    Phase 2 fix (the opus Phase-1 nit): `project` is now OPTIONAL rather than
+    absent -- when given, this resolves the PROJECT's own configured forge
+    (`resolve_forge(project)`, e.g. a self-hosted Forgejo/GitLab instance)
+    instead of hardcoding `FORGE_MAP["github"]`. Every pre-existing caller
+    that omits `project` (or passes a `forge: "github"` project) still
+    resolves to the default GitHub provider -- byte-identical output.
+    """
+    forge = resolve_forge(project) if project is not None else FORGE_MAP["github"]
+    return forge.build_repo_url(repo, protocol, project)

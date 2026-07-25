@@ -79,6 +79,22 @@ discord = [
 cloud = [
   "boto3>=1.34,<2.0",
 ]
+# Self-hosted forge providers (forge-phase2 PRD): ForgejoForge/GitLabForge
+# (hivepilot/forges/forgejo.py, gitlab.py) call the Forgejo/Gitea and GitLab
+# REST APIs over httpx (imported at the top of each of those two modules).
+# `hivepilot/forges/__init__.py` imports them inside a try/except ImportError
+# (mirrors the boto3/docker lazy-import pattern above, one level up) so
+# importing `hivepilot.forges` -- which every `ProjectConfig` construction
+# does, via the fail-closed `forge` field validator -- NEVER hard-requires
+# httpx: a core install (no extras) works unchanged; "forgejo"/"gitlab"
+# simply aren't registered in FORGE_MAP, so a project that declares one
+# fails closed with a clear "unknown forge" error at config-load time,
+# rather than an import crash. `pip install hivepilot[forge]` to actually
+# use a self-hosted forge. GitHubForge (the default) needs no HTTP client of
+# its own -- it shells out to the `gh` CLI.
+forge = [
+  "httpx>=0.27,<1.0",
+]
 # KMS envelope-encryption secrets backend (plugins/kms.py). `cryptography` powers
 # the AES-256-GCM envelope decrypt; the cloud KMS client libs decrypt the data
 # key / ciphertext. AWS uses boto3 from the [cloud] extra above (not duplicated
@@ -162,6 +178,7 @@ full = [
   "opentelemetry-api>=1.24,<2.0",
   "opentelemetry-sdk>=1.24,<2.0",
   "opentelemetry-exporter-otlp-proto-grpc>=1.24,<2.0",
+  "httpx>=0.27,<1.0",
 ]
 dev = [
   "pytest>=8.0,<9.0",
