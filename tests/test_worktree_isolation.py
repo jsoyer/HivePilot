@@ -325,3 +325,67 @@ class TestExecuteTaskWorkingSubdir:
 
         mock_wt.assert_not_called()
         assert captured_paths == [repo]
+
+    def test_working_subdir_missing_raises_clear_error(self, tmp_path: Path) -> None:
+        """F4: a `working_subdir` that doesn't exist in the checkout fails
+        closed with a clear, actionable error -- never a low-level cwd
+        error surfacing from deep inside a runner's subprocess."""
+        repo = _init_git_repo(tmp_path / "repo")
+        project = self._make_project(repo)
+        task = self._make_task(commit=False)
+
+        with (
+            patch("hivepilot.orchestrator.settings") as mock_settings,
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+        ):
+            mock_settings.worktree_isolation = False
+            mock_settings.stage_cache_enabled = False
+
+            orch = self._make_orchestrator(tmp_path)
+            with pytest.raises(RuntimeError, match="not found"):
+                orch._execute_task(
+                    project=project,
+                    task_name="test-task",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=False,
+                    simulate=False,
+                    working_subdir="apps/does-not-exist",
+                )
+
+        mock_wt.assert_not_called()
+
+    def test_working_subdir_symlink_escape_raises_clear_error(self, tmp_path: Path) -> None:
+        """F4: a symlink planted inside the checkout AFTER config load that
+        makes `working_subdir` resolve OUTSIDE the checkout must be
+        rejected at dispatch time too -- load-time validation
+        (`ProjectConfig.validate_modules`) alone can't catch a symlink
+        planted later."""
+        repo = _init_git_repo(tmp_path / "repo")
+        outside = tmp_path / "outside-the-repo"
+        outside.mkdir()
+        (repo / "apps").mkdir()
+        (repo / "apps" / "escape").symlink_to(outside, target_is_directory=True)
+        project = self._make_project(repo)
+        task = self._make_task(commit=False)
+
+        with (
+            patch("hivepilot.orchestrator.settings") as mock_settings,
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+        ):
+            mock_settings.worktree_isolation = False
+            mock_settings.stage_cache_enabled = False
+
+            orch = self._make_orchestrator(tmp_path)
+            with pytest.raises(RuntimeError, match="outside"):
+                orch._execute_task(
+                    project=project,
+                    task_name="test-task",
+                    task=task,
+                    extra_prompt=None,
+                    auto_git=False,
+                    simulate=False,
+                    working_subdir="apps/escape",
+                )
+
+        mock_wt.assert_not_called()

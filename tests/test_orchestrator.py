@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -3255,3 +3256,162 @@ class TestRunTaskModuleTargeting:
         assert results[0].success is True
         assert captured[0].project.path == proj_path
         assert captured[0].project.modules == {}
+
+
+# ---------------------------------------------------------------------------
+# F1 fix (post-review) — approval-resume must not silently broaden a
+# module-scoped run back to the repo root. `run_task`'s `require_approval`
+# path persists the ORIGINAL target string into `approval_meta["target"]`;
+# `run_approved` re-resolves it via `_resolve_run_target` so the approved
+# run executes in the SAME subdir the operator approved.
+# ---------------------------------------------------------------------------
+
+
+class TestRunApprovedModuleTargeting:
+    def _orch_with_monorepo_project(self, tmp_path):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        proj_path = tmp_path / "noxys"
+        (proj_path / "apps" / "detection-core").mkdir(parents=True)
+        orch.projects.projects["noxys"] = ProjectConfig(
+            path=proj_path,
+            modules={"detection-core": "apps/detection-core"},
+        )
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        return orch, proj_path
+
+    def _wire_capturing_runner(self, orch):
+        captured_payloads = []
+
+        def _capture(payload):
+            captured_payloads.append(payload)
+            return "output"
+
+        fake_runner = MagicMock()
+        fake_runner.capture.side_effect = _capture
+        orch.registry = MagicMock()
+        orch.registry.get_runner.return_value = fake_runner
+        return captured_payloads
+
+    def _request_approval(self, orch, project_names, tmp_path):
+        """Drive the REAL `run_task` require_approval path and return the
+        `approval_meta` dict `record_approval_request` was called with."""
+        from hivepilot.services.policy_service import Policy
+
+        recorded: dict = {}
+
+        def _record(run_id, project_name, task_name, meta):
+            recorded.update(meta)
+
+        with (
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch(
+                "hivepilot.orchestrator.policy_service.enforce_policy",
+                return_value=Policy(require_approval=True),
+            ),
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+            patch(
+                "hivepilot.orchestrator.state_service.record_approval_request",
+                side_effect=_record,
+            ),
+            patch("hivepilot.orchestrator.notification_service.send_approval_keyboard"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+        ):
+            results = orch.run_task(
+                project_names=project_names,
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+            )
+        assert len(results) == 1
+        assert results[0].success is False  # pending approval, not yet run
+        return recorded
+
+    def _approve(self, orch, approval_row, captured_payloads):
+        from hivepilot.services.policy_service import Policy
+
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval_row),
+            patch("hivepilot.orchestrator.state_service.update_approval"),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.policy_service.get_policy", return_value=Policy()),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            result = orch.run_approved(run_id=1, approve=True, approver="me")
+        return result
+
+    def test_module_target_approval_resume_scopes_working_dir(self, tmp_path) -> None:
+        """The core F1 regression test: an approved `noxys/detection-core`
+        run must execute scoped to the subdir, not the repo root."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+        captured = self._wire_capturing_runner(orch)
+
+        meta = self._request_approval(orch, ["noxys/detection-core"], tmp_path)
+        assert meta.get("target") == "noxys/detection-core"
+
+        approval_row = {
+            "status": "pending",
+            "project": "noxys",
+            "task": "x",
+            "metadata": json.dumps(meta),
+        }
+        result = self._approve(orch, approval_row, captured)
+
+        assert result.success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path / "apps" / "detection-core"
+
+    def test_plain_project_approval_resume_unchanged(self, tmp_path) -> None:
+        """Byte-identical: a plain-project approval (no module) still
+        resumes at the repo root."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+        captured = self._wire_capturing_runner(orch)
+
+        meta = self._request_approval(orch, ["noxys"], tmp_path)
+        assert meta.get("target") == "noxys"
+
+        approval_row = {
+            "status": "pending",
+            "project": "noxys",
+            "task": "x",
+            "metadata": json.dumps(meta),
+        }
+        result = self._approve(orch, approval_row, captured)
+
+        assert result.success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path
+
+    def test_old_style_approval_metadata_without_target_key_still_resumes(self, tmp_path) -> None:
+        """An approval row recorded BEFORE this PRD (no `target` key at
+        all) must still resume cleanly at the project root -- no crash, no
+        KeyError, byte-identical to pre-PRD behaviour."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+        captured = self._wire_capturing_runner(orch)
+
+        old_style_meta = {
+            "task": "x",
+            "project": "noxys",
+            "extra_prompt": None,
+            "auto_git": False,
+        }
+        approval_row = {
+            "status": "pending",
+            "project": "noxys",
+            "task": "x",
+            "metadata": json.dumps(old_style_meta),
+        }
+        result = self._approve(orch, approval_row, captured)
+
+        assert result.success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path
