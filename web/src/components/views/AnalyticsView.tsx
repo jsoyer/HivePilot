@@ -2,7 +2,8 @@ import { Activity, CheckCircle2, Clock, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
-import { StatCard } from '@/components/dashboard/StatCard'
+import { MetricReadout } from '@/components/dashboard/MetricReadout'
+import { Sparkline } from '@/components/dashboard/Sparkline'
 import { useT } from '@/lib/i18n'
 import {
   fetchAnalyticsDurations,
@@ -47,13 +48,13 @@ export function AnalyticsView() {
             {(data) => (
               <>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                  <StatCard
+                  <MetricReadout
                     icon={<Activity className="size-4" />}
                     label={t('analytics.totalRuns')}
                     value={data.total}
                     sub={t('common.lastDaysLower', { days: DAYS })}
                   />
-                  <StatCard
+                  <MetricReadout
                     icon={<CheckCircle2 className="size-4" />}
                     label={t('analytics.succeeded')}
                     value={data.success_rate === null ? '—' : pct(data.success_rate)}
@@ -62,14 +63,14 @@ export function AnalyticsView() {
                         ? t('analytics.noAttempts', { count: data.outcomes.skipped })
                         : t('analytics.runsCount', { count: data.outcomes.succeeded })
                     }
-                    tone={data.success_rate === null ? 'default' : 'positive'}
+                    tone={data.success_rate === null ? 'default' : 'good'}
                   />
-                  <StatCard
+                  <MetricReadout
                     icon={<XCircle className="size-4" />}
                     label={t('analytics.failed')}
                     value={pct(data.outcome_rates.failed)}
                     sub={t('analytics.runsCount', { count: data.outcomes.failed })}
-                    tone="danger"
+                    tone="crit"
                   />
                 </div>
                 <DistributionBar
@@ -112,7 +113,14 @@ export function AnalyticsView() {
             isEmpty={(data) => data.series.length === 0}
             emptyMessage={t('analytics.noTrend')}
           >
-            {(data) => <TrendBarChart series={data.series} />}
+            {(data) => (
+              <div className="flex flex-col gap-3">
+                <TrendBarChart series={data.series} />
+                {/* Compact instrument-readout companion to the bar chart —
+                 * same `series` data, no new fetch. */}
+                <Sparkline points={data.series.map((point) => point.total)} tone="default" />
+              </div>
+            )}
           </AsyncSection>
         </CardContent>
       </Card>
@@ -181,7 +189,7 @@ export function AnalyticsView() {
           >
             {(data) => (
               <div className="flex flex-col gap-4">
-                <StatCard
+                <MetricReadout
                   icon={<Clock className="size-4" />}
                   label={t('analytics.actionedApprovals')}
                   value={data.count}
