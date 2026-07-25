@@ -1225,6 +1225,14 @@ def efficiency_endpoint(
 # `budget_remaining` is `None` iff `budget_daily_usd` is, else
 # `max(budget_daily_usd - budget_spent_today, 0.0)` (a budget that's already
 # been exceeded reports `0.0` remaining, never negative).
+#
+# `budget_spent_today`/`budget_remaining` on a spend-lookup FAILURE: both
+# report `None` ("unknown"), never a fabricated `0.0`/full-budget pair. A
+# silent `0.0` here would be actively misleading during an analytics outage
+# (looks like "nothing spent, full budget left" when the real spend is
+# simply unknown) -- this mirrors `drain_one`'s own fail-closed handling of
+# the same lookup (it denies dispatch on the identical failure), just
+# surfaced as "unknown" instead of a number for a read-only dashboard.
 # ---------------------------------------------------------------------------
 
 
@@ -1283,7 +1291,7 @@ class AutopilotStateResponse(BaseModel):
     queue: list[AutopilotQueueItem]
     queue_depth: int
     budget_daily_usd: float | None
-    budget_spent_today: float
+    budget_spent_today: float | None
     budget_remaining: float | None
     recent_dispatches: list[AutopilotDispatch]
     auto_dispatch_allowlist: list[str]
@@ -1318,13 +1326,15 @@ def _autopilot_state(tenant: str) -> AutopilotStateResponse:
     ]
 
     policy = autopilot_policy.get_autopilot_policy(_AUTOPILOT_NO_PROJECT_SENTINEL)
+    spent: float | None
     try:
         spent = autopilot_queue.spent_today_usd(tenant=tenant)
-    except Exception:  # noqa: BLE001 - never fabricate "over budget" on a query failure
-        spent = 0.0
-    remaining = (
-        None if policy.budget_daily_usd is None else max(policy.budget_daily_usd - spent, 0.0)
-    )
+    except Exception:  # noqa: BLE001 - lookup failure -> "unknown", never a fabricated 0.0
+        spent = None
+    if policy.budget_daily_usd is None or spent is None:
+        remaining = None
+    else:
+        remaining = max(policy.budget_daily_usd - spent, 0.0)
 
     return AutopilotStateResponse(
         tenant=tenant,

@@ -159,7 +159,28 @@ class TestAutopilotState:
         raw, _ = add_token("read")
         resp = api_client.get("/v1/autopilot", headers=_auth(raw))
         assert resp.status_code == 200
-        assert resp.json()["budget_spent_today"] == 0.0
+        assert resp.json()["budget_spent_today"] is None
+
+    def test_spent_today_lookup_failure_reports_unknown_not_zero(self, api_client, monkeypatch):
+        """F1: a spend-lookup failure must surface as `None` ("unknown"), not
+        a fabricated `0.0` -- reporting 0.0 during an analytics outage would
+        falsely reassure an operator that the full budget remains, hiding
+        real accumulated spend. `budget_remaining` must ALSO go null (not
+        the full ceiling) even when a positive budget IS configured."""
+
+        def _raise(*a, **kw):
+            raise RuntimeError("analytics unavailable")
+
+        _patch_policies(monkeypatch, {"default": {"budget_daily_usd": 10.0}})
+        monkeypatch.setattr(autopilot_queue, "spent_today_usd", _raise)
+
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/autopilot", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["budget_daily_usd"] == 10.0
+        assert data["budget_spent_today"] is None
+        assert data["budget_remaining"] is None
 
 
 class TestAutopilotTenantScoping:
