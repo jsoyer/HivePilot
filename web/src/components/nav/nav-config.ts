@@ -20,7 +20,14 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // view, called out in its own leading group (not folded into "Overview")
   // so it always renders first, above every other section.
   { label: 'nav.commandCenter', values: ['home'] },
-  { label: 'nav.overview', values: ['analytics', 'cost'] },
+  // Mirador Spend section sprint: Cost moves out of "Overview" into its own
+  // "Spend" group alongside the two new views (Models/Efficiency) — the
+  // operator's complaint this sprint answers ("la conso marche pas, rien
+  // sur les modèles, rien de headroom/rtk") is specifically about spend
+  // visibility, so it gets a dedicated, discoverable section rather than
+  // being folded into general analytics.
+  { label: 'nav.spend', values: ['cost', 'models', 'efficiency'] },
+  { label: 'nav.overview', values: ['analytics'] },
   { label: 'nav.agents', values: ['approvals', 'runs'] },
   { label: 'nav.system', values: ['health', 'graph'] },
   { label: 'nav.memory', values: ['mem0', 'reality'] },

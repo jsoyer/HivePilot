@@ -1,6 +1,7 @@
 import {
   Activity,
   CheckSquare,
+  Cpu,
   Database,
   DollarSign,
   Gauge,
@@ -11,6 +12,7 @@ import {
   PlayCircle,
   Search,
   Workflow,
+  Zap,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -28,10 +30,12 @@ import { ThemeToggle } from './nav/ThemeToggle'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
 import { CostView } from './views/CostView'
+import { EfficiencyView } from './views/EfficiencyView'
 import { GraphView } from './views/GraphView'
 import { HealthView } from './views/HealthView'
 import { HomeView } from './views/HomeView'
 import { Mem0View } from './views/Mem0View'
+import { ModelsView } from './views/ModelsView'
 import { PanelView } from './views/PanelView'
 import { RealityView } from './views/RealityView'
 import { RunsView } from './views/RunsView'
@@ -52,6 +56,12 @@ const BUILTIN_TABS = [
   { value: 'home', labelKey: 'nav.home', Panel: HomeView, Icon: LayoutDashboard },
   { value: 'analytics', labelKey: 'nav.analytics', Panel: AnalyticsView, Icon: Activity },
   { value: 'cost', labelKey: 'nav.cost', Panel: CostView, Icon: DollarSign },
+  // Mirador Spend section sprint: Models (per-model cost/tokens/success
+  // rate, GET /v1/models) and Efficiency (Headroom + rtk token-savings
+  // signals, GET /v1/efficiency) — grouped with Cost under "Spend" in
+  // nav-config.ts's NAV_GROUP_ORDER.
+  { value: 'models', labelKey: 'nav.models', Panel: ModelsView, Icon: Cpu },
+  { value: 'efficiency', labelKey: 'nav.efficiency', Panel: EfficiencyView, Icon: Zap },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
   { value: 'mem0', labelKey: 'nav.mem0', Panel: Mem0View, Icon: Database },
   // Mirador "Vigie" memory-quality view: read-only for any token, grouped
