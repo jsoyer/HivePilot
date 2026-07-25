@@ -423,6 +423,124 @@ class TestActionKind:
         assert decision.kind == "answer"
 
 
+class TestSubstantiveQuestionAnswerRouting:
+    """Regression coverage for the production UX gap: a substantive,
+    open-ended question (e.g. "here's a use case — how could we cover it
+    with the product? let's think/plan/decide") got the dismissive generic
+    `_FALLBACK_ANSWER` ("I didn't quite get that...") instead of a genuine
+    answer, because the model sometimes reaches for a made-up `action` name
+    (e.g. "plan"/"discuss") for language that SOUNDS actionable but isn't one
+    of the four real actions — and `_parse_raw` used to discard the model's
+    own `answer_text` entirely in that case. The concierge prompt (see
+    `hivepilot/prompts/concierge.md`) also now explicitly steers such
+    messages to `kind: "answer"` with a genuine reply. The rephrase fallback
+    is reserved for truly empty/unparseable model output."""
+
+    USE_CASE_TEXT = (
+        "here's a use case: our support team keeps losing track of escalated "
+        "tickets across three tools. how could we cover this with the "
+        "product? let's think it through and decide on an approach."
+    )
+
+    def test_substantive_question_classified_as_answer(self) -> None:
+        """The straightforward case: the classifier itself returns a genuine
+        `kind: "answer"` with real engagement — must NOT be the canned
+        fallback text."""
+        raw = json.dumps(
+            {
+                "kind": "answer",
+                "answer_text": (
+                    "You could model each tool as a source feeding a single "
+                    "tracking pipeline, with a role that reconciles escalations "
+                    "across them. Want me to loop in the PM role for a deeper plan?"
+                ),
+            }
+        )
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                self.USE_CASE_TEXT, default_role="developer", default_target="acme"
+            )
+        assert decision.kind == "answer"
+        assert decision.answer_text != concierge_service._FALLBACK_ANSWER
+        assert "escalat" in (decision.answer_text or "").lower()
+
+    def test_invalid_action_name_salvages_models_own_answer_text(self) -> None:
+        """The model understood the question but wrongly reached for a
+        made-up action name (e.g. "plan", not one of the four real
+        actions) — if it ALSO supplied a genuine `answer_text` alongside
+        that, salvage and use it instead of discarding everything for the
+        generic dismissive fallback."""
+        raw = json.dumps(
+            {
+                "kind": "action",
+                "action": "plan",
+                "answer_text": "Let's break the escalation-tracking use case into steps...",
+                "params": {},
+            }
+        )
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                self.USE_CASE_TEXT, default_role="developer", default_target="acme"
+            )
+        assert decision.kind == "answer"
+        assert decision.answer_text == "Let's break the escalation-tracking use case into steps..."
+        assert decision.destructive is False
+
+    def test_invalid_action_name_without_answer_text_still_falls_back(self) -> None:
+        """No salvageable content at all — the generic fallback is still the
+        correct (safe) degrade, unchanged from before."""
+        raw = json.dumps({"kind": "action", "action": "plan", "params": {}})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                self.USE_CASE_TEXT, default_role="developer", default_target="acme"
+            )
+        assert decision.kind == "answer"
+        assert decision.answer_text == concierge_service._FALLBACK_ANSWER
+
+    def test_unknown_top_level_kind_salvages_models_own_answer_text(self) -> None:
+        """Same salvage behaviour when the model botches the top-level
+        `kind` field itself (not just `action`), as long as it supplied
+        real answer_text alongside it."""
+        raw = json.dumps({"kind": "discussion", "answer_text": "Here's a genuine take..."})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                self.USE_CASE_TEXT, default_role="developer", default_target="acme"
+            )
+        assert decision.kind == "answer"
+        assert decision.answer_text == "Here's a genuine take..."
+
+    def test_unknown_kind_with_blank_answer_text_falls_back(self) -> None:
+        """Blank/whitespace-only answer_text is not salvageable content —
+        must still degrade to the generic fallback, not an empty reply."""
+        raw = json.dumps({"kind": "discussion", "answer_text": "   "})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                self.USE_CASE_TEXT, default_role="developer", default_target="acme"
+            )
+        assert decision.kind == "answer"
+        assert decision.answer_text == concierge_service._FALLBACK_ANSWER
+
+    def test_ambiguous_ish_message_never_yields_action_or_route(self) -> None:
+        """Even when a substantive question is phrased with planning
+        language, an invalid/ambiguous classifier response must never
+        surface as a `route`/`action` decision (which the telegram layer
+        would treat as destructive and needing confirmation) — it degrades
+        to `answer`, never fabricating a command to run."""
+        raw = json.dumps({"kind": "action", "action": "plan", "params": {}})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                self.USE_CASE_TEXT, default_role="developer", default_target="acme"
+            )
+        assert decision.kind == "answer"
+        assert decision.kind not in ("route", "action")
+
+
 class TestFailClosed:
     def test_capture_definition_raises_returns_answer(self) -> None:
         orch = _orch_with_capture(side_effect=RuntimeError("boom"))

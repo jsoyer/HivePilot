@@ -157,6 +157,12 @@ _CLASSIFIER_NO_TOOLS = ""  # claude --tools "": "Use \"\" to disable all tools" 
 # multi-minute agent task.
 _CLASSIFIER_TIMEOUT_SECONDS = 30
 
+# Reserved for genuinely empty/unparseable model output ONLY (LLM error,
+# timeout, malformed JSON, or a malformed kind/action with no salvageable
+# `answer_text` alongside it — see `_salvageable_answer_text`). A substantive
+# question the model DID understand must get a genuine LLM answer instead of
+# this generic filler — see `hivepilot/prompts/concierge.md`'s "Deciding the
+# kind" section for the classifier-side half of this contract.
 _FALLBACK_ANSWER = (
     "I didn't quite get that. Try rephrasing your request, "
     "or use /help to see the available commands."
@@ -389,10 +395,37 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+def _salvageable_answer_text(data: dict[str, Any]) -> str | None:
+    """Return a usable `answer_text` from *data* if one is present and
+    non-blank, else None.
+
+    Used when the model's top-level `kind` or `action` is malformed/
+    unrecognised: a model sometimes still engages with a substantive
+    question — it "understood", it just reached for the wrong `kind`/
+    `action` name (e.g. a made-up `action: "plan"` for a strategy question
+    that isn't one of the four real actions) — and may defensively populate
+    `answer_text` alongside that mistake anyway. Discarding a genuine answer
+    the model already wrote, in favour of the generic dismissive fallback,
+    is exactly the UX gap this module exists to avoid — so salvage it
+    rather than nuke it. This does NOT weaken fail-closed behaviour: the
+    result is still always `kind="answer"` (never a route/action), and
+    truly empty/unparseable output still falls through to `None` (the
+    caller's `_FALLBACK_ANSWER` degrade) unchanged."""
+    answer_text = data.get("answer_text")
+    if isinstance(answer_text, str) and answer_text.strip():
+        return answer_text
+    return None
+
+
 def _parse_raw(raw: str) -> ConciergeDecision | None:
     """Strictly parse *raw* as the classifier's JSON contract. Returns None
-    on ANY parse failure or unrecognised `kind`/`action` — callers must
-    treat None as fail-closed (degrade to a friendly answer)."""
+    on ANY parse failure or unrecognised `kind`/`action` with no salvageable
+    `answer_text` alongside it — callers must treat None as fail-closed
+    (degrade to the generic fallback answer). An unrecognised `kind`/
+    `action` that DOES carry real `answer_text` degrades to a genuine
+    `kind="answer"` decision using that text instead (see
+    `_salvageable_answer_text`) — reserving the generic fallback for
+    genuinely empty/unparseable model output."""
     if not raw or not raw.strip():
         return None
     try:
@@ -404,7 +437,8 @@ def _parse_raw(raw: str) -> ConciergeDecision | None:
 
     kind = data.get("kind")
     if kind not in _KNOWN_KINDS:
-        return None
+        salvaged = _salvageable_answer_text(data)
+        return ConciergeDecision(kind="answer", answer_text=salvaged) if salvaged else None
 
     if kind == "answer":
         answer_text = data.get("answer_text")
@@ -426,7 +460,8 @@ def _parse_raw(raw: str) -> ConciergeDecision | None:
     # kind == "action"
     action = data.get("action")
     if action not in _KNOWN_ACTIONS:
-        return None
+        salvaged = _salvageable_answer_text(data)
+        return ConciergeDecision(kind="answer", answer_text=salvaged) if salvaged else None
     params = data.get("params")
     if not isinstance(params, dict):
         params = None
