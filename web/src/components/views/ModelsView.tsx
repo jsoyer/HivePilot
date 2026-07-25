@@ -101,6 +101,7 @@ export function ModelsView() {
                       <TableHead>{t('models.title')}</TableHead>
                       <TableHead>{t('models.successRate')}</TableHead>
                       <TableHead>{t('cost.costLabel')}</TableHead>
+                      <TableHead>{t('cost.steps')}</TableHead>
                       <TableHead>{t('cost.tokensInOut')}</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -112,6 +113,7 @@ export function ModelsView() {
                           <SuccessRateCell rate={row.success_rate} />
                         </TableCell>
                         <TableCell>{formatCost(row.cost_usd)}</TableCell>
+                        <TableCell>{row.step_count.toLocaleString('en-US')}</TableCell>
                         <TableCell>
                           {formatTokens(row.input_tokens)} / {formatTokens(row.output_tokens)}
                         </TableCell>

@@ -99,6 +99,9 @@ describe('ModelsView', () => {
     expect(container.textContent).toContain('8,000')
     expect(container.textContent).toContain('92%')
     expect(container.textContent).toMatch(/no attempts/i)
+    // step_count column (required by the sprint's per-model table contract)
+    expect(container.textContent).toContain('12')
+    expect(container.textContent).toContain('4')
   })
 
   it('honestly shows latency as not available (never fabricates p50/p95)', async () => {
