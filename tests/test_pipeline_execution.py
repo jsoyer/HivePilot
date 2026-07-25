@@ -805,6 +805,69 @@ class TestOnlyModulesScoping:
                 )
             mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
 
+    def test_only_modules_in_group_mode_raises_value_error_up_front(self) -> None:
+        """Fail-closed (opus review nit): only_modules is meaningless in
+        GROUP mode -- group-mode fan-out uses only_components/only_tags, and
+        only_modules expansion only ever applies in the non-group targets
+        path -- so a stage declaring only_modules on a group-mode run must
+        raise up front instead of silently having its scoping ignored."""
+        import pytest
+
+        from hivepilot.models import Group
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="ui-review", task="review", only_modules=["console"])],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(noxys={"console": "apps/console"})
+        group = Group(description="d", hub="hub", components=["noxys"])
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start") as mock_start,
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        ):
+            with pytest.raises(ValueError, match="group mode"):
+                orch.run_pipeline(
+                    project_names=["hub"],
+                    pipeline_name="test-pipe",
+                    extra_prompt=None,
+                    auto_git=False,
+                    dry_run=True,
+                    hub="hub",
+                    components=["noxys"],
+                    group=group,
+                )
+            mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
+
+    def test_only_modules_unknown_project_raises_value_error_up_front(self) -> None:
+        """Fail-closed (opus review nit): only_modules on a stage targeting a
+        project name that isn't in projects.yaml raises 'Unknown project' up
+        front, instead of silently no-oping (unknown project -> empty
+        expanded targets -> run_task([]))."""
+        import pytest
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="ui-review", task="review", only_modules=["console"])],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(noxys={"console": "apps/console"})
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start") as mock_start,
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        ):
+            with pytest.raises(ValueError, match="Unknown project"):
+                orch.run_pipeline(
+                    project_names=["does-not-exist"],
+                    pipeline_name="test-pipe",
+                    extra_prompt=None,
+                    auto_git=False,
+                    dry_run=True,
+                )
+            mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
+
 
 class TestContinueOnFailure:
     """continue_on_failure controls whether a failed stage fail-fasts the run."""

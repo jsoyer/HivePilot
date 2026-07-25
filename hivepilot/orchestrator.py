@@ -821,7 +821,10 @@ def _validate_stage_tags(stages: list[PipelineStage], group_tags: dict[str, list
 
 
 def _validate_stage_modules(
-    stages: list[PipelineStage], project_names: list[str], projects: ProjectsFile
+    stages: list[PipelineStage],
+    project_names: list[str],
+    projects: ProjectsFile,
+    group: Group | None = None,
 ) -> None:
     """Fail-closed guard: every module named in a stage's ``only_modules``
     must exist in EVERY project this run targets (*project_names*)'s
@@ -833,16 +836,43 @@ def _validate_stage_modules(
     front (before any stage executes) — mirrors ``_validate_stage_tags``.
     Stages with ``only_modules`` unset (``None``, the default) are skipped
     entirely, so a pipeline that never declares ``only_modules`` is
-    completely unaffected by this guard. An unknown *project_name* is not
-    an error here — that's raised elsewhere (``run_task``/``_project``).
+    completely unaffected by this guard.
+
+    Two additional fail-closed checks (opus review follow-up, sprint 2):
+
+    1. **Group-mode misconfig.** ``only_modules`` expansion only ever
+       applies in the non-group / single-project targets path (see
+       ``_expand_stage_targets_for_modules``) — a stage declaring
+       ``only_modules`` on a GROUP-mode run (*group* is not ``None``) would
+       otherwise have its scoping silently ignored. Raise instead of
+       silently no-oping.
+    2. **Unknown target project.** A *project_name* not present in
+       *projects* would otherwise reach ``_expand_stage_targets_for_modules``
+       and silently produce zero expanded targets (empty ``run_task([])``,
+       a silent no-op) — raise ``ValueError`` naming the unknown project
+       instead, mirroring the loud "Unknown project" error a non-module
+       stage path already gives via ``Orchestrator._project``.
     """
     for stage in stages:
         if not stage.only_modules:
             continue
+        if group is not None:
+            raise ValueError(
+                f"Pipeline stage '{stage.name}' declares only_modules="
+                f"{stage.only_modules} but this run is in group mode -- "
+                "only_modules applies to single-project/non-group pipelines "
+                "only (group-mode fan-out uses only_components/only_tags "
+                "instead); remove only_modules from this stage or run this "
+                "pipeline without a group"
+            )
         for project_name in project_names:
             project = projects.projects.get(project_name)
             if project is None:
-                continue
+                raise ValueError(
+                    f"Unknown project '{project_name}' -- pipeline stage "
+                    f"'{stage.name}' declares only_modules={stage.only_modules} "
+                    f"but '{project_name}' is not a configured project"
+                )
             if not project.modules:
                 raise ValueError(
                     f"Pipeline stage '{stage.name}' declares only_modules="
@@ -2795,11 +2825,11 @@ class Orchestrator:
         # Stage scoping (only_modules): mirrors the only_tags guard directly
         # above -- fail closed, up front, before any stage executes, if a
         # stage's only_modules references a module undefined for one of this
-        # run's target projects (or targets a project with no `modules` map
-        # at all). Runs unconditionally (like _validate_stage_tags) even
-        # though only_modules is only ever EXPANDED into targets in the
-        # non-group path below -- see `_validate_stage_modules`.
-        _validate_stage_modules(pipeline.stages, project_names, self.projects)
+        # run's target projects, targets a project with no `modules` map at
+        # all, targets an unknown project, or is declared on a group-mode
+        # run (only_modules is only ever EXPANDED into targets in the
+        # non-group path below -- see `_validate_stage_modules`).
+        _validate_stage_modules(pipeline.stages, project_names, self.projects, group=group)
 
         # Group mode: planning stages (before the checkpoint) run once in the hub;
         # execution stages (the pause_before stage onward) fan out over components.
