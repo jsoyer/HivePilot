@@ -77,10 +77,30 @@ def test_unconfigured_telegram_is_silent(monkeypatch: pytest.MonkeyPatch) -> Non
     ns.stream_agent_turn(actor="Blaise", summary="x")  # must not raise
 
 
-def test_long_summary_truncated(captured: list[str]) -> None:
+def test_long_summary_not_truncated(captured: list[str]) -> None:
+    """A long summary (rich disabled) is no longer clipped with a trailing
+    "…" — full content is preserved (split across messages if it doesn't
+    fit in one)."""
     ns.stream_agent_turn(actor="Gustave", summary="y" * 3000)
-    assert "…" in captured[0]
-    assert len(captured[0]) < 1700  # ~1500 cap + header headroom
+    assert "…" not in captured[0]
+    # All 3000 "y"s must be present somewhere in what was sent.
+    assert "y" * 3000 in "".join(captured)
+
+
+def test_very_long_summary_splits_into_multiple_messages(captured: list[str]) -> None:
+    """A summary far bigger than one Telegram message (rich disabled) is
+    split into several ordered plain-text messages, not cut off."""
+    huge = "word " * 2000  # ~10KB, no truncation-hostile long single token
+    ns.stream_agent_turn(actor="Gustave", summary=huge)
+    assert len(captured) > 1
+    for chunk in captured:
+        assert len(chunk) <= 3950  # split limit + continuation marker
+    # Every chunk after the first is plain text (no HTML tags leaked in).
+    for chunk in captured:
+        assert "<b>" not in chunk
+    # Nothing was silently dropped: every chunk's continuation marker
+    # accounts for its position.
+    assert "(1/" in captured[0]
 
 
 def test_medium_summary_not_truncated(captured: list[str]) -> None:
@@ -202,7 +222,9 @@ def test_rich_falls_back_when_stream_rich_false(
 def test_rich_falls_back_for_unstructured_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When summary has no structured content, fall back to plain text."""
+    """A SHORT unstructured summary keeps the legacy plain rendering
+    unchanged — short status/heartbeat turns that already worked are left
+    alone (only long hand-off/stage-output text gets the new formatting)."""
     calls: list[dict] = []
 
     def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
@@ -216,3 +238,106 @@ def test_rich_falls_back_for_unstructured_summary(
     assert len(calls) == 1
     # No parse_mode for unstructured text
     assert calls[0]["parse_mode"] is None
+
+
+def test_rich_long_unstructured_summary_gets_html_formatting_no_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A LONG unstructured hand-off (no ## headers, just free-form agent
+    prose) — the case that used to get clipped at ~1500 chars — now renders
+    with readable HTML and is never cut off."""
+    calls: list[dict] = []
+
+    def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
+        calls.append({"msg": msg, "parse_mode": parse_mode})
+
+    monkeypatch.setattr(ns, "_send_telegram", _fake)
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_rich", True, raising=False)
+
+    body = "Implemented the **auth middleware** and wired it into the router.\n\n" + (
+        "Ran the full test suite, all green. " * 100
+    )
+    ns.stream_agent_turn(actor="Blaise (CTO)", summary=body)
+
+    assert len(calls) >= 1
+    assert all(c["parse_mode"] == "HTML" for c in calls)
+    joined = "".join(c["msg"] for c in calls)
+    assert "<b>auth middleware</b>" in joined
+    # No content silently clipped with a "…" (the old truncation marker).
+    assert "…" not in joined
+
+
+def test_message_thread_id_preserved_across_all_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every chunk of a split turn lands in the SAME topic (message_thread_id)."""
+    thread_ids: list[int | None] = []
+
+    def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
+        thread_ids.append(message_thread_id)
+
+    monkeypatch.setattr(ns, "_send_telegram", _fake)
+    monkeypatch.setattr(ns, "_ensure_topic_thread", lambda agent_key, title: 777)
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_rich", False, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_topics", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", -100999, raising=False)
+
+    huge = "word " * 2000
+    ns.stream_agent_turn(actor="Gustave (Developer)", summary=huge)
+
+    assert len(thread_ids) > 1  # actually split into multiple chunks
+    assert all(tid == 777 for tid in thread_ids)
+
+
+def test_long_summary_secret_redaction_preserved_across_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A secret echoed inside a LONG summary must be redacted in every
+    chunk it ends up in, not just the first message."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        ns,
+        "_send_telegram",
+        lambda msg, chat_id=None, message_thread_id=None, parse_mode=None: calls.append(msg),
+    )
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_rich", False, raising=False)
+
+    marker = "STREAM-MARKER-do-not-leak"
+    config_provenance.register_secret_value(marker)
+    padding = "filler text " * 400
+    ns.stream_agent_turn(actor="Aliénor", summary=f"{padding}deployed with {marker}{padding}")
+
+    joined = "".join(calls)
+    assert marker not in joined
+    assert config_provenance.REDACTED in joined
+
+
+def test_formatted_chunk_send_failure_falls_back_to_plain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If Telegram rejects a formatted (HTML) chunk with an error (simulated
+    400), the SAME chunk is retried as plain text so content still reaches
+    the operator even when formatting fails."""
+    attempts: list[dict] = []
+
+    def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
+        attempts.append({"msg": msg, "parse_mode": parse_mode})
+        if parse_mode == "HTML":
+            raise RuntimeError("400 Bad Request: can't parse entities")
+
+    monkeypatch.setattr(ns, "_send_telegram", _fake)
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_rich", True, raising=False)
+
+    structured = "## status\nPASS\n## summary\n- **bold** thing done\n"
+    ns.stream_agent_turn(actor="Blaise (CTO)", summary=structured)
+
+    # First attempt was HTML and failed, second was the plain-text retry.
+    assert len(attempts) == 2
+    assert attempts[0]["parse_mode"] == "HTML"
+    assert attempts[1]["parse_mode"] is None
+    assert "<b>" not in attempts[1]["msg"]
+    assert "bold" in attempts[1]["msg"]
