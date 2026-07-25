@@ -30,6 +30,8 @@ from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import (
     analytics_service,
     async_run_service,
+    autopilot_policy,
+    autopilot_queue,
     chatops_service,
     efficiency_service,
     memory_service,
@@ -1188,6 +1190,194 @@ def efficiency_endpoint(
     itself never raises (headroom is a zero-safe DB read, rtk is a
     best-effort shell-out that degrades to `None` on any failure)."""
     return efficiency_service.efficiency_summary(tenant=_analytics_tenant(caller), days=days)
+
+
+# ---------------------------------------------------------------------------
+# Autopilot (guarded objective queue + fail-closed dispatch gate) — read +
+# control surface for Mirador. Backed by `hivepilot.services.autopilot_queue`
+# (the same service the `autopilot` CLI command group wraps) and the
+# project-independent "default" block of `hivepilot.services.autopilot_policy`.
+#
+# **Tenant-lock, stated honestly.** `autopilot_queue`'s queue/control tables
+# (and therefore `GET /v1/autopilot`) ARE genuinely tenant-scoped — a
+# non-admin caller only ever sees/controls their own token's tenant (a
+# mismatched `?tenant=` is rejected, never silently ignored or overridden;
+# see `_resolve_autopilot_tenant`). But the ONE thing that actually turns a
+# queued row into a real pipeline run — the scheduler's `source: autopilot`
+# entry (`schedule_service.run_entry`) — hardcodes `tenant="default"` when it
+# calls `autopilot_queue.drain_one`. So a non-`"default"` tenant's queue can
+# accumulate `proposed`/`queued` rows via the API/CLI, but nothing ever
+# drains them automatically. This endpoint does not hide that: an admin with
+# no explicit `?tenant=` sees the `"default"` tenant (the one the drain
+# actually acts on), not a fabricated all-tenants aggregate.
+#
+# **Real vs. null, field by field.** `queue`/`queue_depth`/`recent_dispatches`/
+# `paused` are always real (sourced straight from the `autopilot_queue`/
+# `autopilot_control` tables — empty tables just mean empty/`False`, never a
+# 500). `budget_daily_usd`/`auto_dispatch_allowlist` come from the
+# project-independent "default" block of `policies.yaml` (this endpoint has
+# no `project` scope, so per-project overrides in
+# `policies.projects.<name>.{budget_daily_usd,auto_dispatch}` are NOT
+# reflected — the CLI's `autopilot status` has the same project-agnostic
+# view). `budget_daily_usd` is `None` whenever no positive daily budget is
+# configured (mirrors `AutopilotPolicy`'s own fail-closed "no budget
+# configured" contract) — never fabricated as unlimited or zero.
+# `budget_remaining` is `None` iff `budget_daily_usd` is, else
+# `max(budget_daily_usd - budget_spent_today, 0.0)` (a budget that's already
+# been exceeded reports `0.0` remaining, never negative).
+# ---------------------------------------------------------------------------
+
+
+def _resolve_autopilot_tenant(caller: token_service.TokenEntry, tenant: str | None) -> str:
+    """Resolve which tenant's autopilot state a caller may see/control.
+
+    Non-admin callers are ALWAYS locked to their own token's tenant — an
+    explicit `?tenant=` that disagrees is rejected (403), never silently
+    overridden and never silently ignored (either would hide a real
+    cross-tenant access attempt, mirroring `cancel_run`'s tenant check).
+    Admin callers may pass any `tenant`; omitted defaults to `"default"` —
+    the ONLY tenant the schedule-driven drain ever actually dispatches for
+    today (see the module comment above), so `"default"` is the honest
+    default view, not an arbitrary choice.
+    """
+    if caller.role != "admin":
+        if tenant is not None and tenant != caller.tenant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant autopilot access not allowed",
+            )
+        return caller.tenant
+    return tenant or "default"
+
+
+_AUTOPILOT_PENDING_STATES = ("proposed", "queued", "running")
+_AUTOPILOT_DISPATCHED_STATES = ("done", "blocked")
+_AUTOPILOT_RECENT_DISPATCH_LIMIT = 20
+# Sentinel project name for resolving the project-independent "default"
+# policy block only — guaranteed to never collide with a real project name
+# (real project names are config-declared identifiers, never the empty
+# string), so `autopilot_policy.get_autopilot_policy("")`'s project-override
+# merge step always contributes nothing, leaving only `policies.default`.
+_AUTOPILOT_NO_PROJECT_SENTINEL = ""
+
+
+class AutopilotQueueItem(BaseModel):
+    id: int
+    pipeline: str
+    project: str
+    reason: str | None
+    state: str
+    enqueued_at: str
+
+
+class AutopilotDispatch(BaseModel):
+    pipeline: str
+    project: str
+    outcome: str
+    at: str
+
+
+class AutopilotStateResponse(BaseModel):
+    tenant: str
+    paused: bool
+    queue: list[AutopilotQueueItem]
+    queue_depth: int
+    budget_daily_usd: float | None
+    budget_spent_today: float
+    budget_remaining: float | None
+    recent_dispatches: list[AutopilotDispatch]
+    auto_dispatch_allowlist: list[str]
+
+
+class AutopilotControlResponse(BaseModel):
+    tenant: str
+    paused: bool
+
+
+def _autopilot_state(tenant: str) -> AutopilotStateResponse:
+    items = autopilot_queue.list_queue(tenant=tenant)
+    queue = [
+        AutopilotQueueItem(
+            id=item.id,
+            pipeline=item.pipeline,
+            project=item.project,
+            reason=item.reason,
+            state=item.state,
+            enqueued_at=item.created_ts,
+        )
+        for item in items
+        if item.state in _AUTOPILOT_PENDING_STATES
+    ]
+    dispatched = [item for item in items if item.state in _AUTOPILOT_DISPATCHED_STATES]
+    dispatched.sort(key=lambda item: item.updated_ts, reverse=True)
+    recent_dispatches = [
+        AutopilotDispatch(
+            pipeline=item.pipeline, project=item.project, outcome=item.state, at=item.updated_ts
+        )
+        for item in dispatched[:_AUTOPILOT_RECENT_DISPATCH_LIMIT]
+    ]
+
+    policy = autopilot_policy.get_autopilot_policy(_AUTOPILOT_NO_PROJECT_SENTINEL)
+    try:
+        spent = autopilot_queue.spent_today_usd(tenant=tenant)
+    except Exception:  # noqa: BLE001 - never fabricate "over budget" on a query failure
+        spent = 0.0
+    remaining = (
+        None if policy.budget_daily_usd is None else max(policy.budget_daily_usd - spent, 0.0)
+    )
+
+    return AutopilotStateResponse(
+        tenant=tenant,
+        paused=autopilot_queue.is_paused(tenant=tenant),
+        queue=queue,
+        queue_depth=len(queue),
+        budget_daily_usd=policy.budget_daily_usd,
+        budget_spent_today=spent,
+        budget_remaining=remaining,
+        recent_dispatches=recent_dispatches,
+        auto_dispatch_allowlist=policy.auto_dispatch,
+    )
+
+
+@v1.get("/autopilot")
+@app.get("/autopilot")
+def get_autopilot(
+    tenant: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> AutopilotStateResponse:
+    """Real-or-honest-empty Autopilot state for Mirador. See the module
+    comment block above for the tenant-lock and real-vs-null contract."""
+    resolved_tenant = _resolve_autopilot_tenant(caller, tenant)
+    return _autopilot_state(resolved_tenant)
+
+
+@v1.post("/autopilot/pause")
+@app.post("/autopilot/pause")
+def post_autopilot_pause(
+    tenant: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> AutopilotControlResponse:
+    """Pause the autopilot drain for a tenant. Gated at `run` (a control
+    action, like `POST /v1/runs/{id}/cancel` — never `read`). Idempotent:
+    pausing an already-paused tenant is a no-op success, matching
+    `autopilot_queue.pause`'s own upsert semantics."""
+    resolved_tenant = _resolve_autopilot_tenant(caller, tenant)
+    autopilot_queue.pause(tenant=resolved_tenant)
+    return AutopilotControlResponse(tenant=resolved_tenant, paused=True)
+
+
+@v1.post("/autopilot/resume")
+@app.post("/autopilot/resume")
+def post_autopilot_resume(
+    tenant: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> AutopilotControlResponse:
+    """Resume the autopilot drain for a tenant (also clears the `stopped`
+    flag, mirroring the CLI's `autopilot resume`). Gated at `run`. Idempotent:
+    resuming an already-running tenant is a no-op success."""
+    resolved_tenant = _resolve_autopilot_tenant(caller, tenant)
+    autopilot_queue.resume(tenant=resolved_tenant)
+    return AutopilotControlResponse(tenant=resolved_tenant, paused=False)
 
 
 # ---------------------------------------------------------------------------
