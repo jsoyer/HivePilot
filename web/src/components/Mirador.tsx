@@ -38,7 +38,7 @@ import { Mem0View } from './views/Mem0View'
 import { ModelsView } from './views/ModelsView'
 import { PanelView } from './views/PanelView'
 import { RealityView } from './views/RealityView'
-import { RunsView } from './views/RunsView'
+import { RunBoardView } from './views/RunBoardView'
 
 // FR/EN i18n (P1a): `labelKey` is a `TranslationKey` (see `@/lib/i18n`), NOT
 // display text — resolved to the current language via `t()` where
@@ -72,10 +72,11 @@ const BUILTIN_TABS = [
   // Approve/Deny controls inside gate themselves on useRole().can('approve')
   // — see ApprovalsView.
   { value: 'approvals', labelKey: 'nav.approvals', Panel: ApprovalsView, Icon: CheckSquare },
-  // Mirador actionable dashboard PRD, Sprint 3: read-only for any token,
-  // the New Run form inside gates itself on useRole().can('run') — see
-  // RunsView.
-  { value: 'runs', labelKey: 'nav.runs', Panel: RunsView, Icon: PlayCircle },
+  // Mirador Operate section PRD: Run Board (Kanban of runs, GET /v1/runs +
+  // GET /v1/runs/{id} drill-down) — read-only for any token, the New Run
+  // form and Stop controls inside gate themselves on useRole().can('run')
+  // — see RunBoardView. Supersedes the old flat-table RunsView.
+  { value: 'runs', labelKey: 'nav.runs', Panel: RunBoardView, Icon: PlayCircle },
   // Mirador Graph View PRD, Sprint 3: read-only for any token; a graph
   // source's own min_role (data-dependent, GET /v1/graph/{source}) gates
   // itself inside GraphView, exactly like PanelView's per-panel min_role.

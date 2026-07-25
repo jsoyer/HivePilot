@@ -4,22 +4,38 @@ import type { LucideIcon } from 'lucide-react'
  * Grouped sidebar navigation (Mirador → "Vigie" dashboard upgrade, P0b).
  * Mirrors the operator's mockup section labels — VUE D'ENSEMBLE / AGENTS /
  * SYSTÈME / MÉMOIRE — mapped onto Mirador's actual built-in tabs (see
- * `Mirador.tsx`'s `BUILTIN_TABS`). "Agents" holds the two agent-action tabs
- * (Approvals/Runs) — not called out by name in the sprint's suggested
- * grouping, but required by "don't drop any tab", and it's exactly the 4th
- * named group the mockup describes.
+ * `Mirador.tsx`'s `BUILTIN_TABS`).
  *
  * FR/EN i18n (P1a): `label` here is a `TranslationKey` (see `@/lib/i18n`),
  * NOT display text — `buildNavGroups` stays language-agnostic, and the
  * caller (`Mirador.tsx`, which has `useT()` in scope) resolves each group's
  * `label` to display text right before rendering. This keeps `SidebarNav`
  * itself free of any i18n dependency.
+ *
+ * Mirador Operate section sprint (Run Board + run detail, demote the
+ * node-graph): the operator's core complaint driving this sprint was "the
+ * pipeline graphs are useless" — `GraphView` (plugins/pipeline/skills
+ * topology) is kept (never deleted, still fully reachable), but demoted out
+ * of a prominent top-level slot. Two changes from the group table below:
+ *  1. The former "Agents" group (Approvals/Runs) is renamed "Operate" and
+ *     moved to the SECOND position, right after Home — Runs (now a Kanban
+ *     Run Board, not a flat table) is the primary Operate experience.
+ *  2. "System" (Health/Graph) — Graph's home — moves to the LAST position,
+ *     after Memory, so it's still one click away but no longer front-and-
+ *     center. Health stays paired with it (unchanged pairing, just demoted
+ *     as a unit).
  */
 export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // Mirador Home command-center sprint: Home is the new default landing
   // view, called out in its own leading group (not folded into "Overview")
   // so it always renders first, above every other section.
   { label: 'nav.commandCenter', values: ['home'] },
+  // Mirador Operate section sprint: Runs (Kanban Run Board — the operator's
+  // actionable "what's happening right now" view) + Approvals, right after
+  // Home. Replaces the "Agents" group at this same top-adjacent slot -- the
+  // rename better describes what the group is FOR (operating runs), not
+  // just which role triggers them.
+  { label: 'nav.operate', values: ['runs', 'approvals'] },
   // Mirador Spend section sprint: Cost moves out of "Overview" into its own
   // "Spend" group alongside the two new views (Models/Efficiency) — the
   // operator's complaint this sprint answers ("la conso marche pas, rien
@@ -28,9 +44,12 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // being folded into general analytics.
   { label: 'nav.spend', values: ['cost', 'models', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
-  { label: 'nav.agents', values: ['approvals', 'runs'] },
-  { label: 'nav.system', values: ['health', 'graph'] },
   { label: 'nav.memory', values: ['mem0', 'reality'] },
+  // Mirador Operate section sprint: demoted to LAST — Graph (plugins/
+  // pipeline/skills topology) is still fully reachable (sidebar/drawer/⌘K),
+  // just no longer a prominent top-level destination now that the Run Board
+  // is the primary "what's happening" view. Health stays paired with it.
+  { label: 'nav.system', values: ['health', 'graph'] },
 ]
 
 export interface NavItem {

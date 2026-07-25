@@ -53,7 +53,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.commandCenter': 'Centre de commandement',
   'nav.home': 'Accueil',
   'nav.overview': "Vue d'ensemble",
-  'nav.agents': 'Agents',
+  'nav.operate': 'Opérations',
   'nav.system': 'Système',
   'nav.memory': 'Mémoire',
   'nav.panels': 'Panneaux',
@@ -214,6 +214,38 @@ export const fr: Record<TranslationKey, string> = {
   'runs.insufficientRoleStop': 'Rôle insuffisant — votre jeton ne peut plus arrêter cette exécution.',
   'runs.started': 'Démarrée',
   'runs.finished': 'Terminée',
+
+  // ---- Vue Run Board (section Opérations de Mirador — Kanban des exécutions) ----
+  'board.description':
+    'Statut en direct de chaque exécution, regroupé par étape — cliquez sur une carte pour le détail.',
+  'board.descriptionReadOnly':
+    "Statut en direct de chaque exécution, regroupé par étape (lecture seule — un jeton de rang run peut en déclencher de nouvelles).",
+  'board.noRunsAtAll': "Aucune exécution pour le moment — déclenchez-en une ci-dessus pour la voir ici.",
+  'board.columnEmpty': 'Rien ici.',
+  'board.colQueued': 'File',
+  'board.colRunning': 'En cours',
+  'board.colWaitingApproval': "Attente d'approbation",
+  'board.colFailed': 'Échec',
+  'board.colDone': 'Terminé',
+  'board.colOther': 'Autre',
+  'board.cardAriaLabel': "Voir le détail de l'exécution {id} ({task} sur {project})",
+  'board.listToggleLabel': 'Basculer en vue liste',
+  'board.startedAgo': 'démarrée il y a {age}',
+  'board.duration': 'a duré {duration}',
+
+  // ---- Panneau de détail d'exécution (section Opérations de Mirador) ----
+  'runDetail.title': 'Exécution #{id}',
+  'runDetail.closeAriaLabel': "Fermer le détail de l'exécution",
+  'runDetail.stepsTitle': 'Étapes',
+  'runDetail.noSteps': 'Aucun détail d’étape enregistré pour cette exécution.',
+  'runDetail.overallDetail': 'Détail',
+  'runDetail.provider': 'Fournisseur',
+  'runDetail.model': 'Modèle',
+  'runDetail.tokens': 'Tokens (entrée/sortie)',
+  'runDetail.cost': 'Coût',
+  'runDetail.loadFailed': "Échec du chargement du détail de l'exécution.",
+  'runDetail.requiresTokenLead': "Le détail d'exécution nécessite un jeton de rang",
+  'runDetail.requiresTokenTail': '(ou supérieur).',
 
   // ---- Réalité view (tableau de bord de qualité de la mémoire) ---------
   'reality.kpiTitle': 'Qualité de la mémoire',

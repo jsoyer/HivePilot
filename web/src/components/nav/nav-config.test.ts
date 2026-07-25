@@ -61,4 +61,32 @@ describe('buildNavGroups', () => {
   it('returns an empty array for an empty input', () => {
     expect(buildNavGroups([])).toEqual([])
   })
+
+  // ---- Mirador Operate section: Operate group near the top, Graph demoted ----
+
+  it('places the "nav.operate" group (Runs/Approvals) right after Home, before Spend/Overview', () => {
+    const items = [item('home'), item('cost'), item('analytics'), item('runs'), item('approvals')]
+    const groups = buildNavGroups(items)
+    const labels = groups.map((g) => g.label)
+    expect(labels.indexOf('nav.operate')).toBe(labels.indexOf('nav.commandCenter') + 1)
+    expect(labels.indexOf('nav.operate')).toBeLessThan(labels.indexOf('nav.spend'))
+    expect(labels.indexOf('nav.operate')).toBeLessThan(labels.indexOf('nav.overview'))
+  })
+
+  it('Run Board (runs) is reachable via the "nav.operate" group, not folded into an unlabeled/fallback group', () => {
+    const items = [item('runs'), item('approvals')]
+    const groups = buildNavGroups(items)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.label).toBe('nav.operate')
+    expect(groups[0]?.items.map((i) => i.value)).toContain('runs')
+  })
+
+  it('demotes "nav.system" (Graph/Health) to the LAST group — still reachable, not prominent', () => {
+    const items = [item('home'), item('runs'), item('cost'), item('analytics'), item('mem0'), item('health'), item('graph')]
+    const groups = buildNavGroups(items)
+    const labels = groups.map((g) => g.label)
+    expect(labels[labels.length - 1]).toBe('nav.system')
+    // Graph is still present (reachable) somewhere in the output — never dropped.
+    expect(groups.flatMap((g) => g.items.map((i) => i.value))).toContain('graph')
+  })
 })

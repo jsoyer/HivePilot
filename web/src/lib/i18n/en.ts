@@ -53,7 +53,7 @@ export const en = {
   'nav.commandCenter': 'Command Center',
   'nav.home': 'Home',
   'nav.overview': 'Overview',
-  'nav.agents': 'Agents',
+  'nav.operate': 'Operate',
   'nav.system': 'System',
   'nav.memory': 'Memory',
   'nav.panels': 'Panels',
@@ -212,6 +212,37 @@ export const en = {
   'runs.insufficientRoleStop': 'Insufficient role — your token can no longer stop this run.',
   'runs.started': 'Started',
   'runs.finished': 'Finished',
+
+  // ---- Run Board view (Mirador Operate section — Kanban of runs) -------
+  'board.description': 'Live status of every run, grouped by stage — click a card for detail.',
+  'board.descriptionReadOnly':
+    'Live status of every run, grouped by stage (read-only — a run-rank token can trigger new ones).',
+  'board.noRunsAtAll': 'No runs yet — trigger one above to see it here.',
+  'board.columnEmpty': 'Nothing here.',
+  'board.colQueued': 'Queued',
+  'board.colRunning': 'Running',
+  'board.colWaitingApproval': 'Waiting approval',
+  'board.colFailed': 'Failed',
+  'board.colDone': 'Done',
+  'board.colOther': 'Other',
+  'board.cardAriaLabel': 'View details for run {id} ({task} on {project})',
+  'board.listToggleLabel': 'Toggle list view',
+  'board.startedAgo': 'started {age} ago',
+  'board.duration': 'ran for {duration}',
+
+  // ---- Run detail drill-down panel (Mirador Operate section) -----------
+  'runDetail.title': 'Run #{id}',
+  'runDetail.closeAriaLabel': 'Close run detail',
+  'runDetail.stepsTitle': 'Steps',
+  'runDetail.noSteps': 'No step detail recorded for this run.',
+  'runDetail.overallDetail': 'Detail',
+  'runDetail.provider': 'Provider',
+  'runDetail.model': 'Model',
+  'runDetail.tokens': 'Tokens (in/out)',
+  'runDetail.cost': 'Cost',
+  'runDetail.loadFailed': 'Failed to load run detail.',
+  'runDetail.requiresTokenLead': 'Run detail requires a',
+  'runDetail.requiresTokenTail': '(or higher) token.',
 
   // ---- Réalité view (memory-quality dashboard) ------------------------
   'reality.kpiTitle': 'Memory quality',

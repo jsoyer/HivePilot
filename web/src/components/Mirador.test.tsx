@@ -81,6 +81,17 @@ const mocks = vi.hoisted(() => ({
   // data/empty/error states (covered by HomeView.test.tsx).
   fetchApprovals: vi.fn().mockResolvedValue([]),
   fetchRuns: vi.fn().mockResolvedValue([]),
+  // Mirador Operate section: the Run Board's run detail drill-down fetches
+  // GET /v1/runs/{id} only once a card is clicked -- not on shell mount --
+  // but mocked here defensively so any interaction test never makes a real
+  // network call.
+  fetchRun: vi.fn().mockResolvedValue({
+    run_id: 0,
+    project: '',
+    task: '',
+    status: 'running',
+    steps: [],
+  }),
   fetchEfficiency: vi.fn().mockResolvedValue({
     headroom: { total_compressions: 0, chars_saved: 0, avg_ratio: 0, p95_ratio: 0, est_tokens_saved: 0 },
     rtk: null,
@@ -96,27 +107,31 @@ import { LANG_STORAGE_KEY } from '@/lib/i18n'
 import { Mirador } from './Mirador'
 
 // The sidebar's grouped nav order (P0b, + Home command-center sprint, +
-// Mirador Spend section sprint) — see `./nav/nav-config.ts`'s
-// `NAV_GROUP_ORDER`: Command Center (Home), Spend (Cost/Models/Efficiency),
-// Overview (Analytics), Agents (Approvals/Runs), System (Health/Graph),
-// Memory (Mem0/Réalité). Every built-in tab is still reachable, just
-// reordered by group instead of the old flat declaration order.
+// Mirador Spend section sprint, + Mirador Operate section sprint) — see
+// `./nav/nav-config.ts`'s `NAV_GROUP_ORDER`: Command Center (Home), Operate
+// (Runs/Approvals — renamed from "Agents", moved right after Home so the
+// Run Board is the primary "what's happening" destination), Spend
+// (Cost/Models/Efficiency), Overview (Analytics), Memory (Mem0/Réalité),
+// System (Health/Graph — demoted to LAST: the node-graph is no longer a
+// prominent top-level destination, still fully reachable). Every built-in
+// tab is still reachable, just reordered by group instead of the old flat
+// declaration order.
 // Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n — see the
 // "language toggle" describe block for the French-language assertions of
 // the same shell). "Réalité" itself is a proper noun, kept untranslated in
 // both dictionaries (see en.ts/fr.ts's `nav.reality`).
 const GROUPED_TAB_ORDER = [
   'Home',
+  'Runs',
+  'Approvals',
   'Cost',
   'Models',
   'Efficiency',
   'Analytics',
-  'Approvals',
-  'Runs',
-  'Health',
-  'Graph',
   'Mem0',
   'Réalité',
+  'Health',
+  'Graph',
 ]
 
 let container: HTMLDivElement
@@ -157,11 +172,24 @@ describe('Mirador', () => {
 
   it('groups the sidebar into labelled sections (English default)', () => {
     expect(container.textContent).toContain('Command Center')
+    expect(container.textContent).toContain('Operate')
     expect(container.textContent).toContain('Spend')
     expect(container.textContent).toContain('Overview')
-    expect(container.textContent).toContain('Agents')
     expect(container.textContent).toContain('System')
     expect(container.textContent).toContain('Memory')
+  })
+
+  it('CRITICAL: demotes the node-graph — "System" (Graph) is the LAST sidebar group, "Operate" (Runs) is right after Home', () => {
+    const groupLabels = Array.from(container.querySelectorAll('[data-slot="sidebar-nav"] span.uppercase')).map(
+      (el) => el.textContent,
+    )
+    expect(groupLabels[0]).toBe('Command Center')
+    expect(groupLabels[1]).toBe('Operate')
+    expect(groupLabels[groupLabels.length - 1]).toBe('System')
+
+    // Graph is still fully reachable — just not prominent.
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
+    expect(tabs).toContain('Graph')
   })
 
   it('shows the real Home view by default', async () => {

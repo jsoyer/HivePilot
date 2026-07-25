@@ -594,6 +594,58 @@ export function cancelRun(runId: number): Promise<CancelRunResult> {
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/runs/{run_id} -- Mirador Operate section PRD (Run Board + run
+// detail drill-down). Shape transcribed from `hivepilot/services/
+// api_service.py`'s `RunStepDetail`/`RunDetailResponse`/`get_run` -- read
+// those before changing anything here. Phase 14b's "async family's missing
+// piece" -- how `RunDetailPanel` polls a single run's full step timeline by
+// id (provider/model/token/cost per step), which `GET /v1/runs` (the list
+// `fetchRuns` above uses) never exposes.
+//
+// Gated at `run`, same as `GET /v1/runs`/`POST /v1/runs`/`POST /v1/runs/
+// {run_id}/cancel` -- `fetchRun` opts into `on403: 'forbidden'` exactly like
+// `fetchRuns`. A `404` (unknown run_id, OR a cross-tenant id a non-admin
+// caller must never be able to distinguish from "doesn't exist" -- see the
+// backend docstring) surfaces as a thrown `ApiError`; callers must handle it
+// like any other non-2xx response, never assume success.
+//
+// `detail`/step `detail` are returned exactly as persisted -- already
+// redacted server-side (see `get_run`'s own docstring) -- so, unlike
+// `RunSummary.detail`/`Approval.metadata` elsewhere in this app, these ARE
+// safe to render, but ONLY as plain JSX text (React's auto-escaping), never
+// `dangerouslySetInnerHTML` -- `RunDetailPanel` must never treat them as
+// trusted markup.
+// ---------------------------------------------------------------------------
+
+export interface RunStepDetail {
+  step: string
+  status: string
+  detail?: string | null
+  provider?: string | null
+  model?: string | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+  cost_usd?: number | null
+  timestamp?: string | null
+}
+
+export interface RunDetail {
+  run_id: number
+  project: string
+  task: string
+  status: string
+  detail?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  tenant?: string
+  steps: RunStepDetail[]
+}
+
+export function fetchRun(runId: number): Promise<RunDetail> {
+  return apiFetch<RunDetail>(`/v1/runs/${runId}`, { on403: 'forbidden' })
+}
+
+// ---------------------------------------------------------------------------
 // POST /v1/plugins/{name}/toggle -- Mirador actionable dashboard PRD,
 // Sprint 5. Shape transcribed from `hivepilot/services/api_service.py`'s
 // `PluginToggleResponse`/`toggle_plugin_endpoint` -- read that before

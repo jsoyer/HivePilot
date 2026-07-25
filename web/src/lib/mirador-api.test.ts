@@ -23,6 +23,7 @@ import {
   fetchMemoryJournal,
   fetchMemoryReality,
   fetchModels,
+  fetchRun,
   postApproval,
   fetchPanel,
   fetchPanels,
@@ -193,5 +194,12 @@ describe('mirador-api fetch wrappers', () => {
   it('fetchMemoryGrowth calls GET /v1/memory/growth with a days window and opts into on403: "forbidden"', async () => {
     await fetchMemoryGrowth(30)
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/memory/growth?days=30', { on403: 'forbidden' })
+  })
+
+  // ---- Mirador Operate section: run detail drill-down (GET /v1/runs/{id}) ----
+
+  it('fetchRun calls GET /v1/runs/{run_id} and opts into on403: "forbidden"', async () => {
+    await fetchRun(42)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/runs/42', { on403: 'forbidden' })
   })
 })
