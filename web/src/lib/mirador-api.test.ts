@@ -15,6 +15,7 @@ import {
   fetchAnalyticsTrends,
   fetchApprovalLatency,
   fetchApprovals,
+  fetchAutopilot,
   fetchEfficiency,
   fetchMemories,
   fetchMemoryEvaluations,
@@ -24,12 +25,14 @@ import {
   fetchMemoryReality,
   fetchModels,
   fetchRun,
+  pauseAutopilot,
   postApproval,
   fetchPanel,
   fetchPanels,
   fetchPluginsHealth,
   fetchStepFailures,
   postJson,
+  resumeAutopilot,
   whoami,
 } from './mirador-api'
 
@@ -201,5 +204,32 @@ describe('mirador-api fetch wrappers', () => {
   it('fetchRun calls GET /v1/runs/{run_id} and opts into on403: "forbidden"', async () => {
     await fetchRun(42)
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/runs/42', { on403: 'forbidden' })
+  })
+
+  // ---- Mirador Autopilot view (GET/POST /v1/autopilot) ----
+
+  it('fetchAutopilot calls GET /v1/autopilot and opts into on403: "forbidden"', async () => {
+    await fetchAutopilot()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/autopilot', { on403: 'forbidden' })
+  })
+
+  it('pauseAutopilot POSTs an empty body to /v1/autopilot/pause with on403: "forbidden"', async () => {
+    await pauseAutopilot()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/autopilot/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      on403: 'forbidden',
+    })
+  })
+
+  it('resumeAutopilot POSTs an empty body to /v1/autopilot/resume with on403: "forbidden"', async () => {
+    await resumeAutopilot()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/autopilot/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      on403: 'forbidden',
+    })
   })
 })

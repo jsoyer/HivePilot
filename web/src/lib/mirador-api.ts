@@ -895,3 +895,77 @@ export function fetchMemoryGrowth(days = 30): Promise<MemoryGrowth> {
   return apiFetch<MemoryGrowth>(`/v1/memory/growth?days=${days}`, { on403: 'forbidden' })
 }
 
+// ---------------------------------------------------------------------------
+// GET /v1/autopilot, POST /v1/autopilot/pause, POST /v1/autopilot/resume —
+// Mirador Autopilot view. Shapes transcribed from `hivepilot/services/
+// api_service.py`'s `AutopilotStateResponse`/`AutopilotControlResponse` (read
+// the large module comment above `_resolve_autopilot_tenant` there — the
+// full real-vs-null / tenant-lock contract — before changing anything here).
+//
+// `GET /v1/autopilot` is gated at the `read` floor (unlike `/v1/runs` or
+// `/v1/approvals`, which require `run`) — a valid token normally never 403s
+// fetching this state; the one exception is a non-admin caller whose token
+// tenant disagrees with an explicit `?tenant=` (`_resolve_autopilot_tenant`),
+// which this client never passes — so `on403: 'forbidden'` here is a
+// defensive opt-in for that edge case (and any future tightening of the
+// gate), same posture as `fetchApprovals`/`fetchRuns` above, so
+// `AutopilotView` can render a graceful message instead of clearing a valid
+// token.
+//
+// `POST /v1/autopilot/pause|resume` are gated at `run` (a control action,
+// like `POST /v1/runs/{id}/cancel`) — `postJson` already opts into
+// `on403: 'forbidden'`.
+//
+// `budget_daily_usd`/`budget_spent_today`/`budget_remaining` follow the
+// backend's real-or-honest-null contract: `budget_daily_usd` is `null` iff
+// no positive daily budget is configured; `budget_spent_today`/
+// `budget_remaining` are `null` iff the spend lookup itself failed — never
+// fabricated as `0`/full-budget. `AutopilotView` renders "unknown" for a
+// `null` spend/remaining, never `0`/the full budget.
+// ---------------------------------------------------------------------------
+
+export interface AutopilotQueueItem {
+  id: number
+  pipeline: string
+  project: string
+  reason: string | null
+  state: string
+  enqueued_at: string
+}
+
+export interface AutopilotDispatch {
+  pipeline: string
+  project: string
+  outcome: string
+  at: string
+}
+
+export interface AutopilotState {
+  tenant: string
+  paused: boolean
+  queue: AutopilotQueueItem[]
+  queue_depth: number
+  budget_daily_usd: number | null
+  budget_spent_today: number | null
+  budget_remaining: number | null
+  recent_dispatches: AutopilotDispatch[]
+  auto_dispatch_allowlist: string[]
+}
+
+export function fetchAutopilot(): Promise<AutopilotState> {
+  return apiFetch<AutopilotState>('/v1/autopilot', { on403: 'forbidden' })
+}
+
+export interface AutopilotControlResult {
+  tenant: string
+  paused: boolean
+}
+
+export function pauseAutopilot(): Promise<AutopilotControlResult> {
+  return postJson<AutopilotControlResult>('/v1/autopilot/pause', {})
+}
+
+export function resumeAutopilot(): Promise<AutopilotControlResult> {
+  return postJson<AutopilotControlResult>('/v1/autopilot/resume', {})
+}
+

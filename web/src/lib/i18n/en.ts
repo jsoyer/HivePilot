@@ -65,6 +65,7 @@ export const en = {
   'nav.health': 'Health',
   'nav.approvals': 'Approvals',
   'nav.runs': 'Runs',
+  'nav.autopilot': 'Autopilot',
   'nav.graph': 'Graph',
 
   // ---- health status words (shared: header pills + Health tab badges) --
@@ -360,6 +361,34 @@ export const en = {
   'efficiency.rtkCommands': 'Commands tracked',
   'efficiency.rtkSavedSeriesTitle': 'Savings trend',
   'efficiency.noSavedSeries': 'No daily series recorded yet.',
+
+  // ---- Autopilot view ---------------------------------------------------
+  'autopilot.description': 'The guarded objective queue — pause, resume, and monitor what it dispatches.',
+  'autopilot.statusLabel': 'Status',
+  'autopilot.active': 'Active',
+  'autopilot.paused': 'Paused',
+  'autopilot.queueDepthLabel': 'Queue depth',
+  'autopilot.pauseButton': 'Pause',
+  'autopilot.resumeButton': 'Resume',
+  'autopilot.pauseConfirm': 'Pause autopilot? It will stop dispatching new objectives until resumed.',
+  'autopilot.resumeConfirm': 'Resume autopilot? It will start dispatching queued objectives again.',
+  'autopilot.insufficientRole': 'Insufficient role — your token can no longer pause/resume autopilot.',
+  'autopilot.controlRequiresRunRole': 'Requires a run-rank (or higher) token to pause/resume.',
+  'autopilot.forbidden': "Unable to load Autopilot state for your token's tenant.",
+  'autopilot.budgetTitle': 'Budget',
+  'autopilot.dailyBudget': 'Daily budget',
+  'autopilot.spentToday': 'Spent today',
+  'autopilot.remaining': 'Remaining',
+  'autopilot.unknown': 'unknown',
+  'autopilot.noBudget': 'No daily budget configured.',
+  'autopilot.budgetBurn': 'Budget burn',
+  'autopilot.queueTitle': 'Objective queue',
+  'autopilot.queueEmpty': 'Queue empty.',
+  'autopilot.enqueuedAgo': 'enqueued {age} ago',
+  'autopilot.dispatchesTitle': 'Recent dispatches',
+  'autopilot.dispatchesEmpty': 'No dispatches yet.',
+  'autopilot.allowlistTitle': 'Allowlisted pipelines',
+  'autopilot.allowlistEmpty': 'Nothing allowlisted — autopilot is effectively idle.',
 } as const
 
 /** Every valid translation key — derived from `en`, the single source of

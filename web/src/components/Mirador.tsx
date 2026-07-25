@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bot,
   CheckSquare,
   Cpu,
   Database,
@@ -28,6 +29,7 @@ import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
+import { AutopilotView } from './views/AutopilotView'
 import { CostView } from './views/CostView'
 import { EfficiencyView } from './views/EfficiencyView'
 import { GraphView } from './views/GraphView'
@@ -76,6 +78,11 @@ const BUILTIN_TABS = [
   // form and Stop controls inside gate themselves on useRole().can('run')
   // — see RunBoardView. Supersedes the old flat-table RunsView.
   { value: 'runs', labelKey: 'nav.runs', Panel: RunBoardView, Icon: PlayCircle },
+  // Mirador Autopilot view sprint: GET /v1/autopilot (guarded objective
+  // queue state — real-or-honest-empty, tenant-locked) + POST /v1/autopilot/
+  // pause|resume — read-only for any token, the Pause/Resume control inside
+  // gates itself on useRole().can('run') — see AutopilotView.
+  { value: 'autopilot', labelKey: 'nav.autopilot', Panel: AutopilotView, Icon: Bot },
   // Mirador Graph View PRD, Sprint 3: read-only for any token; a graph
   // source's own min_role (data-dependent, GET /v1/graph/{source}) gates
   // itself inside GraphView, exactly like PanelView's per-panel min_role.
