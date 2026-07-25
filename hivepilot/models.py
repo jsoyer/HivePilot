@@ -204,6 +204,16 @@ class ProjectConfig(BaseModel):
     claude_md: str | None = None
     default_branch: str = "main"
     owner_repo: str | None = None
+    # ---- forge plugin type (forge-plugin-type-phase1 PRD, Sprint 1) ----
+    # Which git-forge provider (see hivepilot.forges) this project's repo
+    # lives on. Defaults to "github" -- the only forge shipped in Phase 1 --
+    # so every pre-existing project (no `forge:` key in projects.yaml) is
+    # completely unaffected. `forge_base_url` is additive/inert in Phase 1
+    # (no provider reads it yet); it exists now so a later self-hosted
+    # Forgejo/GitLab provider can land without another ProjectConfig schema
+    # change.
+    forge: str = "github"
+    forge_base_url: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     # Named secret catalog: NAME -> {source, ...} spec (same shape the
     # SecretResolver consumes). Referenced from `env` values via the
@@ -222,6 +232,34 @@ class ProjectConfig(BaseModel):
     # pure metadata for callers (e.g. a future "which modules have a UI"
     # filter); not consumed anywhere in this sprint.
     ui_surfaces: list[str] = Field(default_factory=list)
+
+    @field_validator("forge")
+    @classmethod
+    def validate_forge(cls, v: str) -> str:
+        """Fail-closed (SECURITY/correctness): an unknown `forge` name must
+        raise at config-load time -- NEVER silently fall back to GitHub.
+        Mirrors the fail-closed posture used elsewhere in this module (see
+        `validate_modules` below) and the unknown-runner-kind error
+        `resolve_runner_class` raises, just enforced earlier (at model
+        validation, since -- unlike an agent runner plugin, which may be
+        disabled or missing its CLI binary at runtime -- `FORGE_MAP`'s
+        builtin ("github") is always registered by the time any
+        `ProjectConfig` is constructed; see `hivepilot/forges/__init__.py`).
+
+        Local import (not at module top) to avoid a
+        `hivepilot.models` <-> `hivepilot.forges` import cycle --
+        `hivepilot.forges.provider`/`.github` both import `ProjectConfig`
+        from this module for type hints, so importing `hivepilot.forges`
+        back at THIS module's top level would be circular. By the time this
+        validator runs (a `ProjectConfig(...)` is being constructed, always
+        after import-time), both modules are already fully loaded, so the
+        lazy import here is safe.
+        """
+        from hivepilot.forges import FORGE_MAP
+
+        if v not in FORGE_MAP:
+            raise ValueError(f"Unknown forge {v!r}; available: {sorted(FORGE_MAP)}")
+        return v
 
     @model_validator(mode="after")
     def expand_path(self) -> ProjectConfig:

@@ -331,3 +331,40 @@ def test_project_config_module_subpath_must_resolve_inside_project_path(tmp_path
     rel = f"../{sibling.name}"
     with pytest.raises(pydantic.ValidationError):
         ProjectConfig(path=tmp_path, modules={"evil": rel})
+
+
+# ---------------------------------------------------------------------------
+# ProjectConfig.forge — forge plugin type (Phase 1: GitHub default,
+# fail-closed on an unknown forge name). See hivepilot/forges/.
+# ---------------------------------------------------------------------------
+
+
+def test_project_config_forge_defaults_to_github(tmp_path) -> None:
+    project = ProjectConfig(path=tmp_path)
+    assert project.forge == "github"
+    assert project.forge_base_url is None
+
+
+def test_project_config_rejects_unknown_forge(tmp_path) -> None:
+    """FAIL-CLOSED: an unknown `forge` value must raise at config-load time --
+    never silently fall back to GitHub (mirrors the unknown-runner-kind
+    posture, just enforced earlier, at model validation)."""
+    with pytest.raises(pydantic.ValidationError, match="[Uu]nknown forge"):
+        ProjectConfig(path=tmp_path, forge="bitbucket")
+
+
+def test_project_config_accepts_registered_forge(tmp_path) -> None:
+    """A forge name that IS registered in FORGE_MAP must be accepted --
+    proves the validator checks the live registry, not a hardcoded
+    allowlist."""
+    from hivepilot.forges.provider import FORGE_MAP, ForgeRegistry
+
+    class _FakeForge:
+        name = "fake-vcs"
+
+    ForgeRegistry.register("fake-vcs", _FakeForge(), override=True)  # type: ignore[arg-type]
+    try:
+        project = ProjectConfig(path=tmp_path, forge="fake-vcs")
+        assert project.forge == "fake-vcs"
+    finally:
+        FORGE_MAP.pop("fake-vcs", None)

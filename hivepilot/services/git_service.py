@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Iterator
 from git import GitCommandError, Repo  # type: ignore
 
 from hivepilot.config import settings
+from hivepilot.forges import resolve_forge
 from hivepilot.models import GitActions, ProjectConfig
 from hivepilot.utils.logging import get_logger
 
@@ -319,50 +320,33 @@ def perform_git_actions(
 
 
 def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
-    """Open a pull request via the gh CLI (run from the project repo)."""
-    base = project.default_branch or "main"
-    title = git.pr_title or f"HivePilot: {branch}"
-    cmd = [settings.gh_command, "pr", "create", "--base", base, "--head", branch, "--title", title]
-    if git.draft:
-        cmd.append("--draft")
-    if git.pr_body_file:
-        cmd += ["--body-file", git.pr_body_file]
-    else:
-        cmd += ["--body", "Automated pull request opened by HivePilot."]
-    try:
-        subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
-        logger.info(
-            "git.pr_created", project=project.path.name, branch=branch, base=base, draft=git.draft
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Failed to create PR for {project.path.name}: {exc}") from exc
+    """Open a pull request via the project's forge provider (developer-opens-PR flow).
+
+    Phase 1 (forge plugin type): thin wrapper around
+    ``resolve_forge(project).open_pr`` -- for ``forge: "github"`` (every
+    pre-existing project, since that's the default) this is byte-identical to
+    the direct ``gh pr create`` subprocess call this function used to make
+    inline (that logic now lives in
+    ``hivepilot.forges.github.GitHubForge.open_pr``).
+    """
+    resolve_forge(project).open_pr(project=project, branch=branch, git=git)
 
 
 def promote_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
-    """Mark *branch*'s draft PR ready for review via gh -- release-gate promotion.
+    """Mark *branch*'s draft PR ready for review via the project's forge provider.
 
-    Sibling to merge_pr: same subprocess/error-handling shape. Only called by
-    perform_git_actions when the gating stage's own verdict did not block
-    (see _agent_verdict_blocked).
+    Sibling to merge_pr: same subprocess/error-handling shape (now inside the
+    resolved provider). Only called by perform_git_actions when the gating
+    stage's own verdict did not block (see _agent_verdict_blocked).
     """
-    cmd = [settings.gh_command, "pr", "ready", branch]
-    try:
-        subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
-        logger.info("git.pr_promoted", project=project.path.name, branch=branch)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Failed to promote PR for {project.path.name}: {exc}") from exc
+    resolve_forge(project).promote_pr(project=project, branch=branch, git=git)
 
 
 def merge_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
-    """Merge the open PR for *branch* via gh -- Jules' autonomous final approval.
+    """Merge the open PR for *branch* via the project's forge provider --
+    Jules' autonomous final approval.
 
     Merge (not a review approval) because GitHub forbids approving your own PR, so
     the actionable autonomous step in a solo workflow is the merge itself.
     """
-    method = git.merge_method if git.merge_method in {"merge", "squash", "rebase"} else "merge"
-    cmd = [settings.gh_command, "pr", "merge", branch, f"--{method}"]
-    try:
-        subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
-        logger.info("git.pr_merged", project=project.path.name, branch=branch, method=method)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Failed to merge PR for {project.path.name}: {exc}") from exc
+    resolve_forge(project).merge_pr(project=project, branch=branch, git=git)

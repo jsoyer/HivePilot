@@ -1,28 +1,31 @@
+"""Thin GitHub-forge wrappers (Phase 1 of the forge plugin type PRD).
+
+Every function here used to shell out to `gh` directly; now each one
+resolves the project's configured forge provider
+(`hivepilot.forges.resolve_forge` -- "github" by default, the only forge
+Phase 1 ships) and delegates. For a `forge: "github"` project (every
+pre-existing project, since that's the default) this is byte-identical to
+the old inline implementation, which now lives in
+`hivepilot.forges.github.GitHubForge`.
+
+Kept as its own module (rather than deleting it and updating every caller)
+because `hivepilot.cli` / `hivepilot.runners.internal_runner` import these
+names directly -- this preserves that public surface unchanged.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 from hivepilot.config import Settings
+from hivepilot.forges import FORGE_MAP, resolve_forge
 from hivepilot.models import ProjectConfig
-from hivepilot.utils.logging import get_logger
-from hivepilot.utils.shell import run_command
-
-logger = get_logger(__name__)
 
 
 def repo_exists(slug: str, settings: Settings, project: ProjectConfig) -> bool:
-    result = run_command(
-        [settings.gh_command, "repo", "view", slug],
-        cwd=project.path,
-        check=False,
-        capture_output=True,
-    )
-    return result.returncode == 0
+    return resolve_forge(project).repo_exists(slug, settings, project)
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))
 def create_repo(
     slug: str,
     *,
@@ -31,14 +34,13 @@ def create_repo(
     visibility: str,
     description: str | None,
 ) -> None:
-    args = [settings.gh_command, "repo", "create", slug, "--confirm"]
-    if visibility == "private":
-        args.append("--private")
-    else:
-        args.append("--public")
-    if description:
-        args.extend(["--description", description])
-    run_command(args, cwd=project.path)
+    resolve_forge(project).create_repo(
+        slug,
+        settings=settings,
+        project=project,
+        visibility=visibility,
+        description=description,
+    )
 
 
 def ensure_repository(
@@ -50,44 +52,14 @@ def ensure_repository(
     remote_protocol: str = "ssh",
     visibility: str = "private",
 ) -> None:
-    remote_protocol = remote_protocol.lower()
-    visibility = visibility.lower()
-    if remote_protocol not in {"ssh", "https"}:
-        raise ValueError("remote_protocol must be 'ssh' or 'https'")
-    if visibility not in {"private", "public"}:
-        raise ValueError("visibility must be 'private' or 'public'")
-    slug = project.owner_repo
-    if not slug:
-        raise ValueError("owner_repo missing in project configuration.")
-    if repo_exists(slug, settings, project):
-        logger.info("github.repo_exists", repo=slug)
-    else:
-        logger.info("github.repo_create", repo=slug)
-        create_repo(
-            slug,
-            settings=settings,
-            project=project,
-            visibility=visibility,
-            description=project.description,
-        )
-    if set_remote:
-        run_command(
-            [
-                settings.git_command,
-                "remote",
-                "set-url",
-                "origin",
-                build_repo_url(slug, remote_protocol),
-            ],
-            cwd=project.path,
-            check=False,
-        )
-    if push:
-        run_command(
-            [settings.git_command, "push", "-u", "origin", project.default_branch],
-            cwd=project.path,
-            check=False,
-        )
+    resolve_forge(project).ensure_repository(
+        project,
+        settings,
+        push=push,
+        set_remote=set_remote,
+        remote_protocol=remote_protocol,
+        visibility=visibility,
+    )
 
 
 def create_issue(
@@ -98,23 +70,9 @@ def create_issue(
     body: str | None,
     labels: list[str],
 ) -> None:
-    slug = project.owner_repo
-    if not slug:
-        raise ValueError("owner_repo missing for issue creation")
-    args = [
-        settings.gh_command,
-        "issue",
-        "create",
-        "--repo",
-        slug,
-        "--title",
-        title,
-    ]
-    if body:
-        args.extend(["--body", body])
-    for label in labels:
-        args.extend(["--label", label])
-    run_command(args, cwd=project.path)
+    resolve_forge(project).create_issue(
+        project=project, settings=settings, title=title, body=body, labels=labels
+    )
 
 
 def create_release(
@@ -126,27 +84,19 @@ def create_release(
     notes_file: Path | None = None,
     generate_notes: bool = True,
 ) -> None:
-    slug = project.owner_repo
-    if not slug:
-        raise ValueError("owner_repo missing for release creation")
-    args = [
-        settings.gh_command,
-        "release",
-        "create",
-        tag,
-        "--repo",
-        slug,
-    ]
-    if generate_notes and not notes_file:
-        args.append("--generate-notes")
-    if title:
-        args.extend(["--title", title])
-    if notes_file:
-        args.extend(["--notes-file", str(notes_file)])
-    run_command(args, cwd=project.path)
+    resolve_forge(project).create_release(
+        project=project,
+        settings=settings,
+        tag=tag,
+        title=title,
+        notes_file=notes_file,
+        generate_notes=generate_notes,
+    )
 
 
 def build_repo_url(repo: str, protocol: str) -> str:
-    if protocol == "https":
-        return f"https://github.com/{repo}.git"
-    return f"git@github.com:{repo}.git"
+    # No `project` is available at this call site (pre-existing signature --
+    # kept unchanged so every caller, e.g. `project_service.ensure_checkout`,
+    # keeps working). Phase 1 only ever has one provider registered, so this
+    # always resolves to the default GitHub provider.
+    return FORGE_MAP["github"].build_repo_url(repo, protocol)
