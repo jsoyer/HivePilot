@@ -251,9 +251,10 @@ class TestAnalyticsCostContract:
         """Mirador data endpoints sprint: `by_project`/`by_role`/
         `by_role_note`/`unpriced_models` are additive new keys — old keys
         (`overall`/`by_provider`/`by_model`) are unchanged, so this is a
-        backward-compatible extension, not a rename. `by_role` is `None`
-        (never fabricated — see `analytics_service.cost_summary`'s
-        docstring): the `steps`/`runs` tables have no `role` column."""
+        backward-compatible extension, not a rename. `by_role` is now a
+        REAL breakdown (Mirador Agent Panels backend sprint added
+        `steps.role`) — the seeded step here carries no role, so it groups
+        under the honest "unknown" bucket, never `None`/fabricated."""
         resp = api_client.get("/v1/analytics/cost", headers=_auth(read_token))
         assert resp.status_code == 200
         data = resp.json()
@@ -274,7 +275,9 @@ class TestAnalyticsCostContract:
         assert set(model_row.keys()) == _COST_ACCUMULATION_KEYS | {"model"}
         project_row = data["by_project"][0]
         assert set(project_row.keys()) == _COST_ACCUMULATION_KEYS | {"project"}
-        assert data["by_role"] is None
+        role_row = data["by_role"][0]
+        assert set(role_row.keys()) == _COST_ACCUMULATION_KEYS | {"role"}
+        assert role_row["role"] == "unknown"
         assert isinstance(data["by_role_note"], str) and data["by_role_note"]
         assert isinstance(data["unpriced_models"], list)
 

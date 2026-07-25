@@ -638,20 +638,18 @@ def _accumulate_cost(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-# `steps`/`runs` carry no `role` column (INVESTIGATED for the Mirador data
-# endpoints sprint -- see `state_service.init_db()`'s `steps` table DDL and
-# every `_add_column_if_missing(conn, "steps", ...)` migration: `provider`,
-# `model`, `input_tokens`, `output_tokens`, `cost_usd` -- no `role`). `role`
-# only exists on unrelated tables (`interactions`, `lessons`, `tokens`,
-# `audit_log`). A cost-by-role breakdown is therefore NOT derivable from
-# current data -- `cost_summary`'s `by_role` is always `None` (never
-# fabricated as an empty-but-present list), paired with `by_role_note`
-# explaining why.
-_BY_ROLE_UNAVAILABLE_NOTE = (
-    "cost_summary.by_role is unavailable: the steps/runs tables persist "
-    "provider/model/token/cost columns but no role column (role only exists "
-    "on interactions/lessons/tokens/audit_log). Add a steps.role column and "
-    "backfill it from TaskConfig.role to make this breakdown possible."
+# `steps.role` (added by the Mirador Agent Panels backend sprint) is
+# populated only for steps recorded from this sprint onward -- every step
+# written before the migration ships (and any step from a non-role task)
+# persists role=NULL. `by_role` below groups those under the literal key
+# "unknown" -- same never-drop, never-guess convention as `by_provider`/
+# `by_model` grouping a NULL provider/model under "unknown".
+_BY_ROLE_NOTE = (
+    "by_role groups steps by the role that executed them (steps.role, added "
+    "in the Mirador Agent Panels backend sprint). Steps recorded BEFORE that "
+    "migration shipped -- and any step from a non-role task -- have "
+    "role=NULL and are grouped under the literal key 'unknown', never "
+    "dropped and never attributed to a guessed role."
 )
 
 
@@ -678,9 +676,11 @@ def cost_summary(
     least one unpriced step, so a dashboard can point at exactly what's
     missing from the price map.
 
-    ``by_role`` is always ``None`` -- see `_BY_ROLE_UNAVAILABLE_NOTE` (paired
-    with ``by_role_note`` in the return value): investigated and confirmed
-    unavailable in current data, not simply omitted.
+    ``by_role`` groups the same steps by `steps.role` (Mirador Agent Panels
+    backend sprint) -- see `_BY_ROLE_NOTE` (paired with ``by_role_note`` in
+    the return value). A `NULL` role (every step recorded before that
+    migration shipped, plus any non-role task's steps) groups under the
+    literal key ``"unknown"``, exactly like `by_provider`/`by_model`.
     """
     state_service.init_db()
     since_ts, until_ts = _resolve_window(days, since, until)
@@ -705,6 +705,7 @@ def cost_summary(
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT s.provider AS provider, s.model AS model, r.project AS project,
+               s.role AS role,
                s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
                s.cost_usd AS cost_usd
         FROM steps s
@@ -716,9 +717,11 @@ def cost_summary(
 
     by_provider: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_role: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_provider[row.get("provider") or "unknown"].append(row)
         by_model[row.get("model") or "unknown"].append(row)
+        by_role[row.get("role") or "unknown"].append(row)
 
     provider_summary = [
         {"provider": key, **_accumulate_cost(group)} for key, group in by_provider.items()
@@ -726,6 +729,8 @@ def cost_summary(
     provider_summary.sort(key=lambda r: -r["cost_usd"])
     model_summary = [{"model": key, **_accumulate_cost(group)} for key, group in by_model.items()]
     model_summary.sort(key=lambda r: -r["cost_usd"])
+    role_summary = [{"role": key, **_accumulate_cost(group)} for key, group in by_role.items()]
+    role_summary.sort(key=lambda r: -r["cost_usd"])
 
     by_project: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -741,8 +746,8 @@ def cost_summary(
         "by_provider": provider_summary,
         "by_model": model_summary,
         "by_project": project_summary,
-        "by_role": None,
-        "by_role_note": _BY_ROLE_UNAVAILABLE_NOTE,
+        "by_role": role_summary,
+        "by_role_note": _BY_ROLE_NOTE,
         "unpriced_models": unpriced_models,
     }
 
@@ -873,3 +878,218 @@ def models_summary(
         "latency_available": False,
         "latency_note": _LATENCY_UNAVAILABLE_NOTE,
     }
+
+
+# ---------------------------------------------------------------------------
+# agents_summary (Mirador Agent Panels backend sprint) — per-role activity
+# roster for GET /v1/agents: the FULL role roster (hivepilot.roles.ROLES)
+# left-joined with REAL per-role activity derived from `steps.role`.
+# ---------------------------------------------------------------------------
+
+_AGENTS_ATTRIBUTION_NOTE = (
+    "Per-role attribution requires steps.role, added in the Mirador Agent "
+    "Panels backend sprint. Only steps recorded AFTER that migration ships "
+    "carry a real role -- earlier steps (and any step from a non-role task) "
+    "have role=NULL and are reported separately under the 'unknown' bucket, "
+    "never guessed and never silently dropped. A role with zero attributed "
+    "steps in the current window is returned with attributed=false and "
+    "success_rate=null ('no data yet'), not a fabricated rollup. No latency "
+    "figure is computed here (see `_LATENCY_UNAVAILABLE_NOTE` -- the same "
+    "per-step-duration gap applies per role)."
+)
+
+
+def _agent_role_stats(group: list[dict[str, Any]]) -> dict[str, Any]:
+    cost_stats = _accumulate_cost(group)
+    outcome_counts = {o.value: 0 for o in Outcome}
+    for row in group:
+        outcome_counts[canonical_outcome(row.get("status"))] += 1
+    timestamps = [row["timestamp"] for row in group if row.get("timestamp")]
+    return {
+        "attributed": bool(group),
+        "run_count": len({row["run_id"] for row in group}),
+        "step_count": cost_stats["total_steps"],
+        "input_tokens": cost_stats["input_tokens"],
+        "output_tokens": cost_stats["output_tokens"],
+        "cost_usd": cost_stats["cost_usd"],
+        "unpriced_steps": cost_stats["unpriced_steps"],
+        "success_rate": _attempt_success_rate(outcome_counts),
+        "last_active": max(timestamps) if timestamps else None,
+    }
+
+
+def agents_summary(
+    tenant: str | None = None,
+    days: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    task: str | None = None,
+) -> dict[str, Any]:
+    """Per-role agent activity roster backing `GET /v1/agents` (Mirador
+    Agent Panels backend sprint): the full role roster from
+    `hivepilot.roles.list_roles()` (name/display_name/title), LEFT-JOINed
+    with real per-role activity derived from `steps.role`.
+
+    Tenant-scoped exactly like `cost_summary`/`models_summary` (`steps JOIN
+    runs`, `r.tenant=?`). Unbounded by default (``days=None``) — a roster
+    view is a lifetime/overview surface, not a rolling-window one, but the
+    same `days`/`since`/`until` knobs as every other analytics function are
+    still honored when a caller wants a windowed slice.
+
+    Honesty contract:
+    - A role with zero attributed steps in the window returns
+      ``attributed: False``, all-zero counts, and ``success_rate: None``
+      ("no data yet") -- never a fabricated rollup.
+    - `NULL`-role steps (pre-migration history, or a non-role task) are
+      NEVER attributed to any named role -- they're aggregated separately
+      under the top-level ``"unknown"`` key.
+    - A role name observed in the data but no longer present in the current
+      roster (e.g. `roles.yaml` changed) is still surfaced in ``agents``
+      (with ``display_name``/``title`` both ``None``) rather than silently
+      dropped.
+    - No latency figure is ever computed/returned per role -- see
+      `_AGENTS_ATTRIBUTION_NOTE`.
+    """
+    from hivepilot import roles as roles_module
+
+    state_service.init_db()
+    since_ts, until_ts = _resolve_window(days, since, until)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if project is not None:
+        clauses.append("r.project=?")
+        params.append(project)
+    if task is not None:
+        clauses.append("r.task=?")
+        params.append(task)
+    if since_ts is not None:
+        clauses.append("s.timestamp>=?")
+        params.append(since_ts)
+    if until_ts is not None:
+        clauses.append("s.timestamp<=?")
+        params.append(until_ts)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT s.role AS role, s.run_id AS run_id, s.status AS status,
+               s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
+               s.cost_usd AS cost_usd, s.timestamp AS timestamp
+        FROM steps s
+        JOIN runs r ON r.id = s.run_id
+        {where}
+    """
+    with db.connect() as conn:
+        rows = [dict(row) for row in conn.execute(db.ph(sql), tuple(params)).fetchall()]
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[row.get("role") or "unknown"].append(row)
+    unknown_rows = grouped.pop("unknown", [])
+
+    known_roles = roles_module.list_roles()
+    known_role_names = {role.name for role in known_roles}
+
+    agents: list[dict[str, Any]] = []
+    for role in known_roles:
+        stats = _agent_role_stats(grouped.get(role.name, []))
+        agents.append(
+            {
+                "name": role.name,
+                "display_name": role.display_name,
+                "title": role.title,
+                **stats,
+            }
+        )
+    # A role observed in the data but no longer in the current roster --
+    # surfaced honestly (never silently dropped), just without identity
+    # metadata the (now-gone) roles.yaml entry used to provide.
+    for name in sorted(set(grouped.keys()) - known_role_names):
+        stats = _agent_role_stats(grouped[name])
+        agents.append({"name": name, "display_name": None, "title": None, **stats})
+
+    agents.sort(key=lambda a: -a["cost_usd"])
+
+    unknown_stats = _agent_role_stats(unknown_rows)
+    unknown_stats.pop("attributed", None)
+
+    return {
+        "agents": agents,
+        "unknown": unknown_stats,
+        "note": _AGENTS_ATTRIBUTION_NOTE,
+    }
+
+
+# ---------------------------------------------------------------------------
+# verdicts_summary / lessons_summary (Mirador Agent Panels backend sprint) —
+# tenant-scoped, role-filterable reads over `verdicts`/`lessons`, plus a
+# per-role aggregation, for GET /v1/verdicts and GET /v1/lessons.
+# ---------------------------------------------------------------------------
+
+
+def verdicts_summary(
+    tenant: str | None = None,
+    role: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Recent verdicts (tenant-scoped via `state_service.list_verdicts`'s
+    fail-closed `LEFT JOIN runs`) plus a per-role aggregation of decision/
+    kind counts, backing `GET /v1/verdicts`.
+    """
+    rows = state_service.list_verdicts(tenant=tenant, role=role, limit=limit)
+    by_role: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("role") or "unknown"
+        bucket = by_role.setdefault(
+            key, {"total": 0, "decision_counts": defaultdict(int), "kind_counts": defaultdict(int)}
+        )
+        bucket["total"] += 1
+        bucket["decision_counts"][row.get("decision") or "unknown"] += 1
+        bucket["kind_counts"][row.get("kind") or "unknown"] += 1
+
+    by_role_out = {
+        key: {
+            "total": bucket["total"],
+            "decision_counts": dict(bucket["decision_counts"]),
+            "kind_counts": dict(bucket["kind_counts"]),
+        }
+        for key, bucket in by_role.items()
+    }
+    return {"verdicts": rows, "by_role": by_role_out}
+
+
+def lessons_summary(
+    tenant: str | None = None,
+    role: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Recent lessons (tenant-scoped via
+    `state_service.list_lessons_by_tenant`'s fail-closed `LEFT JOIN runs`,
+    both validated lessons AND candidates) plus a per-role aggregation
+    (total / validated count / average score), backing `GET /v1/lessons`.
+    """
+    rows = state_service.list_lessons_by_tenant(tenant=tenant, role=role, limit=limit)
+    by_role: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("role") or "unknown"
+        bucket = by_role.setdefault(key, {"total": 0, "validated": 0, "use_count": 0, "scores": []})
+        bucket["total"] += 1
+        if row.get("validated"):
+            bucket["validated"] += 1
+        bucket["use_count"] += row.get("use_count") or 0
+        if row.get("score") is not None:
+            bucket["scores"].append(row["score"])
+
+    by_role_out: dict[str, dict[str, Any]] = {}
+    for key, bucket in by_role.items():
+        scores = bucket["scores"]
+        by_role_out[key] = {
+            "total": bucket["total"],
+            "validated": bucket["validated"],
+            "use_count": bucket["use_count"],
+            "avg_score": round(sum(scores) / len(scores), 4) if scores else None,
+        }
+    return {"lessons": rows, "by_role": by_role_out}

@@ -65,18 +65,20 @@ def _seed_step_with_usage(
     output_tokens: int | None = None,
     cost_usd: float | None = None,
     timestamp: str = "2026-01-01 00:00:00",
+    role: str | None = None,
 ) -> None:
     """Seed helper for Phase 24b.2b cost tests — writes the token/cost
     columns state_service.record_step() also accepts, via direct SQL for
-    deterministic control (mirrors `_seed_step`)."""
+    deterministic control (mirrors `_seed_step`). `role` is additive
+    (Mirador Agent Panels backend sprint)."""
     state_service.init_db()
     with db.connect() as conn:
         conn.execute(
             db.ph(
                 "INSERT INTO steps "
                 "(run_id, step, status, timestamp, provider, model, "
-                "input_tokens, output_tokens, cost_usd) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "input_tokens, output_tokens, cost_usd, role) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
             (
                 run_id,
@@ -88,6 +90,7 @@ def _seed_step_with_usage(
                 input_tokens,
                 output_tokens,
                 cost_usd,
+                role,
             ),
         )
 
@@ -976,14 +979,44 @@ class TestCostSummaryByProjectAndRole:
             }
         ]
 
-    def test_by_role_is_none_and_documented(self) -> None:
-        """`steps`/`runs` has no `role` column -- INVESTIGATED, not
-        available -- so `by_role` must be `None` (never fabricated as an
-        empty-but-present breakdown), with a human-readable reason."""
+    def test_by_role_is_empty_list_and_documented_when_no_steps(self) -> None:
+        """Mirador Agent Panels backend sprint: `steps.role` now exists, so
+        `by_role` is a REAL (possibly empty) breakdown, never `None`."""
         result = analytics_service.cost_summary(days=None)
-        assert result["by_role"] is None
+        assert result["by_role"] == []
         assert isinstance(result["by_role_note"], str)
         assert result["by_role_note"]
+
+    def test_by_role_groups_by_real_role_and_null_becomes_unknown(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(run1, "s1", "success", cost_usd=1.0, role="developer")
+        _seed_step_with_usage(run1, "s2", "success", cost_usd=2.0, role="developer")
+        _seed_step_with_usage(run1, "s3", "success", cost_usd=3.0, role=None)
+
+        result = analytics_service.cost_summary(days=None)
+        by_role = {row["role"]: row for row in result["by_role"]}
+        assert by_role["developer"]["cost_usd"] == 3.0
+        assert by_role["developer"]["total_steps"] == 2
+        assert by_role["unknown"]["cost_usd"] == 3.0
+        assert by_role["unknown"]["total_steps"] == 1
+
+    def test_by_role_tenant_isolation(self) -> None:
+        run_acme = _seed_run(project="p", tenant="acme")
+        run_other = _seed_run(project="p", tenant="other")
+        _seed_step_with_usage(run_acme, "s1", "success", cost_usd=1.0, role="developer")
+        _seed_step_with_usage(run_other, "s1", "success", cost_usd=1.0, role="developer")
+
+        result = analytics_service.cost_summary(tenant="acme", days=None)
+        assert result["by_role"] == [
+            {
+                "role": "developer",
+                "total_steps": 1,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 1.0,
+                "unpriced_steps": 0,
+            }
+        ]
 
     def test_unpriced_models_lists_models_with_any_unpriced_step(self) -> None:
         run1 = _seed_run()
@@ -1123,3 +1156,288 @@ class TestModelsSummary:
         )
         result = analytics_service.models_summary(days=None)
         assert [row["model"] for row in result["models"]] == ["pricey", "cheap"]
+
+
+# ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint -- agents_summary (GET /v1/agents)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentsSummary:
+    def test_empty_db_returns_full_roster_all_unattributed(self) -> None:
+        """Every role in the current roster (roles.yaml) must appear, even
+        with zero activity -- honest 'no data yet', never dropped."""
+        result = analytics_service.agents_summary(days=None)
+        names = {a["name"] for a in result["agents"]}
+        assert "developer" in names
+        assert "reviewer" in names
+        for agent in result["agents"]:
+            assert agent["attributed"] is False
+            assert agent["step_count"] == 0
+            assert agent["run_count"] == 0
+            assert agent["success_rate"] is None
+            assert agent["cost_usd"] == 0.0
+            assert agent["last_active"] is None
+        assert result["unknown"]["step_count"] == 0
+        assert isinstance(result["note"], str) and result["note"]
+
+    def test_attributed_role_reflects_real_activity(self) -> None:
+        run1 = _seed_run(status="success")
+        _seed_step_with_usage(run1, "s1", "success", cost_usd=2.0, role="developer")
+        result = analytics_service.agents_summary(days=None)
+        by_name = {a["name"]: a for a in result["agents"]}
+        dev = by_name["developer"]
+        assert dev["attributed"] is True
+        assert dev["step_count"] == 1
+        assert dev["run_count"] == 1
+        assert dev["cost_usd"] == 2.0
+        assert dev["success_rate"] == 1.0
+        assert dev["last_active"] == "2026-01-01 00:00:00"
+        assert dev["display_name"] == "Gustave"
+        assert dev["title"] == "Developer"
+        # A role with no attributed steps stays honestly empty.
+        reviewer = by_name["reviewer"]
+        assert reviewer["attributed"] is False
+        assert reviewer["success_rate"] is None
+
+    def test_success_rate_none_when_attributed_but_no_attempts(self) -> None:
+        """A role with real steps but none succeeded/failed (e.g. all
+        'running') must still report success_rate=None, never a fabricated
+        0%/100%."""
+        run1 = _seed_run(status="running")
+        _seed_step_with_usage(run1, "s1", "deferred", role="developer")
+        result = analytics_service.agents_summary(days=None)
+        dev = next(a for a in result["agents"] if a["name"] == "developer")
+        assert dev["attributed"] is True
+        assert dev["step_count"] == 1
+        assert dev["success_rate"] is None
+
+    def test_null_role_grouped_under_unknown_not_dropped_not_guessed(self) -> None:
+        run1 = _seed_run(status="success")
+        _seed_step_with_usage(run1, "s1", "success", cost_usd=5.0, role=None)
+        result = analytics_service.agents_summary(days=None)
+        assert result["unknown"]["step_count"] == 1
+        assert result["unknown"]["cost_usd"] == 5.0
+        # Never silently merged into any named role's stats.
+        for agent in result["agents"]:
+            assert agent["step_count"] == 0
+
+    def test_role_observed_but_not_in_current_roster_is_still_surfaced(self) -> None:
+        """A role name present in the data but no longer in roles.yaml
+        (e.g. the roster changed) must still be reported honestly, not
+        silently dropped -- just without a display_name/title."""
+        run1 = _seed_run(status="success")
+        _seed_step_with_usage(run1, "s1", "success", cost_usd=1.0, role="ghost-role")
+        result = analytics_service.agents_summary(days=None)
+        ghost = next(a for a in result["agents"] if a["name"] == "ghost-role")
+        assert ghost["attributed"] is True
+        assert ghost["step_count"] == 1
+        assert ghost["display_name"] is None
+        assert ghost["title"] is None
+
+    def test_tenant_isolation(self) -> None:
+        run_acme = _seed_run(tenant="acme")
+        run_other = _seed_run(tenant="other")
+        _seed_step_with_usage(run_acme, "s1", "success", cost_usd=1.0, role="developer")
+        _seed_step_with_usage(run_other, "s1", "success", cost_usd=1.0, role="developer")
+        result = analytics_service.agents_summary(tenant="acme", days=None)
+        dev = next(a for a in result["agents"] if a["name"] == "developer")
+        assert dev["step_count"] == 1
+        assert dev["cost_usd"] == 1.0
+
+    def test_no_latency_field_ever_fabricated(self) -> None:
+        result = analytics_service.agents_summary(days=None)
+        for agent in result["agents"]:
+            assert "latency" not in agent
+            assert "p50" not in agent
+            assert "p95" not in agent
+
+
+# ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint -- verdicts_summary (GET /v1/verdicts)
+# ---------------------------------------------------------------------------
+
+
+class TestVerdictsSummary:
+    def test_empty_db_returns_empty(self) -> None:
+        result = analytics_service.verdicts_summary()
+        assert result["verdicts"] == []
+        assert result["by_role"] == {}
+
+    def test_groups_by_role_with_decision_and_kind_counts(self) -> None:
+        run_id = _seed_run(tenant="acme")
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="reject",
+            confidence=0.4,
+        )
+        result = analytics_service.verdicts_summary(tenant="acme")
+        assert len(result["verdicts"]) == 2
+        by_role = result["by_role"]["reviewer"]
+        assert by_role["total"] == 2
+        assert by_role["decision_counts"] == {"approve": 1, "reject": 1}
+        assert by_role["kind_counts"] == {"review": 2}
+
+    def test_tenant_isolation(self) -> None:
+        run_acme = _seed_run(tenant="acme")
+        run_other = _seed_run(tenant="other")
+        state_service.record_verdict(
+            run_id=run_acme,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_other,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="reject",
+            confidence=0.9,
+        )
+        result = analytics_service.verdicts_summary(tenant="acme")
+        assert len(result["verdicts"]) == 1
+        assert result["verdicts"][0]["decision"] == "approve"
+
+    def test_role_filter(self) -> None:
+        run_id = _seed_run(tenant="acme")
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="reviewer",
+            kind="review",
+            decision="approve",
+            confidence=0.9,
+        )
+        state_service.record_verdict(
+            run_id=run_id,
+            project="p",
+            task="t",
+            role="developer",
+            kind="debate",
+            decision="approve",
+            confidence=0.9,
+        )
+        result = analytics_service.verdicts_summary(tenant="acme", role="reviewer")
+        assert len(result["verdicts"]) == 1
+        assert result["by_role"] == {
+            "reviewer": {
+                "total": 1,
+                "decision_counts": {"approve": 1},
+                "kind_counts": {"review": 1},
+            }
+        }
+
+
+# ---------------------------------------------------------------------------
+# Mirador Agent Panels backend sprint -- lessons_summary (GET /v1/lessons)
+# ---------------------------------------------------------------------------
+
+
+class TestLessonsSummary:
+    def test_empty_db_returns_empty(self) -> None:
+        result = analytics_service.lessons_summary()
+        assert result["lessons"] == []
+        assert result["by_role"] == {}
+
+    def test_groups_by_role_with_validated_and_avg_score(self) -> None:
+        run_id = _seed_run(tenant="acme")
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="developer",
+            task="t",
+            text="lesson 1",
+            score=0.8,
+            confidence=0.5,
+            category="test",
+            validated=True,
+        )
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="developer",
+            task="t",
+            text="lesson 2",
+            score=None,
+            confidence=None,
+            category="test",
+            validated=False,
+        )
+        result = analytics_service.lessons_summary(tenant="acme")
+        assert len(result["lessons"]) == 2
+        by_role = result["by_role"]["developer"]
+        assert by_role["total"] == 2
+        assert by_role["validated"] == 1
+        assert by_role["avg_score"] == 0.8
+
+    def test_tenant_isolation(self) -> None:
+        run_acme = _seed_run(tenant="acme")
+        run_other = _seed_run(tenant="other")
+        state_service.record_lesson(
+            run_id=run_acme,
+            project="p",
+            role="developer",
+            task="t",
+            text="acme lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        state_service.record_lesson(
+            run_id=run_other,
+            project="p",
+            role="developer",
+            task="t",
+            text="other lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        result = analytics_service.lessons_summary(tenant="acme")
+        assert len(result["lessons"]) == 1
+        assert result["lessons"][0]["text"] == "acme lesson"
+
+    def test_role_filter(self) -> None:
+        run_id = _seed_run(tenant="acme")
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="developer",
+            task="t",
+            text="dev lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        state_service.record_lesson(
+            run_id=run_id,
+            project="p",
+            role="reviewer",
+            task="t",
+            text="reviewer lesson",
+            score=0.5,
+            confidence=0.5,
+            category="test",
+        )
+        result = analytics_service.lessons_summary(tenant="acme", role="reviewer")
+        assert len(result["lessons"]) == 1
+        assert result["lessons"][0]["role"] == "reviewer"

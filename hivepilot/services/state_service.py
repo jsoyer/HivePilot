@@ -169,6 +169,15 @@ def init_db() -> None:
         _add_column_if_missing(conn, "steps", "input_tokens INTEGER")
         _add_column_if_missing(conn, "steps", "output_tokens INTEGER")
         _add_column_if_missing(conn, "steps", "cost_usd REAL")
+        # Idempotent migration (Mirador Agent Panels backend sprint): persist
+        # the role that executed a step, same additive ALTER TABLE ... ADD
+        # COLUMN pattern as provider/model/usage above -- safe on an existing
+        # prod DB. Every row written before this migration ships (and any
+        # row from a non-role task) has role=NULL -- never backfilled with a
+        # guess. Callers that read this honestly surface NULL as an explicit
+        # "unknown" bucket (see analytics_service.cost_summary/agents_summary)
+        # rather than dropping or misattributing those rows.
+        _add_column_if_missing(conn, "steps", "role TEXT")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS interactions (
@@ -389,6 +398,7 @@ def record_step(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cost_usd: float | None = None,
+    role: str | None = None,
 ) -> None:
     """Record a step outcome.
 
@@ -401,6 +411,13 @@ def record_step(
     unaffected and persist ``NULL`` for all three, exactly as before this
     sprint. Cost here is whatever the runner's CLI self-reports — there is no
     price-map lookup in this sprint (that's a later phase).
+
+    ``role`` is additive and optional (Mirador Agent Panels backend sprint —
+    per-role activity attribution): existing callers that omit it are
+    unaffected and persist ``NULL``, exactly as before this sprint. Callers
+    pass the resolved role name (``TaskConfig.role``) when one genuinely
+    applies to the step being recorded; a plain, non-role step passes
+    ``None`` (honest NULL) rather than an invented role.
     """
     init_db()
     # Choke point: `detail` often carries `str(exc)` from a failed step, which
@@ -414,10 +431,21 @@ def record_step(
             db.ph(
                 "INSERT INTO steps "
                 "(run_id, step, status, detail, provider, model, "
-                "input_tokens, output_tokens, cost_usd) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "input_tokens, output_tokens, cost_usd, role) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
-            (run_id, step, status, detail, provider, model, input_tokens, output_tokens, cost_usd),
+            (
+                run_id,
+                step,
+                status,
+                detail,
+                provider,
+                model,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                role,
+            ),
         )
     if _METRICS_AVAILABLE and _metrics is not None:
         try:
@@ -606,6 +634,51 @@ def list_recent_verdicts(limit: int = 50, run_id: int | None = None) -> list[dic
     return [dict(row) for row in rows]
 
 
+def list_verdicts(
+    tenant: str | None = None,
+    role: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Tenant-scoped, optionally role-filtered read of `verdicts`, newest
+    first (Mirador Agent Panels backend sprint, backing `GET /v1/verdicts`).
+
+    Does NOT weaken/replace `list_recent_verdicts` above -- that function is
+    unchanged and keeps its own (unfiltered-by-tenant, run_id-only) contract
+    for existing callers (`orchestrator._distill_lessons_for_run`).
+
+    Fail-closed tenant scoping: `verdicts` carries no `tenant` column of its
+    own (unlike `steps`/`runs`) -- every orchestrator call site today passes
+    a real `run_id`, but the column itself is nullable and does not enforce
+    that. Resolving a caller's tenant is therefore only possible via `LEFT
+    JOIN runs`: when a concrete `tenant` is requested, the WHERE clause
+    requires `r.tenant = ?`, which a NULL `run_id` (or a `run_id` that
+    doesn't match any `runs` row) can never satisfy -- such a row is
+    excluded from every tenant-scoped view rather than risking cross-tenant
+    leakage. Only an unscoped call (`tenant=None`, i.e. an admin caller)
+    can see a row whose tenant is unresolvable.
+    """
+    init_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if role is not None:
+        clauses.append("v.role=?")
+        params.append(role)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT v.* FROM verdicts v
+        LEFT JOIN runs r ON r.id = v.run_id
+        {where}
+        ORDER BY v.id DESC LIMIT ?
+    """
+    params.append(limit)
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def record_lesson(
     *,
     run_id: int | None,
@@ -703,6 +776,51 @@ def list_lessons(
         clauses.append("validated=1")
     where = " AND ".join(clauses)
     sql = f"SELECT * FROM lessons WHERE {where} ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_lessons_by_tenant(
+    tenant: str | None = None,
+    role: str | None = None,
+    validated_only: bool | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Tenant-scoped, optionally role-filtered read of `lessons`, newest
+    first (Mirador Agent Panels backend sprint, backing `GET /v1/lessons`).
+
+    Sibling to `list_verdicts` above -- same fail-closed `LEFT JOIN runs`
+    tenant-scoping rationale applies here verbatim (`lessons` also carries
+    no `tenant` column of its own). Does NOT weaken/replace `list_lessons`:
+    that function keeps its own (project-required, tenant-unaware,
+    validated_only defaulting to True) contract unchanged for existing
+    callers. Unlike `list_lessons`, `validated_only` here defaults to
+    ``None`` (no filter -- both validated lessons AND fresh candidates are
+    returned) since a tenant-wide activity view has no single project to
+    scope validation status to; pass ``True``/``False`` explicitly to
+    filter.
+    """
+    init_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if role is not None:
+        clauses.append("l.role=?")
+        params.append(role)
+    if validated_only is not None:
+        clauses.append("l.validated=?")
+        params.append(int(validated_only))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT l.* FROM lessons l
+        LEFT JOIN runs r ON r.id = l.run_id
+        {where}
+        ORDER BY l.id DESC LIMIT ?
+    """
     params.append(limit)
     with db.connect() as conn:
         rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
