@@ -773,3 +773,325 @@ class TestPromptFilePackaging:
         roster = concierge_service._build_roster()  # must not raise
 
         assert roster == []
+
+
+# ---------------------------------------------------------------------------
+# Conversation memory (per-chat rolling history fed into the classifier
+# prompt so a follow-up like "give them the orders" can resolve "them").
+# Chat-scoped, in-process, bounded — see concierge_service._MAX_HISTORY_TURNS.
+# ---------------------------------------------------------------------------
+
+
+class TestConversationMemory:
+    def teardown_method(self, method) -> None:
+        concierge_service.clear_history()
+
+    def test_history_recorded_and_included_in_next_prompt(self) -> None:
+        raw1 = json.dumps({"kind": "answer", "answer_text": "ok turn one"})
+        orch1 = _orch_with_capture(return_value=raw1)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch1):
+            concierge_service.route(
+                "hello", default_role="developer", default_target="acme", chat_id=100
+            )
+
+        raw2 = json.dumps({"kind": "answer", "answer_text": "ok turn two"})
+        orch2 = _orch_with_capture(return_value=raw2)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch2):
+            concierge_service.route(
+                "follow up", default_role="developer", default_target="acme", chat_id=100
+            )
+
+        _, payload = orch2.registry.capture_definition.call_args.args
+        prompt = payload.metadata["extra_prompt"]
+        assert "hello" in prompt
+        assert "ok turn one" in prompt
+
+    def test_history_bounded_to_max_turns(self) -> None:
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        for i in range(10):
+            orch = _orch_with_capture(return_value=raw)
+            with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+                concierge_service.route(
+                    f"msg-{i}", default_role="developer", default_target="acme", chat_id=200
+                )
+
+        history = concierge_service._get_history(200)
+        assert len(history) == concierge_service._MAX_HISTORY_TURNS
+        assert history[0].user_text == "msg-4"  # oldest retained (10 - 6)
+        assert history[-1].user_text == "msg-9"
+
+    def test_no_chat_id_means_no_memory_recorded(self) -> None:
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            concierge_service.route("hi", default_role="developer", default_target="acme")
+
+        assert concierge_service._get_history(None) == []
+
+    def test_history_is_chat_scoped_not_leaked_across_chats(self) -> None:
+        """SAFETY: chat A's memory must never be visible to chat B's
+        classifier prompt — cross-tenant/cross-chat reference resolution is
+        forbidden."""
+        raw1 = json.dumps({"kind": "answer", "answer_text": "chat A secret plan"})
+        orch1 = _orch_with_capture(return_value=raw1)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch1):
+            concierge_service.route(
+                "plan for chat A", default_role="developer", default_target="acme", chat_id=1
+            )
+
+        raw2 = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch2 = _orch_with_capture(return_value=raw2)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch2):
+            concierge_service.route(
+                "follow up", default_role="developer", default_target="acme", chat_id=2
+            )
+
+        _, payload = orch2.registry.capture_definition.call_args.args
+        prompt = payload.metadata["extra_prompt"]
+        assert "chat A secret plan" not in prompt
+        assert "plan for chat A" not in prompt
+
+    def test_clear_history_for_single_chat_leaves_others_intact(self) -> None:
+        concierge_service._record_turn(10, "u1", "c1")
+        concierge_service._record_turn(20, "u2", "c2")
+
+        concierge_service.clear_history(10)
+
+        assert concierge_service._get_history(10) == []
+        assert len(concierge_service._get_history(20)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Multi-agent dispatch (kind="multi_route") — a follow-up message can
+# propose dispatching to MULTIPLE roles in one turn, but ONLY when each
+# referent is grounded in the roster (configured) AND in the conversation
+# history (actually named earlier) — never guessed. Always destructive;
+# the caller (telegram_bot) requires one explicit confirmation for the
+# whole batch before anything runs.
+# ---------------------------------------------------------------------------
+
+
+def _leadership_roles() -> list[SimpleNamespace]:
+    return [
+        _fake_role("cto", "CTO", "Blaise"),
+        _fake_role("ciso", "CISO", "Hugo"),
+        _fake_role("pm", "PM", "Camille"),
+        _fake_role("developer", "Developer", "Gustave"),
+    ]
+
+
+class TestMultiDispatch:
+    def teardown_method(self, method) -> None:
+        concierge_service.clear_history()
+
+    def test_followup_multi_dispatch_grounded_in_prior_answer(self, monkeypatch) -> None:
+        """The motivating scenario: turn 1 names cto/ciso/pm in a genuine
+        answer; turn 2 ("give them the orders") resolves "them" to exactly
+        those three, grounded in history, and is marked destructive."""
+        monkeypatch.setattr("hivepilot.roles.list_roles", lambda: _leadership_roles())
+
+        turn1_answer = (
+            "Get Blaise (CTO) to sketch the architecture, Hugo (CISO) to define "
+            "the security review, and Camille (PM) to validate the rollout plan."
+        )
+        raw1 = json.dumps({"kind": "answer", "answer_text": turn1_answer})
+        orch1 = _orch_with_capture(return_value=raw1)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch1):
+            decision1 = concierge_service.route(
+                "how should we approach the new payments feature?",
+                default_role="developer",
+                default_target="acme",
+                chat_id=42,
+            )
+        assert decision1.kind == "answer"
+
+        raw2 = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [
+                    {"role_key": "cto", "target": "acme", "order": "sketch the architecture"},
+                    {"role_key": "ciso", "target": "acme", "order": "define the security review"},
+                    {"role_key": "pm", "target": "acme", "order": "validate the rollout plan"},
+                ],
+            }
+        )
+        orch2 = _orch_with_capture(return_value=raw2)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch2):
+            decision2 = concierge_service.route(
+                "donne leur les ordres",
+                default_role="developer",
+                default_target="acme",
+                chat_id=42,
+            )
+
+        assert decision2.kind == "multi_route"
+        assert decision2.destructive is True
+        assert decision2.dispatches is not None
+        assert {d.role_key for d in decision2.dispatches} == {"cto", "ciso", "pm"}
+        assert all(d.target == "acme" for d in decision2.dispatches)
+
+    def test_ambiguous_do_it_with_no_history_never_dispatches(self, monkeypatch) -> None:
+        """SAFETY: an ambiguous message with NOTHING grounding it in history
+        must never auto-dispatch — it degrades to a clarifying answer."""
+        monkeypatch.setattr("hivepilot.roles.list_roles", lambda: _leadership_roles())
+        raw = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [{"role_key": "cto", "target": "acme", "order": "do it"}],
+            }
+        )
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                "do it", default_role="developer", default_target="acme", chat_id=999
+            )
+        assert decision.kind == "answer"
+        assert decision.kind not in ("route", "action", "multi_route")
+        assert decision.dispatches is None
+
+    def test_ungrounded_referent_dropped_not_guessed(self, monkeypatch) -> None:
+        """One dispatch is grounded (named in turn 1's answer); the other is
+        a hallucinated role never mentioned anywhere — it must be dropped,
+        not guessed, while the grounded one still survives."""
+        monkeypatch.setattr("hivepilot.roles.list_roles", lambda: _leadership_roles())
+        raw1 = json.dumps({"kind": "answer", "answer_text": "Get Blaise (CTO) to sketch X."})
+        orch1 = _orch_with_capture(return_value=raw1)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch1):
+            concierge_service.route(
+                "plan?", default_role="developer", default_target="acme", chat_id=7
+            )
+
+        raw2 = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [
+                    {"role_key": "cto", "target": "acme", "order": "sketch X"},
+                    {"role_key": "pm", "target": "acme", "order": "validate Z"},
+                ],
+            }
+        )
+        orch2 = _orch_with_capture(return_value=raw2)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch2):
+            decision = concierge_service.route(
+                "give them the orders", default_role="developer", default_target="acme", chat_id=7
+            )
+        assert decision.kind == "multi_route"
+        assert decision.dispatches is not None
+        assert {d.role_key for d in decision.dispatches} == {"cto"}
+
+    def test_all_referents_ungrounded_falls_back_to_clarifying_answer(self, monkeypatch) -> None:
+        monkeypatch.setattr("hivepilot.roles.list_roles", lambda: _leadership_roles())
+        raw = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [{"role_key": "pm", "target": "acme", "order": "validate Z"}],
+            }
+        )
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                "give them the orders", default_role="developer", default_target="acme", chat_id=8
+            )
+        assert decision.kind == "answer"
+        assert decision.answer_text
+
+    def test_unknown_role_in_dispatch_dropped(self, monkeypatch) -> None:
+        """A role name that isn't a configured role at all (not in the
+        roster) must be dropped even if it was mentioned in history."""
+        monkeypatch.setattr("hivepilot.roles.list_roles", lambda: _leadership_roles())
+        raw1 = json.dumps({"kind": "answer", "answer_text": "Get Blaise (CTO) and Zorg to help."})
+        orch1 = _orch_with_capture(return_value=raw1)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch1):
+            concierge_service.route(
+                "plan?", default_role="developer", default_target="acme", chat_id=9
+            )
+
+        raw2 = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [
+                    {"role_key": "cto", "target": "acme", "order": "sketch X"},
+                    {"role_key": "zorg", "target": "acme", "order": "help"},
+                ],
+            }
+        )
+        orch2 = _orch_with_capture(return_value=raw2)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch2):
+            decision = concierge_service.route(
+                "give them the orders", default_role="developer", default_target="acme", chat_id=9
+            )
+        assert decision.kind == "multi_route"
+        assert {d.role_key for d in decision.dispatches} == {"cto"}
+
+    def test_multi_route_missing_dispatches_field_falls_back(self) -> None:
+        raw = json.dumps({"kind": "multi_route"})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                "give them the orders", default_role="developer", default_target="acme", chat_id=10
+            )
+        assert decision.kind == "answer"
+
+    def test_multi_route_unknown_project_dropped(self, monkeypatch) -> None:
+        monkeypatch.setattr("hivepilot.roles.list_roles", lambda: _leadership_roles())
+        raw1 = json.dumps({"kind": "answer", "answer_text": "Get Blaise (CTO) to sketch X."})
+        orch1 = _orch_with_capture(return_value=raw1)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch1):
+            concierge_service.route(
+                "plan?", default_role="developer", default_target="acme", chat_id=11
+            )
+
+        raw2 = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [
+                    {"role_key": "cto", "target": "not-a-real-project", "order": "sketch X"}
+                ],
+            }
+        )
+        orch2 = _orch_with_capture(return_value=raw2)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch2):
+            decision = concierge_service.route(
+                "give them the orders", default_role="developer", default_target="acme", chat_id=11
+            )
+        assert decision.kind == "answer"
+
+    def test_multi_route_always_destructive_even_if_model_says_otherwise(self, monkeypatch) -> None:
+        monkeypatch.setattr("hivepilot.roles.list_roles", lambda: _leadership_roles())
+        raw1 = json.dumps({"kind": "answer", "answer_text": "Get Blaise (CTO) to sketch X."})
+        orch1 = _orch_with_capture(return_value=raw1)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch1):
+            concierge_service.route(
+                "plan?", default_role="developer", default_target="acme", chat_id=12
+            )
+
+        raw2 = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [{"role_key": "cto", "target": "acme", "order": "sketch X"}],
+                "destructive": False,
+            }
+        )
+        orch2 = _orch_with_capture(return_value=raw2)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch2):
+            decision = concierge_service.route(
+                "give them the orders", default_role="developer", default_target="acme", chat_id=12
+            )
+        assert decision.destructive is True
+
+    def test_no_grounding_needed_check_history_none_never_crashes(self) -> None:
+        """chat_id=None (memory disabled) must never crash `_clamp`'s
+        grounding check — with no history, every multi_route dispatch is
+        simply ungrounded and dropped."""
+        raw = json.dumps(
+            {
+                "kind": "multi_route",
+                "dispatches": [{"role_key": "developer", "target": "acme", "order": "do it"}],
+            }
+        )
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                "give them the orders", default_role="developer", default_target="acme"
+            )
+        assert decision.kind == "answer"

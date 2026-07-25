@@ -417,6 +417,19 @@ def _summarize_concierge_decision(decision: "ConciergeDecision") -> str:
     return "perform this action"
 
 
+def _multi_dispatch_lines(decision: "ConciergeDecision") -> list[str]:
+    """One human-readable line per order in a `multi_route` batch — "who +
+    what + which project" — used by `_send_concierge_keyboard_message` to
+    build the SINGLE confirmation prompt that lists every order in the
+    batch. Plain text only (see that function's docstring)."""
+    lines: list[str] = []
+    for d in decision.dispatches or []:
+        target = d.target or settings.default_target
+        order = f": {d.order}" if d.order else ""
+        lines.append(f"• {d.role_key} on {target}{order}")
+    return lines
+
+
 async def _send_concierge_keyboard_message(
     bot: Any, *, chat_id: int, token: str, decision: "ConciergeDecision"
 ) -> None:
@@ -428,6 +441,10 @@ async def _send_concierge_keyboard_message(
     namespace from `_send_approval_keyboard_message` (`concierge:yes:<token>`
     / `concierge:no:<token>`, pattern registered alongside the existing
     `(approve|deny|challenge)` handler).
+
+    A `multi_route` decision gets ONE confirmation prompt listing EVERY order
+    in the batch (who + what + which project) — pressing Yes runs all of them,
+    pressing No runs none (see `_execute_concierge_decision`).
 
     Sent with `parse_mode=None` (plain text): `decision.order`/`.target` are
     model-controlled and must never be interpreted as Markdown — an
@@ -449,10 +466,17 @@ async def _send_concierge_keyboard_message(
             ]
         ]
     )
-    summary = _summarize_concierge_decision(decision)
+    if decision.kind == "multi_route":
+        lines = _multi_dispatch_lines(decision)
+        count = len(decision.dispatches or [])
+        body = "\n".join(lines) if lines else "(no valid orders)"
+        text = f"⚠️ This will dispatch {count} orders:\n{body}\n\nConfirm?"
+    else:
+        summary = _summarize_concierge_decision(decision)
+        text = f"⚠️ This will {summary}. Confirm?"
     await bot.send_message(
         chat_id=chat_id,
-        text=f"⚠️ This will {summary}. Confirm?",
+        text=text,
         reply_markup=keyboard,
     )
 
@@ -462,9 +486,14 @@ async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDeci
     `update_like.message` (either the original message, or a lightweight
     wrapper around the callback-query's own message — see
     `_concierge_callback`). `route` reuses `_run_agent_order` UNCHANGED (same
-    heartbeat/ack UX as `/ask`); `action run`/`run_pipeline` dispatch to the
-    orchestrator directly; `approve`/`deny` reuse `_dispatch_approval` (the
-    SAME entrypoint the ✅/❌ approval buttons use)."""
+    heartbeat/ack UX as `/ask`); `multi_route` reuses `_run_agent_order`
+    ONCE PER DISPATCH (already `_clamp`-validated in `concierge_service`,
+    but re-checked here against `_AGENT_REGISTRY` — same defense-in-depth as
+    the single-`route` branch — so one unaddressable entry is skipped rather
+    than aborting the rest of the batch); `action run`/`run_pipeline`
+    dispatch to the orchestrator directly; `approve`/`deny` reuse
+    `_dispatch_approval` (the SAME entrypoint the ✅/❌ approval buttons
+    use)."""
     if decision.kind == "route":
         role_key = decision.role_key or ""
         if role_key not in _AGENT_REGISTRY:
@@ -474,6 +503,21 @@ async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDeci
             return
         target = decision.target or settings.default_target
         await _run_agent_order(update_like, role_key, target, decision.order or "")
+        return
+
+    if decision.kind == "multi_route":
+        dispatches = decision.dispatches or []
+        if not dispatches:
+            await update_like.message.reply_text("Nothing to do.")
+            return
+        for d in dispatches:
+            if d.role_key not in _AGENT_REGISTRY:
+                await update_like.message.reply_text(
+                    f"{d.role_key or 'That agent'} is not configured on this deployment — skipped."
+                )
+                continue
+            target = d.target or settings.default_target
+            await _run_agent_order(update_like, d.role_key, target, d.order or "")
         return
 
     if decision.kind != "action":
@@ -546,7 +590,12 @@ async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDeci
 
 
 async def _handle_concierge_mention(update: Any, context: Any, text: str) -> None:
-    """Classify a plain (non-@) chat message and answer / route / confirm."""
+    """Classify a plain (non-@) chat message and answer / route / confirm.
+
+    Threads `chat_id` into `concierge_service.route` so its per-chat
+    conversation memory (see that module's "Conversation memory" section)
+    can resolve a follow-up like "give them the orders" against what was
+    just said in THIS chat — never another chat's history."""
     from hivepilot.services import concierge_service
 
     chat_id = update.message.chat.id
@@ -556,7 +605,10 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
     decision = await loop.run_in_executor(
         None,
         lambda: concierge_service.route(
-            text, default_role=settings.chatops_default_role, default_target=default_target
+            text,
+            default_role=settings.chatops_default_role,
+            default_target=default_target,
+            chat_id=chat_id,
         ),
     )
 
@@ -567,9 +619,9 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
         return
 
     if not decision.destructive:
-        # Every currently-known route/action kind IS destructive (see
-        # concierge_service's hardcoded table) — this only guards a future
-        # non-destructive kind, never exercised today.
+        # Every currently-known route/action/multi_route kind IS destructive
+        # (see concierge_service's hardcoded table) — this only guards a
+        # future non-destructive kind, never exercised today.
         await _execute_concierge_decision(update, decision)
         return
 
