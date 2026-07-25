@@ -114,6 +114,32 @@ def test_pipeline_stage_scoping_fields_accept_explicit_values() -> None:
     assert stage.continue_on_failure is True
 
 
+def test_pipeline_stage_only_modules_defaults_to_none() -> None:
+    """A stage with `only_modules` unset behaves exactly as before this field
+    existed -- byte-identical default (None)."""
+    stage = PipelineStage(name="x", task="t")
+    assert stage.only_modules is None
+
+
+def test_pipeline_stage_only_modules_accepts_non_empty_list() -> None:
+    stage = PipelineStage(name="x", task="t", only_modules=["console", "api"])
+    assert stage.only_modules == ["console", "api"]
+
+
+def test_pipeline_stage_only_modules_rejects_empty_list() -> None:
+    """An explicit `only_modules: []` is rejected at load (fail-closed choice:
+    reject-at-model rather than silently treating [] as skip-the-stage or
+    run-unscoped -- see the field's docstring in hivepilot/models.py)."""
+    with pytest.raises(pydantic.ValidationError, match="only_modules"):
+        PipelineStage(name="x", task="t", only_modules=[])
+
+
+@pytest.mark.parametrize("bad_modules", [[""], ["  "], ["console", ""], ["console", "   "]])
+def test_pipeline_stage_only_modules_rejects_blank_entries(bad_modules: list[str]) -> None:
+    with pytest.raises(pydantic.ValidationError, match="only_modules"):
+        PipelineStage(name="x", task="t", only_modules=bad_modules)
+
+
 def test_group_tags_defaults_to_empty_dict() -> None:
     group = Group(description="d", hub="h", components=[])
     assert group.tags == {}

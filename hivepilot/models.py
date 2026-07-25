@@ -469,6 +469,30 @@ class PipelineStage(BaseModel):
     # set always runs (backward compatible with existing pipelines).
     only_components: list[str] | None = None
     only_tags: list[str] | None = None
+    # Stage scoping (only_modules): restrict this stage's NON-GROUP targets to
+    # specific modules within each target project's `modules` map (monorepo-
+    # modules PRD). None (the default) is byte-identical to before this field
+    # existed -- every existing pipeline is completely unaffected. When set to
+    # a non-empty list, `Orchestrator._expand_stage_targets_for_modules`
+    # expands each plain project target into one `<project>/<module>` target
+    # per named module (see `hivepilot.services.project_service.
+    # resolve_project_target` for how that string resolves to a module-scoped
+    # working directory) -- ONLY in the non-group / single-project targets
+    # path; group-mode fan-out (`only_components`/`only_tags`) is untouched.
+    # `Orchestrator._validate_stage_modules` fails closed, up front (before
+    # any stage executes), if a named module is undefined for a target
+    # project or the target project has no `modules` map at all.
+    #
+    # FAIL-CLOSED: an explicit `only_modules: []` is REJECTED here at load
+    # time (see `_validate_only_modules` below) rather than given run-time
+    # meaning. This is the same "empty-value-fail-open" bug class this repo
+    # has hit before (see error-registry: security-gate-empty-value-fail-
+    # open) -- an empty scoping gate must never be interpreted as "run
+    # unscoped" (which would fan a module-only stage across the whole
+    # project) nor silently as "skip" (a behaviour change invisible in a
+    # diff). Making `[]` unrepresentable removes the ambiguity entirely;
+    # omit the field (None) to run unscoped instead.
+    only_modules: list[str] | None = None
     # When True, a failed stage does not fail-fast the run (the pipeline
     # continues to the next stage instead of breaking).
     continue_on_failure: bool = False
@@ -488,6 +512,29 @@ class PipelineStage(BaseModel):
     @classmethod
     def _dedup_skills(cls, v: list[str] | None) -> list[str] | None:
         return _dedup_ordered(v)
+
+    @field_validator("only_modules")
+    @classmethod
+    def _validate_only_modules(cls, v: list[str] | None) -> list[str] | None:
+        # See the `only_modules` field's docstring above for the fail-closed
+        # rationale: `[]` is unrepresentable (reject-at-model), and every
+        # entry must be a real, non-blank module name.
+        if v is None:
+            return v
+        if len(v) == 0:
+            raise ValueError(
+                "PipelineStage.only_modules must be omitted (None) to run "
+                "unscoped, or a non-empty list of module names -- an explicit "
+                "empty list ([]) is rejected at load to avoid the empty-"
+                "scoping-gate ambiguity (fail-closed: does [] mean 'skip' or "
+                "'run against every module'?)"
+            )
+        for name in v:
+            if not name.strip():
+                raise ValueError(
+                    "PipelineStage.only_modules must not contain blank/whitespace-only module names"
+                )
+        return v
 
 
 class PipelineConfig(BaseModel):
