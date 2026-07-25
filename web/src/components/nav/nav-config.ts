@@ -59,7 +59,13 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // pipeline/skills topology) is still fully reachable (sidebar/drawer/⌘K),
   // just no longer a prominent top-level destination now that the Run Board
   // is the primary "what's happening" view. Health stays paired with it.
-  { label: 'nav.system', values: ['health', 'graph'] },
+  // Mirador "Agents" view sprint: Agents (GET /v1/agents+/lessons+/verdicts
+  // — per-role activity/cost/lessons/verdicts) joins this group too — it's
+  // an observability surface over the fleet's roles, same category as
+  // Health (plugin health) and Graph (topology), not a Spend/Operate
+  // concern. Placed before Graph (still fully reachable, just kept last per
+  // its own demotion above).
+  { label: 'nav.system', values: ['health', 'agents', 'graph'] },
 ]
 
 export interface NavItem {

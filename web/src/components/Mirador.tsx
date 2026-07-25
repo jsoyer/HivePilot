@@ -11,6 +11,7 @@ import {
   Menu,
   PlayCircle,
   Search,
+  Users,
   Workflow,
   Zap,
 } from 'lucide-react'
@@ -27,6 +28,7 @@ import { LanguageToggle } from './nav/LanguageToggle'
 import { SidebarNav } from './nav/SidebarNav'
 import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
+import { AgentsView } from './views/AgentsView'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
 import { AutopilotView } from './views/AutopilotView'
@@ -63,6 +65,11 @@ const BUILTIN_TABS = [
   { value: 'models', labelKey: 'nav.models', Panel: ModelsView, Icon: Cpu },
   { value: 'efficiency', labelKey: 'nav.efficiency', Panel: EfficiencyView, Icon: Zap },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
+  // Mirador "Agents" view sprint: per-role activity roster + lessons +
+  // verdicts (GET /v1/agents, /v1/lessons, /v1/verdicts) — read-only for any
+  // token, grouped with Health/Graph under "System" in nav-config.ts's
+  // NAV_GROUP_ORDER (an observability surface over the fleet's roles).
+  { value: 'agents', labelKey: 'nav.agents', Panel: AgentsView, Icon: Users },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
   // and Réalité (quality) built-ins merged into ONE `memory` item, plus a
   // new Growth tab (`/v1/memory/growth`) — see `MemoryView`'s own

@@ -66,6 +66,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.approvals': 'Approbations',
   'nav.runs': 'Exécutions',
   'nav.autopilot': 'Autopilote',
+  'nav.agents': 'Agents',
   'nav.graph': 'Graphe',
 
   // ---- health status words (shared: header pills + Health tab badges) --
@@ -402,4 +403,38 @@ export const fr: Record<TranslationKey, string> = {
   'autopilot.dispatchesEmpty': 'Aucun dispatch pour le moment.',
   'autopilot.allowlistTitle': 'Pipelines autorisés',
   'autopilot.allowlistEmpty': "Rien n'est autorisé — l'autopilote est effectivement inactif.",
+
+  // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
+  'agents.title': 'Agents',
+  'agents.description':
+    'Activité réelle par rôle — coût, exécutions, leçons et verdicts. Lecture seule pour tout jeton.',
+  'agents.noRoster': "Aucun effectif d'agents configuré.",
+  'agents.forbidden': "Impossible de charger l'activité des agents pour le tenant de votre jeton.",
+  'agents.verdictsForbidden':
+    "Impossible de charger les signaux de sévérité des verdicts pour le tenant de votre jeton.",
+  'agents.noActivityYet': 'Aucune activité attribuée pour le moment.',
+  'agents.noAttemptsYet': 'Aucune tentative',
+  'agents.attentionBadge': 'À surveiller',
+  'agents.costLabel': 'Coût',
+  'agents.runsLabel': 'Exécutions',
+  'agents.stepsLabel': 'Étapes',
+  'agents.tokensLabel': 'Jetons (entrée/sortie)',
+  'agents.lastActiveLabel': 'Dernière activité',
+  'agents.successRateLabel': 'Taux de réussite',
+  'agents.unknownTitle': 'Non attribué (avant le suivi par rôle)',
+  'agents.unknownDescription':
+    "Activité historique enregistrée sans attribution de rôle — steps.role n'existe qu'après le déploiement de ce sprint.",
+  'agents.unknownEmpty': 'Aucune activité non attribuée.',
+  'agents.detailAriaLabel': "Détail de l'agent : {name}",
+  'agents.closeAriaLabel': "Fermer le détail de l'agent",
+  'agents.lessonsTitle': 'Leçons récentes',
+  'agents.noLessons': 'Aucune leçon enregistrée pour ce rôle pour le moment.',
+  'agents.verdictsTitle': 'Verdicts récents',
+  'agents.noVerdicts': 'Aucun verdict enregistré pour ce rôle pour le moment.',
+  'agents.validated': 'Validée',
+  'agents.candidate': 'À valider',
+  'agents.scoreLabel': 'score {score}',
+  'agents.confidenceLabel': '{confidence}% de confiance',
+  'agents.unknownKind': 'inconnu',
+  'agents.noDecision': 'Aucune décision confiante',
 }

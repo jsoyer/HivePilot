@@ -8,6 +8,7 @@ vi.mock('./api', async (importOriginal) => {
 })
 
 import {
+  fetchAgents,
   fetchAnalyticsCost,
   fetchAnalyticsDurations,
   fetchAnalyticsProviders,
@@ -17,6 +18,7 @@ import {
   fetchApprovals,
   fetchAutopilot,
   fetchEfficiency,
+  fetchLessons,
   fetchMemories,
   fetchMemoryEvaluations,
   fetchMemoryGaps,
@@ -25,6 +27,7 @@ import {
   fetchMemoryReality,
   fetchModels,
   fetchRun,
+  fetchVerdicts,
   pauseAutopilot,
   postApproval,
   fetchPanel,
@@ -231,5 +234,39 @@ describe('mirador-api fetch wrappers', () => {
       body: JSON.stringify({}),
       on403: 'forbidden',
     })
+  })
+
+  // ---- Mirador Agents view (GET /v1/agents, /v1/lessons, /v1/verdicts) ----
+
+  it('fetchAgents calls GET /v1/agents with no query string when no args given, opts into on403: "forbidden"', async () => {
+    await fetchAgents()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/agents', { on403: 'forbidden' })
+  })
+
+  it('fetchAgents adds days/project/task query params when given', async () => {
+    await fetchAgents(30, 'acme-web', 'deploy')
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/agents?days=30&project=acme-web&task=deploy', {
+      on403: 'forbidden',
+    })
+  })
+
+  it('fetchLessons calls GET /v1/lessons with a default limit and opts into on403: "forbidden"', async () => {
+    await fetchLessons()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/lessons?limit=50', { on403: 'forbidden' })
+  })
+
+  it('fetchLessons adds a role filter when given', async () => {
+    await fetchLessons('developer', 20)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/lessons?limit=20&role=developer', { on403: 'forbidden' })
+  })
+
+  it('fetchVerdicts calls GET /v1/verdicts with a default limit and opts into on403: "forbidden"', async () => {
+    await fetchVerdicts()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/verdicts?limit=50', { on403: 'forbidden' })
+  })
+
+  it('fetchVerdicts adds a role filter and a custom limit when given', async () => {
+    await fetchVerdicts('reviewer', 200)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/verdicts?limit=200&role=reviewer', { on403: 'forbidden' })
   })
 })
