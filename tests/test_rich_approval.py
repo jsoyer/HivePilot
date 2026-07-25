@@ -7,7 +7,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # notification_service.send_approval_keyboard → forwards details
@@ -277,3 +277,118 @@ def test_truncate_md_long_text() -> None:
     result = _truncate_md(text, max_len=50)
     assert len(result) <= 52  # small tolerance for the trailing ellipsis
     assert result.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# telegram_bot._send_approval_keyboard_message — parse-safe against arbitrary
+# plan/details text (regression for the Telegram 400
+# "Can't parse entities: can't find end of the entity ..." bug)
+# ---------------------------------------------------------------------------
+
+
+def _make_bot(send_side_effect=None):
+    """A MagicMock bot with an AsyncMock send_message."""
+    bot = MagicMock()
+    if send_side_effect is not None:
+        bot.send_message = AsyncMock(side_effect=send_side_effect)
+    else:
+        bot.send_message = AsyncMock()
+    return bot
+
+
+def _extract_callback_data(keyboard) -> list[str]:
+    return [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+
+
+async def test_send_approval_keyboard_message_unbalanced_markdown_sends_and_keeps_buttons() -> None:
+    """Dynamic `details` text with unbalanced markdown entities (lone `_`, `*`,
+    unclosed backtick, unclosed `[link`) must not raise and must still deliver
+    the Approve/Deny/Challenge keyboard — this is the exact shape of content
+    that used to trigger Telegram's 400 "Can't parse entities" and silently
+    drop the checkpoint's inline keyboard.
+    """
+    from hivepilot.services import telegram_bot
+
+    bot = _make_bot()
+    malicious_details = "plan with a lone _ and * and unclosed `code and a [link without close"
+
+    await telegram_bot._send_approval_keyboard_message(
+        bot, chat_id=123, run_id=42, project="acme", task="deploy", details=malicious_details
+    )
+
+    bot.send_message.assert_awaited_once()
+    kwargs = bot.send_message.call_args.kwargs
+    # No parse_mode at all — plain text — is what makes this content safe:
+    # Telegram never attempts to parse it as markup, so it can never 400.
+    assert kwargs.get("parse_mode") is None
+    assert malicious_details in kwargs["text"]
+    keyboard = kwargs["reply_markup"]
+    assert _extract_callback_data(keyboard) == ["approve:42", "deny:42", "challenge:42"]
+
+
+async def test_send_approval_keyboard_message_over_length_truncates_and_sends() -> None:
+    """A very long dynamic details string gets truncated (not dropped) and the
+    message still sends with the keyboard attached."""
+    from hivepilot.services import telegram_bot
+
+    bot = _make_bot()
+    long_details = "x" * 10_000
+
+    await telegram_bot._send_approval_keyboard_message(
+        bot, chat_id=123, run_id=7, project="acme", task="deploy", details=long_details
+    )
+
+    bot.send_message.assert_awaited_once()
+    kwargs = bot.send_message.call_args.kwargs
+    assert len(kwargs["text"]) < len(long_details)
+    assert kwargs.get("reply_markup") is not None
+    assert _extract_callback_data(kwargs["reply_markup"]) == ["approve:7", "deny:7", "challenge:7"]
+
+
+async def test_send_approval_keyboard_message_normal_plan_unchanged_callbacks() -> None:
+    """Regression: a normal plan sends as before and callback_data tokens the
+    callback handler expects (`approve:<id>` / `deny:<id>` / `challenge:<id>`)
+    are unchanged."""
+    from hivepilot.services import telegram_bot
+
+    bot = _make_bot()
+    await telegram_bot._send_approval_keyboard_message(
+        bot,
+        chat_id=123,
+        run_id=99,
+        project="acme",
+        task="plan → build",
+        details="Ship the auth service first. Update the DB schema.",
+    )
+
+    bot.send_message.assert_awaited_once()
+    kwargs = bot.send_message.call_args.kwargs
+    assert "acme" in kwargs["text"]
+    assert "plan → build" in kwargs["text"]
+    assert "Ship the auth service first" in kwargs["text"]
+    assert _extract_callback_data(kwargs["reply_markup"]) == [
+        "approve:99",
+        "deny:99",
+        "challenge:99",
+    ]
+
+
+async def test_send_approval_keyboard_message_falls_back_to_plain_on_send_failure() -> None:
+    """If the first send still fails for any reason (defense-in-depth), retry
+    once with a minimal fallback body — the keyboard must survive even that."""
+    from hivepilot.services import telegram_bot
+
+    bot = _make_bot(send_side_effect=[Exception("boom"), None])
+
+    await telegram_bot._send_approval_keyboard_message(
+        bot, chat_id=123, run_id=5, project="acme", task="deploy", details="anything"
+    )
+
+    assert bot.send_message.await_count == 2
+    second_kwargs = bot.send_message.call_args.kwargs
+    assert second_kwargs.get("reply_markup") is not None
+    assert _extract_callback_data(second_kwargs["reply_markup"]) == [
+        "approve:5",
+        "deny:5",
+        "challenge:5",
+    ]

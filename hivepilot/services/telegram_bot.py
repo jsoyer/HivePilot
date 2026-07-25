@@ -1239,7 +1239,25 @@ def _truncate_md(text: str, max_len: int = _TELEGRAM_MAX_MSG) -> str:
 async def _send_approval_keyboard_message(
     bot, *, chat_id: int, run_id: int, project: str, task: str, details: str | None = None
 ) -> None:
-    """Send a message with ✅ Approve / ❌ Deny inline buttons."""
+    """Send a message with ✅ Approve / ❌ Deny / 🗣 Challenge inline buttons.
+
+    Sent as PLAIN text (no `parse_mode`): `details` is the accumulated plan /
+    stage-summary text built by `Orchestrator._build_checkpoint_details` from
+    arbitrary agent output — it is not markdown authored by us and must never
+    be parsed as such. An unbalanced `_`/`*`/`` ` ``/`[` anywhere in that text
+    used to make Telegram's `sendMessage` reject the WHOLE message with a 400
+    ("Can't parse entities: can't find end of the entity ...") — which drops
+    the Approve/Deny/Challenge buttons, the one thing the operator needs to
+    action the checkpoint. Same precedent as `_send_concierge_keyboard_message`
+    (which sends `decision.order`/`.target` — also model-controlled — as plain
+    text for the same reason).
+
+    `_truncate_md` still guards Telegram's ~4096-char message cap.
+
+    As defense-in-depth, if the send still fails for any other reason, retry
+    once with a minimal, guaranteed-safe fallback body — the keyboard must
+    reach the operator even if the dynamic details are lost.
+    """
     try:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     except ImportError as exc:
@@ -1258,15 +1276,26 @@ async def _send_approval_keyboard_message(
             ],
         ]
     )
-    header = f"*Approval required* — run #{run_id}\nProject: `{project}`\nTask: `{task}`"
+    header = f"Approval required — run #{run_id}\nProject: {project}\nTask: {task}"
     body = f"\n\n{details}" if details else ""
     text = _truncate_md(header + body)
-    await bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        parse_mode="Markdown",
-        reply_markup=keyboard,
-    )
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=keyboard,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.approval_keyboard.send_retry", run_id=run_id, error=str(exc))
+        fallback_text = (
+            f"Approval required — run #{run_id}\nProject: {project}\nTask: {task}\n"
+            "(details omitted — see server logs)"
+        )
+        await bot.send_message(
+            chat_id=chat_id,
+            text=fallback_text,
+            reply_markup=keyboard,
+        )
 
 
 async def _callback_approval(update, context) -> None:
