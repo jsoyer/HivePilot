@@ -468,6 +468,90 @@ class TestFailClosed:
         assert decision.kind == "answer"
 
 
+class TestSharedOrchestratorSingleton:
+    """Regression coverage for the production bug: `telegram.cmd_ask.error`
+    'Runner kind gh is already registered ... refusing to silently replace
+    it' — caused by concierge_service building its OWN `Orchestrator()`
+    (and thus its own PluginManager, which re-scans plugins/*.py and
+    collides with the kinds a first PluginManager already registered on the
+    process-global RUNNER_MAP) instead of reusing the process-wide shared
+    Orchestrator that `chatops_service`/`telegram_bot` already use. See
+    `hivepilot/orchestrator.py`'s `_load()` comment for why RUNNER_MAP is
+    process-global."""
+
+    def setup_method(self) -> None:
+        # chatops_service's module-level singleton is process-global state —
+        # reset it around each test so tests don't leak into each other.
+        from hivepilot.services import chatops_service
+
+        chatops_service._orchestrator = None
+
+    def teardown_method(self) -> None:
+        from hivepilot.services import chatops_service
+
+        chatops_service._orchestrator = None
+
+    def test_returns_same_object_as_chatops_service(self) -> None:
+        from hivepilot.services import chatops_service
+
+        chatops_orch = chatops_service._get_orchestrator()
+        concierge_orch = concierge_service._get_orchestrator()
+
+        assert concierge_orch is chatops_orch
+
+    def test_does_not_construct_a_second_orchestrator(self) -> None:
+        """The core regression: obtaining the concierge orchestrator after
+        chatops's singleton already exists must NOT construct a second
+        `Orchestrator()` — a second construction means a second
+        `PluginManager` re-scanning plugins, which is exactly what raised
+        `Runner kind 'gh' is already registered ...` in production."""
+        from hivepilot.services import chatops_service
+
+        # chatops_service binds `Orchestrator` at module import time
+        # (`from hivepilot.orchestrator import Orchestrator`), so that's the
+        # name that must be patched to observe its construction calls.
+        with patch.object(chatops_service, "Orchestrator") as mock_orchestrator_cls:
+            mock_orchestrator_cls.return_value = MagicMock()
+
+            first = chatops_service._get_orchestrator()
+            assert mock_orchestrator_cls.call_count == 1
+
+            second = concierge_service._get_orchestrator()
+            assert mock_orchestrator_cls.call_count == 1  # no new construction
+
+        assert second is first
+
+    def test_no_double_registration_error_across_both_entry_points(self) -> None:
+        """Mimics the live failure mode: a plugin-provided runner kind (e.g.
+        "gh") registers once on a shared registry. Fetching the orchestrator
+        via both `chatops_service` and `concierge_service` entry points must
+        never trigger a second registration attempt (which is what raised
+        the fail-closed "already registered" error in production)."""
+        from hivepilot.services import chatops_service
+
+        registered_kinds: dict[str, object] = {}
+
+        def _register(kind: str, cls: object) -> None:
+            if kind in registered_kinds and registered_kinds[kind] is not cls:
+                raise RuntimeError(
+                    f"Runner kind '{kind}' is already registered to "
+                    f"{registered_kinds[kind]}; refusing to silently replace it "
+                    f"with {cls}"
+                )
+            registered_kinds[kind] = cls
+
+        fake_orch = MagicMock()
+        with patch.object(chatops_service, "Orchestrator", return_value=fake_orch):
+            chatops_service._get_orchestrator()
+            _register("gh", "GhRunner")  # first (and only) PluginManager scan
+
+            # concierge_service must reuse the same instance — no second scan,
+            # no second _register("gh", "GhRunner") call, so no collision.
+            concierge_service._get_orchestrator()
+
+        assert registered_kinds == {"gh": "GhRunner"}
+
+
 class TestRosterBuild:
     def test_roster_includes_mission_line(self, tmp_path, monkeypatch) -> None:
         prompt = tmp_path / "developer.md"
