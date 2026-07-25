@@ -920,3 +920,206 @@ class TestCostSummary:
         assert result["overall"]["unpriced_steps"] == 0
         assert result["by_provider"] == []
         assert result["by_model"] == []
+
+
+# ---------------------------------------------------------------------------
+# Mirador data endpoints sprint -- cost_summary by_project / by_role /
+# unpriced_models
+# ---------------------------------------------------------------------------
+
+
+class TestCostSummaryByProjectAndRole:
+    def test_grouped_by_project(self) -> None:
+        run_a = _seed_run(project="proj-a")
+        run_b = _seed_run(project="proj-b")
+        _seed_step_with_usage(
+            run_a,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+        _seed_step_with_usage(
+            run_b,
+            "s1",
+            "success",
+            provider="codex",
+            model="totally-unlisted-model",
+            input_tokens=100,
+            output_tokens=100,
+            cost_usd=None,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        by_project = {row["project"]: row for row in result["by_project"]}
+        assert by_project["proj-a"]["cost_usd"] == 10.5
+        assert by_project["proj-b"]["unpriced_steps"] == 1
+
+    def test_by_project_tenant_isolation(self) -> None:
+        run_acme = _seed_run(project="p", tenant="acme")
+        run_other = _seed_run(project="p", tenant="other")
+        _seed_step_with_usage(run_acme, "s1", "success", provider="claude", cost_usd=1.0)
+        _seed_step_with_usage(run_other, "s1", "success", provider="claude", cost_usd=1.0)
+
+        result = analytics_service.cost_summary(tenant="acme", days=None)
+        assert result["by_project"] == [
+            {
+                "project": "p",
+                "total_steps": 1,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 1.0,
+                "unpriced_steps": 0,
+            }
+        ]
+
+    def test_by_role_is_none_and_documented(self) -> None:
+        """`steps`/`runs` has no `role` column -- INVESTIGATED, not
+        available -- so `by_role` must be `None` (never fabricated as an
+        empty-but-present breakdown), with a human-readable reason."""
+        result = analytics_service.cost_summary(days=None)
+        assert result["by_role"] is None
+        assert isinstance(result["by_role_note"], str)
+        assert result["by_role_note"]
+
+    def test_unpriced_models_lists_models_with_any_unpriced_step(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+        _seed_step_with_usage(
+            run1,
+            "s2",
+            "success",
+            provider="codex",
+            model="totally-unlisted-model",
+            input_tokens=100,
+            output_tokens=100,
+            cost_usd=None,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        assert result["unpriced_models"] == ["totally-unlisted-model"]
+
+    def test_unpriced_models_empty_when_no_steps(self) -> None:
+        result = analytics_service.cost_summary(days=None)
+        assert result["unpriced_models"] == []
+
+
+# ---------------------------------------------------------------------------
+# Mirador data endpoints sprint -- models_summary (GET /v1/models)
+# ---------------------------------------------------------------------------
+
+
+class TestModelsSummary:
+    def test_empty_db_returns_empty_models_and_zero_overall(self) -> None:
+        result = analytics_service.models_summary(days=None)
+        assert result["models"] == []
+        assert result["overall"]["cost_usd"] == 0.0
+        assert result["overall"]["cost_per_successful_run"] is None
+        assert result["latency_available"] is False
+        assert isinstance(result["latency_note"], str) and result["latency_note"]
+
+    def test_per_model_rollup_fields(self) -> None:
+        run1 = _seed_run(status="success")
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=500_000,
+            cost_usd=None,
+        )
+        result = analytics_service.models_summary(days=None)
+        assert len(result["models"]) == 1
+        row = result["models"][0]
+        assert row["model"] == "claude-sonnet-4-6"
+        assert row["step_count"] == 1
+        assert row["input_tokens"] == 1_000_000
+        assert row["output_tokens"] == 500_000
+        assert row["cost_usd"] == 10.5
+        assert row["unpriced_steps"] == 0
+        assert row["success_rate"] == 1.0
+        assert row["share_of_spend"] == 1.0
+
+    def test_share_of_spend_across_models(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            cost_usd=3.0,
+        )
+        _seed_step_with_usage(
+            run1,
+            "s2",
+            "success",
+            provider="claude",
+            model="claude-opus-4-6",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            cost_usd=1.0,
+        )
+        result = analytics_service.models_summary(days=None)
+        by_model = {r["model"]: r for r in result["models"]}
+        assert by_model["claude-sonnet-4-6"]["share_of_spend"] == 0.75
+        assert by_model["claude-opus-4-6"]["share_of_spend"] == 0.25
+
+    def test_success_rate_excludes_skipped_from_denominator(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(run1, "s1", "success", provider="claude", model="m")
+        _seed_step_with_usage(run1, "s2", "failed", provider="claude", model="m")
+        _seed_step_with_usage(run1, "s3", "deferred", provider="claude", model="m")
+        result = analytics_service.models_summary(days=None)
+        row = result["models"][0]
+        assert row["success_rate"] == 0.5
+
+    def test_cost_per_successful_run(self) -> None:
+        run1 = _seed_run(status="success")
+        run2 = _seed_run(status="failed")
+        _seed_step_with_usage(run1, "s1", "success", provider="claude", model="m", cost_usd=4.0)
+        _seed_step_with_usage(run2, "s1", "failed", provider="claude", model="m", cost_usd=2.0)
+        result = analytics_service.models_summary(days=None)
+        assert result["overall"]["succeeded_runs"] == 1
+        assert result["overall"]["cost_per_successful_run"] == 6.0
+
+    def test_null_model_groups_as_unknown(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(run1, "s1", "success", provider="shell", model=None)
+        result = analytics_service.models_summary(days=None)
+        assert result["models"][0]["model"] == "unknown"
+
+    def test_tenant_isolation(self) -> None:
+        run_acme = _seed_run(tenant="acme")
+        run_other = _seed_run(tenant="other")
+        _seed_step_with_usage(run_acme, "s1", "success", provider="claude", model="m", cost_usd=1.0)
+        _seed_step_with_usage(
+            run_other, "s1", "success", provider="claude", model="m", cost_usd=1.0
+        )
+        result = analytics_service.models_summary(tenant="acme", days=None)
+        assert result["overall"]["total_steps"] == 1
+
+    def test_models_sorted_by_cost_descending(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(run1, "s1", "success", provider="claude", model="cheap", cost_usd=1.0)
+        _seed_step_with_usage(
+            run1, "s2", "success", provider="claude", model="pricey", cost_usd=9.0
+        )
+        result = analytics_service.models_summary(days=None)
+        assert [row["model"] for row in result["models"]] == ["pricey", "cheap"]
