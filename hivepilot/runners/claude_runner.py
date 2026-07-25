@@ -302,21 +302,24 @@ class ClaudeRunner(BaseRunner):
         )
         if permission_mode:
             args.extend(["--permission-mode", permission_mode])
-        # `--tools <tools...>` (per `claude --help`) is VARIADIC — it greedily
-        # consumes every subsequent bare token as another tool name, including
-        # the positional prompt appended below. With `--tools ""` this makes
-        # claude see argv as `--tools "" "<prompt>"` (tools=["", "<prompt>"]),
-        # so NO prompt reaches `--print` and claude exits 1 with "Input must
-        # be provided either through stdin or as a prompt argument when using
-        # --print" (empirically reproduced against the real `claude` binary).
         # `--` is the standard end-of-options separator: it tells claude's
         # arg parser to stop treating subsequent tokens as option values, so
-        # the prompt is unambiguously positional again (also empirically
-        # verified). Only emitted when `--tools` was actually added — every
-        # invocation that doesn't set `tools` stays byte-identical to before
-        # this fix (see `TestToolsRestriction`/argv tests).
-        if tools is not None:
-            args.append("--")
+        # the prompt is unambiguously positional. UNCONDITIONALLY emitted
+        # immediately before the prompt (not just when `--tools` is set):
+        # ANY variadic flag that might precede it here — `--tools <tools...>`,
+        # `--add-dir <dirs...>` (skill scratch dir, see `apply_skill`),
+        # `--append-system-prompt`, or a future flag we haven't added yet —
+        # would otherwise greedily consume the positional prompt as one more
+        # value of its own, leaving NO prompt for `--print` and making claude
+        # exit 1 with "Input must be provided either through stdin or as a
+        # prompt argument when using --print" (empirically reproduced against
+        # the real `claude` binary for both `--tools` and `--add-dir`).
+        # `claude --print --model X -- <prompt>` is byte-behaviourally
+        # identical to `claude --print --model X <prompt>` — `--` is inert
+        # when nothing variadic precedes it — so making this unconditional
+        # costs nothing on the plain/no-flags path while making every
+        # variadic-flag path permanently safe against this class of bug.
+        args.append("--")
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}
