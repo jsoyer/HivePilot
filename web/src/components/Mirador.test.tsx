@@ -38,6 +38,16 @@ const mocks = vi.hoisted(() => ({
     unpriced_models: [],
   }),
   fetchAnalyticsProviders: vi.fn().mockResolvedValue({ by_provider: [], by_model: [] }),
+  // Mirador Spend section sprint: ModelsView fetches its own /v1/models —
+  // mocked genuinely-empty so this shell test exercises tab switching only,
+  // not ModelsView's own data/empty/error states (covered by
+  // ModelsView.test.tsx).
+  fetchModels: vi.fn().mockResolvedValue({
+    models: [],
+    overall: { total_steps: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0, unpriced_steps: 0, succeeded_runs: 0, cost_per_successful_run: null },
+    latency_available: false,
+    latency_note: 'p50/p95 latency is not computable from current data.',
+  }),
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
   fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
@@ -85,16 +95,29 @@ vi.mock('@/lib/mirador-api', async (importOriginal) => {
 import { LANG_STORAGE_KEY } from '@/lib/i18n'
 import { Mirador } from './Mirador'
 
-// The sidebar's grouped nav order (P0b, + Home command-center sprint) —
-// see `./nav/nav-config.ts`'s `NAV_GROUP_ORDER`: Command Center (Home),
-// Overview (Analytics/Cost), Agents (Approvals/Runs), System (Health/
-// Graph), Memory (Mem0/Réalité). Every built-in tab is still reachable,
-// just reordered by group instead of the old flat declaration order.
+// The sidebar's grouped nav order (P0b, + Home command-center sprint, +
+// Mirador Spend section sprint) — see `./nav/nav-config.ts`'s
+// `NAV_GROUP_ORDER`: Command Center (Home), Spend (Cost/Models/Efficiency),
+// Overview (Analytics), Agents (Approvals/Runs), System (Health/Graph),
+// Memory (Mem0/Réalité). Every built-in tab is still reachable, just
+// reordered by group instead of the old flat declaration order.
 // Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n — see the
 // "language toggle" describe block for the French-language assertions of
 // the same shell). "Réalité" itself is a proper noun, kept untranslated in
 // both dictionaries (see en.ts/fr.ts's `nav.reality`).
-const GROUPED_TAB_ORDER = ['Home', 'Analytics', 'Cost', 'Approvals', 'Runs', 'Health', 'Graph', 'Mem0', 'Réalité']
+const GROUPED_TAB_ORDER = [
+  'Home',
+  'Cost',
+  'Models',
+  'Efficiency',
+  'Analytics',
+  'Approvals',
+  'Runs',
+  'Health',
+  'Graph',
+  'Mem0',
+  'Réalité',
+]
 
 let container: HTMLDivElement
 let root: Root
@@ -134,6 +157,7 @@ describe('Mirador', () => {
 
   it('groups the sidebar into labelled sections (English default)', () => {
     expect(container.textContent).toContain('Command Center')
+    expect(container.textContent).toContain('Spend')
     expect(container.textContent).toContain('Overview')
     expect(container.textContent).toContain('Agents')
     expect(container.textContent).toContain('System')
@@ -179,6 +203,39 @@ describe('Mirador', () => {
     expect(costTab.getAttribute('aria-selected')).toBe('true')
     const panel = container.querySelector('[role="tabpanel"]')
     expect(panel?.textContent).toContain('Cost & tokens')
+  })
+
+  it('switches to the real Models view when the Models item is clicked', async () => {
+    const modelsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Models',
+    ) as HTMLElement
+
+    await act(async () => {
+      click(modelsTab)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(modelsTab.getAttribute('aria-selected')).toBe('true')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toContain('Models')
+    expect(panel?.textContent).toMatch(/no model data yet/i)
+  })
+
+  it('switches to the real Efficiency view when the Efficiency item is clicked', async () => {
+    const efficiencyTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Efficiency',
+    ) as HTMLElement
+
+    await act(async () => {
+      click(efficiencyTab)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(efficiencyTab.getAttribute('aria-selected')).toBe('true')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toContain('Headroom')
   })
 
   it('switches to the real Health view when the Health item is clicked', async () => {
