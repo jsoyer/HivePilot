@@ -141,7 +141,7 @@ def ensure_checkout(project: ProjectConfig) -> None:
             f"or clone the repo to {project.path} manually."
         )
     protocol = settings.project_clone_protocol
-    url = build_repo_url(project.owner_repo, protocol)
+    url = build_repo_url(project.owner_repo, protocol, project=project)
     # Log the owner_repo slug + protocol, never the clone URL itself -- even
     # though build_repo_url never embeds credentials, this keeps the log
     # line safe by construction rather than by accident.

@@ -98,7 +98,7 @@ class GitHubForge:
                     "remote",
                     "set-url",
                     "origin",
-                    self.build_repo_url(slug, remote_protocol),
+                    self.build_repo_url(slug, remote_protocol, project),
                 ],
                 cwd=project.path,
                 check=False,
@@ -166,7 +166,13 @@ class GitHubForge:
             args.extend(["--notes-file", str(notes_file)])
         run_command(args, cwd=project.path)
 
-    def build_repo_url(self, repo: str, protocol: str) -> str:
+    def build_repo_url(self, repo: str, protocol: str, project: ProjectConfig | None = None) -> str:
+        # `project` is accepted (Phase 2 interface widening -- see
+        # hivepilot.forges.provider.ForgeProvider.build_repo_url) but unused:
+        # github.com is a single fixed, always-https host, unlike a
+        # self-hosted Forgejo/GitLab instance whose URL depends on the
+        # project's own `forge_base_url`. Byte-identical output either way.
+        del project
         if protocol == "https":
             return f"https://github.com/{repo}.git"
         return f"git@github.com:{repo}.git"

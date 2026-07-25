@@ -12,9 +12,14 @@ from hivepilot.forges.provider import (
     ForgeCollisionError,
     ForgeRegistry,
     UnknownForgeError,
+    require_secure_forge_url,
     resolve_forge,
+    resolve_forge_base_url,
+    resolve_forge_token,
 )
 from hivepilot.models import ProjectConfig
+from hivepilot.services.config_provenance import clear_secret_values
+from hivepilot.services.secret_refs import SecretReferenceError
 
 
 def test_github_is_registered_by_default() -> None:
@@ -75,3 +80,83 @@ def test_forge_registry_allows_explicit_override() -> None:
 
 def test_known_kinds_includes_github() -> None:
     assert "github" in ForgeRegistry.known_kinds()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 shared helpers: require_secure_forge_url / resolve_forge_base_url /
+# resolve_forge_token (used by ForgejoForge/GitLabForge).
+# ---------------------------------------------------------------------------
+
+
+def test_require_secure_forge_url_accepts_https() -> None:
+    require_secure_forge_url("https://forge.example.com")  # must not raise
+
+
+def test_require_secure_forge_url_accepts_loopback_http() -> None:
+    require_secure_forge_url("http://localhost:3000")  # must not raise
+
+
+def test_require_secure_forge_url_rejects_plaintext_non_loopback() -> None:
+    with pytest.raises(ValueError, match="Refusing plaintext"):
+        require_secure_forge_url("http://forge.example.com")
+
+
+def test_require_secure_forge_url_rejects_non_http_scheme() -> None:
+    with pytest.raises(ValueError, match="http"):
+        require_secure_forge_url("ftp://forge.example.com")
+
+
+def test_resolve_forge_base_url_uses_project_value(tmp_path) -> None:
+    project = ProjectConfig(
+        path=tmp_path, forge="forgejo", forge_base_url="https://forge.example.com/"
+    )
+    assert resolve_forge_base_url(project) == "https://forge.example.com"
+
+
+def test_resolve_forge_base_url_fails_closed_when_unset_and_no_default(tmp_path) -> None:
+    project = ProjectConfig(path=tmp_path)  # forge_base_url unset
+    with pytest.raises(ValueError, match="forge_base_url"):
+        resolve_forge_base_url(project)
+
+
+def test_resolve_forge_base_url_falls_back_to_given_default(tmp_path) -> None:
+    project = ProjectConfig(path=tmp_path)  # forge_base_url unset
+    assert resolve_forge_base_url(project, default="https://gitlab.com") == "https://gitlab.com"
+
+
+def test_resolve_forge_base_url_enforces_https_even_with_default(tmp_path) -> None:
+    project = ProjectConfig(path=tmp_path, forge_base_url="http://forge.example.com")
+    with pytest.raises(ValueError, match="Refusing plaintext"):
+        resolve_forge_base_url(project, default="https://gitlab.com")
+
+
+@pytest.fixture(autouse=True)
+def _clean_secret_registry_for_token_tests():
+    clear_secret_values()
+    yield
+    clear_secret_values()
+
+
+def test_resolve_forge_token_resolves_via_secret_catalog(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MY_TOKEN_ENV", "top-secret-value")
+    project = ProjectConfig(
+        path=tmp_path,
+        secrets={"SOME_TOKEN": {"source": "env", "key": "MY_TOKEN_ENV"}},
+    )
+    assert resolve_forge_token(project, "SOME_TOKEN") == "top-secret-value"
+
+
+def test_resolve_forge_token_fails_closed_when_catalog_entry_missing(tmp_path) -> None:
+    project = ProjectConfig(path=tmp_path, secrets={})
+    with pytest.raises(SecretReferenceError, match="SOME_TOKEN"):
+        resolve_forge_token(project, "SOME_TOKEN")
+
+
+def test_resolve_forge_token_fails_closed_on_empty_resolved_value(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("EMPTY_TOKEN_ENV", "   ")
+    project = ProjectConfig(
+        path=tmp_path,
+        secrets={"SOME_TOKEN": {"source": "env", "key": "EMPTY_TOKEN_ENV"}},
+    )
+    with pytest.raises(ValueError, match="empty"):
+        resolve_forge_token(project, "SOME_TOKEN")

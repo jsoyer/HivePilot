@@ -4,16 +4,19 @@ behaviour-preserving). Mirrors hivepilot.registry's RunnerRegistry/
 SecretsRegistry pattern: a process-global FORGE_MAP name -> provider
 instance, plus a fail-closed resolve_forge(project) lookup.
 
-Only ONE concrete provider ships in Phase 1 (GitHubForge, registered as
-"github" -- see hivepilot/forges/github.py). Forgejo/GitLab providers and
-instance federation are later phases; this module's job is just the seam
-they will plug into.
+Phase 1 shipped ONE concrete provider (GitHubForge, registered as "github"
+-- see hivepilot/forges/github.py). Phase 2 (this module's additions below
+GitHubForge's original content) adds two self-hosted providers -- Forgejo
+(hivepilot/forges/forgejo.py) and GitLab (hivepilot/forges/gitlab.py) --
+plus the shared helpers both need: HTTPS enforcement for a self-hosted
+`forge_base_url`, and fail-closed `${secret:NAME}` token resolution.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
 
 from hivepilot.config import Settings
 from hivepilot.models import GitActions, ProjectConfig
@@ -31,7 +34,9 @@ class ForgeProvider(Protocol):
 
     name: str
 
-    def build_repo_url(self, repo: str, protocol: str) -> str: ...
+    def build_repo_url(
+        self, repo: str, protocol: str, project: ProjectConfig | None = None
+    ) -> str: ...
 
     def repo_exists(self, slug: str, settings: Settings, project: ProjectConfig) -> bool: ...
 
@@ -141,3 +146,81 @@ def resolve_forge(project: ProjectConfig) -> ForgeProvider:
             f"available: {sorted(FORGE_MAP)}"
         )
     return provider
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 shared helpers -- used by ForgejoForge (forgejo.py) and GitLabForge
+# (gitlab.py), the two self-hosted-capable providers. GitHubForge doesn't need
+# these: github.com is a single fixed, always-https host with no per-project
+# token catalog entry of its own (it authenticates via the `gh` CLI's own
+# stored credentials).
+# ---------------------------------------------------------------------------
+
+# Mirrors hivepilot.runners.worker_runner._LOOPBACK_HOSTS -- the one carve-out
+# for a plaintext http:// forge_base_url (local dev against a forge running on
+# the same machine).
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def require_secure_forge_url(base_url: str) -> None:
+    """Refuse a plaintext ``http://`` *base_url* to a non-loopback host --
+    mirrors ``hivepilot.runners.worker_runner._require_secure_transport``. A
+    self-hosted forge's API token must never travel over unencrypted
+    transport to a real host; only a loopback ``http://`` (local dev) is
+    exempt. Also rejects any scheme other than http/https outright.
+    """
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"forge_base_url must be http:// or https://; got {base_url!r}")
+    if parsed.scheme == "http" and (parsed.hostname or "") not in _LOOPBACK_HOSTS:
+        raise ValueError(
+            f"Refusing plaintext http:// forge_base_url to non-loopback host "
+            f"{parsed.hostname!r}; use https:// (or a loopback host for local dev)."
+        )
+
+
+def resolve_forge_base_url(project: ProjectConfig, *, default: str | None = None) -> str:
+    """Resolve *project*'s ``forge_base_url``, enforcing HTTPS.
+
+    Fail-closed when unset and no *default* is given (Forgejo: there is no
+    universal public Forgejo host the way github.com/gitlab.com exist, so an
+    unset ``forge_base_url`` is a configuration error, never a silent
+    fallback). Falls back to *default* when one is given (GitLab: the public
+    ``https://gitlab.com`` SaaS) -- an explicit, documented default, not an
+    accidental one.
+    """
+    base_url = project.forge_base_url or default
+    if not base_url:
+        raise ValueError(
+            f"Project {project.path.name!r} uses forge {project.forge!r} but has no "
+            f"forge_base_url configured; set forge_base_url in projects.yaml."
+        )
+    require_secure_forge_url(base_url)
+    return base_url.rstrip("/")
+
+
+def resolve_forge_token(project: ProjectConfig, ref_name: str) -> str:
+    """Resolve *ref_name* (e.g. ``"FORGEJO_TOKEN"``) through the EXISTING
+    ``${secret:NAME}`` mechanism (``hivepilot.services.secret_refs``) against
+    *project*'s ``secrets:`` catalog -- never read a plaintext environment
+    variable directly.
+
+    Fail-closed: a missing catalog entry or a provider resolution failure
+    both raise ``SecretReferenceError`` (from ``resolve_secret_refs`` itself);
+    an EMPTY resolved value also raises here -- an empty token must never be
+    silently treated as "no auth needed" (see the empty-value fail-open
+    lesson this codebase has hit before: an empty/absent value on a gate must
+    mean deny, not permit). The resolved value is registered for redaction by
+    ``resolve_secret_refs`` itself.
+    """
+    from hivepilot.services.secret_refs import resolve_secret_refs
+
+    values = {ref_name: f"${{secret:{ref_name}}}"}
+    resolved = resolve_secret_refs(values, catalog=project.secrets, fail_mode="closed")
+    token = resolved[ref_name]
+    if not token or not token.strip():
+        raise ValueError(
+            f"Project {project.path.name!r} secret {ref_name!r} resolved to an empty "
+            f"value; refusing to authenticate with an empty token."
+        )
+    return token
