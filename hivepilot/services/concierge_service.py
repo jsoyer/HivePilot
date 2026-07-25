@@ -181,23 +181,22 @@ class ConciergeDecision:
     destructive: bool = False
 
 
-_orchestrator: Any = None
-_orchestrator_lock = threading.Lock()
-
-
 def _get_orchestrator() -> Any:
-    """Lazy module-level Orchestrator singleton — mirrors
-    `chatops_service._get_orchestrator()` exactly (separate instance: this
-    module must stay independently importable and not couple to chatops
-    internals)."""
-    global _orchestrator
-    if _orchestrator is None:
-        with _orchestrator_lock:
-            if _orchestrator is None:
-                from hivepilot.orchestrator import Orchestrator
+    """Reuse the process-wide shared Orchestrator (chatops_service's
+    singleton, the same one telegram_bot._get_orch uses). Building a SECOND
+    Orchestrator here spawns a second PluginManager that re-scans plugins
+    and collides on the process-global RUNNER_MAP/NOTIFIER_MAP/SECRETS_MAP —
+    see orchestrator.py's `_load()` comment. This was the root cause of the
+    production regression `telegram.cmd_ask.error`: "Runner kind 'gh' is
+    already registered to GhRunner; refusing to silently replace it with
+    GhRunner" — the Telegram process holds a shared Orchestrator (used by
+    both telegram_bot and chatops_service) plus this module's OWN separate
+    one, so the second PluginManager scan collided with the first. A lazy
+    function-level import keeps this module independently importable
+    without a hard module-level coupling to chatops."""
+    from hivepilot.services.chatops_service import _get_orchestrator as _shared
 
-                _orchestrator = Orchestrator()
-    return _orchestrator
+    return _shared()
 
 
 # ---------------------------------------------------------------------------
