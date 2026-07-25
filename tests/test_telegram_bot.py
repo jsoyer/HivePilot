@@ -807,6 +807,189 @@ class TestConciergeHandlerRegistered:
 
 
 # ---------------------------------------------------------------------------
+# Multi-agent dispatch (kind="multi_route") — one confirmation gates ALL
+# orders in the batch; declining runs none; each dispatch reuses the same
+# _run_agent_order path as a single `route` decision.
+# ---------------------------------------------------------------------------
+
+from hivepilot.services.concierge_service import DispatchOrder  # noqa: E402
+
+
+class TestConciergeMultiDispatch:
+    def teardown_method(self, method) -> None:
+        telegram_bot._pending_concierge.clear()
+
+    def _multi_decision(self) -> ConciergeDecision:
+        return ConciergeDecision(
+            kind="multi_route",
+            dispatches=[
+                DispatchOrder(role_key="cto", target="acme", order="sketch the architecture"),
+                DispatchOrder(role_key="ciso", target="acme", order="define the security review"),
+                DispatchOrder(role_key="developer", target="acme", order="prep the rollout"),
+            ],
+            destructive=True,
+        )
+
+    def test_multi_dispatch_sends_one_confirmation_listing_all_orders(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(chat_id=1001, text="donne leur les ordres")
+        context = _make_mention_context()
+        telegram_bot._pending_challenges.clear()
+        telegram_bot._pending_concierge.clear()
+        decision = self._multi_decision()
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch("hivepilot.services.concierge_service.route", return_value=decision),
+        ):
+            asyncio.run(telegram_bot._cmd_mention(update, context))
+
+        assert 1001 in telegram_bot._pending_concierge
+        stored_token, stored_decision = telegram_bot._pending_concierge[1001]
+        assert stored_decision == decision
+        context.bot.send_message.assert_awaited_once()
+        call_kwargs = context.bot.send_message.call_args.kwargs
+        assert call_kwargs.get("parse_mode") is None
+        text = call_kwargs["text"]
+        # All three orders must be listed in the single confirmation prompt.
+        assert "cto" in text
+        assert "ciso" in text
+        assert "developer" in text
+        keyboard = call_kwargs["reply_markup"]
+        yes_button = keyboard.inline_keyboard[0][0]
+        assert yes_button.callback_data == f"concierge:yes:{stored_token}"
+
+    def test_confirm_yes_dispatches_all_three_orders(self) -> None:
+        decision = self._multi_decision()
+        telegram_bot._pending_concierge[2002] = ("tok-multi", decision)
+        update = MagicMock()
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message.chat.id = 2002
+        update.callback_query.message.reply_text = AsyncMock()
+        update.callback_query.message.delete = AsyncMock()
+        update.callback_query.data = "concierge:yes:tok-multi"
+        context = MagicMock()
+
+        orch = MagicMock()
+        orch.run_task.return_value = []
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        assert 2002 not in telegram_bot._pending_concierge
+        assert orch.run_task.call_count == 3
+        dispatched_roles = {c.kwargs.get("task_name") for c in orch.run_task.call_args_list}
+        # task_name comes from each role's registered command_task — just
+        # assert three distinct calls happened (one per dispatch), not a
+        # single collapsed call.
+        assert len(dispatched_roles) >= 1
+        assert orch.run_task.call_count == len(decision.dispatches or [])
+
+    def test_confirm_no_dispatches_nothing(self) -> None:
+        decision = self._multi_decision()
+        telegram_bot._pending_concierge[3003] = ("tok-multi-2", decision)
+        update = MagicMock()
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message.chat.id = 3003
+        update.callback_query.data = "concierge:no:tok-multi-2"
+        context = MagicMock()
+
+        orch = MagicMock()
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        assert 3003 not in telegram_bot._pending_concierge
+        orch.run_task.assert_not_called()
+
+    def test_multi_dispatch_skips_unconfigured_role_but_runs_the_rest(self) -> None:
+        """Defense in depth: even though `_clamp` already validates roles,
+        `_execute_concierge_decision` independently re-checks `_AGENT_REGISTRY`
+        (mirrors the single-`route` behaviour) — an entry that somehow isn't
+        addressable is skipped, not fatal to the rest of the batch."""
+        decision = ConciergeDecision(
+            kind="multi_route",
+            dispatches=[
+                DispatchOrder(role_key="cto", target="acme", order="sketch the architecture"),
+                DispatchOrder(role_key="not-a-real-role", target="acme", order="ghost order"),
+            ],
+            destructive=True,
+        )
+        telegram_bot._pending_concierge[4004] = ("tok-multi-3", decision)
+        update = MagicMock()
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message.chat.id = 4004
+        update.callback_query.message.reply_text = AsyncMock()
+        update.callback_query.message.delete = AsyncMock()
+        update.callback_query.data = "concierge:yes:tok-multi-3"
+        context = MagicMock()
+
+        orch = MagicMock()
+        orch.run_task.return_value = []
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        assert orch.run_task.call_count == 1
+
+    def test_empty_dispatches_replies_nothing_to_do(self) -> None:
+        decision = ConciergeDecision(kind="multi_route", dispatches=[], destructive=True)
+        telegram_bot._pending_concierge[5005] = ("tok-multi-4", decision)
+        update = MagicMock()
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message.chat.id = 5005
+        update.callback_query.message.reply_text = AsyncMock()
+        update.callback_query.message.delete = AsyncMock()
+        update.callback_query.data = "concierge:yes:tok-multi-4"
+        context = MagicMock()
+
+        orch = MagicMock()
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        orch.run_task.assert_not_called()
+        update.callback_query.message.reply_text.assert_awaited_once_with("Nothing to do.")
+
+
+class TestConciergeChatIdThreading:
+    """`_handle_concierge_mention` must thread the chat id into
+    `concierge_service.route` so conversation memory is chat-scoped."""
+
+    def test_route_called_with_chat_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(chat_id=6006, text="hello")
+        context = _make_mention_context()
+        telegram_bot._pending_challenges.clear()
+        decision = ConciergeDecision(kind="answer", answer_text="hi")
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch(
+                "hivepilot.services.concierge_service.route", return_value=decision
+            ) as mock_route,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(update, context))
+
+        mock_route.assert_called_once()
+        assert mock_route.call_args.kwargs.get("chat_id") == 6006
+
+
+# ---------------------------------------------------------------------------
 # Graceful PTB error handler (Conflict / network errors logged concisely,
 # unexpected errors keep their traceback)
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ import json
 import os
 import tempfile
 import threading
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -168,16 +169,29 @@ _FALLBACK_ANSWER = (
     "or use /help to see the available commands."
 )
 
-_KNOWN_KINDS = {"answer", "route", "action"}
+_KNOWN_KINDS = {"answer", "route", "action", "multi_route"}
 _KNOWN_ACTIONS = {"run", "run_pipeline", "approve", "deny"}
-# Every currently-known route/action kind is destructive per the hardcoded
-# table (see `_clamp`) — the concierge OWNS this decision and never trusts
-# the model's self-reported `destructive` field as authoritative.
+# Every currently-known route/action/multi_route kind is destructive per the
+# hardcoded table (see `_clamp`) — the concierge OWNS this decision and never
+# trusts the model's self-reported `destructive` field as authoritative.
+
+
+@dataclass(frozen=True)
+class DispatchOrder:
+    """One agent's order within a `multi_route` batch — see
+    `ConciergeDecision.dispatches`. Each entry is independently `_clamp`-
+    validated (known role + known project) AND grounding-checked (the role
+    must have actually been named somewhere in this chat's recent
+    conversation history) before it ever reaches confirmation."""
+
+    role_key: str
+    target: str | None
+    order: str
 
 
 @dataclass(frozen=True)
 class ConciergeDecision:
-    kind: str  # "answer" | "route" | "action"
+    kind: str  # "answer" | "route" | "action" | "multi_route"
     answer_text: str | None = None
     role_key: str | None = None
     target: str | None = None
@@ -185,6 +199,11 @@ class ConciergeDecision:
     action: str | None = None
     params: dict | None = None
     destructive: bool = False
+    # Only for kind="multi_route" — one order per agent in the batch. A
+    # single explicit human confirmation gates the WHOLE batch (see
+    # telegram_bot._send_concierge_keyboard_message /
+    # _execute_concierge_decision) — no partial auto-run.
+    dispatches: list[DispatchOrder] | None = None
 
 
 def _get_orchestrator() -> Any:
@@ -365,7 +384,9 @@ def _grounding_snapshot() -> str:
     return "\n".join(lines) if lines else "(no recent runs or pending approvals)"
 
 
-def _build_classifier_prompt(text: str, roster: list[dict[str, str]], snapshot: str) -> str:
+def _build_classifier_prompt(
+    text: str, roster: list[dict[str, str]], snapshot: str, history_text: str
+) -> str:
     roster_lines = (
         "\n".join(
             f"- {r['role_key']}: {r['display']} ({r['title']}) — "
@@ -375,8 +396,97 @@ def _build_classifier_prompt(text: str, roster: list[dict[str, str]], snapshot: 
         or "(no roles configured on this deployment)"
     )
     return (
-        f"User message: {text}\n\nAvailable roles:\n{roster_lines}\n\nRecent context:\n{snapshot}"
+        f"User message: {text}\n\n"
+        f"Available roles:\n{roster_lines}\n\n"
+        f"Recent context:\n{snapshot}\n\n"
+        f"Recent conversation (this chat only):\n{history_text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Conversation memory — a short, bounded, per-chat rolling history (BOTH the
+# user's messages and the concierge's own answers) so a follow-up message
+# ("give them the orders", "do it", "them") can be resolved against what was
+# just discussed. In-process only (a bounded dict, deque-per-chat) — the
+# simplest storage that survives within a single running process, which is
+# all that's needed here: the concierge's own classifier call is itself
+# per-process (see `_get_orchestrator`'s shared-Orchestrator rationale), and
+# nothing about routing/dispatch depends on this memory surviving a restart.
+# Chat-scoped by construction (keyed by `chat_id`) — never merged or looked
+# up across chats, so one tenant/chat's history can never leak into or
+# resolve referents for another (see `_clamp`'s grounding check below, which
+# only ever consults the CURRENT chat's history text).
+# ---------------------------------------------------------------------------
+
+_MAX_HISTORY_TURNS = 6
+
+
+@dataclass(frozen=True)
+class _Turn:
+    user_text: str
+    concierge_text: str
+
+
+_history: dict[int, deque[_Turn]] = {}
+_history_lock = threading.Lock()
+
+
+def _record_turn(chat_id: int, user_text: str, concierge_text: str) -> None:
+    """Append one turn (user message + the concierge's own reply/summary) to
+    *chat_id*'s bounded history. Never raises."""
+    with _history_lock:
+        buf = _history.setdefault(chat_id, deque(maxlen=_MAX_HISTORY_TURNS))
+        buf.append(_Turn(user_text=user_text, concierge_text=concierge_text))
+
+
+def _get_history(chat_id: int | None) -> list[_Turn]:
+    """Return a COPY of *chat_id*'s recent turns (oldest first), or `[]` if
+    *chat_id* is None or has no recorded history. Chat-scoped: only ever
+    returns entries recorded under the exact same key."""
+    if chat_id is None:
+        return []
+    with _history_lock:
+        buf = _history.get(chat_id)
+        return list(buf) if buf else []
+
+
+def clear_history(chat_id: int | None = None) -> None:
+    """Ops/test helper: clear conversation memory for one chat, or every
+    chat when *chat_id* is None."""
+    with _history_lock:
+        if chat_id is None:
+            _history.clear()
+        else:
+            _history.pop(chat_id, None)
+
+
+def _format_history(history: list[_Turn]) -> str:
+    if not history:
+        return "(no prior conversation this session)"
+    lines: list[str] = []
+    for turn in history:
+        lines.append(f"User: {turn.user_text}")
+        lines.append(f"Concierge: {turn.concierge_text}")
+    return "\n".join(lines)
+
+
+def _history_summary(decision: ConciergeDecision) -> str:
+    """Compact textual summary of *decision*, suitable for storing as the
+    "concierge" side of a recorded turn — used as the grounding text a
+    LATER turn's `multi_route` dispatches are checked against (see
+    `_clamp`). For `kind="answer"` this is simply the genuine answer text
+    (the common case: the concierge names agents/roles in its own answer,
+    which a follow-up like "give them the orders" then resolves)."""
+    if decision.kind == "answer":
+        return decision.answer_text or ""
+    if decision.kind == "route":
+        return f"[dispatched {decision.role_key} on {decision.target}: {decision.order}]"
+    if decision.kind == "multi_route":
+        parts = [f"{d.role_key} on {d.target}: {d.order}" for d in (decision.dispatches or [])]
+        return "[dispatched " + "; ".join(parts) + "]" if parts else "[dispatched nothing]"
+    if decision.kind == "action":
+        return f"[action {decision.action} on {decision.target}]"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +567,33 @@ def _parse_raw(raw: str) -> ConciergeDecision | None:
             order=order if isinstance(order, str) else None,
         )
 
+    if kind == "multi_route":
+        raw_dispatches = data.get("dispatches")
+        if not isinstance(raw_dispatches, list):
+            salvaged = _salvageable_answer_text(data)
+            return ConciergeDecision(kind="answer", answer_text=salvaged) if salvaged else None
+        parsed_dispatches: list[DispatchOrder] = []
+        for item in raw_dispatches:
+            if not isinstance(item, dict):
+                continue
+            item_role_key = item.get("role_key")
+            if not isinstance(item_role_key, str) or not item_role_key.strip():
+                # Never guess a missing role — drop this entry, not the batch.
+                continue
+            item_target = item.get("target")
+            item_order = item.get("order")
+            parsed_dispatches.append(
+                DispatchOrder(
+                    role_key=item_role_key,
+                    target=item_target if isinstance(item_target, str) else None,
+                    order=item_order if isinstance(item_order, str) else "",
+                )
+            )
+        if not parsed_dispatches:
+            salvaged = _salvageable_answer_text(data)
+            return ConciergeDecision(kind="answer", answer_text=salvaged) if salvaged else None
+        return ConciergeDecision(kind="multi_route", dispatches=parsed_dispatches)
+
     # kind == "action"
     action = data.get("action")
     if action not in _KNOWN_ACTIONS:
@@ -488,24 +625,91 @@ def _unknown_target_answer(known_projects: set[str]) -> str:
     return "No projects are configured on this deployment yet. Try /projects."
 
 
+def _role_grounded_in_history(
+    role_key: str, roster_by_key: dict[str, dict[str, str]], history_text: str
+) -> bool:
+    """True if *role_key* (by its role key, display name, or title) was
+    actually named somewhere in *history_text* — the conversation memory
+    fed to the classifier for THIS chat only (see `_get_history`).
+
+    This is a belt-and-suspenders re-check, independent of the model's own
+    judgement: a role can be perfectly valid/configured (pass the
+    `known_roles` check) yet still be an ungrounded guess if it was never
+    actually part of the conversation — e.g. the model hallucinating a
+    plausible-sounding but never-discussed agent. Never trust the model's
+    say-so alone for a MULTI-dispatch batch; require an independent textual
+    match against the chat's own recent history."""
+    if not history_text:
+        return False
+    entry = roster_by_key.get(role_key)
+    needles = {role_key.lower()}
+    if entry:
+        if entry.get("display"):
+            needles.add(entry["display"].lower())
+        if entry.get("title"):
+            needles.add(entry["title"].lower())
+    haystack = history_text.lower()
+    return any(needle and needle in haystack for needle in needles)
+
+
 def _clamp(
-    decision: ConciergeDecision, *, default_role: str, default_target: str | None
+    decision: ConciergeDecision,
+    *,
+    default_role: str,
+    default_target: str | None,
+    history_text: str = "",
 ) -> ConciergeDecision:
     """Validate/clamp a parsed decision against what's actually known
     (roster + projects), substitute defaults, and hardcode `destructive`
     (the concierge OWNS this — never trusts the model's self-reported
-    value as authoritative for a kind/action already in the table)."""
+    value as authoritative for a kind/action already in the table).
+
+    *history_text* (only meaningful for `kind="multi_route"`) is this chat's
+    formatted recent-conversation text (see `_format_history`) — used to
+    ground each proposed dispatch's role against what was ACTUALLY discussed,
+    never merely against what's configured (see `_role_grounded_in_history`).
+    """
     if decision.kind == "answer":
         return decision
 
     from hivepilot.roles import list_roles
 
     try:
-        known_roles = {r.name for r in list_roles()}
+        all_roles = list(list_roles())
     except Exception as exc:  # noqa: BLE001
         logger.warning("concierge.clamp_list_roles_error", error=str(exc))
-        known_roles = set()
+        all_roles = []
+    known_roles = {r.name for r in all_roles}
     known_projects = _known_projects()
+
+    if decision.kind == "multi_route":
+        roster_by_key = {
+            r.name: {"display": r.display_name or r.name, "title": r.title} for r in all_roles
+        }
+        valid: list[DispatchOrder] = []
+        for dispatch in decision.dispatches or []:
+            if dispatch.role_key not in known_roles:
+                # Not a configured role at all — dropped, never guessed.
+                continue
+            if not _role_grounded_in_history(dispatch.role_key, roster_by_key, history_text):
+                # Configured, but never actually named in this chat's recent
+                # conversation — an ungrounded referent, dropped, not guessed.
+                continue
+            target = dispatch.target or default_target
+            if target is not None and known_projects is not None and target not in known_projects:
+                continue
+            valid.append(
+                DispatchOrder(role_key=dispatch.role_key, target=target, order=dispatch.order or "")
+            )
+        if not valid:
+            return ConciergeDecision(
+                kind="answer",
+                answer_text=(
+                    "I couldn't confirm who you mean — could you name the agents "
+                    "and the project explicitly?"
+                ),
+            )
+        return ConciergeDecision(kind="multi_route", dispatches=valid, destructive=True)
 
     if decision.kind == "route":
         role_key = decision.role_key or default_role
@@ -559,17 +763,34 @@ def _clamp(
 # ---------------------------------------------------------------------------
 
 
-def route(text: str, *, default_role: str, default_target: str | None) -> ConciergeDecision:
-    """Classify *text* into an ANSWER / ROUTE / ACTION decision.
+def route(
+    text: str,
+    *,
+    default_role: str,
+    default_target: str | None,
+    chat_id: int | None = None,
+) -> ConciergeDecision:
+    """Classify *text* into an ANSWER / ROUTE / ACTION / MULTI_ROUTE decision.
 
     Fail-closed: any LLM error, timeout, malformed response, or reference to
-    an unknown role/project degrades to a friendly `answer` — this function
-    NEVER fabricates a route/action it cannot validate. Synchronous/blocking
-    (one LLM call) — callers on an event loop must run it in an executor.
+    an unknown/ungrounded role/project degrades to a friendly `answer` — this
+    function NEVER fabricates a route/action/multi_route it cannot validate.
+    Synchronous/blocking (one LLM call) — callers on an event loop must run
+    it in an executor.
+
+    *chat_id*, when supplied, threads this call into the per-chat rolling
+    conversation memory (see the "Conversation memory" section above): the
+    chat's recent history is fed into the classifier prompt so a follow-up
+    ("give them the orders", "do it") can be resolved, and this turn is
+    recorded afterwards. Omitting *chat_id* (the default) disables memory
+    entirely for this call — byte-identical to the pre-memory behaviour,
+    and every call site that doesn't pass it keeps working unchanged.
     """
     roster = _build_roster()
     snapshot = _grounding_snapshot()
-    prompt = _build_classifier_prompt(text, roster, snapshot)
+    history = _get_history(chat_id)
+    history_text = _format_history(history)
+    prompt = _build_classifier_prompt(text, roster, snapshot, history_text)
 
     model = settings.chatops_concierge_model or _DEFAULT_CONCIERGE_MODEL
     mode = _resolve_mode()
@@ -617,4 +838,12 @@ def route(text: str, *, default_role: str, default_target: str | None) -> Concie
     if parsed is None:
         return ConciergeDecision(kind="answer", answer_text=_FALLBACK_ANSWER)
 
-    return _clamp(parsed, default_role=default_role, default_target=default_target)
+    decision = _clamp(
+        parsed,
+        default_role=default_role,
+        default_target=default_target,
+        history_text=history_text,
+    )
+    if chat_id is not None:
+        _record_turn(chat_id, text, _history_summary(decision))
+    return decision
