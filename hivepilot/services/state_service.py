@@ -340,6 +340,37 @@ def init_db() -> None:
             )
             """
         )
+        # Swarm Phase 1 (peer federation bus): the audit/dedupe/claim source
+        # of truth for EVERY swarm event, regardless of which
+        # `hivepilot.swarm.transport.Transport` delivered it -- see
+        # `hivepilot.services.swarm_service`. `id` is the caller-supplied,
+        # DETERMINISTIC event id (`hivepilot.swarm.models.compute_event_id`),
+        # so it is the table's own PRIMARY KEY rather than an autoincrement
+        # column: a second `insert_swarm_event` for the same id is a no-op
+        # INSERT (see `ON CONFLICT(id) DO NOTHING` below), which is exactly
+        # the publish-time DEDUPE contract. `status` is one of
+        # pending/claimed/done/skipped (`deduped` is an application-level
+        # outcome -- see `hivepilot.services.swarm_service.PublishStatus`/
+        # `ClaimStatus` -- never actually written to this column, since the
+        # row this table would attach it to already has a truthful status of
+        # its own; see that module's docstring for the full rationale).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS swarm_events (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                origin_instance TEXT,
+                sig TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                claimed_by TEXT,
+                ts REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:
@@ -1159,3 +1190,156 @@ def get_drift_baseline(project: str, *, tenant: str = "default") -> dict[str, An
             (project, tenant),
         ).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Swarm Phase 1 -- swarm_events persistence (the audit/dedupe/claim source of
+# truth for hivepilot.services.swarm_service, regardless of transport).
+# ---------------------------------------------------------------------------
+
+
+def insert_swarm_event(event: Any) -> bool:
+    """Idempotently persist *event* (a `hivepilot.swarm.models.Event`) as a
+    new `pending` row. Returns `True` iff THIS call actually inserted a new
+    row (a genuinely new event id); `False` when a row for `event.id` already
+    existed (`ON CONFLICT(id) DO NOTHING` no-op) -- the caller
+    (`swarm_service.publish_event`) treats `False` as DEDUPED. `ON CONFLICT
+    ... DO NOTHING` (rather than SQLite-only `INSERT OR IGNORE`) is portable
+    to the optional Postgres backend (see `hivepilot.services.db`).
+    """
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(
+            db.ph(
+                "INSERT INTO swarm_events "
+                "(id, type, payload, tenant, origin_instance, sig, status, ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) "
+                "ON CONFLICT(id) DO NOTHING"
+            ),
+            (
+                event.id,
+                event.type,
+                json.dumps(event.payload),
+                event.tenant,
+                event.origin_instance,
+                event.sig,
+                event.ts,
+            ),
+        )
+        inserted = cur.rowcount == 1
+    logger.info(
+        "state.swarm_publish",
+        event_id=event.id,
+        type=event.type,
+        tenant=event.tenant,
+        inserted=inserted,
+    )
+    return inserted
+
+
+def get_swarm_event(event_id: str) -> dict[str, Any] | None:
+    """Return the single `swarm_events` row for *event_id*, or `None`."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(db.ph("SELECT * FROM swarm_events WHERE id=?"), (event_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def claim_swarm_event(event_id: str, *, claimed_by: str) -> bool:
+    """Atomically claim *event_id* for *claimed_by* -- the exactly-once
+    primitive `hivepilot.swarm.transport.Transport.claim` implementations
+    delegate to (both "poll" and "redis" call this SAME function, so
+    exactly-once is guaranteed identically regardless of which broker
+    delivered the notification -- see `hivepilot/swarm/redis_transport.py`'s
+    module docstring for why Redis consumer groups are belt-and-suspenders
+    on top of this, not a replacement for it).
+
+    Returns `True` iff THIS call's `UPDATE ... WHERE status='pending'`
+    actually changed the row (this call won the race); `False` when the row
+    doesn't exist, or was no longer `pending` (already claimed/done by
+    someone else).
+    """
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(
+            db.ph(
+                "UPDATE swarm_events SET status='claimed', claimed_by=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'"
+            ),
+            (claimed_by, event_id),
+        )
+        claimed = cur.rowcount == 1
+    logger.info("state.swarm_claim", event_id=event_id, claimed_by=claimed_by, claimed=claimed)
+    return claimed
+
+
+def mark_swarm_event_done(event_id: str) -> bool:
+    """Atomically transition *event_id* from `claimed` -> `done` (a handler
+    finished processing it). Returns `False` (no-op) when the row isn't
+    currently `claimed` -- e.g. it's still `pending` (must be claimed first)
+    or already `done` (a duplicate/redelivered completion call) -- this is
+    the persistence half of handler idempotency-by-event.id (see
+    `hivepilot.services.swarm_service.process_claimed_event`).
+    """
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(
+            db.ph(
+                "UPDATE swarm_events SET status='done', updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status='claimed'"
+            ),
+            (event_id,),
+        )
+        done = cur.rowcount == 1
+    logger.info("state.swarm_done", event_id=event_id, done=done)
+    return done
+
+
+def mark_swarm_event_skipped(event_id: str) -> bool:
+    """Atomically transition *event_id* from `pending` -> `skipped` (e.g. a
+    signature that failed verification -- a permanently-corrupt event should
+    never be retried by any instance in the fleet). Returns `False` (no-op)
+    when the row isn't currently `pending` (already claimed/done/skipped) --
+    a signature failure detected AFTER a legitimate claim never overwrites
+    that claim's true status.
+    """
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(
+            db.ph(
+                "UPDATE swarm_events SET status='skipped', updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status='pending'"
+            ),
+            (event_id,),
+        )
+        skipped = cur.rowcount == 1
+    logger.info("state.swarm_skipped", event_id=event_id, skipped=skipped)
+    return skipped
+
+
+def list_pending_swarm_events(
+    types: list[str] | None = None,
+    *,
+    tenants: list[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return `pending` `swarm_events` rows, oldest first (FIFO claim order),
+    optionally filtered by *types* and/or *tenants* -- every query is
+    parameterized (never string-interpolated) so a caller-controlled
+    tenant/type list can never inject SQL.
+    """
+    init_db()
+    clauses = ["status='pending'"]
+    params: list[Any] = []
+    if types:
+        clauses.append(f"type IN ({','.join('?' for _ in types)})")
+        params.extend(types)
+    if tenants:
+        clauses.append(f"tenant IN ({','.join('?' for _ in tenants)})")
+        params.extend(tenants)
+    where = " AND ".join(clauses)
+    sql = f"SELECT * FROM swarm_events WHERE {where} ORDER BY created_at ASC, id ASC LIMIT ?"
+    params.append(limit)
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+    return [dict(row) for row in rows]

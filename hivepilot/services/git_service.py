@@ -319,6 +319,39 @@ def perform_git_actions(
             merge_pr(project=project, branch=branch, git=git)
 
 
+def _publish_pr_ready_best_effort(project: ProjectConfig, branch: str, kind: str) -> None:
+    """Publish a `pr_ready` swarm-bus event for *branch* (Swarm Phase 1,
+    build item 7) -- called ONLY after the forge call already succeeded
+    (`create_pr`/`promote_pr` below), so a publish failure NEVER retroactively
+    breaks an already-completed PR action. Wraps the whole call (import,
+    HEAD-sha lookup, publish) in a broad except: `swarm_service.
+    publish_pr_ready` is already internally best-effort, but this is
+    belt-and-suspenders so this helper itself can NEVER raise.
+    """
+    try:
+        from hivepilot.services.swarm_service import publish_pr_ready
+
+        try:
+            sha = ensure_repo(project.path).head.commit.hexsha
+        except Exception:  # noqa: BLE001 — an unresolvable HEAD sha still publishes (as "unknown")
+            sha = "unknown"
+        publish_pr_ready(
+            project_name=project.path.name,
+            owner_repo=project.owner_repo,
+            branch=branch,
+            sha=sha,
+            kind=kind,
+        )
+    except Exception:  # noqa: BLE001 — best-effort: a bus failure never breaks a run
+        logger.warning(
+            "git.swarm_publish_failed",
+            project=project.path.name,
+            branch=branch,
+            kind=kind,
+            exc_info=True,
+        )
+
+
 def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
     """Open a pull request via the project's forge provider (developer-opens-PR flow).
 
@@ -328,8 +361,14 @@ def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
     the direct ``gh pr create`` subprocess call this function used to make
     inline (that logic now lives in
     ``hivepilot.forges.github.GitHubForge.open_pr``).
+
+    Swarm Phase 1: on a SUCCESSFUL open, best-effort publishes a `pr_ready`
+    event (kind="opened") -- see `_publish_pr_ready_best_effort`. A raised
+    forge error propagates unchanged (unaffected by this addition); nothing
+    is ever published for a PR that failed to open.
     """
     resolve_forge(project).open_pr(project=project, branch=branch, git=git)
+    _publish_pr_ready_best_effort(project, branch, "opened")
 
 
 def promote_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
@@ -338,8 +377,12 @@ def promote_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
     Sibling to merge_pr: same subprocess/error-handling shape (now inside the
     resolved provider). Only called by perform_git_actions when the gating
     stage's own verdict did not block (see _agent_verdict_blocked).
+
+    Swarm Phase 1: on a SUCCESSFUL promote, best-effort publishes a
+    `pr_ready` event (kind="promoted") -- see `_publish_pr_ready_best_effort`.
     """
     resolve_forge(project).promote_pr(project=project, branch=branch, git=git)
+    _publish_pr_ready_best_effort(project, branch, "promoted")
 
 
 def merge_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:

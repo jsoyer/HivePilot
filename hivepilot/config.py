@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -28,11 +29,29 @@ _ENV_LIST_FIELDS = (
     "discord_allowed_channel_ids",
     "signal_allowed_numbers",
     "governance_files",
+    "swarm_served_tenants",
 )
 
 
 def _xdg_config_dir() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "hivepilot"
+
+
+def _default_swarm_instance_id() -> str:
+    """A stable, zero-config default `swarm_instance_id` (Swarm Phase 1):
+    derived from this MACHINE's hostname + MAC-address-derived node id
+    (`uuid.getnode()`), hashed to a short, non-reversible id. Stable across
+    process restarts on the same host (so a solo/local deployment's
+    instance identity doesn't churn every run), but NOT a substitute for an
+    explicit, operator-chosen `HIVEPILOT_SWARM_INSTANCE_ID` in a real
+    multi-host fleet (two containers on the same host, or two hosts behind
+    the same virtualised MAC, could collide) -- set it explicitly there.
+    """
+    import platform
+    import uuid
+
+    raw = f"{platform.node()}:{uuid.getnode()}"
+    return "swarm-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _resolve_env_file() -> str:
@@ -918,6 +937,63 @@ class Settings(BaseSettings):
     # (HIVEPILOT_UPDATE_REPO/_REF/_EXTRAS) for reproducible prod updates.
     update_repo: str = "https://github.com/jsoyer/HivePilot.git"
     update_ref: str = "main"
+
+    # ---- Swarm Phase 1 (peer federation bus) ----
+    # Which registered `hivepilot.swarm.transport.Transport` this instance
+    # uses. "poll" (the default) needs ZERO extra infra -- it reads/writes
+    # `swarm_events` straight from the local state DB, so a solo deployment
+    # federates with itself out of the box. "redis" requires the optional
+    # `swarm` extra (`pip install hivepilot[swarm]`) AND a reachable Redis;
+    # an unregistered/unknown name fails closed at
+    # `hivepilot.swarm.transport.resolve_transport` (never a silent
+    # fallback). env: HIVEPILOT_SWARM_TRANSPORT
+    swarm_transport: str = "poll"
+    # Stable id for THIS deployment, used as the `origin_instance` on every
+    # event this instance publishes and the redis consumer-group `consumer`
+    # name. Defaults to a machine-derived, zero-config stable id (see
+    # `_default_swarm_instance_id`) -- override explicitly
+    # (HIVEPILOT_SWARM_INSTANCE_ID) for a real multi-instance fleet where two
+    # instances could otherwise share a host/MAC-derived default.
+    swarm_instance_id: str = Field(default_factory=_default_swarm_instance_id)
+    # The fleet-wide HMAC signing key every published event is signed with
+    # (`hivepilot.swarm.models.sign_event`) and every claimed event is
+    # verified against (`verify_event`) before it is EVER handed to a
+    # handler -- fail-closed: a bad/missing signature is REJECTED, never
+    # executed (see `hivepilot.services.swarm_service.claim_next`). May be a
+    # literal value OR a `${secret:NAME}` reference resolved against
+    # `swarm_secrets` below via the existing `hivepilot.services.secret_refs`
+    # mechanism -- either way the resolved value is masked
+    # (`config_provenance.register_secret_value`) and NEVER logged. `None`
+    # (unconfigured, the default) means this instance cannot sign or verify
+    # ANYTHING: `publish_event` degrades to a best-effort no-op (a bus
+    # failure must never break a run) and `claim_next` refuses to claim (see
+    # `swarm_service.get_signing_key`) -- publishing/consuming the swarm bus
+    # is opt-in, never silently insecure-by-default.
+    # env: HIVEPILOT_SWARM_KEY
+    swarm_key: str | None = None
+    # Named secret catalog for `swarm_key`'s optional `${secret:NAME}`
+    # reference -- same `{NAME: {source, ...}}` shape as
+    # `ProjectConfig.secrets`, resolved via the SAME `secret_resolver`
+    # dispatch (see `hivepilot.services.secret_refs.resolve_secret_refs`).
+    # Global (not per-project) since the swarm signing key is a
+    # fleet-wide, not a project-scoped, credential.
+    swarm_secrets: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Tenants THIS instance is allowed to claim swarm events for -- an event
+    # whose `tenant` isn't in this list is left `pending` for another
+    # instance (never claimed, never executed) by `swarm_service.claim_next`.
+    # Defaults to `["default"]` -- every pre-existing single-tenant
+    # deployment is unaffected. env: HIVEPILOT_SWARM_SERVED_TENANTS
+    # (comma-separated or JSON array -- see `_parse_env_list` below).
+    swarm_served_tenants: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["default"]
+    )
+    # Redis connection URL for the "redis" transport. Falls back to the
+    # generic `redis_url` (already used by the L3 cache backend above) when
+    # unset, so a deployment that already points `redis_url` at a shared
+    # Redis doesn't need a second, duplicate setting -- override this
+    # separately only if the swarm bus should use a DIFFERENT Redis instance
+    # than the cache. env: HIVEPILOT_SWARM_REDIS_URL
+    swarm_redis_url: str | None = None
     # Base prod extras. Must include everything this deployment actually
     # runs -- e.g. pass --extras "api,notifications,webui" (or set
     # HIVEPILOT_UPDATE_EXTRAS) to keep the web UI, containers, etc.
