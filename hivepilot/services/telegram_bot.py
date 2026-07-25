@@ -94,40 +94,126 @@ def _format_results(results) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _normalise(text: str) -> str:
+    """Strip accents and lowercase — used for accent-insensitive alias matching."""
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
+
+def _sanitise_alias(text: str) -> str:
+    """`_normalise` plus drop anything outside `[a-z0-9_]` so a derived alias
+    (role name, separator-free variant, first name) can never smuggle
+    punctuation into a Telegram `/command` or an `_ALIAS_TO_ROLE` key."""
+    return "".join(c for c in _normalise(text) if c.isalnum() or c == "_")
+
+
+# Curated short aliases that predate deriving aliases from ROLES. These are
+# the memorable slash commands operators already type (/cos, /dev, /theo...)
+# and stay wired 1:1 into `_build_application`'s explicit CommandHandler
+# registrations below. Generalising `_build_agent_registry` to cover EVERY
+# loaded role must never rename or drop these.
+_CURATED_ALIASES: dict[str, list[str]] = {
+    "ceo": ["ceo", "alienor"],
+    "chief_of_staff": ["cos", "jules"],
+    "cto": ["cto", "blaise"],
+    "developer": ["dev", "developer", "gustave"],
+    "reviewer": ["review", "reviewer", "victor"],
+    "ciso": ["ciso", "hugo"],
+    "qa": ["qa", "marie"],
+    "documentation": ["docs", "documentation", "theo"],
+    "auditor": ["audit", "henri"],
+}
+
+
 # Each entry: role_key -> {task, display, aliases (ascii-lowercase only)}
 # Tasks are sourced from role.command_task so no hardcoded task-name literals live in code.
+#
+# Generalised (was: a fixed 9-role table) to iterate hivepilot.roles.ROLES so
+# EVERY loaded role with a command_task becomes addressable from Telegram —
+# not just the original curated 9. A deployment's roles.yaml can define many
+# more roles (pm, cfo, marketing, sales, ops, research, release_manager,
+# designer_console/extension/vscode/agent, design_reviewer, ...); before this
+# fix those were silently unresolvable ("<role> is not configured on this
+# deployment") even though hivepilot.roles.ROLES had them loaded.
+#
+# Alias claim priority (deterministic — never depends on ROLES'/YAML's
+# iteration order, since role_keys are always processed in sorted order):
+#   1. a role's own exact name        — ALWAYS wins, can never be stolen
+#   2. a role's separator-free name   (e.g. "release_manager" -> "releasemanager")
+#   3. curated aliases (_CURATED_ALIASES) — unchanged from before this fix
+#   4. the first token of display_name (e.g. "Aliénor" -> "alienor")
+# A later phase never overwrites an earlier phase's claim; on a collision the
+# losing alias is dropped for that role (logged) — the role stays addressable
+# via its other aliases / its own name, and no alias is ever silently
+# repointed at the wrong role.
 def _build_agent_registry() -> dict[str, dict[str, Any]]:
     from hivepilot.roles import ROLES
 
-    _aliases_by_role: dict[str, list[str]] = {
-        "ceo": ["ceo", "alienor"],
-        "chief_of_staff": ["cos", "jules"],
-        "cto": ["cto", "blaise"],
-        "developer": ["dev", "developer", "gustave"],
-        "reviewer": ["review", "reviewer", "victor"],
-        "ciso": ["ciso", "hugo"],
-        "qa": ["qa", "marie"],
-        "documentation": ["docs", "documentation", "theo"],
-        "auditor": ["audit", "henri"],
-    }
+    role_keys = sorted(ROLES.keys())
+    # auditor is a meta-agent by design — not a real Role (no ad-hoc
+    # entrypoint), so it never appears in ROLES. Give it the same curated-
+    # alias treatment as a real role, unless a deployment DOES define a real
+    # "auditor" Role (then it's handled generically like anything else).
+    synthetic_role_keys = [] if "auditor" in ROLES else ["auditor"]
+
+    claimed: dict[str, str] = {}  # normalised alias -> role_key that owns it
+
+    def _claim(alias: str, role_key: str) -> None:
+        if not alias:
+            return
+        owner = claimed.get(alias)
+        if owner is None or owner == role_key:
+            claimed[alias] = role_key
+            return
+        logger.warning(
+            "telegram.agent_registry.alias_collision",
+            alias=alias,
+            role=role_key,
+            owned_by=owner,
+        )
+
+    # Phase 1 + 2: every role's own name always wins, processed for ALL
+    # roles before anything else is considered — this is what makes "the
+    # explicit role name always wins" true regardless of what any other
+    # role's curated/derived alias would otherwise claim.
+    for role_key in role_keys:
+        own = _sanitise_alias(role_key)
+        _claim(own, role_key)
+        _claim(own.replace("_", ""), role_key)
+
+    # Phase 3: curated aliases, unchanged from before this fix.
+    for role_key in [*role_keys, *synthetic_role_keys]:
+        for alias in _CURATED_ALIASES.get(role_key, []):
+            _claim(alias, role_key)
+
+    # Phase 4: derived first-name alias, lowest priority — dropped on any
+    # collision with a name/curated alias already claimed above.
+    for role_key in role_keys:
+        role = ROLES[role_key]
+        if role.display_name:
+            first = _sanitise_alias(role.display_name.split()[0])
+            _claim(first, role_key)
 
     registry: dict[str, dict[str, Any]] = {}
-    for role_key, aliases in _aliases_by_role.items():
-        role = ROLES.get(role_key)
-        if role is not None:
-            title = role.title
-            display_name = role.display_name or role.name
-            display = f"{display_name} ({title})"
-            task = role.command_task  # None for auditor
-        else:
-            # auditor or unknown — keep entry with no task
-            display = role_key.replace("_", " ").title()
-            task = None
+    for role_key in role_keys:
+        role = ROLES[role_key]
+        display_name = role.display_name or role.name
+        display = f"{display_name} ({role.title})"
+        aliases = sorted(alias for alias, owner in claimed.items() if owner == role_key)
         registry[role_key] = {
-            "task": task,
+            "task": role.command_task,  # None for a role with no direct-command task
             "display": display,
             "aliases": aliases,
         }
+
+    for role_key in synthetic_role_keys:
+        aliases = sorted(alias for alias, owner in claimed.items() if owner == role_key)
+        registry[role_key] = {
+            "task": None,
+            "display": role_key.replace("_", " ").title(),
+            "aliases": aliases,
+        }
+
     return registry
 
 
@@ -138,12 +224,6 @@ _ALIAS_TO_ROLE: dict[str, str] = {}
 for _role_key, _entry in _AGENT_REGISTRY.items():
     for _alias in _entry["aliases"]:
         _ALIAS_TO_ROLE[_alias] = _role_key
-
-
-def _normalise(text: str) -> str:
-    """Strip accents and lowercase — used for accent-insensitive alias matching."""
-    nfkd = unicodedata.normalize("NFKD", text)
-    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
 
 def _resolve_agent(token: str) -> str | None:
