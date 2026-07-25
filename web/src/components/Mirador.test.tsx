@@ -123,6 +123,24 @@ const mocks = vi.hoisted(() => ({
     recent_dispatches: [],
     auto_dispatch_allowlist: [],
   }),
+  // Mirador "Agents" view: GET /v1/agents (roster) + /v1/verdicts (severity
+  // signal, fetched unfiltered on mount) — mocked genuinely-empty so this
+  // shell test exercises tab switching only, not AgentsView's own
+  // data/empty/error/XSS/severity states (covered by AgentsView.test.tsx).
+  // GET /v1/lessons only fires once a role card is drilled into (not on
+  // mount) but is mocked defensively like `fetchRun` above.
+  fetchAgents: vi.fn().mockResolvedValue({ agents: [], unknown: {
+    run_count: 0,
+    step_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cost_usd: 0,
+    unpriced_steps: 0,
+    success_rate: null,
+    last_active: null,
+  }, note: 'Per-role attribution requires steps.role.' }),
+  fetchLessons: vi.fn().mockResolvedValue({ lessons: [], by_role: {} }),
+  fetchVerdicts: vi.fn().mockResolvedValue({ verdicts: [], by_role: {} }),
 }))
 
 vi.mock('@/lib/mirador-api', async (importOriginal) => {
@@ -165,6 +183,7 @@ const GROUPED_TAB_ORDER = [
   'Analytics',
   'Memory',
   'Health',
+  'Agents',
   'Graph',
 ]
 
@@ -328,6 +347,24 @@ describe('Mirador', () => {
     })
 
     expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Plugin health')
+  })
+
+  it('switches to the real Agents view when the Agents item is clicked (reachable via the sidebar)', async () => {
+    const agentsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Agents',
+    ) as HTMLElement
+    expect(agentsTab).not.toBeUndefined()
+
+    await act(async () => {
+      click(agentsTab)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(agentsTab.getAttribute('aria-selected')).toBe('true')
+    const panel = container.querySelector('[role="tabpanel"]')
+    expect(panel?.textContent).toContain('Agents')
+    expect(mocks.fetchAgents).toHaveBeenCalled()
   })
 
   it('switches to the real Memory view when the Memory item is clicked, defaulting to its Quality tab', async () => {

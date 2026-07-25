@@ -66,6 +66,7 @@ export const en = {
   'nav.approvals': 'Approvals',
   'nav.runs': 'Runs',
   'nav.autopilot': 'Autopilot',
+  'nav.agents': 'Agents',
   'nav.graph': 'Graph',
 
   // ---- health status words (shared: header pills + Health tab badges) --
@@ -389,6 +390,38 @@ export const en = {
   'autopilot.dispatchesEmpty': 'No dispatches yet.',
   'autopilot.allowlistTitle': 'Allowlisted pipelines',
   'autopilot.allowlistEmpty': 'Nothing allowlisted — autopilot is effectively idle.',
+
+  // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
+  'agents.title': 'Agents',
+  'agents.description': 'Real per-role activity — cost, runs, lessons, and verdicts. Read-only for every token.',
+  'agents.noRoster': 'No agent roster configured.',
+  'agents.forbidden': "Unable to load agent activity for your token's tenant.",
+  'agents.verdictsForbidden': "Unable to load verdict severity signals for your token's tenant.",
+  'agents.noActivityYet': 'No activity attributed yet.',
+  'agents.noAttemptsYet': 'No attempts yet',
+  'agents.attentionBadge': 'Needs attention',
+  'agents.costLabel': 'Cost',
+  'agents.runsLabel': 'Runs',
+  'agents.stepsLabel': 'Steps',
+  'agents.tokensLabel': 'Tokens (in/out)',
+  'agents.lastActiveLabel': 'Last active',
+  'agents.successRateLabel': 'Success rate',
+  'agents.unknownTitle': 'Unattributed (before role tracking)',
+  'agents.unknownDescription':
+    'Historical activity recorded with no role attribution — steps.role only exists after this sprint shipped.',
+  'agents.unknownEmpty': 'No unattributed activity.',
+  'agents.detailAriaLabel': 'Agent detail: {name}',
+  'agents.closeAriaLabel': 'Close agent detail',
+  'agents.lessonsTitle': 'Recent lessons',
+  'agents.noLessons': 'No lessons recorded for this role yet.',
+  'agents.verdictsTitle': 'Recent verdicts',
+  'agents.noVerdicts': 'No verdicts recorded for this role yet.',
+  'agents.validated': 'Validated',
+  'agents.candidate': 'Candidate',
+  'agents.scoreLabel': 'score {score}',
+  'agents.confidenceLabel': '{confidence}% confidence',
+  'agents.unknownKind': 'unknown',
+  'agents.noDecision': 'No confident decision',
 } as const
 
 /** Every valid translation key — derived from `en`, the single source of

@@ -969,3 +969,156 @@ export function resumeAutopilot(): Promise<AutopilotControlResult> {
   return postJson<AutopilotControlResult>('/v1/autopilot/resume', {})
 }
 
+// ---------------------------------------------------------------------------
+// GET /v1/agents, GET /v1/lessons, GET /v1/verdicts — Mirador "Agents" view
+// (frontend for the Mirador Agent Panels backend sprint). Shapes transcribed
+// directly from `hivepilot/services/analytics_service.py`'s `agents_summary`/
+// `lessons_summary`/`verdicts_summary` and `state_service.py`'s
+// `list_lessons_by_tenant`/`list_verdicts` — read those before changing
+// anything here.
+//
+// All three are `require_role("read")` server-side — the same floor the
+// token gate itself already checks, so a valid token should never genuinely
+// 403 here today. All three still opt into `on403: 'forbidden'` — same
+// defense-in-depth posture as the `/v1/memory/*` fetchers above (see the
+// module comment above `fetchMemoryReality`): if a future tenant-scoping
+// change ever raises the floor, a 403 must not silently clear an otherwise-
+// valid token out from under every other tab.
+//
+// Honesty contract (see `agents_summary`'s own docstring / `_AGENTS_
+// ATTRIBUTION_NOTE`): a roster role with zero attributed steps comes back
+// `attributed: false`, all-zero counts, `success_rate: null` — never a
+// fabricated rollup. `NULL`-role (pre-migration/unattributed) activity is
+// NEVER folded into any named role — it's the separate top-level `unknown`
+// bucket. No latency figure is ever included (same gap as `/v1/models`).
+// `AgentsView` renders `note` verbatim rather than re-explaining it.
+// ---------------------------------------------------------------------------
+
+/** Per-role activity counters shared by both a named roster entry
+ * (`AgentRoster`) and the top-level `unknown` (NULL-role) bucket. */
+export interface AgentActivityStats {
+  run_count: number
+  step_count: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  unpriced_steps: number
+  success_rate: SuccessRate
+  last_active: string | null
+}
+
+export interface AgentRoster extends AgentActivityStats {
+  name: string
+  /** `null` for a role name observed in the data but no longer present in
+   * the current roster (`roles.yaml` changed) — surfaced honestly rather
+   * than silently dropped, per `agents_summary`'s docstring. */
+  display_name: string | null
+  title: string | null
+  /** `false` means zero attributed steps in-window — "no data yet", never a
+   * fabricated rollup. See `success_rate`'s own `null` contract alongside
+   * it (both flip together). */
+  attributed: boolean
+}
+
+/** The NULL-role ("unknown") bucket — same counters as a roster entry,
+ * minus `attributed` (always true by construction: it's whatever activity
+ * actually has no role). */
+export type AgentUnknownBucket = AgentActivityStats
+
+export interface AgentsResponse {
+  agents: AgentRoster[]
+  unknown: AgentUnknownBucket
+  note: string
+}
+
+/** `days`/`project`/`task` all default to unbounded/unfiltered — a roster
+ * view is a lifetime/overview surface, not a rolling window, exactly like
+ * the backend's own `agents_summary(days=None)` default. */
+export function fetchAgents(days?: number, project?: string, task?: string): Promise<AgentsResponse> {
+  const params = new URLSearchParams()
+  if (days != null) params.set('days', String(days))
+  if (project) params.set('project', project)
+  if (task) params.set('task', task)
+  const query = params.toString()
+  return apiFetch<AgentsResponse>(`/v1/agents${query ? `?${query}` : ''}`, { on403: 'forbidden' })
+}
+
+/** One row of the `lessons` table (`state_service.list_lessons_by_tenant`).
+ * `text`/`category` are LLM-distilled free text — UNTRUSTED, same trust
+ * class as `PanelData`/`GraphDetail` elsewhere in this app; render via plain
+ * JSX interpolation only. `validated` is the raw SQLite `INTEGER` (0/1), not
+ * a JSON boolean — treat any non-zero value as `true`. */
+export interface Lesson {
+  id: number
+  run_id: number | null
+  project: string | null
+  role: string | null
+  task: string | null
+  source_verdict_id: number | null
+  source_interaction_id: number | null
+  text: string | null
+  score: number | null
+  confidence: number | null
+  category: string | null
+  validated: number
+  use_count: number
+  created_at: string | null
+}
+
+export interface LessonRoleAggregation {
+  total: number
+  validated: number
+  use_count: number
+  /** `null` when the role has zero lessons with a non-null `score` in the
+   * window — never a fabricated average. */
+  avg_score: number | null
+}
+
+export interface LessonsResponse {
+  lessons: Lesson[]
+  by_role: Record<string, LessonRoleAggregation>
+}
+
+export function fetchLessons(role?: string, limit = 50): Promise<LessonsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (role) params.set('role', role)
+  return apiFetch<LessonsResponse>(`/v1/lessons?${params.toString()}`, { on403: 'forbidden' })
+}
+
+/** One row of the `verdicts` table (`state_service.list_verdicts`).
+ * `summary` is caller-supplied free text (e.g. reviewer summaries) —
+ * UNTRUSTED, same trust class as `Lesson.text` above; render via plain JSX
+ * interpolation only. `decision` is `null` when no confident decision was
+ * reached (a fail-closed "blocking" outcome, see `orchestrator.py`'s
+ * `Verdict` docstring) — a non-`"ACCEPT"` (case-insensitive) or `null`
+ * decision is the "non-nominal" signal `AgentsView`'s severity stripe uses. */
+export interface Verdict {
+  id: number
+  run_id: number | null
+  project: string | null
+  task: string | null
+  role: string | null
+  kind: string | null
+  decision: string | null
+  confidence: number | null
+  summary: string | null
+  timestamp: string | null
+}
+
+export interface VerdictRoleAggregation {
+  total: number
+  decision_counts: Record<string, number>
+  kind_counts: Record<string, number>
+}
+
+export interface VerdictsResponse {
+  verdicts: Verdict[]
+  by_role: Record<string, VerdictRoleAggregation>
+}
+
+export function fetchVerdicts(role?: string, limit = 50): Promise<VerdictsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (role) params.set('role', role)
+  return apiFetch<VerdictsResponse>(`/v1/verdicts?${params.toString()}`, { on403: 'forbidden' })
+}
+
