@@ -558,6 +558,89 @@ class TestAppendDaily:
         assert "dry run entry" in result["content"]
 
 
+class TestWriteArtifact:
+    def test_write_creates_file_under_role_subfolder(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+
+        today = __import__("datetime").date.today().isoformat()
+        result = svc.write_artifact(
+            role="cto",
+            slug="run43-cto-technical-spec",
+            title="Technical Spec — Run 43",
+            body="## Technical Spec\n\nDeliverable body.",
+            frontmatter_fields={
+                "type": "artifact",
+                "status": "complete",
+                "created": today,
+                "agent": "hivepilot",
+                "run_id": 43,
+                "stage": "CTO Review",
+                "role": "cto",
+            },
+        )
+
+        expected_path = vault / "02 - Artifacts" / "cto" / f"{today}-run43-cto-technical-spec.md"
+        assert expected_path.exists()
+        assert result["path"] == str(expected_path)
+        assert result.get("dry_run") is False
+        content = expected_path.read_text(encoding="utf-8")
+        assert "type: artifact" in content
+        assert "role: cto" in content
+        assert "Deliverable body." in content
+
+    def test_write_artifact_dry_run_no_file_created(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=True)
+
+        result = svc.write_artifact(
+            role="pm",
+            slug="run1-pm-brief",
+            title="PM Brief",
+            body="Brief body.",
+            frontmatter_fields={"type": "artifact", "status": "complete"},
+        )
+
+        assert result.get("dry_run") is True
+        assert not (vault / "02 - Artifacts").exists()
+
+    def test_write_artifact_redacts_secret(self, tmp_path: Path) -> None:
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+        marker = "ARTIFACT-SERVICE-MARKER-do-not-leak"
+        config_provenance.register_secret_value(marker)
+
+        result = svc.write_artifact(
+            role="cto",
+            slug="run2-cto-spec",
+            title="Spec",
+            body=f"echoed {marker}",
+            frontmatter_fields={"type": "artifact"},
+        )
+
+        written = Path(result["path"]).read_text(encoding="utf-8")
+        assert marker not in written
+        assert config_provenance.REDACTED in written
+
+    def test_write_artifact_role_traversal_is_contained(self, tmp_path: Path) -> None:
+        """A role string with path-traversal characters must not escape
+        `02 - Artifacts/` — the role is slugified defensively."""
+        vault = _make_full_vault(tmp_path)
+        svc = ObsidianService(vault_path=vault, dry_run=False)
+
+        result = svc.write_artifact(
+            role="../../etc",
+            slug="evil",
+            title="Evil",
+            body="bad",
+            frontmatter_fields={"type": "artifact"},
+        )
+
+        written_path = Path(result["path"])
+        artifacts_root = (vault / "02 - Artifacts").resolve()
+        written_path.relative_to(artifacts_root)  # raises ValueError if escaped
+
+
 class TestGuard:
     def test_write_note_outside_hivepilot_raises(self, tmp_path: Path) -> None:
         vault = _make_full_vault(tmp_path)

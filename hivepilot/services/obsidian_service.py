@@ -4,6 +4,7 @@ Obsidian vault service — safe, dry-run-first I/O wrapper.
 Safety invariants:
 - write_note() targets ONLY the ``12 - HivePilot/`` subtree.
 - write_adr() targets ONLY the ``03 - Decisions/`` folder.
+- write_artifact() targets ONLY the ``02 - Artifacts/`` folder.
 - Audit is always read-only regardless of dry_run.
 - dry_run=True (default) returns planned path + content WITHOUT writing.
 - Never renames or deletes folders.
@@ -45,6 +46,10 @@ _FrontmatterDumper.yaml_implicit_resolvers = {
 
 HIVEPILOT_SUBTREE = "12 - HivePilot"
 ADR_TARGET_FOLDER = "03 - Decisions"
+# Canonical per-stage deliverable artifacts (vault-canonical-artifacts PRD):
+# a human-facing copy of a stage's output, filed by role, sitting alongside
+# the internal `12 - HivePilot/Runs/` run-log copy (which stays unchanged).
+ARTIFACT_TARGET_FOLDER = "02 - Artifacts"
 
 SUBTREE_FOLDERS: list[str] = ["Agents", "Tasks", "Reports", "Runs", "Interactions"]
 
@@ -362,6 +367,64 @@ class ObsidianService:
         }
         frontmatter = self.render_frontmatter(frontmatter_fields)
         content = f"{frontmatter}\n\n{body}"
+
+        return self._emit(target, content)
+
+    def write_artifact(
+        self,
+        role: str,
+        slug: str,
+        title: str,
+        body: str,
+        frontmatter_fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Write a canonical stage-deliverable artifact under ``02 - Artifacts/<role>/``.
+
+        Unlike `write_note` (scoped to ``12 - HivePilot/``), this targets the
+        top-level ``02 - Artifacts/`` folder directly — mirroring `write_adr`'s
+        ``03 - Decisions/`` target — so a planning agent's deliverable (CEO/
+        PM/CTO/designer stage output) lands where a human browsing the vault
+        expects a canonical artifact, not buried in the internal run-log copy
+        under ``12 - HivePilot/Runs/``.
+
+        Parameters
+        ----------
+        role:
+            The stage's producing role (e.g. ``"cto"``) — becomes a subfolder
+            under ``02 - Artifacts/``. Slugified defensively so an unexpected
+            role string can't escape the target folder or introduce path
+            separators.
+        slug:
+            Deterministic filename slug (without the date prefix or ``.md``
+            suffix), e.g. ``"run43-cto-technical-spec"``. Also slugified
+            defensively.
+        title:
+            Human-readable title (injected into frontmatter).
+        body:
+            Markdown body content (the stage's deliverable).
+        frontmatter_fields:
+            Fields merged into the frontmatter. ``title`` and ``language``
+            are always set/overridden.
+
+        Returns
+        -------
+        dict with keys ``path`` (str), ``content`` (str), ``dry_run`` (bool).
+
+        Raises
+        ------
+        ObsidianWriteError
+            If the resolved path escapes the ``02 - Artifacts/`` folder.
+        """
+        allowed_root = (self._vault / ARTIFACT_TARGET_FOLDER).resolve()
+        safe_role = _slugify(role) or "unknown"
+        today = datetime.date.today().isoformat()
+        safe_slug = _slugify(slug) or "artifact"
+        subpath = f"{safe_role}/{today}-{safe_slug}.md"
+        target = _resolve_safe(allowed_root, subpath, context="write_artifact")
+
+        merged_fields: dict[str, Any] = {**frontmatter_fields, "title": title}
+        frontmatter = self.render_frontmatter(merged_fields)
+        content = f"{frontmatter}\n\n{body}\n"
 
         return self._emit(target, content)
 

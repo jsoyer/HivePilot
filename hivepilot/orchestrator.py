@@ -3261,6 +3261,12 @@ class Orchestrator:
                 stage_name=stage.name,
                 output=stage_output,
                 dry_run=dry_run,
+                # Canonical 02 - Artifacts/<role>/ copy (vault-canonical-
+                # artifacts PRD): the producing task's role string, or None
+                # for a task with no declared role (write_stage_artifact
+                # skips the artifact copy in that case; the run-copy above is
+                # unaffected either way).
+                role=producing_task.role if producing_task else None,
             )
 
             # Per-stage interaction log (2.6a)
