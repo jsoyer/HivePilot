@@ -192,9 +192,25 @@ function MiradorShell() {
           >
             <Menu className="size-4" />
           </Button>
-          <div className="flex min-w-0 flex-col">
-            <h1 className="truncate text-xl font-semibold">Mirador</h1>
-            <span className="truncate text-xs text-muted-foreground">{t('header.subtitle')}</span>
+          {/* IA/Cyber identity: the brand block (mirrors the reference
+           * mockup's `.brand` — a conic-gradient logo mark + "MIRADOR" +
+           * a lowercase eyebrow subtitle) instead of a plain wordmark. */}
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span
+              data-slot="brand-mark"
+              aria-hidden="true"
+              className="relative size-7 shrink-0 rounded-lg shadow-[0_0_16px_-4px_var(--color-good)]"
+              style={{
+                backgroundImage:
+                  'conic-gradient(from 210deg, var(--color-good), var(--primary), var(--violet), var(--color-good))',
+              }}
+            >
+              <span className="absolute inset-[3px] rounded-[5px] bg-background" />
+            </span>
+            <div className="flex min-w-0 flex-col">
+              <h1 className="truncate text-base font-bold tracking-wide uppercase">Mirador</h1>
+              <span className="eyebrow truncate">{t('header.subtitle')}</span>
+            </div>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-3">
             <Button

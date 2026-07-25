@@ -77,7 +77,7 @@ describe('useAsyncData', () => {
     expect(readState().status).toBe('error')
   })
 
-  it('re-fetches when a dep changes and resets to loading', async () => {
+  it('re-fetches when a dep changes, without discarding the value', async () => {
     const fetcher = vi.fn().mockResolvedValue('v1')
     act(() => {
       root.render(<Probe fetcher={fetcher} deps={['a']} />)
@@ -97,6 +97,68 @@ describe('useAsyncData', () => {
     })
     expect(readState()).toEqual({ status: 'success', data: 'v2' })
     expect(fetcher2).toHaveBeenCalledTimes(1)
+  })
+
+  it('stale-while-revalidate: keeps the prior data visible (no loading flip) while a dep-triggered refetch is in flight, and still shows loading on first mount', async () => {
+    const first = deferred<string>()
+    const fetcherA = vi.fn().mockReturnValue(first.promise)
+    act(() => {
+      root.render(<Probe fetcher={fetcherA} deps={['a']} />)
+    })
+    // First mount, nothing resolved yet — the full loading state, same as
+    // ever.
+    expect(readState()).toEqual({ status: 'loading' })
+
+    await act(async () => {
+      first.resolve('v1')
+      await first.promise
+    })
+    expect(readState()).toEqual({ status: 'success', data: 'v1' })
+
+    // A dep change triggers a refetch — because data already exists, this
+    // must NOT collapse back to `{ status: 'loading' }` (that's the bug:
+    // it causes the visible layout "jump" every poll). It should keep
+    // rendering the last-known data and flag `isRefreshing` instead.
+    const second = deferred<string>()
+    const fetcherB = vi.fn().mockReturnValue(second.promise)
+    act(() => {
+      root.render(<Probe fetcher={fetcherB} deps={['b']} />)
+    })
+    expect(readState()).toEqual({ status: 'success', data: 'v1', isRefreshing: true })
+
+    // Once the refetch resolves, the new data replaces the old and
+    // `isRefreshing` clears.
+    await act(async () => {
+      second.resolve('v2')
+      await second.promise
+    })
+    expect(readState()).toEqual({ status: 'success', data: 'v2' })
+  })
+
+  it('stale-while-revalidate: a refetch that errors still surfaces the error (no silent stale data)', async () => {
+    const first = deferred<string>()
+    const fetcherA = vi.fn().mockReturnValue(first.promise)
+    act(() => {
+      root.render(<Probe fetcher={fetcherA} deps={['a']} />)
+    })
+    await act(async () => {
+      first.resolve('v1')
+      await first.promise
+    })
+    expect(readState()).toEqual({ status: 'success', data: 'v1' })
+
+    const second = deferred<string>()
+    const fetcherB = vi.fn().mockReturnValue(second.promise)
+    act(() => {
+      root.render(<Probe fetcher={fetcherB} deps={['b']} />)
+    })
+    expect(readState()).toEqual({ status: 'success', data: 'v1', isRefreshing: true })
+
+    await act(async () => {
+      second.reject(new Error('refresh failed'))
+      await second.promise.catch(() => undefined)
+    })
+    expect(readState().status).toBe('error')
   })
 
   it('ignores a stale resolution after deps change (no update-after-unmount/stale race)', async () => {

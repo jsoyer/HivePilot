@@ -103,4 +103,21 @@ describe('MetricReadout', () => {
     })
     expect(container.querySelector('[data-slot="metric-readout"][data-tone="default"]')).not.toBeNull()
   })
+
+  it('renders a left severity stripe for non-nominal tones (good/warn/crit), but not for the default tone', () => {
+    act(() => {
+      root.render(<MetricReadout label="Total runs" value={42} tone="default" />)
+    })
+    const defaultCard = container.querySelector('[data-slot="metric-readout"]')
+    expect(defaultCard?.className).not.toMatch(/border-l-2/)
+
+    for (const tone of ['good', 'warn', 'crit'] as const) {
+      act(() => {
+        root.render(<MetricReadout label="Total runs" value={42} tone={tone} />)
+      })
+      const card = container.querySelector('[data-slot="metric-readout"]')
+      expect(card?.className).toContain('border-l-2')
+      expect(card?.className).toContain(`--color-${tone}`)
+    }
+  })
 })

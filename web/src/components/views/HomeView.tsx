@@ -11,10 +11,11 @@ import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Gauge } from '@/components/dashboard/Gauge'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
+import { SectionHeader } from '@/components/dashboard/SectionHeader'
 import { SweepRadar, type RadarAgent, type RadarAgentStatus } from '@/components/dashboard/SweepRadar'
 import type { VizTone } from '@/components/dashboard/Sparkline'
 import { ApiForbiddenError } from '@/lib/api'
@@ -239,10 +240,11 @@ function AttentionApprovalRow({ approval, canApprove, onDone }: AttentionApprova
   return (
     <li
       data-testid={`home-attention-approval-${approval.run_id}`}
-      className="flex flex-col gap-2 rounded-lg border border-border p-3 text-sm"
+      className="flex flex-col gap-2 rounded-lg border border-border p-3 text-sm transition-colors hover:bg-muted/40"
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline">{t('home.attentionApprovalBadge')}</Badge>
+        <span className="metric-mono text-xs text-muted-foreground">#{approval.run_id}</span>
         <span className="font-medium">{approval.project}</span>
         <span className="text-muted-foreground">·</span>
         <span>{approval.task}</span>
@@ -316,9 +318,10 @@ function AttentionRunRow({ run }: { run: RunSummary }) {
   return (
     <li
       data-testid={`home-attention-run-${run.id}`}
-      className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3 text-sm"
+      className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3 text-sm transition-colors hover:bg-muted/40"
     >
       <Badge variant="destructive">{t('home.attentionFailedRunBadge')}</Badge>
+      <span className="metric-mono text-xs text-muted-foreground">#{run.id}</span>
       <span className="font-medium">{run.project}</span>
       <span className="text-muted-foreground">·</span>
       <span>{run.task}</span>
@@ -583,10 +586,15 @@ function ActivityFeedSection({ runsState, approvalsState }: ActivityFeedSectionP
   return (
     <ul data-testid="home-activity-feed" className="flex flex-col gap-2">
       {entries.map((entry) => (
-        <li key={entry.key} data-testid={`home-activity-${entry.key}`} className="flex flex-wrap items-center gap-2 text-sm">
+        <li
+          key={entry.key}
+          data-testid={`home-activity-${entry.key}`}
+          className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/40"
+        >
           <span aria-hidden="true" className={cn('inline-block size-2 shrink-0 rounded-full', TONE_DOT[activityTone(entry.status)])} />
-          <span className="text-xs text-muted-foreground">{formatAge(entry.ts)}</span>
+          <span className="metric-mono text-xs text-muted-foreground">{formatAge(entry.ts)}</span>
           <Badge variant="outline">{entry.kind === 'run' ? t('home.activityRunLabel') : t('home.activityApprovalLabel')}</Badge>
+          <span className="metric-mono text-xs text-muted-foreground">{entry.key}</span>
           <span className="font-medium">{entry.project}</span>
           <span className="text-muted-foreground">·</span>
           <span>{entry.task}</span>
@@ -646,13 +654,38 @@ export function HomeView({ onNavigate }: HomeViewProps) {
     setRefreshKey((key) => key + 1)
   }
 
+  // Stale-while-revalidate (see `useAsyncData`): none of these three ever
+  // flip the page back to a loading skeleton on poll — `isRefreshing` is
+  // just a subtle in-place signal that a background refetch is in flight,
+  // surfaced once here rather than three times (one per polled card).
+  const isRefreshing =
+    (cost.status === 'success' && cost.isRefreshing === true) ||
+    (approvalsState.status === 'success' && approvalsState.isRefreshing === true) ||
+    (runsState.status === 'success' && runsState.isRefreshing === true)
+
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h2 className="text-lg font-semibold">{t('nav.home')}</h2>
-        <p className="text-sm text-muted-foreground">{t('home.subtitle')}</p>
+      <div className="flex items-baseline gap-2">
+        <div>
+          <h2 className="text-lg font-semibold">{t('nav.home')}</h2>
+          <p className="text-sm text-muted-foreground">{t('home.subtitle')}</p>
+        </div>
+        {isRefreshing && (
+          <span
+            data-testid="home-refreshing-indicator"
+            role="status"
+            className="metric-mono ml-auto flex items-center gap-1.5 text-[10px] tracking-wide text-muted-foreground uppercase"
+          >
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full bg-[var(--color-good)] shadow-[0_0_6px_var(--color-good)] motion-safe:animate-pulse"
+            />
+            {t('home.refreshingLabel')}
+          </span>
+        )}
       </div>
 
+      <SectionHeader index="01" title={t('home.kpiSectionTitle')} className="-mb-1" />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <KpiCard
           testId="home-kpi-spend"
@@ -733,11 +766,11 @@ export function HomeView({ onNavigate }: HomeViewProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="size-4" />
-            {t('home.needsAttentionTitle')}
-          </CardTitle>
-          <CardDescription>{t('home.needsAttentionDescription')}</CardDescription>
+          <SectionHeader index="02" title={t('home.needsAttentionTitle')} />
+          <CardDescription className="flex items-center gap-1.5">
+            <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+            {t('home.needsAttentionDescription')}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <NeedsAttentionSection
@@ -752,24 +785,24 @@ export function HomeView({ onNavigate }: HomeViewProps) {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <RadarIcon className="size-4" />
-              {t('home.sweepTitle')}
-            </CardTitle>
-            <CardDescription>{t('home.sweepDescription')}</CardDescription>
+            <SectionHeader index="03" title={t('home.sweepTitle')} />
+            <CardDescription className="flex items-center gap-1.5">
+              <RadarIcon className="size-3.5 shrink-0" aria-hidden="true" />
+              {t('home.sweepDescription')}
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="bg-grid-dot rounded-lg">
             <SweepSection runsState={runsState} />
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="size-4" />
-              {t('home.activityFeedTitle')}
-            </CardTitle>
-            <CardDescription>{t('home.activityFeedDescription')}</CardDescription>
+            <SectionHeader index="04" title={t('home.activityFeedTitle')} />
+            <CardDescription className="flex items-center gap-1.5">
+              <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+              {t('home.activityFeedDescription')}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <ActivityFeedSection runsState={runsState} approvalsState={approvalsState} />

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 export type AsyncState<T> =
   | { status: 'loading' }
   | { status: 'error'; error: unknown }
-  | { status: 'success'; data: T }
+  | { status: 'success'; data: T; isRefreshing?: boolean }
 
 /**
  * Minimal shared data-fetching hook for Mirador's tab views. Calls `fetcher`
@@ -18,6 +18,17 @@ export type AsyncState<T> =
  * Guards against stale updates: if `deps` change (or the component unmounts)
  * before an in-flight fetch resolves, that resolution is discarded so an
  * old, slower request can never clobber a newer one's result.
+ *
+ * Stale-while-revalidate: a dep-change-triggered refetch that fires while
+ * PRIOR data is already on screen does NOT flip the state back to
+ * `'loading'` — that would collapse the rendered content to a skeleton and
+ * re-expand it a moment later, causing the visible "jump" every poll
+ * interval (see `HomeView`'s `POLL_INTERVAL_MS`). Instead the previous
+ * `data` stays put and `isRefreshing: true` is set alongside it, so a caller
+ * MAY render a subtle in-place indicator instead of collapsing the layout.
+ * Only the very first fetch (no data yet — status is `'loading'` or
+ * `'error'`) shows the full loading state; a refetch that itself errors
+ * still surfaces as `status: 'error'` like before.
  */
 export function useAsyncData<T>(fetcher: () => Promise<T>, deps: unknown[]): AsyncState<T> {
   const [state, setState] = useState<AsyncState<T>>({ status: 'loading' })
@@ -30,7 +41,7 @@ export function useAsyncData<T>(fetcher: () => Promise<T>, deps: unknown[]): Asy
   // oxlint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false
-    setState({ status: 'loading' })
+    setState((prev) => (prev.status === 'success' ? { ...prev, isRefreshing: true } : { status: 'loading' }))
     fetcher()
       .then((data) => {
         if (!cancelled) setState({ status: 'success', data })

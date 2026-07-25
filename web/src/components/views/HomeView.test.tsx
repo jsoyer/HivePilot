@@ -353,6 +353,68 @@ describe('HomeView — The Sweep', () => {
   })
 })
 
+describe('HomeView — polling (stale-while-revalidate, no layout jump)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps the Sweep visible (no skeleton flip) on a poll tick, and surfaces a subtle refreshing indicator instead', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    mockAllZero()
+    fetchRuns.mockResolvedValueOnce([{ ...SAMPLE_RUN, id: 1, status: 'running' }])
+    fetchApprovals.mockResolvedValueOnce([])
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // First load resolved: real data on screen, no refreshing indicator yet.
+    expect(container.querySelector('[data-testid="home-sweep"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-refreshing-indicator"]')).toBeNull()
+
+    // Second (post-poll) call to each polled endpoint hangs — this is the
+    // in-flight refetch the operator would see mid-poll.
+    let resolveRuns!: (value: RunSummary[]) => void
+    let resolveApprovals!: (value: Approval[]) => void
+    fetchRuns.mockImplementationOnce(
+      () =>
+        new Promise<RunSummary[]>((resolve) => {
+          resolveRuns = resolve
+        }),
+    )
+    fetchApprovals.mockImplementationOnce(
+      () =>
+        new Promise<Approval[]>((resolve) => {
+          resolveApprovals = resolve
+        }),
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000) // POLL_INTERVAL_MS
+      await Promise.resolve()
+    })
+
+    // The bug this guards against: the Sweep must NOT collapse to a loading
+    // skeleton while the poll's refetch is in flight — the stale data (and
+    // the whole layout) stays exactly where it was.
+    expect(container.querySelector('[data-testid="home-sweep"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-sweep-empty"]')).toBeNull()
+    expect(container.querySelector('[data-testid="home-refreshing-indicator"]')).not.toBeNull()
+
+    await act(async () => {
+      resolveRuns([{ ...SAMPLE_RUN, id: 1, status: 'running' }])
+      resolveApprovals([])
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // Refetch settled — the subtle indicator clears again.
+    expect(container.querySelector('[data-testid="home-refreshing-indicator"]')).toBeNull()
+  })
+})
+
 describe('HomeView — Activity feed', () => {
   it('renders escaped untrusted project/task text as literal text, never markup', async () => {
     mockAllZero()
