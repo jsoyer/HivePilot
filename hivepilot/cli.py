@@ -21,6 +21,7 @@ from hivepilot.services.project_service import (
     load_groups,
     load_projects,
     load_tasks,
+    resolve_project_target,
     resolve_targets,
 )
 from hivepilot.utils.logging import get_logger
@@ -186,7 +187,17 @@ def _resolve_projects(project: str, extras: list[str], run_all: bool) -> list[st
     ordered = []
     for name in names:
         if name not in projects.projects:
-            raise typer.BadParameter(f"Unknown project: {name}")
+            # Not a plain project key -- try `<project>/<module>` (monorepo-
+            # modules PRD) before failing. `resolve_project_target` raises a
+            # clear, actionable `ValueError` for anything still unresolvable
+            # (unknown project, no `modules` configured, unknown module) --
+            # surfaced here as the same `typer.BadParameter` a plain unknown
+            # project already raised, so CLI behaviour for that case is
+            # unchanged in shape, just wider in what it accepts.
+            try:
+                resolve_project_target(name, projects)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
         if name not in seen:
             ordered.append(name)
             seen.add(name)

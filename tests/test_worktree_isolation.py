@@ -194,3 +194,134 @@ class TestExecuteTaskWorktreeGating:
             )
 
         mock_wt.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _execute_task `working_subdir` — first-class monorepo module scoping
+# (monorepo-modules PRD). The exec cwd choke point (`_exec_project =
+# project.model_copy(update={"path": _exec_path})`) is shared with worktree
+# isolation above -- `working_subdir` (when set) further scopes `_exec_path`
+# to `project.path / working_subdir` BEFORE that copy is made, so both
+# features compose (a module target still gets an isolated worktree when
+# `worktree_isolation` is on) instead of being mutually exclusive.
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteTaskWorkingSubdir:
+    """Duplicates `TestExecuteTaskWorktreeGating`'s small helpers (kept as a
+    standalone class -- NOT a subclass -- so pytest doesn't re-collect/
+    re-run the worktree-gating tests under a second class name; a plain
+    attribute alias to the other class's methods confuses mypy's `self`
+    binding, so these are copied rather than referenced)."""
+
+    def _make_project(self, path: Path):
+        from hivepilot.models import ProjectConfig
+
+        return ProjectConfig(path=path)
+
+    def _make_task(self, *, commit: bool = True, push: bool = False):
+        from hivepilot.models import GitActions, TaskConfig, TaskStep
+
+        return TaskConfig(
+            description="test task",
+            steps=[TaskStep(name="step1", runner="shell")],
+            git=GitActions(commit=commit, push=push),
+        )
+
+    def _make_orchestrator(self, tmp_path: Path):
+        """Build a minimal Orchestrator with mocked load functions."""
+        from hivepilot.orchestrator import Orchestrator
+
+        with (
+            patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
+            patch(
+                "hivepilot.orchestrator.load_tasks", return_value=MagicMock(tasks={}, runners={})
+            ),
+            patch("hivepilot.orchestrator.load_pipelines", return_value=MagicMock(pipelines={})),
+            patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
+            patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
+        ):
+            orch = Orchestrator()
+        return orch
+
+    def test_working_subdir_scopes_exec_project_path(self, tmp_path: Path) -> None:
+        """A `working_subdir` scopes the runner payload's effective cwd to
+        `project.path / working_subdir` (worktree isolation off -- the
+        common case for a plain, non-auto_git task run)."""
+        repo = _init_git_repo(tmp_path / "repo")
+        (repo / "apps" / "detection-core").mkdir(parents=True)
+        project = self._make_project(repo)
+        task = self._make_task(commit=False)
+
+        captured_paths: list[Path] = []
+
+        def _fake_capture_or_execute(runner_key, payload):
+            captured_paths.append(payload.project.path)
+            return "output"
+
+        with (
+            patch("hivepilot.orchestrator.settings") as mock_settings,
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+            patch("hivepilot.orchestrator.perform_git_actions"),
+            patch.object(
+                __import__("hivepilot.orchestrator", fromlist=["Orchestrator"]).Orchestrator,
+                "_capture_or_execute",
+                side_effect=_fake_capture_or_execute,
+            ),
+        ):
+            mock_settings.worktree_isolation = False
+            mock_settings.stage_cache_enabled = False
+
+            orch = self._make_orchestrator(tmp_path)
+            orch._execute_task(
+                project=project,
+                task_name="test-task",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                simulate=False,
+                working_subdir="apps/detection-core",
+            )
+
+        mock_wt.assert_not_called()
+        assert captured_paths == [repo / "apps" / "detection-core"]
+
+    def test_no_working_subdir_keeps_repo_root_cwd_byte_identical(self, tmp_path: Path) -> None:
+        """`working_subdir=None` (the default) is byte-identical to before
+        this feature existed -- the runner payload's cwd stays the repo
+        root."""
+        repo = _init_git_repo(tmp_path / "repo")
+        project = self._make_project(repo)
+        task = self._make_task(commit=False)
+
+        captured_paths: list[Path] = []
+
+        def _fake_capture_or_execute(runner_key, payload):
+            captured_paths.append(payload.project.path)
+            return "output"
+
+        with (
+            patch("hivepilot.orchestrator.settings") as mock_settings,
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+            patch("hivepilot.orchestrator.perform_git_actions"),
+            patch.object(
+                __import__("hivepilot.orchestrator", fromlist=["Orchestrator"]).Orchestrator,
+                "_capture_or_execute",
+                side_effect=_fake_capture_or_execute,
+            ),
+        ):
+            mock_settings.worktree_isolation = False
+            mock_settings.stage_cache_enabled = False
+
+            orch = self._make_orchestrator(tmp_path)
+            orch._execute_task(
+                project=project,
+                task_name="test-task",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                simulate=False,
+            )
+
+        mock_wt.assert_not_called()
+        assert captured_paths == [repo]

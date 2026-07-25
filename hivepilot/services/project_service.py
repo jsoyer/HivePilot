@@ -50,6 +50,61 @@ def resolve_targets(name: str) -> list[str]:
     return [name]
 
 
+def resolve_project_target(
+    target: str, projects: ProjectsFile | None = None
+) -> tuple[ProjectConfig, str | None]:
+    """Resolve a single run target into ``(project, module_subdir)``.
+
+    Supports first-class monorepo module targeting (monorepo-modules PRD):
+    ``"noxys/detection-core"`` resolves to the ``noxys`` project with
+    ``module_subdir="apps/detection-core"`` (looked up in
+    ``project.modules``); a plain ``"noxys"`` (no ``"/"``) resolves to the
+    ``noxys`` project with ``module_subdir=None`` — byte-identical to
+    before this function existed.
+
+    Resolution order: (1) an EXACT match against a project key wins
+    outright — even if *target* happens to contain a ``"/"``, a literal
+    project key match is authoritative and is never re-interpreted as
+    ``project/module``; (2) else, if it contains a ``"/"``, split on the
+    first one and resolve the module against ``project.modules``; (3)
+    else, the plain name is an unknown project.
+
+    Group expansion is NOT this function's concern — a group name is
+    resolved separately, BEFORE this function is ever called on an
+    individual (already group-expanded) target, via ``resolve_targets``.
+    Since no group is ever keyed with a ``"/"`` in practice, a
+    ``project/module`` target is never mistaken for a group.
+
+    Raises ``ValueError`` with a clear, actionable message for: an unknown
+    project, a project with no ``modules`` configured, or an unknown
+    module name (lists the available ones) — mirroring the existing
+    ``Orchestrator._project``/"Unknown project" error shape so callers can
+    treat it identically.
+    """
+    projects_file = projects if projects is not None else load_projects()
+    if target in projects_file.projects:
+        return projects_file.projects[target], None
+    if "/" in target:
+        project_name, module_name = target.split("/", 1)
+        if project_name not in projects_file.projects:
+            raise ValueError(f"Unknown project: {project_name}")
+        project = projects_file.projects[project_name]
+        if not project.modules:
+            raise ValueError(
+                f"Project '{project_name}' has no modules configured "
+                f"(target was '{target}'). Add a 'modules:' map to its "
+                f"projects.yaml entry, or run against '{project_name}' directly."
+            )
+        if module_name not in project.modules:
+            available = ", ".join(sorted(project.modules))
+            raise ValueError(
+                f"Unknown module '{module_name}' for project '{project_name}'. "
+                f"Available modules: {available}"
+            )
+        return project, project.modules[module_name]
+    raise ValueError(f"Unknown project: {target}")
+
+
 def ensure_checkout(project: ProjectConfig) -> None:
     """Clone ``project.path`` from ``project.owner_repo`` if the path doesn't exist yet.
 

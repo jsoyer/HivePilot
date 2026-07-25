@@ -12,6 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch resolution
 from hivepilot.models import PipelineConfig, PipelineStage
 
@@ -3138,3 +3140,118 @@ class TestProjectAutoClone:
 
         failed_calls = [c for c in mock_complete_run.call_args_list if c.args[1] == "failed"]
         assert len(failed_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# First-class monorepo modules (monorepo-modules PRD) — `run_task(
+# project_names=["<project>/<module>"])` end-to-end: target resolution +
+# working-directory scoping through the REAL public `run_task` entry point
+# (the same one cli.py/api_service/concierge all call).
+# ---------------------------------------------------------------------------
+
+
+class TestRunTaskModuleTargeting:
+    def _orch_with_monorepo_project(self, tmp_path):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        proj_path = tmp_path / "noxys"
+        (proj_path / "apps" / "detection-core").mkdir(parents=True)
+        orch.projects.projects["noxys"] = ProjectConfig(
+            path=proj_path,
+            modules={"detection-core": "apps/detection-core"},
+        )
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        return orch, proj_path
+
+    def _run(self, orch, project_names, tmp_path):
+        from hivepilot.services.policy_service import Policy
+
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        captured_payloads = []
+
+        def _capture(payload):
+            captured_payloads.append(payload)
+            return "output"
+
+        fake_runner.capture.side_effect = _capture
+        orch.registry.get_runner.return_value = fake_runner
+
+        with (
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch(
+                "hivepilot.orchestrator.policy_service.enforce_policy",
+                return_value=Policy(),
+            ),
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+            patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+        ):
+            results = orch.run_task(
+                project_names=project_names,
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+            )
+        return results, captured_payloads
+
+    def test_module_target_scopes_working_dir_to_subpath(self, tmp_path) -> None:
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+
+        results, captured = self._run(orch, ["noxys/detection-core"], tmp_path)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path / "apps" / "detection-core"
+
+    def test_plain_project_target_keeps_repo_root_cwd(self, tmp_path) -> None:
+        """Byte-identical: a plain project target (no `/module`) never
+        scopes the working dir -- the runner payload's `project.path` stays
+        the repo root, exactly as before this feature existed."""
+        orch, proj_path = self._orch_with_monorepo_project(tmp_path)
+
+        results, captured = self._run(orch, ["noxys"], tmp_path)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert len(captured) == 1
+        assert captured[0].project.path == proj_path
+
+    def test_unknown_module_target_raises_clear_error(self, tmp_path) -> None:
+        orch, _proj_path = self._orch_with_monorepo_project(tmp_path)
+
+        with pytest.raises(ValueError, match="detection-core"):
+            self._run(orch, ["noxys/no-such-module"], tmp_path)
+
+    def test_backward_compat_project_without_modules_unaffected(self, tmp_path) -> None:
+        """A project that never declares `modules` behaves exactly as
+        before this PRD -- plain project targeting, repo-root cwd."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        proj_path = tmp_path / "plainproj"
+        proj_path.mkdir(parents=True)
+        orch.projects.projects["plainproj"] = ProjectConfig(path=proj_path)
+        orch.tasks.tasks["x"] = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+
+        results, captured = self._run(orch, ["plainproj"], tmp_path)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert captured[0].project.path == proj_path
+        assert captured[0].project.modules == {}
