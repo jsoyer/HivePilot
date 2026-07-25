@@ -27,6 +27,12 @@ const cost: AnalyticsCost = {
   by_model: [
     { model: 'claude-sonnet-5', total_steps: 15, input_tokens: 8000, output_tokens: 3000, cost_usd: 1.0, unpriced_steps: 1 },
   ],
+  by_project: [
+    { project: 'acme-web', total_steps: 15, input_tokens: 8000, output_tokens: 3000, cost_usd: 1.0, unpriced_steps: 1 },
+  ],
+  by_role: null,
+  by_role_note: 'by_role is unavailable',
+  unpriced_models: ['claude-sonnet-5'],
 }
 
 const providers: AnalyticsProviders = {
@@ -102,6 +108,10 @@ describe('CostView', () => {
       overall: { total_steps: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0, unpriced_steps: 0 },
       by_provider: [],
       by_model: [],
+      by_project: [],
+      by_role: null,
+      by_role_note: 'by_role is unavailable',
+      unpriced_models: [],
     } satisfies AnalyticsCost)
     mocks.fetchAnalyticsProviders.mockResolvedValue({ by_provider: [], by_model: [] } satisfies AnalyticsProviders)
 

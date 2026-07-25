@@ -15,11 +15,14 @@ import {
   fetchAnalyticsTrends,
   fetchApprovalLatency,
   fetchApprovals,
+  fetchEfficiency,
   fetchMemories,
   fetchMemoryEvaluations,
   fetchMemoryGaps,
+  fetchMemoryGrowth,
   fetchMemoryJournal,
   fetchMemoryReality,
+  fetchModels,
   postApproval,
   fetchPanel,
   fetchPanels,
@@ -167,5 +170,28 @@ describe('mirador-api fetch wrappers', () => {
   it('fetchMemoryJournal calls GET /v1/memory/journal with a limit and opts into on403: "forbidden"', async () => {
     await fetchMemoryJournal(50)
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/memory/journal?limit=50', { on403: 'forbidden' })
+  })
+
+  // ---- Mirador Home command-center sprint: /v1/models, /v1/efficiency,
+  // /v1/memory/growth --------------------------------------------------
+
+  it('fetchModels calls GET /v1/models with a days window', async () => {
+    await fetchModels(30)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/models?days=30')
+  })
+
+  it('fetchModels adds project/task query params when given', async () => {
+    await fetchModels(7, 'acme-web', 'deploy')
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/models?days=7&project=acme-web&task=deploy')
+  })
+
+  it('fetchEfficiency calls GET /v1/efficiency with a days window', async () => {
+    await fetchEfficiency(30)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/efficiency?days=30')
+  })
+
+  it('fetchMemoryGrowth calls GET /v1/memory/growth with a days window and opts into on403: "forbidden"', async () => {
+    await fetchMemoryGrowth(30)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/memory/growth?days=30', { on403: 'forbidden' })
   })
 })

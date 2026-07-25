@@ -182,14 +182,113 @@ export interface ModelCost extends CostAccumulation {
   model: string
 }
 
+export interface ProjectCost extends CostAccumulation {
+  project: string
+}
+
+/**
+ * `by_project`/`unpriced_models` (Mirador Home command-center sprint) —
+ * transcribed from `cost_summary`'s return value, same as `by_provider`/
+ * `by_model` above. `by_role` is always `null` today — `cost_summary`'s
+ * `_BY_ROLE_UNAVAILABLE_NOTE` docstring explains why (no role column on
+ * steps/runs) — `by_role_note` carries that same explanation, never a
+ * fabricated breakdown.
+ */
 export interface AnalyticsCost {
   overall: CostAccumulation
   by_provider: ProviderCost[]
   by_model: ModelCost[]
+  by_project: ProjectCost[]
+  by_role: null
+  by_role_note: string
+  unpriced_models: string[]
 }
 
 export function fetchAnalyticsCost(days = 30): Promise<AnalyticsCost> {
   return apiFetch<AnalyticsCost>(`/v1/analytics/cost?days=${days}`)
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/models — Mirador Home command-center sprint. Shape transcribed
+// from `hivepilot/services/analytics_service.py`'s `models_summary` — read
+// that before changing anything here. `latency_available` is always `false`
+// today: p50/p95 latency isn't computable from current data (see
+// `models_summary`'s own `_LATENCY_UNAVAILABLE_NOTE`, paired with
+// `latency_note` here) — intentionally omitted rather than fabricated.
+// ---------------------------------------------------------------------------
+
+export interface ModelRollup {
+  model: string
+  step_count: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  unpriced_steps: number
+  success_rate: SuccessRate
+  share_of_spend: number
+}
+
+export interface ModelsOverall extends CostAccumulation {
+  succeeded_runs: number
+  /** `null` when there are zero succeeded runs in-window — never a
+   * misleading `0`, mirrors `SuccessRate`'s own "no attempts" contract. */
+  cost_per_successful_run: number | null
+}
+
+export interface ModelsSummary {
+  models: ModelRollup[]
+  overall: ModelsOverall
+  latency_available: boolean
+  latency_note: string
+}
+
+export function fetchModels(days = 30, project?: string, task?: string): Promise<ModelsSummary> {
+  const params = new URLSearchParams({ days: String(days) })
+  if (project) params.set('project', project)
+  if (task) params.set('task', task)
+  return apiFetch<ModelsSummary>(`/v1/models?${params.toString()}`)
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/efficiency — Mirador Home command-center sprint. Shape transcribed
+// from `hivepilot/services/efficiency_service.py`'s `efficiency_summary` —
+// read that (and `headroom_metrics.efficiency_summary`) before changing
+// anything here. `headroom` is real and NEVER `null` (zero-safe when
+// nothing has been recorded yet); `rtk` is best-effort GLOBAL telemetry (not
+// tenant-scoped — see that module's docstring) and is `null` whenever the
+// `rtk` binary is absent/erroring/unparseable — never a fabricated number.
+// ---------------------------------------------------------------------------
+
+export interface HeadroomEfficiency {
+  total_compressions: number
+  chars_saved: number
+  avg_ratio: number
+  p95_ratio: number
+  est_tokens_saved: number
+}
+
+export interface RtkSavedPoint {
+  date: string
+  saved_tokens: number
+}
+
+export interface RtkEfficiency {
+  gain_pct: number
+  tokens_saved: number
+  total_commands: number
+  saved_series: RtkSavedPoint[]
+  /** Always `null` — `rtk gain -f json` has no per-command breakdown, only
+   * its text/`-H` output does; never scraped/fabricated from that. */
+  top_commands: null
+}
+
+export interface EfficiencySummary {
+  headroom: HeadroomEfficiency
+  rtk: RtkEfficiency | null
+}
+
+export function fetchEfficiency(days = 30): Promise<EfficiencySummary> {
+  return apiFetch<EfficiencySummary>(`/v1/efficiency?days=${days}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -704,5 +803,43 @@ export interface MemoryJournalResponse {
 
 export function fetchMemoryJournal(limit = 50): Promise<MemoryJournalResponse> {
   return apiFetch<MemoryJournalResponse>(`/v1/memory/journal?limit=${limit}`, { on403: 'forbidden' })
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/memory/growth — Mirador Home command-center sprint. Shape
+// transcribed from `hivepilot/services/memory_service.py`'s
+// `growth_summary` — read that before changing anything here. `authorship`
+// is always `null` (a true human-vs-agent split isn't tracked — see that
+// function's docstring); `by_actor` is the real breakdown that IS available
+// instead of a fabricated one. Same `on403: 'forbidden'` opt-in as every
+// other `/v1/memory/*` fetcher above.
+// ---------------------------------------------------------------------------
+
+export interface MemoryGrowthNamespace {
+  namespace: string
+  count: number
+}
+
+export interface MemoryGrowthActor {
+  actor: string
+  count: number
+}
+
+export interface MemoryGrowthPoint {
+  date: string
+  created: number
+}
+
+export interface MemoryGrowth {
+  total: number
+  memories_by_namespace: MemoryGrowthNamespace[]
+  growth_series: MemoryGrowthPoint[]
+  authorship: null
+  by_actor: MemoryGrowthActor[]
+  source: string
+}
+
+export function fetchMemoryGrowth(days = 30): Promise<MemoryGrowth> {
+  return apiFetch<MemoryGrowth>(`/v1/memory/growth?days=${days}`, { on403: 'forbidden' })
 }
 

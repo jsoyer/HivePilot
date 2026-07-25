@@ -16,6 +16,10 @@ import type { LucideIcon } from 'lucide-react'
  * itself free of any i18n dependency.
  */
 export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
+  // Mirador Home command-center sprint: Home is the new default landing
+  // view, called out in its own leading group (not folded into "Overview")
+  // so it always renders first, above every other section.
+  { label: 'nav.commandCenter', values: ['home'] },
   { label: 'nav.overview', values: ['analytics', 'cost'] },
   { label: 'nav.agents', values: ['approvals', 'runs'] },
   { label: 'nav.system', values: ['health', 'graph'] },

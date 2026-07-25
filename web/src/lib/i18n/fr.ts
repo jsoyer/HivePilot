@@ -50,6 +50,8 @@ export const fr: Record<TranslationKey, string> = {
   'palette.toggleLanguage': 'Changer de langue (EN/FR)',
 
   // ---- nav -----------------------------------------------------------
+  'nav.commandCenter': 'Centre de commandement',
+  'nav.home': 'Accueil',
   'nav.overview': "Vue d'ensemble",
   'nav.agents': 'Agents',
   'nav.system': 'Système',
@@ -243,4 +245,39 @@ export const fr: Record<TranslationKey, string> = {
   'reality.requiresTokenTail': 'à privilège supérieur.',
   'reality.requiresTokenNote':
     'Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule cette section nécessite un rôle supérieur.',
+
+  // ---- Home view (centre de commandement, vue d'accueil par défaut) ----
+  'home.subtitle': "Votre flotte en un coup d'œil — cliquez sur un chiffre pour l'explorer.",
+  'home.kpiSpendToday': 'Dépense du jour',
+  'home.kpiSpendSub': 'dernières 24h',
+  'home.kpiTokensSaved': 'Tokens économisés',
+  'home.kpiTokensSavedSub': 'headroom + rtk, combinés',
+  'home.kpiRunsSuccess': 'Runs · réussite',
+  'home.kpiRunsSub': 'dernières 24h',
+  'home.kpiMemoryHealth': 'Santé mémoire',
+  'home.kpiPendingApprovals': 'Approbations en attente',
+  'home.kpiRequiresRole': 'Nécessite un jeton de rang supérieur',
+  'home.notAvailable': 'Non disponible',
+  'home.noData': 'Aucune donnée',
+  'home.needsAttentionTitle': 'À traiter',
+  'home.needsAttentionDescription':
+    "Approbations en attente les plus anciennes d'abord, puis les runs récemment échoués.",
+  'home.allClear': "Tout est calme — rien ne nécessite votre attention pour l'instant.",
+  'home.attentionApprovalBadge': 'Approbation',
+  'home.attentionFailedRunBadge': 'Run échoué',
+  'home.ageAgo': 'il y a {age}',
+  'home.needsAttentionForbidden':
+    'Les approbations et exécutions nécessitent un jeton de rang run (ou supérieur) pour être prévisualisées ici.',
+  'home.sweepTitle': 'La flotte',
+  'home.sweepDescription': 'Statut en direct des runs en cours et récents.',
+  'home.sweepEmpty': 'Aucun run actif ou récent pour le moment.',
+  'home.sweepLegendRunning': 'En cours',
+  'home.sweepLegendWaiting': "En attente d'approbation",
+  'home.sweepLegendFailed': 'Échoué',
+  'home.sweepLegendIdle': 'Inactif / autre',
+  'home.activityFeedTitle': "Flux d'activité",
+  'home.activityFeedDescription': 'Runs et approbations les plus récents, les plus récents en premier.',
+  'home.activityFeedEmpty': "Aucune activité pour l'instant.",
+  'home.activityRunLabel': 'Run',
+  'home.activityApprovalLabel': 'Approbation',
 }
