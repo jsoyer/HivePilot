@@ -47,6 +47,11 @@
     --color-warn: var(--warn);
     --color-crit: var(--crit);
     --color-idle: var(--idle);
+    /* IA/Cyber additive tokens — a secondary hairline border (node rings /
+     * emphasis dividers) and a tertiary "violet" data-flow accent. Additive
+     * only: no existing component consumed these before this remap. */
+    --color-line-2: var(--line-2);
+    --color-violet: var(--violet);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -66,96 +71,177 @@
     letter-spacing: -0.01em;
 }
 
+/* IA/Cyber identity: uppercase, letter-spaced micro-label ("eyebrow") used
+ * above section headings / card titles — e.g. "POSTURE", "FLOW MAP · SWARM
+ * + FORGES". Mirrors the reference mockup's `.eyebrow` class. */
+@utility eyebrow {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--color-muted-foreground);
+    font-weight: 600;
+}
+
+/* IA/Cyber identity: faint tech grid + soft radial glow, for the app shell
+ * background and the graph canvas. Values keyed off `--grid-line`/
+ * `--glow-a`/`--glow-b` (declared per-theme below) so light mode gets a
+ * legible, much fainter version of the same texture instead of an inverted
+ * one. Purely decorative (background-image), never affects layout. */
+@utility bg-grid {
+    background-color: var(--color-background);
+    background-image:
+        radial-gradient(1200px 600px at 78% -8%, var(--glow-a), transparent 60%),
+        radial-gradient(900px 500px at 4% 108%, var(--glow-b), transparent 55%),
+        linear-gradient(var(--grid-line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size:
+        auto,
+        auto,
+        44px 44px,
+        44px 44px;
+    background-attachment: fixed;
+}
+
+/* IA/Cyber identity: the faint dot-grid used inside the graph canvas (a
+ * denser, radial-dot variant of `bg-grid` — matches the reference mockup's
+ * `.canvas` background). */
+@utility bg-grid-dot {
+    background-color: var(--color-card);
+    background-image: radial-gradient(circle at center, var(--grid-line) 1px, transparent 1px);
+    background-size: 22px 22px;
+}
+
+/* IA/Cyber identity: animated glowing "flow" edge stroke for the GraphView
+ * canvas (react-flow custom edge) — a moving dash pattern reads as live
+ * data flowing along the edge, matching the reference mockup's `.flow`
+ * class. Reduced-motion-safe: the dash animation is disabled entirely under
+ * `prefers-reduced-motion: reduce`, leaving a static (still fully visible)
+ * stroke. */
+.flow-edge-path {
+    stroke-dasharray: 5 9;
+    animation: flow-dash 1.1s linear infinite;
+}
+@keyframes flow-dash {
+    to {
+        stroke-dashoffset: -28;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .flow-edge-path {
+        animation: none;
+    }
+}
+
 :root {
-    /* "Instrument / watchtower" light palette. Token NAMES are unchanged
-     * from the shadcn scaffold (background/card/muted/accent/...) — only
-     * the VALUES move to the new palette, so every existing component that
-     * already consumes these tokens repaints for free. */
-    --background: #f5f6fa; /* void */
-    --foreground: #14161e; /* text-1 */
-    --card: #ffffff; /* surface */
-    --card-foreground: #14161e; /* text-1 */
-    --popover: #ecedf4; /* raised */
-    --popover-foreground: #14161e; /* text-1 */
-    /* primary = the brand action color (Beacon Cyan, light variant) —
-     * spent sparingly for primary buttons / focus rings, per spec. */
-    --primary: #2c8fa0;
+    /* IA/Cyber light palette — a legible daylight derivation of the SAME
+     * phosphor/beacon/amber/crit hue family the dark palette below uses
+     * (not a literal inversion): hues darkened/desaturated just enough to
+     * clear AA contrast on a white surface. Token NAMES are unchanged from
+     * the shadcn scaffold (background/card/muted/accent/...) — only the
+     * VALUES move, so every existing component that already consumes these
+     * tokens repaints for free. */
+    --background: #f3f6f8; /* void, light */
+    --foreground: #10141a; /* text-1, light */
+    --card: #ffffff; /* panel, light */
+    --card-foreground: #10141a;
+    --popover: #eaeef2; /* panel-2, light */
+    --popover-foreground: #10141a;
+    /* primary = Beacon (data/links accent), darkened from the mockup's
+     * #46B7CE for AA contrast on a white surface. */
+    --primary: #0e7490;
     --primary-foreground: #ffffff;
-    --secondary: #ecedf4; /* raised */
-    --secondary-foreground: #14161e; /* text-1 */
-    --muted: #ecedf4; /* raised */
-    --muted-foreground: #5b6178; /* text-2 */
+    --secondary: #eaeef2; /* panel-2, light */
+    --secondary-foreground: #10141a;
+    --muted: #eaeef2; /* panel-2, light */
+    --muted-foreground: #52606d; /* text-2, light */
     /* accent = shadcn's subtle hover/selection surface (NOT the brand
-     * accent color) — stays a neutral "raised" tone so the brand cyan isn't
+     * accent color) — stays a neutral "raised" tone so beacon cyan isn't
      * smeared across every hover state. */
-    --accent: #ecedf4; /* raised */
-    --accent-foreground: #14161e; /* text-1 */
-    --destructive: #e0483f; /* crit */
-    --border: #dbdee8;
-    --input: #dbdee8; /* border */
-    --ring: #2c8fa0; /* primary/accent */
-    --chart-1: #2c8fa0; /* accent */
-    --chart-2: #57a66b; /* good */
-    --chart-3: #d89a4a; /* warn */
-    --chart-4: #e0483f; /* crit */
-    --chart-5: #5b6178; /* text-2 */
-    --good: #57a66b;
-    --warn: #d89a4a;
-    --crit: #e0483f;
-    --idle: #5b6178; /* text-2 */
+    --accent: #eaeef2;
+    --accent-foreground: #10141a;
+    --destructive: #c6303e; /* crit, darkened for light bg */
+    --border: #d9e0e6; /* line, light */
+    --input: #d9e0e6;
+    --ring: #0e7490; /* primary/beacon */
+    --chart-1: #0e7490; /* beacon */
+    --chart-2: #0e9f6e; /* phosphor, darkened for light bg */
+    --chart-3: #a6690f; /* amber, darkened for light bg */
+    --chart-4: #c6303e; /* crit, darkened for light bg */
+    --chart-5: #52606d; /* text-2 */
+    --good: #0e9f6e; /* phosphor, light */
+    --warn: #a6690f; /* amber, light */
+    --crit: #c6303e; /* crit, light */
+    --idle: #7a8794; /* text-3, light */
     --radius: 0.625rem;
-    --sidebar: #ffffff; /* surface */
-    --sidebar-foreground: #14161e; /* text-1 */
-    --sidebar-primary: #2c8fa0; /* accent */
+    --sidebar: #ffffff;
+    --sidebar-foreground: #10141a;
+    --sidebar-primary: #0e7490;
     --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #ecedf4; /* raised */
-    --sidebar-accent-foreground: #14161e; /* text-1 */
-    --sidebar-border: #dbdee8;
-    --sidebar-ring: #2c8fa0; /* accent */
+    --sidebar-accent: #eaeef2;
+    --sidebar-accent-foreground: #10141a;
+    --sidebar-border: #d9e0e6;
+    --sidebar-ring: #0e7490;
+    /* IA/Cyber additive tokens (no prior consumer — safe to introduce):
+     * tech-grid line color + two soft background glows, and a tertiary
+     * "violet" accent for a third data-flow category (see the mockup's
+     * gitlab/MR edge color) + a secondary hairline border for node rings. */
+    --grid-line: rgba(14, 116, 144, 0.06);
+    --glow-a: rgba(14, 159, 110, 0.05);
+    --glow-b: rgba(14, 116, 144, 0.05);
+    --line-2: #c9d2da;
+    --violet: #6e4fd1;
 }
 
 .dark {
-    /* "Instrument / watchtower" dark palette (primary theme — the app is
-     * an always-on monitoring instrument, dark-by-default). */
-    --background: #0e1015; /* void */
-    --foreground: #edeff5; /* text-1 */
-    --card: #171a21; /* surface */
-    --card-foreground: #edeff5; /* text-1 */
-    --popover: #1f232c; /* raised */
-    --popover-foreground: #edeff5; /* text-1 */
+    /* IA/Cyber dark palette (primary theme — a SOC-grade cyber-ops console,
+     * dark-by-default) — verbatim from the reference mockup
+     * (mirador-cyber.html): void/panel/line neutrals + a two-accent data
+     * system (phosphor = live/agents/good, beacon = data/links/primary). */
+    --background: #08090c; /* void */
+    --foreground: #e8edf2; /* text-1 */
+    --card: #0e1116; /* panel */
+    --card-foreground: #e8edf2;
+    --popover: #11151b; /* panel-2 */
+    --popover-foreground: #e8edf2;
     /* primary = Beacon Cyan — the app's one spent-sparingly accent for
-     * primary actions / focus rings. */
-    --primary: #4fb8c9;
-    --primary-foreground: #0e1015; /* void, for contrast on cyan */
-    --secondary: #1f232c; /* raised */
-    --secondary-foreground: #edeff5; /* text-1 */
-    --muted: #1f232c; /* raised */
-    --muted-foreground: #9096a8; /* text-2 */
+     * primary actions / focus rings / data-links. */
+    --primary: #46b7ce;
+    --primary-foreground: #08090c; /* void, for contrast on cyan */
+    --secondary: #11151b; /* panel-2 */
+    --secondary-foreground: #e8edf2;
+    --muted: #11151b; /* panel-2 */
+    --muted-foreground: #8b96a6; /* text-2 */
     /* accent = shadcn's subtle hover/selection surface, kept neutral (see
      * light theme comment above). */
-    --accent: #1f232c; /* raised */
-    --accent-foreground: #edeff5; /* text-1 */
-    --destructive: #e0483f; /* crit */
-    --border: #2b303c;
-    --input: #2b303c; /* border */
-    --ring: #4fb8c9; /* primary/accent */
-    --chart-1: #4fb8c9; /* accent */
-    --chart-2: #57a66b; /* good */
-    --chart-3: #d89a4a; /* warn */
-    --chart-4: #e0483f; /* crit */
-    --chart-5: #9096a8; /* text-2 */
-    --good: #57a66b;
-    --warn: #d89a4a;
-    --crit: #e0483f;
-    --idle: #9096a8; /* text-2 */
-    --sidebar: #171a21; /* surface */
-    --sidebar-foreground: #edeff5; /* text-1 */
-    --sidebar-primary: #4fb8c9; /* accent */
-    --sidebar-primary-foreground: #0e1015;
-    --sidebar-accent: #1f232c; /* raised */
-    --sidebar-accent-foreground: #edeff5; /* text-1 */
-    --sidebar-border: #2b303c;
-    --sidebar-ring: #4fb8c9; /* accent */
+    --accent: #11151b;
+    --accent-foreground: #e8edf2;
+    --destructive: #ff5c6c; /* crit */
+    --border: #1b2129; /* line */
+    --input: #1b2129;
+    --ring: #46b7ce; /* primary/beacon */
+    --chart-1: #46b7ce; /* beacon */
+    --chart-2: #35e7a1; /* phosphor/good */
+    --chart-3: #f5b544; /* amber/warn */
+    --chart-4: #ff5c6c; /* crit */
+    --chart-5: #8b96a6; /* text-2 */
+    --good: #35e7a1; /* phosphor */
+    --warn: #f5b544; /* amber */
+    --crit: #ff5c6c;
+    --idle: #5b6675; /* text-3 */
+    --sidebar: #0e1116; /* panel */
+    --sidebar-foreground: #e8edf2;
+    --sidebar-primary: #46b7ce;
+    --sidebar-primary-foreground: #08090c;
+    --sidebar-accent: #11151b; /* panel-2 */
+    --sidebar-accent-foreground: #e8edf2;
+    --sidebar-border: #1b2129; /* line */
+    --sidebar-ring: #46b7ce;
+    /* IA/Cyber additive tokens — see `:root`'s comment above. */
+    --grid-line: rgba(70, 183, 206, 0.05);
+    --glow-a: rgba(53, 231, 161, 0.06);
+    --glow-b: rgba(70, 183, 206, 0.05);
+    --line-2: #242c36;
+    --violet: #8b7cf6;
 }
 
 @layer base {

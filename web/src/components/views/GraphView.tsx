@@ -16,7 +16,7 @@ import {
   type GraphSourceSummary,
 } from '@/lib/mirador-api'
 import { useAsyncData } from '@/lib/use-async-data'
-import { GraphCanvas } from './GraphCanvas'
+import { GraphCanvas, type GraphColorBy } from './GraphCanvas'
 import { PanelRenderer } from './PanelRenderer'
 
 /**
@@ -40,6 +40,11 @@ export function GraphView() {
   const [appliedParams, setAppliedParams] = useState<Record<string, string>>({})
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set())
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  // IA/Cyber "Service Map" identity: a color-by toggle (status vs. kind) —
+  // purely a client-side rendering choice over the SAME already-fetched
+  // graph, so it never triggers a re-fetch (unlike selectedSourceName/
+  // appliedParams above).
+  const [colorBy, setColorBy] = useState<GraphColorBy>('status')
 
   // Default to the first registered source once the list loads — only if
   // the caller hasn't already picked one (never overrides a user choice).
@@ -297,27 +302,57 @@ export function GraphView() {
                 )}
 
                 {graphData.nodes.length > 0 && (
-                  // Mobile-first: a single column (canvas, then the detail
-                  // pane full-width below it) below `lg:`; only becomes a
-                  // canvas+320px-detail-pane row at `lg:` (>=1024px), where
-                  // a phone-cramped side-by-side layout stops being an
-                  // issue.
-                  <div
-                    className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]"
-                    data-testid="graph-layout-row"
-                  >
-                    <GraphCanvas
-                      nodes={visibleNodes}
-                      edges={visibleEdges}
-                      layoutHint={graphData.layout_hint}
-                      selectedNodeId={selectedNodeId}
-                      onNodeClick={handleNodeClick}
-                    />
+                  <>
+                    {/* IA/Cyber identity: color-by control — matches the
+                     * reference mockup's canvas HUD "color by" chip. Purely
+                     * a rendering toggle over the already-fetched graph. */}
+                    <div className="flex items-center gap-2" data-testid="graph-color-by">
+                      <span className="eyebrow">{t('graph.colorBy')}</span>
+                      <div className="flex overflow-hidden rounded-md border border-border">
+                        {(['status', 'kind'] as const).map((option) => (
+                          <button
+                            key={option}
+                            type="button"
+                            data-testid={`graph-color-by-${option}`}
+                            aria-pressed={colorBy === option}
+                            onClick={() => setColorBy(option)}
+                            className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                              colorBy === option
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-transparent text-muted-foreground hover:bg-muted'
+                            }`}
+                          >
+                            {option === 'status' ? t('graph.colorByStatus') : t('graph.colorByKind')}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-                    <div className="rounded-lg border border-border p-3" data-testid="graph-detail-pane">
-                      {selectedNodeId === null && (
-                        <p className="text-sm text-muted-foreground">{t('graph.selectNodeForDetail')}</p>
-                      )}
+                    {/* Mobile-first: a single column (canvas, then the
+                     * detail pane full-width below it) below `lg:`; only
+                     * becomes a canvas+320px-detail-pane row at `lg:`
+                     * (>=1024px), where a phone-cramped side-by-side layout
+                     * stops being an issue. */}
+                    <div
+                      className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]"
+                      data-testid="graph-layout-row"
+                    >
+                      <GraphCanvas
+                        nodes={visibleNodes}
+                        edges={visibleEdges}
+                        layoutHint={graphData.layout_hint}
+                        selectedNodeId={selectedNodeId}
+                        onNodeClick={handleNodeClick}
+                        colorBy={colorBy}
+                      />
+
+                      <div
+                        className="bg-card/60 rounded-lg border border-border p-3 backdrop-blur-sm"
+                        data-testid="graph-detail-pane"
+                      >
+                        {selectedNodeId === null && (
+                          <p className="text-sm text-muted-foreground">{t('graph.selectNodeForDetail')}</p>
+                        )}
 
                       {selectedNodeId !== null && detailState.status === 'loading' && (
                         <div role="status" className="animate-pulse text-sm text-muted-foreground">
@@ -364,8 +399,9 @@ export function GraphView() {
                           <PanelRenderer data={{ sections: detailState.data.sections }} />
                         </div>
                       )}
+                      </div>
                     </div>
-                  </div>
+                  </>
                 )}
               </>
             )}

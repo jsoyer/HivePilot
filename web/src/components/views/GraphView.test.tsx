@@ -366,6 +366,35 @@ describe('GraphView', () => {
     expect(container.querySelector('[data-testid="graph-canvas-stub"]')).toBeNull()
   })
 
+  it('IA/Cyber identity: defaults to "status" color-by and toggles to "kind" without re-fetching the graph', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const statusButton = container.querySelector('[data-testid="graph-color-by-status"]') as HTMLElement
+    const kindButton = container.querySelector('[data-testid="graph-color-by-kind"]') as HTMLElement
+    expect(statusButton.getAttribute('aria-pressed')).toBe('true')
+    expect(kindButton.getAttribute('aria-pressed')).toBe('false')
+
+    const fetchCallsBefore = fetchGraph.mock.calls.length
+    await act(async () => {
+      kindButton.click()
+      await Promise.resolve()
+    })
+
+    expect(kindButton.getAttribute('aria-pressed')).toBe('true')
+    expect(statusButton.getAttribute('aria-pressed')).toBe('false')
+    // A purely client-side rendering toggle — never triggers a re-fetch of
+    // the already-loaded graph.
+    expect(fetchGraph.mock.calls.length).toBe(fetchCallsBefore)
+  })
+
   it('renders French title and copy when the language is fr (P1a)', async () => {
     window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
     fetchGraphSources.mockResolvedValue(SOURCES)

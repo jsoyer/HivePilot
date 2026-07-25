@@ -162,6 +162,9 @@ export const fr: Record<TranslationKey, string> = {
   'graph.loadingDetail': 'Chargement du détail…',
   'graph.nodeRequiresTokenLead': 'Le détail de ce nœud nécessite un rôle',
   'graph.nodeRequiresTokenTail': '.',
+  'graph.colorBy': 'Couleur par',
+  'graph.colorByStatus': 'Statut',
+  'graph.colorByKind': 'Type',
 
   // ---- Mem0 view ---------------------------------------------------------
   'mem0.title': 'Recherche de mémoire Mem0',
