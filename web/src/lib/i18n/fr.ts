@@ -63,11 +63,9 @@ export const fr: Record<TranslationKey, string> = {
   'nav.models': 'Modèles',
   'nav.efficiency': 'Efficacité',
   'nav.health': 'Santé',
-  'nav.mem0': 'Mem0',
   'nav.approvals': 'Approbations',
   'nav.runs': 'Exécutions',
   'nav.graph': 'Graphe',
-  'nav.reality': 'Réalité',
 
   // ---- health status words (shared: header pills + Health tab badges) --
   'health.status.ok': 'ok',
@@ -283,6 +281,22 @@ export const fr: Record<TranslationKey, string> = {
   'reality.requiresTokenTail': 'à privilège supérieur.',
   'reality.requiresTokenNote':
     'Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule cette section nécessite un rôle supérieur.',
+
+  // ---- Memory view (onglets unifiés Qualité/Croissance/Recherche) ------
+  'memory.tabQuality': 'Qualité',
+  'memory.tabGrowth': 'Croissance',
+  'memory.tabSearch': 'Recherche',
+  'memory.growthTitle': 'Croissance de la mémoire',
+  'memory.growthDescription':
+    'Ce qui est stocké, où, dans le temps, et par qui — GET /v1/memory/growth',
+  'memory.totalMemories': 'Total des mémoires',
+  'memory.byNamespaceTitle': 'Mémoires par namespace',
+  'memory.growthOverTimeTitle': 'Croissance dans le temps',
+  'memory.noGrowthSeries': 'Aucune croissance enregistrée sur cette période.',
+  'memory.byActorTitle': 'Par acteur',
+  'memory.authorshipNotAvailable':
+    "Une répartition humain / agent n'est pas disponible — la vraie répartition par acteur est affichée à la place.",
+  'memory.growthEmptyState': 'Aucune croissance de mémoire enregistrée sur cette période.',
 
   // ---- Home view (centre de commandement, vue d'accueil par défaut) ----
   'home.subtitle': "Votre flotte en un coup d'œil — cliquez sur un chiffre pour l'explorer.",

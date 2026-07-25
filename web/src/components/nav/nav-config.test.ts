@@ -20,7 +20,7 @@ describe('NAV_GROUP_ORDER', () => {
 
 describe('buildNavGroups', () => {
   it('places items into their configured group, in NAV_GROUP_ORDER order', () => {
-    const items = [item('analytics'), item('cost'), item('health'), item('mem0')]
+    const items = [item('analytics'), item('cost'), item('health'), item('memory')]
     const groups = buildNavGroups(items)
 
     const labels = groups.map((g) => g.label)
@@ -28,7 +28,7 @@ describe('buildNavGroups', () => {
   })
 
   it('never drops an item — every input item appears in exactly one output group', () => {
-    const items = [item('analytics'), item('cost'), item('health'), item('mem0'), item('approvals'), item('runs'), item('graph')]
+    const items = [item('analytics'), item('cost'), item('health'), item('memory'), item('approvals'), item('runs'), item('graph')]
     const groups = buildNavGroups(items)
     const outputValues = groups.flatMap((g) => g.items.map((i) => i.value)).sort()
     expect(outputValues).toEqual(items.map((i) => i.value).sort())
@@ -44,18 +44,18 @@ describe('buildNavGroups', () => {
   })
 
   it('omits groups that have no items for the given input', () => {
-    const items = [item('mem0')]
+    const items = [item('memory')]
     const groups = buildNavGroups(items)
     expect(groups).toHaveLength(1)
-    expect(groups[0]?.items.map((i) => i.value)).toEqual(['mem0'])
+    expect(groups[0]?.items.map((i) => i.value)).toEqual(['memory'])
   })
 
-  it('places the Réalité memory-quality view alongside Mem0 in the "nav.memory" group', () => {
-    const items = [item('mem0'), item('reality')]
+  it('places the unified Memory item (Quality/Growth/Search tabs) in the "nav.memory" group', () => {
+    const items = [item('memory')]
     const groups = buildNavGroups(items)
     expect(groups).toHaveLength(1)
     expect(groups[0]?.label).toBe('nav.memory')
-    expect(groups[0]?.items.map((i) => i.value)).toEqual(['mem0', 'reality'])
+    expect(groups[0]?.items.map((i) => i.value)).toEqual(['memory'])
   })
 
   it('returns an empty array for an empty input', () => {
@@ -82,7 +82,7 @@ describe('buildNavGroups', () => {
   })
 
   it('demotes "nav.system" (Graph/Health) to the LAST group — still reachable, not prominent', () => {
-    const items = [item('home'), item('runs'), item('cost'), item('analytics'), item('mem0'), item('health'), item('graph')]
+    const items = [item('home'), item('runs'), item('cost'), item('analytics'), item('memory'), item('health'), item('graph')]
     const groups = buildNavGroups(items)
     const labels = groups.map((g) => g.label)
     expect(labels[labels.length - 1]).toBe('nav.system')

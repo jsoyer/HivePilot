@@ -75,6 +75,18 @@ const mocks = vi.hoisted(() => ({
   fetchMemoryGaps: vi.fn().mockResolvedValue({ gaps: [] }),
   fetchMemoryEvaluations: vi.fn().mockResolvedValue({ evaluations: [] }),
   fetchMemoryJournal: vi.fn().mockResolvedValue({ journal: [] }),
+  // Memory unification sprint: the Memory tab's Growth sub-tab fetches
+  // `/v1/memory/growth` (only once that inner tab is actually selected —
+  // see `MemoryView`'s docstring) — mocked genuinely-empty like every
+  // other `/v1/memory/*` endpoint above.
+  fetchMemoryGrowth: vi.fn().mockResolvedValue({
+    total: 0,
+    memories_by_namespace: [],
+    growth_series: [],
+    authorship: null,
+    by_actor: [],
+    source: 'mem0',
+  }),
   // Home command-center tab (default landing view): fetches its own
   // approvals/runs/efficiency/today's-summary — mocked genuinely-empty so
   // this shell test exercises tab switching only, not HomeView's own
@@ -107,19 +119,26 @@ import { LANG_STORAGE_KEY } from '@/lib/i18n'
 import { Mirador } from './Mirador'
 
 // The sidebar's grouped nav order (P0b, + Home command-center sprint, +
-// Mirador Spend section sprint, + Mirador Operate section sprint) — see
-// `./nav/nav-config.ts`'s `NAV_GROUP_ORDER`: Command Center (Home), Operate
-// (Runs/Approvals — renamed from "Agents", moved right after Home so the
-// Run Board is the primary "what's happening" destination), Spend
-// (Cost/Models/Efficiency), Overview (Analytics), Memory (Mem0/Réalité),
-// System (Health/Graph — demoted to LAST: the node-graph is no longer a
-// prominent top-level destination, still fully reachable). Every built-in
-// tab is still reachable, just reordered by group instead of the old flat
+// Mirador Spend section sprint, + Mirador Operate section sprint, +
+// Mirador Memory unification sprint) — see `./nav/nav-config.ts`'s
+// `NAV_GROUP_ORDER`: Command Center (Home), Operate (Runs/Approvals —
+// renamed from "Agents", moved right after Home so the Run Board is the
+// primary "what's happening" destination), Spend (Cost/Models/Efficiency),
+// Overview (Analytics), Memory (ONE unified tab — see below), System
+// (Health/Graph — demoted to LAST: the node-graph is no longer a prominent
+// top-level destination, still fully reachable). Every built-in tab is
+// still reachable, just reordered by group instead of the old flat
 // declaration order.
+//
+// Memory unification sprint: the formerly-separate "Mem0" and "Réalité"
+// top-level tabs merged into ONE "Memory" tab, which itself has internal
+// Quality/Growth/Search tabs (see `MemoryView.test.tsx` for coverage of
+// that inner tab switching) — this shell-level list only asserts the ONE
+// outer "Memory" entry is reachable, same as every other built-in.
+//
 // Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n — see the
 // "language toggle" describe block for the French-language assertions of
-// the same shell). "Réalité" itself is a proper noun, kept untranslated in
-// both dictionaries (see en.ts/fr.ts's `nav.reality`).
+// the same shell).
 const GROUPED_TAB_ORDER = [
   'Home',
   'Runs',
@@ -128,8 +147,7 @@ const GROUPED_TAB_ORDER = [
   'Models',
   'Efficiency',
   'Analytics',
-  'Mem0',
-  'Réalité',
+  'Memory',
   'Health',
   'Graph',
 ]
@@ -279,31 +297,21 @@ describe('Mirador', () => {
     expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Plugin health')
   })
 
-  it('switches to the real Mem0 view when the Mem0 item is clicked', async () => {
-    const mem0Tab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Mem0',
+  it('switches to the real Memory view when the Memory item is clicked, defaulting to its Quality tab', async () => {
+    const memoryTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Memory',
     ) as HTMLElement
 
     await act(async () => {
-      click(mem0Tab)
-      await Promise.resolve()
-    })
-
-    expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Mem0 memory search')
-  })
-
-  it('switches to the real Réalité view when the Réalité item is clicked', async () => {
-    const realityTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Réalité',
-    ) as HTMLElement
-
-    await act(async () => {
-      click(realityTab)
+      click(memoryTab)
       await Promise.resolve()
       await Promise.resolve()
     })
 
-    expect(realityTab.getAttribute('aria-selected')).toBe('true')
+    expect(memoryTab.getAttribute('aria-selected')).toBe('true')
+    // Default inner tab is Quality (the moved-in RealityView content) — its
+    // own Quality/Growth/Search switching behavior is unit-tested in
+    // MemoryView.test.tsx, this only proves the shell wiring.
     const panel = container.querySelector('[role="tabpanel"]')
     expect(panel?.textContent).toMatch(/no memory activity recorded yet/i)
   })
