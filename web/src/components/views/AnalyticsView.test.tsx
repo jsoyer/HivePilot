@@ -104,6 +104,9 @@ describe('AnalyticsView', () => {
     expect(container.textContent).toContain('12')
     expect(container.textContent).toContain('82%')
     expect(container.querySelectorAll('svg rect').length).toBe(2)
+    // The trend card also gets a compact Sparkline readout alongside the
+    // existing bar chart (same `trends.series` data, no new fetch).
+    expect(container.querySelector('[data-slot="sparkline"]')).not.toBeNull()
     expect(container.textContent).toContain('deploy')
     expect(container.textContent).toContain('failed')
     expect(container.textContent).toMatch(/40\.00s/)
@@ -180,13 +183,13 @@ describe('AnalyticsView', () => {
 
     // total > 0 so the volume section renders (not the "no runs" empty state).
     expect(container.textContent).toContain('3')
-    const succeededCard = Array.from(container.querySelectorAll('[data-slot="stat-card"]')).find(
+    const succeededCard = Array.from(container.querySelectorAll('[data-slot="metric-readout"]')).find(
       (card) => card.textContent?.includes('Succeeded'),
     )
     expect(succeededCard).toBeTruthy()
     // The succeeded stat renders "—" (unattempted), never a misleading "0%"
     // (a 0% here would look identical to "every run failed").
-    expect(succeededCard?.querySelector('[data-slot="stat-card-value"]')?.textContent).toBe('—')
+    expect(succeededCard?.querySelector('[data-slot="metric-readout-value"]')?.textContent).toBe('—')
     expect(succeededCard?.textContent).toMatch(/3 skipped, no attempts/i)
   })
 

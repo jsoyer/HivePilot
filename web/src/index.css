@@ -39,6 +39,14 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    /* Instrument identity — status semantics shared by every viz primitive
+     * (Sparkline/Gauge/BurnRibbon/SweepRadar/MetricReadout). Same hex both
+     * themes (they're tuned to read on both void-dark and white-light
+     * surfaces) — see `--good`/`--warn`/`--crit`/`--idle` below. */
+    --color-good: var(--good);
+    --color-warn: var(--warn);
+    --color-crit: var(--crit);
+    --color-idle: var(--idle);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -48,73 +56,106 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* Instrument-readout numeral treatment for metric values (StatCard,
+ * MetricReadout, Gauge, BurnRibbon endpoints, ...): monospace + tabular
+ * figures so digits never jitter width as they change, with a touch of
+ * negative tracking so large mono numerals don't read as loose/spaced-out. */
+@utility metric-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    /* "Instrument / watchtower" light palette. Token NAMES are unchanged
+     * from the shadcn scaffold (background/card/muted/accent/...) — only
+     * the VALUES move to the new palette, so every existing component that
+     * already consumes these tokens repaints for free. */
+    --background: #f5f6fa; /* void */
+    --foreground: #14161e; /* text-1 */
+    --card: #ffffff; /* surface */
+    --card-foreground: #14161e; /* text-1 */
+    --popover: #ecedf4; /* raised */
+    --popover-foreground: #14161e; /* text-1 */
+    /* primary = the brand action color (Beacon Cyan, light variant) —
+     * spent sparingly for primary buttons / focus rings, per spec. */
+    --primary: #2c8fa0;
+    --primary-foreground: #ffffff;
+    --secondary: #ecedf4; /* raised */
+    --secondary-foreground: #14161e; /* text-1 */
+    --muted: #ecedf4; /* raised */
+    --muted-foreground: #5b6178; /* text-2 */
+    /* accent = shadcn's subtle hover/selection surface (NOT the brand
+     * accent color) — stays a neutral "raised" tone so the brand cyan isn't
+     * smeared across every hover state. */
+    --accent: #ecedf4; /* raised */
+    --accent-foreground: #14161e; /* text-1 */
+    --destructive: #e0483f; /* crit */
+    --border: #dbdee8;
+    --input: #dbdee8; /* border */
+    --ring: #2c8fa0; /* primary/accent */
+    --chart-1: #2c8fa0; /* accent */
+    --chart-2: #57a66b; /* good */
+    --chart-3: #d89a4a; /* warn */
+    --chart-4: #e0483f; /* crit */
+    --chart-5: #5b6178; /* text-2 */
+    --good: #57a66b;
+    --warn: #d89a4a;
+    --crit: #e0483f;
+    --idle: #5b6178; /* text-2 */
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --sidebar: #ffffff; /* surface */
+    --sidebar-foreground: #14161e; /* text-1 */
+    --sidebar-primary: #2c8fa0; /* accent */
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #ecedf4; /* raised */
+    --sidebar-accent-foreground: #14161e; /* text-1 */
+    --sidebar-border: #dbdee8;
+    --sidebar-ring: #2c8fa0; /* accent */
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    /* "Instrument / watchtower" dark palette (primary theme — the app is
+     * an always-on monitoring instrument, dark-by-default). */
+    --background: #0e1015; /* void */
+    --foreground: #edeff5; /* text-1 */
+    --card: #171a21; /* surface */
+    --card-foreground: #edeff5; /* text-1 */
+    --popover: #1f232c; /* raised */
+    --popover-foreground: #edeff5; /* text-1 */
+    /* primary = Beacon Cyan — the app's one spent-sparingly accent for
+     * primary actions / focus rings. */
+    --primary: #4fb8c9;
+    --primary-foreground: #0e1015; /* void, for contrast on cyan */
+    --secondary: #1f232c; /* raised */
+    --secondary-foreground: #edeff5; /* text-1 */
+    --muted: #1f232c; /* raised */
+    --muted-foreground: #9096a8; /* text-2 */
+    /* accent = shadcn's subtle hover/selection surface, kept neutral (see
+     * light theme comment above). */
+    --accent: #1f232c; /* raised */
+    --accent-foreground: #edeff5; /* text-1 */
+    --destructive: #e0483f; /* crit */
+    --border: #2b303c;
+    --input: #2b303c; /* border */
+    --ring: #4fb8c9; /* primary/accent */
+    --chart-1: #4fb8c9; /* accent */
+    --chart-2: #57a66b; /* good */
+    --chart-3: #d89a4a; /* warn */
+    --chart-4: #e0483f; /* crit */
+    --chart-5: #9096a8; /* text-2 */
+    --good: #57a66b;
+    --warn: #d89a4a;
+    --crit: #e0483f;
+    --idle: #9096a8; /* text-2 */
+    --sidebar: #171a21; /* surface */
+    --sidebar-foreground: #edeff5; /* text-1 */
+    --sidebar-primary: #4fb8c9; /* accent */
+    --sidebar-primary-foreground: #0e1015;
+    --sidebar-accent: #1f232c; /* raised */
+    --sidebar-accent-foreground: #edeff5; /* text-1 */
+    --sidebar-border: #2b303c;
+    --sidebar-ring: #4fb8c9; /* accent */
 }
 
 @layer base {

@@ -91,7 +91,7 @@ describe('CostView', () => {
 
     expect(container.textContent).toContain('$1.234')
     expect(container.textContent).toMatch(/unpriced steps/i)
-    expect(container.querySelector('[data-tone="warning"]')?.textContent).toContain('2')
+    expect(container.querySelector('[data-tone="warn"]')?.textContent).toContain('2')
     expect(container.textContent).toContain('anthropic')
     expect(container.textContent).toContain('claude-sonnet-5')
     expect(container.textContent).toContain('10,000')

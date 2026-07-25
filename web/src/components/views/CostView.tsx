@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, DollarSign } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { StatCard } from '@/components/dashboard/StatCard'
+import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { useT } from '@/lib/i18n'
 import { fetchAnalyticsCost, fetchAnalyticsProviders } from '@/lib/mirador-api'
 import { useAsyncData } from '@/lib/use-async-data'
@@ -44,28 +44,28 @@ export function CostView() {
             {(data) => (
               <>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <StatCard
+                  <MetricReadout
                     icon={<DollarSign className="size-4" />}
                     label={t('cost.totalCost')}
                     value={formatCost(data.overall.cost_usd)}
-                    tone="positive"
+                    tone="good"
                   />
-                  <StatCard
+                  <MetricReadout
                     icon={<ArrowDownToLine className="size-4" />}
                     label={t('cost.inputTokens')}
                     value={formatTokens(data.overall.input_tokens)}
                   />
-                  <StatCard
+                  <MetricReadout
                     icon={<ArrowUpFromLine className="size-4" />}
                     label={t('cost.outputTokens')}
                     value={formatTokens(data.overall.output_tokens)}
                   />
                   {data.overall.unpriced_steps > 0 && (
-                    <StatCard
+                    <MetricReadout
                       icon={<AlertTriangle className="size-4" />}
                       label={t('cost.unpricedSteps')}
                       value={data.overall.unpriced_steps}
-                      tone="warning"
+                      tone="warn"
                     />
                   )}
                 </div>
