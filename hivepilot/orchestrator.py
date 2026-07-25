@@ -749,6 +749,74 @@ def _parse_components(text: str, valid: list[str]) -> list[str]:
     return found
 
 
+def _parse_surfaces(text: str) -> set[str] | None:
+    """Extract the module/surface scope an agent declared via a ``SURFACES:``
+    line (e.g. ``SURFACES: console, extension`` or ``SURFACES: none``).
+
+    Mirrors ``_parse_components``'s marker-line parsing, but with a CRITICAL
+    None-vs-empty distinction the caller (the ``only_modules`` surface-scope
+    gate in ``_run_pipeline_body``) depends on:
+
+    * Returns ``None`` when NO ``SURFACES:`` line is present anywhere in
+      *text* -- "this stage never declared a scope". Callers MUST treat this
+      as "unknown, don't narrow anything" (fail-safe).
+    * Returns a ``set[str]`` -- possibly EMPTY -- when a ``SURFACES:`` line
+      IS present -- "the scope was explicitly declared". The literal tokens
+      ``none``/``n/a`` (case-insensitive), and a marker line with no other
+      valid tokens (e.g. bare ``SURFACES:``), all yield an EMPTY set: "this
+      change touches no scoped surface".
+
+    Unlike ``_parse_components``, tokens are NOT validated/intersected
+    against a fixed list -- an unrecognised surface name is harmless, it
+    simply won't match any stage's ``only_modules``. Multiple ``SURFACES:``
+    lines within *text* are unioned (same as ``_parse_components``).
+    """
+    import re
+
+    _empty_tokens = {"none", "n/a"}
+    found: set[str] | None = None
+    for line in text.splitlines():
+        m = re.match(r"\s*SURFACES\s*:\s*(.*)", line, re.IGNORECASE)
+        if not m:
+            continue
+        if found is None:
+            found = set()
+        for tok in re.split(r"[,\s]+", m.group(1).strip()):
+            tok = tok.strip().strip(".`*")
+            if not tok or tok.lower() in _empty_tokens:
+                continue
+            found.add(tok)
+    return found
+
+
+def _resolve_scoped_modules(
+    stage: PipelineStage, selected_modules: set[str] | None
+) -> list[str] | None:
+    """Narrow ``stage.only_modules`` by the run's declared ``SURFACES:``
+    scope (see ``_parse_surfaces``).
+
+    Returns ``None`` when the stage doesn't use ``only_modules`` at all --
+    the surface-scope gate is entirely inert for such stages. Otherwise
+    returns the list of modules this stage should target THIS run:
+
+    * *selected_modules* is ``None`` (no earlier stage's output has declared
+      a ``SURFACES:`` line yet this run) -- FAIL-SAFE: returns
+      ``stage.only_modules`` unchanged. A design/UI-review stage must never
+      be silently narrowed when the run's touched surfaces are unknown.
+    * *selected_modules* is a ``set`` (declared, possibly empty) -- returns
+      the intersection of ``stage.only_modules`` and *selected_modules*, in
+      ``stage.only_modules`` order. May be EMPTY -- callers treat an empty
+      result as "skip this stage": none of its modules are in the declared
+      scope (e.g. a backend-only change declaring ``SURFACES: none`` against
+      a console-only design stage).
+    """
+    if stage.only_modules is None:
+        return None
+    if selected_modules is None:
+        return list(stage.only_modules)
+    return [m for m in stage.only_modules if m in selected_modules]
+
+
 def _parse_output_sections(text: str, keys: list[str]) -> dict[str, str]:
     """Extract per-key ``## <HEADER>`` sections from a stage's output text.
 
@@ -897,7 +965,10 @@ def _validate_stage_modules(
 
 
 def _expand_stage_targets_for_modules(
-    stage: PipelineStage, targets: list[str], projects: ProjectsFile
+    stage: PipelineStage,
+    targets: list[str],
+    projects: ProjectsFile,
+    override_modules: list[str] | None = None,
 ) -> list[str]:
     """Expand *targets* (plain project names) into ``<project>/<module>``
     targets for every module named in ``stage.only_modules``, when set.
@@ -915,16 +986,25 @@ def _expand_stage_targets_for_modules(
     target project's ``modules`` map by the time this runs
     (``_validate_stage_modules`` already raised otherwise), so the
     membership check below is defense-in-depth, not the primary guard.
+
+    *override_modules*, when given (not ``None``), is used INSTEAD of
+    ``stage.only_modules`` as the list of modules to expand — this is how
+    the declared-``SURFACES:``-scope gate (``_resolve_scoped_modules``)
+    narrows a stage's fan-out without ever mutating the (immutable)
+    ``stage.only_modules`` field itself. Callers are expected to have
+    already skipped the stage entirely when the resolved scope is empty —
+    an empty ``override_modules`` here just expands to no targets.
     """
     if stage.only_modules is None:
         return targets
+    modules = stage.only_modules if override_modules is None else override_modules
     expanded: list[str] = []
     for project_name in targets:
         project = projects.projects.get(project_name)
         if project is None or not project.modules:
             continue  # unknown/non-modular project — _validate_stage_modules already raised
         expanded.extend(
-            f"{project_name}/{module}" for module in stage.only_modules if module in project.modules
+            f"{project_name}/{module}" for module in modules if module in project.modules
         )
     return expanded
 
@@ -2895,6 +2975,13 @@ class Orchestrator:
                 "components exactly as: `COMPONENTS: name1, name2` (using the names above)."
             )
         selected_components = list(components or [])  # narrowed by the agents' COMPONENTS line
+        # declared-scope gate (only_modules follow-up): which modules THIS run
+        # has been told touch, via an earlier stage's `SURFACES:` line
+        # (`_parse_surfaces`). `None` = never declared this run (fail-safe:
+        # every only_modules stage runs unscoped, see `_resolve_scoped_modules`).
+        # Set once an earlier stage's output carries a `SURFACES:` line, and
+        # then re-set by every later declaration (last explicit wins).
+        selected_modules: set[str] | None = None
         for stage_idx, stage in enumerate(pipeline.stages):
             if stage_idx < start_index:
                 continue  # already executed before the checkpoint pause
@@ -2933,6 +3020,41 @@ class Orchestrator:
                         detail=(
                             f"skipped: scoped to {target_components}, disjoint from "
                             f"selected components {selected_components}"
+                        ),
+                        skipped=True,
+                    )
+                )
+                continue
+
+            # Declared-scope gate (only_modules follow-up): a stage declaring
+            # only_modules is narrowed to the intersection of its modules and
+            # this run's declared SURFACES scope (`selected_modules`). When
+            # that intersection is empty -- the run explicitly declared a
+            # scope that doesn't include this stage's module(s) -- skip the
+            # stage entirely, exactly like the only_components/only_tags gate
+            # above (task never invoked, no output key produced, a single
+            # skipped=True RunResult is recorded). `selected_modules is None`
+            # (no SURFACES: line declared by ANY earlier stage yet) always
+            # resolves non-empty here (fail-safe: run unscoped) -- see
+            # `_resolve_scoped_modules`. This is entirely inert for stages
+            # with only_modules unset (returns None, never matches).
+            scoped_modules = _resolve_scoped_modules(stage, selected_modules)
+            if scoped_modules is not None and not scoped_modules:
+                logger.info(
+                    "pipeline.stage_skipped_surface_scope",
+                    pipeline=pipeline_name,
+                    stage=stage.name,
+                    only_modules=stage.only_modules,
+                    selected_modules=sorted(selected_modules) if selected_modules else [],
+                )
+                results.append(
+                    RunResult(
+                        project=project_names[0] if project_names else pipeline_name,
+                        target=f"{pipeline_name}:{stage.name}",
+                        success=True,
+                        detail=(
+                            f"skipped: only_modules={stage.only_modules} disjoint from "
+                            f"declared SURFACES scope {sorted(selected_modules) if selected_modules else []}"
                         ),
                         skipped=True,
                     )
@@ -3035,7 +3157,14 @@ class Orchestrator:
                 # path -- group-mode fan-out above is untouched. A stage with
                 # only_modules unset (None, the default) returns targets
                 # unchanged -- byte-identical to before this field existed.
-                targets = _expand_stage_targets_for_modules(stage, project_names, self.projects)
+                # `scoped_modules` (declared-scope gate, above) narrows which
+                # modules get expanded when a SURFACES: scope was declared;
+                # an empty scoped_modules already caused a `continue` above,
+                # so by construction this is either None (feature unused) or
+                # a non-empty list here.
+                targets = _expand_stage_targets_for_modules(
+                    stage, project_names, self.projects, override_modules=scoped_modules
+                )
                 stage_auto_git = auto_git
             # PRD A2 Sprint 2: resolve the CONSUMING stage's role (the stage
             # about to run) to decide whether prior_context is routed from the
@@ -3108,6 +3237,18 @@ class Orchestrator:
             )
             if producing_role and producing_role.outputs:
                 outputs_by_key.update(_stage_outputs_by_key(stage_output, producing_role.outputs))
+
+            # Declared-scope gate (only_modules follow-up): any stage's output
+            # can declare the run's touched-surfaces scope via a `SURFACES:`
+            # line (`_parse_surfaces`). A non-None result REPLACES
+            # `selected_modules` for every later stage's gate check above --
+            # the most recent explicit declaration always wins. A stage that
+            # never emits a `SURFACES:` line leaves `selected_modules`
+            # untouched (fail-safe: stays `None`, or stays at whatever an
+            # earlier stage declared).
+            _surfaces = _parse_surfaces(stage_output)
+            if _surfaces is not None:
+                selected_modules = _surfaces
 
             prior_chunks.append(f"## {self._agent_name(stage)} ({stage.name})\n{stage_output}")
             write_stage_artifact(

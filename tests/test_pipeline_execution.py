@@ -869,6 +869,331 @@ class TestOnlyModulesScoping:
             mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
 
 
+# ---------------------------------------------------------------------------
+# Declared-scope gate for only_modules stages (_parse_surfaces /
+# _resolve_scoped_modules) -- an earlier stage's `SURFACES:` line narrows
+# WHICH only_modules stages run this run.
+# ---------------------------------------------------------------------------
+
+
+class TestParseSurfaces:
+    """`_parse_surfaces` extracts the run's declared touched-surfaces scope
+    from a `SURFACES:` marker line -- the None-vs-empty distinction is the
+    crux the gate depends on."""
+
+    def test_returns_none_when_no_marker_present(self) -> None:
+        from hivepilot.orchestrator import _parse_surfaces
+
+        assert _parse_surfaces("no marker here, just prose") is None
+
+    def test_returns_empty_set_for_surfaces_none(self) -> None:
+        from hivepilot.orchestrator import _parse_surfaces
+
+        assert _parse_surfaces("some text\nSURFACES: none\nmore text") == set()
+
+    def test_returns_empty_set_for_bare_marker(self) -> None:
+        from hivepilot.orchestrator import _parse_surfaces
+
+        assert _parse_surfaces("SURFACES:") == set()
+
+    def test_returns_declared_tokens(self) -> None:
+        from hivepilot.orchestrator import _parse_surfaces
+
+        assert _parse_surfaces("SURFACES: console") == {"console"}
+
+    def test_returns_multiple_declared_tokens(self) -> None:
+        from hivepilot.orchestrator import _parse_surfaces
+
+        assert _parse_surfaces("SURFACES: console, extension") == {"console", "extension"}
+
+    def test_case_insensitive_marker_and_n_a_token(self) -> None:
+        from hivepilot.orchestrator import _parse_surfaces
+
+        assert _parse_surfaces("surfaces: n/a") == set()
+
+
+class TestOnlyModulesScopeGate:
+    """A stage declaring `only_modules` is narrowed to the intersection of
+    its modules and the run's declared `SURFACES:` scope (an earlier
+    stage's output). No declaration this run -> fail-safe, run unscoped.
+    A declared scope disjoint from a stage's modules -> skip that stage."""
+
+    def test_surfaces_console_runs_console_skips_extension(self) -> None:
+        """An earlier stage declares `SURFACES: console`: the
+        only_modules:[console] stage RUNS, the only_modules:[extension]
+        stage SKIPS."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="scope", task="scope"),
+                PipelineStage(
+                    name="console-design", task="console-design", only_modules=["console"]
+                ),
+                PipelineStage(
+                    name="extension-design", task="extension-design", only_modules=["extension"]
+                ),
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = TestOnlyModulesScoping._projects_with_modules(
+            noxys={"console": "apps/console", "extension": "apps/extension"}
+        )
+        calls: list[str] = []
+
+        def fake_run_task(**kw):
+            calls.append(kw["task_name"])
+            if kw["task_name"] == "scope":
+                return [RunResult("noxys", "scope", True, "SURFACES: console")]
+            return [RunResult("noxys", kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=400),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            results = orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert calls == ["scope", "console-design"], (
+            f"'extension-design' must be skipped (task never invoked), got: {calls}"
+        )
+        by_target = {r.target: r for r in results}
+        assert by_target["test-pipe:console-design"].skipped is False
+        assert by_target["test-pipe:extension-design"].skipped is True
+        assert by_target["test-pipe:extension-design"].success is True, (
+            "a scope-skip must never be recorded as a failure"
+        )
+
+    def test_surfaces_none_skips_all_only_modules_stages(self) -> None:
+        """An earlier stage declares `SURFACES: none`: every only_modules
+        stage is skipped."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="scope", task="scope"),
+                PipelineStage(
+                    name="console-design", task="console-design", only_modules=["console"]
+                ),
+                PipelineStage(
+                    name="extension-design", task="extension-design", only_modules=["extension"]
+                ),
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = TestOnlyModulesScoping._projects_with_modules(
+            noxys={"console": "apps/console", "extension": "apps/extension"}
+        )
+        calls: list[str] = []
+
+        def fake_run_task(**kw):
+            calls.append(kw["task_name"])
+            if kw["task_name"] == "scope":
+                return [RunResult("noxys", "scope", True, "SURFACES: none")]
+            return [RunResult("noxys", kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=401),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            results = orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert calls == ["scope"], f"both design stages must be skipped, got: {calls}"
+        by_target = {r.target: r for r in results}
+        assert by_target["test-pipe:console-design"].skipped is True
+        assert by_target["test-pipe:extension-design"].skipped is True
+
+    def test_no_surfaces_declared_runs_all_only_modules_stages(self) -> None:
+        """No stage ever emits a `SURFACES:` line: fail-safe -- every
+        only_modules stage runs unscoped, exactly as before this feature."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="scope", task="scope"),
+                PipelineStage(
+                    name="console-design", task="console-design", only_modules=["console"]
+                ),
+                PipelineStage(
+                    name="extension-design", task="extension-design", only_modules=["extension"]
+                ),
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = TestOnlyModulesScoping._projects_with_modules(
+            noxys={"console": "apps/console", "extension": "apps/extension"}
+        )
+        calls: list[str] = []
+
+        def fake_run_task(**kw):
+            calls.append(kw["task_name"])
+            return [RunResult("noxys", kw["task_name"], True, "no scope marker here")]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=402),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            results = orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert calls == ["scope", "console-design", "extension-design"], (
+            f"fail-safe: all only_modules stages must run when SURFACES was never "
+            f"declared, got: {calls}"
+        )
+        by_target = {r.target: r for r in results}
+        assert by_target["test-pipe:console-design"].skipped is False
+        assert by_target["test-pipe:extension-design"].skipped is False
+
+    def test_surfaces_console_and_extension_both_run_others_skip(self) -> None:
+        """`SURFACES: console, extension` -- both those only_modules stages
+        run; a third, unrelated only_modules:[backend] stage skips."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="scope", task="scope"),
+                PipelineStage(
+                    name="console-design", task="console-design", only_modules=["console"]
+                ),
+                PipelineStage(
+                    name="extension-design", task="extension-design", only_modules=["extension"]
+                ),
+                PipelineStage(
+                    name="backend-design", task="backend-design", only_modules=["backend"]
+                ),
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = TestOnlyModulesScoping._projects_with_modules(
+            noxys={
+                "console": "apps/console",
+                "extension": "apps/extension",
+                "backend": "apps/backend",
+            }
+        )
+        calls: list[str] = []
+
+        def fake_run_task(**kw):
+            calls.append(kw["task_name"])
+            if kw["task_name"] == "scope":
+                return [RunResult("noxys", "scope", True, "SURFACES: console, extension")]
+            return [RunResult("noxys", kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=403),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            results = orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert calls == ["scope", "console-design", "extension-design"], (
+            f"'backend-design' must be skipped, got: {calls}"
+        )
+        by_target = {r.target: r for r in results}
+        assert by_target["test-pipe:console-design"].skipped is False
+        assert by_target["test-pipe:extension-design"].skipped is False
+        assert by_target["test-pipe:backend-design"].skipped is True
+
+    def test_scoped_skip_leaves_no_trace_downstream_still_runs(self) -> None:
+        """A stage skipped by the declared-scope gate produces NO output key
+        (its task is never invoked, so `outputs_by_key`/`prior_chunks` are
+        never touched for it) -- and the run carries on: a later, unscoped
+        stage still runs successfully."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="scope", task="scope"),
+                PipelineStage(
+                    name="extension-design", task="extension-design", only_modules=["extension"]
+                ),
+                PipelineStage(name="ship", task="ship"),
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = TestOnlyModulesScoping._projects_with_modules(
+            noxys={"console": "apps/console", "extension": "apps/extension"}
+        )
+        calls: list[str] = []
+        prior_contexts: dict[str, str | None] = {}
+
+        def fake_run_task(**kw):
+            calls.append(kw["task_name"])
+            prior_contexts[kw["task_name"]] = kw.get("prior_context")
+            if kw["task_name"] == "scope":
+                return [RunResult("noxys", "scope", True, "SURFACES: console")]
+            return [RunResult("noxys", kw["task_name"], True, f"{kw['task_name']} output")]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=404),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            results = orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        # 'extension-design' (scoped to console-only this run) never ran.
+        assert calls == ["scope", "ship"]
+        by_target = {r.target: r for r in results}
+        assert by_target["test-pipe:extension-design"].skipped is True
+        # downstream still works: 'ship' ran to completion and never saw the
+        # skipped stage's output in its prior_context.
+        ship_result = by_target["test-pipe:ship"]
+        assert ship_result.skipped is False
+        assert ship_result.success is True
+        assert "extension-design" not in (prior_contexts.get("ship") or "")
+
+
 class TestContinueOnFailure:
     """continue_on_failure controls whether a failed stage fail-fasts the run."""
 
