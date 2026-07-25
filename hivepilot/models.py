@@ -496,6 +496,16 @@ class PipelineStage(BaseModel):
     # When True, a failed stage does not fail-fast the run (the pipeline
     # continues to the next stage instead of breaking).
     continue_on_failure: bool = False
+    # Declared-scope gate (SURFACES restriction follow-up): when True, a
+    # `SURFACES:` line in THIS stage's agent output sets the run's declared
+    # touched-surfaces scope (see `only_modules` / `_parse_surfaces` in
+    # `hivepilot.orchestrator`). Default False -- byte-identical to before
+    # this field existed: with no stage flagged, `selected_modules` stays
+    # `None` for the whole run (fail-safe: every `only_modules` stage runs
+    # unscoped). Only the designated planning stage (e.g. the CTO stage)
+    # should set this to True; every other stage's output is never scanned
+    # for a `SURFACES:` line, no matter what it contains.
+    declares_surfaces: bool = False
     # Skill plugin type (skill-plugin-type PRD, Sprint 3): ordered, deduped
     # names of plugin-contributed skills this stage wants applied. Default
     # None -- dormant, byte-identical when absent. See `TaskStep.skills` for

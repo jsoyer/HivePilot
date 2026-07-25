@@ -140,6 +140,19 @@ def test_pipeline_stage_only_modules_rejects_blank_entries(bad_modules: list[str
         PipelineStage(name="x", task="t", only_modules=bad_modules)
 
 
+def test_pipeline_stage_declares_surfaces_defaults_to_false() -> None:
+    """A stage with `declares_surfaces` unset behaves exactly as before this
+    field existed -- byte-identical default (False): its output is never
+    scanned for a `SURFACES:` line."""
+    stage = PipelineStage(name="x", task="t")
+    assert stage.declares_surfaces is False
+
+
+def test_pipeline_stage_declares_surfaces_accepts_true() -> None:
+    stage = PipelineStage(name="x", task="t", declares_surfaces=True)
+    assert stage.declares_surfaces is True
+
+
 def test_group_tags_defaults_to_empty_dict() -> None:
     group = Group(description="d", hub="h", components=[])
     assert group.tags == {}
