@@ -161,6 +161,9 @@ export const en = {
   'graph.loadingDetail': 'Loading detail…',
   'graph.nodeRequiresTokenLead': "This node's detail requires a",
   'graph.nodeRequiresTokenTail': 'token.',
+  'graph.colorBy': 'Color by',
+  'graph.colorByStatus': 'Status',
+  'graph.colorByKind': 'Kind',
 
   // ---- Mem0 view ---------------------------------------------------------
   'mem0.title': 'Mem0 memory search',

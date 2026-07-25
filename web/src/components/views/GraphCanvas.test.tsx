@@ -19,4 +19,26 @@ describe('GraphCanvas source', () => {
     expect(source).toMatch(/h-\[60vh\]/)
     expect(source).toMatch(/lg:h-\[600px\]/)
   })
+
+  it('IA/Cyber identity: only ever surfaces primitive (string/number/boolean) meta values as on-card metrics, never nested objects/arrays', () => {
+    // Static contract check on `nodeMetrics` — a nested object/array in
+    // `GraphNode.meta` must never be handed to the compact node card (it
+    // belongs in the full `GraphDetail` pane instead); asserting on the
+    // source keeps this honest without needing a DOM mount (react-flow
+    // needs `ResizeObserver`, unavailable in jsdom — see the module note
+    // in `GraphView.test.tsx`).
+    expect(source).toMatch(/typeof value === 'string'/)
+    expect(source).toMatch(/typeof value === 'number'/)
+    expect(source).toMatch(/typeof value === 'boolean'/)
+  })
+
+  it('IA/Cyber identity: the animated flow edge relies on the shared CSS class for its dash animation, never a JS matchMedia check of its own', () => {
+    // Reduced-motion handling for `.flow-edge-path` lives entirely in the
+    // shared `@media (prefers-reduced-motion: reduce)` rule in
+    // `src/index.css` — this file must never duplicate that logic with its
+    // own `window.matchMedia` call (unlike `SweepRadar`, which draws to a
+    // `<canvas>` and genuinely needs JS-level motion detection).
+    expect(source).toMatch(/flow-edge-path/)
+    expect(source).not.toContain('matchMedia')
+  })
 })

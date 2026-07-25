@@ -174,8 +174,13 @@ function MiradorShell() {
     // app-wide via useRole() — see @/lib/role-context. Provider wrap only;
     // no other logic changes here.
     <RoleProvider>
-      <div className="flex min-h-screen flex-col bg-background text-foreground">
-        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-background/95 px-3 py-3 backdrop-blur sm:px-6">
+      {/* IA/Cyber identity: `bg-grid` paints the faint tech-grid + soft
+       * radial glow across the whole shell (see `src/index.css`) — a
+       * background-image only, so it never affects layout/scroll behavior.
+       * The header stays a "glass panel" (semi-transparent + backdrop-blur,
+       * unchanged from before this sprint) floating over that texture. */}
+      <div className="bg-grid flex min-h-screen flex-col text-foreground">
+        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-background/80 px-3 py-3 backdrop-blur-md sm:px-6">
           <Button
             type="button"
             variant="ghost"

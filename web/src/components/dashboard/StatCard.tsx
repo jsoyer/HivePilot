@@ -54,10 +54,12 @@ export function StatCard({ icon, label, value, sub, tone = 'default', className 
           >
             {label}
           </span>
-          <span
-            data-slot="stat-card-value"
-            className={cn('font-mono text-3xl leading-none tracking-tight', toneClasses.value)}
-          >
+          {/* IA/Cyber identity: the shared `metric-mono` utility (mono +
+           * tabular-nums, see `src/index.css`) — same instrument-readout
+           * numeral treatment `MetricReadout`/`Gauge` already use, so every
+           * metric value across the dashboard reads consistently and never
+           * jitters width as digits change. */}
+          <span data-slot="stat-card-value" className={cn('metric-mono text-3xl leading-none', toneClasses.value)}>
             {value}
           </span>
           {sub != null && (

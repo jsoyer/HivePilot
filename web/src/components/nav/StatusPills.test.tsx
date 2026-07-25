@@ -100,4 +100,33 @@ describe('StatusPills', () => {
     const errorPill = pills.find((p) => p.textContent?.includes('broken'))
     expect(okPill?.className).not.toEqual(errorPill?.className)
   })
+
+  it('IA/Cyber identity: pulses the status dot for a healthy plugin, but not for degraded/error ones', async () => {
+    const data: PluginsHealthResponse = {
+      plugins: [
+        { name: 'store', status: 'ok', detail: '' },
+        { name: 'headroom', status: 'degraded', detail: '' },
+        { name: 'broken', status: 'error', detail: '' },
+      ],
+      disabled: [],
+    }
+    mocks.fetchPluginsHealth.mockResolvedValue(data)
+    await mount()
+
+    const dots = Array.from(container.querySelectorAll('[data-testid="status-pill-dot"]'))
+    expect(dots).toHaveLength(3)
+
+    const pills = Array.from(container.querySelectorAll('[data-testid="status-pill"]'))
+    const dotFor = (name: string) => {
+      const pill = pills.find((p) => p.textContent?.includes(name))
+      return pill?.querySelector('[data-testid="status-pill-dot"]')
+    }
+
+    expect(dotFor('store')?.className).toContain('animate-pulse')
+    expect(dotFor('headroom')?.className).not.toContain('animate-pulse')
+    expect(dotFor('broken')?.className).not.toContain('animate-pulse')
+    // The dot never contributes text content — the pill's accessible name
+    // stays exactly "<name> <status>".
+    expect(dotFor('store')?.textContent).toBe('')
+  })
 })
