@@ -22,6 +22,7 @@ from hivepilot.models import (
     PipelineConfig,
     PipelineStage,
     ProjectConfig,
+    ProjectsFile,
     RunnerDefinition,
     TaskConfig,
     TaskStep,
@@ -817,6 +818,107 @@ def _validate_stage_tags(stages: list[PipelineStage], group_tags: dict[str, list
                     f"Pipeline stage '{stage.name}' references undefined tag "
                     f"'{tag}' (not present in this run's Group.tags)"
                 )
+
+
+def _validate_stage_modules(
+    stages: list[PipelineStage],
+    project_names: list[str],
+    projects: ProjectsFile,
+    group: Group | None = None,
+) -> None:
+    """Fail-closed guard: every module named in a stage's ``only_modules``
+    must exist in EVERY project this run targets (*project_names*)'s
+    ``modules`` map.
+
+    Raises ``ValueError`` naming the offending stage/project/module (and the
+    project's available modules) on the first mismatch found, or if the
+    target project declares no ``modules`` map at all. Called once, up
+    front (before any stage executes) — mirrors ``_validate_stage_tags``.
+    Stages with ``only_modules`` unset (``None``, the default) are skipped
+    entirely, so a pipeline that never declares ``only_modules`` is
+    completely unaffected by this guard.
+
+    Two additional fail-closed checks (opus review follow-up, sprint 2):
+
+    1. **Group-mode misconfig.** ``only_modules`` expansion only ever
+       applies in the non-group / single-project targets path (see
+       ``_expand_stage_targets_for_modules``) — a stage declaring
+       ``only_modules`` on a GROUP-mode run (*group* is not ``None``) would
+       otherwise have its scoping silently ignored. Raise instead of
+       silently no-oping.
+    2. **Unknown target project.** A *project_name* not present in
+       *projects* would otherwise reach ``_expand_stage_targets_for_modules``
+       and silently produce zero expanded targets (empty ``run_task([])``,
+       a silent no-op) — raise ``ValueError`` naming the unknown project
+       instead, mirroring the loud "Unknown project" error a non-module
+       stage path already gives via ``Orchestrator._project``.
+    """
+    for stage in stages:
+        if not stage.only_modules:
+            continue
+        if group is not None:
+            raise ValueError(
+                f"Pipeline stage '{stage.name}' declares only_modules="
+                f"{stage.only_modules} but this run is in group mode -- "
+                "only_modules applies to single-project/non-group pipelines "
+                "only (group-mode fan-out uses only_components/only_tags "
+                "instead); remove only_modules from this stage or run this "
+                "pipeline without a group"
+            )
+        for project_name in project_names:
+            project = projects.projects.get(project_name)
+            if project is None:
+                raise ValueError(
+                    f"Unknown project '{project_name}' -- pipeline stage "
+                    f"'{stage.name}' declares only_modules={stage.only_modules} "
+                    f"but '{project_name}' is not a configured project"
+                )
+            if not project.modules:
+                raise ValueError(
+                    f"Pipeline stage '{stage.name}' declares only_modules="
+                    f"{stage.only_modules} but project '{project_name}' has no "
+                    "'modules' map defined (only_modules requires a modular project)"
+                )
+            for module in stage.only_modules:
+                if module not in project.modules:
+                    raise ValueError(
+                        f"Pipeline stage '{stage.name}' references undefined module "
+                        f"'{module}' for project '{project_name}' "
+                        f"(available modules: {sorted(project.modules)})"
+                    )
+
+
+def _expand_stage_targets_for_modules(
+    stage: PipelineStage, targets: list[str], projects: ProjectsFile
+) -> list[str]:
+    """Expand *targets* (plain project names) into ``<project>/<module>``
+    targets for every module named in ``stage.only_modules``, when set.
+
+    Each expanded target string is resolved by ``run_task``/
+    ``Orchestrator._resolve_run_target`` exactly like any other
+    ``"project/module"`` target (module-scoped ``working_subdir``, see
+    ``hivepilot.services.project_service.resolve_project_target``) — this
+    function only builds the target strings, it never touches path
+    resolution itself.
+
+    Returns *targets* unchanged when ``stage.only_modules`` is ``None`` (the
+    default) — byte-identical to pre-``only_modules`` behaviour. Every
+    module named in ``stage.only_modules`` is guaranteed to exist in every
+    target project's ``modules`` map by the time this runs
+    (``_validate_stage_modules`` already raised otherwise), so the
+    membership check below is defense-in-depth, not the primary guard.
+    """
+    if stage.only_modules is None:
+        return targets
+    expanded: list[str] = []
+    for project_name in targets:
+        project = projects.projects.get(project_name)
+        if project is None or not project.modules:
+            continue  # unknown/non-modular project — _validate_stage_modules already raised
+        expanded.extend(
+            f"{project_name}/{module}" for module in stage.only_modules if module in project.modules
+        )
+    return expanded
 
 
 def _stage_should_skip(
@@ -2720,6 +2822,15 @@ class Orchestrator:
 
         project_names = list(project_names)
 
+        # Stage scoping (only_modules): mirrors the only_tags guard directly
+        # above -- fail closed, up front, before any stage executes, if a
+        # stage's only_modules references a module undefined for one of this
+        # run's target projects, targets a project with no `modules` map at
+        # all, targets an unknown project, or is declared on a group-mode
+        # run (only_modules is only ever EXPANDED into targets in the
+        # non-group path below -- see `_validate_stage_modules`).
+        _validate_stage_modules(pipeline.stages, project_names, self.projects, group=group)
+
         # Group mode: planning stages (before the checkpoint) run once in the hub;
         # execution stages (the pause_before stage onward) fan out over components.
         group_mode = bool(components)
@@ -2910,7 +3021,13 @@ class Orchestrator:
                     # artifacts are persisted via the vault auto-commit instead.
                     stage_auto_git = auto_git and not is_hub_stage
             else:
-                targets = project_names
+                # only_modules (monorepo-modules PRD follow-up): expand each
+                # plain project target into `<project>/<module>` per named
+                # module, ONLY in this non-group / single-project targets
+                # path -- group-mode fan-out above is untouched. A stage with
+                # only_modules unset (None, the default) returns targets
+                # unchanged -- byte-identical to before this field existed.
+                targets = _expand_stage_targets_for_modules(stage, project_names, self.projects)
                 stage_auto_git = auto_git
             # PRD A2 Sprint 2: resolve the CONSUMING stage's role (the stage
             # about to run) to decide whether prior_context is routed from the

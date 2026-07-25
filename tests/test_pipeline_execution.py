@@ -618,6 +618,257 @@ class TestStageScoping:
             mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
 
 
+class TestOnlyModulesScoping:
+    """PipelineStage.only_modules expands non-group targets into
+    `<project>/<module>` per named module (monorepo-modules PRD follow-up).
+    None (unset) is byte-identical to pre-only_modules behaviour; an
+    undefined module or a project with no `modules` map raises ValueError
+    up front, fail-closed, before any stage executes."""
+
+    @staticmethod
+    def _projects_with_modules(**project_modules: dict[str, str] | None) -> Any:
+        """Build a ProjectsFile: project name -> modules map (None means the
+        project declares no `modules` map at all)."""
+        from hivepilot.models import ProjectConfig, ProjectsFile
+
+        return ProjectsFile(
+            projects={
+                name: ProjectConfig(path=Path(f"/tmp/{name}"), modules=modules or {})
+                for name, modules in project_modules.items()
+            }
+        )
+
+    def test_unset_only_modules_leaves_targets_unchanged(self) -> None:
+        """A stage with only_modules unset (None) targets the plain project
+        name -- byte-identical to before this field existed."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="build", task="build")],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(
+            noxys={"console": "apps/console", "api": "apps/api"}
+        )
+        seen_targets: list[list[str]] = []
+
+        def fake_run_task(**kw):
+            seen_targets.append(list(kw["project_names"]))
+            return [RunResult("noxys", kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=200),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert seen_targets == [["noxys"]]
+
+    def test_only_modules_expands_target_per_module(self) -> None:
+        """A non-empty only_modules expands 'noxys' -> 'noxys/console',
+        'noxys/api' (one target per named module)."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="ui-review", task="review", only_modules=["console", "api"])
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(
+            noxys={"console": "apps/console", "api": "apps/api", "core": "apps/core"}
+        )
+        seen_targets: list[list[str]] = []
+
+        def fake_run_task(**kw):
+            seen_targets.append(list(kw["project_names"]))
+            return [RunResult("noxys", kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=201),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert seen_targets == [["noxys/console", "noxys/api"]]
+
+    def test_only_modules_fanout_count_matches_named_modules(self) -> None:
+        """The number of expanded targets equals len(only_modules), not the
+        project's total module count."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="ui-review", task="review", only_modules=["console"])],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(
+            noxys={"console": "apps/console", "api": "apps/api", "core": "apps/core"}
+        )
+        seen_targets: list[list[str]] = []
+
+        def fake_run_task(**kw):
+            seen_targets.append(list(kw["project_names"]))
+            return [RunResult("noxys", kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=202),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert len(seen_targets[0]) == 1
+        assert seen_targets == [["noxys/console"]]
+
+    def test_undefined_module_raises_value_error_up_front(self) -> None:
+        """Fail-closed: an only_modules entry not present in the target
+        project's `modules` map raises ValueError before any stage runs."""
+        import pytest
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="ui-review", task="review", only_modules=["missing"])],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(noxys={"console": "apps/console"})
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start") as mock_start,
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        ):
+            with pytest.raises(ValueError, match="missing"):
+                orch.run_pipeline(
+                    project_names=["noxys"],
+                    pipeline_name="test-pipe",
+                    extra_prompt=None,
+                    auto_git=False,
+                    dry_run=True,
+                )
+            mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
+
+    def test_project_without_modules_map_raises_value_error(self) -> None:
+        """Fail-closed: only_modules on a stage targeting a project with NO
+        `modules` map at all raises ValueError (scoping a non-modular
+        project is misconfiguration)."""
+        import pytest
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="ui-review", task="review", only_modules=["console"])],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(plainproj=None)
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start") as mock_start,
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        ):
+            with pytest.raises(ValueError, match="modules"):
+                orch.run_pipeline(
+                    project_names=["plainproj"],
+                    pipeline_name="test-pipe",
+                    extra_prompt=None,
+                    auto_git=False,
+                    dry_run=True,
+                )
+            mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
+
+    def test_only_modules_in_group_mode_raises_value_error_up_front(self) -> None:
+        """Fail-closed (opus review nit): only_modules is meaningless in
+        GROUP mode -- group-mode fan-out uses only_components/only_tags, and
+        only_modules expansion only ever applies in the non-group targets
+        path -- so a stage declaring only_modules on a group-mode run must
+        raise up front instead of silently having its scoping ignored."""
+        import pytest
+
+        from hivepilot.models import Group
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="ui-review", task="review", only_modules=["console"])],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(noxys={"console": "apps/console"})
+        group = Group(description="d", hub="hub", components=["noxys"])
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start") as mock_start,
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        ):
+            with pytest.raises(ValueError, match="group mode"):
+                orch.run_pipeline(
+                    project_names=["hub"],
+                    pipeline_name="test-pipe",
+                    extra_prompt=None,
+                    auto_git=False,
+                    dry_run=True,
+                    hub="hub",
+                    components=["noxys"],
+                    group=group,
+                )
+            mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
+
+    def test_only_modules_unknown_project_raises_value_error_up_front(self) -> None:
+        """Fail-closed (opus review nit): only_modules on a stage targeting a
+        project name that isn't in projects.yaml raises 'Unknown project' up
+        front, instead of silently no-oping (unknown project -> empty
+        expanded targets -> run_task([]))."""
+        import pytest
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[PipelineStage(name="ui-review", task="review", only_modules=["console"])],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = self._projects_with_modules(noxys={"console": "apps/console"})
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start") as mock_start,
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+        ):
+            with pytest.raises(ValueError, match="Unknown project"):
+                orch.run_pipeline(
+                    project_names=["does-not-exist"],
+                    pipeline_name="test-pipe",
+                    extra_prompt=None,
+                    auto_git=False,
+                    dry_run=True,
+                )
+            mock_start.assert_not_called()  # fails before any run/stage bookkeeping starts
+
+
 class TestContinueOnFailure:
     """continue_on_failure controls whether a failed stage fail-fasts the run."""
 
