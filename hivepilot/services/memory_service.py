@@ -407,6 +407,92 @@ def recent_evaluations(tenant: str | None = None, limit: int = 50) -> list[dict[
     ]
 
 
+# ---------------------------------------------------------------------------
+# growth_summary (Mirador data endpoints sprint) -- GET /v1/memory/growth.
+# ---------------------------------------------------------------------------
+
+
+def growth_summary(tenant: str | None = None, days: int | None = 30) -> dict[str, Any]:
+    """Memory growth aggregates for Mirador's growth panel, derived from
+    `memory_events` (`op='store'` rows only -- search/read events don't
+    represent a memory being CREATED).
+
+    **What's real vs. what's not.** `total`/`memories_by_namespace`/
+    `growth_series`/`by_actor` are all real counts of STORE EVENTS this
+    module has recorded (i.e. how many times `plugins/mem0.py`'s `store()`
+    hook fired) -- NOT necessarily the current distinct memory count inside
+    mem0's own store (mem0 may dedupe/merge/evict independently, and this
+    module has no way to query mem0's client for that count: `mem0ai` isn't
+    even installed as a hivepilot dependency -- see `plugins/mem0.py`'s own
+    docstring for the "optional, lazily imported" contract). ``source``
+    documents this explicitly so a caller never mistakes an event count for
+    mem0's live store size.
+
+    A TRUE human vs. agent authorship split is investigated and confirmed
+    NOT available: every recorded store event originates from the SAME
+    automated `mem0` plugin hook (`recall`/`store`, both lifecycle hooks
+    the orchestrator invokes) -- there is no human-initiated write path
+    into mem0 today. `authorship` is therefore always ``None`` here (never
+    fabricated as e.g. ``{"human": 0, "agent": N}``, which would falsely
+    imply the distinction is tracked). `by_actor` is offered instead: a
+    REAL breakdown by the ``actor`` field each store event recorded (the
+    invoking task's ROLE, or ``"system"`` as a fallback -- see
+    `plugins/mem0.py`'s `record_store` call site) -- genuinely available
+    data, just not the same thing as human/agent authorship.
+
+    Tenant-scoped and windowed exactly like `reality_summary`/
+    `gaps_by_namespace` (mirrors `_scope`/`_resolve_window`). Zero-safe:
+    every list is ``[]`` and ``total`` is ``0`` on an empty/no-match table
+    -- never crashes, never a fabricated number.
+    """
+    init_db()
+    since = _resolve_window(days)
+    clauses, params = _scope(tenant, since)
+    clauses = clauses + ["op='store'"]
+
+    with db.connect() as conn:
+        rows = conn.execute(
+            db.ph(f"SELECT ts, namespace, actor FROM memory_events {_where(clauses)}"),
+            tuple(params),
+        ).fetchall()
+
+    total = len(rows)
+    by_namespace: dict[str, int] = defaultdict(int)
+    by_actor: dict[str, int] = defaultdict(int)
+    by_day: dict[str, int] = defaultdict(int)
+    for row in rows:
+        by_namespace[row["namespace"] or "unknown"] += 1
+        by_actor[row["actor"] or "unknown"] += 1
+        day_key = (row["ts"] or "")[:10]
+        if day_key:
+            by_day[day_key] += 1
+
+    memories_by_namespace = [
+        {"namespace": namespace, "count": count}
+        for namespace, count in sorted(by_namespace.items(), key=lambda kv: -kv[1])
+    ]
+
+    by_actor_list = [
+        {"actor": actor, "count": count}
+        for actor, count in sorted(by_actor.items(), key=lambda kv: -kv[1])
+    ]
+
+    growth_series = [{"date": day, "created": count} for day, count in sorted(by_day.items())]
+
+    return {
+        "total": total,
+        "memories_by_namespace": memories_by_namespace,
+        "growth_series": growth_series,
+        "authorship": None,
+        "by_actor": by_actor_list,
+        "source": (
+            "memory_events (recorded store events fired by the mem0 plugin hook) -- "
+            "not queried directly from mem0's own store, which may dedupe/evict "
+            "independently; see growth_summary()'s docstring for the full caveat."
+        ),
+    }
+
+
 def activity_journal(tenant: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
     """Most recent memory events (search/read/store) for *tenant*, newest
     first. Returns ``[]`` when there are none — never crashes on an empty

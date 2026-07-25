@@ -384,3 +384,74 @@ class TestMemoryUnversionedRoutes:
         raw, _ = add_token("read")
         resp = api_client.get("/memory/reality", headers=_auth(raw))
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/memory/growth (Mirador data endpoints sprint)
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryGrowthEndpoint:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/memory/growth")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/memory/growth", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_allows_read_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/memory/growth", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/memory/growth", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_empty_is_zero_safe_not_500(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/memory/growth", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["memories_by_namespace"] == []
+        assert data["growth_series"] == []
+        assert data["authorship"] is None
+
+    def test_reflects_seeded_store_events(self, api_client, tmp_tokens_file):
+        from hivepilot.services import memory_service
+
+        memory_service.record_store(namespace="ns", key="k1", actor="developer", tenant="acme")
+        memory_service.record_store(namespace="ns", key="k2", actor="developer", tenant="acme")
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/memory/growth", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert data["memories_by_namespace"] == [{"namespace": "ns", "count": 2}]
+
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import memory_service
+
+        memory_service.record_store(namespace="ns", key="k1", actor="x", tenant="acme")
+        memory_service.record_store(namespace="ns", key="k2", actor="x", tenant="other")
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/memory/growth", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1
+
+    def test_admin_sees_all_tenants(self, api_client, tmp_tokens_file):
+        from hivepilot.services import memory_service
+
+        memory_service.record_store(namespace="ns", key="k1", actor="x", tenant="acme")
+        memory_service.record_store(namespace="ns", key="k2", actor="x", tenant="other")
+
+        raw, _ = add_token("admin")
+        resp = api_client.get("/v1/memory/growth", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 2

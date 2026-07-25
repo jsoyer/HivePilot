@@ -31,6 +31,7 @@ from hivepilot.services import (
     analytics_service,
     async_run_service,
     chatops_service,
+    efficiency_service,
     memory_service,
     notification_service,
     policy_service,
@@ -1146,6 +1147,50 @@ def analytics_cost(
 
 
 # ---------------------------------------------------------------------------
+# Mirador data endpoints sprint — GET /v1/models, GET /v1/efficiency.
+# Same shape as the analytics endpoints above: Depends(require_role("read")),
+# tenant-filtered via `_analytics_tenant` for /v1/models (run/step data);
+# `/v1/efficiency`'s `headroom` half is tenant-scoped the same way, but its
+# `rtk` half is intentionally NOT tenant-scoped — see
+# `hivepilot.services.efficiency_service`'s module docstring for why (it's
+# global, machine-level dev-tool telemetry, not hivepilot run/tenant data).
+# ---------------------------------------------------------------------------
+
+
+@v1.get("/models")
+@app.get("/models")
+def models_endpoint(
+    days: int = 30,
+    project: str | None = None,
+    task: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Per-model rollup (Mirador data endpoints sprint): cost, tokens, step
+    count, success rate, share of spend, and an overall cost-per-successful
+    -run figure — see `analytics_service.models_summary`'s docstring for the
+    full contract (including why p50/p95 latency is honestly omitted rather
+    than fabricated)."""
+    return analytics_service.models_summary(
+        tenant=_analytics_tenant(caller), days=days, project=project, task=task
+    )
+
+
+@v1.get("/efficiency")
+@app.get("/efficiency")
+def efficiency_endpoint(
+    days: int = 30,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """`{"headroom": <real dict, never null>, "rtk": <real dict or null>}`
+    (Mirador data endpoints sprint) — see
+    `hivepilot.services.efficiency_service`'s module docstring for the full
+    investigation behind each source. Never 500s: `efficiency_summary`
+    itself never raises (headroom is a zero-safe DB read, rtk is a
+    best-effort shell-out that degrades to `None` on any failure)."""
+    return efficiency_service.efficiency_summary(tenant=_analytics_tenant(caller), days=days)
+
+
+# ---------------------------------------------------------------------------
 # Memory-quality instrumentation subsystem — backs Mirador's "Réalité" view.
 # Sibling to the analytics endpoints above, same shape: every GET endpoint
 # Depends(require_role("read")), tenant-filtered from the caller's token via
@@ -1217,6 +1262,19 @@ def memory_journal(
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> dict[str, Any]:
     return {"journal": memory_service.activity_journal(tenant=_memory_tenant(caller), limit=limit)}
+
+
+@v1.get("/memory/growth")
+@app.get("/memory/growth")
+def memory_growth(
+    days: int = 30,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Memory growth aggregates (Mirador data endpoints sprint) — see
+    `memory_service.growth_summary`'s docstring for the full contract,
+    including why `authorship` (human vs. agent) is always `None` rather
+    than a fabricated split."""
+    return memory_service.growth_summary(tenant=_memory_tenant(caller), days=days)
 
 
 class MemoryEvaluationRequest(BaseModel):

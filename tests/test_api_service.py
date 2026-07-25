@@ -555,6 +555,192 @@ class TestAnalyticsCostCsvExport:
 
 
 # ---------------------------------------------------------------------------
+# Mirador data endpoints sprint — /v1/analytics/cost by_project/by_role
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsCostByProjectAndRole:
+    def test_json_shape_includes_by_project_and_by_role(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("proj-x", "t", status="running")
+        state_service.record_step(run_id, "s1", "success", provider="claude", cost_usd=1.0)
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["by_project"] == [
+            {
+                "project": "proj-x",
+                "total_steps": 1,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 1.0,
+                "unpriced_steps": 0,
+            }
+        ]
+        # role isn't trackable in current data — honest null + reason, never
+        # fabricated as an empty-but-present breakdown.
+        assert data["by_role"] is None
+        assert isinstance(data["by_role_note"], str) and data["by_role_note"]
+        assert data["unpriced_models"] == []
+
+    def test_by_project_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", provider="claude", cost_usd=1.0)
+        state_service.record_step(run_other, "s1", "success", provider="claude", cost_usd=1.0)
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/cost", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["by_project"][0]["total_steps"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Mirador data endpoints sprint — GET /v1/models
+# ---------------------------------------------------------------------------
+
+
+class TestModelsEndpoint:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/models")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/models", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_empty_is_empty_models_not_500(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/models", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["models"] == []
+        assert data["overall"]["cost_per_successful_run"] is None
+        assert data["latency_available"] is False
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/models", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_rollup_reflects_seeded_steps(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("p", "t", status="success")
+        state_service.record_step(
+            run_id, "s1", "success", provider="claude", model="claude-sonnet-4-6", cost_usd=2.0
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/models", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["models"]) == 1
+        assert data["models"][0]["model"] == "claude-sonnet-4-6"
+        assert data["models"][0]["cost_usd"] == 2.0
+        assert data["overall"]["cost_per_successful_run"] == 2.0
+
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", provider="claude", cost_usd=1.0)
+        state_service.record_step(run_other, "s1", "success", provider="claude", cost_usd=1.0)
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/models", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["overall"]["total_steps"] == 1
+
+    def test_admin_sees_all_tenants(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(run_acme, "s1", "success", provider="claude", cost_usd=1.0)
+        state_service.record_step(run_other, "s1", "success", provider="claude", cost_usd=1.0)
+
+        raw, _ = add_token("admin")
+        resp = api_client.get("/v1/models", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["overall"]["total_steps"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Mirador data endpoints sprint — GET /v1/efficiency
+# ---------------------------------------------------------------------------
+
+
+class TestEfficiencyEndpoint:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/efficiency")
+        assert resp.status_code == 401
+
+    def test_rejects_unrecognized_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("bogus-role")
+        resp = api_client.get("/v1/efficiency", headers=_auth(raw))
+        assert resp.status_code == 403
+
+    def test_headroom_always_real_rtk_null_when_absent(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(api_service.efficiency_service.shutil, "which", lambda *a, **k: None)
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/efficiency", headers=_auth(raw))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["headroom"]["total_compressions"] == 0
+        assert data["rtk"] is None
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(api_service.efficiency_service.shutil, "which", lambda *a, **k: None)
+        raw, _ = add_token("read")
+        resp = api_client.get("/efficiency", headers=_auth(raw))
+        assert resp.status_code == 200
+
+    def test_never_500s_when_rtk_shellout_raises(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(
+            api_service.efficiency_service.shutil, "which", lambda *a, **k: "/usr/bin/rtk"
+        )
+
+        def _boom(*args, **kwargs):
+            raise OSError("no such file")
+
+        monkeypatch.setattr(api_service.efficiency_service.subprocess, "run", _boom)
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/efficiency", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["rtk"] is None
+
+    def test_headroom_tenant_scoped(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import api_service, headroom_metrics
+
+        monkeypatch.setattr(api_service.efficiency_service.shutil, "which", lambda *a, **k: None)
+        headroom_metrics.record_compression(
+            tenant="acme", step="s", chars_before=100, chars_after=10, ratio=0.1
+        )
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/efficiency", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json()["headroom"]["total_compressions"] == 1
+
+        raw_other, _ = add_token("read", tenant="other")
+        resp_other = api_client.get("/v1/efficiency", headers=_auth(raw_other))
+        assert resp_other.json()["headroom"]["total_compressions"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Mirador web UI surface (Sprint 1): GET /v1/plugins/health, GET /v1/memories
 # ---------------------------------------------------------------------------
 

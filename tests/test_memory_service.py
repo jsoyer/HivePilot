@@ -195,6 +195,103 @@ class TestTenantIsolation:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# growth_summary (Mirador data endpoints sprint) -- GET /v1/memory/growth.
+# Real data derived from `memory_events` (op='store'); `authorship` is
+# always None + documented (mem0 has no human-write path today -- see
+# module docstring).
+# ---------------------------------------------------------------------------
+
+
+class TestGrowthSummary:
+    def test_empty_is_zero_safe(self):
+        summary = memory_service.growth_summary(tenant="default", days=30)
+        assert summary["total"] == 0
+        assert summary["memories_by_namespace"] == []
+        assert summary["growth_series"] == []
+        assert summary["by_actor"] == []
+        assert summary["authorship"] is None
+        assert isinstance(summary["source"], str) and summary["source"]
+
+    def test_counts_only_store_events_not_search_or_read(self):
+        memory_service.record_search(namespace="ns", query="q", result_count=1, actor="x")
+        memory_service.record_read(namespace="ns", key="k", found=True, actor="x")
+        memory_service.record_store(namespace="ns", key="k", actor="x")
+        summary = memory_service.growth_summary(tenant="default", days=30)
+        assert summary["total"] == 1
+
+    def test_memories_by_namespace_grouped_and_sorted_desc(self):
+        memory_service.record_store(namespace="ns-a", key="k1", actor="x")
+        memory_service.record_store(namespace="ns-a", key="k2", actor="x")
+        memory_service.record_store(namespace="ns-b", key="k3", actor="x")
+        summary = memory_service.growth_summary(tenant="default", days=30)
+        assert summary["memories_by_namespace"] == [
+            {"namespace": "ns-a", "count": 2},
+            {"namespace": "ns-b", "count": 1},
+        ]
+
+    def test_by_actor_reflects_invoking_role_not_human_agent_split(self):
+        memory_service.record_store(namespace="ns", key="k1", actor="developer")
+        memory_service.record_store(namespace="ns", key="k2", actor="developer")
+        memory_service.record_store(namespace="ns", key="k3", actor="system")
+        summary = memory_service.growth_summary(tenant="default", days=30)
+        by_actor = {row["actor"]: row["count"] for row in summary["by_actor"]}
+        assert by_actor == {"developer": 2, "system": 1}
+
+    def test_authorship_always_none_never_fabricated(self):
+        """mem0 has no human-initiated write path -- every recorded store
+        event comes from the same automated plugin hook. A human/agent
+        authorship split would be either fabricated (a fake 'human' count)
+        or misleading (an always-zero 'human' count implying the split IS
+        tracked) -- must always be None."""
+        memory_service.record_store(namespace="ns", key="k1", actor="developer")
+        summary = memory_service.growth_summary(tenant="default", days=30)
+        assert summary["authorship"] is None
+
+    def test_growth_series_buckets_by_day(self):
+        from hivepilot.services import db
+
+        memory_service.init_db()
+        with db.connect() as conn:
+            conn.execute(
+                db.ph(
+                    "INSERT INTO memory_events (tenant, op, namespace, query_or_key, actor, ts) "
+                    "VALUES (?, 'store', ?, ?, ?, ?)"
+                ),
+                ("default", "ns", "k1", "x", "2026-01-01 10:00:00"),
+            )
+            conn.execute(
+                db.ph(
+                    "INSERT INTO memory_events (tenant, op, namespace, query_or_key, actor, ts) "
+                    "VALUES (?, 'store', ?, ?, ?, ?)"
+                ),
+                ("default", "ns", "k2", "x", "2026-01-01 11:00:00"),
+            )
+            conn.execute(
+                db.ph(
+                    "INSERT INTO memory_events (tenant, op, namespace, query_or_key, actor, ts) "
+                    "VALUES (?, 'store', ?, ?, ?, ?)"
+                ),
+                ("default", "ns", "k3", "x", "2026-01-02 09:00:00"),
+            )
+        summary = memory_service.growth_summary(tenant="default", days=None)
+        assert summary["growth_series"] == [
+            {"date": "2026-01-01", "created": 2},
+            {"date": "2026-01-02", "created": 1},
+        ]
+
+    def test_tenant_scoped(self):
+        memory_service.record_store(namespace="ns", key="k1", actor="x", tenant="acme")
+        memory_service.record_store(namespace="ns", key="k2", actor="x", tenant="other")
+        assert memory_service.growth_summary(tenant="acme", days=30)["total"] == 1
+        assert memory_service.growth_summary(tenant="other", days=30)["total"] == 1
+
+    def test_admin_unscoped_tenant_none_sees_all(self):
+        memory_service.record_store(namespace="ns", key="k1", actor="x", tenant="acme")
+        memory_service.record_store(namespace="ns", key="k2", actor="x", tenant="other")
+        assert memory_service.growth_summary(tenant=None, days=30)["total"] == 2
+
+
 class TestRecordNeverRaises:
     def test_record_search_survives_db_failure(self, monkeypatch):
         from hivepilot.services import db

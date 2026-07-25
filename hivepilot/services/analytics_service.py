@@ -638,6 +638,23 @@ def _accumulate_cost(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# `steps`/`runs` carry no `role` column (INVESTIGATED for the Mirador data
+# endpoints sprint -- see `state_service.init_db()`'s `steps` table DDL and
+# every `_add_column_if_missing(conn, "steps", ...)` migration: `provider`,
+# `model`, `input_tokens`, `output_tokens`, `cost_usd` -- no `role`). `role`
+# only exists on unrelated tables (`interactions`, `lessons`, `tokens`,
+# `audit_log`). A cost-by-role breakdown is therefore NOT derivable from
+# current data -- `cost_summary`'s `by_role` is always `None` (never
+# fabricated as an empty-but-present list), paired with `by_role_note`
+# explaining why.
+_BY_ROLE_UNAVAILABLE_NOTE = (
+    "cost_summary.by_role is unavailable: the steps/runs tables persist "
+    "provider/model/token/cost columns but no role column (role only exists "
+    "on interactions/lessons/tokens/audit_log). Add a steps.role column and "
+    "backfill it from TaskConfig.role to make this breakdown possible."
+)
+
+
 def cost_summary(
     tenant: str | None = None,
     days: int | None = 30,
@@ -646,15 +663,24 @@ def cost_summary(
     project: str | None = None,
     task: str | None = None,
 ) -> dict[str, Any]:
-    """Cost/token totals, overall and grouped by `provider` and `model`.
+    """Cost/token totals, overall and grouped by `provider`, `model`, and
+    `project`.
 
     Tenant-scoped via `steps JOIN runs` (mirrors `_steps_grouped_by`). A
     `NULL` provider/model groups under the literal key ``"unknown"`` — never
-    dropped, never invented. Each group (and the overall total) reports both
-    the summed cost AND ``unpriced_steps`` — a count of steps that had no
-    cost signal at all (no self-reported `cost_usd` and no price-map match),
-    so a dashboard can show coverage instead of presenting a total that
-    silently omits unpriced steps as if it were complete.
+    dropped, never invented (a run's `project` is a required field, so no
+    `NULL` case exists there). Each group (and the overall total) reports
+    both the summed cost AND ``unpriced_steps`` — a count of steps that had
+    no cost signal at all (no self-reported `cost_usd` and no price-map
+    match), so a dashboard can show coverage instead of presenting a total
+    that silently omits unpriced steps as if it were complete.
+    ``unpriced_models`` lists which model names (from ``by_model``) have at
+    least one unpriced step, so a dashboard can point at exactly what's
+    missing from the price map.
+
+    ``by_role`` is always ``None`` -- see `_BY_ROLE_UNAVAILABLE_NOTE` (paired
+    with ``by_role_note`` in the return value): investigated and confirmed
+    unavailable in current data, not simply omitted.
     """
     state_service.init_db()
     since_ts, until_ts = _resolve_window(days, since, until)
@@ -678,7 +704,7 @@ def cost_summary(
         params.append(until_ts)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
-        SELECT s.provider AS provider, s.model AS model,
+        SELECT s.provider AS provider, s.model AS model, r.project AS project,
                s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
                s.cost_usd AS cost_usd
         FROM steps s
@@ -701,8 +727,149 @@ def cost_summary(
     model_summary = [{"model": key, **_accumulate_cost(group)} for key, group in by_model.items()]
     model_summary.sort(key=lambda r: -r["cost_usd"])
 
+    by_project: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_project[row.get("project") or "unknown"].append(row)
+    project_summary = [
+        {"project": key, **_accumulate_cost(group)} for key, group in by_project.items()
+    ]
+    project_summary.sort(key=lambda r: -r["cost_usd"])
+    unpriced_models = sorted(row["model"] for row in model_summary if row["unpriced_steps"] > 0)
+
     return {
         "overall": _accumulate_cost(rows),
         "by_provider": provider_summary,
         "by_model": model_summary,
+        "by_project": project_summary,
+        "by_role": None,
+        "by_role_note": _BY_ROLE_UNAVAILABLE_NOTE,
+        "unpriced_models": unpriced_models,
+    }
+
+
+# ---------------------------------------------------------------------------
+# models_summary (Mirador data endpoints sprint) — per-model rollup for
+# GET /v1/models: cost, tokens, step count, success rate, share of spend,
+# and an overall cost-per-successful-run figure.
+# ---------------------------------------------------------------------------
+
+
+_LATENCY_UNAVAILABLE_NOTE = (
+    "p50/p95 latency is not computable from current data and is intentionally "
+    "omitted rather than fabricated: steps.timestamp is a single point-in-time "
+    "value (no per-step start/end pair -- see state_service.record_step()), and "
+    "runs.started_at/finished_at describe the WHOLE run, which can span "
+    "multiple steps/models -- attributing a run's duration to just one of its "
+    "models would misattribute latency. Add a steps.duration_seconds (or "
+    "started_at/finished_at pair) column to make this measurable."
+)
+
+
+def models_summary(
+    tenant: str | None = None,
+    days: int | None = 30,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    task: str | None = None,
+) -> dict[str, Any]:
+    """Per-model rollup backing `GET /v1/models`: cost, tokens, step count,
+    success rate, and each model's share of total in-window spend, plus an
+    overall cost-per-successful-run figure.
+
+    Reuses the same `steps JOIN runs` query shape as `cost_summary`/
+    `_steps_grouped_by` — tenant-scoped, `NULL` model groups under
+    ``"unknown"``. ``success_rate`` uses `_attempt_success_rate` (excludes
+    skipped/other from the denominator — see that function's docstring).
+    ``share_of_spend`` is each model's ``cost_usd`` divided by the in-window
+    total across all models (``0.0`` when the total is ``0.0``, never a
+    ``ZeroDivisionError``). Sorted by descending cost (biggest spender
+    first).
+
+    ``overall.cost_per_successful_run`` divides the in-window total cost by
+    the count of RUNS (not steps) whose canonical outcome is "succeeded" in
+    the same window (`runs.started_at`-scoped, mirroring `run_summary`) —
+    ``None`` when there are zero succeeded runs (never a misleading `0.0`,
+    mirrors `_attempt_success_rate`'s own "no attempts -> None" contract).
+
+    Latency (p50/p95): NOT computable from current data — see
+    `_LATENCY_UNAVAILABLE_NOTE` (``latency_available=False`` +
+    ``latency_note`` in the return value) — intentionally omitted per model
+    rather than fabricated.
+    """
+    state_service.init_db()
+    since_ts, until_ts = _resolve_window(days, since, until)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if project is not None:
+        clauses.append("r.project=?")
+        params.append(project)
+    if task is not None:
+        clauses.append("r.task=?")
+        params.append(task)
+    if since_ts is not None:
+        clauses.append("s.timestamp>=?")
+        params.append(since_ts)
+    if until_ts is not None:
+        clauses.append("s.timestamp<=?")
+        params.append(until_ts)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT s.model AS model, s.status AS status,
+               s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
+               s.cost_usd AS cost_usd
+        FROM steps s
+        JOIN runs r ON r.id = s.run_id
+        {where}
+    """
+    with db.connect() as conn:
+        rows = [dict(row) for row in conn.execute(db.ph(sql), tuple(params)).fetchall()]
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[row.get("model") or "unknown"].append(row)
+
+    overall_cost = _accumulate_cost(rows)
+    total_cost = overall_cost["cost_usd"]
+
+    models: list[dict[str, Any]] = []
+    for key, group in grouped.items():
+        cost_stats = _accumulate_cost(group)
+        outcome_counts = {o.value: 0 for o in Outcome}
+        for row in group:
+            outcome_counts[canonical_outcome(row.get("status"))] += 1
+        models.append(
+            {
+                "model": key,
+                "step_count": cost_stats["total_steps"],
+                "input_tokens": cost_stats["input_tokens"],
+                "output_tokens": cost_stats["output_tokens"],
+                "cost_usd": cost_stats["cost_usd"],
+                "unpriced_steps": cost_stats["unpriced_steps"],
+                "success_rate": _attempt_success_rate(outcome_counts),
+                "share_of_spend": round(cost_stats["cost_usd"] / total_cost, 4)
+                if total_cost > 0
+                else 0.0,
+            }
+        )
+    models.sort(key=lambda r: -r["cost_usd"])
+
+    runs = _query_runs(tenant, project, task, since_ts, until_ts)
+    run_outcomes = _outcome_counts(runs)
+    succeeded_runs = run_outcomes[Outcome.SUCCEEDED.value]
+    cost_per_successful_run = round(total_cost / succeeded_runs, 6) if succeeded_runs > 0 else None
+
+    return {
+        "models": models,
+        "overall": {
+            **overall_cost,
+            "succeeded_runs": succeeded_runs,
+            "cost_per_successful_run": cost_per_successful_run,
+        },
+        "latency_available": False,
+        "latency_note": _LATENCY_UNAVAILABLE_NOTE,
     }
