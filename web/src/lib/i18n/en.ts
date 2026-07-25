@@ -63,11 +63,9 @@ export const en = {
   'nav.models': 'Models',
   'nav.efficiency': 'Efficiency',
   'nav.health': 'Health',
-  'nav.mem0': 'Mem0',
   'nav.approvals': 'Approvals',
   'nav.runs': 'Runs',
   'nav.graph': 'Graph',
-  'nav.reality': 'Réalité',
 
   // ---- health status words (shared: header pills + Health tab badges) --
   'health.status.ok': 'ok',
@@ -279,6 +277,20 @@ export const en = {
   'reality.requiresTokenTail': 'higher-privilege token.',
   'reality.requiresTokenNote':
     'Your current token can still use the other Mirador tabs — only this section needs a higher role.',
+
+  // ---- Memory view (unified Quality/Growth/Search tabs) -----------------
+  'memory.tabQuality': 'Quality',
+  'memory.tabGrowth': 'Growth',
+  'memory.tabSearch': 'Search',
+  'memory.growthTitle': 'Memory growth',
+  'memory.growthDescription': 'How much is stored, where, over time, and by whom — GET /v1/memory/growth',
+  'memory.totalMemories': 'Total memories',
+  'memory.byNamespaceTitle': 'Memories by namespace',
+  'memory.growthOverTimeTitle': 'Growth over time',
+  'memory.noGrowthSeries': 'No growth recorded in this window.',
+  'memory.byActorTitle': 'By actor',
+  'memory.authorshipNotAvailable': 'A human-vs-agent authorship split is not available — showing the real by-actor breakdown instead.',
+  'memory.growthEmptyState': 'No memory growth recorded in this window.',
 
   // ---- Home view (command center, default landing view) ----------------
   'home.subtitle': 'Your fleet at a glance — click any figure to dig in.',

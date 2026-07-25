@@ -214,7 +214,7 @@ describe('HomeView — hero KPIs', () => {
     clickAndCheck('home-kpi-spend', 'cost')
     clickAndCheck('home-kpi-tokens', 'analytics')
     clickAndCheck('home-kpi-runs', 'runs')
-    clickAndCheck('home-kpi-memory', 'reality')
+    clickAndCheck('home-kpi-memory', 'memory')
     clickAndCheck('home-kpi-approvals', 'approvals')
   })
 })

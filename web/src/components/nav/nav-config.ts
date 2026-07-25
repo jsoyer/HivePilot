@@ -44,7 +44,13 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // being folded into general analytics.
   { label: 'nav.spend', values: ['cost', 'models', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
-  { label: 'nav.memory', values: ['mem0', 'reality'] },
+  // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
+  // and Réalité (quality) built-ins merged into ONE `memory` item backed by
+  // `MemoryView`'s internal Quality/Growth/Search tabs (see `Mirador.tsx`'s
+  // `BUILTIN_TABS`) — a single-entry-with-tabs destination reads cleaner
+  // than three separate top-level nav items for what is really one
+  // subject (memory).
+  { label: 'nav.memory', values: ['memory'] },
   // Mirador Operate section sprint: demoted to LAST — Graph (plugins/
   // pipeline/skills topology) is still fully reachable (sidebar/drawer/⌘K),
   // just no longer a prominent top-level destination now that the Run Board

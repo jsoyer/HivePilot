@@ -694,7 +694,7 @@ export function HomeView({ onNavigate }: HomeViewProps) {
           }}
         />
 
-        <KpiButton testId="home-kpi-memory" ariaLabel={t('home.kpiMemoryHealth')} onClick={() => onNavigate('reality')}>
+        <KpiButton testId="home-kpi-memory" ariaLabel={t('home.kpiMemoryHealth')} onClick={() => onNavigate('memory')}>
           <Card className="w-full">
             <CardContent className="flex flex-col items-center gap-1.5">
               <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
