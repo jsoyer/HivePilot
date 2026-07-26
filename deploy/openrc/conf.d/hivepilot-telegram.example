@@ -1,0 +1,9 @@
+# Copy to /etc/conf.d/hivepilot-telegram and fill in the placeholders.
+#
+# OpenRC runs this service with cwd=/ -- keep every path-shaped value below
+# absolute (see deploy/openrc/README.md, "env-silo warning").
+
+export HIVEPILOT_BASE_DIR=/data
+export HIVEPILOT_TELEGRAM_BOT_TOKEN=<telegram-bot-token>
+# export HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS=[111111111,222222222]
+# export HIVEPILOT_TELEGRAM_NOTIFICATION_CHAT_ID=111111111

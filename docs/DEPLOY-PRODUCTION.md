@@ -284,6 +284,23 @@ reference: the script's own header comment (`scripts/setup-openrc.sh`).
 For the plain, hand-editable equivalent (no script, copy-paste the
 `openrc-run`/`conf.d` files directly), see the manual walkthrough above.
 
+### OpenRC templates for Slack + Discord chatops
+
+`scripts/setup-openrc.sh` above only generates `hivepilot-api` +
+`hivepilot-scheduler` + `hivepilot-telegram`. For Slack and/or Discord
+chatops, copy the hand-editable templates in
+[`deploy/openrc/`](../deploy/openrc/README.md) instead:
+`deploy/openrc/init.d/hivepilot-{slack,discord}` +
+`deploy/openrc/conf.d/hivepilot-{slack,discord}.example`. Both default to
+their **outbound-only** transport (Slack Socket Mode / Discord gateway
+WebSocket) — no public HTTPS endpoint, reverse proxy, or TLS cert required,
+the right choice for a box with no public IP (e.g. behind Tailscale). See
+[`deploy/openrc/README.md`](../deploy/openrc/README.md) for the exact token
+requirements (Slack Socket Mode needs `HIVEPILOT_SLACK_BOT_TOKEN` +
+`HIVEPILOT_SLACK_SIGNING_SECRET` + `HIVEPILOT_SLACK_APP_TOKEN`; Discord
+gateway mode only needs `HIVEPILOT_DISCORD_BOT_TOKEN`) and the `cwd=/`
+env-silo warning that applies to every OpenRC service on this host.
+
 ## 3. Wire the config
 
 Point HivePilot at your private config repo and pull it down:
@@ -666,3 +683,4 @@ to appear on the command line at all.
 - [SECURITY.md](SECURITY.md) — approval gates, secrets model, fail-closed policies
 - [CLI-REFERENCE.md](CLI-REFERENCE.md) — every command, including mutating/destructive markers
 - [PLUGINS.md](PLUGINS.md) — secrets-backend plugins (Infisical, 1Password, Bitwarden, Vaultwarden)
+- [deploy/openrc/README.md](../deploy/openrc/README.md) — OpenRC service templates for all five services (API, scheduler, Telegram, Slack, Discord)

@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+description="HivePilot HTTP API server"
+command="/opt/hivepilot/venv/bin/hivepilot"
+command_args="api serve --host 127.0.0.1 --port 8045"
+supervisor="supervise-daemon"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/hivepilot-api.log"
+error_log="/var/log/hivepilot-api.log"
+depend() { need net; }

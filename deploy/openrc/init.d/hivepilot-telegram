@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+description="HivePilot Telegram bot (polling)"
+command="/opt/hivepilot/venv/bin/hivepilot"
+command_args="telegram start --mode polling"
+supervisor="supervise-daemon"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/hivepilot-telegram.log"
+error_log="/var/log/hivepilot-telegram.log"
+depend() { need net; after hivepilot-api; }
