@@ -41,6 +41,27 @@ def test_build_prompt_without_prior_context_is_clean(tmp_path: Path) -> None:
     assert "INSTRUCTIONS" in out
 
 
+def test_build_prompt_tolerates_missing_project() -> None:
+    """human_challenge()/agent-request re-invocations build a repo-less
+    payload (``project=None`` — it's a Q&A/challenge exchange, not a coding
+    task against a real repository). ``_build_prompt`` must not crash on
+    ``payload.project.path`` (AttributeError: 'NoneType' object has no
+    attribute 'path') and must simply omit the project-specific sections.
+    """
+    payload = RunnerPayload(
+        project_name="p",
+        project=None,
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={"extra_prompt": "Please respond."},
+        secrets={},
+    )
+    out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+    assert "INSTRUCTIONS" in out
+    assert "Please respond." in out
+    assert "Repository path" not in out
+
+
 def test_permission_mode_flag_when_configured(tmp_path: Path, monkeypatch) -> None:
     pf = tmp_path / "p.md"
     pf.write_text("do it", encoding="utf-8")

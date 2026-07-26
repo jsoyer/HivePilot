@@ -4,6 +4,7 @@ import concurrent.futures
 import json
 import math
 import subprocess
+import tempfile
 import threading
 from collections.abc import Iterable
 from contextlib import nullcontext
@@ -123,6 +124,75 @@ def _resolve_role_from_display(display_name: str) -> str | None:
             if candidate in needle or needle in candidate:
                 return role_key
     return None
+
+
+# Candidate ROLES keys for the Chief-of-Staff persona, tried in order. The
+# canonical role name shipped by roles.yaml / examples/roles.yaml is
+# "chief_of_staff" -- "cos" is only a Telegram *command alias* for it (see
+# `telegram_bot._ALIAS_HANDLERS["chief_of_staff"] = ["cos", "jules"]`), never
+# a ROLES dict key. A hard-coded `"cos"` lookup here previously ALWAYS raised
+# KeyError, which silently degraded every human_challenge()/CoS re-invocation
+# to the no-role fallback (empty prompt_file -> "requires a prompt_file for
+# Claude runner"). Trying "cos" second keeps a custom roles.yaml that
+# genuinely names the role "cos" working too.
+_COS_ROLE_CANDIDATES: tuple[str, ...] = ("chief_of_staff", "cos")
+
+
+def _resolve_cos_role() -> tuple["Role | None", str]:
+    """Resolve the live Chief-of-Staff role, trying ``_COS_ROLE_CANDIDATES``
+    in order. Returns ``(role, role_key)`` -- ``role`` is ``None`` and
+    ``role_key`` is the LAST candidate tried when no candidate resolves
+    (e.g. a minimal roles.yaml with no CoS entry at all)."""
+    from hivepilot.roles import get_role
+
+    role_key = _COS_ROLE_CANDIDATES[-1]
+    for candidate_key in _COS_ROLE_CANDIDATES:
+        role_key = candidate_key
+        try:
+            return get_role(candidate_key), candidate_key
+        except Exception:
+            continue
+    return None, role_key
+
+
+def _resolve_or_synthesize_role_prompt_file(role: "Role | None", role_key: str) -> str:
+    """Resolve *role*'s prompt file the SAME way ``ClaudeRunner._assemble_prompt``
+    does -- via ``settings.resolve_config_path`` -- never a bare, cwd-relative
+    ``Path.exists()`` check, and never hand the runner an empty
+    ``prompt_file`` (which crashes with a cryptic "requires a prompt_file for
+    Claude runner").
+
+    If the role is missing entirely (``role is None`` -- e.g. ``get_role``
+    raised) or its declared ``prompt_file`` cannot be found on disk, a
+    minimal, generic persona prompt is synthesized into a temp file instead.
+    The ACTUAL task instructions always live in the caller's
+    ``metadata["extra_prompt"]`` regardless of which branch fires here --
+    this only ever supplies the agent's persona text, so the feature keeps
+    working even for a role with no (or a broken) prompt file.
+    """
+    if role is not None and role.prompt_file:
+        try:
+            resolved = settings.resolve_config_path(role.prompt_file)
+        except Exception:  # noqa: BLE001
+            resolved = None
+        if resolved is not None and resolved.exists():
+            return str(resolved)
+        logger.warning(
+            "role_prompt_file.missing",
+            role=role_key,
+            looked_for=str(resolved) if resolved is not None else str(role.prompt_file),
+        )
+    else:
+        logger.warning("role_prompt_file.role_unresolved", role_key=role_key)
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="hivepilot-role-prompt-"))
+    tmp_path = tmp_dir / "prompt.md"
+    tmp_path.write_text(
+        f"You are the '{role_key}' agent. Respond helpfully and concisely to"
+        " the instructions provided below.\n",
+        encoding="utf-8",
+    )
+    return str(tmp_path)
 
 
 def _build_checkpoint_details(
@@ -3681,7 +3751,7 @@ class Orchestrator:
         from typing import cast
 
         from hivepilot.models import RunnerKind, TaskStep
-        from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
+        from hivepilot.roles import resolve_host, resolve_stage_dispatch
         from hivepilot.runners.base import RunnerPayload
 
         row = state_service.get_approval(run_id)
@@ -3693,18 +3763,26 @@ class Orchestrator:
         planning_context = meta.get("planning_context", "")
         project_name = row.get("project", "unknown")
 
-        # Resolve CoS role (Jules)
-        cos_role_key = "cos"
-        try:
-            cos_role = get_role(cos_role_key)
-        except Exception:
-            cos_role = None
+        # Resolve CoS role (Jules). See `_resolve_cos_role` -- the ROLES dict
+        # key is "chief_of_staff" ("cos" is only a Telegram command alias for
+        # it), so this tries the real key first instead of a hard-coded "cos"
+        # that never matched anything.
+        cos_role, cos_role_key = _resolve_cos_role()
 
         # Get policy for this project
         try:
             policy = policy_service.get_policy(project_name)
         except Exception:
             policy = None
+
+        # `_resolve_or_synthesize_role_prompt_file` resolves through the same
+        # settings config chain the Claude runner itself uses, and — if the
+        # role or its prompt file cannot be found on disk — synthesizes a
+        # minimal temp prompt so the challenge still works instead of ever
+        # handing the runner an empty `prompt_file` (which used to crash with
+        # "requires a prompt_file for Claude runner", the live bug this
+        # fixes).
+        prompt_file = _resolve_or_synthesize_role_prompt_file(cos_role, cos_role_key)
 
         if cos_role is not None:
             # No pipeline stage exists at this out-of-band, paused-approval
@@ -3723,18 +3801,15 @@ class Orchestrator:
                 host=resolve_host(cos_role_key, policy),
                 options=role_options,
             )
-            prompt_file = (
-                str(cos_role.prompt_file)
-                if cos_role.prompt_file and cos_role.prompt_file.exists()
-                else ""
-            )
             step = TaskStep(
                 name="human_challenge:cos",
                 runner=runner_kind,
                 prompt_file=prompt_file,
             )
         else:
-            # Fallback: use default claude runner
+            # Fallback: no CoS role configured at all — still use the
+            # default claude runner, but with the synthesized temp prompt
+            # file above rather than a hard-coded empty string.
             runner_def = RunnerDefinition(
                 name="human_challenge:cos",
                 kind=cast(RunnerKind, "claude"),
@@ -3746,7 +3821,7 @@ class Orchestrator:
             step = TaskStep(
                 name="human_challenge:cos",
                 runner="claude",
-                prompt_file="",
+                prompt_file=prompt_file,
             )
 
         challenge_prompt = (
