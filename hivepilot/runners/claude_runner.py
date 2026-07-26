@@ -120,9 +120,13 @@ def _detect_known_hint(text: str) -> str | None:
         )
     if _ROOT_SUDO_MARKER in text and "root" in text.lower():
         return (
-            "claude refuses --dangerously-skip-permissions (bypassPermissions) when "
-            "running as root/sudo — set permission_mode: acceptEdits for this "
-            "role/step instead."
+            "claude refuses --dangerously-skip-permissions under root/sudo. Options: "
+            "(a) run the services as a non-root user (cleanest), or (b) on a "
+            "dedicated single-purpose container/VM, set IS_SANDBOX=1 in the service "
+            "environment so claude accepts bypassPermissions. NOTE: "
+            "permission_mode=acceptEdits is NOT a substitute — it auto-accepts file "
+            "edits but the agent still needs approval to run Bash (git/tests), which "
+            "headless cannot grant, so the step will silently do nothing."
         )
     if _PERMISSION_GRANT_MARKER in text or (
         "cannot be used" in text and "non-interactive" in text.lower()

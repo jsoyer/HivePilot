@@ -112,6 +112,41 @@ own. This has bitten real deployments before (duplicate state from a
 config value that silently resolved to `/` instead of `/data`) — when in
 doubt, use an absolute path.
 
+## Env silos — read this
+
+Each service above is a **separate OpenRC process with its own, independent
+`/etc/conf.d/hivepilot-<svc>` env file** — there is no environment shared
+across `hivepilot-api`, `hivepilot-scheduler`, `hivepilot-telegram`,
+`hivepilot-slack`, and `hivepilot-discord`. Setting a variable in one
+service's `conf.d` file has **zero effect** on any other service.
+
+This matters more than it looks like, because **an approval callback
+(Telegram/Slack/Discord) resumes the pipeline INSIDE that bot's own
+process** — not inside `hivepilot-scheduler`, which only kicked the run off.
+A concrete incident: `IS_SANDBOX=1` was set in `hivepilot-api`'s and
+`hivepilot-scheduler`'s `conf.d` files (2 of 3 relevant services) but not
+`hivepilot-telegram`'s. Runs that reached a checkpoint and got resumed via a
+Telegram approval executed the developer stage **without** `IS_SANDBOX`,
+and it failed — the var was invisible in the process that actually resumed
+the pipeline, even though it "looked" configured everywhere that mattered
+at a glance.
+
+**Remedy:** put every var that must apply to *every* service — anything a
+resumed pipeline might need, plus any other cross-cutting setting — in one
+file, `/etc/hivepilot/shared.env` (see
+[`conf.d/shared.env.example`](conf.d/shared.env.example) for the vars that
+belong there), and source it from the first line of every
+`/etc/conf.d/hivepilot-*` file (already done in every `conf.d/*.example`
+template in this directory):
+
+```sh
+[ -f /etc/hivepilot/shared.env ] && . /etc/hivepilot/shared.env
+```
+
+Service-specific `conf.d` files stay for values that genuinely differ per
+service (tokens, ports, allow-lists); `shared.env` is only for values that
+must be identical everywhere.
+
 ## Restart requirements
 
 Editing a `conf.d/hivepilot-*` file only takes effect on the next

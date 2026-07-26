@@ -461,7 +461,15 @@ class TestExplicitFailureLogs:
             m.return_value = MagicMock(returncode=1, stdout="", stderr=stderr)
             with pytest.raises(RunnerExecutionError) as excinfo:
                 _runner().capture(payload)
-        assert "acceptEdits" in excinfo.value.context["hint"]
+        hint = excinfo.value.context["hint"]
+        # Must point at the two real remedies (non-root user, or IS_SANDBOX=1
+        # on a dedicated sandbox) and must NOT recommend acceptEdits as a
+        # substitute -- acceptEdits only auto-accepts file edits, the agent
+        # still needs (unavailable, headless) approval to run Bash, so the
+        # step silently produces nothing.
+        assert "non-root" in hint
+        assert "IS_SANDBOX" in hint
+        assert "acceptEdits is NOT a substitute" in hint
 
     def test_hint_for_headless_permission_refusal(self, tmp_path: Path) -> None:
         from unittest.mock import MagicMock, patch

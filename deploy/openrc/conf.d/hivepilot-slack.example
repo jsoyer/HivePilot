@@ -1,3 +1,8 @@
+[ -f /etc/hivepilot/shared.env ] && . /etc/hivepilot/shared.env
+# ^ vars every hivepilot-* service must share (e.g. IS_SANDBOX) live
+# there, not here -- see deploy/openrc/conf.d/shared.env.example and
+# deploy/openrc/README.md, "Env silos -- read this".
+
 # Copy to /etc/conf.d/hivepilot-slack and fill in the placeholders.
 #
 # OpenRC runs this service with cwd=/ -- keep every path-shaped value below
