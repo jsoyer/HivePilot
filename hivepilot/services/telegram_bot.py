@@ -1166,6 +1166,13 @@ def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | 
 
     Pipeline-checkpoint approvals resume the parked pipeline; everything else is a
     single-task approval.
+
+    Explicit-failure-logs sprint, Part A.2: logs the run_id, project/pipeline,
+    task (when known), which route was taken, and the approver BEFORE
+    dispatching — and, on failure, the specific reason (surfaced by
+    `Orchestrator.run_approved`/`resume_pipeline`'s own
+    `approval.approve_rejected`/`approval.resume_rejected` logs) rather than
+    letting the caller only see a bare exception.
     """
     import json
 
@@ -1173,11 +1180,32 @@ def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | 
 
     appr = state_service.get_approval(run_id)
     meta = json.loads(appr.get("metadata") or "{}") if appr else {}
-    if meta.get("kind") == "pipeline_checkpoint":
-        return _get_orch().resume_pipeline(run_id=run_id, approve=approve, approver=approver)
-    return _get_orch().run_approved(
-        run_id=run_id, approve=approve, approver=approver, reason=reason
+    route = "pipeline_checkpoint" if meta.get("kind") == "pipeline_checkpoint" else "task"
+    logger.info(
+        "telegram.approval.dispatch",
+        run_id=run_id,
+        route=route,
+        project=appr.get("project") if appr else None,
+        task=appr.get("task") if appr else None,
+        pipeline=meta.get("pipeline"),
+        approve=approve,
+        approver=approver,
     )
+    try:
+        if route == "pipeline_checkpoint":
+            return _get_orch().resume_pipeline(run_id=run_id, approve=approve, approver=approver)
+        return _get_orch().run_approved(
+            run_id=run_id, approve=approve, approver=approver, reason=reason
+        )
+    except Exception as exc:  # noqa: BLE001 — logged with full routing context, then re-raised
+        logger.error(
+            "telegram.approval.dispatch_failed",
+            run_id=run_id,
+            route=route,
+            approver=approver,
+            error=str(exc),
+        )
+        raise
 
 
 async def _cmd_approve(update, context) -> None:

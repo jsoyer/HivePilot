@@ -1728,6 +1728,135 @@ class TestRunResultDetailRedaction:
         assert cp.REDACTED in (result.detail or "")
 
 
+class TestRunFailureLogEnrichment:
+    """Explicit-failure-logs sprint, Part A.1: the orchestrator's `run.failure`
+    log must merge a `RunnerExecutionError`'s structured `context` (exit_code,
+    runner_kind, model, hint, ...) into the log call, not just `str(exc)`."""
+
+    def _orch_with_project_and_task(self, task):
+        from hivepilot.models import ProjectConfig
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        proj_path = Path("/tmp/failure-log-proj")
+        proj_path.mkdir(parents=True, exist_ok=True)
+        orch.projects.projects["proj"] = ProjectConfig(path=proj_path)
+        orch.tasks.tasks["x"] = task
+        return orch
+
+    def test_run_failure_log_merges_structured_context(self, tmp_path) -> None:
+        from hivepilot.models import TaskConfig, TaskStep
+        from hivepilot.runners.base import RunnerExecutionError
+        from hivepilot.services.policy_service import Policy
+
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        orch = self._orch_with_project_and_task(task)
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.capture.side_effect = RunnerExecutionError(
+            "claude exited 1: bad model | hint: some hint",
+            context={
+                "exit_code": 1,
+                "runner_kind": "claude",
+                "model": "claude-x",
+                "hint": "some hint",
+                "stderr_excerpt": "bad model",
+            },
+        )
+        orch.registry.get_runner.return_value = fake_runner
+
+        with (
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch(
+                "hivepilot.orchestrator.policy_service.enforce_policy",
+                return_value=Policy(),
+            ),
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+            patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+            patch("hivepilot.orchestrator.logger") as mock_logger,
+        ):
+            results = orch.run_task(
+                project_names=["proj"],
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+            )
+
+        assert len(results) == 1
+        assert results[0].success is False
+
+        failure_calls = [
+            call for call in mock_logger.error.call_args_list if call.args[:1] == ("run.failure",)
+        ]
+        assert len(failure_calls) == 1
+        kwargs = failure_calls[0].kwargs
+        assert kwargs["exit_code"] == 1
+        assert kwargs["runner_kind"] == "claude"
+        assert kwargs["model"] == "claude-x"
+        assert kwargs["hint"] == "some hint"
+        assert kwargs["project"] == "failure-log-proj"
+        assert kwargs["task"] == "x"
+
+    def test_run_failure_log_degrades_gracefully_for_plain_exception(self, tmp_path) -> None:
+        """A non-`RunnerExecutionError` failure (most exception types, still)
+        has no `.context` -- the log call must degrade to exactly the
+        pre-existing `project`/`task`/`error` fields, never crash."""
+        from hivepilot.models import TaskConfig, TaskStep
+        from hivepilot.services.policy_service import Policy
+
+        task = TaskConfig(
+            description="t",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude")],
+            artifacts={"capture": []},
+        )
+        orch = self._orch_with_project_and_task(task)
+        orch.registry = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.capture.side_effect = RuntimeError("plain failure, no context")
+        orch.registry.get_runner.return_value = fake_runner
+
+        with (
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch(
+                "hivepilot.orchestrator.policy_service.enforce_policy",
+                return_value=Policy(),
+            ),
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=1),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.notification_service.send_notification"),
+            patch("hivepilot.orchestrator.knowledge_service.append_feedback"),
+            patch("hivepilot.orchestrator.create_run_directory", return_value=tmp_path),
+            patch("hivepilot.orchestrator.logger") as mock_logger,
+        ):
+            results = orch.run_task(
+                project_names=["proj"],
+                task_name="x",
+                extra_prompt=None,
+                auto_git=False,
+            )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        failure_calls = [
+            call for call in mock_logger.error.call_args_list if call.args[:1] == ("run.failure",)
+        ]
+        assert len(failure_calls) == 1
+        kwargs = failure_calls[0].kwargs
+        assert kwargs["project"] == "failure-log-proj"
+        assert kwargs["task"] == "x"
+        assert "plain failure, no context" in kwargs["error"]
+
+
 # ---------------------------------------------------------------------------
 # Phase 21 Sprint 2 -- pipeline CVE gate (`policy.block_on_severity`)
 #

@@ -10,7 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from hivepilot.models import EffectiveLessonsConfig, ProjectConfig, TaskStep
-from hivepilot.runners.base import RunnerPayload, UsageInfo, pop_last_usage, set_last_usage
+from hivepilot.runners.base import (
+    RunnerExecutionError,
+    RunnerPayload,
+    UsageInfo,
+    pop_last_usage,
+    set_last_usage,
+)
 
 
 def _payload(**overrides: object) -> RunnerPayload:
@@ -89,3 +95,29 @@ def test_set_none_clears_stash() -> None:
     set_last_usage(UsageInfo(input_tokens=1))
     set_last_usage(None)
     assert pop_last_usage() is None
+
+
+class TestRunnerExecutionError:
+    """Explicit-failure-logs sprint, Part A.1: a runner failure carries
+    structured `context` a caller can merge into a log call, alongside a
+    plain-text `str()` for backward-compat callers."""
+
+    def test_str_is_the_plain_message(self) -> None:
+        exc = RunnerExecutionError("claude exited 1: boom", context={"exit_code": 1})
+        assert str(exc) == "claude exited 1: boom"
+
+    def test_context_defaults_to_empty_dict(self) -> None:
+        exc = RunnerExecutionError("boom")
+        assert exc.context == {}
+
+    def test_context_carries_structured_fields(self) -> None:
+        exc = RunnerExecutionError(
+            "claude exited 1: boom",
+            context={"exit_code": 1, "runner_kind": "claude", "hint": "some hint"},
+        )
+        assert exc.context["exit_code"] == 1
+        assert exc.context["runner_kind"] == "claude"
+        assert exc.context["hint"] == "some hint"
+
+    def test_is_a_runtime_error(self) -> None:
+        assert isinstance(RunnerExecutionError("boom"), RuntimeError)

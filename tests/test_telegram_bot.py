@@ -1039,3 +1039,83 @@ class TestOnError:
         src = inspect.getsource(telegram_bot._build_application)
         assert "add_error_handler" in src
         assert "_on_error" in src
+
+
+class TestDispatchApprovalLogging:
+    """Explicit-failure-logs sprint, Part A.2: `_dispatch_approval` logs the
+    route/run_id/project-or-pipeline/approver BEFORE dispatching, and the
+    failure reason (not a bare exception) when the orchestrator rejects it."""
+
+    def test_logs_task_route_before_dispatch(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as stdlib_logging
+
+        orch = MagicMock()
+        orch.run_approved.return_value = "ok"
+        with (
+            patch(
+                "hivepilot.services.state_service.get_approval",
+                return_value={"project": "proj-a", "task": "task-a", "metadata": "{}"},
+            ),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            caplog.at_level(stdlib_logging.INFO),
+        ):
+            result = telegram_bot._dispatch_approval(42, True, "alice")
+
+        assert result == "ok"
+        orch.run_approved.assert_called_once_with(
+            run_id=42, approve=True, approver="alice", reason=None
+        )
+        dispatch_records = [r for r in caplog.records if "telegram.approval.dispatch" in r.message]
+        assert dispatch_records
+        assert '"route": "task"' in dispatch_records[0].message
+        assert '"run_id": 42' in dispatch_records[0].message
+
+    def test_logs_pipeline_checkpoint_route_before_dispatch(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import json
+        import logging as stdlib_logging
+
+        orch = MagicMock()
+        orch.resume_pipeline.return_value = "ok"
+        meta = json.dumps({"kind": "pipeline_checkpoint", "pipeline": "review"})
+        with (
+            patch(
+                "hivepilot.services.state_service.get_approval",
+                return_value={"project": "proj-a", "task": None, "metadata": meta},
+            ),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            caplog.at_level(stdlib_logging.INFO),
+        ):
+            result = telegram_bot._dispatch_approval(43, True, "bob")
+
+        assert result == "ok"
+        orch.resume_pipeline.assert_called_once_with(run_id=43, approve=True, approver="bob")
+        dispatch_records = [r for r in caplog.records if "telegram.approval.dispatch" in r.message]
+        assert dispatch_records
+        assert '"route": "pipeline_checkpoint"' in dispatch_records[0].message
+        assert '"pipeline": "review"' in dispatch_records[0].message
+
+    def test_logs_specific_reason_on_dispatch_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging as stdlib_logging
+
+        orch = MagicMock()
+        orch.run_approved.side_effect = ValueError("Run 99 is not pending approval.")
+        with (
+            patch(
+                "hivepilot.services.state_service.get_approval",
+                return_value={"project": "proj-a", "task": "task-a", "metadata": "{}"},
+            ),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            caplog.at_level(stdlib_logging.INFO),
+            pytest.raises(ValueError, match="not pending approval"),
+        ):
+            telegram_bot._dispatch_approval(99, True, "alice")
+
+        failure_records = [
+            r for r in caplog.records if "telegram.approval.dispatch_failed" in r.message
+        ]
+        assert failure_records
+        assert "not pending approval" in failure_records[0].message

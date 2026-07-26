@@ -235,6 +235,25 @@ def redact_text(text: str) -> str:
     return text
 
 
+def mask_id(value: Any) -> str:
+    """Partially mask a non-secret IDENTIFIER (a Telegram chat id, a Swarm
+    signing-key/instance id, ...) for logging: keep only the last 4
+    characters, replacing everything before them with ``***``.
+
+    Distinct from `redact_text`/`redact_value` -- those only ever mask
+    values that were explicitly `register_secret_value`'d (resolved
+    `${secret:NAME}` credentials). An identifier is not a secret and is
+    never registered there, but it still shouldn't be sprayed verbatim
+    across every log line (explicit-failure-logs sprint, Part A.3/A.5).
+    `None`/empty/very short values collapse to a bare ``"***"`` -- there's
+    nothing useful left to preserve once fewer than 5 characters remain.
+    """
+    text = str(value) if value is not None else ""
+    if len(text) <= 4:
+        return "***"
+    return f"***{text[-4:]}"
+
+
 def redact_value(value: Any) -> Any:
     """Recursively redact registered secret values found anywhere inside
     *value*.
