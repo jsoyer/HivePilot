@@ -35,8 +35,18 @@ class PollTransport:
     name = "poll"
 
     def __init__(self, *, settings: Settings, instance_id: str) -> None:
-        del settings  # unused by poll (no broker config) — kept for interface parity
         self._instance_id = instance_id
+        # MEDIUM #3 fix (opus security review): filter by served tenant(s) IN
+        # SQL (`list_pending_swarm_events(tenants=...)` below), not just at
+        # the `swarm_service.claim_next` post-filter. Without this, a burst
+        # of pending events for a tenant this instance does NOT serve could
+        # fill the whole `limit=50` window and permanently starve a
+        # genuinely-served tenant's events out of every `subscribe()` call
+        # (they'd never even appear as candidates to skip past). `None`
+        # `settings` (defensive -- every real caller passes one via
+        # `resolve_transport`) degrades to "no tenant filter" rather than
+        # crashing the constructor.
+        self._served_tenants = list(settings.swarm_served_tenants) if settings is not None else []
 
     def publish(self, event: Event) -> None:
         """Persist *event* into `swarm_events`. For "poll", this IS the
@@ -44,11 +54,14 @@ class PollTransport:
         state_service.insert_swarm_event(event)
 
     def subscribe(self, types: list[str]) -> Iterator[Event]:
-        """Yield every currently-`pending` row matching *types* as an
-        `Event`. Every yielded event is a CANDIDATE only -- `claim()` is what
-        actually grants ownership (see the module-level docstring on
+        """Yield every currently-`pending` row matching *types* AND this
+        instance's served tenant(s) as an `Event`. Every yielded event is a
+        CANDIDATE only -- `claim()` is what actually grants ownership (see
+        the module-level docstring on
         `hivepilot.swarm.transport.Transport.subscribe`)."""
-        for row in state_service.list_pending_swarm_events(types=types or None):
+        for row in state_service.list_pending_swarm_events(
+            types=types or None, tenants=self._served_tenants or None
+        ):
             yield _row_to_event(row)
 
     def claim(self, event_id: str) -> bool:

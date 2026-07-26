@@ -132,3 +132,48 @@ class TestZeroInfra:
         import hivepilot.swarm.poll_transport as mod
 
         assert not hasattr(mod, "redis")
+
+
+class TestTenantScopedSubscribe:
+    """MEDIUM #3 fix (opus security review): `subscribe` must filter by
+    served tenant(s) IN SQL (`list_pending_swarm_events(tenants=...)`), not
+    just rely on a caller-side post-filter -- otherwise a burst of pending
+    events for a tenant this instance does NOT serve can fill the whole
+    `limit=50` window and permanently starve a genuinely-served tenant's
+    events out of ever appearing as a `subscribe()` candidate at all."""
+
+    def test_subscribe_only_yields_served_tenant_events(self) -> None:
+        transport = PollTransport(
+            settings=settings.model_copy(update={"swarm_served_tenants": ["tenant-a"]}),
+            instance_id="inst-a",
+        )
+        served_event = _event(dedupe_key="r:served:s", tenant="tenant-a")
+        other_event = _event(dedupe_key="r:other:s", tenant="tenant-b")
+        state_service.insert_swarm_event(served_event)
+        state_service.insert_swarm_event(other_event)
+
+        seen_ids = {e.id for e in transport.subscribe(["pr_ready"])}
+        assert served_event.id in seen_ids
+        assert other_event.id not in seen_ids
+
+    def test_unserved_tenant_burst_does_not_starve_served_tenant(self) -> None:
+        """Reproduces the exact MEDIUM #3 exploit: 60 pending events for an
+        UNSERVED tenant (more than `list_pending_swarm_events`'s default
+        `limit=50`) must never crowd out a single served-tenant event -- the
+        tenant filter has to happen in SQL, before the `LIMIT`, or the
+        served-tenant event would never even reach this instance's
+        `subscribe()` window to be skipped-past, let alone claimed."""
+        for i in range(60):
+            state_service.insert_swarm_event(
+                _event(dedupe_key=f"r:unserved:{i}", tenant="tenant-unserved")
+            )
+        served_event = _event(dedupe_key="r:served:s", tenant="tenant-served")
+        state_service.insert_swarm_event(served_event)
+
+        transport = PollTransport(
+            settings=settings.model_copy(update={"swarm_served_tenants": ["tenant-served"]}),
+            instance_id="inst-a",
+        )
+        seen_ids = {e.id for e in transport.subscribe(["pr_ready"])}
+        assert served_event.id in seen_ids
+        assert transport.claim(served_event.id) is True

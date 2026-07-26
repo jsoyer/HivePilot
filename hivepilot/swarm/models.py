@@ -35,15 +35,25 @@ from pydantic import BaseModel, Field
 
 
 def compute_event_id(event_type: str, dedupe_key: str) -> str:
-    """Deterministic event id: `f"{event_type}:{dedupe_key}"`.
+    """Deterministic event id: `f"{event_type}:{sha256(dedupe_key)}"`.
 
     `dedupe_key` is caller-supplied and should embed whatever makes this
     event's UNIT OF WORK unique (e.g. for `pr_ready`:
     `f"{repo}:{branch}:{sha}"`). Two publishes with the same
     `(event_type, dedupe_key)` always yield the same id, regardless of
     payload/timestamp -- that's the whole dedupe contract.
+
+    The key is HASHED (NIT #4, opus security review) rather than embedded
+    raw: `dedupe_key` itself may contain the SAME `":"` separator this
+    function joins on (e.g. a `pr_ready` dedupe key is itself
+    `f"{repo}:{branch}:{sha}"`), so two DIFFERENT logical dedupe keys could
+    otherwise concatenate into the same id string across event types/repos
+    (a raw-string collision, not a cryptographic one -- SHA-256 here is
+    purely for a fixed-width, separator-free, still-deterministic encoding,
+    not a security boundary).
     """
-    return f"{event_type}:{dedupe_key}"
+    digest = hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()
+    return f"{event_type}:{digest}"
 
 
 class Event(BaseModel):

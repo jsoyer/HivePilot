@@ -56,6 +56,43 @@ class TestGetSigningKey:
         settings = _settings(swarm_key="${secret:MISSING}", swarm_secrets={})
         assert swarm_service.get_signing_key(settings) is None
 
+    def test_secret_ref_resolving_to_empty_string_is_treated_as_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """HIGH #1 fix (opus security review): a `${secret:NAME}` reference
+        whose backing value is `""` (a rotation window, a blank `.env` line,
+        ...) must degrade to `None` -- IDENTICALLY to "unconfigured" -- never
+        become a real, guessable, empty-string HMAC key."""
+        monkeypatch.setenv("SWARM_KEY_ENV_VAR", "")
+        settings = _settings(
+            swarm_key="${secret:SWARM_KEY}",
+            swarm_secrets={"SWARM_KEY": {"source": "env", "key": "SWARM_KEY_ENV_VAR"}},
+        )
+        assert swarm_service.get_signing_key(settings) is None
+        assert "" not in registered_secret_values()
+
+    def test_secret_ref_resolving_to_whitespace_only_is_treated_as_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same as above for a whitespace-only resolved value -- `"   "` is
+        just as unusable/guessable-adjacent as `""` and must fail closed
+        identically."""
+        monkeypatch.setenv("SWARM_KEY_ENV_VAR", "   ")
+        settings = _settings(
+            swarm_key="${secret:SWARM_KEY}",
+            swarm_secrets={"SWARM_KEY": {"source": "env", "key": "SWARM_KEY_ENV_VAR"}},
+        )
+        assert swarm_service.get_signing_key(settings) is None
+        assert "   " not in registered_secret_values()
+
+    def test_empty_literal_swarm_key_never_registered_as_secret(self) -> None:
+        """The literal (non-`${secret:}`) path already guarded `if not raw`
+        before this fix -- confirm it still never registers an empty value
+        for masking (an empty "secret" would poison the masker)."""
+        assert swarm_service.get_signing_key(_settings(swarm_key="")) is None
+        assert swarm_service.get_signing_key(_settings(swarm_key="   ")) is None
+        assert "" not in registered_secret_values()
+
 
 class TestPublishEvent:
     def test_first_publish_returns_published(self) -> None:
@@ -77,6 +114,24 @@ class TestPublishEvent:
 
     def test_publish_without_key_is_skipped_not_raised(self) -> None:
         settings = _settings(swarm_key=None)
+        result = swarm_service.publish_event(
+            "pr_ready", {"repo": "acme/widgets"}, "default", dedupe_key="r:b:s", settings=settings
+        )
+        assert result.status == swarm_service.PublishStatus.SKIPPED
+        assert state_service.get_swarm_event(result.event_id) is None
+
+    def test_publish_with_secret_ref_resolving_empty_is_skipped_never_signed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """HIGH #1 fix, end-to-end: a `${secret:NAME}` reference that
+        resolves to `""` must never reach `sign_event` -- `publish_event`
+        degrades to `SKIPPED` (same as no key at all), and NOTHING is ever
+        persisted/signed with an empty-string HMAC key."""
+        monkeypatch.setenv("SWARM_KEY_ENV_VAR", "")
+        settings = _settings(
+            swarm_key="${secret:SWARM_KEY}",
+            swarm_secrets={"SWARM_KEY": {"source": "env", "key": "SWARM_KEY_ENV_VAR"}},
+        )
         result = swarm_service.publish_event(
             "pr_ready", {"repo": "acme/widgets"}, "default", dedupe_key="r:b:s", settings=settings
         )
@@ -134,6 +189,31 @@ class TestClaimNext:
         claim_settings = _settings(swarm_key=None)
         result = swarm_service.claim_next(["pr_ready"], settings=claim_settings)
         assert result.status != swarm_service.ClaimStatus.CLAIMED
+
+    def test_empty_resolved_secret_ref_refuses_to_claim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """HIGH #1 fix, claim-side: a `${secret:NAME}` reference resolving to
+        `""` must be treated identically to "no key configured" -- `claim_next`
+        never attempts to verify/claim anything."""
+        publish_settings = _settings()
+        swarm_service.publish_event(
+            "pr_ready",
+            {"repo": "acme/widgets"},
+            "default",
+            dedupe_key="r:b:s",
+            settings=publish_settings,
+        )
+        monkeypatch.setenv("SWARM_KEY_ENV_VAR", "")
+        claim_settings = _settings(
+            swarm_key="${secret:SWARM_KEY}",
+            swarm_secrets={"SWARM_KEY": {"source": "env", "key": "SWARM_KEY_ENV_VAR"}},
+        )
+        result = swarm_service.claim_next(["pr_ready"], settings=claim_settings)
+        assert result.status == swarm_service.ClaimStatus.NONE
+        assert result.event is None
+        # Still pending — an unconfigured/empty key must never consume it.
+        assert len(state_service.list_pending_swarm_events()) == 1
 
     def test_empty_queue_returns_none_status(self) -> None:
         result = swarm_service.claim_next(["pr_ready"], settings=_settings())
@@ -205,7 +285,9 @@ class TestClaimNext:
         statuses = {result_a.status, result_b.status}
         assert statuses == {swarm_service.ClaimStatus.CLAIMED, swarm_service.ClaimStatus.DEDUPED}
 
-    def test_wrong_tenant_never_claimed(self) -> None:
+    def test_wrong_tenant_never_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        handler = MagicMock()
+        monkeypatch.setitem(swarm_service._EVENT_HANDLERS, "pr_ready", lambda e, o: handler(e))
         publish_settings = _settings()
         swarm_service.publish_event(
             "pr_ready",
@@ -220,6 +302,9 @@ class TestClaimNext:
         # Still pending — available for a tenant-b-serving instance.
         pending = state_service.list_pending_swarm_events(tenants=["tenant-b"])
         assert len(pending) == 1
+        if result.event is not None:
+            swarm_service.dispatch_claimed_event(result.event, orchestrator=MagicMock())
+        handler.assert_not_called()
 
     def test_correct_tenant_can_claim_after_wrong_tenant_checked(self) -> None:
         publish_settings = _settings()
@@ -237,7 +322,11 @@ class TestClaimNext:
         result = swarm_service.claim_next(["pr_ready"], settings=right_tenant_settings)
         assert result.status == swarm_service.ClaimStatus.CLAIMED
 
-    def test_bad_signature_event_is_rejected_never_claimed(self) -> None:
+    def test_bad_signature_event_is_rejected_never_claimed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handler = MagicMock()
+        monkeypatch.setitem(swarm_service._EVENT_HANDLERS, "pr_ready", lambda e, o: handler(e))
         publish_settings = _settings(swarm_key="key-one")
         swarm_service.publish_event(
             "pr_ready",
@@ -253,6 +342,14 @@ class TestClaimNext:
 
         row_before = state_service.list_pending_swarm_events()
         assert row_before == []  # marked skipped, not left claimable forever
+
+        # A bad-signature event must never reach a handler — there is no
+        # event object to dispatch at all (`result.event is None`, proven
+        # below), but assert directly against the registered handler too so
+        # this test fails loudly if that claim-result contract ever regresses.
+        if result.event is not None:
+            swarm_service.dispatch_claimed_event(result.event, orchestrator=MagicMock())
+        handler.assert_not_called()
 
     def test_key_never_appears_in_any_exception_or_log_call(
         self, monkeypatch: pytest.MonkeyPatch
@@ -291,15 +388,19 @@ class TestProcessClaimedEvent:
         settings = _settings()
         event = self._claimed_event(settings)
         handler = MagicMock()
-        assert swarm_service.process_claimed_event(event, handler) is True
+        # `settings.swarm_instance_id` ("inst-a" per `_settings()`'s
+        # defaults) is who actually holds this claim (see `_claimed_event`'s
+        # `claim_next(settings=settings)` call) -- the atomic `claimed_by`
+        # gate (HIGH #2 fix) requires the SAME instance identity here.
+        assert swarm_service.process_claimed_event(event, handler, settings=settings) is True
         handler.assert_called_once_with(event)
 
     def test_duplicate_processing_is_a_no_op(self) -> None:
         settings = _settings()
         event = self._claimed_event(settings)
         handler = MagicMock()
-        assert swarm_service.process_claimed_event(event, handler) is True
-        assert swarm_service.process_claimed_event(event, handler) is False
+        assert swarm_service.process_claimed_event(event, handler, settings=settings) is True
+        assert swarm_service.process_claimed_event(event, handler, settings=settings) is False
         handler.assert_called_once()  # NOT called twice
 
     def test_unclaimed_event_is_never_processed(self) -> None:
@@ -315,8 +416,30 @@ class TestProcessClaimedEvent:
             origin_instance="inst-a",
         )
         handler = MagicMock()
-        assert swarm_service.process_claimed_event(unclaimed, handler) is False
+        assert swarm_service.process_claimed_event(unclaimed, handler, settings=settings) is False
         handler.assert_not_called()
+
+    def test_race_loser_instance_never_invokes_handler(self) -> None:
+        """HIGH #2 fix, direct proof: instance A wins the claim; instance B
+        (a DIFFERENT `instance_id`) must NEVER get to run the handler for it,
+        even if it somehow got hold of the event object (e.g. a caller that
+        ignored `ClaimResult.event is None` on a `DEDUPED` result, or any
+        other path that hands B the same `Event`). Before this fix,
+        `process_claimed_event` only checked `status == 'claimed'` — it never
+        checked WHO claimed it — so B would have run the handler too."""
+        winner_settings = _settings(swarm_instance_id="inst-a")
+        event = self._claimed_event(winner_settings)  # inst-a is the true owner
+
+        handler = MagicMock()
+        # inst-b never won this claim — the atomic `claimed_by`-gated
+        # transition must reject it outright.
+        assert swarm_service.process_claimed_event(event, handler, instance_id="inst-b") is False
+        handler.assert_not_called()
+
+        # The TRUE owner can still process it afterwards — the race-loser's
+        # failed attempt must not have poisoned the row for the real owner.
+        assert swarm_service.process_claimed_event(event, handler, instance_id="inst-a") is True
+        handler.assert_called_once_with(event)
 
 
 class TestDispatchClaimedEvent:
@@ -332,7 +455,12 @@ class TestDispatchClaimedEvent:
         result = swarm_service.claim_next(["pr_ready"], settings=settings)
         assert result.event is not None
         orchestrator = MagicMock()
-        assert swarm_service.dispatch_claimed_event(result.event, orchestrator=orchestrator) is True
+        assert (
+            swarm_service.dispatch_claimed_event(
+                result.event, orchestrator=orchestrator, settings=settings
+            )
+            is True
+        )
         orchestrator.run_pipeline.assert_called_once()
         call_kwargs = orchestrator.run_pipeline.call_args.kwargs
         assert call_kwargs["project_names"] == ["widgets"]
@@ -347,6 +475,31 @@ class TestDispatchClaimedEvent:
             origin_instance="inst-a",
         )
         assert swarm_service.dispatch_claimed_event(event, orchestrator=MagicMock()) is False
+
+    def test_race_loser_instance_never_dispatches_to_handler(self) -> None:
+        """HIGH #2 fix, at the `dispatch_claimed_event` layer (the seam a real
+        fleet worker actually calls): a race-LOSER instance id must never
+        trigger `orchestrator.run_pipeline` for an event another instance
+        owns."""
+        settings = _settings(swarm_instance_id="inst-a")
+        swarm_service.publish_event(
+            "pr_ready",
+            {"project": "widgets", "branch": "hivepilot/x"},
+            "default",
+            dedupe_key="r:b:s",
+            settings=settings,
+        )
+        result = swarm_service.claim_next(["pr_ready"], settings=settings)
+        assert result.event is not None
+
+        orchestrator = MagicMock()
+        assert (
+            swarm_service.dispatch_claimed_event(
+                result.event, orchestrator=orchestrator, instance_id="inst-b"
+            )
+            is False
+        )
+        orchestrator.run_pipeline.assert_not_called()
 
 
 class TestPublishPrReady:

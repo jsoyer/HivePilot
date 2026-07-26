@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterator, Protocol, Type
 
+from hivepilot.config import Settings
 from hivepilot.swarm.models import Event
 
 
@@ -103,20 +104,39 @@ class TransportRegistry:
         return frozenset(TRANSPORT_MAP)
 
 
-def resolve_transport(name: str, *, instance_id: str) -> Transport:
+def resolve_transport(
+    name: str, *, instance_id: str, settings: Settings | None = None
+) -> Transport:
     """Construct a fresh transport instance for *name*, scoped to
-    *instance_id*.
+    *instance_id* and *settings*.
+
+    *settings* defaults to the process-global singleton ONLY when the caller
+    doesn't pass one -- previously this function unconditionally imported and
+    used the global singleton, silently ignoring any per-call ``Settings``
+    object a caller (e.g. ``swarm_service.claim_next``/``publish_event``, both
+    of which already accept an optional ``settings`` override) had actually
+    resolved. That was harmless while no transport read anything off
+    ``settings`` beyond what it was constructed with, but once
+    ``PollTransport`` started filtering by ``settings.swarm_served_tenants``
+    in SQL (MEDIUM #3 fix, opus security review) it became a real bug: a
+    caller's explicit tenant scope would be silently discarded in favor of the
+    global default. Threading *settings* through here is what makes a custom
+    ``Settings`` object (per-tenant test fixtures, a multi-tenant dispatcher
+    iterating several identities, ...) actually take effect.
 
     Fail-closed: raises ``UnknownTransportError`` (never a silent fallback)
     when *name* isn't registered in ``TRANSPORT_MAP`` -- e.g. ``"redis"`` was
     requested but the ``redis`` package isn't installed, so it never
     registered itself (see ``hivepilot/swarm/__init__.py``).
     """
-    from hivepilot.config import settings as _settings
+    if settings is None:
+        from hivepilot.config import settings as _settings
+
+        settings = _settings
 
     cls = TRANSPORT_MAP.get(name)
     if cls is None:
         raise UnknownTransportError(
             f"Unknown swarm transport {name!r}; available: {sorted(TRANSPORT_MAP)}"
         )
-    return cls(settings=_settings, instance_id=instance_id)
+    return cls(settings=settings, instance_id=instance_id)

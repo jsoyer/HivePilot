@@ -121,20 +121,153 @@ class TestClaimSwarmEvent:
         assert results.count(True) == 1
         assert results.count(False) == 9
 
+    def test_exactly_one_winner_under_genuine_thread_concurrency(self) -> None:
+        """The review flagged the sequential list-comprehension test above as
+        NOT honest enough: back-to-back calls from a single thread can never
+        actually exercise a write race, since each call completes before the
+        next begins. This test fires N threads at the SAME event's claim
+        UPDATE simultaneously, synchronized on a `threading.Barrier` so they
+        all reach `claim_swarm_event` at (as close to) the same instant as
+        Python's GIL + `db.connect()`'s independent-connections-per-thread
+        model allow -- a genuine write race against SQLite's own locking, not
+        a simulated one. Exactly one winner must still hold, every time."""
+        import threading
 
-class TestMarkSwarmEventDone:
-    def test_marks_claimed_event_done(self) -> None:
+        event = _event()
+        state_service.insert_swarm_event(event)
+
+        n_threads = 16
+        barrier = threading.Barrier(n_threads)
+        results: list[bool] = [False] * n_threads
+        errors: list[BaseException] = []
+
+        def _worker(i: int) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results[i] = state_service.claim_swarm_event(event.id, claimed_by=f"inst-{i}")
+            except BaseException as exc:  # noqa: BLE001 - capture for assertion
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"claim_swarm_event raised under concurrency: {errors!r}"
+        assert results.count(True) == 1
+        assert results.count(False) == n_threads - 1
+        row = state_service.get_swarm_event(event.id)
+        assert row is not None
+        assert row["status"] == "claimed"
+
+
+class TestMarkSwarmEventRunning:
+    """`mark_swarm_event_running` -- the HIGH #2 fix (opus security review):
+    the atomic `claimed` -> `running` ownership gate `process_claimed_event`
+    uses BEFORE ever invoking a handler."""
+
+    def test_claimed_event_by_owner_transitions_to_running(self) -> None:
         event = _event()
         state_service.insert_swarm_event(event)
         state_service.claim_swarm_event(event.id, claimed_by="inst-a")
+        assert state_service.mark_swarm_event_running(event.id, claimed_by="inst-a") is True
+        row = state_service.get_swarm_event(event.id)
+        assert row is not None
+        assert row["status"] == "running"
+
+    def test_wrong_claimed_by_never_transitions(self) -> None:
+        """A race-LOSER (or an attacker guessing ids) presenting the WRONG
+        `claimed_by` can never flip a WINNER's row to `running` -- this is
+        the exact primitive that closes the exactly-once-handler gap."""
+        event = _event()
+        state_service.insert_swarm_event(event)
+        state_service.claim_swarm_event(event.id, claimed_by="inst-a")
+        assert state_service.mark_swarm_event_running(event.id, claimed_by="inst-b") is False
+        row = state_service.get_swarm_event(event.id)
+        assert row is not None
+        assert row["status"] == "claimed"  # unchanged -- inst-b never touched it
+
+    def test_cannot_transition_a_still_pending_event(self) -> None:
+        event = _event()
+        state_service.insert_swarm_event(event)
+        assert state_service.mark_swarm_event_running(event.id, claimed_by="inst-a") is False
+
+    def test_double_transition_by_true_owner_only_succeeds_once(self) -> None:
+        """Even the TRUE owner can't win this atomic transition twice --
+        makes handler invocation itself exactly-once, not just the claim."""
+        event = _event()
+        state_service.insert_swarm_event(event)
+        state_service.claim_swarm_event(event.id, claimed_by="inst-a")
+        assert state_service.mark_swarm_event_running(event.id, claimed_by="inst-a") is True
+        assert state_service.mark_swarm_event_running(event.id, claimed_by="inst-a") is False
+
+    def test_exactly_one_winner_under_genuine_thread_concurrency(self) -> None:
+        """The HIGH #2 fix's own atomic primitive, under GENUINE concurrency
+        (not a sequential simulation): N threads for the SAME true owner
+        (`claimed_by="inst-a"`) all racing to flip `claimed` -> `running`
+        simultaneously, synchronized on a `threading.Barrier`. Exactly one
+        must win -- this is what makes handler invocation itself exactly-once
+        for the legitimate owner, not just the claim step."""
+        import threading
+
+        event = _event()
+        state_service.insert_swarm_event(event)
+        state_service.claim_swarm_event(event.id, claimed_by="inst-a")
+
+        n_threads = 16
+        barrier = threading.Barrier(n_threads)
+        results: list[bool] = [False] * n_threads
+        errors: list[BaseException] = []
+
+        def _worker(i: int) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results[i] = state_service.mark_swarm_event_running(event.id, claimed_by="inst-a")
+            except BaseException as exc:  # noqa: BLE001 - capture for assertion
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"mark_swarm_event_running raised under concurrency: {errors!r}"
+        assert results.count(True) == 1
+        assert results.count(False) == n_threads - 1
+        row = state_service.get_swarm_event(event.id)
+        assert row is not None
+        assert row["status"] == "running"
+
+
+class TestMarkSwarmEventDone:
+    def test_marks_running_event_done(self) -> None:
+        event = _event()
+        state_service.insert_swarm_event(event)
+        state_service.claim_swarm_event(event.id, claimed_by="inst-a")
+        state_service.mark_swarm_event_running(event.id, claimed_by="inst-a")
         assert state_service.mark_swarm_event_done(event.id) is True
         row = state_service.get_swarm_event(event.id)
         assert row is not None
         assert row["status"] == "done"
 
+    def test_cannot_mark_claimed_but_not_running_event_done(self) -> None:
+        """A `claimed` row that never passed through `mark_swarm_event_running`
+        cannot skip straight to `done` -- the ownership gate is mandatory,
+        not optional."""
+        event = _event()
+        state_service.insert_swarm_event(event)
+        state_service.claim_swarm_event(event.id, claimed_by="inst-a")
+        assert state_service.mark_swarm_event_done(event.id) is False
+        row = state_service.get_swarm_event(event.id)
+        assert row is not None
+        assert row["status"] == "claimed"
+
     def test_cannot_mark_pending_event_done_directly(self) -> None:
-        """An event must go through 'claimed' first — marking a still-pending
-        event 'done' is a no-op (returns False), never silently succeeds."""
+        """An event must go through 'claimed' -> 'running' first -- marking a
+        still-pending event 'done' is a no-op (returns False), never
+        silently succeeds."""
         event = _event()
         state_service.insert_swarm_event(event)
         assert state_service.mark_swarm_event_done(event.id) is False
@@ -146,6 +279,7 @@ class TestMarkSwarmEventDone:
         event = _event()
         state_service.insert_swarm_event(event)
         state_service.claim_swarm_event(event.id, claimed_by="inst-a")
+        state_service.mark_swarm_event_running(event.id, claimed_by="inst-a")
         assert state_service.mark_swarm_event_done(event.id) is True
         assert state_service.mark_swarm_event_done(event.id) is False
 

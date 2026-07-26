@@ -349,11 +349,16 @@ def init_db() -> None:
         # column: a second `insert_swarm_event` for the same id is a no-op
         # INSERT (see `ON CONFLICT(id) DO NOTHING` below), which is exactly
         # the publish-time DEDUPE contract. `status` is one of
-        # pending/claimed/done/skipped (`deduped` is an application-level
-        # outcome -- see `hivepilot.services.swarm_service.PublishStatus`/
-        # `ClaimStatus` -- never actually written to this column, since the
-        # row this table would attach it to already has a truthful status of
-        # its own; see that module's docstring for the full rationale).
+        # pending/claimed/running/done/skipped. `running` (HIGH #2 fix, opus
+        # security review) is the atomic gate between a winning claim and
+        # actual handler invocation -- see `mark_swarm_event_running` --
+        # closing a TOCTOU race where a claim race-LOSER could still read a
+        # `claimed` row and run the handler too. `deduped` is an
+        # application-level outcome -- see
+        # `hivepilot.services.swarm_service.PublishStatus`/`ClaimStatus` --
+        # never actually written to this column, since the row this table
+        # would attach it to already has a truthful status of its own; see
+        # that module's docstring for the full rationale).
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS swarm_events (
@@ -1273,12 +1278,48 @@ def claim_swarm_event(event_id: str, *, claimed_by: str) -> bool:
     return claimed
 
 
+def mark_swarm_event_running(event_id: str, *, claimed_by: str) -> bool:
+    """Atomically transition *event_id* from `claimed` -> `running`, but
+    ONLY when it is currently claimed BY *claimed_by* -- the atomic
+    handler-dispatch gate `swarm_service.process_claimed_event` uses BEFORE
+    ever invoking a handler (HIGH #2 fix, opus security review).
+
+    A plain `get_swarm_event()` + `if status == 'claimed'` read-then-act
+    check is a TOCTOU race: it never verifies WHO holds the claim, so a
+    race-LOSER instance B (whose own `claim_swarm_event` call already
+    returned `False`) could still read the row as `status='claimed'`
+    (claimed by WINNER instance A) and run the handler too -- a second,
+    unauthorized execution of whatever `pr_ready` (or any future event type)
+    triggers. Gating on a single conditional `UPDATE ... WHERE id=? AND
+    status='claimed' AND claimed_by=?` closes this: only the actual owner's
+    call can ever flip `claimed` -> `running` (`rowcount == 1`); every other
+    caller (a different `claimed_by`, or a second call for an event already
+    past `claimed`) gets `rowcount == 0` -> `False` -> no handler invocation.
+    This ALSO makes handler invocation itself exactly-once even for the
+    legitimate owner: two concurrent `process_claimed_event` calls for the
+    SAME owner can never both win this same atomic transition.
+    """
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(
+            db.ph(
+                "UPDATE swarm_events SET status='running', updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status='claimed' AND claimed_by=?"
+            ),
+            (event_id, claimed_by),
+        )
+        running = cur.rowcount == 1
+    logger.info("state.swarm_running", event_id=event_id, claimed_by=claimed_by, running=running)
+    return running
+
+
 def mark_swarm_event_done(event_id: str) -> bool:
-    """Atomically transition *event_id* from `claimed` -> `done` (a handler
+    """Atomically transition *event_id* from `running` -> `done` (a handler
     finished processing it). Returns `False` (no-op) when the row isn't
-    currently `claimed` -- e.g. it's still `pending` (must be claimed first)
-    or already `done` (a duplicate/redelivered completion call) -- this is
-    the persistence half of handler idempotency-by-event.id (see
+    currently `running` -- e.g. it never passed through
+    `mark_swarm_event_running` (must be claimed AND running first) or is
+    already `done` (a duplicate/redelivered completion call) -- this is the
+    persistence half of handler idempotency-by-event.id (see
     `hivepilot.services.swarm_service.process_claimed_event`).
     """
     init_db()
@@ -1286,7 +1327,7 @@ def mark_swarm_event_done(event_id: str) -> bool:
         cur = conn.execute(
             db.ph(
                 "UPDATE swarm_events SET status='done', updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='claimed'"
+                "WHERE id=? AND status='running'"
             ),
             (event_id,),
         )

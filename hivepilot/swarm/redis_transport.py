@@ -95,6 +95,16 @@ class RedisTransport:
         self._client.xadd(self.STREAM_KEY, {"data": event.model_dump_json()})
 
     def subscribe(self, types: list[str]) -> Iterator[Event]:
+        # NOTE (opus security review MEDIUM #3 follow-up): unlike
+        # `PollTransport`, this does NOT filter by served tenant at the
+        # broker level -- Redis Streams has no per-tenant index to filter on
+        # without splitting into per-tenant streams (out of scope for Phase
+        # 1's single shared `STREAM_KEY`), so a burst of unserved-tenant
+        # events could in principle fill this `count=50` XREADGROUP window
+        # too. `swarm_service.claim_next`'s post-filter still guarantees
+        # CORRECTNESS (an unserved-tenant event is never claimed/executed);
+        # only the same *fairness/starvation* caveat poll's fix closed
+        # remains open for redis, documented here rather than silently.
         resp = self._client.xreadgroup(
             self.GROUP, self._instance_id, {self.STREAM_KEY: ">"}, count=50
         )
