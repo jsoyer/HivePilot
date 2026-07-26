@@ -12,6 +12,7 @@ from typing import Any, Callable
 import requests
 
 from hivepilot.config import settings
+from hivepilot.services.config_provenance import mask_id
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -152,6 +153,35 @@ def _send_discord(message: str) -> None:
     requests.post(webhook, json={"content": message}, timeout=5)
 
 
+class TelegramSendError(RuntimeError):
+    """A Telegram `sendMessage` call returned a non-2xx response.
+
+    Carries the fields a human needs to diagnose a Telegram failure WITHOUT
+    reproducing it (explicit-failure-logs sprint, Part A.3): the HTTP status
+    code and Telegram's own ``description`` (e.g. "Can't parse entities:
+    can't find end of the entity ...") parsed straight out of the JSON error
+    body -- `requests.Response.raise_for_status()` alone only ever produces a
+    generic "400 Client Error: Bad Request for url: ..." with NONE of that
+    detail. `chat_id`/`message_thread_id` are the raw (unmasked) values the
+    call was made with -- callers must mask `chat_id` themselves (see
+    `hivepilot.services.config_provenance.mask_id`) before logging it.
+    """
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        description: str | None,
+        chat_id: int | str | None,
+        message_thread_id: int | None,
+    ) -> None:
+        super().__init__(f"Telegram sendMessage failed: {status_code} {description or ''}".strip())
+        self.status_code = status_code
+        self.description = description
+        self.chat_id = chat_id
+        self.message_thread_id = message_thread_id
+
+
 def _send_telegram(
     message: str,
     chat_id: int | str | None = None,
@@ -174,10 +204,26 @@ def _send_telegram(
         payload["parse_mode"] = parse_mode
     resp = requests.post(url, json=payload, timeout=5)
     # Telegram returns HTTP 400 for a malformed HTML request (e.g. an
-    # unbalanced/unsupported entity our formatter didn't anticipate). Raise
-    # so callers like _send_chunks can retry that one chunk as plain text
-    # instead of the failure silently vanishing.
-    resp.raise_for_status()
+    # unbalanced/unsupported entity our formatter didn't anticipate). Raise a
+    # `TelegramSendError` (carrying status + Telegram's own `description`)
+    # rather than the generic `resp.raise_for_status()` so callers like
+    # `_send_chunks` can retry that one chunk as plain text AND log a real
+    # reason instead of the failure silently vanishing into "400 Client
+    # Error: Bad Request for url: ...".
+    if not resp.ok:
+        description: str | None = None
+        try:
+            body = resp.json()
+            if isinstance(body, dict):
+                description = body.get("description")
+        except ValueError:
+            pass
+        raise TelegramSendError(
+            status_code=resp.status_code,
+            description=description,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+        )
 
 
 NotifierRegistry.register("slack", _send_slack)
@@ -746,12 +792,41 @@ def _send_chunks(
         except Exception as exc:  # noqa: BLE001
             if parse_mode is None:
                 raise
-            logger.warning("stream.chunk_send_failed_retry_plain", error=str(exc))
-            _send_telegram(
-                _strip_html(chunk),
-                chat_id=chat_id,
+            # Explicit-failure-logs sprint, Part A.3: a `TelegramSendError`
+            # carries the real HTTP status + Telegram's own `description`
+            # ("Can't parse entities: ..."); any OTHER exception (a network
+            # error, ...) degrades to just `error=str(exc)` -- either way a
+            # 400 is never just a silent retry with no diagnostic trail.
+            logger.warning(
+                "stream.chunk_send_failed_retry_plain",
+                kind="stream_chunk",
+                status_code=getattr(exc, "status_code", None),
+                description=getattr(exc, "description", None),
+                chat_id=mask_id(chat_id),
                 message_thread_id=message_thread_id,
-                parse_mode=None,
+                error=str(exc),
+            )
+            try:
+                _send_telegram(
+                    _strip_html(chunk),
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    parse_mode=None,
+                )
+            except Exception as fallback_exc:  # noqa: BLE001
+                logger.error(
+                    "stream.chunk_send_fallback_failed",
+                    kind="stream_chunk",
+                    chat_id=mask_id(chat_id),
+                    message_thread_id=message_thread_id,
+                    error=str(fallback_exc),
+                )
+                raise
+            logger.info(
+                "stream.chunk_send_fallback_succeeded",
+                kind="stream_chunk",
+                chat_id=mask_id(chat_id),
+                message_thread_id=message_thread_id,
             )
 
 

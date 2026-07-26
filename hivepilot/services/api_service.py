@@ -726,7 +726,24 @@ def handle_approval(
     action: ApprovalAction,
     caller: token_service.TokenEntry = Depends(require_role("approve")),
 ):
-    """Approve/deny a run. Non-admin callers may only act on their own tenant's runs."""
+    """Approve/deny a run. Non-admin callers may only act on their own tenant's runs.
+
+    Explicit-failure-logs sprint, Part A.2: logs the attempt (run_id, approve,
+    approver, caller) BEFORE dispatching, and on failure translates a known
+    rejection reason (`Orchestrator.run_approved` raises `ValueError`/
+    `KeyError` for unknown run / not pending / unknown task -- each logged
+    with its OWN specific reason at the orchestrator layer) into a clean 400
+    instead of an opaque, contextless 500. A route-mismatch note: this
+    endpoint only ever calls `run_approved` (the single-task path) -- a
+    pipeline-checkpoint approval belongs on `resume_pipeline` (see
+    `telegram_bot._dispatch_approval` for the reference routing logic); that
+    routing gap is tracked separately and intentionally NOT changed here (see
+    this sprint's Agent Notes) -- only the logging/error-message wording is.
+    """
+    from hivepilot.utils.logging import get_logger
+
+    api_logger = get_logger(__name__)
+
     if caller.role != "admin":
         row = state_service.get_approval(run_id)
         if row is None:
@@ -737,13 +754,35 @@ def handle_approval(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cross-tenant approval not allowed",
             )
-    with run_duration_seconds.time():
-        result = _get_orchestrator().run_approved(
-            run_id=run_id,
-            approve=action.approve,
-            approver=action.approver,
-            reason=action.reason,
-        )
+    api_logger.info(
+        "api.approval.requested",
+        run_id=run_id,
+        approve=action.approve,
+        approver=action.approver,
+        caller_role=caller.role,
+        caller_tenant=caller.tenant,
+    )
+    try:
+        with run_duration_seconds.time():
+            result = _get_orchestrator().run_approved(
+                run_id=run_id,
+                approve=action.approve,
+                approver=action.approver,
+                reason=action.reason,
+            )
+    except (ValueError, KeyError) as exc:
+        # Every KNOWN rejection reason (unknown run / not pending / unknown
+        # task) -- the orchestrator's own `approval.approve_rejected` log
+        # already recorded WHY; surface that same reason to the caller as a
+        # clean 400 rather than letting it fall through as an unhandled 500.
+        api_logger.warning("api.approval.rejected", run_id=run_id, error=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — genuinely unexpected: log full context, still 500
+        api_logger.error("api.approval.failed_unexpected", run_id=run_id, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Approval processing failed for run {run_id}: {exc}",
+        ) from exc
     return {"result": result.__dict__}
 
 

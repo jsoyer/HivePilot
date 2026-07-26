@@ -20,6 +20,7 @@ from hivepilot.services.config_provenance import (
     all_keys,
     clear_secret_values,
     is_secret_field,
+    mask_id,
     redact_text,
     redact_value,
     register_secret_value,
@@ -243,3 +244,25 @@ class TestRedactValueRecursive:
         redact_value(payload)
         # redact_value must return a NEW structure, not mutate the input.
         assert payload == {"a": ["immut-secret-value"]}
+
+
+class TestMaskId:
+    """Explicit-failure-logs sprint, Part A.3/A.5: an IDENTIFIER (Telegram
+    chat id, Swarm key id, ...) is not a secret (never `register_secret_
+    value`'d) but must still not appear verbatim across every log line."""
+
+    def test_keeps_only_last_4_chars(self) -> None:
+        assert mask_id(123456789) == "***6789"
+        assert mask_id("-1001234567890") == "***7890"
+
+    def test_short_values_collapse_to_bare_mask(self) -> None:
+        assert mask_id(12) == "***"
+        assert mask_id("ab") == "***"
+        assert mask_id("") == "***"
+
+    def test_none_collapses_to_bare_mask(self) -> None:
+        assert mask_id(None) == "***"
+
+    def test_never_returns_the_full_original_value(self) -> None:
+        chat_id = 987654321
+        assert str(chat_id) not in mask_id(chat_id)

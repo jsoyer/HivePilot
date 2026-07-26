@@ -16,6 +16,7 @@ from hivepilot.models import RunnerDefinition
 from hivepilot.plugins import SkillSpec
 from hivepilot.runners.base import (
     BaseRunner,
+    RunnerExecutionError,
     RunnerPayload,
     UsageInfo,
     resolve_runner_effort,
@@ -88,6 +89,50 @@ EFFORT_TOKEN_MAP: dict[str, int] = {
     "xhigh": 40000,
     "max": 63999,
 }
+
+
+# Known Claude CLI failure signatures -> an actionable `hint` a human can act
+# on WITHOUT reading `_build_invocation`'s source or reproducing the failure
+# (explicit-failure-logs sprint, Part A.1 -- these are REAL failures hit in
+# production that were hard to diagnose from the log alone). Checked in
+# order; the first match wins.
+_STDIN_OR_PROMPT_MARKER = "Input must be provided either through stdin or as a prompt argument"
+_ROOT_SUDO_MARKER = "--dangerously-skip-permissions"
+_PERMISSION_GRANT_MARKER = "needs a permission grant"
+
+
+def _detect_known_hint(text: str) -> str | None:
+    """Match *text* (raw stderr, or any exception message derived from it)
+    against known Claude CLI failure signatures and return an actionable
+    ``hint``, or ``None`` when nothing matches.
+
+    Deliberately conservative (substring, not regex) -- a false negative
+    (no hint) just means the operator falls back to reading the raw
+    stderr excerpt already logged alongside it; a false positive would be
+    worse (a misleading hint), so each pattern below is unique enough to the
+    real Claude CLI failure text it targets.
+    """
+    if _STDIN_OR_PROMPT_MARKER in text:
+        return (
+            "a variadic flag (--tools/--add-dir/--append-system-prompt/...) ate the "
+            "positional prompt argument — ensure `--` precedes the prompt "
+            "(see claude_runner._build_invocation's unconditional `--` insertion)."
+        )
+    if _ROOT_SUDO_MARKER in text and "root" in text.lower():
+        return (
+            "claude refuses --dangerously-skip-permissions (bypassPermissions) when "
+            "running as root/sudo — set permission_mode: acceptEdits for this "
+            "role/step instead."
+        )
+    if _PERMISSION_GRANT_MARKER in text or (
+        "cannot be used" in text and "non-interactive" in text.lower()
+    ):
+        return (
+            "the agent tried a tool/action that needs interactive approval while "
+            "running headless (--print) — HivePilot persists deliverables itself; "
+            "no manual approval is available mid-run."
+        )
+    return None
 
 
 def _insert_output_format_json(argv: list[str]) -> list[str]:
@@ -390,6 +435,46 @@ class ClaudeRunner(BaseRunner):
             or self.settings.claude_permission_mode
         )
 
+    def _runner_failure_context(
+        self,
+        payload: RunnerPayload,
+        *,
+        exit_code: int | None,
+        stderr_text: str,
+        skill_applied: bool,
+    ) -> dict[str, Any]:
+        """Build the structured diagnostic context for a failed `run()`/
+        `capture()` invocation (explicit-failure-logs sprint, Part A.1).
+
+        Every field here is chosen to answer "why did this fail?" WITHOUT
+        reading code or reproducing the run: the exit code, which runner/
+        model/role/task/stage/project/permission_mode were actually in
+        effect, whether a skill was materialised, a bounded (~300 char)
+        stderr excerpt, and -- when the text matches a KNOWN failure
+        signature (`_detect_known_hint`) -- a `hint` explaining the likely
+        cause and fix. `stderr_text` is expected to already be the
+        combined stderr/stdout tail the caller extracted; it is redacted
+        here (via `redact_text`) before being excerpted so a resolved
+        `${secret:NAME}` value can never leak into this log line either.
+        """
+        redacted = redact_text(stderr_text) if stderr_text else stderr_text
+        context: dict[str, Any] = {
+            "exit_code": exit_code,
+            "runner_kind": self.definition.kind,
+            "model": self._resolve_model(payload),
+            "role": payload.metadata.get("role"),
+            "task": payload.task_name,
+            "stage": payload.step.name,
+            "project": payload.project_name,
+            "permission_mode": self._permission_mode(payload),
+            "skill_applied": skill_applied,
+            "stderr_excerpt": redacted[:300] if redacted else "",
+        }
+        hint = _detect_known_hint(stderr_text) if stderr_text else None
+        if hint:
+            context["hint"] = hint
+        return context
+
     def apply_skill(self, payload: RunnerPayload, skills: list[SkillSpec]) -> RunnerPayload:
         """Materialise the *skills* applicable to this runner into an
         EPHEMERAL scratch directory and stash a concatenated system prompt —
@@ -512,6 +597,26 @@ class ClaudeRunner(BaseRunner):
             subprocess.run(
                 argv, cwd=cwd, env=run_env, check=True, text=True, stdin=subprocess.DEVNULL
             )
+        except subprocess.CalledProcessError as exc:
+            # `run()` never captures stdout/stderr (it streams straight to the
+            # parent's inherited fds for live/interactive visibility) -- so,
+            # unlike `capture()` below, there is no stderr text to excerpt or
+            # match a known-hint signature against here. Still logs every
+            # OTHER field (exit code, runner/model/role/task/stage/project/
+            # permission_mode/skill_applied) so a `run()`-path failure is no
+            # longer just "returned non-zero exit status 1." with nothing else.
+            context = self._runner_failure_context(
+                payload,
+                exit_code=exc.returncode,
+                stderr_text="",
+                skill_applied=bool(scratch_dir),
+            )
+            logger.error("claude_runner.run_failed", **context)
+            raise RunnerExecutionError(
+                f"claude exited {exc.returncode} (stderr not captured on the run() path — "
+                "see logs for full context, or use a capture()-based step for stderr detail)",
+                context=context,
+            ) from exc
         finally:
             # Ephemeral skill scratch (see apply_skill) must not outlive the
             # step — removed here on BOTH success and exception.
@@ -585,8 +690,20 @@ class ClaudeRunner(BaseRunner):
                     # support --output-format json, enabling this flag surfaces
                     # as a run failure and the operator turns the flag back off —
                     # we never silently double-run the agent to route around it.
-                    err = (json_result.stderr or json_result.stdout or "").strip()[-2000:]
-                    raise RuntimeError(f"claude exited {json_result.returncode}: {err}")
+                    stderr_text = (json_result.stderr or json_result.stdout or "").strip()
+                    context = self._runner_failure_context(
+                        payload,
+                        exit_code=json_result.returncode,
+                        stderr_text=stderr_text,
+                        skill_applied=bool(scratch_dir),
+                    )
+                    logger.error("claude_runner.run_failed", **context)
+                    err = redact_text(stderr_text)[-2000:]
+                    hint_suffix = f" | hint: {context['hint']}" if context.get("hint") else ""
+                    raise RunnerExecutionError(
+                        f"claude exited {json_result.returncode}: {err}{hint_suffix}",
+                        context=context,
+                    )
                 parsed = _parse_usage_envelope(json_result.stdout)
                 if parsed is not None:
                     text, usage = parsed
@@ -615,8 +732,20 @@ class ClaudeRunner(BaseRunner):
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode != 0:
-                err = (result.stderr or result.stdout or "").strip()[-2000:]
-                raise RuntimeError(f"claude exited {result.returncode}: {err}")
+                stderr_text = (result.stderr or result.stdout or "").strip()
+                context = self._runner_failure_context(
+                    payload,
+                    exit_code=result.returncode,
+                    stderr_text=stderr_text,
+                    skill_applied=bool(scratch_dir),
+                )
+                logger.error("claude_runner.run_failed", **context)
+                err = redact_text(stderr_text)[-2000:]
+                hint_suffix = f" | hint: {context['hint']}" if context.get("hint") else ""
+                raise RunnerExecutionError(
+                    f"claude exited {result.returncode}: {err}{hint_suffix}",
+                    context=context,
+                )
             return result.stdout
         finally:
             # Ephemeral skill scratch (see apply_skill) must not outlive the

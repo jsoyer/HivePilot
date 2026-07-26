@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from hivepilot.config import settings
 from hivepilot.models import EffortLevel, ProjectConfig, RunnerDefinition, TaskStep
-from hivepilot.runners.base import RunnerPayload
+from hivepilot.runners.base import RunnerExecutionError, RunnerPayload
 from hivepilot.runners.claude_runner import ClaudeRunner
 
 
@@ -359,6 +361,157 @@ def test_capture_surfaces_stderr_on_failure(tmp_path: Path) -> None:
         m.return_value = MagicMock(returncode=1, stdout="", stderr="boom: bad model")
         with __import__("pytest").raises(RuntimeError, match="boom: bad model"):
             _runner().capture(payload)
+
+
+# ── Explicit failure logs (Part A.1) ────────────────────────────────────────
+
+
+class TestExplicitFailureLogs:
+    """A runner failure must be diagnosable from the log alone: exit code,
+    runner kind, resolved model, role, task/stage, project, permission_mode,
+    whether a skill was applied, a bounded stderr excerpt, and -- for a KNOWN
+    failure signature -- an actionable `hint`."""
+
+    def _failing_payload(self, tmp_path: Path, **step_kwargs) -> RunnerPayload:
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        return RunnerPayload(
+            project_name="proj-x",
+            project=ProjectConfig(path=tmp_path),
+            task_name="task-x",
+            step=TaskStep(name="stage-x", runner="claude", prompt_file=str(pf), **step_kwargs),
+            metadata={"role": "developer"},
+            secrets={},
+        )
+
+    def test_capture_failure_raises_with_structured_context(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path, metadata={"permission_mode": "acceptEdits"})
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr="some CLI error")
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+
+        ctx = excinfo.value.context
+        assert ctx["exit_code"] == 1
+        assert ctx["runner_kind"] == "claude"
+        assert ctx["role"] == "developer"
+        assert ctx["task"] == "task-x"
+        assert ctx["stage"] == "stage-x"
+        assert ctx["project"] == "proj-x"
+        assert ctx["permission_mode"] == "acceptEdits"
+        assert ctx["skill_applied"] is False
+        assert "some CLI error" in ctx["stderr_excerpt"]
+
+    def test_stderr_excerpt_bounded_to_300_chars(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        long_stderr = "x" * 5000
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr=long_stderr)
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+        assert len(excinfo.value.context["stderr_excerpt"]) == 300
+
+    def test_hint_for_stdin_or_prompt_argument(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        stderr = (
+            "Error: Input must be provided either through stdin or as a "
+            "prompt argument when using --print"
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr=stderr)
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+        assert "hint" in excinfo.value.context
+        assert "--" in excinfo.value.context["hint"]
+        assert "hint:" in str(excinfo.value)
+
+    def test_hint_for_root_sudo_permission_refusal(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        stderr = "--dangerously-skip-permissions cannot be used with root/sudo"
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr=stderr)
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+        assert "acceptEdits" in excinfo.value.context["hint"]
+
+    def test_hint_for_headless_permission_refusal(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        stderr = "Tool use needs a permission grant to proceed"
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr=stderr)
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+        assert "interactive approval" in excinfo.value.context["hint"]
+
+    def test_no_hint_for_unrecognized_stderr(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr="totally unrelated error")
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+        assert "hint" not in excinfo.value.context
+
+    def test_run_path_failure_raises_with_context_no_stderr(self, tmp_path: Path) -> None:
+        """`run()` never captures stdout/stderr (streams to inherited fds) --
+        it must still surface every OTHER structured field."""
+        import subprocess as sp
+        from unittest.mock import patch
+
+        payload = self._failing_payload(tmp_path)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.side_effect = sp.CalledProcessError(returncode=2, cmd=["claude"])
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().run(payload)
+        ctx = excinfo.value.context
+        assert ctx["exit_code"] == 2
+        assert ctx["runner_kind"] == "claude"
+        assert ctx["task"] == "task-x"
+
+    def test_registered_secret_redacted_from_stderr_excerpt(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.services import config_provenance
+
+        config_provenance.clear_secret_values()
+        marker = "SUPERSECRET-MARKER-abc123-do-not-leak"
+        config_provenance.register_secret_value(marker)
+        try:
+            payload = self._failing_payload(tmp_path)
+            with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+                m.return_value = MagicMock(
+                    returncode=1, stdout="", stderr=f"auth failed with key {marker}"
+                )
+                with pytest.raises(RunnerExecutionError) as excinfo:
+                    _runner().capture(payload)
+            assert marker not in excinfo.value.context["stderr_excerpt"]
+            assert marker not in str(excinfo.value)
+        finally:
+            config_provenance.clear_secret_values()
+
+    def test_usage_capture_path_also_raises_with_context(self, tmp_path: Path, monkeypatch) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr="usage-path failure")
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                runner.capture(payload)
+        assert excinfo.value.context["exit_code"] == 1
+        assert "usage-path failure" in excinfo.value.context["stderr_excerpt"]
 
 
 # ── L1: prompt ordering tests ────────────────────────────────────────────────

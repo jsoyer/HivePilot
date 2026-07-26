@@ -39,6 +39,32 @@ class RunnerModeUnsupportedError(RuntimeError):
     """
 
 
+class RunnerExecutionError(RuntimeError):
+    """A runner's underlying subprocess/API call failed (non-zero exit, or an
+    equivalent execution failure) -- raised in place of a bare ``RuntimeError``
+    so the failure carries STRUCTURED diagnostic context alongside its human
+    ``str()`` message (explicit-failure-logs sprint, Part A.1).
+
+    ``context`` is a flat ``dict`` of machine-readable fields (e.g.
+    ``exit_code``, ``runner_kind``, ``model``, ``role``, ``task``, ``stage``,
+    ``project``, ``permission_mode``, ``skill_applied``, ``stderr_excerpt``,
+    and an optional ``hint`` for a recognised failure signature) a caller can
+    merge straight into a structured log call (see
+    ``Orchestrator``'s ``run.failure`` handler) instead of only logging the
+    opaque exception text. Any value already redacted by the raiser (see
+    ``ClaudeRunner._runner_failure_context``) -- this class does no
+    redaction of its own, it only carries what it's given.
+
+    ``str(exc)`` stays a plain, human-readable message (unchanged shape from
+    the plain ``RuntimeError`` this replaces) so every existing caller that
+    only reads/matches the exception text keeps working unmodified.
+    """
+
+    def __init__(self, message: str, *, context: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.context: dict[str, Any] = context or {}
+
+
 class BaseRunner(Protocol):
     definition: RunnerDefinition
     settings: Settings
