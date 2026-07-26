@@ -1,0 +1,57 @@
+[Unit]
+Description=HivePilot HTTP API server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/hivepilot/venv/bin/hivepilot api serve --host 127.0.0.1 --port 8045
+Restart=always
+RestartSec=2
+
+# Optional-file dash prefix ("-") -- systemd does NOT fail to start if the
+# file is missing. Load order matters: shared.env first (values common to
+# every hivepilot-*.service), then this service's own file (may override).
+# See deploy/systemd/README.md for the EnvironmentFile=KEY=value format
+# (no shell, no `export `, no $VAR expansion -- unlike OpenRC's conf.d files).
+EnvironmentFile=-/etc/hivepilot/shared.env
+EnvironmentFile=-/etc/hivepilot/hivepilot-api.env
+
+# WorkingDirectory=/ -- mirrors OpenRC's cwd=/ behavior on purpose (same
+# env-silo trap, same fix, different init system). systemd services have NO
+# inherited working directory from your shell/checkout either; a relative
+# path in any config value (config-repo clone path, plugin dir,
+# obsidian_vault, a state-db path, etc.) resolves against `/`, not against
+# where you'd expect. Keep every path-shaped setting ABSOLUTE. See
+# deploy/openrc/README.md, "Env-silo warning (cwd=/)" for the original
+# incident this guards against.
+WorkingDirectory=/
+
+# --- Hardening (safe subset for this workload) ---
+# NoNewPrivileges is always safe here: nothing this process runs needs
+# setuid/setgid escalation.
+NoNewPrivileges=yes
+# ProtectHome, ReadOnlyPaths, and PrivateTmp are DELIBERATELY NOT enabled:
+# the agents this service (indirectly, via the API/orchestrator) supervises
+# need to write into arbitrary project repo checkouts (often under a user's
+# home directory), the Obsidian vault, and /tmp (scratch files, git
+# worktrees, build caches). Enabling any of those would silently break agent
+# runs. Revisit only if HIVEPILOT_BASE_DIR and every project/vault path are
+# confined to one dedicated, non-home directory you can allowlist instead.
+
+# --- root vs non-root, and IS_SANDBOX ---
+# Unlike the current Alpine box (root), a systemd deployment can cleanly run
+# as a dedicated non-root user -- prefer that (uncomment and adjust):
+#   User=hivepilot
+#   Group=hivepilot
+# If you keep root anyway: `claude` refuses --dangerously-skip-permissions
+# under root/sudo UNLESS IS_SANDBOX=1 is set in the process environment (see
+# hivepilot/runners/claude_runner.py's root-refusal hint). Put IS_SANDBOX=1
+# in /etc/hivepilot/shared.env (loaded above, shared by every
+# hivepilot-*.service) -- never in only one service's own env file, or you
+# recreate the exact env-silo bug documented in deploy/openrc/README.md,
+# "Env silos -- read this" (a resumed approval-callback pipeline ran without
+# IS_SANDBOX because it was only set on 2 of 3 relevant services).
+
+[Install]
+WantedBy=multi-user.target
