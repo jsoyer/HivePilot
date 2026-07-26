@@ -868,7 +868,11 @@ def approvals_approve(
 ) -> None:
     _require_cli_role("approve", token)
     orchestrator = Orchestrator()
-    result = orchestrator.run_approved(run_id=run_id, approve=True, approver=approver)
+    try:
+        result = orchestrator.approve_run(run_id=run_id, approve=True, approver=approver)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
     typer.echo(f"Run {run_id} approved. Status: {result.success}")
 
 
@@ -883,7 +887,11 @@ def approvals_deny(
 ) -> None:
     _require_cli_role("approve", token)
     orchestrator = Orchestrator()
-    orchestrator.run_approved(run_id=run_id, approve=False, approver=approver, reason=reason)
+    try:
+        orchestrator.approve_run(run_id=run_id, approve=False, approver=approver, reason=reason)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
     typer.echo(f"Run {run_id} denied.")
 
 
