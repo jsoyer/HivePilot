@@ -1,0 +1,16 @@
+[ -f /etc/hivepilot/shared.env ] && . /etc/hivepilot/shared.env
+# ^ vars every hivepilot-* service must share (e.g. IS_SANDBOX) live
+# there, not here -- see deploy/openrc/conf.d/shared.env.example and
+# deploy/openrc/README.md, "Env silos -- read this".
+
+# Copy to /etc/conf.d/hivepilot-scheduler and fill in the placeholders.
+#
+# OpenRC runs this service with cwd=/ -- keep every path-shaped value below
+# absolute (see deploy/openrc/README.md, "env-silo warning").
+
+export HIVEPILOT_BASE_DIR=/data
+export HIVEPILOT_CONFIG_REPO=<your-config-repo-url>
+
+# The scheduler daemon is fail-closed -- it refuses to start without a
+# run-role token. Bootstrap one first (docs/DEPLOY-PRODUCTION.md#7-api-tokens-bootstrap).
+export HIVEPILOT_API_TOKEN=<run-role-token>

@@ -1,0 +1,22 @@
+[ -f /etc/hivepilot/shared.env ] && . /etc/hivepilot/shared.env
+# ^ vars every hivepilot-* service must share (e.g. IS_SANDBOX) live
+# there, not here -- see deploy/openrc/conf.d/shared.env.example and
+# deploy/openrc/README.md, "Env silos -- read this".
+
+# Copy to /etc/conf.d/hivepilot-api and fill in the placeholders.
+#
+# OpenRC runs this service with cwd=/ -- a relative path here resolves
+# against `/`, not against this file's own directory or any checkout. Every
+# path-shaped value below MUST be absolute (see deploy/openrc/README.md,
+# "env-silo warning").
+
+export HIVEPILOT_BASE_DIR=/data
+export HIVEPILOT_API_HOST=127.0.0.1
+export HIVEPILOT_API_PORT=8045
+export HIVEPILOT_CONFIG_REPO=<your-config-repo-url>
+# export HIVEPILOT_CONFIG_TOKEN=<github-pat>   # only for https:// config repo URLs (see docs/DEPLOY-PRODUCTION.md#3-wire-the-config)
+
+# HIVEPILOT_API_TOKEN is NOT required for `api serve` to start (unlike
+# hivepilot-scheduler below) -- only set it here if some other admin-role
+# CLI command you run against this host needs one.
+# export HIVEPILOT_API_TOKEN=<admin-or-run-role-token>
