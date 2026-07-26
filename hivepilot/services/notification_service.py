@@ -55,8 +55,14 @@ _STATUS_BADGES = {
     "ADVISORY": "📋 ADVISORY",
 }
 
-# Path for persisting agent_key -> message_thread_id across runs.
-_TOPICS_REGISTRY_PATH = Path(".hivepilot/stream_topics.json")
+# Legacy cwd-relative path for the agent_key -> message_thread_id registry.
+# Kept ONLY as a one-time migration source (see _migrate_legacy_topics) --
+# this is exactly the bug: a relative path means an OpenRC service (cwd=/)
+# and a CLI run (cwd=$HOME) each get their OWN registry, so the second
+# context never sees a topic the first already created and duplicates it
+# via createForumTopic. The live registry now lives at an absolute,
+# cwd-independent path — see _topics_registry_path().
+_LEGACY_TOPICS_REGISTRY_PATH = Path(".hivepilot/stream_topics.json")
 
 NOTIFIER_MAP: dict[str, Callable[[str], None]] = {}
 
@@ -179,25 +185,72 @@ NotifierRegistry.register("discord", _send_discord)
 NotifierRegistry.register("telegram", _send_telegram)
 
 
+def _topics_registry_path() -> Path:
+    """Resolve the absolute, cwd-INDEPENDENT path for the topics registry.
+
+    Uses the `stream_topics_registry_path` override when configured,
+    otherwise defaults to `xdg_data_home/stream_topics.json` — the same
+    stable data directory already used for plugins/config-repo (see
+    `Settings.xdg_data_home`). Reusing it (instead of a cwd-relative default,
+    or `base_dir`, which is itself frozen to `Path.cwd()` at import time and
+    would reproduce the exact same split) is what makes every process share
+    ONE registry regardless of its working directory.
+    """
+    override = settings.stream_topics_registry_path
+    if override is not None:
+        return settings.resolve_path(Path(override))
+    return settings.xdg_data_home / "stream_topics.json"
+
+
+def _migrate_legacy_topics(new_path: Path) -> dict[str, int]:
+    """One-time migration: legacy cwd-relative registry -> new absolute path.
+
+    Only runs when *new_path* doesn't exist yet, so an existing deployment
+    keeps its already-created topics instead of losing them (and creating a
+    THIRD set) the first time it runs with the fixed, absolute path.
+    """
+    legacy = _LEGACY_TOPICS_REGISTRY_PATH
+    if not legacy.exists():
+        return {}
+    try:
+        data: dict[str, int] = json.loads(legacy.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.topics.migration_read_failed", error=str(exc))
+        return {}
+    logger.warning(
+        "stream.topics.migrated_legacy_registry",
+        legacy_path=str(legacy.resolve()),
+        new_path=str(new_path),
+        count=len(data),
+    )
+    _write_topics(new_path, data)
+    return data
+
+
 def _load_topics() -> dict[str, int]:
     """Load the agent_key -> message_thread_id registry from disk. Best-effort."""
     try:
-        path = _TOPICS_REGISTRY_PATH
+        path = _topics_registry_path()
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
+        return _migrate_legacy_topics(path)
     except Exception as exc:  # noqa: BLE001
         logger.warning("stream.topics.load_failed", error=str(exc))
     return {}
 
 
-def _save_topics(mapping: dict[str, int]) -> None:
-    """Persist the topics registry to disk. Best-effort."""
+def _write_topics(path: Path, mapping: dict[str, int]) -> None:
+    """Persist *mapping* to *path*. Best-effort — never raises."""
     try:
-        path = _TOPICS_REGISTRY_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
         logger.warning("stream.topics.save_failed", error=str(exc))
+
+
+def _save_topics(mapping: dict[str, int]) -> None:
+    """Persist the topics registry to disk. Best-effort."""
+    _write_topics(_topics_registry_path(), mapping)
 
 
 def _normalize(text: str) -> str:
