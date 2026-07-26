@@ -349,11 +349,17 @@ def init_db() -> None:
         # column: a second `insert_swarm_event` for the same id is a no-op
         # INSERT (see `ON CONFLICT(id) DO NOTHING` below), which is exactly
         # the publish-time DEDUPE contract. `status` is one of
-        # pending/claimed/running/done/skipped. `running` (HIGH #2 fix, opus
-        # security review) is the atomic gate between a winning claim and
-        # actual handler invocation -- see `mark_swarm_event_running` --
-        # closing a TOCTOU race where a claim race-LOSER could still read a
-        # `claimed` row and run the handler too. `deduped` is an
+        # pending/claimed/running/done/skipped/failed. `running` (HIGH #2
+        # fix, opus security review) is the atomic gate between a winning
+        # claim and actual handler invocation -- see
+        # `mark_swarm_event_running` -- closing a TOCTOU race where a claim
+        # race-LOSER could still read a `claimed` row and run the handler
+        # too. `failed` (bug-debt fix) is the OTHER defined terminal state a
+        # `running` row can reach: a handler that raises moves the row
+        # straight to `failed` rather than leaving it `running` forever with
+        # no reaper -- see `mark_swarm_event_failed` and `swarm_service.
+        # process_claimed_event`'s docstring for the at-most-once rationale
+        # (never a silent re-queue). `deduped` is an
         # application-level outcome -- see
         # `hivepilot.services.swarm_service.PublishStatus`/`ClaimStatus` --
         # never actually written to this column, since the row this table
@@ -1334,6 +1340,34 @@ def mark_swarm_event_done(event_id: str) -> bool:
         done = cur.rowcount == 1
     logger.info("state.swarm_done", event_id=event_id, done=done)
     return done
+
+
+def mark_swarm_event_failed(event_id: str) -> bool:
+    """Atomically transition *event_id* from `running` -> `failed` (bug-debt
+    fix: a claimed event whose handler RAISED must land in a DEFINED
+    terminal state, never stay `running` forever with no reaper).
+
+    `failed` is a genuine terminal state, exactly like `done`/`skipped` --
+    NOT `pending` -- so `claim_swarm_event`'s `WHERE status='pending'` gate
+    makes it structurally impossible for this or any other instance to ever
+    re-claim/re-run a failed event (see `swarm_service.process_claimed_
+    event`'s docstring for the at-most-once rationale: a handler triggers a
+    pipeline run, which is not a safe-to-silently-retry side effect).
+    Returns `False` (no-op) when the row isn't currently `running` -- e.g. a
+    duplicate/redelivered failure call for an event already `failed`/`done`.
+    """
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(
+            db.ph(
+                "UPDATE swarm_events SET status='failed', updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status='running'"
+            ),
+            (event_id,),
+        )
+        failed = cur.rowcount == 1
+    logger.info("state.swarm_failed", event_id=event_id, failed=failed)
+    return failed
 
 
 def mark_swarm_event_skipped(event_id: str) -> bool:

@@ -58,9 +58,26 @@ class PollTransport:
         instance's served tenant(s) as an `Event`. Every yielded event is a
         CANDIDATE only -- `claim()` is what actually grants ownership (see
         the module-level docstring on
-        `hivepilot.swarm.transport.Transport.subscribe`)."""
+        `hivepilot.swarm.transport.Transport.subscribe`).
+
+        Bug-debt fix (fail-closed on an EMPTY served-tenant set): an instance
+        configured with `swarm_served_tenants=[]` must claim NOTHING, ever --
+        but `list_pending_swarm_events(tenants=self._served_tenants or
+        None)` previously turned an empty list into `tenants=None`, which
+        means "no tenant filter" (every tenant) at the SQL layer. End-to-end
+        that was only saved by `swarm_service.claim_next`'s Python-level
+        `event.tenant not in served_tenants` post-filter -- the SQL layer
+        ALONE was fail-open, and a future caller of `subscribe()` that skips
+        that post-filter (or a redis-transport-style caller with no
+        post-filter at all) would silently see every tenant's events. An
+        empty served set therefore short-circuits BEFORE ever querying --
+        never even constructs a `tenants=None` "no filter" query -- so the
+        SQL layer itself is fail-closed too, not just the caller above it.
+        """
+        if not self._served_tenants:
+            return
         for row in state_service.list_pending_swarm_events(
-            types=types or None, tenants=self._served_tenants or None
+            types=types or None, tenants=self._served_tenants
         ):
             yield _row_to_event(row)
 

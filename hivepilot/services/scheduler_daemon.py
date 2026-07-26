@@ -68,6 +68,12 @@ class SchedulerDaemon:
         # the CLI's `run-pipeline` command).
         init_tracing(settings)
 
+        # Bug-debt fix — log the RESOLVED, ABSOLUTE paths this daemon
+        # process is actually using (state DB / topics registry / config
+        # dir / prompts dir / vault): see `hivepilot.utils.startup_paths`
+        # for the full rationale.
+        self._log_startup_paths_once()
+
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
         # SIGHUP is POSIX-only (no-op guard for Windows, which has no
@@ -91,6 +97,19 @@ class SchedulerDaemon:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _log_startup_paths_once(self) -> None:
+        """Log this process's resolved, absolute startup paths (bug-debt
+        fix). Split out from `run()` as its own method so it can be tested
+        directly — `run()` itself registers real, process-wide signal
+        handlers before entering its blocking loop, which makes actually
+        invoking `run()` from a unit test a side-effect risk (see
+        `tests/test_scheduler_daemon.py`'s `TestSchedulerDaemonStartupPath
+        Logging` for the full rationale)."""
+        from hivepilot.config import settings
+        from hivepilot.utils.startup_paths import log_resolved_startup_paths
+
+        log_resolved_startup_paths(settings)
 
     def _handle_signal(self, signum: int, frame: Any) -> None:  # noqa: ANN401
         logger.info("scheduler_daemon.signal_received", extra={"signum": signum})

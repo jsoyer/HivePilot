@@ -375,6 +375,238 @@ class TestClaimNext:
             assert "a-totally-different-key" not in entry
 
 
+class TestSwarmOutcomeLogging:
+    """Bug-debt fix: every publish/claim outcome must log `event_id`,
+    `type`, `tenant`, `instance_id`, `outcome` (CLAIMED/DEDUPED/SKIPPED/
+    REJECTED) and, for anything other than CLAIMED, the REASON (bad
+    signature / no key / unserved tenant / not pending)."""
+
+    def _rendered(self, caplog: pytest.LogCaptureFixture) -> str:
+        return "\n".join(
+            [r.getMessage() for r in caplog.records] + [str(r.msg) for r in caplog.records]
+        )
+
+    def test_publish_success_logs_published_outcome(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _settings()
+        with caplog.at_level("INFO"):
+            result = swarm_service.publish_event(
+                "pr_ready",
+                {"repo": "acme/widgets"},
+                "default",
+                dedupe_key="r:pub:s",
+                settings=settings,
+            )
+        rendered = self._rendered(caplog)
+        assert result.event_id in rendered
+        assert '"tenant": "default"' in rendered
+        assert '"instance_id": "inst-a"' in rendered
+        assert '"outcome": "PUBLISHED"' in rendered
+
+    def test_publish_deduped_logs_deduped_outcome(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _settings()
+        swarm_service.publish_event(
+            "pr_ready", {"repo": "acme/widgets"}, "default", dedupe_key="r:dup:s", settings=settings
+        )
+        with caplog.at_level("INFO"):
+            swarm_service.publish_event(
+                "pr_ready",
+                {"repo": "acme/widgets"},
+                "default",
+                dedupe_key="r:dup:s",
+                settings=settings,
+            )
+        rendered = self._rendered(caplog)
+        assert '"outcome": "DEDUPED"' in rendered
+        assert '"reason": "already_published"' in rendered
+
+    def test_publish_no_key_logs_skipped_with_no_key_reason(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        settings = _settings(swarm_key=None)
+        with caplog.at_level("WARNING"):
+            swarm_service.publish_event(
+                "pr_ready",
+                {"repo": "acme/widgets"},
+                "default",
+                dedupe_key="r:nokey:s",
+                settings=settings,
+            )
+        rendered = self._rendered(caplog)
+        assert '"outcome": "SKIPPED"' in rendered
+        assert '"reason": "no_key"' in rendered
+
+    def test_claim_success_logs_claimed_outcome(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _settings()
+        swarm_service.publish_event(
+            "pr_ready",
+            {"repo": "acme/widgets"},
+            "default",
+            dedupe_key="r:claim:s",
+            settings=settings,
+        )
+        with caplog.at_level("INFO"):
+            result = swarm_service.claim_next(["pr_ready"], settings=settings)
+        rendered = self._rendered(caplog)
+        assert result.event is not None
+        assert result.event.id in rendered
+        assert '"outcome": "CLAIMED"' in rendered
+        assert '"instance_id": "inst-a"' in rendered
+
+    def test_unserved_tenant_logs_rejected_with_reason(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`PollTransport.subscribe` already filters unserved tenants out in
+        SQL (item 1's fail-closed fix) -- so this instance's own
+        `claim_next` loop never even SEES an unserved-tenant candidate via
+        the real transport. A minimal transport double that yields one
+        anyway (mirrors `hivepilot.swarm.redis_transport.RedisTransport`,
+        which has NO tenant filter of its own -- see its `subscribe`
+        docstring) exercises the loop's own defense-in-depth rejection
+        branch directly."""
+        publish_settings = _settings()
+        swarm_service.publish_event(
+            "pr_ready",
+            {"repo": "acme/widgets"},
+            "tenant-b",
+            dedupe_key="r:unserved:s",
+            settings=publish_settings,
+        )
+        unserved_event = next(
+            e
+            for e in swarm_service.resolve_transport(
+                "poll",
+                instance_id="inst-x",
+                settings=publish_settings.model_copy(update={"swarm_served_tenants": ["tenant-b"]}),
+            ).subscribe(["pr_ready"])
+        )
+
+        class _UnfilteredTransport:
+            name = "poll"
+
+            def __init__(self, *, settings=None, instance_id) -> None:
+                pass
+
+            def subscribe(self, types):
+                yield unserved_event
+
+            def claim(self, event_id: str) -> bool:
+                raise AssertionError("must never attempt to claim a rejected candidate")
+
+            def ack(self, event_id: str) -> None:
+                pass
+
+            def complete(self, event_id: str) -> None:
+                pass
+
+        monkeypatch.setattr(
+            swarm_service, "resolve_transport", lambda *a, **k: _UnfilteredTransport(**k)
+        )
+        claim_settings = _settings(swarm_served_tenants=["tenant-a"])
+        with caplog.at_level("WARNING"):
+            swarm_service.claim_next(["pr_ready"], settings=claim_settings)
+        rendered = self._rendered(caplog)
+        assert '"outcome": "REJECTED"' in rendered
+        assert '"reason": "unserved_tenant"' in rendered
+        assert '"tenant": "tenant-b"' in rendered
+
+    def test_bad_signature_logs_rejected_with_reason(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        publish_settings = _settings(swarm_key="key-one")
+        swarm_service.publish_event(
+            "pr_ready",
+            {"repo": "acme/widgets"},
+            "default",
+            dedupe_key="r:badsig:s",
+            settings=publish_settings,
+        )
+        claim_settings = _settings(swarm_key="key-two")
+        with caplog.at_level("WARNING"):
+            swarm_service.claim_next(["pr_ready"], settings=claim_settings)
+        rendered = self._rendered(caplog)
+        assert '"outcome": "REJECTED"' in rendered
+        assert '"reason": "bad_signature"' in rendered
+
+    def test_claim_race_lost_logs_deduped_with_not_pending_reason(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Mirrors `TestClaimNext.test_two_instances_race_exactly_one_claimed_
+        other_deduped`'s stale-transport double: a real `PollTransport.
+        subscribe` would no longer even yield an already-claimed row (it's
+        no longer `pending`), so a static transport that always yields the
+        SAME event regardless of DB status reproduces the exact race window
+        where `transport.claim` (delegating to the REAL, atomic
+        `state_service.claim_swarm_event`) loses."""
+        settings = _settings()
+        published = swarm_service.publish_event(
+            "pr_ready",
+            {"repo": "acme/widgets"},
+            "default",
+            dedupe_key="r:race:s",
+            settings=settings,
+        )
+        stale_event = Event(
+            id=published.event_id,
+            type="pr_ready",
+            payload={"repo": "acme/widgets"},
+            tenant="default",
+            origin_instance="inst-publisher",
+            sig=swarm_service.sign_event(
+                Event(
+                    id=published.event_id,
+                    type="pr_ready",
+                    payload={"repo": "acme/widgets"},
+                    tenant="default",
+                    origin_instance="inst-publisher",
+                ),
+                "fleet-shared-key",
+            ),
+        )
+        # The event is already claimed by someone else by the time THIS
+        # instance tries -- `transport.claim` (the REAL, atomic
+        # `state_service.claim_swarm_event`) returns False (not pending).
+        state_service.claim_swarm_event(published.event_id, claimed_by="inst-other")
+
+        class _StaticTransport:
+            name = "poll"
+
+            def __init__(self, *, settings=None, instance_id) -> None:
+                self._instance_id = instance_id
+
+            def subscribe(self, types):
+                yield stale_event
+
+            def claim(self, event_id: str) -> bool:
+                return state_service.claim_swarm_event(event_id, claimed_by=self._instance_id)
+
+            def ack(self, event_id: str) -> None:
+                pass
+
+            def complete(self, event_id: str) -> None:
+                pass
+
+        monkeypatch.setattr(
+            swarm_service, "resolve_transport", lambda *a, **k: _StaticTransport(**k)
+        )
+
+        with caplog.at_level("INFO"):
+            result = swarm_service.claim_next(["pr_ready"], settings=settings)
+        assert result.status == swarm_service.ClaimStatus.DEDUPED
+        rendered = self._rendered(caplog)
+        assert '"outcome": "DEDUPED"' in rendered
+        assert '"reason": "not_pending"' in rendered
+
+    def test_claim_no_key_logs_skipped_with_no_key_reason(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        claim_settings = _settings(swarm_key=None)
+        with caplog.at_level("WARNING"):
+            swarm_service.claim_next(["pr_ready"], settings=claim_settings)
+        rendered = self._rendered(caplog)
+        assert '"outcome": "SKIPPED"' in rendered
+        assert '"reason": "no_key"' in rendered
+
+
 class TestProcessClaimedEvent:
     def _claimed_event(self, settings) -> Event:
         swarm_service.publish_event(
@@ -440,6 +672,87 @@ class TestProcessClaimedEvent:
         # failed attempt must not have poisoned the row for the real owner.
         assert swarm_service.process_claimed_event(event, handler, instance_id="inst-a") is True
         handler.assert_called_once_with(event)
+
+
+class TestProcessClaimedEventHandlerFailure:
+    """Bug-debt fix: a crashing handler must never leave the row `running`
+    forever (dead, unclaimable, silent) -- it must be logged explicitly and
+    land in the documented terminal state, `failed`, and that event can
+    never be silently re-claimed by anyone afterwards."""
+
+    def _claimed_event(self, settings) -> Event:
+        swarm_service.publish_event(
+            "pr_ready",
+            {"repo": "acme/widgets"},
+            "default",
+            dedupe_key="r:boom:s",
+            settings=settings,
+        )
+        result = swarm_service.claim_next(["pr_ready"], settings=settings)
+        assert result.event is not None
+        return result.event
+
+    def test_raising_handler_logs_and_lands_in_failed_not_running(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        settings = _settings()
+        event = self._claimed_event(settings)
+
+        def _boom(_event: Event) -> None:
+            raise RuntimeError("handler exploded")
+
+        with caplog.at_level("ERROR"):
+            with pytest.raises(RuntimeError, match="handler exploded"):
+                swarm_service.process_claimed_event(event, _boom, settings=settings)
+
+        row = state_service.get_swarm_event(event.id)
+        assert row is not None
+        assert row["status"] == "failed"
+        assert row["status"] != "running"
+
+        failure_records = [r for r in caplog.records if "swarm.handler_failed" in r.message]
+        assert failure_records
+
+    def test_failed_event_can_never_be_silently_reclaimed(self) -> None:
+        settings = _settings()
+        event = self._claimed_event(settings)
+
+        def _boom(_event: Event) -> None:
+            raise RuntimeError("handler exploded")
+
+        with pytest.raises(RuntimeError):
+            swarm_service.process_claimed_event(event, _boom, settings=settings)
+
+        # Neither this instance nor any other can ever claim it again — the
+        # row is `failed`, not `pending`, so `claim_swarm_event`'s
+        # `WHERE status='pending'` gate structurally forbids it.
+        assert state_service.claim_swarm_event(event.id, claimed_by="inst-a") is False
+        assert state_service.claim_swarm_event(event.id, claimed_by="inst-b") is False
+
+    def test_a_handler_that_succeeds_after_a_failure_on_a_different_event_is_unaffected(
+        self,
+    ) -> None:
+        """Sanity: the fix is scoped to the FAILING event's own row -- it
+        must not somehow poison a completely different, healthy claim."""
+        settings = _settings()
+        failing_event = self._claimed_event(settings)
+
+        def _boom(_event: Event) -> None:
+            raise RuntimeError("handler exploded")
+
+        with pytest.raises(RuntimeError):
+            swarm_service.process_claimed_event(failing_event, _boom, settings=settings)
+
+        swarm_service.publish_event(
+            "pr_ready", {"repo": "acme/widgets"}, "default", dedupe_key="r:ok:s", settings=settings
+        )
+        ok_result = swarm_service.claim_next(["pr_ready"], settings=settings)
+        assert ok_result.event is not None
+        handler = MagicMock()
+        assert (
+            swarm_service.process_claimed_event(ok_result.event, handler, settings=settings) is True
+        )
+        handler.assert_called_once_with(ok_result.event)
 
 
 class TestDispatchClaimedEvent:

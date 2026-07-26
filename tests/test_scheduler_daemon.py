@@ -608,3 +608,48 @@ class TestSchedulerDaemonSharedManagerInjection:
         daemon._run_drift_scans()
 
         assert captured_kwargs.get("plugins") is manager
+
+
+class TestSchedulerDaemonStartupPathLogging:
+    """Bug-debt fix: the scheduler daemon must log its resolved startup
+    paths ONCE, at INFO, when the daemon actually begins serving --
+    `run()` is a blocking loop (registers signal handlers), so this exercises
+    the SAME private helper `run()` calls, matching this file's existing
+    pattern of testing private methods directly (`_maybe_hot_reload_plugins`,
+    `_reload_roles`, ...) rather than the blocking entry point itself."""
+
+    def test_log_startup_paths_once_logs_resolved_paths(self, caplog):
+        import logging as stdlib_logging
+
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+        from hivepilot.utils import startup_paths as startup_paths_mod
+
+        # Order-independent: `log_resolved_startup_paths` is idempotent per
+        # `Settings` INSTANCE, and this daemon calls it with the process-wide
+        # singleton -- an earlier test elsewhere in the same pytest process
+        # may have already logged for it.
+        startup_paths_mod._logged_for.clear()
+
+        daemon = SchedulerDaemon()
+        with caplog.at_level(stdlib_logging.INFO):
+            daemon._log_startup_paths_once()
+
+        rendered = "\n".join(r.getMessage() for r in caplog.records)
+        assert "startup.resolved_paths" in rendered
+
+    def test_run_source_calls_the_startup_path_logger(self):
+        """Direct proof `run()` itself wires the helper in (not just that
+        the helper works in isolation) -- a SOURCE check rather than
+        actually invoking `run()`: it registers real process-wide SIGTERM/
+        SIGINT/SIGHUP handlers before entering its loop, which would leak
+        past this one test into the rest of the suite (mirrors
+        `test_api_service.py`'s `test_metrics_no_local_registry`/
+        `test_no_run_counter_in_api_service`'s own source-inspection
+        pattern for exactly this "prove the wiring without the side
+        effects" reason)."""
+        import inspect
+
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        source = inspect.getsource(SchedulerDaemon.run)
+        assert "_log_startup_paths_once" in source

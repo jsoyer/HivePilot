@@ -78,6 +78,19 @@ async def _init_tracing() -> None:
     init_tracing(settings)
 
 
+# -- Startup path logging (bug-debt fix) -------------------------------------
+@app.on_event("startup")
+async def _log_startup_paths() -> None:
+    """Log the RESOLVED, ABSOLUTE paths this API server process is actually
+    using (state DB / topics registry / config dir / prompts dir / vault) —
+    see `hivepilot.utils.startup_paths` for the full rationale (the
+    cwd-relative split between a service `cwd=/` and a CLI `cwd=$HOME` run
+    has cost real debugging hours)."""
+    from hivepilot.utils.startup_paths import log_resolved_startup_paths
+
+    log_resolved_startup_paths(settings)
+
+
 # -- Body size limit (Phase 14b) -------------------------------------------
 _MAX_BODY_BYTES = getattr(settings, "api_max_body_size", 1_048_576)  # 1 MB default
 

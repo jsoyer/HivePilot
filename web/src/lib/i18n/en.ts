@@ -235,6 +235,7 @@ export const en = {
   'board.listToggleLabel': 'Toggle list view',
   'board.startedAgo': 'started {age} ago',
   'board.duration': 'ran for {duration}',
+  'board.kanbanScrollLabel': 'Scroll board columns horizontally',
 
   // ---- Run detail drill-down panel (Mirador Operate section) -----------
   'runDetail.title': 'Run #{id}',
