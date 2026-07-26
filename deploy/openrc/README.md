@@ -62,6 +62,25 @@ app-level token:
 `--mode webhook`'s HTTP-interaction signature verification — leave it unset
 for the default gateway mode.
 
+## Slack / Discord require optional pip extras
+
+Neither `slack-bolt`/`slack-sdk` nor `discord.py`/`PyNaCl` are installed by
+default — install the matching extra before starting the service, or it
+fails fast with a clear error:
+
+- **Slack**: `pip install hivepilot[slack]` (pulls in `slack-bolt` +
+  `slack-sdk`). Missing it fails with `slack-bolt is required: pip install
+  hivepilot[slack]`. Both packages ship pure-Python wheels — safe to
+  install on musl/Alpine, no build toolchain needed.
+- **Discord**: `pip install hivepilot[discord]` (pulls in `discord.py` +
+  `PyNaCl`). Missing it fails with `discord.py required: pip install
+  hivepilot[discord]` or `PyNaCl required: pip install hivepilot[discord]`.
+  `discord.py` is pure-Python, but `PyNaCl` is a **compiled** binding to
+  libsodium (NOT pure Python) — it does publish prebuilt `musllinux` wheels
+  for `x86_64`/`aarch64` on PyPI, so a plain `pip install` still avoids a
+  from-source build (and the `libsodium-dev` + compiler it would otherwise
+  need) on those architectures.
+
 ## Install
 
 ```bash
@@ -158,3 +177,47 @@ those are reloaded live via `hivepilot reload` / `SIGHUP` instead. A change
 to any environment variable in these `conf.d` files (a new token, a
 different allow-list) always needs a restart of the affected service, since
 environment variables are only read once, at process start.
+
+## Troubleshooting
+
+### `supervise-daemon: not found` / `eend: not found`
+
+**Symptom** — `rc-service hivepilot-<svc> start` fails, and the log (or
+console output) shows:
+
+```
+/usr/libexec/rc/sh/openrc-run.sh: eval: line 32: supervise-daemon: not found
+/usr/libexec/rc/sh/openrc-run.sh: line 113: eend: not found
+ * ERROR: hivepilot-<svc> failed to start
+```
+
+The `eend: not found` line is a **red herring** — it's just openrc-run
+itself failing to report the error because its own helpers went missing
+once the shell that ran `supervise-daemon` had a broken `PATH`.
+
+**Cause** — a `conf.d/hivepilot-<svc>` file **replaced** `PATH` instead of
+prefixing it, e.g. `export PATH="/opt/hivepilot/venv/bin"` (bare, no
+`$PATH`). This drops the inherited `PATH`, which includes `/sbin` — and
+`supervise-daemon` lives at `/sbin/supervise-daemon`. With `/sbin` gone,
+openrc-run can no longer find it, and the service can't start.
+
+**Fix** — always prefix, never replace, e.g.:
+
+```sh
+export PATH="/root/.local/bin:/opt/hivepilot/venv/bin:$PATH"
+```
+
+Every `conf.d/hivepilot-*.example` template in this directory already does
+this correctly — if you hand-edited a `conf.d` file's `PATH` line, restore
+the `:$PATH` suffix.
+
+### Clearing a wedged service after a failed start
+
+A service that failed to start (e.g. from the `PATH` bug above) can leave
+OpenRC believing it's still starting/stopping, so a plain `rc-service
+hivepilot-<svc> start` no-ops or errors again. Clear the stuck state first:
+
+```sh
+rc-service hivepilot-<svc> zap
+rc-service hivepilot-<svc> start
+```
