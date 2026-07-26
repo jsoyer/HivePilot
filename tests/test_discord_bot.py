@@ -626,6 +626,24 @@ class TestChallengeModalSubmit:
         assert "Unknown modal" in result["data"]["content"]
         orch.human_challenge.assert_not_called()
 
+    def test_unknown_modal_custom_id_with_parseable_int_suffix_rejected(self) -> None:
+        """Test-hardening: `test_unknown_modal_custom_id_rejected` above uses
+        a custom_id ("some_other_modal:42") that only accidentally fails the
+        prefix check by being a different length/shape from
+        `challenge_modal:<id>`. This case's suffix is ALSO a cleanly
+        parseable int, so it would slip through a broken guard that (e.g.)
+        matched on "contains a colon followed by digits" instead of the
+        actual `str.startswith(_CHALLENGE_MODAL_PREFIX)` check -- proving the
+        rejection is really keyed off the prefix, not the shape of the id."""
+        orch = MagicMock()
+        with patch.object(discord_bot, "_get_orch", return_value=orch):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("evil_modal_prefix:42"), "sig", "ts"
+            )
+        assert result["type"] == 4
+        assert "Unknown modal" in result["data"]["content"]
+        orch.human_challenge.assert_not_called()
+
     def test_invalid_run_id_in_modal_custom_id_rejected(self) -> None:
         orch = MagicMock()
         with patch.object(discord_bot, "_get_orch", return_value=orch):
@@ -672,7 +690,30 @@ class TestChallengeModalSubmit:
         assert result["type"] == 4
         orch.human_challenge.assert_not_called()
 
+    def test_long_challenge_text_capped_before_dispatch(self) -> None:
+        """F9 fix: Discord's modal caps input at 4000 chars CLIENT-SIDE only
+        (`max_length` in `_challenge_modal_response`) -- cap it server-side
+        too before it reaches the CoS / planning_context."""
+        orch = MagicMock()
+        orch.human_challenge.return_value = "ok"
+        long_text = "x" * 10_000
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_followup_message"),
+        ):
+            discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:42", text_value=long_text), "sig", "ts"
+            )
+        dispatched_text = orch.human_challenge.call_args.args[1]
+        assert len(dispatched_text) == discord_bot._CHALLENGE_TEXT_MAX_LEN
+
     def test_human_challenge_error_reported_not_silently_swallowed(self) -> None:
+        """F4 fix: only the exception TYPE name reaches chat -- the raw
+        message (which could carry runner stderr, a token, or a path; see
+        the known-unredacted RunResult.detail issue) must never appear.
+        F7: every followup, including the error path, must carry the
+        anti-mass-ping guard -- this is the assertion that would catch the
+        guard being silently deleted from the error branch."""
         orch = MagicMock()
         orch.human_challenge.side_effect = RuntimeError("boom")
         with (
@@ -684,7 +725,39 @@ class TestChallengeModalSubmit:
             )
         assert result == {"type": 5}
         followup.assert_called_once()
-        assert "boom" in followup.call_args.args[2]["content"]
+        content = followup.call_args.args[2]["content"]
+        assert "RuntimeError" in content
+        assert "boom" not in content
+        assert followup.call_args.args[2]["allowed_mentions"] == {"parse": []}
+
+
+class TestChallengeResponseChunking:
+    """F8: `_MAX_MSG_LEN` + the `split_for` call in `_handle_challenge_modal_submit`
+    had zero coverage -- a CoS response longer than Discord's per-message cap
+    must be split into multiple ordered followups, each within the cap,
+    rather than silently rejected/truncated by Discord itself."""
+
+    def test_long_cos_response_splits_into_multiple_chunks_under_max_len(self) -> None:
+        long_response = "word " * 1000  # well over _MAX_MSG_LEN (2000)
+        orch = MagicMock()
+        orch.human_challenge.return_value = long_response
+        row = {"project": "acme", "task": "deploy"}
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=row),
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:42", text_value="short question"),
+                "sig",
+                "ts",
+            )
+        assert followup.call_count > 1, "a long CoS response must split into >1 followup"
+        for call in followup.call_args_list:
+            assert len(call.args[2]["content"]) <= discord_bot._MAX_MSG_LEN
+        # The final chunk (and only the final chunk) re-attaches the buttons.
+        assert "components" in followup.call_args_list[-1].args[2]
+        assert all("components" not in c.args[2] for c in followup.call_args_list[:-1])
 
 
 # ---------------------------------------------------------------------------
@@ -904,6 +977,195 @@ class TestRunGateway:
             asyncio.run(tree.commands["approve"](interaction, 42))
         interaction.response.send_message.assert_awaited_once_with("Unauthorized.", ephemeral=True)
         orch.approve_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Gateway `on_interaction` -- F1 fix: Approve/Deny/Challenge buttons were
+# DEAD in gateway mode before this (no interaction handler was registered at
+# all beyond the slash-command CommandTree, so Discord never received an ACK
+# for a MESSAGE_COMPONENT/MODAL_SUBMIT interaction and showed "This
+# interaction failed"). `on_interaction` must route those two interaction
+# types into the SAME `_dispatch_interaction` dict-driven dispatcher the
+# HTTP-interactions webhook path (`handle_interaction`) uses -- never a
+# gateway-specific reimplementation -- and deliver the computed response via
+# the interaction-callback REST endpoint (gateway has no HTTP response body
+# to return it in). APPLICATION_COMMAND interactions must NOT be routed here
+# -- the CommandTree already auto-dispatches those.
+# ---------------------------------------------------------------------------
+
+
+class _FakeGatewayInteraction:
+    def __init__(
+        self,
+        *,
+        itype: int,
+        data: dict[str, Any],
+        guild_id: int | None = ALLOWED_GUILD,
+        channel_id: int | None = ALLOWED_CHANNEL,
+        application_id: str = "app-1",
+        token: str = "tok-1",
+        interaction_id: str = "int-1",
+        username: str = "alice",
+        user_id: int = 42,
+    ) -> None:
+        self.type = itype
+        self.data = data
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.application_id = application_id
+        self.token = token
+        self.id = interaction_id
+        self.user = types.SimpleNamespace(name=username, id=user_id)
+
+
+class TestGatewayOnInteractionRoutesToSharedHandler:
+    def test_component_approve_routes_through_shared_dispatch(self, fake_discord: Any) -> None:
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(itype=3, data={"custom_id": "approve:42"})
+        orch = MagicMock()
+        orch.approve_run.return_value = types.SimpleNamespace(success=True)
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_send_interaction_response") as send_resp,
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        # The deferred ack is delivered via the interaction-callback REST
+        # endpoint -- gateway mode has no HTTP response body to return it in.
+        send_resp.assert_called_once_with("int-1", "tok-1", {"type": 5})
+        orch.approve_run.assert_called_once_with(run_id=42, approve=True, approver="discord")
+        followup.assert_called_once()
+
+    def test_component_denied_guild_rejected_no_mutation(self, fake_discord: Any) -> None:
+        """SECURITY REGRESSION GUARD: the guild/channel allow-list must be
+        enforced identically on this new gateway path -- it must NEVER be a
+        weaker second door onto Approve/Deny/Challenge."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(
+            itype=3,
+            data={"custom_id": "approve:42"},
+            guild_id=DENIED_GUILD,
+            channel_id=DENIED_CHANNEL,
+        )
+        orch = MagicMock()
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_send_interaction_response") as send_resp,
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        orch.approve_run.assert_not_called()
+        send_resp.assert_called_once()
+        sent_payload = send_resp.call_args.args[2]
+        assert sent_payload["data"]["content"] == "Unauthorized."
+
+    def test_component_challenge_button_opens_modal_via_interaction_callback(
+        self, fake_discord: Any
+    ) -> None:
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(itype=3, data={"custom_id": "challenge:42"})
+        with patch.object(discord_bot, "_send_interaction_response") as send_resp:
+            asyncio.run(client.events["on_interaction"](interaction))
+        send_resp.assert_called_once_with(
+            "int-1",
+            "tok-1",
+            {
+                "type": 9,
+                "data": {
+                    "custom_id": "challenge_modal:42",
+                    "title": "Challenge / Ask — run #42",
+                    "components": [
+                        {
+                            "type": 1,
+                            "components": [
+                                {
+                                    "type": 4,
+                                    "custom_id": "challenge_text",
+                                    "style": 2,
+                                    "label": "Your challenge or question",
+                                    "required": True,
+                                    "max_length": 4000,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+
+    def test_modal_submit_routes_through_shared_dispatch(self, fake_discord: Any) -> None:
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(
+            itype=5,
+            data={
+                "custom_id": "challenge_modal:42",
+                "components": [
+                    {
+                        "type": 1,
+                        "components": [{"type": 4, "custom_id": "challenge_text", "value": "why?"}],
+                    }
+                ],
+            },
+        )
+        orch = MagicMock()
+        orch.human_challenge.return_value = "Jules says: looks fine."
+        row = {"project": "acme", "task": "deploy"}
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=row),
+            patch.object(discord_bot, "_send_interaction_response") as send_resp,
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        send_resp.assert_called_once_with("int-1", "tok-1", {"type": 5})
+        orch.human_challenge.assert_called_once_with(42, "why?", "discord:alice")
+        assert followup.called
+
+    def test_modal_submit_denied_guild_rejected_no_dispatch(self, fake_discord: Any) -> None:
+        """SECURITY REGRESSION GUARD: same allow-list enforcement for the
+        MODAL_SUBMIT branch of the new gateway path."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(
+            itype=5,
+            data={"custom_id": "challenge_modal:42", "components": []},
+            guild_id=DENIED_GUILD,
+            channel_id=DENIED_CHANNEL,
+        )
+        orch = MagicMock()
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_send_interaction_response") as send_resp,
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        orch.human_challenge.assert_not_called()
+        sent_payload = send_resp.call_args.args[2]
+        assert sent_payload["data"]["content"] == "Unauthorized."
+
+    def test_application_command_type_not_routed_here(self, fake_discord: Any) -> None:
+        """APPLICATION_COMMAND (type 2) interactions must not be handled by
+        on_interaction -- the CommandTree constructed in `run_gateway`
+        already auto-dispatches those; routing them here too would
+        double-invoke every slash command."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(itype=2, data={"name": "run"})
+        with patch.object(discord_bot, "_send_interaction_response") as send_resp:
+            asyncio.run(client.events["on_interaction"](interaction))
+        send_resp.assert_not_called()
+
+    def test_ping_type_not_routed_here(self, fake_discord: Any) -> None:
+        """PING (type 1) never arrives over the gateway in practice, but
+        on_interaction must not blow up or respond if it somehow did."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(itype=1, data={})
+        with patch.object(discord_bot, "_send_interaction_response") as send_resp:
+            asyncio.run(client.events["on_interaction"](interaction))
+        send_resp.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,13 @@ _pending_concierge: dict[int, tuple[str, "ConciergeDecision"]] = {}
 # of letting it silently get rejected/truncated.
 _MAX_MSG_LEN = 2000
 
+# F9 fix: the modal's `max_length: 4000` (see `_challenge_modal_response`)
+# is enforced CLIENT-SIDE only by Discord's own UI -- a submission crafted
+# outside that UI (or a future client bug) isn't bounded by it at all. Cap
+# the operator-typed challenge text server-side before it's dispatched to
+# the CoS / persisted into planning_context.
+_CHALLENGE_TEXT_MAX_LEN = 4000
+
 # Challenge/Ask (parity with Telegram's Challenge / Ask button) modal
 # constants. Discord's HTTP-interactions mode never receives plain messages
 # (the gateway-only, privileged-intent concierge text flow above doesn't
@@ -105,6 +112,29 @@ def _post_message(channel_id: int, payload: dict[str, Any]) -> None:
 
 def _followup_message(application_id: str, interaction_token: str, payload: dict[str, Any]) -> None:
     url = f"{_DISCORD_API}/webhooks/{application_id}/{interaction_token}"
+    resp = requests.post(
+        url, headers={"Content-Type": "application/json"}, json=payload, timeout=10
+    )
+    resp.raise_for_status()
+
+
+def _interaction_callback_url(interaction_id: str, interaction_token: str) -> str:
+    return f"{_DISCORD_API}/interactions/{interaction_id}/{interaction_token}/callback"
+
+
+def _send_interaction_response(
+    interaction_id: str, interaction_token: str, payload: dict[str, Any]
+) -> None:
+    """POST an interaction-response payload to Discord's interaction-callback
+    endpoint. In HTTP-interactions mode, `_dispatch_interaction`'s returned
+    dict is returned directly as the webhook's HTTP response body instead --
+    gateway mode (`run_gateway`'s `on_interaction`) has no such return
+    channel, so it must deliver that SAME dict explicitly via this call. No
+    `Authorization: Bot ...` header is sent: the interaction token embedded
+    in the URL is itself the one-time credential for this specific
+    interaction (this is Discord's documented interaction-callback auth
+    model, distinct from the bot-token-authenticated REST calls above)."""
+    url = _interaction_callback_url(interaction_id, interaction_token)
     resp = requests.post(
         url, headers={"Content-Type": "application/json"}, json=payload, timeout=10
     )
@@ -426,15 +456,21 @@ def _handle_challenge_modal_submit(
     Telegram/Slack use — keeps the CoS role-resolution + prompt-dispatch
     logic in ONE place instead of a Discord-specific copy.
     """
+    challenge_text = challenge_text[:_CHALLENGE_TEXT_MAX_LEN]
     try:
         cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
     except Exception as exc:  # noqa: BLE001
+        # F4 fix: the full exception (including any runner stderr it may
+        # carry -- RunResult.detail reaches this choke-point unredacted) is
+        # logged server-side ONLY. Chat gets the exception TYPE name alone,
+        # matching repo-wide exception-disclosure discipline -- never the
+        # raw message, which could leak a token/path into a shared channel.
         logger.error("discord.challenge.failed", run_id=run_id, error=str(exc))
         _followup_message(
             application_id,
             interaction_token,
             {
-                "content": f"⚠️ Challenge error for run #{run_id}: {exc}",
+                "content": f"⚠️ Challenge error for run #{run_id}: {type(exc).__name__}",
                 "allowed_mentions": {"parse": []},
             },
         )
@@ -466,6 +502,27 @@ def handle_interaction(body: bytes, signature: str, timestamp: str) -> dict[str,
     Returns a JSON-serialisable dict for FastAPI to return directly.
     """
     data: dict[str, Any] = json.loads(body)
+    return _dispatch_interaction(data)
+
+
+def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
+    """Shared interaction dispatcher -- computes the Discord interaction-response
+    dict for a MESSAGE_COMPONENT (button), MODAL_SUBMIT, or APPLICATION_COMMAND
+    (slash command) interaction, regardless of the transport it arrived over.
+
+    TWO callers, ONE code path -- never forked:
+      * `handle_interaction` (HTTP-interactions webhook mode) -- the dict this
+        returns IS the HTTP response body FastAPI sends back to Discord.
+      * `run_gateway`'s `on_interaction` (gateway/WebSocket mode) -- gateway
+        interactions have no HTTP response channel to return a value into, so
+        that caller POSTs this SAME returned dict to Discord's
+        interaction-callback REST endpoint instead (see
+        `_send_interaction_response`). The `_is_allowed` guild/channel
+        allow-list check below therefore runs IDENTICALLY for both transports
+        -- gateway mode is never a weaker second door onto Approve/Deny/
+        Challenge (this fixes the previously-dead gateway-mode buttons: no
+        interaction handler was registered there at all).
+    """
     interaction_type = data.get("type", 0)
 
     # PING — Discord health check
@@ -743,6 +800,70 @@ def run_gateway() -> None:
     async def on_ready() -> None:
         await tree.sync()
         logger.info("discord.gateway.ready", user=str(client.user))
+
+    @client.event
+    async def on_interaction(interaction: discord.Interaction) -> None:
+        """F1 fix (live production bug): route MESSAGE_COMPONENT (Approve/
+        Deny/Challenge buttons) and MODAL_SUBMIT (Challenge/Ask follow-up
+        text) gateway interactions into the SAME `_dispatch_interaction`
+        dict-driven dispatcher the HTTP-interactions webhook path
+        (`handle_interaction`) uses -- never a gateway-specific copy.
+
+        Before this handler existed, gateway mode registered slash commands
+        + `on_ready` + `on_message` only. A button/modal interaction was
+        therefore NEVER acknowledged within Discord's 3-second deadline --
+        Discord showed "This interaction failed" for every Approve/Deny/
+        Challenge press on a gateway-mode bot (the CLI default and the mode
+        documented for boxes with no public IP), with no server-side log
+        line at all.
+
+        APPLICATION_COMMAND (slash command) interactions are deliberately
+        NOT routed here: the `app_commands.CommandTree` constructed above
+        already auto-dispatches those via discord.py's internal wiring --
+        routing them here too would double-invoke every slash command.
+        """
+        itype = int(getattr(interaction.type, "value", interaction.type))
+        if itype not in (3, 5):  # MESSAGE_COMPONENT, MODAL_SUBMIT
+            return
+
+        raw_data = interaction.data
+        if not isinstance(raw_data, dict):
+            raw_data = dict(raw_data) if raw_data else {}
+
+        user = interaction.user
+        user_dict = (
+            {"username": getattr(user, "name", None), "id": getattr(user, "id", None)}
+            if user is not None
+            else {}
+        )
+
+        # Reconstruct the SAME raw interaction-dict shape `_dispatch_interaction`
+        # already parses from the HTTP webhook's JSON body -- guild_id/
+        # channel_id are already ints (or None) on a discord.py Interaction,
+        # matching what `_is_allowed` expects; no dict-shape fork.
+        raw: dict[str, Any] = {
+            "type": itype,
+            "application_id": str(interaction.application_id),
+            "token": interaction.token,
+            "guild_id": interaction.guild_id,
+            "channel_id": interaction.channel_id,
+            "data": raw_data,
+            "user": user_dict,
+        }
+        response = _dispatch_interaction(raw)
+
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        # `_dispatch_interaction` already started any background thread work
+        # (approve/deny mutation, human_challenge dispatch) synchronously
+        # inside this call -- what's left is delivering the immediate
+        # ack/modal `response` dict within the 3-second deadline, via REST
+        # since gateway mode has no HTTP response body to return it in.
+        await loop.run_in_executor(
+            None,
+            lambda: _send_interaction_response(str(interaction.id), interaction.token, response),
+        )
 
     @client.event
     async def on_message(message: Any) -> None:

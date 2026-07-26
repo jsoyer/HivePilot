@@ -112,6 +112,21 @@ class TestSplitForPlain:
         chunks = split_for(text, 100, max_chunks=50, entity_aware=False)
         assert "(1/" in chunks[0]
 
+    def test_final_chunk_length_never_exceeds_max_len_after_marker(self) -> None:
+        """Regression: the trailing "(i/N)" continuation marker used to be
+        appended AFTER chunks were packed to `max_len`, with no budget
+        reserved for it -- so a caller treating `max_len` as the real
+        per-message hard cap (Discord's 2000, Slack's ~3000, ...) could get
+        a message that silently overflows that cap once the marker lands,
+        defeating the very "never truncates"/channel-safe guarantee this
+        function exists for. Discovered via a Challenge/Ask long-response
+        chunking test on Discord's real 2000-char cap."""
+        text = "word " * 1000
+        chunks = split_for(text, 2000, entity_aware=False)
+        assert len(chunks) > 1
+        for chunk in chunks:
+            assert len(chunk) <= 2000
+
 
 class TestSplitForEntityAware:
     def test_balances_tags_across_chunk_boundary(self) -> None:

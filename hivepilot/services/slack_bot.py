@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
@@ -25,14 +26,39 @@ _app_lock = threading.Lock()
 # as chatops_service._pending_concierge_text / telegram_bot._pending_concierge.
 _pending_concierge: dict[str, tuple[str, "ConciergeDecision"]] = {}
 
+
 # Challenge/Ask (parity with Telegram's Challenge / Ask button): pending
-# (run_id, approver) awaiting a plain-text follow-up reply, keyed by
-# channel_id -- same per-channel granularity as _pending_concierge (Slack
-# has no forum-topic equivalent to scope this more tightly). A SEPARATE dict
-# from _pending_concierge: Challenge/Ask is a core, always-on interaction
-# (never gated behind chatops_concierge_enabled), never a concierge
-# route/action decision.
-_pending_challenges: dict[str, tuple[int, str]] = {}
+# entry awaiting a plain-text follow-up reply, keyed by channel_id -- same
+# per-channel granularity as _pending_concierge (Slack has no forum-topic
+# equivalent to scope this more tightly). A SEPARATE dict from
+# _pending_concierge: Challenge/Ask is a core, always-on interaction (never
+# gated behind chatops_concierge_enabled), never a concierge route/action
+# decision.
+#
+# F3 security fix: `_pending_challenges` used to be keyed by channel ONLY
+# (run_id, approver) -- `handle_message` never compared the replying user
+# against the button-presser, and the entry never expired. That allowed (a)
+# cross-user consumption + forged attribution (anyone's next channel message
+# got dispatched and logged/persisted as if the ORIGINAL button-presser
+# wrote it -- an authorization-bearing audit-log forgery), and (b) an
+# unbounded window during which ANY unrelated later message in that channel
+# (including in an unrelated thread, which carries the same `channel` field)
+# silently got consumed and permanently appended to a paused run's
+# `planning_context`. Each entry is now bound to the requesting user's Slack
+# id and carries an expiry -- see `_CHALLENGE_TTL_SECONDS`.
+class _PendingChallenge(NamedTuple):
+    run_id: int
+    approver: str
+    owner_user_id: str
+    expires_at: float
+
+
+# TTL for a pending Challenge/Ask follow-up reply -- an operator who presses
+# Challenge and never replies must not leave a run's planning_context
+# forever exposed to whatever the channel happens to say next.
+_CHALLENGE_TTL_SECONDS = 15 * 60
+
+_pending_challenges: dict[str, _PendingChallenge] = {}
 
 # Slack's chat.postMessage/respond text field is practically capped well
 # before its ~40k total message-body limit -- mirrors
@@ -40,6 +66,13 @@ _pending_challenges: dict[str, tuple[int, str]] = {}
 # Challenge/Ask response into multiple ordered messages instead of letting
 # it silently break block/section rendering.
 _SLACK_TEXT_MAX_LEN = 3000
+
+# F9 fix: Slack has no client-side cap on a plain-text follow-up reply
+# (unlike Discord's modal, which caps the input at 4000 chars client-side
+# only -- not enforced server-side either). Cap the operator-typed challenge
+# text server-side before it's dispatched to the CoS / persisted into
+# planning_context.
+_CHALLENGE_TEXT_MAX_LEN = 4000
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +228,7 @@ def _slack_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _handle_challenge_reply(pending: tuple[int, str], challenge_text: str, say: Any) -> None:
+def _handle_challenge_reply(pending: _PendingChallenge, challenge_text: str, say: Any) -> None:
     """Resolve a pending Challenge/Ask follow-up reply via the SAME
     channel-agnostic `Orchestrator.human_challenge()` entrypoint Telegram
     uses — keeps the CoS role-resolution + prompt-dispatch logic in ONE
@@ -206,12 +239,19 @@ def _handle_challenge_reply(pending: tuple[int, str], challenge_text: str, say: 
     `hivepilot.streaming.base.split_for` chunker so a long CoS response
     never breaks Slack's rendering.
     """
-    run_id, approver = pending
+    run_id, approver = pending.run_id, pending.approver
+    challenge_text = challenge_text[:_CHALLENGE_TEXT_MAX_LEN]
     try:
         cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
     except Exception as exc:  # noqa: BLE001
+        # F4 fix: the full exception (including any runner stderr it may
+        # carry -- RunResult.detail reaches this choke-point unredacted) is
+        # logged server-side ONLY. Chat gets the exception TYPE name alone,
+        # escaped -- never the raw message, which could leak a token/path
+        # into a shared channel, and never unescaped (a `<!channel>` inside
+        # a crafted exception message must not ping the channel either).
         logger.error("slack.challenge.failed", run_id=run_id, error=str(exc))
-        say(f"⚠️ Challenge error for run #{run_id}: {exc}")
+        say(f"⚠️ Challenge error for run #{run_id}: {_slack_escape(type(exc).__name__)}")
         return
 
     logger.info("slack.challenge.dispatched", run_id=run_id)
@@ -473,10 +513,15 @@ def _register_handlers(bolt_app) -> None:
         except (ValueError, AttributeError):
             respond(f"Invalid action: {action_id!r}")
             return
-        user = (body.get("user") or {}).get("username") or (body.get("user") or {}).get(
-            "id", "unknown"
+        user_obj = body.get("user") or {}
+        owner_user_id = user_obj.get("id", "")
+        username = user_obj.get("username") or owner_user_id or "unknown"
+        _pending_challenges[channel_id] = _PendingChallenge(
+            run_id=run_id,
+            approver=f"slack:{username}",
+            owner_user_id=owner_user_id,
+            expires_at=time.time() + _CHALLENGE_TTL_SECONDS,
         )
-        _pending_challenges[channel_id] = (run_id, f"slack:{user}")
         logger.info("slack.challenge.requested", run_id=run_id)
         respond(
             f"Send your challenge or question for run #{run_id} as your next message"
@@ -511,11 +556,28 @@ def _register_handlers(bolt_app) -> None:
         # challenge pending for a real follow-up.
         pending = _pending_challenges.get(channel_id)
         if pending is not None:
-            if not text:
+            if time.time() > pending.expires_at:
+                # F3 fix: expired -- drop it and fall through to normal
+                # handling below (concierge classification if enabled, else
+                # a no-op). An operator who pressed Challenge and never
+                # replied must not leave an unbounded window where whatever
+                # the channel says next gets silently consumed and
+                # permanently appended to a paused run's planning_context.
+                _pending_challenges.pop(channel_id, None)
+            elif event.get("user") != pending.owner_user_id:
+                # F3 fix: not the button-presser -- a different user's
+                # message must NEVER consume/dispatch the pending challenge
+                # (this used to forge attribution: the ORIGINAL presser's
+                # name was recorded as the author of someone else's text in
+                # an authorization-bearing audit log). Leave the pending
+                # entry untouched and ignore this message entirely.
                 return
-            _pending_challenges.pop(channel_id, None)
-            _handle_challenge_reply(pending, text, say)
-            return
+            else:
+                if not text:
+                    return
+                _pending_challenges.pop(channel_id, None)
+                _handle_challenge_reply(pending, text, say)
+                return
 
         if not settings.chatops_concierge_enabled:
             return

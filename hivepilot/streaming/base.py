@@ -203,6 +203,19 @@ def split_for(
     if len(text) <= max_len:
         return [text]
 
+    # The trailing "(i/N)" continuation marker (appended below, once we know
+    # there's more than one chunk) is NOT part of the content packed up to
+    # `max_len` below -- reserve its worst-case width upfront so a chunk's
+    # FINAL length (content + marker) never exceeds the caller's real
+    # per-message cap (e.g. Discord's 2000, Slack's ~3000). Worst case width
+    # is bounded by `max_chunks` itself (`N` can never exceed it), e.g.
+    # max_chunks=8 -> "\n\n(8/8)". Without this reservation, packing greedily
+    # fills chunks right up to `max_len` and the marker then silently pushes
+    # the message over the platform's hard cap -- defeating the "never
+    # truncates"/channel-safe guarantee this function exists for.
+    marker_reserve = len(f"\n\n({max_chunks}/{max_chunks})")
+    pack_len = max(max_len - marker_reserve, 1)
+
     tokens = tokenize_tags(text) if entity_aware else [text]
     chunks: list[str] = []
     stack: list[str] = []
@@ -228,7 +241,7 @@ def split_for(
                 else:
                     trial_stack.append(name)
                 suffix_len = sum(len(f"</{t}>") for t in reversed(trial_stack))
-                if len(prefix) + len(current) + len(tok) + suffix_len > max_len and current:
+                if len(prefix) + len(current) + len(tok) + suffix_len > pack_len and current:
                     break  # finalize this chunk before the tag
                 current += tok
                 cur_stack = trial_stack
@@ -236,7 +249,7 @@ def split_for(
                 continue
 
             suffix_len = sum(len(f"</{t}>") for t in reversed(cur_stack))
-            budget = max(max_len - len(prefix) - len(current) - suffix_len, 0 if current else 1)
+            budget = max(pack_len - len(prefix) - len(current) - suffix_len, 0 if current else 1)
             if budget <= 0:
                 break
             if len(tok) <= budget:

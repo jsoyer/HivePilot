@@ -48,8 +48,15 @@ hivepilot slack notify   # send a one-off message
 `SLACK_SIGNING_SECRET`). Notifications can also go through a webhook (`SLACK_WEBHOOK_URL`).
 Approval messages carry Approve / Deny / **Challenge / Ask** buttons (Block Kit) — pressing
 Challenge / Ask prompts for a plain-text follow-up message, which is routed to the Chief of
-Staff (the run stays paused) via the same shared entrypoint Telegram uses. Restrict to
-specific channels with `HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS`.
+Staff (the run stays paused) via the same shared entrypoint Telegram uses. The follow-up
+reply is bound to the user who pressed the button and expires after ~15 minutes if never
+answered. Challenge/Ask's plain-text follow-up requires subscribing the app to the
+`message.channels` (and/or `message.im`/`message.groups`, depending on where the bot is
+invited) event in the Slack app configuration — the SAME event subscription the
+natural-language concierge needs (see below) — without it, the button opens fine but the
+follow-up reply is never delivered. Restrict to specific channels with
+`HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS` — **if left unset, every channel the bot is a member
+of can approve, deny, and challenge runs** (empty allow-list means open, not closed).
 
 ## Discord
 
@@ -61,7 +68,11 @@ hivepilot discord notify   # send a one-off message
 Webhook-based notifications use `DISCORD_WEBHOOK_URL`. Approval messages carry Approve /
 Deny / **Challenge / Ask** buttons — pressing Challenge / Ask opens a modal (no privileged
 Message Content intent required); the submitted text is routed to the Chief of Staff (the
-run stays paused) via the same shared entrypoint Telegram/Slack use. Restrict to specific
+run stays paused) via the same shared entrypoint Telegram/Slack use. **These buttons work
+identically in both `discord start --mode webhook` (HTTP interactions) and `--mode gateway`
+(WebSocket, the default)** — gateway mode routes MESSAGE_COMPONENT/MODAL_SUBMIT interactions
+through the SAME dispatcher the webhook path uses, delivering the response via Discord's
+interaction-callback REST endpoint rather than an HTTP response body. Restrict to specific
 guilds/channels with `HIVEPILOT_DISCORD_ALLOWED_GUILD_IDS` / `HIVEPILOT_DISCORD_ALLOWED_CHANNEL_IDS`.
 
 ## Signal
