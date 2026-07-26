@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from hivepilot.config import settings
+from hivepilot.config import Settings, settings
 from hivepilot.services import config_doctor
 
 
@@ -301,6 +301,233 @@ class TestEnabledPluginsLoaded:
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
         assert not any("'claude'" in f.message for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# check_enabled_plugins_loaded default-True signal-to-noise fix: on a real
+# production box this check produced 19 ERRORs, 17 of which were flags that
+# default to True as a PERMISSION GATE (herdr/infisical/kms/onepassword/
+# gemini/codex/cursor/hugo/tmux/bitwarden/vaultwarden/opencode/ollama/pi/
+# qwen_code/kimi_cli/antigravity), never touched by the operator. Only an
+# EXPLICITLY-configured flag (env var / .env file / init kwarg) with a
+# missing plugin is a real incident (the mem0/headroom case this check was
+# built for) -- these tests pin that distinction.
+# ---------------------------------------------------------------------------
+
+
+def _fresh_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **overrides: object
+) -> Settings:
+    """Build a `Settings` instance isolated from the real machine's env/.env
+    file and XDG dirs, with a CLEAN `model_fields_set` -- unlike mutating the
+    process-wide `settings` singleton via `monkeypatch.setattr(settings,
+    ...)` (which permanently adds the field to that singleton's
+    `model_fields_set`, even on monkeypatch teardown -- `MonkeyPatch.undo()`
+    restores the old VALUE via a plain `setattr`, which pydantic v2 treats
+    as an explicit set), this gives each test a provably clean slate for
+    provenance assertions with zero cross-test pollution risk."""
+    xdg_root = tmp_path / "xdg-home"
+    xdg_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_root))
+    kwargs: dict[str, object] = {"base_dir": tmp_path, "_env_file": None}
+    kwargs.update(overrides)
+    return Settings(**kwargs)  # type: ignore[arg-type, call-arg]
+
+
+class _FakeFieldInfo:
+    def __init__(self, default: object) -> None:
+        self.default = default
+
+
+class _FallbackProvenanceSettings:
+    """Test double with class-level `model_fields` (mirroring pydantic's
+    `FieldInfo.default` contract) but NO `model_fields_set` instance
+    attribute at all -- a real `Settings` instance always has
+    `model_fields_set` (it's a pydantic `BaseSettings`), so this exercises
+    `_is_setting_explicit`'s value-vs-default FALLBACK path directly,
+    decoupled from any real Settings instance."""
+
+    model_fields = {
+        "mem0_enabled": _FakeFieldInfo(default=False),
+        "herdr_enabled": _FakeFieldInfo(default=True),
+    }
+
+    def __init__(self, *, mem0_enabled: bool, herdr_enabled: bool) -> None:
+        self.mem0_enabled = mem0_enabled
+        self.herdr_enabled = herdr_enabled
+
+
+class _AmbiguousProvenanceSettings:
+    """Test double simulating 'provenance genuinely unavailable' -- no
+    `model_fields_set` AND no class-level `model_fields` at all (e.g. a
+    hypothetical future non-pydantic config backend). Only defines the
+    handful of attributes `check_enabled_plugins_loaded` actually touches.
+    Proves the fail-closed guard: an `*_enabled` flag that's truthy but
+    whose provenance can't be determined AT ALL must still produce a
+    finding (a warning), never silence -- the recurring
+    empty/unknown-treated-as-no-constraint bug class this codebase has hit
+    repeatedly."""
+
+    mem0_enabled = True
+
+    def resolve_path(self, path: Path) -> Path:
+        return Path("/fake") / path
+
+    xdg_data_home = Path("/fake/xdg-data")
+
+
+class TestIsSettingExplicit:
+    """Direct unit coverage of the provenance helper, independent of
+    `check_enabled_plugins_loaded`'s aggregation/severity logic above."""
+
+    def test_env_var_source_is_explicit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HIVEPILOT_MEM0_ENABLED", "true")
+        cfg = _fresh_settings(tmp_path, monkeypatch)
+
+        assert config_doctor._is_setting_explicit(cfg, "mem0_enabled") is True
+
+    def test_env_file_source_is_explicit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env_file = tmp_path / "custom.env"
+        env_file.write_text("HIVEPILOT_MEM0_ENABLED=true\n")
+        cfg = _fresh_settings(tmp_path, monkeypatch, _env_file=str(env_file))
+
+        assert config_doctor._is_setting_explicit(cfg, "mem0_enabled") is True
+
+    def test_untouched_default_true_flag_is_not_explicit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg = _fresh_settings(tmp_path, monkeypatch)  # herdr_enabled left at its True default
+
+        assert config_doctor._is_setting_explicit(cfg, "herdr_enabled") is False
+
+    def test_fallback_mismatch_is_treated_as_explicit(self) -> None:
+        """`model_fields_set` unavailable, but the live value disagrees with
+        the class default -- unambiguous evidence of an override."""
+        cfg = _FallbackProvenanceSettings(mem0_enabled=True, herdr_enabled=True)
+
+        assert config_doctor._is_setting_explicit(cfg, "mem0_enabled") is True
+
+    def test_fallback_match_is_ambiguous_not_default(self) -> None:
+        """`model_fields_set` unavailable AND the live value equals the
+        class default -- genuinely ambiguous (could be an explicit override
+        that happens to match the default, or truly untouched). Must return
+        `None` (unknown), never `False` (confirmed default) -- the caller
+        is responsible for treating `None` as fail-closed."""
+        cfg = _FallbackProvenanceSettings(mem0_enabled=False, herdr_enabled=True)
+
+        assert config_doctor._is_setting_explicit(cfg, "herdr_enabled") is None
+
+    def test_no_model_fields_at_all_is_unknown(self) -> None:
+        cfg = _AmbiguousProvenanceSettings()
+
+        assert config_doctor._is_setting_explicit(cfg, "mem0_enabled") is None
+
+
+class TestEnabledPluginsLoadedProvenance:
+    def test_default_enabled_flag_missing_plugin_yields_info_not_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """THE 17-false-positive regression: `herdr_enabled` defaults to
+        True as a permission gate. Left untouched, with no 'herdr' plugin
+        loaded, this must NOT be an ERROR (or any per-plugin finding at
+        all) -- at most a single aggregated info line."""
+        cfg = _fresh_settings(tmp_path, monkeypatch)
+        monkeypatch.setattr(config_doctor, "settings", cfg)
+        fake_manager = SimpleNamespace(loaded=[])
+
+        findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
+
+        assert not any(
+            f.check == "plugin_enabled_not_loaded" and "herdr" in f.message for f in findings
+        )
+        info_findings = [f for f in findings if f.check == "default_enabled_plugin_not_installed"]
+        assert info_findings, "expected one aggregated info finding for default-enabled plugins"
+        assert info_findings[0].severity == "info"
+        assert "herdr" in info_findings[0].message
+
+    def test_explicit_env_var_enabled_missing_plugin_is_still_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """THE REAL INCIDENT must stay caught: an operator who explicitly
+        set `HIVEPILOT_MEM0_ENABLED=true` via an env var, with the plugin
+        FILE missing, must still get an ERROR."""
+        monkeypatch.setenv("HIVEPILOT_MEM0_ENABLED", "true")
+        cfg = _fresh_settings(tmp_path, monkeypatch)
+        monkeypatch.setattr(config_doctor, "settings", cfg)
+        fake_manager = SimpleNamespace(loaded=[])
+
+        findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
+
+        mem0_findings = [f for f in findings if "'mem0'" in f.message]
+        assert mem0_findings, "expected a plugin_enabled_not_loaded ERROR for mem0"
+        assert mem0_findings[0].severity == "error"
+        assert mem0_findings[0].check == "plugin_enabled_not_loaded"
+
+    def test_explicit_env_file_enabled_missing_plugin_is_still_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same real incident, sourced from a `.env` config file instead of
+        a live env var -- must also still be an ERROR."""
+        env_file = tmp_path / "custom.env"
+        env_file.write_text("HIVEPILOT_MEM0_ENABLED=true\n")
+        cfg = _fresh_settings(tmp_path, monkeypatch, _env_file=str(env_file))
+        monkeypatch.setattr(config_doctor, "settings", cfg)
+        fake_manager = SimpleNamespace(loaded=[])
+
+        findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
+
+        mem0_findings = [f for f in findings if "'mem0'" in f.message]
+        assert mem0_findings, "expected a plugin_enabled_not_loaded ERROR for mem0"
+        assert mem0_findings[0].severity == "error"
+
+    def test_explicit_false_missing_plugin_is_silent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg = _fresh_settings(tmp_path, monkeypatch, herdr_enabled=False)
+        monkeypatch.setattr(config_doctor, "settings", cfg)
+        fake_manager = SimpleNamespace(loaded=[])
+
+        findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
+
+        assert not any("herdr" in f.message for f in findings)
+
+    def test_provenance_unavailable_and_truthy_is_reported_not_silenced(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail-closed guard: when provenance is genuinely unknown, a
+        truthy flag with no matching plugin must still surface (degraded to
+        a warning), never disappear silently."""
+        monkeypatch.setattr(config_doctor, "settings", _AmbiguousProvenanceSettings())
+        fake_manager = SimpleNamespace(loaded=[])
+
+        findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
+
+        mem0_findings = [f for f in findings if "'mem0'" in f.message]
+        assert mem0_findings, "provenance-unknown + truthy must still emit a finding"
+        assert mem0_findings[0].severity == "warning"
+
+    def test_many_default_enabled_flags_yield_zero_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression pin for the real production incident: with a clean
+        `Settings()` (all `*_enabled` flags at their class defaults) and NO
+        plugins loaded at all, this check must yield ZERO error-severity
+        findings -- against current `main` this produces 17 false-positive
+        ERRORs (herdr/infisical/kms/onepassword/gemini/codex/cursor/hugo/
+        tmux/bitwarden/vaultwarden/opencode/ollama/pi/qwen_code/kimi_cli/
+        antigravity)."""
+        cfg = _fresh_settings(tmp_path, monkeypatch)
+        monkeypatch.setattr(config_doctor, "settings", cfg)
+        fake_manager = SimpleNamespace(loaded=[])
+
+        findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
+
+        errors = [f for f in findings if f.severity == "error"]
+        assert errors == [], f"expected zero ERROR findings, got: {[e.message for e in errors]}"
 
 
 # ---------------------------------------------------------------------------
