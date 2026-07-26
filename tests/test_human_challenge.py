@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -215,6 +216,32 @@ def test_human_challenge_role_not_found_falls_back_to_temp_prompt():
     assert Path(payload.step.prompt_file).exists()
 
 
+def test_human_challenge_builds_synthetic_project_not_none():
+    """Regression for the live bug: 'NoneType' object has no attribute 'env'
+    (and, before that, '.path'). ``human_challenge`` used to pass
+    ``project=None`` to the runner payload -- every runner unconditionally
+    dereferences ``payload.project.*`` (env/secrets/path/...), so `None`
+    crashed on whichever attribute that runner's code touched first. It must
+    now always be a valid, obviously-synthetic ``ProjectConfig`` (see
+    ``orchestrator._synthetic_project``) -- never ``None``.
+    """
+    with (
+        patch("hivepilot.orchestrator.state_service") as mock_ss,
+        patch("hivepilot.orchestrator.log_challenge_interaction"),
+    ):
+        mock_ss.get_approval.return_value = _APPROVAL_ROW
+        orch = _make_orchestrator()
+
+        orch.human_challenge(1, "why?", "alice")
+
+    payload = orch.registry.capture_definition.call_args[0][1]
+    assert payload.project is not None
+    assert payload.project.env == {}
+    assert payload.project.secrets == {}
+    assert payload.project.path.exists(), "synthetic project path must actually exist"
+    assert "challenge" in (payload.project.description or "")
+
+
 def test_human_challenge_role_with_missing_prompt_file_falls_back_to_temp_prompt(tmp_path):
     """A role that resolves but whose declared prompt_file is absent from
     disk (stale roles.yaml override, moved file, etc.) must not crash the
@@ -248,3 +275,63 @@ def test_human_challenge_role_with_missing_prompt_file_falls_back_to_temp_prompt
     assert payload.step.prompt_file
     assert payload.step.prompt_file != str(fake_role.prompt_file)
     assert Path(payload.step.prompt_file).exists()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: drive the WHOLE challenge flow through a REAL RunnerRegistry +
+# REAL ClaudeRunner (only `subprocess.run` mocked) so the actual
+# `_build_invocation`/`_assemble_prompt`/env-merge code paths that crashed in
+# production for this exact feature -- three times in a row, each time on a
+# different `payload.project.*` attribute -- are genuinely exercised, not a
+# stubbed runner.
+# ---------------------------------------------------------------------------
+
+
+def test_human_challenge_end_to_end_real_claude_runner_no_crash(tmp_path):
+    """Drives `orchestrator.human_challenge` through a REAL `RunnerRegistry`
+    + `ClaudeRunner` (only `subprocess.run` mocked) end-to-end, asserting no
+    AttributeError/TypeError anywhere and that the answer text comes back."""
+    from hivepilot.registry import RunnerRegistry
+    from hivepilot.roles import Role
+
+    prompt_file = tmp_path / "chief_of_staff.md"
+    prompt_file.write_text("You are Jules, the Chief of Staff.\n", encoding="utf-8")
+    fake_role = Role(
+        name="chief_of_staff",
+        title="Chief of Staff",
+        prompt_file=prompt_file,
+        model_profile="automation",
+        inputs=[],
+        outputs=[],
+        can_block=False,
+        order=2,
+        runner="claude",
+        model="test-model",
+    )
+
+    with (
+        patch("hivepilot.orchestrator.state_service") as mock_ss,
+        patch("hivepilot.orchestrator.log_challenge_interaction"),
+        patch.dict("hivepilot.roles.ROLES", {"chief_of_staff": fake_role}, clear=True),
+        patch("hivepilot.runners.claude_runner.subprocess.run") as mock_run,
+    ):
+        mock_ss.get_approval.return_value = _APPROVAL_ROW
+        mock_run.return_value = MagicMock(stdout="Good point, let's revise the plan.", returncode=0)
+        orch = _make_orchestrator()
+        orch.registry = RunnerRegistry(runner_defs={})
+
+        answer = orch.human_challenge(1, "why is step 3 before step 2?", "alice")
+
+    assert answer == "Good point, let's revise the plan."
+    assert mock_run.called, "the real ClaudeRunner must reach subprocess.run"
+    _, run_kwargs = mock_run.call_args
+    # cwd came from the synthetic project's `.path` -- proves
+    # `payload.project.path` was accessed without crashing (the live bug:
+    # 'NoneType' object has no attribute 'path', then '.env').
+    assert run_kwargs["cwd"] == str(Path(tempfile.gettempdir()))
+    # planning_context was still updated with challenge + response.
+    call_args = mock_ss.update_approval_metadata.call_args
+    assert call_args is not None
+    updated_meta = call_args[0][1]
+    assert "why is step 3 before step 2?" in updated_meta["planning_context"]
+    assert answer in updated_meta["planning_context"]

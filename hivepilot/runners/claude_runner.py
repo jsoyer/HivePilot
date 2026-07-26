@@ -909,13 +909,16 @@ class ClaudeRunner(BaseRunner):
             f"Task: {payload.task_name}",
             f"Step: {payload.step.name}",
         ]
-        # `payload.project` is None for out-of-band, repo-less invocations —
-        # the human-challenge/ask feature and direct inter-agent requests
-        # (`orchestrator.human_challenge` / `_process_agent_requests`) build a
-        # payload with no ProjectConfig since there is no repository context,
-        # just a question/answer exchange. Guard every `payload.project.*`
-        # access so those call sites don't crash with
-        # `AttributeError: 'NoneType' object has no attribute 'path'`.
+        # `RunnerPayload.project` is typed as a plain (non-Optional)
+        # ProjectConfig -- every real call site (including the human-
+        # challenge/ask feature and direct inter-agent requests, see
+        # `orchestrator._synthetic_project`) always supplies one, even for
+        # out-of-band, repo-less invocations (a minimal synthetic
+        # ProjectConfig with no real repository). This `is not None` guard is
+        # therefore pure defence-in-depth against some FUTURE caller
+        # reintroducing `project=None` -- it must never crash
+        # (`AttributeError: 'NoneType' object has no attribute 'path'`) even
+        # if that contract is ever violated again.
         if payload.project is not None:
             sections.append(f"Repository path: {payload.project.path}")
             if payload.project.description:
