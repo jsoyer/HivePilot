@@ -32,12 +32,19 @@ export interface SidebarNavProps {
  * one list, which Base UI's composite keyboard navigation simply skips
  * (only registered `Tab` children participate).
  *
- * Desktop (`lg:` and up): a static, always-visible aside. `collapsed`
+ * Desktop (`md:` and up): a static, always-visible aside. `collapsed`
  * persists to localStorage (`usePersistedState`) so a reload keeps the
  * operator's choice; icon-only mode hides every label (and un-hides the
  * group header for screen readers via `sr-only` rather than removing it).
+ * Bug fix: this used to be `lg:` (1024px) — any normal, non-maximized
+ * desktop browser window narrower than that (split-screen, a smaller
+ * laptop, etc.) was silently treated as "mobile", so clicking ANY nav item
+ * called `onCloseMobile` and translated the whole sidebar off-screen with
+ * no visible way back ("the whole menu disappears"). `md:` (768px) is a
+ * much more realistic floor for "this is a desktop window, not a phone" —
+ * Mirador is an ops console, not a page that's ever hand-held.
  *
- * Mobile (below `lg:`): an off-canvas drawer (`fixed`, translated out of
+ * Mobile (below `md:`): an off-canvas drawer (`fixed`, translated out of
  * view by default) plus a click-to-close backdrop, controlled entirely by
  * `mobileOpen`/`onCloseMobile` props from the header's hamburger button.
  */
@@ -50,7 +57,7 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
         <div
           data-testid="sidebar-backdrop"
           aria-hidden="true"
-          className="fixed inset-0 z-30 bg-black/50 lg:hidden"
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
           onClick={onCloseMobile}
         />
       )}
@@ -59,9 +66,9 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
         data-collapsed={collapsed}
         data-mobile-open={mobileOpen}
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col gap-3 overflow-y-auto border-r border-border bg-card p-2 transition-transform duration-200 ease-out lg:static lg:z-auto lg:h-auto lg:w-56 lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col gap-3 overflow-y-auto border-r border-border bg-card p-2 transition-transform duration-200 ease-out md:static md:z-auto md:h-auto md:w-56 md:translate-x-0',
           mobileOpen && 'translate-x-0',
-          collapsed && 'lg:w-16',
+          collapsed && 'md:w-16',
         )}
       >
         <div className="flex items-center justify-end">
@@ -70,7 +77,7 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
             variant="ghost"
             size="icon-sm"
             data-testid="sidebar-collapse-toggle"
-            className="hidden lg:inline-flex"
+            className="hidden md:inline-flex"
             onClick={() => {
               setCollapsed((prev) => !prev)
             }}
@@ -80,13 +87,19 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
             {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
           </Button>
         </div>
-        <TabsList className="h-auto w-full flex-1 flex-col items-stretch gap-3 bg-transparent p-0">
+        {/* Bug fix: TabsList's shared CVA base (`ui/tabs.tsx`) sets
+         * `justify-center` for the horizontal tab-bar use case — that must
+         * be overridden to `justify-start` here, or a group list shorter
+         * than the sidebar's full height gets vertically centered inside
+         * this `flex-1` column, leaving a large empty gap above "COMMAND
+         * CENTER" instead of the nav starting right under the chevron. */}
+        <TabsList className="h-auto w-full flex-1 flex-col items-stretch justify-start gap-3 bg-transparent p-0">
           {groups.map((group) => (
             <div key={group.label} className="flex flex-col gap-1">
               <span
                 className={cn(
                   'px-2 text-[11px] font-semibold tracking-wide text-muted-foreground/70 uppercase',
-                  collapsed && 'lg:sr-only',
+                  collapsed && 'md:sr-only',
                 )}
               >
                 {group.label}

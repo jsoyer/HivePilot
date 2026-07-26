@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   CheckSquare,
   Clock,
+  Database,
   DollarSign,
   PlayCircle,
   Radar as RadarIcon,
@@ -13,7 +14,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Gauge } from '@/components/dashboard/Gauge'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { SectionHeader } from '@/components/dashboard/SectionHeader'
 import { SweepRadar, type RadarAgent, type RadarAgentStatus } from '@/components/dashboard/SweepRadar'
@@ -66,8 +66,22 @@ function formatCost(n: number): string {
   return `$${n.toFixed(3)}`
 }
 
+/**
+ * Bug fix (permanent clipping): a raw comma-grouped token count (e.g.
+ * "623,393,633") is wider than the hero KPI card has room for in a 5-column
+ * grid — it overflowed its `MetricReadout` and got sliced by the ancestor
+ * `Card`'s `overflow-hidden` with no ellipsis, no wrap, just a hard cut
+ * mid-digit. Above 1,000,000 this switches to compact notation ("623.4M",
+ * matching the reference mockup's "1.8M" KPI style) — below that threshold
+ * the exact grouped count is short enough to always fit, so it's kept
+ * unchanged (existing behavior/tests for small values like "1,500").
+ */
 function formatTokens(n: number): string {
-  return Math.round(n).toLocaleString('en-US')
+  const rounded = Math.round(n)
+  if (Math.abs(rounded) >= 1_000_000) {
+    return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(rounded)
+  }
+  return rounded.toLocaleString('en-US')
 }
 
 function pct(rate: number): string {
@@ -686,7 +700,12 @@ export function HomeView({ onNavigate }: HomeViewProps) {
       </div>
 
       <SectionHeader index="01" title={t('home.kpiSectionTitle')} className="-mb-1" />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      {/* Bug fix (KPI row uniformity): `min-w-0` on every grid item stops a
+       * long/overflowing value from ever growing its OWN card wider than
+       * its equal-`fr` grid track — without it, an overflowing child (like
+       * the old raw token count) could make one card visually wider/
+       * ragged than its siblings even though the grid math is the same. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5 *:min-w-0">
         <KpiCard
           testId="home-kpi-spend"
           icon={<DollarSign className="size-4" />}
@@ -727,32 +746,30 @@ export function HomeView({ onNavigate }: HomeViewProps) {
           }}
         />
 
-        <KpiButton testId="home-kpi-memory" ariaLabel={t('home.kpiMemoryHealth')} onClick={() => onNavigate('memory')}>
-          <Card className="w-full">
-            <CardContent className="flex flex-col items-center gap-1.5">
-              <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                {t('home.kpiMemoryHealth')}
-              </span>
-              {memory.status === 'loading' && <span className="text-sm text-muted-foreground">{t('common.loading')}</span>}
-              {memory.status === 'error' && (
-                <span className="text-sm text-muted-foreground">
-                  {memory.error instanceof ApiForbiddenError ? t('home.kpiRequiresRole') : describeApiError(memory.error)}
-                </span>
-              )}
-              {memory.status === 'success' &&
-                (memory.data.total_searches > 0 ? (
-                  <Gauge
-                    value={memory.data.search_success_rate}
-                    tone={memory.data.search_success_rate >= 0.8 ? 'good' : memory.data.search_success_rate >= 0.5 ? 'warn' : 'crit'}
-                  />
-                ) : (
-                  <span data-testid="home-kpi-memory-nodata" className="text-sm text-muted-foreground">
-                    {t('home.noData')}
-                  </span>
-                ))}
-            </CardContent>
-          </Card>
-        </KpiButton>
+        {/* Bug fix (KPI row uniformity): Memory health used to be a bespoke
+         * `Card` with a centered `Gauge` and no icon chip — the one card in
+         * the row that didn't match the icon + label + value + sub
+         * structure every other `KpiCard` uses. Same primitive now, same
+         * honest-empty handling (an unavailable/zero-searches reading is a
+         * real "—" + "No data" sub-line, never a fabricated percentage). */}
+        <KpiCard
+          testId="home-kpi-memory"
+          icon={<Database className="size-4" />}
+          label={t('home.kpiMemoryHealth')}
+          state={memory}
+          onNavigate={() => onNavigate('memory')}
+          render={(data) => {
+            if (data.total_searches === 0) {
+              return {
+                value: <span data-testid="home-kpi-memory-nodata">{'—'}</span>,
+                sub: t('home.noData'),
+              }
+            }
+            const tone: VizTone =
+              data.search_success_rate >= 0.8 ? 'good' : data.search_success_rate >= 0.5 ? 'warn' : 'crit'
+            return { value: pct(data.search_success_rate), sub: t('home.kpiMemorySub'), tone }
+          }}
+        />
 
         <KpiCard
           testId="home-kpi-approvals"
@@ -760,7 +777,11 @@ export function HomeView({ onNavigate }: HomeViewProps) {
           label={t('home.kpiPendingApprovals')}
           state={approvalsState}
           onNavigate={() => onNavigate('approvals')}
-          render={(data) => ({ value: data.length, tone: data.length > 0 ? ('crit' as VizTone) : ('good' as VizTone) })}
+          render={(data) => ({
+            value: data.length,
+            sub: t('home.kpiApprovalsSub'),
+            tone: data.length > 0 ? ('crit' as VizTone) : ('good' as VizTone),
+          })}
         />
       </div>
 
