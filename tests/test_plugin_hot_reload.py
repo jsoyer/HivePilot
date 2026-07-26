@@ -428,13 +428,13 @@ class TestReloadReentrancy:
         reentrant_result: dict[str, ReloadResult] = {}
         original_scan = plugins_mod._scan_local_plugins
 
-        def _scan_with_reentrant_reload() -> list:
+        def _scan_with_reentrant_reload(*, base_dir=None) -> list:
             # Simulates a SIGHUP handler firing mid-reload and re-entering
             # `reload()` on the SAME manager instance, from as early as
             # possible in `_load_into` (the very first thing it calls).
             if "captured" not in reentrant_result:
                 reentrant_result["captured"] = pm.reload()
-            return original_scan()
+            return original_scan(base_dir=base_dir)
 
         monkeypatch.setattr(plugins_mod, "_scan_local_plugins", _scan_with_reentrant_reload)
 
