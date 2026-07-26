@@ -5,6 +5,7 @@ Minimal tests for hivepilot.plugins — PluginManager and hooks type annotation.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -918,3 +919,168 @@ class TestInstalledPluginsAutoLoad:
 
         assert calls.count(shared_plugins) == 1, f"Expected exactly one scan, got: {calls}"
         assert len(found) == 1
+
+
+# ---------------------------------------------------------------------------
+# Cross-instance re-registration (fix: plugin-double-registration bug).
+#
+# Reported on the production box: `hivepilot config doctor` constructs its
+# own `PluginManager()` for plugin health checks, then `check_dangling_
+# references` -> `validate_config()` conditionally constructs a SECOND,
+# INDEPENDENT `PluginManager()` (only when a task/pipeline step declares
+# `skills:` -- see `config_validation.validate_config_report`). Local-file
+# plugins are always re-exec'd (`_load_plugin_module` never touches
+# `sys.modules`), so the second construction produces a BRAND NEW class
+# object for the exact same on-disk plugin -- `_stage_kind`'s (pre-fix)
+# raw-identity collision check could not tell that apart from a genuinely
+# different plugin trying to steal an already-claimed kind, and raised
+# `RunnerKindCollisionError`. These tests reproduce that exactly at the
+# `PluginManager` level (no `config_doctor` involved) and prove the fix's
+# precise boundary: the SAME on-disk plugin (by file stem) re-loaded by a
+# second, independent instance is a no-op; a GENUINELY DIFFERENT plugin
+# (different stem) still hard-fails, exactly as before.
+# ---------------------------------------------------------------------------
+
+
+def _write_gh_like_runner_plugin(plugin_dir: Path, stem: str = "gh", kind: str = "gh") -> None:
+    """A minimal runner-contributing local-file plugin, modeled on the real
+    `plugins/gh.py` shape (plain class, no dataclass -- see that file's own
+    docstring for why) that triggered the reported production incident."""
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    (plugin_dir / f"{stem}.py").write_text(
+        f"""
+class GhRunner:
+    def __init__(self, definition, settings):
+        self.definition = definition
+        self.settings = settings
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    return {{"runners": {{{kind!r}: GhRunner}}}}
+""",
+        encoding="utf-8",
+    )
+
+
+class TestCrossInstanceReRegistrationIsBenign:
+    def test_second_independent_plugin_manager_does_not_collide_with_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exact repro of the reported doctor incident: TWO independent
+        `PluginManager()` constructions against the SAME `base_dir`, each
+        re-exec'ing `gh.py` into a fresh, distinct `GhRunner` class object.
+        Before the fix this raised `RunnerKindCollisionError` on the SECOND
+        construction; after the fix it is a benign no-op."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP
+
+        _write_gh_like_runner_plugin(tmp_path / "plugins")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        first = plugins_mod.PluginManager()
+        first_cls = RUNNER_MAP["gh"]
+
+        second = plugins_mod.PluginManager()  # must NOT raise RunnerKindCollisionError
+        second_cls = RUNNER_MAP["gh"]
+
+        assert first_cls.__name__ == "GhRunner"
+        assert second_cls.__name__ == "GhRunner"
+        assert any(r.name == "gh" for r in first.loaded)
+        assert any(r.name == "gh" for r in second.loaded)
+
+    def test_second_manager_scanning_a_scratch_copy_of_the_plugin_is_also_benign(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mirrors `config_writer._validate_prospective`'s scratch-copy
+        pattern (`shutil.copy2` preserves the filename, hence the module
+        stem): a SECOND `PluginManager` scanning a DIFFERENT absolute path
+        (a copy of the same file, not the literal same file) must still be
+        recognized as the same plugin -- proving the fix keys off the
+        plugin's identity (its file stem / synthetic module name), not its
+        absolute path, which the config-writer validation flow legitimately
+        changes on every call."""
+        import shutil
+
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP
+
+        live_dir = tmp_path / "live"
+        _write_gh_like_runner_plugin(live_dir / "plugins")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", live_dir, raising=False)
+        plugins_mod.PluginManager()
+        assert "gh" in RUNNER_MAP
+
+        scratch_dir = tmp_path / "scratch"
+        (scratch_dir / "plugins").mkdir(parents=True)
+        shutil.copy2(live_dir / "plugins" / "gh.py", scratch_dir / "plugins" / "gh.py")
+
+        # Must NOT raise, even though `base_dir` (and therefore the scanned
+        # file's absolute path) differs from the first construction's.
+        plugins_mod.PluginManager(base_dir=scratch_dir)
+
+    def test_genuinely_different_plugin_still_raises_collision(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard's real job, unchanged: a SECOND, independent
+        `PluginManager()` whose plugin file has a DIFFERENT stem (a
+        genuinely different plugin, not a re-load of the same one) claiming
+        an already-registered kind must still hard-fail -- the fix must
+        never let an unrelated plugin silently steal another plugin's
+        kind."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP, RunnerKindCollisionError
+
+        pdir = tmp_path / "plugins"
+        _write_gh_like_runner_plugin(pdir, stem="gh", kind="gh")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        plugins_mod.PluginManager()
+        assert RUNNER_MAP["gh"].__name__ == "GhRunner"
+
+        # A DIFFERENT plugin file (different stem) also claiming kind "gh".
+        (pdir / "impostor.py").write_text(
+            """
+class ImpostorRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    return {"runners": {"gh": ImpostorRunner}}
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(RunnerKindCollisionError):
+            plugins_mod.PluginManager()
+
+        # The live entry must be left exactly as the FIRST plugin set it --
+        # never silently replaced by the impostor.
+        assert RUNNER_MAP["gh"].__name__ == "GhRunner"
+
+    def test_reload_after_a_second_independent_construction_still_works(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression guard for hot-reload (Phase 26b): after a second,
+        independent `PluginManager()` benignly takes over an already-live
+        kind (per the fix above), calling `.reload()` on THAT second
+        instance must still work normally -- it now legitimately owns
+        'gh' and a subsequent reload must not itself raise."""
+        from hivepilot import plugins as plugins_mod
+        from hivepilot.registry import RUNNER_MAP
+
+        _write_gh_like_runner_plugin(tmp_path / "plugins")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+
+        plugins_mod.PluginManager()
+        second = plugins_mod.PluginManager()
+
+        result = second.reload()
+
+        assert result.ok is True
+        assert "gh" in RUNNER_MAP

@@ -496,6 +496,70 @@ def register():
         # Sanity: the plugin was genuinely discovered (not pre-registered by the test).
         assert "dummy-plugin-runner" in RUNNER_MAP
 
+    def test_runner_plugin_kind_accepted_when_skill_ref_triggers_second_plugin_manager(
+        self, config_dir: Path
+    ) -> None:
+        """Plugin-double-registration regression (broader scope than the
+        reported `config doctor` incident): a `skills:` reference on a task
+        step is the dormant trigger for `apply_and_validate`'s scratch-copy
+        validation (`config_writer._validate_prospective` ->
+        `validate_config` -> `validate_config_report`) to construct its OWN,
+        second, independent `PluginManager()` -- see that function's
+        skill_refs branch. Before the fix, THIS second construction
+        (re-exec'ing a `shutil.copy2` of the exact same plugin file into an
+        isolated scratch tmp dir) collided with the `PluginManager()` this
+        command already constructed moments earlier for the `runner` field's
+        own validation (cli.py's `role wire` "runner" field check) -- both
+        re-exec the SAME on-disk plugin into a fresh, non-identical class
+        object for the SAME runner kind."""
+        from hivepilot.registry import RUNNER_MAP
+
+        plugin_dir = config_dir / "plugins"
+        plugin_dir.mkdir()
+        (plugin_dir / "role_wire_fixture.py").write_text(
+            """
+class RoleWireFixtureRunner:
+    def __init__(self, definition, settings):
+        pass
+
+    def run(self, payload):
+        return None
+
+
+def register():
+    return {
+        "runners": {"dummy-plugin-runner": RoleWireFixtureRunner},
+        "skills": [
+            {
+                "name": "dummy-skill",
+                "description": "d",
+                "provider": "acme",
+                "files": {"SKILL.md": "hello"},
+            }
+        ],
+    }
+""",
+            encoding="utf-8",
+        )
+        (config_dir / "tasks.yaml").write_text(
+            "runners: {}\n"
+            "tasks:\n"
+            "  dev-task:\n"
+            "    description: Do dev work\n"
+            "    role: developer\n"
+            "    steps:\n"
+            "      - name: s1\n"
+            "        runner: claude\n"
+            "        skills: [dummy-skill]\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["role", "wire", "developer", "runner", "dummy-plugin-runner"])
+
+        assert result.exit_code == 0, result.output
+        assert "runner: dummy-plugin-runner" in (config_dir / "roles.yaml").read_text()
+        assert "dummy-plugin-runner" in RUNNER_MAP
+
     def test_model_profile_valid_value(self, config_dir: Path) -> None:
         result = runner.invoke(app, ["role", "wire", "developer", "model_profile", "architecture"])
         assert result.exit_code == 0, result.output

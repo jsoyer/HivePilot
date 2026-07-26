@@ -25,6 +25,12 @@ logger = get_logger(__name__)
 
 PLUGIN_ENTRY_POINT_GROUP = "hivepilot.plugins"
 
+# Synthetic module-name prefix `_load_plugin_module` gives every local-file
+# plugin it compiles+execs (`f"{_LOCAL_PLUGIN_MODULE_PREFIX}{file.stem}"` --
+# see that function). Shared with `_same_local_plugin_origin` below (the
+# plugin-double-registration fix) so both stay in sync.
+_LOCAL_PLUGIN_MODULE_PREFIX = "hivepilot_plugin_"
+
 # The closed set of values `PluginRecord.source` may take:
 # - "local-file": discovered by `_scan_local_plugins` scanning `plugins/*.py`
 # - "entry-point": discovered via the `hivepilot.plugins` entry-point group
@@ -395,7 +401,7 @@ def _load_plugin_module(file: Path) -> Any | None:
     """
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location(f"hivepilot_plugin_{file.stem}", file)
+    spec = importlib.util.spec_from_file_location(f"{_LOCAL_PLUGIN_MODULE_PREFIX}{file.stem}", file)
     if not (spec and spec.loader):
         return None
     module = importlib.util.module_from_spec(spec)
@@ -751,6 +757,56 @@ class _StagedPluginState:
     graph_source_map: dict[str, Any] = field(default_factory=dict)
 
 
+def _same_local_plugin_origin(current: Any, obj: Any) -> bool:
+    """True when `current` (the live/staged entry) and `obj` (freshly
+    staged) are DIFFERENT objects but were unmistakably produced by the SAME
+    local-file plugin being re-scanned by a DIFFERENT `PluginManager`
+    instance (or an exact `shutil.copy2` of it -- see
+    `config_writer._validate_prospective`'s scratch-copy validation) rather
+    than a genuinely different plugin trying to claim an already-registered
+    kind/name.
+
+    Fix for the plugin-double-registration bug: `_load_plugin_module` always
+    re-execs a local-file plugin into a FRESH module object via
+    `importlib.util.spec_from_file_location` -- it is NEVER cached in
+    `sys.modules` (see that function's docstring). So a SECOND, independent
+    `PluginManager()` construction that scans the same plugins directory
+    (e.g. `config_doctor.run_doctor`'s own manager, immediately followed by
+    `check_dangling_references` -> `validate_config`'s conditional second
+    one -- see both modules' docstrings) produces a BRAND NEW class/function
+    object for the exact same on-disk plugin, which the ownership model
+    (`owned_kinds`, scoped to a SINGLE `PluginManager` instance's own
+    `reload()` calls) cannot recognize as benign, since this manager never
+    owned that kind in the first place. Raw object identity can therefore
+    NEVER match across two independent constructions of the same plugin --
+    without this fallback, EVERY such second construction would hard-fail.
+
+    Safe boundary: `_load_plugin_module`'s synthetic module name is
+    `f"{_LOCAL_PLUGIN_MODULE_PREFIX}{file.stem}"` -- derived ONLY from the
+    file's STEM (filename minus extension), so it is STABLE across a
+    `shutil.copy2` to a different directory/absolute path (the filename is
+    preserved) but can NEVER be produced by a builtin (`hivepilot.runners.*`
+    modules) or a cached entry-point/explicit-entry plugin (a real,
+    `sys.modules`-cached `import_module` -- identity already matches for
+    those, so this fallback is never even reached). Two plugin files with
+    the SAME stem is exactly the trust boundary `_scan_plugin_dir`'s
+    existing dedup-by-stem logic already accepts as "the same logical
+    plugin, shadowed by directory precedence" (see its docstring) -- this
+    extends that same accepted trust decision across PluginManager
+    instances instead of only within one instance's single scan pass. A
+    collision against a builtin, or between two DIFFERENT-stemmed plugin
+    files that both attempt the same kind/name, still always raises --
+    neither can ever produce a matching `(__module__, __qualname__)` pair.
+    """
+    module = getattr(obj, "__module__", None)
+    if not isinstance(module, str) or not module.startswith(_LOCAL_PLUGIN_MODULE_PREFIX):
+        return False
+    if getattr(current, "__module__", None) != module:
+        return False
+    obj_qualname = getattr(obj, "__qualname__", None)
+    return obj_qualname is not None and getattr(current, "__qualname__", None) == obj_qualname
+
+
 def _stage_kind(
     kind: str,
     obj: Any,
@@ -769,15 +825,20 @@ def _stage_kind(
     A kind already present in `staged` (an earlier plugin in THIS pass
     claimed it) is a collision unless it's the exact same object. A kind
     already present in `live_map` is a collision unless it's the exact same
-    object, OR `kind` is in `owned_kinds` -- a kind THIS manager itself
+    object, `kind` is in `owned_kinds` (a kind THIS manager itself
     registered on a PREVIOUS load/reload and is now legitimately replacing
-    (the live entry is stale-but-still-there only because staging never
-    mutates it; `_commit` is what actually swaps it).
+    -- the live entry is stale-but-still-there only because staging never
+    mutates it; `_commit` is what actually swaps it), OR `obj` and the live
+    entry are provably the SAME local-file plugin re-loaded by a DIFFERENT
+    manager instance (`_same_local_plugin_origin` -- the plugin-double-
+    registration fix; never weakens the guard for a genuinely different
+    class/function claiming the kind/name, including a plugin colliding
+    with a builtin).
     """
     current = staged.get(kind)
     if current is None and kind in live_map and kind not in owned_kinds:
         current = live_map[kind]
-    if current is not None and current is not obj:
+    if current is not None and current is not obj and not _same_local_plugin_origin(current, obj):
         raise collision_cls(
             f"{label} {kind!r} is already registered to "
             f"{getattr(current, '__name__', type(current).__name__)}; refusing to "
