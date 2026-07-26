@@ -24,6 +24,7 @@ import asyncio
 import inspect
 import json
 import sys
+import time
 import types
 from typing import Any, Callable
 from unittest.mock import MagicMock, patch
@@ -412,8 +413,14 @@ class TestHandleApprovalAction:
         orch.approve_run.assert_not_called()
         respond.assert_called_once_with("Unauthorized channel.")
 
-    def test_missing_channel_in_body_treated_as_unauthorized(self) -> None:
-        """Fail-closed: no channel info in the payload -> reject, don't mutate."""
+    def test_missing_channel_in_body_rejected_when_allowlist_configured(self) -> None:
+        """Fail-closed under a CONFIGURED (non-empty) allow-list -- the
+        autouse `_allowlist` fixture sets `slack_allowed_channel_ids` to a
+        non-empty list, which is WHY a missing/empty channel_id is rejected
+        here (`_is_allowed` only returns True unconditionally when the list
+        is EMPTY -- see F5, deliberately out of scope: an empty allow-list
+        means "open to all", not "deny all"). This does NOT prove a missing
+        channel is universally rejected regardless of configuration."""
         app = _register()
         respond = _respond()
         orch = MagicMock()
@@ -453,7 +460,7 @@ class TestApprovalBlocks:
         blocks = slack_bot._approval_blocks(run_id=99, project="acme", task="deploy")
         actions_block = next(b for b in blocks if b["type"] == "actions")
         action_ids = {el["action_id"] for el in actions_block["elements"]}
-        assert action_ids == {"approve_99", "deny_99"}
+        assert action_ids == {"approve_99", "deny_99", "challenge_99"}
 
     def test_section_mentions_project_and_task(self) -> None:
         blocks = slack_bot._approval_blocks(run_id=1, project="acme", task="deploy")
@@ -488,6 +495,423 @@ def _message_event(text: str, *, channel: str = ALLOWED_CHANNEL, **extra: Any) -
     event = {"channel": channel, "text": text, "user": "U-ALICE"}
     event.update(extra)
     return event
+
+
+# ---------------------------------------------------------------------------
+# Challenge / Ask -- parity with Telegram's 🗣 Challenge / Ask button.
+#
+# The button press stores a pending entry keyed by channel_id (mirrors
+# `_pending_concierge`'s per-channel granularity); the follow-up plain-text
+# reply is captured by the SAME `event("message")` handler the concierge
+# feature already uses, checked FIRST so Challenge/Ask works regardless of
+# whether `chatops_concierge_enabled` is on. The actual CoS role-resolution
+# + dispatch always goes through the SAME channel-agnostic
+# `Orchestrator.human_challenge()` Telegram uses -- never a Slack-specific
+# re-implementation.
+#
+# F3 security fix: the pending entry is now bound to the requesting user's
+# Slack id (`owner_user_id`) and carries a TTL (`expires_at`) -- see
+# `slack_bot._PendingChallenge` / `_CHALLENGE_TTL_SECONDS`. Before this fix,
+# ANY later message in the channel (from any user, in any thread) was
+# consumed and dispatched/logged as if the original button-presser wrote it,
+# with no expiry at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_pending_challenges() -> Any:
+    slack_bot._pending_challenges.clear()
+    yield
+    slack_bot._pending_challenges.clear()
+
+
+def _challenge_action_handler(app: FakeBoltApp) -> Callable:
+    return app.actions["^challenge_\\d+$"]
+
+
+# `_message_event`'s default `"user": "U-ALICE"` (see above) is the owner id
+# every helper-seeded pending entry below binds to, unless a test explicitly
+# wants a mismatch/expiry scenario.
+_OWNER_USER_ID = "U-ALICE"
+
+
+def _pending(
+    run_id: int,
+    approver: str,
+    *,
+    owner: str = _OWNER_USER_ID,
+    ttl: float = slack_bot._CHALLENGE_TTL_SECONDS,
+) -> slack_bot._PendingChallenge:
+    return slack_bot._PendingChallenge(run_id, approver, owner, time.time() + ttl)
+
+
+class TestChallengeButtonAction:
+    def test_allowed_channel_stores_pending_and_prompts(self) -> None:
+        app = _register()
+        respond = _respond()
+        body = {
+            "channel": {"id": ALLOWED_CHANNEL},
+            "user": {"id": _OWNER_USER_ID, "username": "alice"},
+        }
+        before = time.time()
+        _call(
+            _challenge_action_handler(app),
+            ack=_ack(),
+            action={"action_id": "challenge_42"},
+            body=body,
+            respond=respond,
+        )
+        stored = slack_bot._pending_challenges[ALLOWED_CHANNEL]
+        assert stored.run_id == 42
+        assert stored.approver == "slack:alice"
+        assert stored.owner_user_id == _OWNER_USER_ID
+        assert stored.expires_at > before  # TTL was set, not left unbound
+        respond.assert_called_once()
+        assert "run #42" in respond.call_args.args[0]
+
+    def test_denied_channel_rejected_no_pending_stored(self) -> None:
+        """Fail-closed: a button press from a non-allowlisted channel must
+        never store pending state or prompt for a follow-up."""
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": DENIED_CHANNEL}, "user": {"username": "mallory"}}
+        _call(
+            _challenge_action_handler(app),
+            ack=_ack(),
+            action={"action_id": "challenge_42"},
+            body=body,
+            respond=respond,
+        )
+        assert DENIED_CHANNEL not in slack_bot._pending_challenges
+        respond.assert_called_once_with("Unauthorized channel.")
+
+    def test_missing_channel_in_body_rejected_when_allowlist_configured(self) -> None:
+        """Same caveat as `TestHandleApprovalAction`'s test of the same
+        rename: this passes because the autouse `_allowlist` fixture sets a
+        non-empty allow-list (F5's empty-list-means-open-to-all is
+        deliberately unchanged, out of scope here)."""
+        app = _register()
+        respond = _respond()
+        body = {"user": {"username": "mallory"}}
+        _call(
+            _challenge_action_handler(app),
+            ack=_ack(),
+            action={"action_id": "challenge_42"},
+            body=body,
+            respond=respond,
+        )
+        assert slack_bot._pending_challenges == {}
+
+    def test_invalid_action_id_handled_gracefully(self) -> None:
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"username": "alice"}}
+        _call(
+            _challenge_action_handler(app),
+            ack=_ack(),
+            action={"action_id": "challenge_notanumber"},
+            body=body,
+            respond=respond,
+        )
+        assert slack_bot._pending_challenges == {}
+        respond.assert_called_once()
+        assert "Invalid" in respond.call_args.args[0]
+
+
+class TestChallengeFollowupMessage:
+    def test_pending_challenge_dispatches_via_shared_human_challenge(self) -> None:
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(42, "slack:alice")
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        orch.human_challenge.return_value = "Jules says: looks fine."
+        row = {"project": "acme", "task": "deploy"}
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=row),
+        ):
+            _call(
+                app.events["message"],
+                event=_message_event("why this approach?"),
+                say=say,
+            )
+        orch.human_challenge.assert_called_once_with(42, "why this approach?", "slack:alice")
+        assert ALLOWED_CHANNEL not in slack_bot._pending_challenges
+
+        texts = [c.args[0] for c in say.call_args_list if c.args]
+        assert any("why this approach?" in t for t in texts)
+        assert any("Jules says: looks fine." in t for t in texts)
+
+        # Approve/Deny/Challenge keyboard is re-sent so the operator can act again.
+        blocks_calls = [c for c in say.call_args_list if c.kwargs.get("blocks")]
+        assert blocks_calls
+        action_ids = {
+            el["action_id"]
+            for block in blocks_calls[0].kwargs["blocks"]
+            if block["type"] == "actions"
+            for el in block["elements"]
+        }
+        assert action_ids == {"approve_42", "deny_42", "challenge_42"}
+
+    def test_no_pending_challenge_falls_through_to_concierge_flag_off(self) -> None:
+        """No pending challenge and concierge disabled -> pure no-op, exactly
+        the pre-existing behaviour."""
+        app = _register()
+        say = MagicMock()
+        with patch("hivepilot.services.concierge_service.route") as route:
+            _call(app.events["message"], event=_message_event("hello there"), say=say)
+        route.assert_not_called()
+        say.assert_not_called()
+
+    def test_denied_channel_pending_reply_rejected_no_dispatch(self) -> None:
+        """Fail-closed: a reply arriving on a non-allowlisted channel must
+        never dispatch to human_challenge, even if a pending entry somehow
+        exists under that channel id."""
+        slack_bot._pending_challenges[DENIED_CHANNEL] = _pending(7, "slack:mallory")
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        with patch.object(slack_bot, "_get_orch", return_value=orch):
+            _call(
+                app.events["message"],
+                event=_message_event("my answer", channel=DENIED_CHANNEL),
+                say=say,
+            )
+        orch.human_challenge.assert_not_called()
+        # Still pending -- untouched, not silently consumed.
+        assert DENIED_CHANNEL in slack_bot._pending_challenges
+
+    def test_empty_text_does_not_consume_pending_challenge(self) -> None:
+        """Fail-closed: an empty/whitespace-only message must never be
+        treated as an answer that resolves the pending challenge."""
+        pending = _pending(42, "slack:alice")
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = pending
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        with patch.object(slack_bot, "_get_orch", return_value=orch):
+            _call(
+                app.events["message"],
+                event=_message_event("   "),
+                say=say,
+            )
+        orch.human_challenge.assert_not_called()
+        assert slack_bot._pending_challenges[ALLOWED_CHANNEL] == pending
+
+    def test_bot_message_never_consumes_pending_challenge(self) -> None:
+        pending = _pending(42, "slack:alice")
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = pending
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        with patch.object(slack_bot, "_get_orch", return_value=orch):
+            _call(
+                app.events["message"],
+                event=_message_event("my answer", bot_id="B123"),
+                say=say,
+            )
+        orch.human_challenge.assert_not_called()
+        assert ALLOWED_CHANNEL in slack_bot._pending_challenges
+
+    def test_pending_challenge_takes_precedence_over_concierge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Even with the concierge flag ON, a pending Challenge/Ask reply
+        must be consumed by human_challenge, never routed into the
+        concierge classifier."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(42, "slack:alice")
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        orch.human_challenge.return_value = "ok"
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+            patch("hivepilot.services.concierge_service.route") as route,
+        ):
+            _call(app.events["message"], event=_message_event("my answer"), say=say)
+        orch.human_challenge.assert_called_once()
+        route.assert_not_called()
+
+    def test_human_challenge_error_reported_not_silently_swallowed(self) -> None:
+        """F4 fix: only the exception TYPE name (escaped) reaches chat -- the
+        raw message must never appear (could carry runner stderr, a token,
+        or a path; see the known-unredacted RunResult.detail issue)."""
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(42, "slack:alice")
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        orch.human_challenge.side_effect = RuntimeError("boom")
+        with patch.object(slack_bot, "_get_orch", return_value=orch):
+            _call(app.events["message"], event=_message_event("my answer"), say=say)
+        say.assert_called_once()
+        content = say.call_args.args[0]
+        assert "RuntimeError" in content
+        assert "boom" not in content
+        # Consumed -- an errored challenge must not stay pending forever.
+        assert ALLOWED_CHANNEL not in slack_bot._pending_challenges
+
+    def test_answer_control_sequence_neutralized(self) -> None:
+        """A crafted `<!channel>` in either the operator's challenge text or
+        the CoS's response must render as inert literal text, never trigger
+        a broadcast ping (same guard as the concierge answer/summary text)."""
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(42, "slack:alice")
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        orch.human_challenge.return_value = "<!channel> agreed"
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+        ):
+            _call(
+                app.events["message"],
+                event=_message_event("<!channel> why?"),
+                say=say,
+            )
+        texts = [c.args[0] for c in say.call_args_list if c.args]
+        assert not any("<!channel>" in t for t in texts)
+        assert any("&lt;!channel&gt;" in t for t in texts)
+
+    def test_long_challenge_text_capped_before_dispatch(self) -> None:
+        """F9 fix: Slack has no client-side cap on the follow-up reply --
+        cap it server-side before it reaches the CoS / planning_context."""
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(42, "slack:alice")
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        orch.human_challenge.return_value = "ok"
+        long_text = "x" * 10_000
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+        ):
+            _call(app.events["message"], event=_message_event(long_text), say=say)
+        dispatched_text = orch.human_challenge.call_args.args[1]
+        assert len(dispatched_text) == slack_bot._CHALLENGE_TEXT_MAX_LEN
+
+    def test_long_cos_response_splits_into_multiple_messages_under_max_len(self) -> None:
+        """F8: `_SLACK_TEXT_MAX_LEN` + the `split_for` call in
+        `_handle_challenge_reply` had zero coverage -- a CoS response longer
+        than Slack's practical per-message cap must be split into multiple
+        ordered `say(...)` calls, each within the cap."""
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(42, "slack:alice")
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        long_response = "word " * 1000  # well over _SLACK_TEXT_MAX_LEN (3000)
+        orch.human_challenge.return_value = long_response
+        row = {"project": "acme", "task": "deploy"}
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=row),
+        ):
+            _call(
+                app.events["message"],
+                event=_message_event("short question"),
+                say=say,
+            )
+        plain_text_calls = [c for c in say.call_args_list if c.args]
+        assert len(plain_text_calls) > 1, "a long CoS response must split into >1 message"
+        for c in plain_text_calls:
+            assert len(c.args[0]) <= slack_bot._SLACK_TEXT_MAX_LEN
+
+
+# ---------------------------------------------------------------------------
+# F3 security fix: pending-challenge owner binding + TTL.
+# ---------------------------------------------------------------------------
+
+
+class TestChallengeOwnerBindingAndTTL:
+    def test_different_user_message_does_not_consume_pending_challenge(self) -> None:
+        """Alice presses Challenge; Bob's next message must NOT be consumed
+        and dispatched/attributed as Alice's answer."""
+        pending = _pending(42, "slack:alice", owner=_OWNER_USER_ID)
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = pending
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        with patch.object(slack_bot, "_get_orch", return_value=orch):
+            _call(
+                app.events["message"],
+                event=_message_event("lunch?", user="U-BOB"),
+                say=say,
+            )
+        orch.human_challenge.assert_not_called()
+        say.assert_not_called()
+        # Still pending, untouched -- Alice can still answer afterwards.
+        assert slack_bot._pending_challenges[ALLOWED_CHANNEL] == pending
+
+    def test_owner_message_within_ttl_still_dispatches(self) -> None:
+        """Sanity check for the fix: the legitimate button-presser's reply,
+        within the TTL, must still work exactly as before."""
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(
+            42, "slack:alice", owner=_OWNER_USER_ID
+        )
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        orch.human_challenge.return_value = "ok"
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+        ):
+            _call(
+                app.events["message"],
+                event=_message_event("why this approach?", user=_OWNER_USER_ID),
+                say=say,
+            )
+        orch.human_challenge.assert_called_once_with(42, "why this approach?", "slack:alice")
+
+    def test_expired_pending_challenge_dropped_and_falls_through(self) -> None:
+        """An expired entry must be dropped (not consumed) and the message
+        must fall through to normal handling -- here, concierge disabled, so
+        a pure no-op, never a stale dispatch to human_challenge."""
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(
+            42, "slack:alice", owner=_OWNER_USER_ID, ttl=-1.0
+        )
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.concierge_service.route") as route,
+        ):
+            _call(
+                app.events["message"],
+                event=_message_event("lunch?", user=_OWNER_USER_ID),
+                say=say,
+            )
+        orch.human_challenge.assert_not_called()
+        route.assert_not_called()  # concierge is off by default in this suite
+        assert ALLOWED_CHANNEL not in slack_bot._pending_challenges
+
+    def test_expired_pending_challenge_falls_through_to_concierge_when_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Expiry drops the entry and lets normal handling continue -- if the
+        concierge is enabled, the now-unclaimed message is classified like
+        any other plain message, never silently dropped or misattributed."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        slack_bot._pending_challenges[ALLOWED_CHANNEL] = _pending(
+            42, "slack:alice", owner=_OWNER_USER_ID, ttl=-1.0
+        )
+        app = _register()
+        say = MagicMock()
+        orch = MagicMock()
+        with (
+            patch.object(slack_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.concierge_service.route") as route,
+        ):
+            _call(
+                app.events["message"],
+                event=_message_event("what's pending?", user=_OWNER_USER_ID),
+                say=say,
+            )
+        orch.human_challenge.assert_not_called()
+        route.assert_called_once()
+        assert ALLOWED_CHANNEL not in slack_bot._pending_challenges
 
 
 class TestConciergeMessageFlagOff:

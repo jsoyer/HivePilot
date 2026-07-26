@@ -145,6 +145,51 @@ _APPROVAL_ROW = {
 }
 
 
+# ---------------------------------------------------------------------------
+# F2 security fix: human_challenge must reject a non-pending run, mirroring
+# run_approved's `approval["status"] != "pending"` fail-closed check. Before
+# this fix, ANY status (approved/denied/completed) passed -- a challenge
+# against a resolved run still returned a plausible answer AND mutated
+# planning_context, unlike approve/deny (a one-shot, idempotent-after-the-
+# fact transition).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", ["approved", "denied", "completed"])
+def test_human_challenge_rejects_non_pending_run(status: str) -> None:
+    row = {**_APPROVAL_ROW, "status": status}
+    with (
+        patch("hivepilot.orchestrator.state_service") as mock_ss,
+        patch("hivepilot.orchestrator.log_challenge_interaction"),
+    ):
+        mock_ss.get_approval.return_value = row
+        orch = _make_orchestrator()
+
+        with pytest.raises(ValueError, match=status):
+            orch.human_challenge(1, "why?", "alice")
+
+    # Fail-closed: nothing was dispatched to the CoS and nothing was
+    # persisted into planning_context for a non-pending run.
+    orch.registry.capture_definition.assert_not_called()
+    mock_ss.update_approval_metadata.assert_not_called()
+
+
+def test_human_challenge_allows_pending_run() -> None:
+    """Sanity check for the fix above: the normal pending case must still work."""
+    with (
+        patch("hivepilot.orchestrator.state_service") as mock_ss,
+        patch("hivepilot.orchestrator.log_challenge_interaction"),
+    ):
+        mock_ss.get_approval.return_value = dict(_APPROVAL_ROW)
+        orch = _make_orchestrator("ok")
+
+        result = orch.human_challenge(1, "why?", "alice")
+
+    assert result == "ok"
+    orch.registry.capture_definition.assert_called_once()
+    mock_ss.update_approval_metadata.assert_called_once()
+
+
 def test_human_challenge_resolves_real_cos_role_key():
     """Regression for the live bug: 'Step human_challenge:cos requires a
     prompt_file for Claude runner'.

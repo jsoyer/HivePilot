@@ -129,6 +129,20 @@ _RATE_LIMITED_PATHS = {
     "/v1/chatops/slack",
     "/v1/chatops/discord",
     "/v1/chatops/telegram",
+    # F2 fix: the Challenge/Ask feature routes ALL THREE channels (Telegram,
+    # Slack, Discord) through the single shared `human_challenge()`
+    # entrypoint, which spawns a full LLM invocation on every call and is
+    # NOT idempotent/read-only (see orchestrator.human_challenge). Without
+    # rate-limiting these webhook paths too, any member of an allowed
+    # channel had an unmetered LLM-spend primitive -- contradicting the
+    # `budget_daily_usd` policy this project ships. Telegram's webhook path
+    # is keyed by a per-deployment secret URL segment
+    # (`/webhook/telegram/{url_path}`) rather than a fixed path, so it can't
+    # be listed here the same way; it's out of scope for this fix.
+    "/webhook/slack",
+    "/webhook/discord",
+    "/v1/webhook/slack",
+    "/v1/webhook/discord",
 }
 
 

@@ -3807,6 +3807,26 @@ class Orchestrator:
         row = state_service.get_approval(run_id)
         if not row:
             raise ValueError(f"No approval row found for run_id={run_id}")
+        if row.get("status") != "pending":
+            # F2 fix: unlike `run_approved` (which fails closed on
+            # `approval["status"] != "pending"`), this precondition used to
+            # be missing entirely -- a challenge against an already-approved
+            # /denied/completed run would still succeed and return a
+            # plausible-looking answer, misleading the operator, AND it is
+            # NOT read-only (it appends to `planning_context` via
+            # `update_approval_metadata` below and spawns a full LLM
+            # invocation on every call, unlike approve/deny which are a
+            # one-shot state transition).
+            logger.warning(
+                "human_challenge.rejected",
+                run_id=run_id,
+                reason="not_pending",
+                status=row.get("status"),
+            )
+            raise ValueError(
+                f"Run {run_id} is not pending approval "
+                f"(current status={row.get('status')!r}) -- cannot challenge."
+            )
 
         raw_meta = row.get("metadata") or "{}"
         meta: dict = _json.loads(raw_meta) if isinstance(raw_meta, str) else (raw_meta or {})

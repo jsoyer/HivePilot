@@ -827,7 +827,15 @@ async def _cmd_mention(update: Any, context: Any) -> None:
                 thread_id=thread_id,
                 error=str(exc),
             )
-            await update.message.reply_text(f"⚠️ Challenge error for run #{run_id}: {exc}")
+            # The full exception (which may carry runner stderr -- RunResult.detail
+            # reaches this choke-point unredacted) stays in the server-side log
+            # above ONLY. Chat gets the exception TYPE name alone, matching the
+            # Slack/Discord Challenge handlers and repo-wide exception-disclosure
+            # discipline -- never the raw message, which could leak a token or a
+            # filesystem path into a shared chat.
+            await update.message.reply_text(
+                f"⚠️ Challenge error for run #{run_id}: {type(exc).__name__}"
+            )
             return
         logger.info(
             "telegram.challenge.dispatched",

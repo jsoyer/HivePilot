@@ -294,7 +294,12 @@ chatops, copy the hand-editable templates in
 `deploy/openrc/conf.d/hivepilot-{slack,discord}.example`. Both default to
 their **outbound-only** transport (Slack Socket Mode / Discord gateway
 WebSocket) — no public HTTPS endpoint, reverse proxy, or TLS cert required,
-the right choice for a box with no public IP (e.g. behind Tailscale). See
+the right choice for a box with no public IP (e.g. behind Tailscale).
+Approve/Deny/Challenge/Ask buttons work fully in this mode — Discord's
+gateway transport routes button/modal interactions through the same
+dispatcher the HTTP-interactions webhook path uses (see
+[`docs/INTEGRATIONS.md`](INTEGRATIONS.md#discord)), so there is no
+functional downgrade versus running a public webhook endpoint. See
 [`deploy/openrc/README.md`](../deploy/openrc/README.md) for the exact token
 requirements (Slack Socket Mode needs `HIVEPILOT_SLACK_BOT_TOKEN` +
 `HIVEPILOT_SLACK_SIGNING_SECRET` + `HIVEPILOT_SLACK_APP_TOKEN`; Discord
