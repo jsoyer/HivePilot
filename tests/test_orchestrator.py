@@ -3552,3 +3552,162 @@ class TestRunApprovedModuleTargeting:
         assert result.success is True
         assert len(captured) == 1
         assert captured[0].project.path == proj_path
+
+
+# ---------------------------------------------------------------------------
+# Bug 2 (live): a `developer` stage that only asked for permission -- never
+# wrote a single file -- must FAIL the step, not be recorded as a silent
+# success, and a role that declares "implementation" output finishing with
+# zero working-tree changes must at least surface a WARNING.
+# ---------------------------------------------------------------------------
+
+
+class TestNoopPermissionResponseFailsStep:
+    def _run(self, output_text: str):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = output_text
+        task = TaskConfig(
+            description="t",
+            role="developer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md", allow_failure=True)],
+        )
+        project = ProjectConfig(path=Path("/tmp/dev-noop-proj"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+        return mock_step
+
+    def test_permission_request_output_is_recorded_as_failed(self) -> None:
+        mock_step = self._run(
+            "I need your approval to run shell commands in this session. Should I proceed?"
+        )
+        mock_step.assert_called_once()
+        args, kwargs = mock_step.call_args
+        assert args[:3] == (1, "s", "failed")
+        assert "permission" in args[3].lower() or "approval" in args[3].lower()
+        assert kwargs["role"] == "developer"
+
+    def test_normal_output_is_still_recorded_as_success(self) -> None:
+        """No false positive: real completed work is unaffected."""
+        mock_step = self._run("Implemented the feature and added the test suite.")
+        mock_step.assert_called_once_with(
+            1, "s", "success", provider="claude", model=None, role="developer"
+        )
+
+    def test_document_discussing_approval_workflow_is_not_a_false_positive(self) -> None:
+        """A step whose output happens to DISCUSS an approval workflow (e.g.
+        a docs/spec-writing step) must not be misdetected as a no-op."""
+        mock_step = self._run(
+            "Wrote docs/approvals.md describing the approval workflow: a "
+            "checkpoint pauses the run and notifies the operator via "
+            "Telegram, who can approve, deny, or challenge it."
+        )
+        mock_step.assert_called_once_with(
+            1, "s", "success", provider="claude", model=None, role="developer"
+        )
+
+
+class TestNoChangesDetectedWarning:
+    def _run(self, *, git_diff_result: str | None, is_git_repo: bool = True):
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "Implemented the feature."
+        task = TaskConfig(
+            description="t",
+            role="developer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/dev-no-changes-proj"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch.object(orch, "_is_git_repo", return_value=is_git_repo),
+            patch.object(orch, "_git_diff", return_value=git_diff_result),
+            patch("hivepilot.orchestrator.logger") as mock_logger,
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+        return mock_logger
+
+    def test_zero_changes_logs_a_warning_but_still_succeeds(self) -> None:
+        mock_logger = self._run(git_diff_result=None)
+        warning_calls = [
+            call
+            for call in mock_logger.warning.call_args_list
+            if call.args[:1] == ("step.no_changes_detected",)
+        ]
+        assert len(warning_calls) == 1
+        kwargs = warning_calls[0].kwargs
+        assert kwargs["role"] == "developer"
+        assert kwargs["task"] == "x"
+        assert kwargs["step"] == "s"
+
+    def test_real_changes_do_not_trigger_the_warning(self) -> None:
+        mock_logger = self._run(git_diff_result="diff --git a/f b/f\n+hi\n")
+        warning_calls = [
+            call
+            for call in mock_logger.warning.call_args_list
+            if call.args[:1] == ("step.no_changes_detected",)
+        ]
+        assert warning_calls == []
+
+    def test_non_git_project_does_not_trigger_the_warning(self) -> None:
+        mock_logger = self._run(git_diff_result=None, is_git_repo=False)
+        warning_calls = [
+            call
+            for call in mock_logger.warning.call_args_list
+            if call.args[:1] == ("step.no_changes_detected",)
+        ]
+        assert warning_calls == []
+
+    def test_role_without_implementation_output_never_checks_git(self) -> None:
+        """A `reviewer`-role step (outputs don't include "implementation")
+        must never trigger the no-changes check at all."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "Reviewed the diff."
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/reviewer-proj"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch.object(orch, "_is_git_repo") as mock_is_git_repo,
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+        mock_is_git_repo.assert_not_called()
