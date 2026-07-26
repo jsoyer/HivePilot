@@ -73,7 +73,9 @@ identically in both `discord start --mode webhook` (HTTP interactions) and `--mo
 (WebSocket, the default)** — gateway mode routes MESSAGE_COMPONENT/MODAL_SUBMIT interactions
 through the SAME dispatcher the webhook path uses, delivering the response via Discord's
 interaction-callback REST endpoint rather than an HTTP response body. Restrict to specific
-guilds/channels with `HIVEPILOT_DISCORD_ALLOWED_GUILD_IDS` / `HIVEPILOT_DISCORD_ALLOWED_CHANNEL_IDS`.
+guilds/channels with `HIVEPILOT_DISCORD_ALLOWED_GUILD_IDS` / `HIVEPILOT_DISCORD_ALLOWED_CHANNEL_IDS`
+— **if both are left unset, every guild/channel the bot can see can approve, deny, and
+challenge runs** (empty allow-list means open, not closed).
 
 ## Signal
 

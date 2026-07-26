@@ -1381,6 +1381,38 @@ class TestChallengeButtonForumTopic:
         error_events = [call.args[0] for call in mock_logger.error.call_args_list]
         assert "telegram.challenge.failed" in error_events
 
+    def test_challenge_dispatch_failure_does_not_leak_exception_text_to_chat(self) -> None:
+        """Parity with the Slack/Discord Challenge handlers: the chat reply
+        carries the exception TYPE name only. `human_challenge` surfaces
+        runner output (`RunResult.detail` reaches this choke-point
+        unredacted), so echoing `str(exc)` into a shared Telegram chat can
+        leak a token or a filesystem path. The full exception stays in the
+        server-side `telegram.challenge.failed` log."""
+        telegram_bot._pending_challenges[(760, 4)] = (32, "telegram:dave")
+        mention_update = _make_mention_update(chat_id=760, text="my question")
+        mention_update.message.message_thread_id = 4
+        mention_context = _make_mention_context()
+
+        secret = "/home/deploy/.env ANTHROPIC_API_KEY=sk-ant-supersecret"
+        orch = MagicMock()
+        orch.human_challenge.side_effect = RuntimeError(secret)
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            patch.object(telegram_bot, "logger") as mock_logger,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(mention_update, mention_context))
+
+        replies = [call.args[0] for call in mention_update.message.reply_text.call_args_list]
+        assert any("Challenge error for run #32" in r for r in replies)
+        assert all(secret not in r for r in replies)
+        assert any("RuntimeError" in r for r in replies)
+        # ... but the operator can still find the real cause server-side.
+        failed = [
+            c for c in mock_logger.error.call_args_list if c.args[0] == "telegram.challenge.failed"
+        ]
+        assert failed and secret in failed[0].kwargs["error"]
+
     def test_prompt_send_failure_logs_prompt_failed_and_does_not_raise(self) -> None:
         update = self._make_challenge_callback_update(chat_id=800, thread_id=2, run_id=40)
         update.callback_query.message.reply_text = AsyncMock(side_effect=RuntimeError("boom"))

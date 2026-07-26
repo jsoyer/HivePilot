@@ -127,6 +127,31 @@ class TestSplitForPlain:
         for chunk in chunks:
             assert len(chunk) <= 2000
 
+    def test_final_chunk_length_never_exceeds_max_len_when_max_chunks_capped(self) -> None:
+        """Second offender, same class of bug and the reason the test above
+        did not catch it: it only exercised input that fits within
+        `max_chunks`, so the "(… truncated — N more characters dropped)" note
+        never fired. That note is ALSO appended after packing, with no width
+        reserved -- so on a `max_chunks`-CAPPED split the last chunk overflows
+        the caller's real hard cap. On Discord that is a 400 from the followup
+        webhook, whose `raise_for_status()` kills the daemon thread: the
+        operator gets NOTHING back from a long Challenge/Ask response."""
+        text = "word " * 20_000  # ~100 KB -- far beyond 8 x 2000
+        chunks = split_for(text, 2000, entity_aware=False)
+        assert len(chunks) == 8  # capped
+        assert "truncated" in chunks[-1]
+        for chunk in chunks:
+            assert len(chunk) <= 2000
+
+    def test_truncation_note_fits_entity_aware_too(self) -> None:
+        """Same guarantee on the entity-aware path, where the chunk also
+        carries re-opened/closed tags."""
+        text = "<b>" + ("word " * 20_000) + "</b>"
+        chunks = split_for(text, 2000, entity_aware=True)
+        assert "truncated" in chunks[-1]
+        for chunk in chunks:
+            assert len(chunk) <= 2000
+
 
 class TestSplitForEntityAware:
     def test_balances_tags_across_chunk_boundary(self) -> None:

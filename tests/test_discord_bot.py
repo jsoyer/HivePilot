@@ -1167,6 +1167,212 @@ class TestGatewayOnInteractionRoutesToSharedHandler:
             asyncio.run(client.events["on_interaction"](interaction))
         send_resp.assert_not_called()
 
+    def test_direct_message_rejected_no_dispatch(self, fake_discord: Any) -> None:
+        """SECURITY REGRESSION GUARD (gateway twin of
+        `test_missing_guild_and_channel_treated_as_unauthorized`): a DM to the
+        bot carries `guild_id=None` (there is no guild), so with a configured
+        guild allow-list it must be rejected fail-closed on the GATEWAY door
+        too -- a DM must never be a private side-channel onto Approve/Deny/
+        Challenge. Gateway mode is the CLI default, so this is the door most
+        deployments actually expose."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(
+            itype=3,
+            data={"custom_id": "approve:42"},
+            guild_id=None,
+            channel_id=None,
+        )
+        orch = MagicMock()
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_send_interaction_response") as send_resp,
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        orch.approve_run.assert_not_called()
+        followup.assert_not_called()
+        sent_payload = send_resp.call_args.args[2]
+        assert sent_payload["data"]["content"] == "Unauthorized."
+
+
+# ---------------------------------------------------------------------------
+# Gateway ack/followup ORDERING.
+#
+# On the HTTP-interactions transport the ack is written back on the still-open
+# request connection, so starting the worker first is harmless. On the GATEWAY
+# transport both the ack and the worker's followup are fresh outbound HTTPS
+# POSTs, and Discord rejects a followup that arrives before its interaction has
+# been acknowledged with `404 Unknown Webhook`. A fast-failing worker (e.g.
+# `_exec_approve` on a non-pending run -- `run_approved` raises in
+# microseconds) wins that race, so the operator sees NOTHING while the mutation
+# was already attempted. `on_interaction` must therefore await the ack and only
+# then start the worker.
+# ---------------------------------------------------------------------------
+
+
+class TestGatewayAckPrecedesWorker:
+    def test_ack_is_delivered_before_worker_starts(self, fake_discord: Any) -> None:
+        """Ordering guard: record the real call sequence. Before the split of
+        `_dispatch_interaction` into a pure `_compute_interaction_response`
+        plus a caller-invoked `dispatch_work`, the worker (and its followup)
+        ran INSIDE `_dispatch_interaction`, i.e. strictly BEFORE the ack."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(itype=3, data={"custom_id": "approve:42"})
+        calls: list[str] = []
+
+        def _approve_run(**_kwargs: Any) -> Any:
+            calls.append("work")
+            return types.SimpleNamespace(success=True)
+
+        orch = MagicMock()
+        orch.approve_run.side_effect = _approve_run
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(
+                discord_bot,
+                "_send_interaction_response",
+                side_effect=lambda *_a: calls.append("ack"),
+            ),
+            patch.object(
+                discord_bot,
+                "_followup_message",
+                side_effect=lambda *_a: calls.append("followup"),
+            ),
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        assert calls == ["ack", "work", "followup"]
+
+    def test_fast_failing_approve_still_reaches_the_operator(self, fake_discord: Any) -> None:
+        """The exact production symptom: approving an already-resolved run
+        makes `approve_run` raise almost instantly, so the worker's followup
+        is the first thing out of the process. It must still be sent AFTER the
+        ack, otherwise Discord 404s it and the operator is told nothing at
+        all about a mutation that was already attempted."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(itype=3, data={"custom_id": "approve:42"})
+        calls: list[str] = []
+        followups: list[dict[str, Any]] = []
+
+        orch = MagicMock()
+        orch.approve_run.side_effect = ValueError("Run 42 is not pending approval")
+
+        def _record_followup(*args: Any) -> None:
+            calls.append("followup")
+            followups.append(args[2])
+
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(
+                discord_bot,
+                "_send_interaction_response",
+                side_effect=lambda *_a: calls.append("ack"),
+            ),
+            patch.object(discord_bot, "_followup_message", side_effect=_record_followup),
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        assert calls == ["ack", "followup"]
+        assert followups[0]["content"].startswith("Error:")
+
+    def test_modal_submit_ack_is_delivered_before_worker_starts(self, fake_discord: Any) -> None:
+        """Same ordering guarantee on the MODAL_SUBMIT branch -- the
+        Challenge/Ask worker delivers its ENTIRE payload over followup
+        webhooks, so an unacknowledged interaction loses the whole CoS
+        response."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(
+            itype=5,
+            data={
+                "custom_id": "challenge_modal:42",
+                "components": [
+                    {
+                        "type": 1,
+                        "components": [{"type": 4, "custom_id": "challenge_text", "value": "why?"}],
+                    }
+                ],
+            },
+        )
+        calls: list[str] = []
+
+        def _human_challenge(*_args: Any, **_kwargs: Any) -> str:
+            calls.append("work")
+            return "Jules says: looks fine."
+
+        orch = MagicMock()
+        orch.human_challenge.side_effect = _human_challenge
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch(
+                "hivepilot.services.state_service.get_approval",
+                return_value={"project": "acme", "task": "deploy"},
+            ),
+            patch.object(
+                discord_bot,
+                "_send_interaction_response",
+                side_effect=lambda *_a: calls.append("ack"),
+            ),
+            patch.object(
+                discord_bot,
+                "_followup_message",
+                side_effect=lambda *_a: calls.append("followup"),
+            ),
+        ):
+            asyncio.run(client.events["on_interaction"](interaction))
+        assert calls[:2] == ["ack", "work"]
+
+    def test_webhook_transport_ordering_is_unchanged(self) -> None:
+        """The webhook path must keep its pre-existing behaviour exactly:
+        `_dispatch_interaction` starts the worker itself, synchronously,
+        before returning the response dict FastAPI writes back."""
+        calls: list[str] = []
+
+        def _approve_run(**_kwargs: Any) -> Any:
+            calls.append("work")
+            return types.SimpleNamespace(success=True)
+
+        orch = MagicMock()
+        orch.approve_run.side_effect = _approve_run
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(
+                discord_bot,
+                "_followup_message",
+                side_effect=lambda *_a: calls.append("followup"),
+            ),
+        ):
+            result = discord_bot.handle_interaction(_component_body("approve:42"), "sig", "ts")
+        assert result == {"type": 5}
+        assert calls == ["work", "followup"]
+
+    def test_ack_failure_is_logged_and_worker_not_started(self, fake_discord: Any) -> None:
+        """A `raise_for_status()` failure on the interaction-callback POST must
+        not escape into discord.py's event-dispatch loop. It is logged, and the
+        worker is deliberately NOT started -- its followup webhook is unusable
+        without a delivered ack, so running it would mutate a run the operator
+        can never be told about."""
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        interaction = _FakeGatewayInteraction(itype=3, data={"custom_id": "approve:42"})
+        orch = MagicMock()
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(
+                discord_bot,
+                "_send_interaction_response",
+                side_effect=RuntimeError("500 Server Error"),
+            ),
+            patch.object(discord_bot, "_followup_message") as followup,
+            patch.object(discord_bot.logger, "error") as log_error,
+        ):
+            # Must NOT raise.
+            asyncio.run(client.events["on_interaction"](interaction))
+        orch.approve_run.assert_not_called()
+        followup.assert_not_called()
+        assert log_error.call_args.args[0] == "discord.gateway.ack_failed"
+
 
 # ---------------------------------------------------------------------------
 # Natural-language concierge (opt-in, settings.chatops_concierge_enabled) —

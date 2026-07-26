@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import requests
@@ -506,28 +507,59 @@ def handle_interaction(body: bytes, signature: str, timestamp: str) -> dict[str,
 
 
 def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
-    """Shared interaction dispatcher -- computes the Discord interaction-response
-    dict for a MESSAGE_COMPONENT (button), MODAL_SUBMIT, or APPLICATION_COMMAND
-    (slash command) interaction, regardless of the transport it arrived over.
+    """Webhook-transport entrypoint: compute the interaction response and start
+    any background work IMMEDIATELY, then return the response dict.
 
-    TWO callers, ONE code path -- never forked:
-      * `handle_interaction` (HTTP-interactions webhook mode) -- the dict this
-        returns IS the HTTP response body FastAPI sends back to Discord.
-      * `run_gateway`'s `on_interaction` (gateway/WebSocket mode) -- gateway
-        interactions have no HTTP response channel to return a value into, so
-        that caller POSTs this SAME returned dict to Discord's
-        interaction-callback REST endpoint instead (see
-        `_send_interaction_response`). The `_is_allowed` guild/channel
-        allow-list check below therefore runs IDENTICALLY for both transports
-        -- gateway mode is never a weaker second door onto Approve/Deny/
-        Challenge (this fixes the previously-dead gateway-mode buttons: no
-        interaction handler was registered there at all).
+    On the HTTP-interactions transport the ack IS this returned dict, written
+    back on the still-open request connection, so starting the worker before
+    returning is safe and is exactly the pre-existing ordering -- preserved
+    byte-for-byte here. The gateway transport must NOT use this wrapper: see
+    `_compute_interaction_response` and `run_gateway`'s `on_interaction`.
+    """
+    response, dispatch_work = _compute_interaction_response(data)
+    if dispatch_work is not None:
+        dispatch_work()
+    return response
+
+
+def _compute_interaction_response(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], Callable[[], None] | None]:
+    """Shared, PURE interaction dispatcher -- computes the Discord
+    interaction-response dict for a MESSAGE_COMPONENT (button), MODAL_SUBMIT, or
+    APPLICATION_COMMAND (slash command) interaction, regardless of the transport
+    it arrived over, and returns it alongside an OPTIONAL `dispatch_work`
+    callable that starts the background worker thread.
+
+    Performs no I/O and starts no thread itself -- the caller decides WHEN the
+    work begins relative to acknowledging the interaction. That ordering choice
+    is transport-critical:
+
+      * `_dispatch_interaction` (HTTP-interactions webhook mode) invokes
+        `dispatch_work()` right away -- the returned dict IS the HTTP response
+        body FastAPI writes back on the open connection, so the ack is
+        effectively already in flight.
+      * `run_gateway`'s `on_interaction` (gateway/WebSocket mode) has no HTTP
+        response channel: BOTH the ack and the worker's followup are fresh
+        outbound HTTPS POSTs. A followup webhook is only valid once the
+        interaction has been acknowledged, so a fast-failing worker (e.g.
+        `_exec_approve` on a non-pending run -- `run_approved` raises in
+        microseconds) would race its followup ahead of the ack and get
+        `404 Unknown Webhook`: the operator sees NOTHING while the mutation was
+        already attempted. That caller therefore awaits the ack first and only
+        then calls `dispatch_work()`.
+
+    The `_is_allowed` guild/channel allow-list check below is the SINGLE choke
+    point for interactions and runs IDENTICALLY for both transports -- gateway
+    mode is never a weaker second door onto Approve/Deny/Challenge (this fixes
+    the previously-dead gateway-mode buttons: no interaction handler was
+    registered there at all).
     """
     interaction_type = data.get("type", 0)
 
     # PING — Discord health check
     if interaction_type == 1:
-        return {"type": 1}
+        return {"type": 1}, None
 
     application_id = str(data.get("application_id", ""))
     interaction_token = data.get("token", "")
@@ -540,7 +572,7 @@ def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
         return {
             "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
             "data": {"content": "Unauthorized.", "flags": 64},
-        }
+        }, None
 
     # MESSAGE_COMPONENT (button)
     if interaction_type == 3:
@@ -555,15 +587,18 @@ def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
                 return {
                     "type": 4,
                     "data": {"content": f"Invalid component id: {custom_id!r}", "flags": 64},
-                }
+                }, None
             logger.info("discord.challenge.requested", run_id=run_id)
-            return _challenge_modal_response(run_id)
-        threading.Thread(
-            target=_handle_component,
-            args=(data, application_id, interaction_token),
-            daemon=True,
-        ).start()
-        return {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+            return _challenge_modal_response(run_id), None
+
+        def _start_component_worker() -> None:
+            threading.Thread(
+                target=_handle_component,
+                args=(data, application_id, interaction_token),
+                daemon=True,
+            ).start()
+
+        return {"type": 5}, _start_component_worker  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
 
     # MODAL_SUBMIT (Challenge/Ask follow-up text)
     if interaction_type == 5:
@@ -572,7 +607,7 @@ def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
             return {
                 "type": 4,
                 "data": {"content": f"Unknown modal: {modal_custom_id!r}", "flags": 64},
-            }
+            }, None
         raw_id = modal_custom_id[len(_CHALLENGE_MODAL_PREFIX) :]
         try:
             run_id = int(raw_id)
@@ -580,7 +615,7 @@ def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
             return {
                 "type": 4,
                 "data": {"content": f"Invalid modal id: {modal_custom_id!r}", "flags": 64},
-            }
+            }, None
 
         challenge_text = _extract_modal_text(data.get("data", {}), _CHALLENGE_TEXT_CUSTOM_ID)
         if not challenge_text or not challenge_text.strip():
@@ -589,24 +624,28 @@ def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
             return {
                 "type": 4,
                 "data": {"content": "Challenge/question text cannot be empty.", "flags": 64},
-            }
+            }, None
 
         member = data.get("member") or {}
         user = member.get("user") or data.get("user") or {}
         approver = user.get("username") or str(user.get("id", "discord"))
+        modal_run_id = run_id
+        modal_text = challenge_text.strip()
 
-        threading.Thread(
-            target=_handle_challenge_modal_submit,
-            args=(
-                run_id,
-                f"discord:{approver}",
-                challenge_text.strip(),
-                application_id,
-                interaction_token,
-            ),
-            daemon=True,
-        ).start()
-        return {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+        def _start_modal_worker() -> None:
+            threading.Thread(
+                target=_handle_challenge_modal_submit,
+                args=(
+                    modal_run_id,
+                    f"discord:{approver}",
+                    modal_text,
+                    application_id,
+                    interaction_token,
+                ),
+                daemon=True,
+            ).start()
+
+        return {"type": 5}, _start_modal_worker  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
 
     # APPLICATION_COMMAND
     if interaction_type == 2:
@@ -649,10 +688,12 @@ def _dispatch_interaction(data: dict[str, Any]) -> dict[str, Any]:
                 msg = f"Error: {exc}"
             _followup_message(application_id, interaction_token, {"content": msg})
 
-        threading.Thread(target=_dispatch, daemon=True).start()
-        return {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+        def _start_command_worker() -> None:
+            threading.Thread(target=_dispatch, daemon=True).start()
 
-    return {"type": 4, "data": {"content": "Unsupported interaction type.", "flags": 64}}
+        return {"type": 5}, _start_command_worker  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+
+    return {"type": 4, "data": {"content": "Unsupported interaction type.", "flags": 64}}, None
 
 
 # ---------------------------------------------------------------------------
@@ -801,6 +842,16 @@ def run_gateway() -> None:
         await tree.sync()
         logger.info("discord.gateway.ready", user=str(client.user))
 
+    # NOTE (dependency assumption): the "no double-response" reasoning in
+    # `on_interaction` below -- that APPLICATION_COMMAND interactions must NOT
+    # be routed through it because `app_commands.CommandTree` already
+    # auto-dispatches them, and that no persistent `discord.ui.View` is
+    # registered for the Approve/Deny/Challenge buttons (they are raw component
+    # dicts built by `_approval_components`, so discord.py has no View callback
+    # to fire in addition to this handler) -- is specific to **discord.py 2.x**
+    # (`discord.py>=2.3` per the optional `discord` extra in pyproject.toml).
+    # If that major version ever changes, re-verify both properties before
+    # trusting this handler: a 3.x dispatch-model change could double-invoke.
     @client.event
     async def on_interaction(interaction: discord.Interaction) -> None:
         """F1 fix (live production bug): route MESSAGE_COMPONENT (Approve/
@@ -850,20 +901,45 @@ def run_gateway() -> None:
             "data": raw_data,
             "user": user_dict,
         }
-        response = _dispatch_interaction(raw)
+        # ORDERING IS LOAD-BEARING on this transport. `_compute_interaction_response`
+        # is pure -- it does NOT start the worker -- so the ack below goes out
+        # FIRST and the worker is only started once that ack has landed.
+        # Unlike the webhook transport (where the ack is written back on the
+        # already-open HTTP request), gateway mode sends BOTH the ack and the
+        # worker's followup as fresh outbound HTTPS POSTs. Discord rejects a
+        # followup webhook that arrives before its interaction is acknowledged
+        # with `404 Unknown Webhook`, and a fast-failing worker (`_exec_approve`
+        # on a non-pending run raises from `run_approved` in microseconds) will
+        # win that race -- the operator would see nothing at all while the
+        # mutation had already been attempted.
+        response, dispatch_work = _compute_interaction_response(raw)
 
         import asyncio
 
         loop = asyncio.get_event_loop()
-        # `_dispatch_interaction` already started any background thread work
-        # (approve/deny mutation, human_challenge dispatch) synchronously
-        # inside this call -- what's left is delivering the immediate
-        # ack/modal `response` dict within the 3-second deadline, via REST
-        # since gateway mode has no HTTP response body to return it in.
-        await loop.run_in_executor(
-            None,
-            lambda: _send_interaction_response(str(interaction.id), interaction.token, response),
-        )
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: _send_interaction_response(
+                    str(interaction.id), interaction.token, response
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Without this guard a `raise_for_status()` failure escapes into
+            # discord.py's event-dispatch loop: the operator is left with
+            # "This interaction failed" and no server-side signal. Fail CLOSED
+            # -- the worker is deliberately NOT started, because its followup
+            # webhook is unusable without a delivered ack, so running it would
+            # mutate a run the operator can never be told about.
+            logger.error(
+                "discord.gateway.ack_failed",
+                interaction_type=itype,
+                error=str(exc),
+            )
+            return
+
+        if dispatch_work is not None:
+            dispatch_work()
 
     @client.event
     async def on_message(message: Any) -> None:

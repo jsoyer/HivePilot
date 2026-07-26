@@ -216,6 +216,18 @@ def split_for(
     marker_reserve = len(f"\n\n({max_chunks}/{max_chunks})")
     pack_len = max(max_len - marker_reserve, 1)
 
+    # Same reservation problem, second offender: the "(… truncated — N more
+    # characters dropped)" note below is ALSO appended after packing. It only
+    # ever lands on the `max_chunks`-th chunk (the single chunk that can be
+    # followed by dropped content), so reserve its worst-case width when packing
+    # exactly that chunk. `N` is bounded above by len(text), which makes the
+    # reservation computable upfront and never an under-estimate. Without it a
+    # `max_chunks`-CAPPED split pushes the last chunk past the caller's real hard
+    # cap -- on Discord that is a 400 from the followup webhook, whose
+    # `raise_for_status()` kills the daemon thread and the operator gets nothing.
+    note_reserve = len(f"\n\n(… truncated — {len(text)} more characters dropped)")
+    last_pack_len = max(pack_len - note_reserve, 1)
+
     tokens = tokenize_tags(text) if entity_aware else [text]
     chunks: list[str] = []
     stack: list[str] = []
@@ -226,6 +238,9 @@ def split_for(
         prefix = "".join(f"<{t}>" for t in stack)
         cur_stack = list(stack)
         current = ""
+        # The chunk being packed right now is number len(chunks)+1; only the
+        # max_chunks-th one can ever carry the truncation note.
+        chunk_pack_len = last_pack_len if len(chunks) == max_chunks - 1 else pack_len
 
         while idx < len(tokens):
             tok = tokens[idx]
@@ -241,7 +256,7 @@ def split_for(
                 else:
                     trial_stack.append(name)
                 suffix_len = sum(len(f"</{t}>") for t in reversed(trial_stack))
-                if len(prefix) + len(current) + len(tok) + suffix_len > pack_len and current:
+                if len(prefix) + len(current) + len(tok) + suffix_len > chunk_pack_len and current:
                     break  # finalize this chunk before the tag
                 current += tok
                 cur_stack = trial_stack
@@ -249,7 +264,9 @@ def split_for(
                 continue
 
             suffix_len = sum(len(f"</{t}>") for t in reversed(cur_stack))
-            budget = max(pack_len - len(prefix) - len(current) - suffix_len, 0 if current else 1)
+            budget = max(
+                chunk_pack_len - len(prefix) - len(current) - suffix_len, 0 if current else 1
+            )
             if budget <= 0:
                 break
             if len(tok) <= budget:
