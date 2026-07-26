@@ -48,6 +48,12 @@ async def test_challenge_tap_sets_pending_state():
     mock_query.answer = AsyncMock()
     mock_query.message = MagicMock()
     mock_query.message.chat.id = chat_id
+    # A plain (non-forum) Telegram Message always carries a real
+    # `message_thread_id` attribute defaulting to None -- set it explicitly
+    # so this mock accurately represents that case (a bare MagicMock()
+    # would otherwise auto-vivify a truthy, non-None attribute here and get
+    # mistaken for a forum-topic message by `_challenge_key`).
+    mock_query.message.message_thread_id = None
     mock_query.message.reply_text = AsyncMock()
     mock_query.from_user.username = "testuser"
 

@@ -1206,3 +1206,210 @@ class TestDispatchApprovalLogging:
         assert rejected_records
         assert '"run_id": 99' in rejected_records[0].message
         assert '"reason": "unknown_run"' in rejected_records[0].message
+
+
+# ---------------------------------------------------------------------------
+# Bug 1 (live): the 🗣 Challenge / Ask button pressed in a Telegram FORUM
+# group topic appeared to "do nothing" -- the follow-up prompt didn't
+# reliably carry the topic's `message_thread_id` (landing in General
+# instead), `_pending_challenges` was keyed by bare chat_id (two topics
+# could clobber each other), and the whole path logged nothing.
+# ---------------------------------------------------------------------------
+
+
+class TestChallengeButtonForumTopic:
+    def _make_challenge_callback_update(
+        self, *, chat_id: int, thread_id: int | None, run_id: int = 42
+    ) -> MagicMock:
+        update = MagicMock()
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.data = f"challenge:{run_id}"
+        update.callback_query.from_user.username = "alice"
+        update.callback_query.message.chat.id = chat_id
+        update.callback_query.message.message_thread_id = thread_id
+        update.callback_query.message.reply_text = AsyncMock()
+        return update
+
+    def teardown_method(self, method) -> None:
+        telegram_bot._pending_challenges.clear()
+
+    def test_challenge_reply_carries_the_topic_thread_id(self) -> None:
+        update = self._make_challenge_callback_update(chat_id=100, thread_id=456)
+        context = MagicMock()
+
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(update, context))
+
+        update.callback_query.message.reply_text.assert_awaited_once()
+        call_kwargs = update.callback_query.message.reply_text.call_args.kwargs
+        assert call_kwargs.get("message_thread_id") == 456
+
+    def test_no_thread_id_omits_the_kwarg_for_non_forum_chats(self) -> None:
+        update = self._make_challenge_callback_update(chat_id=101, thread_id=None)
+        context = MagicMock()
+
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(update, context))
+
+        call_kwargs = update.callback_query.message.reply_text.call_args.kwargs
+        assert "message_thread_id" not in call_kwargs
+
+    def test_pending_challenge_keyed_by_chat_and_thread(self) -> None:
+        update = self._make_challenge_callback_update(chat_id=200, thread_id=10, run_id=7)
+        context = MagicMock()
+
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(update, context))
+
+        assert (200, 10) in telegram_bot._pending_challenges
+        assert 200 not in telegram_bot._pending_challenges
+
+    def test_followup_in_a_different_topic_does_not_consume_the_challenge(self) -> None:
+        callback_update = self._make_challenge_callback_update(chat_id=300, thread_id=1, run_id=9)
+        callback_context = MagicMock()
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(callback_update, callback_context))
+        assert (300, 1) in telegram_bot._pending_challenges
+
+        # Operator replies in a DIFFERENT topic of the same group.
+        mention_update = _make_mention_update(chat_id=300, text="not my answer")
+        mention_update.message.message_thread_id = 2
+        mention_context = _make_mention_context()
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch") as mock_get_orch,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(mention_update, mention_context))
+
+        mock_get_orch.assert_not_called()
+        # Still pending, untouched, for the CORRECT topic.
+        assert (300, 1) in telegram_bot._pending_challenges
+
+    def test_followup_in_the_same_topic_consumes_the_challenge(self) -> None:
+        callback_update = self._make_challenge_callback_update(chat_id=400, thread_id=5, run_id=11)
+        callback_context = MagicMock()
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(callback_update, callback_context))
+
+        mention_update = _make_mention_update(chat_id=400, text="here is my challenge")
+        mention_update.message.message_thread_id = 5
+        mention_context = _make_mention_context()
+
+        orch = MagicMock()
+        orch.human_challenge.return_value = "CoS response"
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+        ):
+            asyncio.run(telegram_bot._cmd_mention(mention_update, mention_context))
+
+        orch.human_challenge.assert_called_once_with(11, "here is my challenge", "telegram:alice")
+        assert (400, 5) not in telegram_bot._pending_challenges
+
+    def test_backward_compat_bare_chat_id_entry_is_still_consumed(self) -> None:
+        """An entry stored under the bare chat_id (pre-fix state) must still
+        be consumed even when the follow-up message happens to carry a
+        thread_id — defensive fallback, never a hard requirement."""
+        telegram_bot._pending_challenges[500] = (13, "telegram:bob")
+
+        mention_update = _make_mention_update(chat_id=500, text="my answer")
+        mention_update.message.message_thread_id = 999
+        mention_context = _make_mention_context()
+
+        orch = MagicMock()
+        orch.human_challenge.return_value = "CoS response"
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+        ):
+            asyncio.run(telegram_bot._cmd_mention(mention_update, mention_context))
+
+        orch.human_challenge.assert_called_once_with(13, "my answer", "telegram:bob")
+
+    def test_challenge_path_emits_structured_log_events_on_request(self) -> None:
+        update = self._make_challenge_callback_update(chat_id=600, thread_id=1, run_id=21)
+        context = MagicMock()
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "logger") as mock_logger,
+        ):
+            asyncio.run(telegram_bot._callback_approval(update, context))
+
+        events = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert "telegram.challenge.requested" in events
+        assert "telegram.challenge.prompt_sent" in events
+
+    def test_challenge_receive_and_dispatch_events_logged(self) -> None:
+        telegram_bot._pending_challenges[(700, 3)] = (30, "telegram:carol")
+        mention_update = _make_mention_update(chat_id=700, text="my question")
+        mention_update.message.message_thread_id = 3
+        mention_context = _make_mention_context()
+
+        orch = MagicMock()
+        orch.human_challenge.return_value = "response"
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+            patch.object(telegram_bot, "logger") as mock_logger,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(mention_update, mention_context))
+
+        events = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert "telegram.challenge.received" in events
+        assert "telegram.challenge.dispatched" in events
+
+    def test_challenge_dispatch_failure_logs_failed_event(self) -> None:
+        telegram_bot._pending_challenges[(750, 4)] = (31, "telegram:dave")
+        mention_update = _make_mention_update(chat_id=750, text="my question")
+        mention_update.message.message_thread_id = 4
+        mention_context = _make_mention_context()
+
+        orch = MagicMock()
+        orch.human_challenge.side_effect = RuntimeError("orchestrator boom")
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            patch.object(telegram_bot, "logger") as mock_logger,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(mention_update, mention_context))
+
+        error_events = [call.args[0] for call in mock_logger.error.call_args_list]
+        assert "telegram.challenge.failed" in error_events
+
+    def test_prompt_send_failure_logs_prompt_failed_and_does_not_raise(self) -> None:
+        update = self._make_challenge_callback_update(chat_id=800, thread_id=2, run_id=40)
+        update.callback_query.message.reply_text = AsyncMock(side_effect=RuntimeError("boom"))
+        context = MagicMock()
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "logger") as mock_logger,
+        ):
+            asyncio.run(telegram_bot._callback_approval(update, context))  # must not raise
+
+        error_events = [call.args[0] for call in mock_logger.error.call_args_list]
+        assert "telegram.challenge.prompt_failed" in error_events
+
+
+class TestCallbackApprovalNoMessage:
+    """Telegram can omit `message` on a callback query -- live log showed a
+    bare `AttributeError: 'NoneType' object has no attribute 'chat'` here."""
+
+    def test_no_message_does_not_raise_and_shows_a_toast(self) -> None:
+        update = MagicMock()
+        update.callback_query.message = None
+        update.callback_query.data = "approve:1"
+        update.callback_query.answer = AsyncMock()
+        context = MagicMock()
+
+        asyncio.run(telegram_bot._callback_approval(update, context))  # must not raise
+
+        update.callback_query.answer.assert_awaited_once()
+        call_args = update.callback_query.answer.call_args
+        assert call_args.args and "no longer be used" in call_args.args[0].lower()
+        assert call_args.kwargs.get("show_alert") is True

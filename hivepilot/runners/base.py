@@ -228,3 +228,54 @@ def pop_last_usage() -> UsageInfo | None:
     usage = _LAST_USAGE.get()
     _LAST_USAGE.set(None)
     return usage
+
+
+# Live incident (explicit-failure-logs follow-up): a `developer` stage ran
+# headless with `--permission-mode acceptEdits`, the agent replied "I need
+# your approval to run shell commands in this session... Should I proceed?",
+# wrote NO files, and `claude` still exited 0 -- HivePilot recorded the run
+# as a SUCCESS, the pipeline advanced to Review, and no code/PR was ever
+# produced. Exit 0 != work done. Each phrase below is a clear signature of
+# the AGENT ITSELF asking for permission/approval rather than acting -- never
+# ordinary prose that merely mentions the word "approval" (see
+# `detect_noop_permission_response`'s docstring for the conservative-
+# matching rationale; matched by test_base.py's
+# `test_does_not_false_positive_on_approval_workflow_prose`).
+_NOOP_PERMISSION_PATTERNS: tuple[str, ...] = (
+    "i need your approval",
+    "need permission to",
+    "requires approval",
+    "cannot be used with root",
+    "should i proceed",
+    "permission grant",
+    "i don't have permission",
+)
+
+
+def detect_noop_permission_response(text: str | None) -> str | None:
+    """Detect a captured agent response that is a NO-OP permission/approval
+    REQUEST rather than completed work, and return a human-readable reason,
+    or ``None`` when *text* looks like ordinary (possibly completed-work)
+    output.
+
+    Deliberately CONSERVATIVE -- plain, case-insensitive substring matches
+    against a short list of phrasings that only ever occur when the agent
+    itself is asking for permission/approval instead of proceeding. A
+    document that merely *discusses* an approval workflow (e.g. "see the
+    approval workflow spec") does not contain any of these phrasings and
+    must never match -- a false negative here just means the operator falls
+    back to noticing the empty diff themselves; a false positive would
+    incorrectly fail a step that actually did the work, which is worse.
+
+    Returns ``None`` for ``None``/empty *text* -- nothing to inspect.
+    """
+    if not text:
+        return None
+    lowered = text.lower()
+    for pattern in _NOOP_PERMISSION_PATTERNS:
+        if pattern in lowered:
+            return (
+                "agent response reads like a permission/approval request, not "
+                f"completed work (matched phrase: {pattern!r})"
+            )
+    return None

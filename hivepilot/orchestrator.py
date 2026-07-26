@@ -51,9 +51,11 @@ from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager, SkillSpec
 from hivepilot.registry import RunnerRegistry
 from hivepilot.runners.base import (
+    RunnerExecutionError,
     RunnerPayload,
     UsageInfo,
     apply_skill_if_supported,
+    detect_noop_permission_response,
     pop_last_usage,
     validate_runner_mode,
 )
@@ -5197,6 +5199,41 @@ class Orchestrator:
                                 raise _last_exc
                         else:
                             outputs.append(self._capture_or_execute(runner_key, payload))
+                        # Live incident (explicit-failure-logs follow-up): a
+                        # `developer` stage replied "I need your approval to run
+                        # shell commands... Should I proceed?", wrote no files,
+                        # and `claude` still exited 0 -- a silent false-green.
+                        # Inspect the just-captured output BEFORE it's ever
+                        # recorded as a success; a permission/approval-request
+                        # response is treated as a FAILED step (raised here so
+                        # it flows through the EXACT same
+                        # `record_step(..., "failed", ...)` / `allow_failure`
+                        # path as any other runner exception below, and its
+                        # `hint` reaches `run.failure` via the existing
+                        # `RunnerExecutionError.context` mechanism).
+                        # `simulate` output is a synthetic `[simulated ...]`
+                        # marker, never real agent text -- skipped.
+                        if not simulate:
+                            _step_output_text = outputs[-1] if outputs else None
+                            _noop_reason = detect_noop_permission_response(_step_output_text)
+                            if _noop_reason is not None:
+                                raise RunnerExecutionError(
+                                    f"step '{step.name}' produced no work -- {_noop_reason}",
+                                    context={
+                                        "step": step.name,
+                                        "role": task.role,
+                                        "project": _runner_project.path.name,
+                                        "hint": (
+                                            "the agent asked for permission/approval "
+                                            "instead of acting -- a headless run "
+                                            "(--print / non-interactive) can never "
+                                            "answer an interactive prompt. Check this "
+                                            "role/step's permission_mode (e.g. "
+                                            "acceptEdits / bypassPermissions) and "
+                                            "IS_SANDBOX."
+                                        ),
+                                    },
+                                )
                         # Phase 24b.2a: read-and-clear whatever usage the runner's
                         # capture() stashed for THIS step (None when the flag is
                         # off, the runner isn't claude, or nothing was captured).
@@ -5210,6 +5247,33 @@ class Orchestrator:
                             _record_step_success(
                                 run_id, step.name, _provider, _model, _usage, role=task.role
                             )
+                        # Observability-only signal (does NOT fail the step —
+                        # some legit steps write nothing, e.g. a pure review):
+                        # a role whose declared outputs include "implementation"
+                        # finished with zero working-tree changes in its
+                        # project. Reuses the existing `_git_diff`/`_is_git_repo`
+                        # helpers (already used for the review-diff subject) --
+                        # note `_git_diff` is `git diff HEAD`, so it can miss a
+                        # brand-new file the agent created but never `git add`ed;
+                        # accepted for a WARN-only heuristic rather than adding a
+                        # second git subprocess call here.
+                        if not simulate and task.role:
+                            from hivepilot.roles import ROLES as _step_roles_registry
+
+                            _step_role = _step_roles_registry.get(task.role)
+                            if (
+                                _step_role is not None
+                                and "implementation" in _step_role.outputs
+                                and self._is_git_repo(_runner_project.path)
+                                and not self._git_diff(_runner_project.path)
+                            ):
+                                logger.warning(
+                                    "step.no_changes_detected",
+                                    project=_runner_project.path.name,
+                                    role=task.role,
+                                    task=task_name,
+                                    step=step.name,
+                                )
                         _step_span.set_attribute("hivepilot.step.status", "success")
                         # Close the store()-redaction hole (auto-learning-
                         # lessons-loop PRD, Sprint 1): `after_step` fans out
