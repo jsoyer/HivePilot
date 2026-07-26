@@ -2150,3 +2150,105 @@ class TestApprovalEndpointRouting:
         assert ".run_approved(" not in source
         assert ".resume_pipeline(" not in source
         assert ".approve_run(" in source
+
+
+class TestHandleApprovalExplicitFailures:
+    """Explicit-failure-logs sprint, Part A.2: a known rejection reason from
+    `Orchestrator.approve_run` (raised as `ValueError`/`KeyError` -- the
+    routing dispatch re-raises whatever `resume_pipeline`/`run_approved`
+    raise) must surface as a clean 400 with that reason in the body -- never
+    an opaque 500 -- and every attempt/failure is logged with structured
+    context. Mocks `approve_run` directly (not `run_approved`) since that is
+    the entrypoint `handle_approval` now calls -- these tests are about
+    `api_service`'s OWN exception-to-HTTP-status translation, independent of
+    the routing logic itself (covered by `TestApprovalEndpointRouting`
+    above)."""
+
+    def test_not_pending_becomes_400_not_500(self, api_client, tmp_tokens_file, monkeypatch):
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        def _boom(**kwargs):
+            raise ValueError("Run 7 is not pending approval (current status='denied').")
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(approve_run=_boom),
+        )
+        raw, _ = add_token("admin")
+        resp = api_client.post("/v1/approvals/7", json={"approver": "tester"}, headers=_auth(raw))
+
+        assert resp.status_code == 400
+        assert "not pending approval" in resp.json()["detail"]
+
+    def test_unknown_task_becomes_400_not_500(self, api_client, tmp_tokens_file, monkeypatch):
+        """The `self.tasks.tasks[task_name]` bare `KeyError` this sprint fixed
+        at the orchestrator layer (now a `ValueError`) -- still exercised end-
+        to-end here as a plain `KeyError` too, since `handle_approval` must
+        catch BOTH exception types cleanly."""
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        def _boom(**kwargs):
+            raise KeyError("stale-task-name")
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(approve_run=_boom),
+        )
+        raw, _ = add_token("admin")
+        resp = api_client.post("/v1/approvals/7", json={"approver": "tester"}, headers=_auth(raw))
+
+        assert resp.status_code == 400
+
+    def test_unexpected_error_still_logged_before_500(
+        self, api_client, tmp_tokens_file, monkeypatch, caplog
+    ):
+        import logging as stdlib_logging
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        def _boom(**kwargs):
+            raise RuntimeError("totally unexpected internal failure")
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(approve_run=_boom),
+        )
+        raw, _ = add_token("admin")
+        with caplog.at_level(stdlib_logging.INFO):
+            resp = api_client.post(
+                "/v1/approvals/7", json={"approver": "tester"}, headers=_auth(raw)
+            )
+
+        assert resp.status_code == 500
+        assert "totally unexpected internal failure" in resp.json()["detail"]
+        failed_records = [
+            r for r in caplog.records if "api.approval.failed_unexpected" in r.message
+        ]
+        assert failed_records
+
+    def test_success_path_returns_result(self, api_client, tmp_tokens_file, monkeypatch):
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        class _Result:
+            __dict__ = {"success": True, "detail": "ok"}
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(approve_run=lambda **kwargs: _Result()),
+        )
+        raw, _ = add_token("admin")
+        resp = api_client.post("/v1/approvals/7", json={"approver": "tester"}, headers=_auth(raw))
+
+        assert resp.status_code == 200
+        assert resp.json()["result"]["success"] is True

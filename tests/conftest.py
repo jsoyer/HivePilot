@@ -70,8 +70,10 @@ import pytest  # noqa: E402  (must come after sys.modules stubs are installed)
 # SecretsRegistry comment). Import it explicitly so SECRETS_MAP is already
 # populated with builtins before we snapshot the baseline below.
 import hivepilot.services.secrets_service  # noqa: E402,F401
+import hivepilot.swarm  # noqa: E402,F401 — populates TRANSPORT_MAP with builtins
 from hivepilot.registry import RUNNER_MAP, SECRETS_MAP  # noqa: E402
 from hivepilot.services.notification_service import NOTIFIER_MAP  # noqa: E402
+from hivepilot.swarm.transport import TRANSPORT_MAP  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -82,6 +84,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNNER_MAP_BASELINE = dict(RUNNER_MAP)
 _NOTIFIER_MAP_BASELINE = dict(NOTIFIER_MAP)
 _SECRETS_MAP_BASELINE = dict(SECRETS_MAP)
+_TRANSPORT_MAP_BASELINE = dict(TRANSPORT_MAP)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -175,6 +178,8 @@ def _isolate_runner_and_notifier_maps():
     NOTIFIER_MAP.update(_NOTIFIER_MAP_BASELINE)
     SECRETS_MAP.clear()
     SECRETS_MAP.update(_SECRETS_MAP_BASELINE)
+    TRANSPORT_MAP.clear()
+    TRANSPORT_MAP.update(_TRANSPORT_MAP_BASELINE)
 
 
 @pytest.fixture(autouse=True)

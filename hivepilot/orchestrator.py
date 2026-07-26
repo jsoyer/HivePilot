@@ -1727,9 +1727,25 @@ class Orchestrator:
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.error(
-                        "run.failure", project=project.path.name, task=task_name, error=str(exc)
-                    )
+                    # Explicit-failure-logs sprint, Part A.1: a runner failure
+                    # (e.g. `RunnerExecutionError` from `ClaudeRunner`) carries
+                    # STRUCTURED diagnostic context (exit_code, runner_kind,
+                    # model, role, task, stage, project, permission_mode,
+                    # skill_applied, stderr_excerpt, optional hint) -- merge it
+                    # straight into this log call so `run.failure` itself is
+                    # diagnosable without reading code or reproducing the
+                    # failure. Any OTHER exception type (most of them, still)
+                    # has no `.context` and this degrades to exactly the
+                    # pre-existing `project`/`task`/`error` fields.
+                    failure_context = getattr(exc, "context", None)
+                    log_fields: dict[str, Any] = {
+                        "project": project.path.name,
+                        "task": task_name,
+                        "error": str(exc),
+                    }
+                    if isinstance(failure_context, dict):
+                        log_fields.update(failure_context)
+                    logger.error("run.failure", **log_fields)
                     # Phase 10c: a raised runner/step error can itself echo
                     # captured output (e.g. "non-zero exit: <stdout>") — mask
                     # registered secrets here too, same choke-point rationale
@@ -3477,9 +3493,24 @@ class Orchestrator:
         discriminator Telegram's ``_dispatch_approval`` already used
         (``metadata["kind"] == "pipeline_checkpoint"``) -- moved here so
         every caller that lets an operator approve/deny a run (Mirador's
-        ``POST /v1/approvals/{id}`` in ``api_service.py``, and Telegram's
-        approve/deny buttons in ``telegram_bot.py``) goes through ONE place
-        and the two paths can never diverge again.
+        ``POST /v1/approvals/{id}`` in ``api_service.py``, Telegram/Slack/
+        Discord/ChatOps's approve/deny buttons and commands, and the CLI's
+        ``hivepilot approvals approve/deny``) goes through ONE place and the
+        paths can never diverge again.
+
+        Explicit-failure-logs sprint, Part A.2 (extended): logs the resolved
+        route (``approval.dispatch``) BEFORE dispatching to ``resume_pipeline``/
+        ``run_approved`` -- each of which already logs its OWN specific
+        rejection reason (unknown run / not pending / wrong checkpoint kind /
+        malformed metadata / unknown task) via ``approval.resume_rejected``/
+        ``approval.approve_rejected`` before raising -- and logs
+        ``approval.dispatch_failed`` with the routing context on ANY exception
+        from that dispatch before re-raising it. Centralizing this here (not
+        the deeper "unknown run / not pending" gate below, which itself logs
+        ``approval.dispatch_rejected``) means every caller gets the same
+        structured logging for free just by calling ``approve_run``, instead
+        of each one re-implementing it (e.g. Telegram's ``_dispatch_approval``
+        used to log this locally; it now just delegates here).
 
         Raises ``ValueError`` if the run has no pending approval (unknown
         run id or already resolved) -- callers should translate that into a
@@ -3487,11 +3518,40 @@ class Orchestrator:
         """
         approval = state_service.get_approval(run_id)
         if not approval or approval.get("status") != "pending":
+            logger.warning(
+                "approval.dispatch_rejected",
+                run_id=run_id,
+                reason="unknown_run" if not approval else "not_pending",
+                status=approval.get("status") if approval else None,
+            )
             raise ValueError(f"Run {run_id} is not pending approval.")
         metadata = json.loads(approval.get("metadata") or "{}")
-        if metadata.get("kind") == "pipeline_checkpoint":
-            return self.resume_pipeline(run_id=run_id, approve=approve, approver=approver)
-        return self.run_approved(run_id=run_id, approve=approve, approver=approver, reason=reason)
+        route = "pipeline_checkpoint" if metadata.get("kind") == "pipeline_checkpoint" else "task"
+        logger.info(
+            "approval.dispatch",
+            run_id=run_id,
+            route=route,
+            project=approval.get("project"),
+            task=approval.get("task"),
+            pipeline=metadata.get("pipeline"),
+            approve=approve,
+            approver=approver,
+        )
+        try:
+            if route == "pipeline_checkpoint":
+                return self.resume_pipeline(run_id=run_id, approve=approve, approver=approver)
+            return self.run_approved(
+                run_id=run_id, approve=approve, approver=approver, reason=reason
+            )
+        except Exception as exc:  # noqa: BLE001 — logged with full routing context, then re-raised
+            logger.error(
+                "approval.dispatch_failed",
+                run_id=run_id,
+                route=route,
+                approver=approver,
+                error=str(exc),
+            )
+            raise
 
     def resume_pipeline(
         self,
@@ -3507,14 +3567,59 @@ class Orchestrator:
         same ``run_id``; on deny, mark the run denied and run nothing further.
         ``auto_git`` (when not None) overrides the run's stored auto_git — e.g. to
         enable push/PR at approval time on a run launched without ``--auto-git``.
+
+        Explicit-failure-logs sprint, Part A.2: every rejection is logged with
+        the SPECIFIC reason (unknown run / not pending / wrong checkpoint kind
+        / malformed checkpoint metadata) via ``approval.resume_rejected``
+        BEFORE raising — a caller (e.g. the API layer) can surface that reason
+        directly instead of translating a bare ``ValueError``/``KeyError``
+        into an opaque 500.
         """
+        logger.info(
+            "approval.resume_requested",
+            run_id=run_id,
+            approve=approve,
+            approver=approver,
+            route="pipeline_checkpoint",
+        )
         approval = state_service.get_approval(run_id)
-        if not approval or approval.get("status") != "pending":
-            raise ValueError(f"Run {run_id} is not a pending checkpoint.")
+        if not approval:
+            logger.warning("approval.resume_rejected", run_id=run_id, reason="unknown_run")
+            raise ValueError(f"Run {run_id} is not a pending checkpoint (no approval row found).")
+        if approval.get("status") != "pending":
+            logger.warning(
+                "approval.resume_rejected",
+                run_id=run_id,
+                reason="not_pending",
+                status=approval.get("status"),
+            )
+            raise ValueError(
+                f"Run {run_id} is not a pending checkpoint "
+                f"(current status={approval.get('status')!r})."
+            )
         meta = json.loads(approval.get("metadata") or "{}")
         if meta.get("kind") != "pipeline_checkpoint":
-            raise ValueError(f"Run {run_id} is not a pipeline checkpoint.")
-        pipeline_name = meta["pipeline"]
+            logger.warning(
+                "approval.resume_rejected",
+                run_id=run_id,
+                reason="wrong_checkpoint_kind",
+                kind=meta.get("kind"),
+            )
+            raise ValueError(
+                f"Run {run_id} is not a pipeline checkpoint (metadata kind={meta.get('kind')!r})."
+            )
+        pipeline_name = meta.get("pipeline")
+        if not pipeline_name:
+            logger.error(
+                "approval.resume_rejected",
+                run_id=run_id,
+                reason="malformed_checkpoint_metadata",
+                missing_field="pipeline",
+            )
+            raise ValueError(
+                f"Run {run_id}'s pipeline-checkpoint metadata is missing 'pipeline' "
+                "— cannot resume."
+            )
 
         if not approve:
             state_service.update_approval(run_id, "denied", approver)
@@ -3527,6 +3632,22 @@ class Orchestrator:
             )
             return RunResult(pipeline_name, pipeline_name, False, "Plan denied at checkpoint")
 
+        projects = meta.get("projects")
+        resume_from_index = meta.get("resume_from_index")
+        if not projects or resume_from_index is None:
+            missing = "projects" if not projects else "resume_from_index"
+            logger.error(
+                "approval.resume_rejected",
+                run_id=run_id,
+                pipeline=pipeline_name,
+                reason="malformed_checkpoint_metadata",
+                missing_field=missing,
+            )
+            raise ValueError(
+                f"Run {run_id}'s pipeline-checkpoint metadata is missing {missing!r} "
+                "— cannot resume."
+            )
+
         state_service.update_approval(run_id, "approved", approver)
         notification_service.send_notification(
             f"✅ Plan #{run_id} ({pipeline_name}) approved — starting development."
@@ -3535,13 +3656,13 @@ class Orchestrator:
             "approved", run_id=run_id, pipeline=pipeline_name, approver=approver
         )
         results = self.run_pipeline(
-            project_names=meta["projects"],
+            project_names=projects,
             pipeline_name=pipeline_name,
             extra_prompt=meta.get("extra_prompt"),
             auto_git=auto_git if auto_git is not None else meta.get("auto_git", False),
             dry_run=meta.get("dry_run", True),
             simulate=meta.get("simulate", False),
-            start_index=meta["resume_from_index"],
+            start_index=resume_from_index,
             run_id=run_id,
             hub=meta.get("hub"),
             components=meta.get("components"),
@@ -3671,9 +3792,35 @@ class Orchestrator:
         approver: str,
         reason: str | None = None,
     ) -> RunResult:
+        """Approve/deny a single-task approval checkpoint.
+
+        Explicit-failure-logs sprint, Part A.2: every rejection is logged with
+        the SPECIFIC reason (unknown run / not pending / unknown task in the
+        current config) via ``approval.approve_rejected`` BEFORE raising — a
+        caller (e.g. the API layer) can surface that reason directly instead
+        of translating a bare ``ValueError``/``KeyError`` into an opaque 500.
+        """
+        logger.info(
+            "approval.approve_requested",
+            run_id=run_id,
+            approve=approve,
+            approver=approver,
+            route="task",
+        )
         approval = state_service.get_approval(run_id)
-        if not approval or approval["status"] != "pending":
-            raise ValueError(f"Run {run_id} is not pending approval.")
+        if not approval:
+            logger.warning("approval.approve_rejected", run_id=run_id, reason="unknown_run")
+            raise ValueError(f"Run {run_id} is not pending approval (no approval row found).")
+        if approval["status"] != "pending":
+            logger.warning(
+                "approval.approve_rejected",
+                run_id=run_id,
+                reason="not_pending",
+                status=approval["status"],
+            )
+            raise ValueError(
+                f"Run {run_id} is not pending approval (current status={approval['status']!r})."
+            )
         project_name = approval["project"]
         task_name = approval["task"]
         metadata = json.loads(approval.get("metadata") or "{}")
@@ -3688,7 +3835,25 @@ class Orchestrator:
 
         policy = policy_service.get_policy(project_name)
         project = self._project(project_name)
-        task = self.tasks.tasks[task_name]
+        task = self.tasks.tasks.get(task_name)
+        if task is None:
+            # Was a bare `KeyError` before this sprint -- an opaque 500 with
+            # no indication of WHICH task/run was involved (see api_service's
+            # `handle_approval`, which now translates this into a clean 4xx).
+            # Config drift between "approval requested" and "approval acted
+            # on" (a task renamed/removed from tasks.yaml in between) is the
+            # realistic trigger.
+            logger.error(
+                "approval.approve_rejected",
+                run_id=run_id,
+                project=project_name,
+                task=task_name,
+                reason="unknown_task",
+            )
+            raise ValueError(
+                f"Run {run_id}: task {task_name!r} no longer exists in the current task "
+                "config (approval metadata may be stale)."
+            )
         state_service.update_approval(run_id, "approved", approver)
         notification_service.send_notification(
             f"✅ Run {run_id} for {project_name}:{task_name} approved by {approver}."

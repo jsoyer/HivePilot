@@ -1085,3 +1085,124 @@ class TestDispatchApprovalDelegatesToSharedHelper:
         assert ".run_approved(" not in source
         assert ".resume_pipeline(" not in source
         assert "_get_orch().approve_run(" in source
+
+
+# ---------------------------------------------------------------------------
+# Explicit-failure-logs sprint, Part A.2 (centralized): the route/run_id/
+# project-or-pipeline/approver dispatch log, and the specific failure reason
+# on rejection, now live in `Orchestrator.approve_run` itself (see
+# `hivepilot/orchestrator.py`) rather than in `_dispatch_approval` -- so
+# Telegram gets them "for free" simply by delegating to `approve_run`. These
+# tests prove exactly that: driving the REAL `approve_run` (bound to a fake
+# `resume_pipeline`/`run_approved`) through `telegram_bot._dispatch_approval`
+# and asserting the centralized `approval.dispatch`/`approval.dispatch_failed`
+# log lines fire, not a telegram-local reimplementation of them.
+# ---------------------------------------------------------------------------
+
+
+class _FakeApprovalOrchestrator:
+    """Real `Orchestrator.approve_run` bound to fake `resume_pipeline`/
+    `run_approved` -- exercises the ACTUAL routing+logging method through
+    `_dispatch_approval`, not a re-implementation of it."""
+
+    def __init__(self) -> None:
+        self.resume_pipeline_calls: list[dict] = []
+        self.run_approved_calls: list[dict] = []
+
+    def resume_pipeline(self, **kwargs):
+        self.resume_pipeline_calls.append(kwargs)
+        return "ok"
+
+    def run_approved(self, **kwargs):
+        self.run_approved_calls.append(kwargs)
+        return "ok"
+
+
+from hivepilot.orchestrator import Orchestrator as _Orchestrator  # noqa: E402
+
+_FakeApprovalOrchestrator.approve_run = _Orchestrator.approve_run  # type: ignore[attr-defined]
+
+
+class TestDispatchApprovalLogging:
+    """`_dispatch_approval` logs the route/run_id/project-or-pipeline/approver
+    BEFORE dispatching, and the failure reason (not a bare exception) when
+    the orchestrator rejects it -- via the centralized `approve_run` logs."""
+
+    def test_logs_task_route_before_dispatch(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as stdlib_logging
+
+        fake_orch = _FakeApprovalOrchestrator()
+        approval = {
+            "status": "pending",
+            "project": "proj-a",
+            "task": "task-a",
+            "metadata": "{}",
+        }
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval),
+            patch.object(telegram_bot, "_get_orch", return_value=fake_orch),
+            caplog.at_level(stdlib_logging.INFO),
+        ):
+            result = telegram_bot._dispatch_approval(42, True, "alice")
+
+        assert result == "ok"
+        assert fake_orch.run_approved_calls == [
+            {"run_id": 42, "approve": True, "approver": "alice", "reason": None}
+        ]
+        assert fake_orch.resume_pipeline_calls == []
+        dispatch_records = [
+            r for r in caplog.records if r.levelname == "INFO" and "approval.dispatch" in r.message
+        ]
+        assert dispatch_records
+        assert '"route": "task"' in dispatch_records[0].message
+        assert '"run_id": 42' in dispatch_records[0].message
+
+    def test_logs_pipeline_checkpoint_route_before_dispatch(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import json
+        import logging as stdlib_logging
+
+        fake_orch = _FakeApprovalOrchestrator()
+        meta = json.dumps({"kind": "pipeline_checkpoint", "pipeline": "review"})
+        approval = {"status": "pending", "project": "proj-a", "task": None, "metadata": meta}
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval),
+            patch.object(telegram_bot, "_get_orch", return_value=fake_orch),
+            caplog.at_level(stdlib_logging.INFO),
+        ):
+            result = telegram_bot._dispatch_approval(43, True, "bob")
+
+        assert result == "ok"
+        assert fake_orch.resume_pipeline_calls == [
+            {"run_id": 43, "approve": True, "approver": "bob"}
+        ]
+        assert fake_orch.run_approved_calls == []
+        dispatch_records = [
+            r for r in caplog.records if r.levelname == "INFO" and "approval.dispatch" in r.message
+        ]
+        assert dispatch_records
+        assert '"route": "pipeline_checkpoint"' in dispatch_records[0].message
+        assert '"pipeline": "review"' in dispatch_records[0].message
+
+    def test_logs_specific_reason_on_dispatch_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging as stdlib_logging
+
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=None),
+            patch.object(telegram_bot, "_get_orch", return_value=_FakeApprovalOrchestrator()),
+            caplog.at_level(stdlib_logging.INFO),
+            pytest.raises(ValueError, match="not pending approval"),
+        ):
+            telegram_bot._dispatch_approval(99, True, "alice")
+
+        rejected_records = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "approval.dispatch_rejected" in r.message
+        ]
+        assert rejected_records
+        assert '"run_id": 99' in rejected_records[0].message
+        assert '"reason": "unknown_run"' in rejected_records[0].message

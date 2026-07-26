@@ -1165,9 +1165,19 @@ def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | 
     """Route an approve/deny to the right orchestrator entrypoint.
 
     Delegates to `Orchestrator.approve_run` -- the single shared helper (also
-    used by `api_service.handle_approval`) that discriminates a pipeline-
-    checkpoint approval (resumes the parked pipeline) from a single-task
-    approval, so this path and the API path can never diverge again.
+    used by `api_service.handle_approval`/`slack_bot`/`discord_bot`/
+    `chatops_service`/the CLI) that discriminates a pipeline-checkpoint
+    approval (resumes the parked pipeline) from a single-task approval, so
+    this path and every other channel's path can never diverge again.
+
+    Explicit-failure-logs sprint, Part A.2: `approve_run` itself now logs the
+    run_id, project/pipeline, task (when known), which route was taken, and
+    the approver BEFORE dispatching (`approval.dispatch`), and on failure the
+    specific reason (`approval.resume_rejected`/`approval.approve_rejected`
+    from `resume_pipeline`/`run_approved`, or the generic
+    `approval.dispatch_failed` for anything else) -- so this path gets the
+    same structured logging as every other channel for free, instead of
+    re-implementing it locally.
     """
     return _get_orch().approve_run(run_id=run_id, approve=approve, approver=approver, reason=reason)
 

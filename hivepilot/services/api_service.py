@@ -726,7 +726,31 @@ def handle_approval(
     action: ApprovalAction,
     caller: token_service.TokenEntry = Depends(require_role("approve")),
 ):
-    """Approve/deny a run. Non-admin callers may only act on their own tenant's runs."""
+    """Approve/deny a run. Non-admin callers may only act on their own tenant's runs.
+
+    Routes through `Orchestrator.approve_run` -- the single shared entrypoint
+    (also used by `telegram_bot`/`slack_bot`/`discord_bot`/`chatops_service`/
+    the CLI) that discriminates a pipeline-checkpoint approval (dispatches to
+    `resume_pipeline`) from a per-task approval (dispatches to `run_approved`),
+    so this endpoint no longer KeyErrors on a pipeline checkpoint (Mirador's
+    "Approve" 500 -- live traceback was `KeyError: 'noxys'`).
+
+    Explicit-failure-logs sprint, Part A.2: logs the attempt (run_id, approve,
+    approver, caller) BEFORE dispatching -- `approve_run`'s own dispatch (see
+    `Orchestrator.approve_run`) additionally logs the resolved route, and
+    `resume_pipeline`/`run_approved` each log their OWN specific rejection
+    reason (unknown run / not pending / wrong checkpoint kind / unknown task)
+    before raising -- so both this endpoint AND Telegram/Slack/Discord/
+    ChatOps/CLI get the same structured logging for free just by calling
+    `approve_run`, without each caller re-implementing it. On failure, a
+    known rejection (`ValueError`/`KeyError`) is translated into a clean 400
+    instead of an opaque 500; a genuinely unexpected exception is still
+    logged with full context before surfacing as a 500.
+    """
+    from hivepilot.utils.logging import get_logger
+
+    api_logger = get_logger(__name__)
+
     if caller.role != "admin":
         row = state_service.get_approval(run_id)
         if row is None:
@@ -737,21 +761,38 @@ def handle_approval(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cross-tenant approval not allowed",
             )
-    with run_duration_seconds.time():
-        try:
+    api_logger.info(
+        "api.approval.requested",
+        run_id=run_id,
+        approve=action.approve,
+        approver=action.approver,
+        caller_role=caller.role,
+        caller_tenant=caller.tenant,
+    )
+    try:
+        with run_duration_seconds.time():
             result = _get_orchestrator().approve_run(
                 run_id=run_id,
                 approve=action.approve,
                 approver=action.approver,
                 reason=action.reason,
             )
-        except ValueError as exc:
-            # Not pending / unknown run (or, before this fix, a pipeline
-            # checkpoint's task-name KeyError) must never surface as a raw
-            # 500 -- `Orchestrator.approve_run` routes pipeline checkpoints
-            # to `resume_pipeline` and per-task approvals to `run_approved`,
-            # so the only `ValueError` left here is "not actionable".
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except (ValueError, KeyError) as exc:
+        # Every KNOWN rejection reason (unknown run / not pending / unknown
+        # task, or -- before this fix -- a pipeline checkpoint's task-name
+        # KeyError) -- `Orchestrator.approve_run` routes pipeline checkpoints
+        # to `resume_pipeline` and per-task approvals to `run_approved`, and
+        # both log their OWN specific `approval.*_rejected` reason before
+        # raising; surface that same reason to the caller as a clean 400
+        # rather than letting it fall through as an unhandled 500.
+        api_logger.warning("api.approval.rejected", run_id=run_id, error=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — genuinely unexpected: log full context, still 500
+        api_logger.error("api.approval.failed_unexpected", run_id=run_id, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Approval processing failed for run {run_id}: {exc}",
+        ) from exc
     return {"result": result.__dict__}
 
 

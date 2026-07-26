@@ -74,4 +74,12 @@ describe('StatCard', () => {
     const label = container.querySelector('[data-slot="stat-card-label"]')
     expect(label?.className).toContain('uppercase')
   })
+
+  it('BUG FIX (permanent clipping): the value wraps instead of being silently clipped by the ancestor Card overflow-hidden when it does not fit', () => {
+    act(() => {
+      root.render(<StatCard label="Total runs" value={42} />)
+    })
+    const value = container.querySelector('[data-slot="stat-card-value"]')
+    expect(value?.className).toContain('break-words')
+  })
 })
