@@ -9,11 +9,9 @@ service module (not a plugin file loaded via importlib), so
 bug only affects plugin files.
 
 Two deliberate deviations from the literal integration-seam sketch, both
-required because `ClaudeRunner` reads them unconditionally in CLI *and* API
-mode (`Orchestrator.human_challenge`'s `project=None`/`prompt_file=""`
-pattern only "works" today because Chief-of-Staff happens to be bound to a
-non-Claude runner in this repo's `roles.yaml` — the concierge always
-dispatches to `kind="claude"`):
+required because `ClaudeRunner` (and, in fact, every runner — see
+`hivepilot.orchestrator._synthetic_project`) reads them unconditionally in
+CLI *and* API mode:
 
 1. `RunnerPayload.project` is a real minimal `ProjectConfig`, not `None`
    (`_build_prompt`/`_run_api` read `payload.project.path` unconditionally).

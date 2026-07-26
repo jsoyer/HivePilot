@@ -3,6 +3,14 @@
 # there, not here -- see deploy/openrc/conf.d/shared.env.example and
 # deploy/openrc/README.md, "Env silos -- read this".
 
+# PATH must be PREFIXED, never replaced. A bare `export PATH="..."` here
+# drops the inherited PATH -- which includes /sbin, where `supervise-daemon`
+# lives -- and the service fails to start with a confusing cascade:
+#   eval: line N: supervise-daemon: not found
+#   line N: eend: not found   (a red herring; the real cause is the line above)
+# See deploy/openrc/README.md, "Troubleshooting".
+export PATH="/root/.local/bin:/opt/hivepilot/venv/bin:$PATH"
+
 # Copy to /etc/conf.d/hivepilot-telegram and fill in the placeholders.
 #
 # OpenRC runs this service with cwd=/ -- keep every path-shaped value below

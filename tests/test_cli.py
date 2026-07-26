@@ -170,6 +170,104 @@ class TestValidateCli:
         assert result.exit_code == 0, result.output
         assert "OK" in result.output
 
+    def test_header_prints_absolute_config_dir_and_plugin_dir(self, tmp_path: Path) -> None:
+        """`validate` must print, at the top, the absolute config directory
+        it read and the absolute plugin dir(s) it scanned -- so a cwd-
+        dependent verdict is never mistaken for flakiness again."""
+        _write_minimal_valid_config(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["validate", "--dir", str(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        resolved = str(tmp_path.resolve())
+        assert resolved in result.output
+        assert str((tmp_path / "plugins").resolve()) in result.output
+        assert "OK" in result.output
+
+    def test_skill_resolution_is_cwd_independent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The confirmed bug: a `skills:` reference must resolve identically
+        whether the process cwd is inside or outside the directory being
+        validated -- `--dir` must be threaded to plugin/skill discovery
+        instead of `PluginManager` silently reading `Path.cwd()`."""
+        config_dir = tmp_path / "config-repo"
+        config_dir.mkdir()
+        _write_minimal_valid_config(config_dir)
+
+        plugin_dir = config_dir / "plugins"
+        plugin_dir.mkdir()
+        (plugin_dir / "cwd_skill.py").write_text(
+            "def register():\n"
+            "    return {'skills': [{'name': 'cwd_skill', 'description': 'd', "
+            "'provider': 'acme', 'files': {'SKILL.md': 'hi'}}]}\n",
+            encoding="utf-8",
+        )
+
+        import yaml
+
+        (config_dir / "tasks.yaml").write_text(
+            yaml.dump(
+                {
+                    "tasks": {
+                        "task-a": {
+                            "role": "planner",
+                            "steps": [{"name": "s1", "runner": "claude", "skills": ["cwd_skill"]}],
+                        }
+                    }
+                }
+            )
+        )
+
+        outside_cwd = tmp_path / "somewhere-else"
+        outside_cwd.mkdir()
+
+        runner = CliRunner()
+
+        monkeypatch.chdir(outside_cwd)
+        result_outside = runner.invoke(app, ["validate", "--dir", str(config_dir)])
+
+        monkeypatch.chdir(config_dir)
+        result_inside = runner.invoke(app, ["validate", "--dir", str(config_dir)])
+
+        assert result_outside.exit_code == 0, result_outside.output
+        assert "OK" in result_outside.output
+        assert result_inside.exit_code == 0, result_inside.output
+        assert "OK" in result_inside.output
+        assert result_outside.output == result_inside.output
+
+    def test_unresolved_skill_error_names_searched_directories(self, tmp_path: Path) -> None:
+        """An unresolved `skills:` reference must name the directories that
+        were searched, not just say "unknown skill"."""
+        config_dir = tmp_path / "config-repo"
+        config_dir.mkdir()
+        _write_minimal_valid_config(config_dir)
+
+        import yaml
+
+        (config_dir / "tasks.yaml").write_text(
+            yaml.dump(
+                {
+                    "tasks": {
+                        "task-a": {
+                            "role": "planner",
+                            "steps": [
+                                {"name": "s1", "runner": "claude", "skills": ["ghost-skill"]}
+                            ],
+                        }
+                    }
+                }
+            )
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["validate", "--dir", str(config_dir)])
+
+        assert result.exit_code == 1, result.output
+        assert "ghost-skill" in result.output
+        assert str((config_dir / "plugins").resolve()) in result.output
+
 
 class TestObsidianCli:
     def test_obsidian_audit_command_exists(self, fake_vault: Path) -> None:

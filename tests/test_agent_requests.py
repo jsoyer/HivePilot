@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -143,10 +144,14 @@ class TestLogRequestInteraction:
 
 # ---------------------------------------------------------------------------
 # Regression: _handle_agent_requests must reach the runner with a resolved,
-# non-empty prompt_file even though its payload has `project=None` (a
-# question/answer exchange, not a coding task against a real repo) — same
-# bug class as the human_challenge()/CoS live bug ("requires a prompt_file
-# for Claude runner").
+# non-empty prompt_file, and (since the synthetic-project fix) a valid
+# synthetic `ProjectConfig` rather than `project=None` — a question/answer
+# exchange still isn't a coding task against a real repo, but every runner
+# unconditionally dereferences `payload.project.*` (env/secrets/path/...),
+# so `None` crashed with `AttributeError: 'NoneType' object has no attribute
+# '<whichever field that runner touched first>'` — the exact bug class this
+# fix eliminates. Same bug class as the human_challenge()/CoS live bug
+# ("requires a prompt_file for Claude runner").
 # ---------------------------------------------------------------------------
 
 
@@ -189,6 +194,70 @@ class TestHandleAgentRequestsPromptFile:
 
         assert "[ANSWER from CTO]: Kimi K2.7." in result
         payload = orch.registry.capture_definition.call_args[0][1]
-        assert payload.project is None
+        # `project=None` used to be passed here -- this asserts the fix: a
+        # valid, obviously-synthetic ProjectConfig instead (see
+        # `orchestrator._synthetic_project`), never `None`.
+        assert payload.project is not None
+        assert payload.project.env == {}
+        assert payload.project.secrets == {}
+        assert "agent-request" in (payload.project.description or "")
         assert payload.step.prompt_file, "prompt_file must not be empty"
         assert Path(payload.step.prompt_file).exists()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: drive the WHOLE agent-request flow through a REAL RunnerRegistry
+# + REAL ClaudeRunner (only `subprocess.run` mocked) so the actual
+# `_build_invocation`/`_assemble_prompt`/env-merge code paths that crashed in
+# production (`'NoneType' object has no attribute 'env'`, then `.path`, then
+# the missing prompt_file) are genuinely exercised — not a stubbed runner.
+# ---------------------------------------------------------------------------
+
+
+class TestHandleAgentRequestsEndToEnd:
+    def test_request_end_to_end_real_claude_runner_no_crash(self, tmp_path):
+        from hivepilot.registry import RunnerRegistry
+        from hivepilot.roles import Role
+
+        prompt_file = tmp_path / "developer.md"
+        prompt_file.write_text("You are the developer agent.\n", encoding="utf-8")
+        fake_role = Role(
+            name="developer",
+            title="Developer",
+            prompt_file=prompt_file,
+            model_profile="coding",
+            inputs=[],
+            outputs=[],
+            can_block=False,
+            order=1,
+            runner="claude",
+            model="test-model",
+        )
+
+        orch = _make_orchestrator_with_pipeline()
+        orch.registry = RunnerRegistry(runner_defs={})
+
+        with (
+            patch.dict("hivepilot.roles.ROLES", {"developer": fake_role}, clear=True),
+            patch("hivepilot.orchestrator.notification_service"),
+            patch("hivepilot.orchestrator.log_request_interaction"),
+            patch("hivepilot.runners.claude_runner.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                stdout="Claude handles code generation.", returncode=0
+            )
+            result = orch._handle_agent_requests(
+                stage_output="request: Developer — What model runs code generation?",
+                actor="CTO",
+                stage=MagicMock(),
+                project_names=["myproject"],
+                policy=None,
+                budget={"remaining": 5},
+            )
+
+        assert "[ANSWER from Developer]: Claude handles code generation." in result
+        assert mock_run.called, "the real ClaudeRunner must reach subprocess.run"
+        _, run_kwargs = mock_run.call_args
+        # cwd came from the synthetic project's `.path` -- proves
+        # `payload.project.path` was accessed without crashing.
+        assert run_kwargs["cwd"] == str(Path(tempfile.gettempdir()))

@@ -3502,30 +3502,38 @@ def validate(
     ),
 ) -> None:
     """Validate cross-references in a HivePilot config directory."""
-    from hivepilot.services.config_validation import validate_config
+    from hivepilot.services.config_validation import validate_config_report
 
     if config_dir is None:
-        # Report the ACTUAL directory this run resolves from -- probing a
-        # representative required file through the same XDG -> config_repo
-        # -> base_dir chain every check below uses. Without this, editing a
-        # config-repo clone and running bare `validate` silently validates
-        # the untouched ACTIVE config instead, reporting a misleading "OK".
-        probe = settings.resolve_config_path("projects.yaml")
-        typer.echo(f"Validating the ACTIVE config (resolved from): {probe.parent}")
+        # Name the resolution chain when no --dir was given: editing a
+        # config-repo clone and running bare `validate` validates the
+        # untouched ACTIVE config instead, and an unexplained "OK" reads as
+        # success rather than as "you validated the wrong tree".
         typer.echo(
-            "  chain: $XDG_CONFIG_HOME/hivepilot -> config_repo -> base_dir (cwd) -- "
-            "pass --dir <repo clone> to validate a config-repo clone BEFORE "
-            "`hivepilot config sync` makes it active"
+            "Validating the ACTIVE config -- chain: $XDG_CONFIG_HOME/hivepilot "
+            "-> config_repo -> base_dir (cwd). Pass --dir <repo clone> to "
+            "validate a config-repo clone BEFORE `hivepilot config sync` "
+            "makes it active."
         )
-    else:
-        typer.echo(f"Validating: {config_dir.expanduser().resolve()}")
 
-    problems = validate_config(base_dir=config_dir)
-    if not problems:
+    report = validate_config_report(base_dir=config_dir)
+    # Header first, always -- this is the fix for the confirmed cwd bug
+    # ("validate --dir <config-repo>" silently resolved plugins/skills via
+    # the process's cwd instead of --dir): printing exactly which config
+    # directory was read and which plugin directories were scanned makes a
+    # cwd-dependent verdict immediately self-explanatory instead of looking
+    # like transient flakiness.
+    typer.echo(f"Config directory: {report.config_dir}")
+    if report.plugin_dirs:
+        typer.echo("Plugin dirs scanned:")
+        for plugin_dir in report.plugin_dirs:
+            typer.echo(f"  {plugin_dir}")
+
+    if not report.problems:
         typer.echo("OK")
         return
 
-    for problem in problems:
+    for problem in report.problems:
         typer.echo(f"  ERROR  {problem}", err=True)
     raise typer.Exit(1)
 
