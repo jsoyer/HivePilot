@@ -531,7 +531,13 @@ _PLACEHOLDER_RE = re.compile(r"\x00(\d+)\x00")
 # Any HTML open/close tag we might emit ourselves — used to tokenize a
 # rendered string for entity-aware splitting. Only ever applied to text WE
 # built (post html.escape), so a literal "<" from agent output is already
-# "&lt;" by the time this regex runs and can never masquerade as a tag.
+# "&lt;" by the time this regex runs and can never masquerade as a tag. Kept
+# here (duplicated, not imported) alongside the identical constant in
+# `hivepilot.streaming.base` -- some existing tests reference
+# `notification_service._TAG_TOKEN_RE` directly, and importing it from
+# `hivepilot.streaming.base` at this module's top level would import the
+# `hivepilot.streaming` package (which imports `telegram_channel`, which
+# imports THIS module) before it has finished loading.
 _TAG_TOKEN_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)(?:\s+[^<>]*)?>")
 
 # Tags our formatter can emit — anything else in the stream is plain text.
@@ -685,49 +691,6 @@ def _strip_html(text: str) -> str:
     return html.unescape(_STRIP_HTML_RE.sub("", text))
 
 
-def _find_break(text: str, budget: int) -> int:
-    """Return the best index <= *budget* to cut *text* at.
-
-    Prefers a paragraph break (``\\n\\n``), then a line break (``\\n``),
-    then a word boundary (space) — never mid-word if one of those exists
-    within the budget. Falls back to a hard cut at *budget* only when none
-    of the softer boundaries are available.
-    """
-    if budget <= 0:
-        return 0
-    if len(text) <= budget:
-        return len(text)
-    window = text[:budget]
-    idx = window.rfind("\n\n")
-    if idx > 0:
-        return idx + 2
-    idx = window.rfind("\n")
-    if idx > 0:
-        return idx + 1
-    idx = window.rfind(" ")
-    if idx > 0:
-        return idx + 1
-    return budget
-
-
-def _tokenize_html(text: str) -> list[str]:
-    """Split *text* into a flat token list: each ``<tag>``/``</tag>`` is its
-    own atomic token (never split), everything else is a plain-text token
-    that the packer in :func:`_split_for_telegram` may split further."""
-    tokens: list[str] = []
-    last = 0
-    for m in _TAG_TOKEN_RE.finditer(text):
-        if m.group(2) not in _KNOWN_TAGS:
-            continue  # not one of ours — treat as plain text, don't tokenize
-        if m.start() > last:
-            tokens.append(text[last : m.start()])
-        tokens.append(m.group(0))
-        last = m.end()
-    if last < len(text):
-        tokens.append(text[last:])
-    return tokens
-
-
 def _split_for_telegram(
     text: str,
     limit: int = _SPLIT_LIMIT,
@@ -737,88 +700,26 @@ def _split_for_telegram(
 ) -> list[str]:
     """Split *text* into ordered Telegram-sized chunks — never truncates.
 
-    Breaks on a paragraph boundary first, then a line boundary, then a word
-    boundary (see :func:`_find_break`). When *html_aware* (the default —
-    pass ``False`` for genuinely plain, non-HTML text so literal ``<``/``>``
-    in agent output, e.g. ``List<int>``, is never mistaken for a tag), any
-    of our own ``<b>``/``<i>``/``<code>``/``<pre>``/``<a>`` tags that would
-    straddle a chunk boundary are closed at the end of the chunk they start
-    in and re-opened at the start of the next one, so every returned chunk
-    is independently well-formed HTML.
-
-    Capped at *max_chunks* — a pathological (multi-hundred-KB) agent dump
-    must never turn into dozens of Telegram messages; a short note is
-    appended to the last chunk when content had to be dropped for the cap.
-    When there is more than one chunk, each gets a trailing ``(i/N)``
-    continuation marker.
+    Thin delegation to the channel-agnostic
+    :func:`hivepilot.streaming.base.split_for` (``limit`` -> ``max_len``,
+    ``html_aware`` -> ``entity_aware``) — this function's own name/signature/
+    behavior are kept byte-identical (same defaults, same output) for every
+    existing caller and test; only the algorithm's *body* moved so Slack/
+    Discord can reuse the exact same paragraph/line/word-boundary-aware,
+    never-truncating splitter (see multi-channel-streaming sprint). Breaks on
+    a paragraph boundary first, then a line boundary, then a word boundary.
+    When *html_aware* (the default — pass ``False`` for genuinely plain,
+    non-HTML text so literal ``<``/``>`` in agent output, e.g. ``List<int>``,
+    is never mistaken for a tag), any of our own
+    ``<b>``/``<i>``/``<code>``/``<pre>``/``<a>``/``<blockquote>`` tags that
+    would straddle a chunk boundary are closed at the end of the chunk they
+    start in and re-opened at the start of the next one, so every returned
+    chunk is independently well-formed HTML. Capped at *max_chunks*; when
+    there is more than one chunk, each gets a trailing ``(i/N)`` marker.
     """
-    if len(text) <= limit:
-        return [text]
+    from hivepilot.streaming.base import split_for
 
-    tokens = _tokenize_html(text) if html_aware else [text]
-    chunks: list[str] = []
-    stack: list[str] = []
-    idx = 0
-    truncated = False
-
-    while idx < len(tokens):
-        prefix = "".join(f"<{t}>" for t in stack)
-        cur_stack = list(stack)
-        current = ""
-
-        while idx < len(tokens):
-            tok = tokens[idx]
-            tag_match = _TAG_TOKEN_RE.fullmatch(tok) if html_aware else None
-
-            if tag_match is not None:
-                is_close = tag_match.group(1) == "/"
-                name = tag_match.group(2)
-                trial_stack = list(cur_stack)
-                if is_close:
-                    if trial_stack and trial_stack[-1] == name:
-                        trial_stack.pop()
-                else:
-                    trial_stack.append(name)
-                suffix_len = sum(len(f"</{t}>") for t in reversed(trial_stack))
-                if len(prefix) + len(current) + len(tok) + suffix_len > limit and current:
-                    break  # finalize this chunk before the tag
-                current += tok
-                cur_stack = trial_stack
-                idx += 1
-                continue
-
-            suffix_len = sum(len(f"</{t}>") for t in reversed(cur_stack))
-            budget = max(limit - len(prefix) - len(current) - suffix_len, 0 if current else 1)
-            if budget <= 0:
-                break
-            if len(tok) <= budget:
-                current += tok
-                idx += 1
-                continue
-            cut = _find_break(tok, budget)
-            if cut <= 0:
-                break  # nothing more fits in this chunk
-            current += tok[:cut]
-            tokens[idx] = tok[cut:]
-            break
-
-        suffix = "".join(f"</{t}>" for t in reversed(cur_stack))
-        chunks.append(prefix + current + suffix)
-        stack = cur_stack
-
-        if len(chunks) >= max_chunks and idx < len(tokens):
-            truncated = True
-            break
-
-    if truncated:
-        remaining = sum(len(t) for t in tokens[idx:])
-        chunks[-1] += f"\n\n(… truncated — {remaining} more characters dropped)"
-
-    if len(chunks) > 1:
-        total = len(chunks)
-        chunks = [f"{chunk}\n\n({i + 1}/{total})" for i, chunk in enumerate(chunks)]
-
-    return chunks
+    return split_for(text, limit, max_chunks, entity_aware=html_aware)
 
 
 def _deliver_threadless(
@@ -1023,7 +924,7 @@ def _send_chunks(
         )
 
 
-def stream_agent_turn(
+def _stream_agent_turn_telegram(
     *,
     actor: str,
     stage: str | None = None,
@@ -1033,10 +934,16 @@ def stream_agent_turn(
 ) -> None:
     """Live-stream a single agent's turn to Telegram (outbound ``sendMessage`` only).
 
-    Used during pipeline and debate runs so the user can watch the agents talk
-    in real time. Intentionally Telegram-only (the live channel) and a silent
-    no-op when streaming is disabled or Telegram is unconfigured — it must never
-    break a run.
+    This is Telegram's ORIGINAL, byte-identical rendering pipeline (rich HTML
+    cards, entity-aware chunk splitting, stale/closed-topic self-heal) --
+    unchanged since before the multi-channel-streaming sprint. `stream_agent_turn`
+    (below) is the public, channel-agnostic entry point: it calls this function
+    for Telegram specifically (so every existing Telegram test, many of which
+    patch this module's own attributes directly, keeps passing unmodified) and
+    separately fans out to any other ENABLED `StreamChannel` (Slack, Discord, ...).
+
+    A silent no-op when streaming is disabled or Telegram is unconfigured — it
+    must never break a run.
 
     When ``settings.telegram_stream_rich`` is True and the summary contains
     structured content (status badge or bullet points), renders an HTML card
@@ -1147,6 +1054,142 @@ def stream_agent_turn(
         pass  # Telegram not set up — streaming is best-effort
     except Exception as exc:  # noqa: BLE001
         logger.warning("stream.failed", error=str(exc))
+
+
+def _render_markdown_turn(
+    *,
+    icon: str,
+    actor: str,
+    stage: str | None,
+    target: str | None,
+    summary: str | None,
+) -> str:
+    """Render a channel-NEUTRAL Markdown turn card for the generic
+    `StreamChannel` path (Slack, Discord, ...) -- reuses the same
+    structured-report detection Telegram's own rich card uses
+    (`parse_agent_report`) but emits plain Markdown instead of Telegram's
+    HTML subset; each channel's own `format()` converts it to its native
+    dialect (mrkdwn, Discord markdown, ...).
+    """
+    label = _ICON_LABELS.get(icon)
+    tag = f"{icon} ({label})" if label else icon
+    lines = [f"**{tag} {actor}**" + (f" — {stage}" if stage else "")]
+    if target:
+        lines.append(f"   ↳ {target}")
+    if not summary:
+        return "\n".join(lines)
+
+    report = None
+    has_structure = False
+    try:
+        from hivepilot.services.agent_report import parse_agent_report
+
+        report = parse_agent_report(summary)
+        has_structure = bool(report.status or report.summary)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.generic_render_failed", error=str(exc))
+
+    if has_structure and report is not None:
+        from hivepilot.services.agent_report import to_telegram_text
+
+        if report.status:
+            lines.append(_STATUS_BADGES.get(report.status.upper(), report.status))
+        shown = report.summary[:5]
+        for bullet in shown:
+            clean = to_telegram_text(bullet).strip()
+            if clean:
+                lines.append(f"- {clean}")
+        if len(report.summary) > len(shown):
+            lines.append(f"… (+{len(report.summary) - len(shown)} more)")
+        if report.next_handoff:
+            lines.append(f"↪ next: {report.next_handoff}")
+        if report.confidence:
+            lines.append(f"confidence: {report.confidence}")
+        lines.extend(report.links)
+    else:
+        lines.append(summary)
+
+    return "\n".join(lines)
+
+
+def _stream_agent_turn_generic(
+    channel: Any,
+    *,
+    actor: str,
+    stage: str | None,
+    target: str | None,
+    summary: str | None,
+    icon: str,
+) -> None:
+    """Deliver a turn to a non-Telegram `StreamChannel` (Slack, Discord, a
+    plugin-registered channel, ...) via the generic protocol: render a
+    channel-neutral Markdown card, `format()` it into the channel's native
+    markup, `ensure_agent_thread()` the per-agent thread, split for the
+    channel's `max_len` (see `hivepilot.streaming.base.split_for`), and
+    `send()` every chunk in order.
+    """
+    from hivepilot.streaming.base import split_for
+
+    markdown = _render_markdown_turn(
+        icon=icon, actor=actor, stage=stage, target=target, summary=summary
+    )
+    formatted = channel.format(markdown)
+    agent_key = _resolve_agent_key(actor)
+    thread = channel.ensure_agent_thread(agent_key, actor)
+    for chunk in split_for(formatted, channel.max_len, entity_aware=False):
+        channel.send(thread, chunk, rich=True)
+
+
+def stream_agent_turn(
+    *,
+    actor: str,
+    stage: str | None = None,
+    target: str | None = None,
+    summary: str | None = None,
+    icon: str = "🗣",
+) -> None:
+    """Live-stream a single agent's turn to every ENABLED stream channel --
+    Telegram, Slack, Discord, or a plugin-registered channel (see
+    `hivepilot.streaming`).
+
+    Channel-agnostic fan-out: each channel delivers independently,
+    best-effort -- a failure in one channel never blocks the others, and no
+    channel configured at all is a silent no-op. A deployment with only the
+    Telegram settings configured behaves EXACTLY as before this sprint --
+    Telegram keeps its own dedicated, byte-identical rendering pipeline (see
+    `_stream_agent_turn_telegram`); Slack/Discord/plugins render via the
+    generic `StreamChannel` protocol (`_stream_agent_turn_generic`).
+    """
+    from hivepilot.services.config_provenance import redact_text
+
+    summary = redact_text(summary) if summary is not None else summary
+
+    try:
+        _stream_agent_turn_telegram(
+            actor=actor, stage=stage, target=target, summary=summary, icon=icon
+        )
+    except Exception as exc:  # noqa: BLE001 -- extra safety net; the callee already never raises
+        logger.warning("stream.telegram_failed", error=str(exc))
+
+    from hivepilot.streaming.base import STREAM_CHANNEL_MAP
+
+    for name, channel in STREAM_CHANNEL_MAP.items():
+        if name == "telegram":
+            continue  # delivered above via the dedicated, byte-identical path
+        try:
+            if not channel.enabled():
+                continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stream.enabled_check_failed", channel=name, error=str(exc))
+            continue
+        try:
+            _stream_agent_turn_generic(
+                channel, actor=actor, stage=stage, target=target, summary=summary, icon=icon
+            )
+        except _NotConfigured:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stream.channel_failed", channel=name, error=str(exc))
 
 
 def stream_challenge(actor: str, target: str, point: str) -> None:
