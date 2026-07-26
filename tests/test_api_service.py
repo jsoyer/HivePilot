@@ -1965,11 +1965,204 @@ class TestAdminReloadEndpoint:
         assert resp.json() == {"roles_reloaded": True, "config_reloaded": True}
 
 
+# ---------------------------------------------------------------------------
+# `POST /v1/approvals/{run_id}` (Mirador's "Approve" button) -- regression
+# for the live bug: this endpoint called `Orchestrator.run_approved`
+# unconditionally, and `run_approved` does `self.tasks.tasks[task_name]` --
+# for a pipeline checkpoint `task_name` is actually the PIPELINE name
+# (e.g. "noxys", not a task), so it raised a bare `KeyError` -> 500. The
+# endpoint now goes through `Orchestrator.approve_run`, the single shared
+# helper also used by `telegram_bot._dispatch_approval` (see
+# tests/test_pipeline_checkpoint.py::TestApproveRunRouting for the routing
+# logic itself, unit-tested directly on the orchestrator).
+# ---------------------------------------------------------------------------
+
+
+class _FakeApprovalOrchestrator:
+    """Real `approve_run` bound to fake `resume_pipeline`/`run_approved` --
+    exercises the ACTUAL routing method through the API, not a re-implemented
+    stand-in, while stubbing out the heavy pipeline/task execution."""
+
+    def __init__(self) -> None:
+        self.resume_pipeline_calls: list[dict] = []
+        self.run_approved_calls: list[dict] = []
+
+    def resume_pipeline(self, **kwargs):
+        from hivepilot.orchestrator import RunResult
+
+        self.resume_pipeline_calls.append(kwargs)
+        return RunResult("noxys", "noxys", kwargs.get("approve", True))
+
+    def run_approved(self, **kwargs):
+        from hivepilot.orchestrator import RunResult
+
+        self.run_approved_calls.append(kwargs)
+        return RunResult("proj", "task", kwargs.get("approve", True))
+
+
+# Bind the REAL `Orchestrator.approve_run` implementation onto the fake so
+# the test exercises production routing logic, not a re-implementation of it.
+from hivepilot.orchestrator import Orchestrator as _Orchestrator  # noqa: E402
+
+_FakeApprovalOrchestrator.approve_run = _Orchestrator.approve_run  # type: ignore[attr-defined]
+
+
+class TestApprovalEndpointRouting:
+    def test_pipeline_checkpoint_approval_routes_to_resume_pipeline_not_run_approved(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """The live-bug regression, exercised through the real API endpoint:
+        approving a pipeline-checkpoint run must return 200 and hit
+        `resume_pipeline`, never `run_approved` (which historically
+        KeyError'd on the pipeline name)."""
+        from hivepilot.services import api_service, state_service
+
+        run_id = state_service.record_run_start("proj", "noxys", status="pending")
+        state_service.record_approval_request(
+            run_id=run_id,
+            project="proj",
+            task="noxys",  # the pipeline name -- NOT a task -- is what KeyErrors
+            metadata={"kind": "pipeline_checkpoint", "pipeline": "noxys"},
+        )
+
+        fake_orch = _FakeApprovalOrchestrator()
+        monkeypatch.setattr(api_service, "_get_orchestrator", lambda: fake_orch)
+
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            f"/v1/approvals/{run_id}",
+            json={"approver": "mirador", "approve": True},
+            headers=_auth(raw),
+        )
+
+        assert resp.status_code == 200
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.run_approved_calls == []
+
+    def test_per_task_approval_still_routes_to_run_approved(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """A plain per-task approval (no `pipeline_checkpoint` metadata) via
+        the API must still route to `run_approved` -- unchanged behavior."""
+        from hivepilot.services import api_service, state_service
+
+        run_id = state_service.record_run_start("proj", "build", status="pending")
+        state_service.record_approval_request(
+            run_id=run_id, project="proj", task="build", metadata={}
+        )
+
+        fake_orch = _FakeApprovalOrchestrator()
+        monkeypatch.setattr(api_service, "_get_orchestrator", lambda: fake_orch)
+
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            f"/v1/approvals/{run_id}",
+            json={"approver": "mirador", "approve": True},
+            headers=_auth(raw),
+        )
+
+        assert resp.status_code == 200
+        assert len(fake_orch.run_approved_calls) == 1
+        assert fake_orch.resume_pipeline_calls == []
+
+    def test_deny_pipeline_checkpoint_routes_to_resume_pipeline(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """Denying a pipeline checkpoint via the API must also route to
+        `resume_pipeline` (approve=False), not `run_approved`."""
+        from hivepilot.services import api_service, state_service
+
+        run_id = state_service.record_run_start("proj", "noxys", status="pending")
+        state_service.record_approval_request(
+            run_id=run_id,
+            project="proj",
+            task="noxys",
+            metadata={"kind": "pipeline_checkpoint", "pipeline": "noxys"},
+        )
+
+        fake_orch = _FakeApprovalOrchestrator()
+        monkeypatch.setattr(api_service, "_get_orchestrator", lambda: fake_orch)
+
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            f"/v1/approvals/{run_id}",
+            json={"approver": "mirador", "approve": False},
+            headers=_auth(raw),
+        )
+
+        assert resp.status_code == 200
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.resume_pipeline_calls[0]["approve"] is False
+        assert fake_orch.run_approved_calls == []
+
+    def test_unknown_run_returns_clean_400_not_500(self, api_client, tmp_tokens_file, monkeypatch):
+        """An unknown/not-pending run must return a clean 4xx, never an
+        unhandled exception / 500."""
+        from hivepilot.services import api_service
+
+        fake_orch = _FakeApprovalOrchestrator()
+        monkeypatch.setattr(api_service, "_get_orchestrator", lambda: fake_orch)
+
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/approvals/999999",
+            json={"approver": "mirador", "approve": True},
+            headers=_auth(raw),
+        )
+
+        assert resp.status_code == 400
+        assert "not pending approval" in resp.json()["detail"]
+
+    def test_already_resolved_run_returns_clean_400_not_500(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """A run whose approval was already resolved must return a clean
+        4xx, never a 500."""
+        from hivepilot.services import api_service, state_service
+
+        run_id = state_service.record_run_start("proj", "build", status="approved")
+        state_service.record_approval_request(
+            run_id=run_id, project="proj", task="build", metadata={}
+        )
+        state_service.update_approval(run_id, "approved", "someone")
+
+        fake_orch = _FakeApprovalOrchestrator()
+        monkeypatch.setattr(api_service, "_get_orchestrator", lambda: fake_orch)
+
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            f"/v1/approvals/{run_id}",
+            json={"approver": "mirador", "approve": True},
+            headers=_auth(raw),
+        )
+
+        assert resp.status_code == 400
+
+    def test_no_direct_run_approved_call_in_api_service_source(self) -> None:
+        """Static guard: the routing decision must live in ONE place
+        (`Orchestrator.approve_run`) -- `api_service.py` must never call
+        `run_approved`/`resume_pipeline` directly again."""
+        from pathlib import Path
+
+        from hivepilot.services import api_service
+
+        source = Path(api_service.__file__).read_text()
+        assert ".run_approved(" not in source
+        assert ".resume_pipeline(" not in source
+        assert ".approve_run(" in source
+
+
 class TestHandleApprovalExplicitFailures:
     """Explicit-failure-logs sprint, Part A.2: a known rejection reason from
-    `Orchestrator.run_approved` (raised as `ValueError`/`KeyError`) must
-    surface as a clean 400 with that reason in the body -- never an opaque
-    500 -- and every attempt/failure is logged with structured context."""
+    `Orchestrator.approve_run` (raised as `ValueError`/`KeyError` -- the
+    routing dispatch re-raises whatever `resume_pipeline`/`run_approved`
+    raise) must surface as a clean 400 with that reason in the body -- never
+    an opaque 500 -- and every attempt/failure is logged with structured
+    context. Mocks `approve_run` directly (not `run_approved`) since that is
+    the entrypoint `handle_approval` now calls -- these tests are about
+    `api_service`'s OWN exception-to-HTTP-status translation, independent of
+    the routing logic itself (covered by `TestApprovalEndpointRouting`
+    above)."""
 
     def test_not_pending_becomes_400_not_500(self, api_client, tmp_tokens_file, monkeypatch):
         from types import SimpleNamespace
@@ -1982,7 +2175,7 @@ class TestHandleApprovalExplicitFailures:
         monkeypatch.setattr(
             api_service,
             "_get_orchestrator",
-            lambda: SimpleNamespace(run_approved=_boom),
+            lambda: SimpleNamespace(approve_run=_boom),
         )
         raw, _ = add_token("admin")
         resp = api_client.post("/v1/approvals/7", json={"approver": "tester"}, headers=_auth(raw))
@@ -2005,7 +2198,7 @@ class TestHandleApprovalExplicitFailures:
         monkeypatch.setattr(
             api_service,
             "_get_orchestrator",
-            lambda: SimpleNamespace(run_approved=_boom),
+            lambda: SimpleNamespace(approve_run=_boom),
         )
         raw, _ = add_token("admin")
         resp = api_client.post("/v1/approvals/7", json={"approver": "tester"}, headers=_auth(raw))
@@ -2026,7 +2219,7 @@ class TestHandleApprovalExplicitFailures:
         monkeypatch.setattr(
             api_service,
             "_get_orchestrator",
-            lambda: SimpleNamespace(run_approved=_boom),
+            lambda: SimpleNamespace(approve_run=_boom),
         )
         raw, _ = add_token("admin")
         with caplog.at_level(stdlib_logging.INFO):
@@ -2052,7 +2245,7 @@ class TestHandleApprovalExplicitFailures:
         monkeypatch.setattr(
             api_service,
             "_get_orchestrator",
-            lambda: SimpleNamespace(run_approved=lambda **kwargs: _Result()),
+            lambda: SimpleNamespace(approve_run=lambda **kwargs: _Result()),
         )
         raw, _ = add_token("admin")
         resp = api_client.post("/v1/approvals/7", json={"approver": "tester"}, headers=_auth(raw))

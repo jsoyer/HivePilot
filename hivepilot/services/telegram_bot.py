@@ -1164,48 +1164,22 @@ async def _cmd_approvals(update, context) -> None:
 def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | None = None):
     """Route an approve/deny to the right orchestrator entrypoint.
 
-    Pipeline-checkpoint approvals resume the parked pipeline; everything else is a
-    single-task approval.
+    Delegates to `Orchestrator.approve_run` -- the single shared helper (also
+    used by `api_service.handle_approval`/`slack_bot`/`discord_bot`/
+    `chatops_service`/the CLI) that discriminates a pipeline-checkpoint
+    approval (resumes the parked pipeline) from a single-task approval, so
+    this path and every other channel's path can never diverge again.
 
-    Explicit-failure-logs sprint, Part A.2: logs the run_id, project/pipeline,
-    task (when known), which route was taken, and the approver BEFORE
-    dispatching — and, on failure, the specific reason (surfaced by
-    `Orchestrator.run_approved`/`resume_pipeline`'s own
-    `approval.approve_rejected`/`approval.resume_rejected` logs) rather than
-    letting the caller only see a bare exception.
+    Explicit-failure-logs sprint, Part A.2: `approve_run` itself now logs the
+    run_id, project/pipeline, task (when known), which route was taken, and
+    the approver BEFORE dispatching (`approval.dispatch`), and on failure the
+    specific reason (`approval.resume_rejected`/`approval.approve_rejected`
+    from `resume_pipeline`/`run_approved`, or the generic
+    `approval.dispatch_failed` for anything else) -- so this path gets the
+    same structured logging as every other channel for free, instead of
+    re-implementing it locally.
     """
-    import json
-
-    from hivepilot.services import state_service
-
-    appr = state_service.get_approval(run_id)
-    meta = json.loads(appr.get("metadata") or "{}") if appr else {}
-    route = "pipeline_checkpoint" if meta.get("kind") == "pipeline_checkpoint" else "task"
-    logger.info(
-        "telegram.approval.dispatch",
-        run_id=run_id,
-        route=route,
-        project=appr.get("project") if appr else None,
-        task=appr.get("task") if appr else None,
-        pipeline=meta.get("pipeline"),
-        approve=approve,
-        approver=approver,
-    )
-    try:
-        if route == "pipeline_checkpoint":
-            return _get_orch().resume_pipeline(run_id=run_id, approve=approve, approver=approver)
-        return _get_orch().run_approved(
-            run_id=run_id, approve=approve, approver=approver, reason=reason
-        )
-    except Exception as exc:  # noqa: BLE001 — logged with full routing context, then re-raised
-        logger.error(
-            "telegram.approval.dispatch_failed",
-            run_id=run_id,
-            route=route,
-            approver=approver,
-            error=str(exc),
-        )
-        raise
+    return _get_orch().approve_run(run_id=run_id, approve=approve, approver=approver, reason=reason)
 
 
 async def _cmd_approve(update, context) -> None:

@@ -151,7 +151,7 @@ def _exec_approvals() -> str:
 
 def _exec_approve(run_id: int) -> str:
     try:
-        result = _get_orch().run_approved(run_id=run_id, approve=True, approver="discord")
+        result = _get_orch().approve_run(run_id=run_id, approve=True, approver="discord")
         status = "succeeded" if result.success else "failed"
         return f"Run #{run_id} approved — {status}."
     except Exception as exc:
@@ -160,7 +160,7 @@ def _exec_approve(run_id: int) -> str:
 
 def _exec_deny(run_id: int, reason: str) -> str:
     try:
-        _get_orch().run_approved(run_id=run_id, approve=False, approver="discord", reason=reason)
+        _get_orch().approve_run(run_id=run_id, approve=False, approver="discord", reason=reason)
         return f"Run #{run_id} denied."
     except Exception as exc:
         return f"Error: {exc}"

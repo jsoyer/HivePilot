@@ -3475,6 +3475,84 @@ class Orchestrator:
                 logger.warning("auditor.observe_failed", run_id=run_id, error=str(exc))
         return results
 
+    def approve_run(
+        self,
+        *,
+        run_id: int,
+        approve: bool,
+        approver: str,
+        reason: str | None = None,
+    ) -> RunResult:
+        """Single entry point for routing an approve/deny decision.
+
+        A PIPELINE checkpoint (a stage with ``pause_before: true``) parks the
+        run with ``approval["task"]`` set to the *pipeline* name, not a task
+        name -- ``run_approved`` then does ``self.tasks.tasks[task_name]``
+        and raises a bare ``KeyError`` for it (the Mirador "Approve" button
+        500 -- live traceback was ``KeyError: 'noxys'``). This mirrors the
+        discriminator Telegram's ``_dispatch_approval`` already used
+        (``metadata["kind"] == "pipeline_checkpoint"``) -- moved here so
+        every caller that lets an operator approve/deny a run (Mirador's
+        ``POST /v1/approvals/{id}`` in ``api_service.py``, Telegram/Slack/
+        Discord/ChatOps's approve/deny buttons and commands, and the CLI's
+        ``hivepilot approvals approve/deny``) goes through ONE place and the
+        paths can never diverge again.
+
+        Explicit-failure-logs sprint, Part A.2 (extended): logs the resolved
+        route (``approval.dispatch``) BEFORE dispatching to ``resume_pipeline``/
+        ``run_approved`` -- each of which already logs its OWN specific
+        rejection reason (unknown run / not pending / wrong checkpoint kind /
+        malformed metadata / unknown task) via ``approval.resume_rejected``/
+        ``approval.approve_rejected`` before raising -- and logs
+        ``approval.dispatch_failed`` with the routing context on ANY exception
+        from that dispatch before re-raising it. Centralizing this here (not
+        the deeper "unknown run / not pending" gate below, which itself logs
+        ``approval.dispatch_rejected``) means every caller gets the same
+        structured logging for free just by calling ``approve_run``, instead
+        of each one re-implementing it (e.g. Telegram's ``_dispatch_approval``
+        used to log this locally; it now just delegates here).
+
+        Raises ``ValueError`` if the run has no pending approval (unknown
+        run id or already resolved) -- callers should translate that into a
+        4xx, never let it surface as a 500.
+        """
+        approval = state_service.get_approval(run_id)
+        if not approval or approval.get("status") != "pending":
+            logger.warning(
+                "approval.dispatch_rejected",
+                run_id=run_id,
+                reason="unknown_run" if not approval else "not_pending",
+                status=approval.get("status") if approval else None,
+            )
+            raise ValueError(f"Run {run_id} is not pending approval.")
+        metadata = json.loads(approval.get("metadata") or "{}")
+        route = "pipeline_checkpoint" if metadata.get("kind") == "pipeline_checkpoint" else "task"
+        logger.info(
+            "approval.dispatch",
+            run_id=run_id,
+            route=route,
+            project=approval.get("project"),
+            task=approval.get("task"),
+            pipeline=metadata.get("pipeline"),
+            approve=approve,
+            approver=approver,
+        )
+        try:
+            if route == "pipeline_checkpoint":
+                return self.resume_pipeline(run_id=run_id, approve=approve, approver=approver)
+            return self.run_approved(
+                run_id=run_id, approve=approve, approver=approver, reason=reason
+            )
+        except Exception as exc:  # noqa: BLE001 — logged with full routing context, then re-raised
+            logger.error(
+                "approval.dispatch_failed",
+                run_id=run_id,
+                route=route,
+                approver=approver,
+                error=str(exc),
+            )
+            raise
+
     def resume_pipeline(
         self,
         *,
