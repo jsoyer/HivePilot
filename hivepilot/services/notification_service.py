@@ -231,6 +231,49 @@ NotifierRegistry.register("discord", _send_discord)
 NotifierRegistry.register("telegram", _send_telegram)
 
 
+# ---------------------------------------------------------------------------
+# Stale/closed forum-topic detection + self-heal
+#
+# A `message_thread_id` cached in the topics registry can go dead: an
+# operator deletes the topic (or a registry gets migrated from another
+# context — see `_migrate_legacy_topics`). Telegram then rejects EVERY send
+# that carries it with a 400 whose `description` names the problem. Without
+# this detection, the existing per-chunk "retry as plain text" fallback
+# retries with the SAME dead thread id and fails identically — the message
+# is lost and the dead id stays cached forever (see `_send_one_chunk`, which
+# is what actually invalidates + recreates).
+#
+# A *closed* (not deleted) topic is a DIFFERENT error class
+# (e.g. "TOPIC_CLOSED") and must NOT be treated the same way: the operator
+# closed it deliberately, so recreating it would defeat that decision —
+# route to the chat's General topic instead (see `_send_one_chunk`).
+# ---------------------------------------------------------------------------
+
+_STALE_TOPIC_MARKERS: tuple[str, ...] = (
+    "message thread not found",
+    "topic_deleted",
+    "thread not found",
+)
+_CLOSED_TOPIC_MARKERS: tuple[str, ...] = ("topic_closed",)
+
+
+def _description_matches(description: str | None, markers: tuple[str, ...]) -> bool:
+    if not description:
+        return False
+    low = description.lower()
+    return any(marker in low for marker in markers)
+
+
+def _is_stale_topic_error(description: str | None) -> bool:
+    """True when *description* names a deleted/missing forum topic."""
+    return _description_matches(description, _STALE_TOPIC_MARKERS)
+
+
+def _is_closed_topic_error(description: str | None) -> bool:
+    """True when *description* names a CLOSED (not deleted) forum topic."""
+    return _description_matches(description, _CLOSED_TOPIC_MARKERS)
+
+
 def _topics_registry_path() -> Path:
     """Resolve the absolute, cwd-INDEPENDENT path for the topics registry.
 
@@ -297,6 +340,21 @@ def _write_topics(path: Path, mapping: dict[str, int]) -> None:
 def _save_topics(mapping: dict[str, int]) -> None:
     """Persist the topics registry to disk. Best-effort."""
     _write_topics(_topics_registry_path(), mapping)
+
+
+def _invalidate_topic(agent_key: str) -> int | None:
+    """Remove *agent_key* from the topics registry and persist. Best-effort.
+
+    Returns the removed (dead) thread id, or None if the key wasn't cached.
+    This is the self-heal step: without it, the dead id would be re-read by
+    the next `_ensure_topic_thread` call and every future send would fail
+    with the same "thread not found" error forever.
+    """
+    registry = _load_topics()
+    dead = registry.pop(agent_key, None)
+    if dead is not None:
+        _save_topics(registry)
+    return dead
 
 
 def _normalize(text: str) -> str:
@@ -763,6 +821,170 @@ def _split_for_telegram(
     return chunks
 
 
+def _deliver_threadless(
+    chunk: str,
+    *,
+    chat_id: Any,
+    parse_mode: str | None,
+    agent_key: str | None,
+) -> None:
+    """Last-resort send with NO ``message_thread_id`` (the chat's General
+    topic) — used once a topic is confirmed dead/closed and recreation
+    either isn't attempted (closed) or failed (dead, recreate/resend both
+    failed). Tries the original *parse_mode* first so formatting survives
+    when the only problem was the topic, then degrades to plain text.
+    Content must always reach the operator — this is the final line of
+    defense against ever silently dropping a message.
+    """
+    try:
+        _send_telegram(chunk, chat_id=chat_id, message_thread_id=None, parse_mode=parse_mode)
+    except _NotConfigured:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        plain = _strip_html(chunk) if parse_mode else chunk
+        _send_telegram(plain, chat_id=chat_id, message_thread_id=None, parse_mode=None)
+        logger.info(
+            "stream.topic_self_heal_delivered_general_plain",
+            agent_key=agent_key,
+            chat_id=mask_id(chat_id),
+            error=str(exc),
+        )
+        return
+    logger.info(
+        "stream.topic_self_heal_delivered_general",
+        agent_key=agent_key,
+        chat_id=mask_id(chat_id),
+        parse_mode=parse_mode,
+    )
+
+
+def _send_one_chunk(
+    chunk: str,
+    *,
+    chat_id: Any,
+    message_thread_id: int | None,
+    parse_mode: str | None,
+    agent_key: str | None,
+    topic_title: str | None,
+) -> int | None:
+    """Send a single *chunk*, self-healing a dead/closed registry topic id
+    and never losing the message. Returns the ``message_thread_id`` that
+    subsequent chunks of the same turn should use (unchanged unless this
+    chunk triggered a stale-topic recreate, in which case later chunks reuse
+    the fresh id instead of repeating the invalidate/recreate dance).
+    """
+    try:
+        _send_telegram(
+            chunk, chat_id=chat_id, message_thread_id=message_thread_id, parse_mode=parse_mode
+        )
+        return message_thread_id
+    except _NotConfigured:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        description = getattr(exc, "description", None)
+
+        if (
+            message_thread_id is not None
+            and agent_key is not None
+            and _is_closed_topic_error(description)
+        ):
+            # Operator closed this topic deliberately -- do NOT recreate it,
+            # route to General instead.
+            logger.warning(
+                "stream.topic_closed_fallback_general",
+                agent_key=agent_key,
+                chat_id=mask_id(chat_id),
+                message_thread_id=message_thread_id,
+                description=description,
+            )
+            _deliver_threadless(chunk, chat_id=chat_id, parse_mode=parse_mode, agent_key=agent_key)
+            return None
+
+        if (
+            message_thread_id is not None
+            and agent_key is not None
+            and _is_stale_topic_error(description)
+        ):
+            dead = _invalidate_topic(agent_key)
+            logger.warning(
+                "stream.topic_stale_invalidated",
+                agent_key=agent_key,
+                chat_id=mask_id(chat_id),
+                dead_message_thread_id=dead if dead is not None else message_thread_id,
+                description=description,
+            )
+            new_thread_id = _ensure_topic_thread(agent_key, topic_title or agent_key)
+            if new_thread_id is not None:
+                logger.info(
+                    "stream.topic_recreated",
+                    agent_key=agent_key,
+                    chat_id=mask_id(chat_id),
+                    message_thread_id=new_thread_id,
+                )
+                try:
+                    _send_telegram(
+                        chunk,
+                        chat_id=chat_id,
+                        message_thread_id=new_thread_id,
+                        parse_mode=parse_mode,
+                    )
+                    return new_thread_id
+                except Exception as retry_exc:  # noqa: BLE001
+                    logger.warning(
+                        "stream.topic_recreate_resend_failed",
+                        agent_key=agent_key,
+                        chat_id=mask_id(chat_id),
+                        message_thread_id=new_thread_id,
+                        error=str(retry_exc),
+                    )
+            # Recreate failed, or the resend to the fresh topic also failed
+            # -- never drop the message, deliver it threadless instead.
+            _deliver_threadless(chunk, chat_id=chat_id, parse_mode=parse_mode, agent_key=agent_key)
+            return None
+
+        # Not a topic problem -- keep the existing "retry as plain text"
+        # degrade for a parse-entity edge case (e.g. bad markdown); registry
+        # untouched. Explicit-failure-logs sprint, Part A.3: a
+        # `TelegramSendError` carries the real HTTP status + Telegram's own
+        # `description` ("Can't parse entities: ..."); any OTHER exception
+        # (a network error, ...) degrades to just `error=str(exc)` -- either
+        # way a 400 is never just a silent retry with no diagnostic trail.
+        if parse_mode is None:
+            raise
+        logger.warning(
+            "stream.chunk_send_failed_retry_plain",
+            kind="stream_chunk",
+            status_code=getattr(exc, "status_code", None),
+            description=description,
+            chat_id=mask_id(chat_id),
+            message_thread_id=message_thread_id,
+            error=str(exc),
+        )
+        try:
+            _send_telegram(
+                _strip_html(chunk),
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                parse_mode=None,
+            )
+        except Exception as fallback_exc:  # noqa: BLE001
+            logger.error(
+                "stream.chunk_send_fallback_failed",
+                kind="stream_chunk",
+                chat_id=mask_id(chat_id),
+                message_thread_id=message_thread_id,
+                error=str(fallback_exc),
+            )
+            raise
+        logger.info(
+            "stream.chunk_send_fallback_succeeded",
+            kind="stream_chunk",
+            chat_id=mask_id(chat_id),
+            message_thread_id=message_thread_id,
+        )
+        return message_thread_id
+
+
 def _send_chunks(
     text: str,
     *,
@@ -770,6 +992,8 @@ def _send_chunks(
     message_thread_id: int | None,
     parse_mode: str | None,
     html_aware: bool,
+    agent_key: str | None = None,
+    topic_title: str | None = None,
 ) -> None:
     """Split *text* and send each chunk, in order, to the same chat + topic.
 
@@ -778,56 +1002,25 @@ def _send_chunks(
     as plain text so the content always reaches the operator even when
     formatting doesn't. ``_NotConfigured`` always propagates unchanged so
     the caller's existing best-effort no-op behaviour is preserved.
+
+    When *agent_key* is given (the registry key `message_thread_id` came
+    from), a "message thread not found"/"TOPIC_DELETED" class of error
+    self-heals: the dead registry entry is invalidated, a fresh topic is
+    created via `_ensure_topic_thread`, and every remaining chunk (including
+    the one that failed) is sent to the NEW thread id — see
+    `_send_one_chunk`. A "TOPIC_CLOSED" error instead routes to the chat's
+    General topic without recreating (the operator closed it on purpose).
     """
+    thread_id = message_thread_id
     for chunk in _split_for_telegram(text, html_aware=html_aware):
-        try:
-            _send_telegram(
-                chunk,
-                chat_id=chat_id,
-                message_thread_id=message_thread_id,
-                parse_mode=parse_mode,
-            )
-        except _NotConfigured:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            if parse_mode is None:
-                raise
-            # Explicit-failure-logs sprint, Part A.3: a `TelegramSendError`
-            # carries the real HTTP status + Telegram's own `description`
-            # ("Can't parse entities: ..."); any OTHER exception (a network
-            # error, ...) degrades to just `error=str(exc)` -- either way a
-            # 400 is never just a silent retry with no diagnostic trail.
-            logger.warning(
-                "stream.chunk_send_failed_retry_plain",
-                kind="stream_chunk",
-                status_code=getattr(exc, "status_code", None),
-                description=getattr(exc, "description", None),
-                chat_id=mask_id(chat_id),
-                message_thread_id=message_thread_id,
-                error=str(exc),
-            )
-            try:
-                _send_telegram(
-                    _strip_html(chunk),
-                    chat_id=chat_id,
-                    message_thread_id=message_thread_id,
-                    parse_mode=None,
-                )
-            except Exception as fallback_exc:  # noqa: BLE001
-                logger.error(
-                    "stream.chunk_send_fallback_failed",
-                    kind="stream_chunk",
-                    chat_id=mask_id(chat_id),
-                    message_thread_id=message_thread_id,
-                    error=str(fallback_exc),
-                )
-                raise
-            logger.info(
-                "stream.chunk_send_fallback_succeeded",
-                kind="stream_chunk",
-                chat_id=mask_id(chat_id),
-                message_thread_id=message_thread_id,
-            )
+        thread_id = _send_one_chunk(
+            chunk,
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            parse_mode=parse_mode,
+            agent_key=agent_key,
+            topic_title=topic_title,
+        )
 
 
 def stream_agent_turn(
@@ -869,9 +1062,12 @@ def stream_agent_turn(
     summary = redact_text(summary) if summary is not None else summary
 
     message_thread_id: int | None = None
+    stream_agent_key: str | None = None
+    stream_topic_title: str | None = None
     if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
-        agent_key = _resolve_agent_key(actor)
-        message_thread_id = _ensure_topic_thread(agent_key, f"{actor}")
+        stream_agent_key = _resolve_agent_key(actor)
+        stream_topic_title = f"{actor}"
+        message_thread_id = _ensure_topic_thread(stream_agent_key, stream_topic_title)
 
     use_rich = getattr(settings, "telegram_stream_rich", True)
     chat_id = settings.telegram_stream_chat_id
@@ -944,6 +1140,8 @@ def stream_agent_turn(
             message_thread_id=message_thread_id,
             parse_mode=parse_mode,
             html_aware=html_aware,
+            agent_key=stream_agent_key,
+            topic_title=stream_topic_title,
         )
     except _NotConfigured:
         pass  # Telegram not set up — streaming is best-effort
