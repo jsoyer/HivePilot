@@ -336,6 +336,91 @@ class TestNotifyApprovalRequiredRouting:
         with pytest.raises(RuntimeError):
             telegram_bot.notify_approval_required(run_id=4, project="acme", task="deploy")
 
+    def test_stale_topic_self_heals_retries_same_chat_not_dm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dead "Approvals" topic (message thread not found) must NOT
+        immediately fall back to the DM — it self-heals: invalidate the
+        registry entry, recreate the topic, and retry in the SAME group
+        chat with the fresh thread id."""
+        self._patch_settings(
+            monkeypatch, stream_topics=True, stream_chat_id=-100111, notification_chat_id=555
+        )
+        calls: list[dict] = []
+
+        async def fake_send_keyboard(
+            bot, *, chat_id, run_id, project, task, details=None, message_thread_id=None
+        ):
+            calls.append({"chat_id": chat_id, "message_thread_id": message_thread_id})
+            if message_thread_id == 208:
+                raise RuntimeError("Bad Request: message thread not found")
+
+        ensure_calls: list[str] = []
+
+        def fake_ensure(agent_key: str, title: str):
+            ensure_calls.append(agent_key)
+            return 208 if len(ensure_calls) == 1 else 999
+
+        with (
+            patch.object(telegram_bot, "_send_approval_keyboard_message", fake_send_keyboard),
+            patch(
+                "hivepilot.services.notification_service._ensure_topic_thread",
+                side_effect=fake_ensure,
+            ),
+            patch(
+                "hivepilot.services.notification_service._invalidate_topic",
+                return_value=208,
+            ) as mock_invalidate,
+            patch("telegram.Bot") as mock_bot_cls,
+        ):
+            mock_bot_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+            mock_bot_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            telegram_bot.notify_approval_required(run_id=6, project="acme", task="deploy")
+
+        mock_invalidate.assert_called_once_with("approvals")
+        assert len(calls) == 2
+        assert calls[0]["chat_id"] == -100111
+        assert calls[0]["message_thread_id"] == 208
+        assert calls[1]["chat_id"] == -100111  # SAME group, NOT the DM
+        assert calls[1]["message_thread_id"] == 999  # fresh, recreated topic
+
+    def test_closed_topic_falls_back_to_general_not_dm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A CLOSED (not deleted) "Approvals" topic must NOT be recreated —
+        it routes to the group's General topic (no thread id), still the
+        SAME chat, not the DM."""
+        self._patch_settings(
+            monkeypatch, stream_topics=True, stream_chat_id=-100111, notification_chat_id=555
+        )
+        calls: list[dict] = []
+
+        async def fake_send_keyboard(
+            bot, *, chat_id, run_id, project, task, details=None, message_thread_id=None
+        ):
+            calls.append({"chat_id": chat_id, "message_thread_id": message_thread_id})
+            if message_thread_id == 208:
+                raise RuntimeError("Bad Request: TOPIC_CLOSED")
+
+        with (
+            patch.object(telegram_bot, "_send_approval_keyboard_message", fake_send_keyboard),
+            patch(
+                "hivepilot.services.notification_service._ensure_topic_thread",
+                return_value=208,
+            ) as mock_ensure,
+            patch("telegram.Bot") as mock_bot_cls,
+        ):
+            mock_bot_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+            mock_bot_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            telegram_bot.notify_approval_required(run_id=7, project="acme", task="deploy")
+
+        # Only the initial resolve call -- no recreate attempt for a closed topic.
+        mock_ensure.assert_called_once_with("approvals", "⛔ Approvals")
+        assert len(calls) == 2
+        assert calls[0]["chat_id"] == -100111
+        assert calls[1]["chat_id"] == -100111  # SAME group, NOT the DM
+        assert calls[1]["message_thread_id"] is None  # General
+
 
 # ---------------------------------------------------------------------------
 # _callback_approval — approve/deny button pressed from the GROUP chat

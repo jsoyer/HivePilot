@@ -139,7 +139,14 @@ def _execute_concierge_decision(
                 return "Invalid run id."
             approve = decision.action == "approve"
             reason = None if approve else f"Denied via {source.title()} concierge"
-            orch.run_approved(run_id=run_id, approve=approve, approver=source, reason=reason)
+            try:
+                orch.approve_run(run_id=run_id, approve=approve, approver=source, reason=reason)
+            except ValueError as exc:
+                # Not pending / unknown run -- surface a clean message instead
+                # of letting this bubble up through _dispatch -> handle_* ->
+                # the /chatops/* endpoint as an unhandled 500 (same posture as
+                # api_service.handle_approval's ValueError -> 400).
+                return str(exc)
             return f"{'Approved' if approve else 'Denied'} run {run_id}"
 
     return "Nothing to do."
@@ -206,7 +213,14 @@ def _dispatch(command: str, args: list[str], source: str) -> str:
             return f"Invalid run_id: {args[0]!r}"
         approve = command == "approve"
         reason = None if approve else f"Denied via {source.title()}"
-        orch.run_approved(run_id=run_id, approve=approve, approver=source, reason=reason)
+        try:
+            orch.approve_run(run_id=run_id, approve=approve, approver=source, reason=reason)
+        except ValueError as exc:
+            # Not pending / unknown run -- surface a clean message instead of
+            # letting this bubble up through handle_* -> the /chatops/*
+            # endpoint as an unhandled 500 (same posture as
+            # api_service.handle_approval's ValueError -> 400).
+            return str(exc)
         return f"{'Approved' if approve else 'Denied'} run {run_id}"
 
     if command == "status":

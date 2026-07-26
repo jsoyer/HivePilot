@@ -728,17 +728,24 @@ def handle_approval(
 ):
     """Approve/deny a run. Non-admin callers may only act on their own tenant's runs.
 
+    Routes through `Orchestrator.approve_run` -- the single shared entrypoint
+    (also used by `telegram_bot`/`slack_bot`/`discord_bot`/`chatops_service`/
+    the CLI) that discriminates a pipeline-checkpoint approval (dispatches to
+    `resume_pipeline`) from a per-task approval (dispatches to `run_approved`),
+    so this endpoint no longer KeyErrors on a pipeline checkpoint (Mirador's
+    "Approve" 500 -- live traceback was `KeyError: 'noxys'`).
+
     Explicit-failure-logs sprint, Part A.2: logs the attempt (run_id, approve,
-    approver, caller) BEFORE dispatching, and on failure translates a known
-    rejection reason (`Orchestrator.run_approved` raises `ValueError`/
-    `KeyError` for unknown run / not pending / unknown task -- each logged
-    with its OWN specific reason at the orchestrator layer) into a clean 400
-    instead of an opaque, contextless 500. A route-mismatch note: this
-    endpoint only ever calls `run_approved` (the single-task path) -- a
-    pipeline-checkpoint approval belongs on `resume_pipeline` (see
-    `telegram_bot._dispatch_approval` for the reference routing logic); that
-    routing gap is tracked separately and intentionally NOT changed here (see
-    this sprint's Agent Notes) -- only the logging/error-message wording is.
+    approver, caller) BEFORE dispatching -- `approve_run`'s own dispatch (see
+    `Orchestrator.approve_run`) additionally logs the resolved route, and
+    `resume_pipeline`/`run_approved` each log their OWN specific rejection
+    reason (unknown run / not pending / wrong checkpoint kind / unknown task)
+    before raising -- so both this endpoint AND Telegram/Slack/Discord/
+    ChatOps/CLI get the same structured logging for free just by calling
+    `approve_run`, without each caller re-implementing it. On failure, a
+    known rejection (`ValueError`/`KeyError`) is translated into a clean 400
+    instead of an opaque 500; a genuinely unexpected exception is still
+    logged with full context before surfacing as a 500.
     """
     from hivepilot.utils.logging import get_logger
 
@@ -764,7 +771,7 @@ def handle_approval(
     )
     try:
         with run_duration_seconds.time():
-            result = _get_orchestrator().run_approved(
+            result = _get_orchestrator().approve_run(
                 run_id=run_id,
                 approve=action.approve,
                 approver=action.approver,
@@ -772,9 +779,12 @@ def handle_approval(
             )
     except (ValueError, KeyError) as exc:
         # Every KNOWN rejection reason (unknown run / not pending / unknown
-        # task) -- the orchestrator's own `approval.approve_rejected` log
-        # already recorded WHY; surface that same reason to the caller as a
-        # clean 400 rather than letting it fall through as an unhandled 500.
+        # task, or -- before this fix -- a pipeline checkpoint's task-name
+        # KeyError) -- `Orchestrator.approve_run` routes pipeline checkpoints
+        # to `resume_pipeline` and per-task approvals to `run_approved`, and
+        # both log their OWN specific `approval.*_rejected` reason before
+        # raising; surface that same reason to the caller as a clean 400
+        # rather than letting it fall through as an unhandled 500.
         api_logger.warning("api.approval.rejected", run_id=run_id, error=str(exc))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — genuinely unexpected: log full context, still 500

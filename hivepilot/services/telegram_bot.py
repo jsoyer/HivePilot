@@ -1220,48 +1220,22 @@ async def _cmd_approvals(update, context) -> None:
 def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | None = None):
     """Route an approve/deny to the right orchestrator entrypoint.
 
-    Pipeline-checkpoint approvals resume the parked pipeline; everything else is a
-    single-task approval.
+    Delegates to `Orchestrator.approve_run` -- the single shared helper (also
+    used by `api_service.handle_approval`/`slack_bot`/`discord_bot`/
+    `chatops_service`/the CLI) that discriminates a pipeline-checkpoint
+    approval (resumes the parked pipeline) from a single-task approval, so
+    this path and every other channel's path can never diverge again.
 
-    Explicit-failure-logs sprint, Part A.2: logs the run_id, project/pipeline,
-    task (when known), which route was taken, and the approver BEFORE
-    dispatching — and, on failure, the specific reason (surfaced by
-    `Orchestrator.run_approved`/`resume_pipeline`'s own
-    `approval.approve_rejected`/`approval.resume_rejected` logs) rather than
-    letting the caller only see a bare exception.
+    Explicit-failure-logs sprint, Part A.2: `approve_run` itself now logs the
+    run_id, project/pipeline, task (when known), which route was taken, and
+    the approver BEFORE dispatching (`approval.dispatch`), and on failure the
+    specific reason (`approval.resume_rejected`/`approval.approve_rejected`
+    from `resume_pipeline`/`run_approved`, or the generic
+    `approval.dispatch_failed` for anything else) -- so this path gets the
+    same structured logging as every other channel for free, instead of
+    re-implementing it locally.
     """
-    import json
-
-    from hivepilot.services import state_service
-
-    appr = state_service.get_approval(run_id)
-    meta = json.loads(appr.get("metadata") or "{}") if appr else {}
-    route = "pipeline_checkpoint" if meta.get("kind") == "pipeline_checkpoint" else "task"
-    logger.info(
-        "telegram.approval.dispatch",
-        run_id=run_id,
-        route=route,
-        project=appr.get("project") if appr else None,
-        task=appr.get("task") if appr else None,
-        pipeline=meta.get("pipeline"),
-        approve=approve,
-        approver=approver,
-    )
-    try:
-        if route == "pipeline_checkpoint":
-            return _get_orch().resume_pipeline(run_id=run_id, approve=approve, approver=approver)
-        return _get_orch().run_approved(
-            run_id=run_id, approve=approve, approver=approver, reason=reason
-        )
-    except Exception as exc:  # noqa: BLE001 — logged with full routing context, then re-raised
-        logger.error(
-            "telegram.approval.dispatch_failed",
-            run_id=run_id,
-            route=route,
-            approver=approver,
-            error=str(exc),
-        )
-        raise
+    return _get_orch().approve_run(run_id=run_id, approve=approve, approver=approver, reason=reason)
 
 
 async def _cmd_approve(update, context) -> None:
@@ -1558,6 +1532,16 @@ def notify_approval_required(
     lost because of a topic issue: if sending to the resolved chat fails
     outright (not just topic-creation, which already degrades gracefully to
     a threadless send), fall back once to the DM/notification chat_id.
+
+    Same self-heal as `notification_service._send_one_chunk` for a DEAD
+    "Approvals" topic (deleted/migrated registry): rather than immediately
+    giving up on the group chat and falling to the DM, a "message thread not
+    found"/"TOPIC_DELETED"-class error first invalidates the cached
+    `approvals` registry entry, recreates the topic, and retries in the SAME
+    chat with the fresh thread id — only a second failure (or a plain
+    non-topic error) falls back to the DM as before. A "TOPIC_CLOSED" error
+    routes to the group's General topic (no thread id) instead of recreating
+    — the operator closed it on purpose.
     """
     chat_id = _approval_chat_id()
     if not chat_id:
@@ -1569,7 +1553,16 @@ def notify_approval_required(
     async def _send():
         from telegram import Bot
 
+        from hivepilot.services.config_provenance import mask_id
+        from hivepilot.services.notification_service import (
+            _ensure_topic_thread,
+            _invalidate_topic,
+            _is_closed_topic_error,
+            _is_stale_topic_error,
+        )
+
         async with Bot(token) as bot:
+            thread_id = message_thread_id
             try:
                 await _send_approval_keyboard_message(
                     bot,
@@ -1578,9 +1571,74 @@ def notify_approval_required(
                     project=project,
                     task=task,
                     details=details,
-                    message_thread_id=message_thread_id,
+                    message_thread_id=thread_id,
                 )
+                return
             except Exception as exc:  # noqa: BLE001
+                description = str(exc)
+                self_healed = False
+
+                if thread_id is not None and _is_closed_topic_error(description):
+                    logger.warning(
+                        "stream.topic_closed_fallback_general",
+                        agent_key=_APPROVALS_TOPIC_KEY,
+                        chat_id=mask_id(chat_id),
+                        message_thread_id=thread_id,
+                        description=description,
+                    )
+                    thread_id = None
+                    self_healed = True
+                elif thread_id is not None and _is_stale_topic_error(description):
+                    dead = _invalidate_topic(_APPROVALS_TOPIC_KEY)
+                    logger.warning(
+                        "stream.topic_stale_invalidated",
+                        agent_key=_APPROVALS_TOPIC_KEY,
+                        chat_id=mask_id(chat_id),
+                        dead_message_thread_id=dead if dead is not None else thread_id,
+                        description=description,
+                    )
+                    new_thread_id = _ensure_topic_thread(
+                        _APPROVALS_TOPIC_KEY, _APPROVALS_TOPIC_TITLE
+                    )
+                    if new_thread_id is not None:
+                        logger.info(
+                            "stream.topic_recreated",
+                            agent_key=_APPROVALS_TOPIC_KEY,
+                            chat_id=mask_id(chat_id),
+                            message_thread_id=new_thread_id,
+                        )
+                    thread_id = new_thread_id
+                    self_healed = True
+
+                if self_healed:
+                    try:
+                        await _send_approval_keyboard_message(
+                            bot,
+                            chat_id=chat_id,
+                            run_id=run_id,
+                            project=project,
+                            task=task,
+                            details=details,
+                            message_thread_id=thread_id,
+                        )
+                        logger.info(
+                            "stream.topic_self_heal_delivered_general"
+                            if thread_id is None
+                            else "stream.topic_recreate_resend_succeeded",
+                            agent_key=_APPROVALS_TOPIC_KEY,
+                            chat_id=mask_id(chat_id),
+                            run_id=run_id,
+                        )
+                        return
+                    except Exception as retry_exc:  # noqa: BLE001
+                        logger.warning(
+                            "stream.topic_recreate_resend_failed",
+                            agent_key=_APPROVALS_TOPIC_KEY,
+                            chat_id=mask_id(chat_id),
+                            message_thread_id=thread_id,
+                            error=str(retry_exc),
+                        )
+
                 dm_chat_id = _notification_chat_id()
                 if not dm_chat_id or dm_chat_id == chat_id:
                     raise

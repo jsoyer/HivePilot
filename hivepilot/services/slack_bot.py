@@ -304,7 +304,7 @@ def _register_handlers(bolt_app) -> None:
             return
         respond(f"Running approved task #{run_id}...")
         try:
-            result = _get_orch().run_approved(run_id=run_id, approve=True, approver="slack")
+            result = _get_orch().approve_run(run_id=run_id, approve=True, approver="slack")
             status = "succeeded" if result.success else "failed"
             respond(f"Run #{run_id} approved — {status}.")
         except Exception as exc:
@@ -329,7 +329,7 @@ def _register_handlers(bolt_app) -> None:
             return
         reason = parts[1] if len(parts) > 1 else "Denied via Slack"
         try:
-            _get_orch().run_approved(run_id=run_id, approve=False, approver="slack", reason=reason)
+            _get_orch().approve_run(run_id=run_id, approve=False, approver="slack", reason=reason)
             respond(f"Run #{run_id} denied.")
         except Exception as exc:
             respond(f"Error: {exc}")
@@ -375,7 +375,7 @@ def _register_handlers(bolt_app) -> None:
             "id", "unknown"
         )
         try:
-            result = _get_orch().run_approved(
+            result = _get_orch().approve_run(
                 run_id=run_id,
                 approve=approve,
                 approver=f"slack:{user}",

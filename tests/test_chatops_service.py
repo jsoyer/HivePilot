@@ -44,20 +44,20 @@ class TestHandleSignal:
             result = chatops_service.handle_signal({"text": "approvals"})
         assert "No pending approvals." in result or "run_id" in result
 
-    def test_bare_approve_form_routes_to_run_approved(self) -> None:
+    def test_bare_approve_form_routes_to_approve_run(self) -> None:
         orch = MagicMock()
         with patch.object(chatops_service, "_get_orchestrator", return_value=orch):
             result = chatops_service.handle_signal({"text": "approve 42"})
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42, approve=True, approver="signal", reason=None
         )
         assert "42" in result
 
-    def test_bare_deny_form_routes_to_run_approved(self) -> None:
+    def test_bare_deny_form_routes_to_approve_run(self) -> None:
         orch = MagicMock()
         with patch.object(chatops_service, "_get_orchestrator", return_value=orch):
             chatops_service.handle_signal({"text": "deny 42"})
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42, approve=False, approver="signal", reason="Denied via Signal"
         )
 
@@ -226,9 +226,212 @@ class TestDispatchConciergeOn:
         with patch.object(chatops_service, "_get_orchestrator", return_value=orch):
             chatops_service._dispatch("yes", ["tok"], source="signal")
         assert "approve" in calls
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42, approve=True, approver="signal", reason=None
         )
 
     def teardown_method(self, method) -> None:
         chatops_service._pending_concierge_text.clear()
+
+
+# ---------------------------------------------------------------------------
+# `_dispatch`'s bare `approve`/`deny` command AND `_execute_concierge_decision`'s
+# confirmed approve/deny action now go through the shared `Orchestrator.
+# approve_run` helper instead of calling `run_approved` directly -- regression
+# coverage for the same pipeline-checkpoint KeyError bug on the ChatOps
+# channel (shared by Signal/Slack/Discord/Telegram's `/chatops/*` webhooks).
+# ---------------------------------------------------------------------------
+
+
+class _FakeApprovalOrchestrator:
+    """Real `Orchestrator.approve_run` bound to fake `resume_pipeline`/
+    `run_approved` -- exercises the ACTUAL routing method through
+    `_dispatch`/`_execute_concierge_decision`, not a re-implementation."""
+
+    def __init__(self) -> None:
+        self.resume_pipeline_calls: list[dict] = []
+        self.run_approved_calls: list[dict] = []
+
+    def resume_pipeline(self, **kwargs):
+        from hivepilot.orchestrator import RunResult
+
+        self.resume_pipeline_calls.append(kwargs)
+        return RunResult("noxys", "noxys", kwargs.get("approve", True))
+
+    def run_approved(self, **kwargs):
+        from hivepilot.orchestrator import RunResult
+
+        self.run_approved_calls.append(kwargs)
+        return RunResult("proj", "task", kwargs.get("approve", True))
+
+
+from hivepilot.orchestrator import Orchestrator as _Orchestrator  # noqa: E402
+
+_FakeApprovalOrchestrator.approve_run = _Orchestrator.approve_run  # type: ignore[attr-defined]
+
+
+def _pipeline_checkpoint_approval() -> dict:
+    import json
+
+    return {
+        "status": "pending",
+        "task": "noxys",  # the pipeline name -- NOT a task -- is what KeyErrors
+        "metadata": json.dumps({"kind": "pipeline_checkpoint", "pipeline": "noxys"}),
+    }
+
+
+def _per_task_approval() -> dict:
+    import json
+
+    return {"status": "pending", "task": "build", "metadata": json.dumps({})}
+
+
+class TestBareApproveDenyRoutingThroughSharedHelper:
+    """The bare `approve <run_id>` / `deny <run_id>` command, reached via
+    `handle_signal` (Signal) and shared by every other channel's `/chatops/*`
+    webhook (`handle_slack`/`handle_discord`/`handle_telegram`)."""
+
+    def test_pipeline_checkpoint_approval_routes_to_resume_pipeline(self) -> None:
+        """Live-bug regression: approving a pipeline-checkpoint run via the
+        bare `approve <run_id>` command must route to `resume_pipeline`,
+        never `run_approved`, and must not raise."""
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
+        ):
+            result = chatops_service.handle_signal({"text": "approve 7"})
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.run_approved_calls == []
+        assert "Approved" in result
+
+    def test_per_task_approval_still_routes_to_run_approved(self) -> None:
+        """A plain per-task approval via the bare `approve` command must
+        keep routing to `run_approved` -- unchanged behavior."""
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_per_task_approval(),
+            ),
+            patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
+        ):
+            result = chatops_service.handle_signal({"text": "approve 8"})
+        assert len(fake_orch.run_approved_calls) == 1
+        assert fake_orch.resume_pipeline_calls == []
+        assert "Approved" in result
+
+    def test_deny_pipeline_checkpoint_routes_to_resume_pipeline(self) -> None:
+        """Denying a pipeline checkpoint via the bare `deny` command must
+        also route to `resume_pipeline` (approve=False), not `run_approved`."""
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
+        ):
+            result = chatops_service.handle_signal({"text": "deny 9 not ready"})
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.resume_pipeline_calls[0]["approve"] is False
+        assert fake_orch.run_approved_calls == []
+        assert "Denied" in result
+
+    def test_unknown_run_returns_clean_message_not_crash(self) -> None:
+        """A not-pending/unknown run must return the clean `ValueError`
+        message, never let the exception bubble up to the `/chatops/*`
+        endpoint as an unhandled 500 (same posture as api_service's 400)."""
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=None),
+            patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
+        ):
+            result = chatops_service.handle_signal({"text": "approve 999"})
+        assert "not pending approval" in result
+
+
+class TestConciergeApproveDenyRoutingThroughSharedHelper:
+    """The confirmed `action: approve`/`deny` concierge decision, executed
+    via `_execute_concierge_decision` after a "yes <token>" reply."""
+
+    def _pipeline_checkpoint_decision(self, action: str):
+        from hivepilot.services.concierge_service import ConciergeDecision
+
+        return ConciergeDecision(
+            kind="action", action=action, params={"run_id": 7}, destructive=True
+        )
+
+    def test_pipeline_checkpoint_approval_routes_to_resume_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
+        decision = self._pipeline_checkpoint_decision("approve")
+        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
+        ):
+            chatops_service._dispatch("yes", ["tok"], source="signal")
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.run_approved_calls == []
+
+    def test_per_task_approval_still_routes_to_run_approved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
+        decision = self._pipeline_checkpoint_decision("approve")
+        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_per_task_approval(),
+            ),
+            patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
+        ):
+            chatops_service._dispatch("yes", ["tok"], source="signal")
+        assert len(fake_orch.run_approved_calls) == 1
+        assert fake_orch.resume_pipeline_calls == []
+
+    def test_deny_pipeline_checkpoint_routes_to_resume_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
+        decision = self._pipeline_checkpoint_decision("deny")
+        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
+        ):
+            chatops_service._dispatch("yes", ["tok"], source="signal")
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.resume_pipeline_calls[0]["approve"] is False
+        assert fake_orch.run_approved_calls == []
+
+    def teardown_method(self, method) -> None:
+        chatops_service._pending_concierge_text.clear()
+
+
+def test_no_direct_run_approved_call_in_chatops_service_source() -> None:
+    """Static guard: the routing decision must live in ONE place
+    (`Orchestrator.approve_run`) -- `chatops_service.py` must never call
+    `run_approved`/`resume_pipeline` directly again for the approve/deny
+    routing decision."""
+    from pathlib import Path
+
+    source = Path(chatops_service.__file__).read_text()
+    assert ".run_approved(" not in source
+    assert ".resume_pipeline(" not in source
+    assert ".approve_run(" in source
