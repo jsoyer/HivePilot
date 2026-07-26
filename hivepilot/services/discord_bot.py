@@ -25,6 +25,22 @@ _DISCORD_API = "https://discord.com/api/v10"
 # slack_bot._pending_concierge / telegram_bot._pending_concierge.
 _pending_concierge: dict[int, tuple[str, "ConciergeDecision"]] = {}
 
+# Discord's hard per-message character cap -- mirrors
+# hivepilot.streaming.discord_channel._DISCORD_MAX_LEN. Used to split a long
+# Challenge/Ask CoS response into multiple ordered followup messages instead
+# of letting it silently get rejected/truncated.
+_MAX_MSG_LEN = 2000
+
+# Challenge/Ask (parity with Telegram's Challenge / Ask button) modal
+# constants. Discord's HTTP-interactions mode never receives plain messages
+# (the gateway-only, privileged-intent concierge text flow above doesn't
+# apply here), so the follow-up text is captured via a MODAL opened
+# synchronously from the button press instead. The run_id is encoded
+# directly in the modal's custom_id -- no server-side pending-state dict is
+# needed (and none could safely span the stateless HTTP webhook process).
+_CHALLENGE_MODAL_PREFIX = "challenge_modal:"
+_CHALLENGE_TEXT_CUSTOM_ID = "challenge_text"
+
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -319,6 +335,131 @@ def _handle_component(
     _followup_message(application_id, interaction_token, {"content": msg})
 
 
+def _approval_components(run_id: int) -> list[dict[str, Any]]:
+    """Approve/Deny/Challenge button row -- shared by `notify_approval_required`
+    (the initial approval message) and the post-challenge followup (so the
+    operator can act again after a Challenge/Ask round-trip), keeping the
+    button layout defined in exactly ONE place."""
+    return [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 3,
+                    "label": "Approve",
+                    "custom_id": f"approve:{run_id}",
+                },
+                {
+                    "type": 2,
+                    "style": 4,
+                    "label": "Deny",
+                    "custom_id": f"deny:{run_id}",
+                },
+                {
+                    "type": 2,
+                    "style": 2,
+                    "label": "Challenge / Ask",
+                    "custom_id": f"challenge:{run_id}",
+                },
+            ],
+        }
+    ]
+
+
+def _challenge_modal_response(run_id: int) -> dict[str, Any]:
+    """Build the MODAL (response type 9) for the Challenge/Ask button.
+
+    A MODAL response MUST be the immediate, synchronous reply to the
+    component interaction -- unlike Approve/Deny it can never be deferred
+    and answered later on a background thread. The run_id is encoded in the
+    modal's own custom_id (`_CHALLENGE_MODAL_PREFIX`) so no server-side
+    pending-state dict is needed between the button press and the submit.
+    """
+    return {
+        "type": 9,  # MODAL
+        "data": {
+            "custom_id": f"{_CHALLENGE_MODAL_PREFIX}{run_id}",
+            "title": f"Challenge / Ask — run #{run_id}"[:45],  # Discord's modal title cap
+            "components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 4,  # TEXT_INPUT
+                            "custom_id": _CHALLENGE_TEXT_CUSTOM_ID,
+                            "style": 2,  # PARAGRAPH
+                            "label": "Your challenge or question",
+                            "required": True,
+                            "max_length": 4000,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def _extract_modal_text(data_block: dict[str, Any], target_custom_id: str) -> str | None:
+    """Pull a text-input value out of a MODAL_SUBMIT interaction's nested
+    `components` (Discord nests each field inside its own action-row).
+    Returns None if the field is missing or its value isn't a string --
+    callers must treat that as a malformed/rejected submission, never an
+    empty-but-valid answer."""
+    for row in data_block.get("components") or []:
+        for component in row.get("components") or []:
+            if component.get("custom_id") == target_custom_id:
+                value = component.get("value")
+                return value if isinstance(value, str) else None
+    return None
+
+
+def _handle_challenge_modal_submit(
+    run_id: int,
+    approver: str,
+    challenge_text: str,
+    application_id: str,
+    interaction_token: str,
+) -> None:
+    """Dispatch a submitted Challenge/Ask modal in a background thread, via
+    the SAME channel-agnostic `Orchestrator.human_challenge()` entrypoint
+    Telegram/Slack use — keeps the CoS role-resolution + prompt-dispatch
+    logic in ONE place instead of a Discord-specific copy.
+    """
+    try:
+        cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("discord.challenge.failed", run_id=run_id, error=str(exc))
+        _followup_message(
+            application_id,
+            interaction_token,
+            {
+                "content": f"⚠️ Challenge error for run #{run_id}: {exc}",
+                "allowed_mentions": {"parse": []},
+            },
+        )
+        return
+
+    logger.info("discord.challenge.dispatched", run_id=run_id)
+
+    from hivepilot.streaming.base import split_for
+
+    body = f"🗣 Human → Jules\n{challenge_text}\n\n🛡️ Jules → Human\n{cos_response}"
+    chunks = split_for(body, _MAX_MSG_LEN, entity_aware=False)
+    for i, chunk in enumerate(chunks):
+        # allowed_mentions={"parse": []} on EVERY chunk -- both challenge_text
+        # (operator-typed) and cos_response (LLM-generated) are untrusted
+        # text that must never trigger an @everyone/@here/role ping.
+        payload: dict[str, Any] = {"content": chunk, "allowed_mentions": {"parse": []}}
+        if i == len(chunks) - 1:
+            # Re-attach Approve/Deny/Challenge buttons to the LAST chunk so
+            # the operator can act again -- lands in the SAME channel the
+            # interaction happened in via the followup webhook, no
+            # dependency on a separately-configured notification channel.
+            payload["components"] = _approval_components(run_id)
+        _followup_message(application_id, interaction_token, payload)
+
+
 def handle_interaction(body: bytes, signature: str, timestamp: str) -> dict[str, Any]:
     """
     Process a raw Discord interaction from the FastAPI webhook endpoint.
@@ -346,9 +487,66 @@ def handle_interaction(body: bytes, signature: str, timestamp: str) -> dict[str,
 
     # MESSAGE_COMPONENT (button)
     if interaction_type == 3:
+        custom_id = data.get("data", {}).get("custom_id", "")
+        action, _, raw_id = custom_id.partition(":")
+        if action == "challenge":
+            # The Challenge/Ask button opens a MODAL -- a synchronous
+            # response, never threaded/deferred like approve/deny.
+            try:
+                run_id = int(raw_id)
+            except ValueError:
+                return {
+                    "type": 4,
+                    "data": {"content": f"Invalid component id: {custom_id!r}", "flags": 64},
+                }
+            logger.info("discord.challenge.requested", run_id=run_id)
+            return _challenge_modal_response(run_id)
         threading.Thread(
             target=_handle_component,
             args=(data, application_id, interaction_token),
+            daemon=True,
+        ).start()
+        return {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+
+    # MODAL_SUBMIT (Challenge/Ask follow-up text)
+    if interaction_type == 5:
+        modal_custom_id = data.get("data", {}).get("custom_id", "")
+        if not modal_custom_id.startswith(_CHALLENGE_MODAL_PREFIX):
+            return {
+                "type": 4,
+                "data": {"content": f"Unknown modal: {modal_custom_id!r}", "flags": 64},
+            }
+        raw_id = modal_custom_id[len(_CHALLENGE_MODAL_PREFIX) :]
+        try:
+            run_id = int(raw_id)
+        except ValueError:
+            return {
+                "type": 4,
+                "data": {"content": f"Invalid modal id: {modal_custom_id!r}", "flags": 64},
+            }
+
+        challenge_text = _extract_modal_text(data.get("data", {}), _CHALLENGE_TEXT_CUSTOM_ID)
+        if not challenge_text or not challenge_text.strip():
+            # Fail-closed: an empty/whitespace/missing/non-string submission
+            # must NEVER be forwarded to human_challenge as a valid answer.
+            return {
+                "type": 4,
+                "data": {"content": "Challenge/question text cannot be empty.", "flags": 64},
+            }
+
+        member = data.get("member") or {}
+        user = member.get("user") or data.get("user") or {}
+        approver = user.get("username") or str(user.get("id", "discord"))
+
+        threading.Thread(
+            target=_handle_challenge_modal_submit,
+            args=(
+                run_id,
+                f"discord:{approver}",
+                challenge_text.strip(),
+                application_id,
+                interaction_token,
+            ),
             daemon=True,
         ).start()
         return {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
@@ -406,7 +604,8 @@ def handle_interaction(body: bytes, signature: str, timestamp: str) -> dict[str,
 
 
 def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
-    """Post an approval embed with Approve/Deny buttons to the notification channel."""
+    """Post an approval embed with Approve/Deny/Challenge buttons to the
+    notification channel."""
     channel_id = settings.discord_notification_channel_id
     if not channel_id:
         raise RuntimeError("No Discord notification channel_id configured")
@@ -419,25 +618,7 @@ def notify_approval_required(*, run_id: int, project: str, task: str) -> None:
                 "color": 0xFFA500,
             }
         ],
-        "components": [
-            {
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 3,
-                        "label": "Approve",
-                        "custom_id": f"approve:{run_id}",
-                    },
-                    {
-                        "type": 2,
-                        "style": 4,
-                        "label": "Deny",
-                        "custom_id": f"deny:{run_id}",
-                    },
-                ],
-            }
-        ],
+        "components": _approval_components(run_id),
     }
     _post_message(channel_id, payload)
 

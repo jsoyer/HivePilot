@@ -25,6 +25,22 @@ _app_lock = threading.Lock()
 # as chatops_service._pending_concierge_text / telegram_bot._pending_concierge.
 _pending_concierge: dict[str, tuple[str, "ConciergeDecision"]] = {}
 
+# Challenge/Ask (parity with Telegram's Challenge / Ask button): pending
+# (run_id, approver) awaiting a plain-text follow-up reply, keyed by
+# channel_id -- same per-channel granularity as _pending_concierge (Slack
+# has no forum-topic equivalent to scope this more tightly). A SEPARATE dict
+# from _pending_concierge: Challenge/Ask is a core, always-on interaction
+# (never gated behind chatops_concierge_enabled), never a concierge
+# route/action decision.
+_pending_challenges: dict[str, tuple[int, str]] = {}
+
+# Slack's chat.postMessage/respond text field is practically capped well
+# before its ~40k total message-body limit -- mirrors
+# hivepilot.streaming.slack_channel._SLACK_MAX_LEN. Used to split a long CoS
+# Challenge/Ask response into multiple ordered messages instead of letting
+# it silently break block/section rendering.
+_SLACK_TEXT_MAX_LEN = 3000
+
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -113,6 +129,11 @@ def _approval_blocks(run_id: int, project: str, task: str) -> list[dict[str, Any
                     "style": "danger",
                     "action_id": f"deny_{run_id}",
                 },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Challenge / Ask"},
+                    "action_id": f"challenge_{run_id}",
+                },
             ],
         },
     ]
@@ -172,6 +193,49 @@ def _slack_escape(text: str) -> str:
     never applied to our own static labels, the confirmation token, or
     button values."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _handle_challenge_reply(pending: tuple[int, str], challenge_text: str, say: Any) -> None:
+    """Resolve a pending Challenge/Ask follow-up reply via the SAME
+    channel-agnostic `Orchestrator.human_challenge()` entrypoint Telegram
+    uses — keeps the CoS role-resolution + prompt-dispatch logic in ONE
+    place instead of a Slack-specific copy. Both `challenge_text` (operator-
+    typed) and the CoS response (LLM-generated) are escaped with
+    `_slack_escape` before display — same broadcast-ping guard as the
+    concierge answer/summary text — and split with the shared
+    `hivepilot.streaming.base.split_for` chunker so a long CoS response
+    never breaks Slack's rendering.
+    """
+    run_id, approver = pending
+    try:
+        cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("slack.challenge.failed", run_id=run_id, error=str(exc))
+        say(f"⚠️ Challenge error for run #{run_id}: {exc}")
+        return
+
+    logger.info("slack.challenge.dispatched", run_id=run_id)
+
+    from hivepilot.streaming.base import split_for
+
+    body = (
+        f"🗣 Human → Jules\n{_slack_escape(challenge_text)}\n\n"
+        f"🛡️ Jules → Human\n{_slack_escape(cos_response)}"
+    )
+    for chunk in split_for(body, _SLACK_TEXT_MAX_LEN, entity_aware=False):
+        say(chunk)
+
+    # Re-send the Approve/Deny/Challenge keyboard so the operator can act
+    # again — mirrors Telegram's post-challenge keyboard resend.
+    try:
+        from hivepilot.services import state_service
+
+        row = state_service.get_approval(run_id)
+        if row:
+            blocks = _approval_blocks(run_id, row.get("project", ""), row.get("task", ""))
+            say(blocks=blocks, text=f"Approval required — run #{run_id}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("slack.challenge.resend_keyboard_error", run_id=run_id, error=str(exc))
 
 
 def _execute_concierge(decision: "ConciergeDecision", channel_id: str, respond: Any) -> None:
@@ -390,6 +454,36 @@ def _register_handlers(bolt_app) -> None:
             logger.error("slack.handle_approval_action.error", run_id=run_id, error=str(exc))
             respond(f"Error processing run #{run_id}: {exc}")
 
+    # -- Challenge / Ask button (parity with Telegram's Challenge / Ask
+    # button) — a SEPARATE action_id namespace from approve/deny, since a
+    # challenge only stores pending state and prompts for a follow-up
+    # message rather than immediately mutating approval state. -------------
+
+    @bolt_app.action({"action_id": "^challenge_\\d+$"})
+    def handle_challenge_action(ack, action, body, respond):
+        ack()
+        channel_id = ((body or {}).get("channel") or {}).get("id", "")
+        if not _is_allowed(channel_id):
+            respond("Unauthorized channel.")
+            return
+        action_id = action.get("action_id", "")
+        try:
+            _, raw_id = action_id.rsplit("_", 1)
+            run_id = int(raw_id)
+        except (ValueError, AttributeError):
+            respond(f"Invalid action: {action_id!r}")
+            return
+        user = (body.get("user") or {}).get("username") or (body.get("user") or {}).get(
+            "id", "unknown"
+        )
+        _pending_challenges[channel_id] = (run_id, f"slack:{user}")
+        logger.info("slack.challenge.requested", run_id=run_id)
+        respond(
+            f"Send your challenge or question for run #{run_id} as your next message"
+            " — the Chief of Staff will respond and may revise the plan."
+            " The run stays paused."
+        )
+
     # -- Natural-language concierge (opt-in, settings.chatops_concierge_enabled) --
     # Registered unconditionally — the flag check is the FIRST line of the
     # listener body, guaranteeing byte-identical (no-op) behaviour when off,
@@ -397,18 +491,34 @@ def _register_handlers(bolt_app) -> None:
     # this one keeps the handler map shape stable for tests/introspection).
 
     @bolt_app.event("message")
-    def handle_concierge_message(event, say):
-        if not settings.chatops_concierge_enabled:
-            return
+    def handle_message(event, say):
         channel_id = event.get("channel", "")
         if not _is_allowed(channel_id):
             return
         # Ignore the bot's own messages and non-plain subtypes (edits,
         # channel-join notices, etc.) to avoid loops / mis-classifying
-        # system messages as user requests.
+        # system messages as user requests, for BOTH Challenge/Ask replies
+        # and concierge routing below.
         if event.get("bot_id") or event.get("subtype"):
             return
         text = (event.get("text") or "").strip()
+
+        # Check for a pending Challenge/Ask reply FIRST — unconditional (not
+        # gated behind chatops_concierge_enabled), mirroring Telegram's
+        # `_cmd_mention` precedence. An empty/whitespace-only message must
+        # never be treated as an answer that consumes/resolves the pending
+        # challenge (fail-closed) — it's simply ignored, leaving the
+        # challenge pending for a real follow-up.
+        pending = _pending_challenges.get(channel_id)
+        if pending is not None:
+            if not text:
+                return
+            _pending_challenges.pop(channel_id, None)
+            _handle_challenge_reply(pending, text, say)
+            return
+
+        if not settings.chatops_concierge_enabled:
+            return
         if not text:
             return
 

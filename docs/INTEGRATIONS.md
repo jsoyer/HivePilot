@@ -46,6 +46,10 @@ hivepilot slack notify   # send a one-off message
 
 `slack start` uses Slack app/bot credentials (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`,
 `SLACK_SIGNING_SECRET`). Notifications can also go through a webhook (`SLACK_WEBHOOK_URL`).
+Approval messages carry Approve / Deny / **Challenge / Ask** buttons (Block Kit) — pressing
+Challenge / Ask prompts for a plain-text follow-up message, which is routed to the Chief of
+Staff (the run stays paused) via the same shared entrypoint Telegram uses. Restrict to
+specific channels with `HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS`.
 
 ## Discord
 
@@ -54,7 +58,11 @@ hivepilot discord start    # bot (long-running)
 hivepilot discord notify   # send a one-off message
 ```
 
-Webhook-based notifications use `DISCORD_WEBHOOK_URL`.
+Webhook-based notifications use `DISCORD_WEBHOOK_URL`. Approval messages carry Approve /
+Deny / **Challenge / Ask** buttons — pressing Challenge / Ask opens a modal (no privileged
+Message Content intent required); the submitted text is routed to the Chief of Staff (the
+run stays paused) via the same shared entrypoint Telegram/Slack use. Restrict to specific
+guilds/channels with `HIVEPILOT_DISCORD_ALLOWED_GUILD_IDS` / `HIVEPILOT_DISCORD_ALLOWED_CHANNEL_IDS`.
 
 ## Signal
 

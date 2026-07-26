@@ -152,6 +152,48 @@ def _component_body(
     return json.dumps(payload).encode()
 
 
+def _modal_submit_body(
+    custom_id: str,
+    *,
+    text_value: Any = "why this approach?",
+    text_custom_id: str = "challenge_text",
+    guild_id: int | None = ALLOWED_GUILD,
+    channel_id: int | None = ALLOWED_CHANNEL,
+    username: str = "alice",
+    omit_components: bool = False,
+) -> bytes:
+    """Build a MODAL_SUBMIT (interaction type 5) interaction payload — the
+    shape Discord sends when the Challenge/Ask modal's text field is
+    submitted (nested one level inside an action-row `components` list,
+    same as the real API)."""
+    data: dict[str, Any] = {"custom_id": custom_id}
+    if not omit_components:
+        components: list[dict[str, Any]] = []
+        if text_value is not _OMIT:
+            components.append(
+                {
+                    "type": 1,
+                    "components": [{"type": 4, "custom_id": text_custom_id, "value": text_value}],
+                }
+            )
+        data["components"] = components
+    payload: dict[str, Any] = {
+        "type": 5,
+        "application_id": "app-1",
+        "token": "tok-1",
+        "data": data,
+        "member": {"user": {"username": username, "id": 42}},
+    }
+    if guild_id is not None:
+        payload["guild_id"] = guild_id
+    if channel_id is not None:
+        payload["channel_id"] = channel_id
+    return json.dumps(payload).encode()
+
+
+_OMIT = object()
+
+
 # ---------------------------------------------------------------------------
 # _is_allowed
 # ---------------------------------------------------------------------------
@@ -462,6 +504,187 @@ class TestMessageComponentApprovalButton:
         orch.approve_run.assert_not_called()
         followup.assert_called_once()
         assert "Invalid component id" in followup.call_args.args[2]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Challenge / Ask — parity with Telegram's Challenge / Ask button.
+#
+# Discord has no privileged plain-text listener in HTTP-interactions mode
+# (only gateway mode can receive `on_message`, and only when the privileged
+# Message Content intent + `chatops_concierge_enabled` are both on) — so the
+# follow-up text is captured via a MODAL (component type 9) opened
+# synchronously from the button press, instead of a plain-text reply.
+# Submitting the modal (interaction type 5 = MODAL_SUBMIT) dispatches
+# through the SAME channel-agnostic `Orchestrator.human_challenge()`
+# Telegram/Slack use — never a Discord-specific re-implementation.
+# ---------------------------------------------------------------------------
+
+
+class TestChallengeButtonOpensModal:
+    def test_allowed_returns_modal_with_run_id_encoded(self) -> None:
+        result = discord_bot.handle_interaction(_component_body("challenge:42"), "sig", "ts")
+        assert result["type"] == 9
+        assert result["data"]["custom_id"] == "challenge_modal:42"
+        text_input = result["data"]["components"][0]["components"][0]
+        assert text_input["custom_id"] == "challenge_text"
+        assert text_input["required"] is True
+
+    def test_denied_channel_rejected_no_modal(self) -> None:
+        """Fail-closed: a button press from a non-allowlisted guild/channel
+        must never open the modal."""
+        result = discord_bot.handle_interaction(
+            _component_body("challenge:42", guild_id=DENIED_GUILD, channel_id=DENIED_CHANNEL),
+            "sig",
+            "ts",
+        )
+        assert result["type"] == 4
+        assert result["data"]["content"] == "Unauthorized."
+
+    def test_invalid_run_id_rejected_no_modal(self) -> None:
+        result = discord_bot.handle_interaction(
+            _component_body("challenge:notanumber"), "sig", "ts"
+        )
+        assert result["type"] == 4
+        assert "Invalid component id" in result["data"]["content"]
+
+    def test_approve_deny_still_dispatch_to_thread_not_modal(self) -> None:
+        """Regression guard: only the challenge button short-circuits to a
+        synchronous modal response — approve/deny keep their existing
+        threaded, deferred dispatch."""
+        orch = MagicMock()
+        orch.approve_run.return_value = types.SimpleNamespace(success=True)
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_followup_message"),
+        ):
+            result = discord_bot.handle_interaction(_component_body("approve:42"), "sig", "ts")
+        assert result == {"type": 5}
+        orch.approve_run.assert_called_once()
+
+
+class TestChallengeModalSubmit:
+    def test_allowed_dispatches_via_shared_human_challenge(self) -> None:
+        orch = MagicMock()
+        orch.human_challenge.return_value = "Jules says: looks fine."
+        row = {"project": "acme", "task": "deploy"}
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=row),
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:42", text_value="why this approach?"),
+                "sig",
+                "ts",
+            )
+        assert result == {"type": 5}
+        orch.human_challenge.assert_called_once_with(42, "why this approach?", "discord:alice")
+        assert followup.called
+        sent_texts = [c.args[2]["content"] for c in followup.call_args_list]
+        assert any("why this approach?" in t for t in sent_texts)
+        assert any("Jules says: looks fine." in t for t in sent_texts)
+        # Every followup must carry the anti-mass-ping guard.
+        for c in followup.call_args_list:
+            assert c.args[2]["allowed_mentions"] == {"parse": []}
+        # Approve/Deny/Challenge buttons are re-attached so the operator can
+        # act again, in the SAME channel (via the followup webhook).
+        last_payload = followup.call_args_list[-1].args[2]
+        custom_ids = {
+            el["custom_id"] for row_ in last_payload["components"] for el in row_["components"]
+        }
+        assert custom_ids == {"approve:42", "deny:42", "challenge:42"}
+
+    def test_denied_channel_rejected_no_dispatch(self) -> None:
+        """Fail-closed: a modal submission from a non-allowlisted
+        guild/channel must never dispatch to human_challenge."""
+        orch = MagicMock()
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body(
+                    "challenge_modal:42", guild_id=DENIED_GUILD, channel_id=DENIED_CHANNEL
+                ),
+                "sig",
+                "ts",
+            )
+        assert result["type"] == 4
+        assert result["data"]["content"] == "Unauthorized."
+        orch.human_challenge.assert_not_called()
+        followup.assert_not_called()
+
+    def test_unknown_modal_custom_id_rejected(self) -> None:
+        """Fail-closed: an unrecognized modal (not our Challenge/Ask modal)
+        must be rejected, never treated as an answer."""
+        orch = MagicMock()
+        with patch.object(discord_bot, "_get_orch", return_value=orch):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("some_other_modal:42"), "sig", "ts"
+            )
+        assert result["type"] == 4
+        assert "Unknown modal" in result["data"]["content"]
+        orch.human_challenge.assert_not_called()
+
+    def test_invalid_run_id_in_modal_custom_id_rejected(self) -> None:
+        orch = MagicMock()
+        with patch.object(discord_bot, "_get_orch", return_value=orch):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:notanumber"), "sig", "ts"
+            )
+        assert result["type"] == 4
+        assert "Invalid modal id" in result["data"]["content"]
+        orch.human_challenge.assert_not_called()
+
+    def test_empty_text_rejected_not_dispatched(self) -> None:
+        """SECURITY REGRESSION GUARD (empty-value fail-open bug class): an
+        empty/whitespace-only modal submission must be REJECTED, never
+        silently treated as a valid answer that dispatches to the Chief of
+        Staff."""
+        orch = MagicMock()
+        with patch.object(discord_bot, "_get_orch", return_value=orch):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:42", text_value="   "), "sig", "ts"
+            )
+        assert result["type"] == 4
+        assert result["data"]["flags"] == 64
+        assert "empty" in result["data"]["content"].lower()
+        orch.human_challenge.assert_not_called()
+
+    def test_missing_text_component_rejected_not_dispatched(self) -> None:
+        """Malformed payload: no matching text-input component at all."""
+        orch = MagicMock()
+        with patch.object(discord_bot, "_get_orch", return_value=orch):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:42", text_value=_OMIT), "sig", "ts"
+            )
+        assert result["type"] == 4
+        orch.human_challenge.assert_not_called()
+
+    def test_non_string_text_value_rejected_not_dispatched(self) -> None:
+        """Malformed payload: a non-string `value` must never be forwarded
+        to human_challenge."""
+        orch = MagicMock()
+        with patch.object(discord_bot, "_get_orch", return_value=orch):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:42", text_value=12345), "sig", "ts"
+            )
+        assert result["type"] == 4
+        orch.human_challenge.assert_not_called()
+
+    def test_human_challenge_error_reported_not_silently_swallowed(self) -> None:
+        orch = MagicMock()
+        orch.human_challenge.side_effect = RuntimeError("boom")
+        with (
+            patch.object(discord_bot, "_get_orch", return_value=orch),
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            result = discord_bot.handle_interaction(
+                _modal_submit_body("challenge_modal:42"), "sig", "ts"
+            )
+        assert result == {"type": 5}
+        followup.assert_called_once()
+        assert "boom" in followup.call_args.args[2]["content"]
 
 
 # ---------------------------------------------------------------------------
