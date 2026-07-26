@@ -14,10 +14,80 @@ from hivepilot.runners.base import (
     RunnerExecutionError,
     RunnerPayload,
     UsageInfo,
+    classify_signal_exit,
     detect_noop_permission_response,
     pop_last_usage,
     set_last_usage,
 )
+
+
+class TestClassifySignalExit:
+    """Bug 1 (run 243, live incident): the `claude` subprocess was SIGKILLed
+    (exit_code=-9, empty stderr since the OS never let it write anything) and
+    the pipeline recorded the run as `test_failure` -- actively misleading,
+    since no test ever ran. `classify_signal_exit` distinguishes a POSIX
+    signal death (a negative exit code, `-N` == signal N per the
+    `subprocess`/`os.WIFSIGNALED` convention) -- an INFRASTRUCTURE failure --
+    from the command actually running and reporting its own failure via a
+    positive exit code, which must classify exactly as before."""
+
+    def test_none_for_missing_exit_code(self) -> None:
+        assert classify_signal_exit(None) is None
+
+    def test_none_for_zero_exit_code(self) -> None:
+        assert classify_signal_exit(0) is None
+
+    def test_none_for_positive_exit_code(self) -> None:
+        """A command that ran and reported its own (genuine) failure via a
+        positive exit code is NEVER a signal death -- regression guard for
+        "do not paper over real test failures"."""
+        assert classify_signal_exit(1) is None
+        assert classify_signal_exit(2) is None
+        assert classify_signal_exit(127) is None
+
+    def test_sigkill_is_not_deliberate_and_names_the_signal(self) -> None:
+        death = classify_signal_exit(-9)
+        assert death is not None
+        assert death.signal_number == 9
+        assert death.signal_name == "SIGKILL"
+        assert death.deliberate is False
+
+    def test_sigkill_message_mentions_oom_and_available_memory(self) -> None:
+        """The message must be actionable (WHAT/WHY/FIX spirit): name the
+        signal, point at the OOM killer, and tell the operator to check
+        AVAILABLE memory (not total/free) and container memory limits."""
+        death = classify_signal_exit(-9)
+        assert death is not None
+        message = death.message.lower()
+        assert "sigkill" in message
+        assert "oom" in message or "out-of-memory" in message or "out of memory" in message
+        assert "available" in message
+        assert "memory" in message
+
+    def test_sigterm_is_deliberate_and_not_reported_as_a_crash(self) -> None:
+        death = classify_signal_exit(-15)
+        assert death is not None
+        assert death.signal_number == 15
+        assert death.signal_name == "SIGTERM"
+        assert death.deliberate is True
+        assert "crash" not in death.message.lower()
+
+    def test_sigabrt_and_sigsegv_are_genuine_crashes(self) -> None:
+        for code, name in ((-6, "SIGABRT"), (-11, "SIGSEGV")):
+            death = classify_signal_exit(code)
+            assert death is not None
+            assert death.signal_name == name
+            assert death.deliberate is False
+
+    def test_unknown_negative_signal_falls_back_gracefully(self) -> None:
+        """A signal number Python's `signal` module doesn't recognise must
+        never raise -- it degrades to a generic (still non-deliberate,
+        still-classified) SignalDeath rather than crashing the classifier
+        itself while handling an already-unusual failure."""
+        death = classify_signal_exit(-987)
+        assert death is not None
+        assert death.deliberate is False
+        assert "987" in death.signal_name or "987" in death.message
 
 
 def _payload(**overrides: object) -> RunnerPayload:

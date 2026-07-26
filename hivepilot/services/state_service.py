@@ -72,6 +72,16 @@ class RunStatus(str, Enum):
     AUTH_EXPIRED = "auth_expired"
     TEST_FAILURE = "test_failure"
     SECURITY_BLOCKER = "security_blocker"
+    # Bug 1 fix (run 243, live incident): a runner process killed by a POSIX
+    # signal (SIGKILL/SIGABRT/SIGSEGV/... -- see
+    # `hivepilot.runners.base.classify_signal_exit`) never ran to completion,
+    # so it can never be a TEST_FAILURE (that bucket implies the command ran
+    # and either the tests or the agent's logic were at fault). Distinct
+    # bucket so the operator investigates the HOST/container (memory,
+    # resource limits) instead of the codebase. A deliberate SIGTERM
+    # (operator/service-triggered stop) is reported as CANCELLED instead --
+    # see `Orchestrator._classify_stage_failure`.
+    INFRASTRUCTURE_FAILURE = "infrastructure_failure"
 
     @classmethod
     def from_str(cls, value: str) -> "RunStatus":

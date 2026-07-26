@@ -86,3 +86,11 @@ class TestRunStatusEnum:
     def test_complete_value_is_complete(self) -> None:
         """RunStatus.COMPLETE.value should equal 'complete' for DB compat."""
         assert RunStatus.COMPLETE.value == "complete"
+
+    def test_infrastructure_failure_status_exists(self) -> None:
+        """Bug 1 (run 243, live incident): a runner process killed by a
+        POSIX signal (e.g. SIGKILL/-9, the OOM killer) is an INFRASTRUCTURE
+        failure, distinct from TEST_FAILURE -- it must be its own formal
+        member, not an ad hoc string."""
+        assert RunStatus.INFRASTRUCTURE_FAILURE.value == "infrastructure_failure"
+        assert RunStatus.INFRASTRUCTURE_FAILURE is not RunStatus.TEST_FAILURE

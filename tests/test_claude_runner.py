@@ -508,6 +508,56 @@ class TestExplicitFailureLogs:
         assert ctx["runner_kind"] == "claude"
         assert ctx["task"] == "task-x"
 
+    def test_sigkill_run_path_gets_oom_hint_despite_empty_stderr(self, tmp_path: Path) -> None:
+        """Bug 1 (run 243, live incident): `claude` was SIGKILLed (exit_code
+        -9), `stderr_excerpt` is empty (the process never got to write
+        anything) -- the pipeline then recorded the run as `test_failure`.
+        The `run()` path never captures stderr at all, so the hint MUST come
+        from the exit code alone, not from any stderr signature match."""
+        import subprocess as sp
+        from unittest.mock import patch
+
+        payload = self._failing_payload(tmp_path)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.side_effect = sp.CalledProcessError(returncode=-9, cmd=["claude"])
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().run(payload)
+        ctx = excinfo.value.context
+        assert ctx["exit_code"] == -9
+        assert "hint" in ctx
+        hint = ctx["hint"].lower()
+        assert "sigkill" in hint
+        assert "oom" in hint or "out-of-memory" in hint or "out of memory" in hint
+        assert "available" in hint
+
+    def test_sigkill_capture_path_gets_oom_hint(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=-9, stdout="", stderr="")
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+        ctx = excinfo.value.context
+        assert ctx["exit_code"] == -9
+        assert "hint" in ctx
+        assert "sigkill" in ctx["hint"].lower()
+        assert "hint:" in str(excinfo.value)
+
+    def test_positive_exit_code_unaffected_by_signal_classification(self, tmp_path: Path) -> None:
+        """Regression guard: a positive, non-zero exit code (a genuine
+        command failure, e.g. a real test failure) must NEVER get a
+        signal-death hint -- only a negative exit code (a signal death) does.
+        """
+        from unittest.mock import MagicMock, patch
+
+        payload = self._failing_payload(tmp_path)
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(returncode=1, stdout="", stderr="totally unrelated error")
+            with pytest.raises(RunnerExecutionError) as excinfo:
+                _runner().capture(payload)
+        assert "hint" not in excinfo.value.context
+
     def test_registered_secret_redacted_from_stderr_excerpt(self, tmp_path: Path) -> None:
         from unittest.mock import MagicMock, patch
 
