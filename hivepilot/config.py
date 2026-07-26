@@ -851,11 +851,22 @@ class Settings(BaseSettings):
     slack_app_token: str | None = None  # for Socket Mode (xapp-...)
     slack_allowed_channel_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
     slack_notification_channel_id: str | None = None  # proactive notifications
+    # env: HIVEPILOT_SLACK_STREAM_CHANNEL_ID -- dedicated Slack channel for the
+    # LIVE agent stream (mirrors telegram_stream_chat_id): a thread is created
+    # per agent under this channel (see hivepilot.streaming.slack_channel).
+    # None (default) = Slack streaming disabled -- a deployment with only the
+    # Telegram settings configured behaves exactly as before this sprint.
+    slack_stream_channel_id: str | None = None
     discord_bot_token: str | None = None
     discord_public_key: str | None = None  # Ed25519 public key for HTTP interactions
     discord_allowed_guild_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     discord_allowed_channel_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     discord_notification_channel_id: int | None = None  # proactive notifications
+    # env: HIVEPILOT_DISCORD_STREAM_CHANNEL_ID -- dedicated Discord channel for
+    # the LIVE agent stream: a thread is created per agent under this channel
+    # (see hivepilot.streaming.discord_channel). None (default) = disabled --
+    # same backward-compat posture as slack_stream_channel_id above.
+    discord_stream_channel_id: int | None = None
     # Phase 23e — Signal bot (dual-mode). Signal has no cloud bot API / inbound
     # webhook (E2E P2P); the bot is a dedicated phone number driven either by
     # the `signal-cli` binary (PATH-gated, optional external dependency) or a
