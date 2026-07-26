@@ -16,7 +16,14 @@ would this have caught" stays discoverable from the code itself:
     config, not the clone, which used to mislead operators).
   * ``check_enabled_plugins_loaded`` — incident #4 (``mem0``/``headroom``
     were enabled via env flags with the plugin FILES missing from the
-    plugins dir; the only symptom was an empty dashboard panel).
+    plugins dir; the only symptom was an empty dashboard panel). Incident
+    #4b (signal-to-noise follow-up, same check): against a real production
+    box this reported 19 ERRORs, 17 of which were flags that default to
+    ``True`` as a PERMISSION GATE (never touched by the operator) rather
+    than an explicit opt-in -- see ``_is_setting_explicit``. Only a flag
+    that was EXPLICITLY configured (env var / ``.env`` file / init kwarg)
+    still yields an ERROR; an untouched default-``True`` flag is folded
+    into a single aggregated ``info`` line instead.
   * ``check_plugin_health`` — incident #5 (a plugin's own ``health()``
     check catches "not installed" / broken-dependency states, but nothing
     surfaced them outside ``plugins health`` -- folded into the single
@@ -386,6 +393,60 @@ _NON_PLUGIN_ENABLED_FLAG_EXCEPTIONS = frozenset(
 )
 
 
+def _is_setting_explicit(settings_obj: Any, key: str) -> bool | None:
+    """Whether Settings field *key* was EXPLICITLY provided (an env var, the
+    `.env` config file, or an init kwarg) as opposed to resolved purely from
+    its class default.
+
+    `config_provenance.resolve_with_provenance` was investigated first (it
+    already powers `hivepilot config list`'s provenance column). Its
+    `xdg_rank`/`source_path` are only computed for *file-backed* fields --
+    those whose name ends in `_file`, resolved through the XDG ->
+    config_repo -> base_dir chain (see `config_provenance._is_file_backed`).
+    A boolean `*_enabled` flag is not file-backed, so `resolve_with_provenance`
+    always reports `xdg_rank=0` for it regardless of whether the operator
+    ever touched it -- it cannot answer this question for this class of
+    field, so it is not used here.
+
+    Pydantic v2 `BaseSettings` already tracks exactly the right thing:
+    `model_fields_set` on an instance contains only the field names an
+    actual source (env var, `.env` file, or an init kwarg) supplied. A field
+    resolved purely via the class default is never added to it -- this is a
+    definitive, built-in answer, not a heuristic, and needs no new
+    bookkeeping. (Directly setting an attribute on the instance, as some
+    tests/callers do, also lands it in `model_fields_set` -- pydantic
+    treats any assignment as an explicit set, which is the correct
+    behaviour here too.)
+
+    Returns ``True`` (explicit), ``False`` (left at the class default), or
+    ``None`` when this cannot be determined at all (e.g. *settings_obj* is
+    not a real pydantic model). Callers MUST treat ``None`` as "report it
+    anyway" (at most degraded to a warning, never silence) -- this codebase
+    has repeatedly shipped the bug class of an empty/unknown value being
+    treated as "no constraint" and failing open.
+    """
+    fields_set = getattr(settings_obj, "model_fields_set", None)
+    if isinstance(fields_set, (set, frozenset)):
+        return key in fields_set
+
+    # Fallback (the primary mechanism above is unavailable): compare the
+    # live value against the field's declared default. This is a heuristic,
+    # not definitive -- an operator who explicitly set a flag to the SAME
+    # value as its default is indistinguishable from "never touched" this
+    # way. A mismatch is still unambiguous evidence of an explicit override
+    # (`True`); a match is genuinely ambiguous and must NOT be reported as a
+    # confirmed default (`False`) -- return `None` (unknown) so the caller
+    # degrades to a warning instead of going silent.
+    try:
+        field_default = type(settings_obj).model_fields[key].default
+    except (AttributeError, KeyError, TypeError):
+        return None
+    live_value = getattr(settings_obj, key, None)
+    if live_value != field_default:
+        return True
+    return None
+
+
 def check_enabled_plugins_loaded(plugin_manager: Any) -> list[DoctorFinding]:
     from hivepilot.registry import _BUILTIN_RUNNERS
 
@@ -393,6 +454,7 @@ def check_enabled_plugins_loaded(plugin_manager: Any) -> list[DoctorFinding]:
     loaded_names = {record.name for record in plugin_manager.loaded}
 
     findings: list[DoctorFinding] = []
+    default_enabled_not_loaded: list[str] = []
     for key in all_keys():
         if not key.endswith("_enabled"):
             continue
@@ -403,6 +465,29 @@ def check_enabled_plugins_loaded(plugin_manager: Any) -> list[DoctorFinding]:
             continue
         if stem in loaded_names:
             continue
+
+        explicit = _is_setting_explicit(settings, key)
+        if explicit is False:
+            # Left at its class default (True for every flag this branch
+            # can reach -- see the _NON_PLUGIN_ENABLED_FLAG_EXCEPTIONS/
+            # builtin skip and the `not getattr(...)` skip for False flags
+            # above): a PERMISSION GATE ("activate this plugin IF its
+            # file/binary is present"), not an assertion that the operator
+            # opted in. Reporting each one as its own ERROR produced 17
+            # false positives against a real production config (herdr/
+            # infisical/kms/onepassword/gemini/codex/cursor/hugo/tmux/
+            # bitwarden/vaultwarden/opencode/ollama/pi/qwen_code/kimi_cli/
+            # antigravity) and buried the 2 real findings under noise --
+            # aggregate instead of dropping silent (signal-to-noise IS the
+            # feature).
+            default_enabled_not_loaded.append(stem)
+            continue
+
+        # explicit is True (definitively opted in) or None (provenance
+        # unknown). Never let "unknown" collapse to silence: degrade to a
+        # warning instead -- the operator may well have opted in and we
+        # simply couldn't prove it.
+        severity = "error" if explicit else "warning"
         expected = settings.resolve_path(Path("plugins") / f"{stem}.py")
         installed_dir = settings.xdg_data_home / "plugins" / f"{stem}.py"
         install_hint = (
@@ -412,7 +497,7 @@ def check_enabled_plugins_loaded(plugin_manager: Any) -> list[DoctorFinding]:
         )
         findings.append(
             _finding(
-                "error",
+                severity,
                 "plugin_enabled_not_loaded",
                 f"'{stem}' is enabled ({key}=true) but no such plugin is loaded",
                 "an *_enabled flag with no matching loaded plugin silently degrades to a "
@@ -420,6 +505,23 @@ def check_enabled_plugins_loaded(plugin_manager: Any) -> list[DoctorFinding]:
                 "in normal operation",
                 f"add the plugin file at {expected} or {installed_dir} (fetch it with "
                 f"{install_hint}), or set {key}=false",
+            )
+        )
+
+    if default_enabled_not_loaded:
+        names = ", ".join(sorted(default_enabled_not_loaded))
+        findings.append(
+            _finding(
+                "info",
+                "default_enabled_plugin_not_installed",
+                f"{len(default_enabled_not_loaded)} default-enabled optional plugin(s) are "
+                f"not installed: {names}",
+                "these `*_enabled` flags default to True as a permission gate (activate the "
+                "plugin IF its file/binary is present), not an assertion that the operator "
+                "opted in -- treating each one as its own ERROR produced 17 false positives "
+                "against a real production config and buried the 2 real findings",
+                "this is normal for plugins you have not installed; install one with "
+                "`hivepilot plugins install <name>` if you want it, otherwise ignore this line",
             )
         )
     return findings
