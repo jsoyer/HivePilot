@@ -80,6 +80,50 @@ def _notification_chat_id() -> int | None:
     return None
 
 
+def _approval_chat_id() -> int | None:
+    """Return the chat_id BLOCKING approval keyboards should be sent to.
+
+    Resolution order: `telegram_approval_chat_id` (explicit operator choice)
+    -> the forum stream group (`telegram_stream_chat_id`) when
+    `telegram_stream_topics` is on -> `_notification_chat_id()` (the DM),
+    exactly as before. A deployment that sets neither new knob keeps
+    today's DM behaviour byte-for-byte.
+    """
+    if settings.telegram_approval_chat_id:
+        return settings.telegram_approval_chat_id
+    if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
+        return settings.telegram_stream_chat_id
+    return _notification_chat_id()
+
+
+_APPROVALS_TOPIC_KEY = "approvals"
+_APPROVALS_TOPIC_TITLE = "⛔ Approvals"
+
+
+def _approval_message_thread_id(chat_id: int | None) -> int | None:
+    """Best-effort dedicated "Approvals" forum-topic thread id.
+
+    Only applies when *chat_id* IS the forum stream group with topics
+    enabled — an explicit `telegram_approval_chat_id` that differs from the
+    stream group never gets a synthetic thread id (it isn't necessarily a
+    forum at all). Reuses the existing per-agent topic mechanism
+    (`notification_service._ensure_topic_thread` + its
+    `.hivepilot/stream_topics.json` registry) with a dedicated stable key
+    ("approvals") so approvals land in their OWN topic, not mixed into any
+    agent's stream topic. Best-effort: `_ensure_topic_thread` never raises —
+    any failure (not a forum, missing rights, rate-limited) returns None,
+    which makes the caller send without a thread id (the group's General
+    topic) instead of losing the approval.
+    """
+    if not (settings.telegram_stream_topics and settings.telegram_stream_chat_id):
+        return None
+    if chat_id != settings.telegram_stream_chat_id:
+        return None
+    from hivepilot.services.notification_service import _ensure_topic_thread
+
+    return _ensure_topic_thread(_APPROVALS_TOPIC_KEY, _APPROVALS_TOPIC_TITLE)
+
+
 def _format_results(results) -> str:
     lines = [
         f"{'✓' if r.success else '✗'} {r.project} → {r.target}"
@@ -1237,9 +1281,20 @@ def _truncate_md(text: str, max_len: int = _TELEGRAM_MAX_MSG) -> str:
 
 
 async def _send_approval_keyboard_message(
-    bot, *, chat_id: int, run_id: int, project: str, task: str, details: str | None = None
+    bot,
+    *,
+    chat_id: int,
+    run_id: int,
+    project: str,
+    task: str,
+    details: str | None = None,
+    message_thread_id: int | None = None,
 ) -> None:
     """Send a message with ✅ Approve / ❌ Deny / 🗣 Challenge inline buttons.
+
+    *message_thread_id*, when given, routes the message into a specific
+    Telegram forum topic (e.g. the dedicated "Approvals" topic) instead of
+    the chat's General topic — see `_approval_message_thread_id`.
 
     Sent as PLAIN text (no `parse_mode`): `details` is the accumulated plan /
     stage-summary text built by `Orchestrator._build_checkpoint_details` from
@@ -1279,11 +1334,15 @@ async def _send_approval_keyboard_message(
     header = f"Approval required — run #{run_id}\nProject: {project}\nTask: {task}"
     body = f"\n\n{details}" if details else ""
     text = _truncate_md(header + body)
+    send_kwargs: dict[str, Any] = {}
+    if message_thread_id is not None:
+        send_kwargs["message_thread_id"] = message_thread_id
     try:
         await bot.send_message(
             chat_id=chat_id,
             text=text,
             reply_markup=keyboard,
+            **send_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.approval_keyboard.send_retry", run_id=run_id, error=str(exc))
@@ -1295,6 +1354,7 @@ async def _send_approval_keyboard_message(
             chat_id=chat_id,
             text=fallback_text,
             reply_markup=keyboard,
+            **send_kwargs,
         )
 
 
@@ -1352,22 +1412,57 @@ def notify_approval_required(
     *, run_id: int, project: str, task: str, details: str | None = None
 ) -> None:
     """
-    Send an approval keyboard to the notification chat (sync, fire-and-forget).
-    Called from notification_service — safe to call from non-async context.
+    Send an approval keyboard to the resolved approval chat (sync,
+    fire-and-forget). Called from notification_service — safe to call from
+    non-async context.
+
+    Chat resolution: `_approval_chat_id()` — the dedicated
+    `telegram_approval_chat_id`, else the forum stream group (routed into a
+    dedicated "Approvals" topic via `_approval_message_thread_id`), else the
+    operator's DM as before. Approvals are BLOCKING — they must never be
+    lost because of a topic issue: if sending to the resolved chat fails
+    outright (not just topic-creation, which already degrades gracefully to
+    a threadless send), fall back once to the DM/notification chat_id.
     """
-    chat_id = _notification_chat_id()
+    chat_id = _approval_chat_id()
     if not chat_id:
         raise RuntimeError("No Telegram notification chat_id configured")
 
+    message_thread_id = _approval_message_thread_id(chat_id)
     token = _token()
 
     async def _send():
         from telegram import Bot
 
         async with Bot(token) as bot:
-            await _send_approval_keyboard_message(
-                bot, chat_id=chat_id, run_id=run_id, project=project, task=task, details=details
-            )
+            try:
+                await _send_approval_keyboard_message(
+                    bot,
+                    chat_id=chat_id,
+                    run_id=run_id,
+                    project=project,
+                    task=task,
+                    details=details,
+                    message_thread_id=message_thread_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                dm_chat_id = _notification_chat_id()
+                if not dm_chat_id or dm_chat_id == chat_id:
+                    raise
+                logger.warning(
+                    "telegram.approval_keyboard.chat_send_failed_dm_fallback",
+                    run_id=run_id,
+                    chat_id=chat_id,
+                    error=str(exc),
+                )
+                await _send_approval_keyboard_message(
+                    bot,
+                    chat_id=dm_chat_id,
+                    run_id=run_id,
+                    project=project,
+                    task=task,
+                    details=details,
+                )
 
     try:
         loop = asyncio.get_event_loop()

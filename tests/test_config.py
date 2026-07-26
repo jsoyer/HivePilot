@@ -99,6 +99,31 @@ def test_numeric_notification_chat_id(monkeypatch) -> None:
     assert s.telegram_notification_chat_id == 12345
 
 
+def test_approval_chat_id_defaults_to_none(monkeypatch) -> None:
+    """New setting: unset by default -- fully backward compatible."""
+    from hivepilot.config import Settings
+
+    monkeypatch.delenv("HIVEPILOT_TELEGRAM_APPROVAL_CHAT_ID", raising=False)
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.telegram_approval_chat_id is None
+
+
+def test_blank_approval_chat_id_is_none(monkeypatch) -> None:
+    from hivepilot.config import Settings
+
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_APPROVAL_CHAT_ID", "")
+    s = Settings()
+    assert s.telegram_approval_chat_id is None
+
+
+def test_numeric_approval_chat_id(monkeypatch) -> None:
+    from hivepilot.config import Settings
+
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_APPROVAL_CHAT_ID", "-100777")
+    s = Settings()
+    assert s.telegram_approval_chat_id == -100777
+
+
 # ---------------------------------------------------------------------------
 # PRD A2 Sprint 2 — context_routing_mode
 # ---------------------------------------------------------------------------
