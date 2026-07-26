@@ -8,6 +8,7 @@ strings; an empty list means the config is consistent.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +29,40 @@ def _load(path: Path) -> Any:
         raise ValueError(f"YAML parse error in {path}: {exc}") from exc
 
 
+@dataclass(frozen=True)
+class ValidationReport:
+    """Full result of `validate_config_report()` -- `problems` is the exact
+    pre-existing `list[str]` contract `validate_config()` has always
+    returned (kept as a thin wrapper around this for backward
+    compatibility with every existing caller/test). `config_dir` and
+    `plugin_dirs` are ADDITIONAL, resolved-to-absolute context so
+    `hivepilot validate` can print, at the top of its output, exactly what
+    it read and where it looked for plugins/skills -- the fix for the
+    "validate silently follows the process cwd instead of --dir" bug: an
+    operator seeing this header can never again mistake a cwd-dependent
+    verdict for flakiness.
+    """
+
+    problems: list[str] = field(default_factory=list)
+    config_dir: Path = field(default_factory=Path.cwd)
+    plugin_dirs: list[Path] = field(default_factory=list)
+
+
 def validate_config(base_dir: Path | None = None) -> list[str]:
     """Validate cross-references in a HivePilot config directory.
+
+    Thin wrapper around `validate_config_report()` returning just its
+    `problems` list -- the pre-existing contract every caller in this
+    codebase (and dozens of tests) relies on. Use `validate_config_report`
+    directly when the resolved config/plugin directories are also needed
+    (e.g. `hivepilot validate`'s CLI header).
+    """
+    return validate_config_report(base_dir=base_dir).problems
+
+
+def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
+    """Validate cross-references in a HivePilot config directory, and
+    report exactly which directories were read/scanned along the way.
 
     Parameters
     ----------
@@ -53,10 +86,32 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
         to XDG, never to cwd) reflects reality instead of always reading
         cwd literally.
 
+        This same `explicit_base_dir` split now ALSO governs plugin/skill
+        discovery (`hivepilot/plugins.py` `PluginManager`/`plugin_scan_dirs`)
+        for the `skills:` cross-reference check below -- previously
+        `PluginManager()` always read the process-global `settings.base_dir`
+        (`default_factory=Path.cwd`) regardless of `base_dir`, so validating
+        a config repo from any cwd OTHER than that repo silently reported
+        every `skills:` reference as "unknown skill" (the confirmed
+        `hivepilot validate --dir` cwd bug). An explicit `base_dir` is now
+        threaded straight into `PluginManager(base_dir=base_dir)`, mirroring
+        the config-files split exactly: isolated when explicit, the
+        pre-existing global-settings-derived behavior otherwise.
+
     Returns
     -------
-    list[str]
-        A list of problem descriptions.  Empty means everything is consistent.
+    ValidationReport
+        `problems`: list of problem descriptions (empty means everything is
+        consistent). `config_dir`: the absolute directory the six required
+        config files were actually read from (the explicit `base_dir` when
+        given; otherwise the resolved location of the first of them,
+        representative of the XDG -> config_repo -> base_dir chain).
+        `plugin_dirs`: every absolute directory plugin/skill discovery
+        looked in (see `plugin_scan_dirs`) -- populated even when no
+        `skills:` reference exists anywhere in this config, since computing
+        it is pure path arithmetic with no filesystem scanning or
+        `PluginManager` construction (see the dormancy-gate note on the
+        `skills:` check below).
     """
     explicit_base_dir = base_dir is not None
     if base_dir is None:
@@ -76,16 +131,37 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
         "tasks.yaml",
     ]
     data: dict[str, Any] = {}
+    resolved_required_paths: list[Path] = []
     for filename in required_files:
         if explicit_base_dir:
             path = base_dir / filename
         else:
             path = settings.resolve_config_path(filename)
+        resolved_required_paths.append(path)
         if not path.exists():
             problems.append(f"Missing required config file: {filename}")
             data[filename] = None
         else:
             data[filename] = _load(path)
+
+    # The directory this run actually read its config from -- `base_dir`
+    # itself when explicit (the isolated-directory contract); otherwise the
+    # resolved location of the first required file, representative of
+    # whichever XDG -> config_repo -> base_dir tier `resolve_config_path`
+    # picked (every real deployment keeps all six files together in the
+    # same tier, so "first file's parent" is never misleading in practice).
+    config_dir = (base_dir if explicit_base_dir else resolved_required_paths[0].parent).resolve()
+
+    # Every directory plugin/skill discovery would look in for THIS run --
+    # cheap path arithmetic (see `plugin_scan_dirs`'s docstring), computed
+    # unconditionally so `hivepilot validate`'s header is accurate even for
+    # a config with no `skills:` reference at all (which never constructs a
+    # real `PluginManager` -- see the dormancy-gate note below).
+    from hivepilot.plugins import plugin_scan_dirs
+
+    plugin_dirs = [
+        d.resolve() for d in plugin_scan_dirs(base_dir=base_dir if explicit_base_dir else None)
+    ]
 
     # -----------------------------------------------------------------------
     # Collect defined names
@@ -400,12 +476,22 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
         from hivepilot.plugins import PluginManager
         from hivepilot.services import token_service
 
-        plugin_manager = PluginManager()
+        # `base_dir=base_dir if explicit_base_dir else None` -- the cwd bug
+        # fix: an explicit `--dir` must scan plugins/skills from THAT
+        # directory, never from `Path.cwd()` (`PluginManager`'s pre-fix
+        # default). Omitted (`None`), it's byte-identical to before: the
+        # process-global `settings.base_dir` chain. See this function's own
+        # docstring and `plugin_scan_dirs` for the full semantics.
+        plugin_manager = PluginManager(base_dir=base_dir if explicit_base_dir else None)
+        searched_dirs = ", ".join(str(d) for d in plugin_dirs) or "(no plugin directories)"
         for owner_label, skill_names, resolved_role in skill_refs:
             for skill_name in skill_names:
                 skill = plugin_manager.get_skill(skill_name)
                 if skill is None:
-                    problems.append(f"{owner_label} references unknown skill '{skill_name}'")
+                    problems.append(
+                        f"{owner_label} references unknown skill '{skill_name}' "
+                        f"(searched: {searched_dirs})"
+                    )
                     continue
                 min_role = skill.get("min_role")
                 if not min_role:
@@ -421,4 +507,4 @@ def validate_config(base_dir: Path | None = None) -> list[str]:
                         f"{resolved_role!r} does not satisfy it"
                     )
 
-    return problems
+    return ValidationReport(problems=problems, config_dir=config_dir, plugin_dirs=plugin_dirs)

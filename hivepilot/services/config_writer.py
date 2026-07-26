@@ -131,6 +131,18 @@ def _validate_prospective(file: str, mutated_text: str, containing_dir: Path) ->
         prompts_src = containing_dir / "prompts"
         if prompts_src.exists():
             shutil.copytree(prompts_src, tmp_dir / "prompts")
+        # `validate_config`'s `skills:` cross-reference check now scans
+        # plugins/skills from the SAME isolated `base_dir` it validates the
+        # config files from (the `hivepilot validate --dir` cwd bug fix —
+        # plugin/skill discovery is no longer merged with the process-global
+        # `settings.base_dir`). Without copying `plugins/` into the scratch
+        # copy too, a `skills:` reference that's genuinely registered in the
+        # real, active config would false-positive as "unknown skill" here,
+        # purely because the scratch dir doesn't have its own plugins/ --
+        # mirrors the `prompts/` copy immediately above for the same reason.
+        plugins_src = containing_dir / "plugins"
+        if plugins_src.exists():
+            shutil.copytree(plugins_src, tmp_dir / "plugins")
 
         (tmp_dir / file).write_text(mutated_text, encoding="utf-8")
 

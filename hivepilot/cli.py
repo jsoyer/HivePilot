@@ -3449,14 +3449,26 @@ def validate(
     ),
 ) -> None:
     """Validate cross-references in a HivePilot config directory."""
-    from hivepilot.services.config_validation import validate_config
+    from hivepilot.services.config_validation import validate_config_report
 
-    problems = validate_config(base_dir=config_dir)
-    if not problems:
+    report = validate_config_report(base_dir=config_dir)
+    # Header first, always -- this is the fix for the confirmed cwd bug
+    # ("validate --dir <config-repo>" silently resolved plugins/skills via
+    # the process's cwd instead of --dir): printing exactly which config
+    # directory was read and which plugin directories were scanned makes a
+    # cwd-dependent verdict immediately self-explanatory instead of looking
+    # like transient flakiness.
+    typer.echo(f"Config directory: {report.config_dir}")
+    if report.plugin_dirs:
+        typer.echo("Plugin dirs scanned:")
+        for plugin_dir in report.plugin_dirs:
+            typer.echo(f"  {plugin_dir}")
+
+    if not report.problems:
         typer.echo("OK")
         return
 
-    for problem in problems:
+    for problem in report.problems:
         typer.echo(f"  ERROR  {problem}", err=True)
     raise typer.Exit(1)
 

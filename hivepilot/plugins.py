@@ -517,26 +517,84 @@ def _installed_plugins_dir() -> Path | None:
     return candidate if candidate.exists() else None
 
 
-def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
-    """Scan `base_dir/plugins`, then the config repo clone's own `plugins/`
-    dir (if auto-loading is enabled -- see `_config_repo_plugins_dir`), then
-    the managed `plugins install` dir (if it exists -- see
-    `_installed_plugins_dir`), then each directory in
-    `settings.plugins_extra_dirs` (in order), for local-file plugins.
+def plugin_scan_dirs(base_dir: Path | None = None) -> list[Path]:
+    """Return, in scan order, every directory `_scan_local_plugins` scans
+    for local-file plugins -- the exact (NOT `.resolve()`d) `Path` objects
+    it passes to `_scan_plugin_dir`, so `_scan_local_plugins` can (and does)
+    just iterate this list instead of duplicating the resolution logic, and
+    `hivepilot validate`'s "plugin dirs scanned" header / an "unknown skill"
+    error's list of searched directories (`config_validation.py`) can reuse
+    it too, WITHOUT constructing a real `PluginManager` (no exec'ing plugin
+    files, no process-global side effects) just to describe where it would
+    look.
 
-    `base_dir/plugins` is always scanned FIRST — a deployment that points
-    `base_dir` at its own config repo (to load its own `plugins/*.py`) can
-    still reach the engine's shipped `plugins/*.py` via `plugins_extra_dirs`,
-    without one shadowing the other. The config repo clone's `plugins/` dir
-    (when applicable), then the managed installed-plugins dir (when it
-    exists), are scanned NEXT, before any manually-configured extra dir, and
-    each is SKIPPED here if it's already present in
-    `settings.plugins_extra_dirs` OR is the other one of the two (compared
-    by resolved path) so it is never scanned twice. A module stem already
-    loaded from an earlier directory is skipped rather than re-loaded or
-    raising a collision (dedup by stem, first-wins). A directory that
-    doesn't exist on disk is silently skipped, same as a missing
-    `base_dir/plugins` always has been.
+    Two modes, matching `validate_config`'s own `explicit_base_dir` split
+    (the `hivepilot validate --dir` cwd bug fix — see that function's
+    docstring):
+
+    - `base_dir` omitted (`None`, the default): every candidate is derived
+      from the process-global `settings.base_dir` exactly as before this
+      fix — `base_dir/plugins` first, then the config repo clone's own
+      `plugins/` dir (if auto-loading is enabled), then the managed
+      `plugins install` dir (if it exists), then each
+      `settings.plugins_extra_dirs` entry in order. A directory already
+      covered by an earlier entry (compared by resolved path) is not
+      listed twice.
+    - `base_dir` given explicitly: ISOLATED-directory mode. Only
+      `base_dir/plugins` plus any ABSOLUTE `plugins_extra_dirs` entry is
+      scanned — never the process's global config-repo clone or managed
+      installed-plugins dir (ambient global state unrelated to the
+      directory actually being checked, which would silently change the
+      verdict), and never a RELATIVE `plugins_extra_dirs` entry (inherently
+      cwd-relative — resolving it against cwd or against `base_dir` would
+      each reintroduce a different flavor of the exact cwd-dependence this
+      parameter exists to remove, so it is skipped instead).
+    """
+    if not settings.plugins_enabled:
+        return []
+
+    explicit_base_dir = base_dir is not None
+    effective_base_dir = base_dir if explicit_base_dir else settings.base_dir
+    dirs: list[Path] = [effective_base_dir / "plugins"]
+
+    extra_dirs = list(settings.plugins_extra_dirs)
+    if explicit_base_dir:
+        dirs.extend(d for d in extra_dirs if d.is_absolute())
+        return dirs
+
+    config_repo_plugins = _config_repo_plugins_dir()
+    if config_repo_plugins is not None:
+        already_listed = {d.resolve() for d in extra_dirs}
+        if config_repo_plugins.resolve() not in already_listed:
+            dirs.append(config_repo_plugins)
+
+    installed_plugins = _installed_plugins_dir()
+    if installed_plugins is not None:
+        already_listed = {d.resolve() for d in extra_dirs}
+        if config_repo_plugins is not None:
+            already_listed.add(config_repo_plugins.resolve())
+        if installed_plugins.resolve() not in already_listed:
+            dirs.append(installed_plugins)
+
+    dirs.extend(extra_dirs)
+    return dirs
+
+
+def _scan_local_plugins(
+    *, base_dir: Path | None = None
+) -> list[tuple[Callable[..., Any], PluginRecord]]:
+    """Scan every directory `plugin_scan_dirs(base_dir=base_dir)` returns,
+    in order, for local-file plugins (`*.py`, non-`_`-prefixed, not in
+    `settings.plugins_disabled`). A module stem already loaded from an
+    earlier directory is skipped rather than re-loaded or raising a
+    collision (dedup by stem, first-wins — see `_scan_plugin_dir`). A
+    directory that doesn't exist on disk is silently skipped.
+
+    `base_dir`: see `plugin_scan_dirs` -- `None` (the default) preserves
+    the pre-existing `settings.base_dir`-derived behavior exactly;
+    `PluginManager(base_dir=...)` passes its own explicit `base_dir`
+    through here so an isolated-directory scan (`hivepilot validate --dir`)
+    never depends on the process's cwd or on `settings.base_dir`.
 
     Returns each successfully-loaded plugin's `register` callable paired with
     a `PluginRecord` describing where it came from.
@@ -546,25 +604,8 @@ def _scan_local_plugins() -> list[tuple[Callable[..., Any], PluginRecord]]:
         return found
 
     seen_stems: set[str] = set()
-    found.extend(_scan_plugin_dir(settings.base_dir / "plugins", seen_stems=seen_stems))
-
-    extra_dirs = list(settings.plugins_extra_dirs)
-    config_repo_plugins = _config_repo_plugins_dir()
-    if config_repo_plugins is not None:
-        already_listed = {d.resolve() for d in extra_dirs}
-        if config_repo_plugins.resolve() not in already_listed:
-            found.extend(_scan_plugin_dir(config_repo_plugins, seen_stems=seen_stems))
-
-    installed_plugins = _installed_plugins_dir()
-    if installed_plugins is not None:
-        already_listed = {d.resolve() for d in extra_dirs}
-        if config_repo_plugins is not None:
-            already_listed.add(config_repo_plugins.resolve())
-        if installed_plugins.resolve() not in already_listed:
-            found.extend(_scan_plugin_dir(installed_plugins, seen_stems=seen_stems))
-
-    for extra_dir in extra_dirs:
-        found.extend(_scan_plugin_dir(extra_dir, seen_stems=seen_stems))
+    for directory in plugin_scan_dirs(base_dir=base_dir):
+        found.extend(_scan_plugin_dir(directory, seen_stems=seen_stems))
     return found
 
 
@@ -648,7 +689,7 @@ class ReloadResult:
     error: str | None = None
 
 
-def _snapshot_plugin_dir() -> dict[str, float]:
+def _snapshot_plugin_dir(base_dir: Path | None = None) -> dict[str, float]:
     """mtime snapshot of every non-underscore-prefixed `plugins/*.py` file,
     keyed by absolute path string.
 
@@ -658,8 +699,15 @@ def _snapshot_plugin_dir() -> dict[str, float]:
     filesystem-level signal ("did the directory change"), not a load-time
     decision -- `plugins_changed_on_disk()` must answer accurately regardless
     of whether a caller is currently loading plugins at all.
+
+    `base_dir`: same explicit-vs-default semantics as `plugin_scan_dirs` --
+    a `PluginManager(base_dir=...)` instance passes its own `base_dir`
+    through (via `_commit`) so its snapshot matches what it ACTUALLY
+    scanned, instead of always reading `settings.base_dir` regardless of
+    what this instance was constructed with (the same latent cwd-derived-
+    default pattern the constructor fix above addresses).
     """
-    plugin_dir = settings.base_dir / "plugins"
+    plugin_dir = (base_dir if base_dir is not None else settings.base_dir) / "plugins"
     if not plugin_dir.exists():
         return {}
     return {
@@ -739,7 +787,24 @@ def _stage_kind(
 
 
 class PluginManager:
-    def __init__(self) -> None:
+    def __init__(self, *, base_dir: Path | None = None) -> None:
+        """`base_dir`: explicit override for where local-file plugin/skill
+        discovery scans -- see `plugin_scan_dirs`'s docstring for the exact
+        semantics. `None` (the default) is byte-identical to pre-existing
+        behavior: every caller that doesn't pass it (the vast majority --
+        `Orchestrator()`, `hivepilot plugins list`, `lint_service`, the
+        scheduler daemon's hot-reload manager, etc.) keeps reading the
+        process-global `settings.base_dir`. Passing it explicitly is an
+        ISOLATED-directory scan (currently only `hivepilot validate --dir`,
+        via `config_validation.validate_config_report`), never merged with
+        `settings.base_dir` -- this is what makes plugin/skill resolution
+        for a `--dir` validation independent of the process's cwd (the
+        confirmed bug this parameter exists to fix). Stored on the instance
+        (not passed around as a bare local) so `reload()` -- which re-scans
+        using THIS instance's own settings -- keeps using the same
+        `base_dir` on every subsequent reload, not just at construction.
+        """
+        self._base_dir = base_dir
         # Reentrancy guard for `reload()` -- see that method's docstring.
         # Never touched during `__init__` itself (which never calls
         # `reload()`), but initialized here so the attribute always exists.
@@ -836,7 +901,7 @@ class PluginManager:
         """True if `plugins/*.py` (added/removed/modified) differs from the
         snapshot taken at the last successful load/reload. Pure mtime
         comparison -- safe to poll on every scheduler tick."""
-        return _snapshot_plugin_dir() != self._plugin_dir_snapshot
+        return _snapshot_plugin_dir(base_dir=self._base_dir) != self._plugin_dir_snapshot
 
     def _commit(self, staged: _StagedPluginState) -> None:
         """Apply a successfully-staged pass to live state. Only ever called
@@ -889,7 +954,7 @@ class PluginManager:
         self.panels: dict[str, PanelSpec] = staged.panels
         self.skills: dict[str, SkillSpec] = staged.skills
         self.plugins = staged.plugins
-        self._plugin_dir_snapshot: dict[str, float] = _snapshot_plugin_dir()
+        self._plugin_dir_snapshot: dict[str, float] = _snapshot_plugin_dir(base_dir=self._base_dir)
 
     def _load_into(
         self,
@@ -909,7 +974,7 @@ class PluginManager:
         `__init__` did (see `_stage_kind`), so `reload()` can catch it and
         discard the whole candidate state untouched.
         """
-        local = _scan_local_plugins()
+        local = _scan_local_plugins(base_dir=self._base_dir)
         explicit_entry = settings.__dict__.get("plugins_entry")
         # The master switch disables ALL plugin loading, including the explicit
         # `plugins_entry` pin — otherwise an operator could not silence a suspect

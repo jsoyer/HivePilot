@@ -547,3 +547,104 @@ class TestPluginsExtraDirs:
         assert "solo-kind" in RUNNER_MAP
         assert len(pm.loaded) == 1
         assert pm.loaded[0].name == "solo"
+
+
+class TestPluginManagerExplicitBaseDir:
+    """`PluginManager(base_dir=...)` / `plugins_mod.plugin_scan_dirs(base_dir=...)`
+    (the `hivepilot validate --dir` cwd bug fix): an explicit `base_dir`
+    must be used INSTEAD OF `settings.base_dir` -- never merged with it --
+    so plugin/skill discovery for an isolated directory never depends on
+    the process's cwd (or on whatever `settings.base_dir` happens to be)."""
+
+    def test_explicit_base_dir_overrides_settings_base_dir(self, tmp_path, monkeypatch) -> None:
+        unrelated = tmp_path / "unrelated-cwd-like-dir"
+        explicit = tmp_path / "explicit-target"
+        _write_local_plugin(explicit / "plugins", "explicit_only.py", kind="explicit-only-kind")
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", unrelated, raising=False)
+
+        pm = PluginManager(base_dir=explicit)
+
+        assert "explicit-only-kind" in RUNNER_MAP
+        assert any(r.name == "explicit_only" for r in pm.loaded)
+
+    def test_explicit_base_dir_ignores_settings_base_dir_plugins(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A plugin sitting under the global `settings.base_dir/plugins`
+        must NOT leak into an explicit-base_dir scan -- proves this is a
+        REPLACEMENT, not an additional scan directory."""
+        settings_base_dir = tmp_path / "settings-base"
+        explicit = tmp_path / "explicit-target"
+        explicit.mkdir()
+        _write_local_plugin(
+            settings_base_dir / "plugins", "should_not_leak.py", kind="should-not-leak-kind"
+        )
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", settings_base_dir, raising=False)
+
+        pm = PluginManager(base_dir=explicit)
+
+        assert "should-not-leak-kind" not in RUNNER_MAP
+        assert pm.loaded == []
+
+    def test_explicit_base_dir_only_honors_absolute_extra_dirs(self, tmp_path, monkeypatch) -> None:
+        """Isolated-directory mode (explicit base_dir) only scans that
+        directory plus ABSOLUTE `plugins_extra_dirs` entries -- a relative
+        entry is inherently cwd-relative and would silently reintroduce the
+        exact cwd-dependence this parameter exists to remove, so it is
+        skipped rather than resolved against cwd or base_dir."""
+        explicit = tmp_path / "explicit-target"
+        abs_extra = tmp_path / "abs-extra"
+        _write_local_plugin(abs_extra, "abs_extra_plugin.py", kind="abs-extra-kind")
+        relative_extra = Path("relative-extra-dir")
+        _write_local_plugin(
+            Path.cwd() / relative_extra, "rel_extra_plugin.py", kind="rel-extra-kind"
+        )
+        monkeypatch.setattr(
+            plugins_mod.settings,
+            "plugins_extra_dirs",
+            [abs_extra, relative_extra],
+            raising=False,
+        )
+
+        try:
+            pm = PluginManager(base_dir=explicit)
+        finally:
+            import shutil
+
+            shutil.rmtree(Path.cwd() / relative_extra, ignore_errors=True)
+
+        assert "abs-extra-kind" in RUNNER_MAP
+        assert "rel-extra-kind" not in RUNNER_MAP
+        assert any(r.name == "abs_extra_plugin" for r in pm.loaded)
+
+    def test_plugin_scan_dirs_explicit_base_dir_filters_relative_extra_dirs(self, tmp_path) -> None:
+        """Unit-level pin on `plugin_scan_dirs` itself (the shared helper
+        `_scan_local_plugins`/`hivepilot validate`'s header/error-message
+        reporting both reuse) -- explicit base_dir returns exactly
+        `[base_dir/plugins, *absolute plugins_extra_dirs]`, in order."""
+        import pytest as _pytest
+
+        mp = _pytest.MonkeyPatch()
+        try:
+            abs_extra = tmp_path / "abs-extra"
+            mp.setattr(
+                plugins_mod.settings,
+                "plugins_extra_dirs",
+                [abs_extra, Path("relative-dir")],
+                raising=False,
+            )
+            dirs = plugins_mod.plugin_scan_dirs(base_dir=tmp_path)
+            assert dirs == [tmp_path / "plugins", abs_extra]
+        finally:
+            mp.undo()
+
+    def test_plugin_scan_dirs_default_matches_pre_fix_behavior(self, tmp_path, monkeypatch) -> None:
+        """Regression pin: omitting `base_dir` (the default) must still
+        derive every candidate directory from `settings.base_dir` (and the
+        config-repo/installed/extra dirs) exactly as before this fix."""
+        monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "plugins_extra_dirs", [], raising=False)
+
+        dirs = plugins_mod.plugin_scan_dirs()
+
+        assert dirs == [tmp_path / "plugins"]
