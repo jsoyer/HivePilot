@@ -882,6 +882,383 @@ class TestRunDoctorIntegration:
 
 
 # ---------------------------------------------------------------------------
+# N1 (2nd Opus review, PR #334): a malformed SECOND-level container (e.g.
+# `projects.yaml` written as a LIST of projects, exactly like `roles.yaml`
+# genuinely IS a list) must never crash the whole doctor report.
+# ---------------------------------------------------------------------------
+
+
+class TestN1MalformedSecondLevelContainer:
+    def test_projects_list_does_not_crash_schedules_check(self, tmp_path: Path) -> None:
+        """Against commit 46404b2 this raises AttributeError at
+        `set((projects_data.get("projects") or {}).keys())` instead of
+        returning a finding."""
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": [{"name": "acme"}]}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {}}))
+        (tmp_path / "schedules.yaml").write_text(yaml.dump({"schedules": {}}))
+
+        findings = config_doctor._check_schedules_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_tasks_list_does_not_crash_schedules_check(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": ["not", "a", "mapping"]}))
+        (tmp_path / "schedules.yaml").write_text(yaml.dump({"schedules": {}}))
+
+        findings = config_doctor._check_schedules_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_schedules_section_list_does_not_crash_schedules_check(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {}}))
+        (tmp_path / "schedules.yaml").write_text(yaml.dump({"schedules": ["not", "a", "mapping"]}))
+
+        findings = config_doctor._check_schedules_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_policies_section_list_does_not_crash_role_overrides_check(
+        self, tmp_path: Path
+    ) -> None:
+        """Against commit 46404b2 this raises AttributeError at
+        `policies.get("default")` (policies_data.get("policies") is a list,
+        not a dict)."""
+        (tmp_path / "roles.yaml").write_text(
+            yaml.dump({"roles": [{"name": "chief_of_staff", "prompt_file": "cos.md"}]})
+        )
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": ["not", "a", "mapping"]}))
+
+        findings = config_doctor._check_role_overrides_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_policies_projects_list_does_not_crash_role_overrides_check(
+        self, tmp_path: Path
+    ) -> None:
+        """Against commit 46404b2 this raises AttributeError at
+        `(policies.get("projects") or {}).items()`."""
+        (tmp_path / "roles.yaml").write_text(
+            yaml.dump({"roles": [{"name": "chief_of_staff", "prompt_file": "cos.md"}]})
+        )
+        (tmp_path / "policies.yaml").write_text(
+            yaml.dump({"policies": {"projects": ["not", "a", "mapping"]}})
+        )
+
+        findings = config_doctor._check_role_overrides_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_projects_list_does_not_crash_only_modules_check(self, tmp_path: Path) -> None:
+        """Against commit 46404b2 this raises AttributeError at
+        `(projects_data.get("projects") or {}).values()`."""
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": [{"name": "acme"}]}))
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+        findings = config_doctor._check_only_modules_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_pipelines_list_does_not_crash_only_modules_check(self, tmp_path: Path) -> None:
+        """Against commit 46404b2 this raises AttributeError at
+        `(pipelines_data.get("pipelines") or {}).items()`."""
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": ["not", "a", "mapping"]}))
+
+        findings = config_doctor._check_only_modules_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_project_modules_non_mapping_does_not_crash_only_modules_check(
+        self, tmp_path: Path
+    ) -> None:
+        """Against commit 46404b2 this raises AttributeError at
+        `(project.get("modules") or {}).keys()`."""
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump({"projects": {"acme": {"modules": ["not", "a", "mapping"]}}})
+        )
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+        findings = config_doctor._check_only_modules_dangling(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_projects_list_does_not_crash_secrets_sanity(self, tmp_path: Path) -> None:
+        """Against commit 46404b2 this raises AttributeError at
+        `(projects_data.get("projects") or {}).items()`."""
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": [{"name": "acme"}]}))
+
+        findings = config_doctor.check_secrets_sanity(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_projects_list_survives_in_full_run_doctor(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The governing rule of this module end to end: a malformed
+        `projects.yaml` must produce an emitted finding AND every other
+        check's already-computed findings must survive in the same report --
+        never a raw traceback that discards everything. Against commit
+        46404b2 this crashes `run_doctor` outright with an unhandled
+        AttributeError."""
+        _clear_path_env(monkeypatch)
+        monkeypatch.setenv("HIVEPILOT_BASE_DIR", str(tmp_path))
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+        # Unrelated, independently-detectable problem that must survive.
+        monkeypatch.setattr(settings, "linear_api_key", "", raising=False)
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _write_minimal_valid_config(config_dir)
+        (config_dir / "projects.yaml").write_text(
+            yaml.dump({"projects": [{"name": "acme", "path": "~/dev/acme"}]})
+        )
+        (config_dir / "schedules.yaml").write_text(yaml.dump({"schedules": {}}))
+
+        fake_manager = SimpleNamespace(
+            loaded=[SimpleNamespace(name=stem) for stem in _currently_enabled_plugin_stems()],
+            check_all=lambda: {},
+        )
+        monkeypatch.setattr("hivepilot.plugins.PluginManager", lambda: fake_manager, raising=False)
+
+        findings = config_doctor.run_doctor(config_dir=config_dir)
+
+        assert any(f.check in ("invalid_config_section", "check_crashed") for f in findings), (
+            f"expected a finding for the malformed projects.yaml, got: {[f.check for f in findings]}"
+        )
+        assert any(f.check == "empty_secret_setting" for f in findings), (
+            "an unrelated, already-computed finding must survive"
+        )
+
+
+class TestSystemicCheckCrashBackstop:
+    def test_one_check_raising_does_not_discard_other_checks_findings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Defense-in-depth on top of the targeted per-site guards above: if
+        ANY doctor check raises for a reason not yet anticipated, `run_doctor`
+        must convert it to a single `check_crashed` finding instead of
+        losing every OTHER check's already-computed findings."""
+        _clear_path_env(monkeypatch)
+        monkeypatch.setenv("HIVEPILOT_BASE_DIR", str(tmp_path))
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(settings, "linear_api_key", "", raising=False)
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _write_minimal_valid_config(config_dir)
+        (config_dir / "schedules.yaml").write_text(yaml.dump({"schedules": {}}))
+
+        fake_manager = SimpleNamespace(
+            loaded=[SimpleNamespace(name=stem) for stem in _currently_enabled_plugin_stems()],
+            check_all=lambda: {},
+        )
+        monkeypatch.setattr("hivepilot.plugins.PluginManager", lambda: fake_manager, raising=False)
+
+        def _boom(config_dir: Path | None = None) -> list[config_doctor.DoctorFinding]:
+            raise RuntimeError("credential=super-secret-value should never leak")
+
+        monkeypatch.setattr(config_doctor, "check_dangling_references", _boom)
+
+        findings = config_doctor.run_doctor(config_dir=config_dir)
+
+        crashed = [f for f in findings if f.check == "check_crashed"]
+        assert crashed, "expected a check_crashed finding, not a lost check"
+        assert crashed[0].severity == "error"
+        assert "RuntimeError" in crashed[0].message
+        assert "credential" not in crashed[0].message
+        assert "super-secret-value" not in crashed[0].message
+        # The OTHER already-computed check's finding must survive.
+        assert any(f.check == "empty_secret_setting" for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# N2 (2nd Opus review, PR #334): one unparseable/malformed file loaded by
+# more than one check must not emit the SAME finding multiple times.
+# ---------------------------------------------------------------------------
+
+
+class TestN2DuplicateFindingsCollapsed:
+    def test_run_doctor_deduplicates_identical_findings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """`projects.yaml` is loaded independently by three different
+        checks (_check_schedules_dangling, _check_only_modules_dangling,
+        check_secrets_sanity); against commit 46404b2 an unparseable
+        projects.yaml emits `unparseable_config_yaml` three times in the
+        same `run_doctor()` report."""
+        _clear_path_env(monkeypatch)
+        monkeypatch.setenv("HIVEPILOT_BASE_DIR", str(tmp_path))
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _write_minimal_valid_config(config_dir)
+        (config_dir / "projects.yaml").write_text("projects: [unclosed\n")
+        (config_dir / "schedules.yaml").write_text(yaml.dump({"schedules": {}}))
+
+        fake_manager = SimpleNamespace(
+            loaded=[SimpleNamespace(name=stem) for stem in _currently_enabled_plugin_stems()],
+            check_all=lambda: {},
+        )
+        monkeypatch.setattr("hivepilot.plugins.PluginManager", lambda: fake_manager, raising=False)
+
+        findings = config_doctor.run_doctor(config_dir=config_dir)
+
+        unparseable = [f for f in findings if f.check == "unparseable_config_yaml"]
+        assert len(unparseable) == 1, (
+            f"expected exactly one deduplicated finding, got {len(unparseable)}: "
+            f"{[f.message for f in unparseable]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# N5 (2nd Opus review, PR #334): a `secrets:` catalog that isn't a mapping
+# used to silently degrade `ref_name not in catalog` to SUBSTRING matching
+# against a scalar -- a fail-open, not just a crash.
+# ---------------------------------------------------------------------------
+
+
+class TestN5SecretsCatalogTypeGuard:
+    def test_non_mapping_secrets_catalog_does_not_fail_open_to_substring_match(
+        self, tmp_path: Path
+    ) -> None:
+        """Against commit 46404b2, `catalog = project.get("secrets") or {}`
+        is unguarded: if `secrets:` is the STRING `"abc"`, `"a" not in
+        catalog` is `False` (substring match) -- a reference named 'a'
+        would incorrectly appear resolved. Must emit a finding instead,
+        never silently accept the substring match."""
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {
+                    "projects": {
+                        "acme": {
+                            "env": {"API_KEY": "${secret:a}"},
+                            "secrets": "abc",
+                        }
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor.check_secrets_sanity(tmp_path)
+
+        assert any(f.check == "malformed_project_secrets" for f in findings)
+        # The fail-open substring match must NOT silently mark 'a' as resolved.
+        assert not any(f.check == "dangling_secret_ref" and "'a'" in f.message for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# N6 (2nd Opus review, PR #334): consistency -- every bare type-check that
+# silently dropped a malformed entry must emit a finding instead, matching
+# the module's stated governing rule.
+# ---------------------------------------------------------------------------
+
+
+class TestN6ConsistentTypeGuards:
+    def test_non_string_env_value_emits_finding_not_silence(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {
+                    "projects": {
+                        "acme": {
+                            "env": {"DEBUG": True},
+                            "secrets": {},
+                        }
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor.check_secrets_sanity(tmp_path)
+
+        assert any(f.check == "non_string_project_env_value" for f in findings)
+        # An info-level oddity, not an actionable secrets-hygiene error.
+        skipped = next(f for f in findings if f.check == "non_string_project_env_value")
+        assert skipped.severity == "info"
+        assert "DEBUG" in skipped.message
+
+    def test_non_mapping_role_entry_emits_finding_not_silence(self, tmp_path: Path) -> None:
+        """Against commit 46404b2, a non-mapping role entry silently
+        vanishes from `role_names`, making a role_overrides reference to the
+        REAL role that failed to parse look like a dangling reference to a
+        role that was simply never declared."""
+        (tmp_path / "roles.yaml").write_text(
+            yaml.dump({"roles": ["not-a-mapping", {"name": "chief_of_staff"}]})
+        )
+        (tmp_path / "policies.yaml").write_text(
+            yaml.dump({"policies": {"default": {"role_overrides": {"chief_of_staff": {}}}}})
+        )
+
+        findings = config_doctor._check_role_overrides_dangling(tmp_path)
+
+        assert any(f.check == "malformed_role_entry" for f in findings)
+        # The real, valid role_override must still resolve cleanly.
+        assert not any(f.check == "dangling_role_override" for f in findings)
+
+    def test_non_mapping_project_entry_emits_finding_in_only_modules_check(
+        self, tmp_path: Path
+    ) -> None:
+        """Against commit 46404b2, a non-mapping project entry contributes
+        no modules to the known-modules set, silently making a genuinely
+        valid `only_modules` reference to that project look dangling for
+        the WRONG reason."""
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"acme": "not-a-mapping"}}))
+        (tmp_path / "pipelines.yaml").write_text(
+            yaml.dump(
+                {
+                    "pipelines": {
+                        "default": {"stages": [{"name": "dev", "only_modules": ["real-module"]}]}
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor._check_only_modules_dangling(tmp_path)
+
+        assert any(f.check == "malformed_project_entry" for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# N4 (2nd Opus review, PR #334): guard the M5 CLI wiring -- reverting
+# `cli.py`'s `badge = verify_badge(result)` to an inline `"ok"` badge must
+# not pass silently at the CLI level.
+# ---------------------------------------------------------------------------
+
+
+class TestN4CliSurfacesMissingBadge:
+    def test_cli_command_surfaces_missing_badge_from_verify_badge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reverting `cli.py:3756` to an inline `"ok"` badge (instead of
+        calling `verify_badge(result)`) would still pass
+        `TestVerifyBadge` (tests the helper in isolation) AND
+        `test_cli_command_lists_every_plugin` (only asserts names + exit
+        code) -- neither would catch the regression. This test stubs
+        `verify_plugins` with a MISSING-shaped result and asserts the badge
+        actually reaches the CLI's rendered output."""
+        from typer.testing import CliRunner
+
+        from hivepilot.cli import app
+
+        missing_result = config_doctor.PluginVerifyResult(
+            name="mem0",
+            prereq_kind="pip",
+            present_per_declaration=False,
+            importable=False,
+            mismatch=None,
+            detail="NOT importable (ImportError); pip: 'mem0ai' not installed",
+        )
+        monkeypatch.setattr(config_doctor, "verify_plugins", lambda: [missing_result])
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plugins", "verify"])
+
+        assert "MISSING" in result.output, result.output
+
+
+# ---------------------------------------------------------------------------
 # plugins verify (incident #5)
 # ---------------------------------------------------------------------------
 

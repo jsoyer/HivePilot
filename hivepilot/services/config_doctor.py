@@ -49,6 +49,7 @@ import importlib.metadata as importlib_metadata
 import os
 import platform
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -161,6 +162,44 @@ def _load_yaml_checked(path: Path) -> tuple[dict[str, Any], list[DoctorFinding]]
             )
         ]
     return data, []
+
+
+def _checked_container(
+    data: dict[str, Any], key: str, where: str
+) -> tuple[dict[str, Any], list[DoctorFinding]]:
+    """Return ``(data.get(key) or {}, [])`` when that value is a mapping (or
+    absent); otherwise return ``({}, [finding])`` instead of letting the
+    caller's `.keys()`/`.items()`/`.values()` call raise `AttributeError` and
+    silently discard every OTHER finding already computed in the same doctor
+    run.
+
+    N1 (2nd Opus review, PR #334): `_load_yaml_checked` only guarantees a
+    mapping ROOT -- the next level down (e.g. ``projects:``, ``tasks:``,
+    ``schedules:``, ``policies:``, ``pipelines:``, a project's ``modules:``)
+    was assumed to be a mapping with no check at all. A ``projects.yaml``
+    written as a LIST of projects is realistic: ``roles.yaml`` genuinely IS
+    written as a list elsewhere in this same config schema.
+
+    *where* is a fully-formed, human-readable location string (e.g.
+    ``"'projects.yaml' key 'projects'"``) so the emitted message/fix read
+    naturally without this helper needing to know the caller's file layout.
+    """
+    value = data.get(key)
+    if value is None:
+        return {}, []
+    if not isinstance(value, dict):
+        return {}, [
+            _finding(
+                "error",
+                "invalid_config_section",
+                f"{where} must be a mapping, got {type(value).__name__} -- not checked",
+                "a list/scalar where a mapping is expected raises AttributeError on the "
+                "first .keys()/.items()/.values() call downstream, aborting every OTHER "
+                "finding already computed in the same doctor run",
+                f"fix {where} so it is a mapping",
+            )
+        ]
+    return value, []
 
 
 # ---------------------------------------------------------------------------
@@ -431,10 +470,28 @@ def _check_schedules_dangling(config_dir: Path | None) -> list[DoctorFinding]:
     findings.extend(project_findings)
     findings.extend(task_findings)
 
-    project_names: set[str] = set((projects_data.get("projects") or {}).keys())
-    task_names: set[str] = set((tasks_data.get("tasks") or {}).keys())
+    # N1: guard the SECOND-level container too -- `_load_yaml_checked` only
+    # guarantees a mapping ROOT; `projects:`/`tasks:`/`schedules:` were
+    # assumed to be mappings with no check, and a list there (realistic --
+    # `roles.yaml` genuinely IS a list) used to raise AttributeError on
+    # `.keys()`/`.items()` and crash the whole doctor report.
+    projects_section, projects_section_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(projects_section_findings)
+    tasks_section, tasks_section_findings = _checked_container(
+        tasks_data, "tasks", "'tasks.yaml' key 'tasks'"
+    )
+    findings.extend(tasks_section_findings)
+    schedules_section, schedules_section_findings = _checked_container(
+        schedules_data, "schedules", "'schedules.yaml' key 'schedules'"
+    )
+    findings.extend(schedules_section_findings)
 
-    for schedule_name, schedule in (schedules_data.get("schedules") or {}).items():
+    project_names: set[str] = set(projects_section.keys())
+    task_names: set[str] = set(tasks_section.keys())
+
+    for schedule_name, schedule in schedules_section.items():
         if not isinstance(schedule, dict):
             # M3: a schedule entry that isn't a mapping (e.g. a YAML typo
             # like `nightly: "my-task"` instead of a mapping) used to be
@@ -502,16 +559,46 @@ def _check_role_overrides_dangling(config_dir: Path | None) -> list[DoctorFindin
     roles_data, roles_findings = _load_yaml_checked(_doctor_path("roles.yaml", config_dir))
     findings.extend(roles_findings)
 
-    role_names: set[str] = {
-        role["name"]
-        for role in (roles_data.get("roles") or [])
-        if isinstance(role, dict) and "name" in role
-    }
+    # N6: a role entry that isn't a mapping with a 'name' key used to just
+    # vanish from `role_names` via the comprehension's `isinstance` filter --
+    # silently making a role_overrides reference to the REAL role (which
+    # never actually got parsed) look dangling for the WRONG reason.
+    role_names: set[str] = set()
+    for index, role in enumerate(roles_data.get("roles") or []):
+        if isinstance(role, dict) and "name" in role:
+            role_names.add(role["name"])
+            continue
+        findings.append(
+            _finding(
+                "error",
+                "malformed_role_entry",
+                f"roles.yaml entry #{index} is not a mapping with a 'name' key (got "
+                f"{type(role).__name__}) -- not checked",
+                "a role entry that isn't a mapping with a 'name' key silently vanishes "
+                "from the known-roles set, making every role_overrides reference to the "
+                "REAL role (which never actually got parsed) look dangling for the wrong "
+                "reason",
+                f"fix roles.yaml entry #{index} in the 'roles:' list to be a mapping with "
+                "a 'name' key",
+            )
+        )
+
     alias_to_role = _alias_to_role_map()
 
-    policies = policies_data.get("policies") or {}
-    entries: list[tuple[str, Any]] = [("default", policies.get("default") or {})]
-    entries.extend((policies.get("projects") or {}).items())
+    # N1: guard `policies:` itself and its nested `projects:` sub-map -- a
+    # list at either level used to raise AttributeError on `.get("default")`
+    # / `.items()` and crash the whole doctor report.
+    policies_section, policies_section_findings = _checked_container(
+        policies_data, "policies", "'policies.yaml' key 'policies'"
+    )
+    findings.extend(policies_section_findings)
+
+    entries: list[tuple[str, Any]] = [("default", policies_section.get("default") or {})]
+    scoped_policies, scoped_policies_findings = _checked_container(
+        policies_section, "projects", "'policies.yaml' key 'policies.projects'"
+    )
+    findings.extend(scoped_policies_findings)
+    entries.extend(scoped_policies.items())
 
     for scope, rules in entries:
         if not isinstance(rules, dict):
@@ -568,12 +655,49 @@ def _check_only_modules_dangling(config_dir: Path | None) -> list[DoctorFinding]
     projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
     findings.extend(project_findings)
 
-    all_modules: set[str] = set()
-    for project in (projects_data.get("projects") or {}).values():
-        if isinstance(project, dict):
-            all_modules.update((project.get("modules") or {}).keys())
+    # N1: guard `projects:` and `pipelines:` themselves -- a list at either
+    # level used to raise AttributeError on `.values()`/`.items()` and crash
+    # the whole doctor report.
+    projects_section, projects_section_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(projects_section_findings)
 
-    for pipeline_name, pipeline in (pipelines_data.get("pipelines") or {}).items():
+    all_modules: set[str] = set()
+    for project_name, project in projects_section.items():
+        if not isinstance(project, dict):
+            # N6: a non-mapping project entry used to just be skipped here,
+            # contributing zero modules to the known-modules set and making
+            # every genuinely-valid only_modules reference to that project
+            # look dangling for the WRONG reason.
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_project_entry",
+                    f"Project '{project_name}' is not a mapping (got "
+                    f"{type(project).__name__}) -- not checked",
+                    "a project entry that isn't a mapping silently contributed zero "
+                    "modules to the known-modules set, making every genuinely-valid "
+                    "only_modules reference to that project look dangling for the wrong "
+                    "reason",
+                    f"fix the '{project_name}' entry in projects.yaml to be a mapping",
+                )
+            )
+            continue
+        # N1: `project.get("modules")` itself must also be guarded -- a list
+        # there used to raise AttributeError on `.keys()`.
+        modules, modules_findings = _checked_container(
+            project, "modules", f"'projects.yaml' project '{project_name}' key 'modules'"
+        )
+        findings.extend(modules_findings)
+        all_modules.update(modules.keys())
+
+    pipelines_section, pipelines_section_findings = _checked_container(
+        pipelines_data, "pipelines", "'pipelines.yaml' key 'pipelines'"
+    )
+    findings.extend(pipelines_section_findings)
+
+    for pipeline_name, pipeline in pipelines_section.items():
         if not isinstance(pipeline, dict):
             # M2/M3: its sibling `_check_schedules_dangling` already guards
             # this; unguarded here, a scalar pipeline entry raised
@@ -712,7 +836,13 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
     # the reference (no network/side effects from a read-only health check).
     projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
     findings.extend(project_findings)
-    for project_name, project in (projects_data.get("projects") or {}).items():
+    # N1: guard `projects:` itself -- a list there used to raise
+    # AttributeError on `.items()` and crash the whole doctor report.
+    projects_section, projects_section_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(projects_section_findings)
+    for project_name, project in projects_section.items():
         if not isinstance(project, dict):
             # M3: a project entry that isn't a mapping used to be skipped
             # with ZERO output for its secrets/env sanity checks.
@@ -729,6 +859,26 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
             )
             continue
         catalog = project.get("secrets") or {}
+        if not isinstance(catalog, dict):
+            # N5: unguarded, `ref_name not in catalog` against a scalar (e.g.
+            # a string) silently degrades to SUBSTRING matching -- a
+            # fail-open where a reference named 'a' would incorrectly appear
+            # resolved against the catalog value "abc".
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_project_secrets",
+                    f"Project '{project_name}' secrets is not a mapping (got "
+                    f"{type(catalog).__name__}) -- not checked",
+                    "a secrets catalog that isn't a mapping silently degrades "
+                    "`ref_name not in catalog` to SUBSTRING matching against a scalar, "
+                    "causing an unrelated but similarly-named ${secret:NAME} reference "
+                    "to incorrectly appear resolved -- a fail-open, not just a crash",
+                    f"fix the 'secrets' block under project '{project_name}' in "
+                    "projects.yaml to be a mapping",
+                )
+            )
+            continue
         env = project.get("env") or {}
         if not isinstance(env, dict):
             findings.append(
@@ -746,6 +896,27 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
             continue
         for env_key, env_value in env.items():
             if not isinstance(env_value, str):
+                # N6: a non-string env value cannot contain a ${secret:NAME}
+                # reference by definition, but silently skipping it means a
+                # config typo (e.g. an unintentionally-unquoted value) that
+                # SHOULD have been a string never gets flagged -- info-level
+                # only, since non-string env values (bools/ints) are a
+                # legitimate, common pattern.
+                findings.append(
+                    _finding(
+                        "info",
+                        "non_string_project_env_value",
+                        f"Project '{project_name}' env['{env_key}'] is not a string (got "
+                        f"{type(env_value).__name__}) -- not scanned for ${{secret:NAME}} "
+                        "references",
+                        "a non-string env value cannot contain a secret reference, but "
+                        "skipping it silently means a value that should have been a "
+                        "quoted string referencing a secret is never flagged",
+                        f"if project '{project_name}' env['{env_key}'] should reference a "
+                        "secret via ${secret:NAME}, ensure the YAML value is quoted as a "
+                        "string",
+                    )
+                )
                 continue
             for ref_name in find_secret_refs(env_value):
                 if ref_name not in catalog:
@@ -795,6 +966,53 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
 # ---------------------------------------------------------------------------
 
 
+def _run_check(name: str, func: Callable[[], list[DoctorFinding]]) -> list[DoctorFinding]:
+    """Run one check in isolation: a single check crashing must NEVER
+    discard every OTHER check's already-computed findings in the same
+    doctor run.
+
+    Systemic backstop (2nd Opus review, PR #334, N1) layered on TOP of the
+    targeted per-site mapping guards elsewhere in this module -- defense in
+    depth against any failure mode not yet anticipated by those guards.
+    Never interpolate `str(exc)` (a YAML parser's exception string can embed
+    a credential from the offending line): name the exception TYPE only,
+    matching `plugins.py::run_health_check`'s discipline.
+    """
+    try:
+        return func()
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        return [
+            _finding(
+                "error",
+                "check_crashed",
+                f"doctor check '{name}' raised {type(exc).__name__} while running -- its "
+                "findings could not be computed",
+                "one check crashing must never silently discard every OTHER check's "
+                "already-computed findings in the same doctor run",
+                "re-run the individual check function directly, or `hivepilot validate`, "
+                "to see the exact error, then fix the offending config file",
+            )
+        ]
+
+
+def _dedupe_findings(findings: list[DoctorFinding]) -> list[DoctorFinding]:
+    """Collapse byte-identical findings emitted by more than one check in
+    the same doctor run (2nd Opus review, PR #334, N2): `projects.yaml`
+    alone is loaded independently by three different checks, so one
+    unparseable file used to emit `unparseable_config_yaml` three times.
+    `DoctorFinding` is a frozen, hashable dataclass, so exact duplicates can
+    be identified by value alone -- order-preserving, first occurrence
+    wins."""
+    seen: set[DoctorFinding] = set()
+    deduped: list[DoctorFinding] = []
+    for finding in findings:
+        if finding in seen:
+            continue
+        seen.add(finding)
+        deduped.append(finding)
+    return deduped
+
+
 def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     """Run every check and return the combined findings list (empty means a
     clean config: `hivepilot config doctor` prints "OK" and exits 0).
@@ -810,16 +1028,23 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     from hivepilot.plugins import PluginManager
 
     findings: list[DoctorFinding] = []
-    findings.extend(check_cwd_relative_paths())
-    findings.extend(check_sync_drift())
+    findings.extend(_run_check("check_cwd_relative_paths", check_cwd_relative_paths))
+    findings.extend(_run_check("check_sync_drift", check_sync_drift))
 
     plugin_manager = PluginManager()
-    findings.extend(check_enabled_plugins_loaded(plugin_manager))
-    findings.extend(check_plugin_health(plugin_manager))
+    findings.extend(
+        _run_check(
+            "check_enabled_plugins_loaded",
+            lambda: check_enabled_plugins_loaded(plugin_manager),
+        )
+    )
+    findings.extend(_run_check("check_plugin_health", lambda: check_plugin_health(plugin_manager)))
 
-    findings.extend(check_dangling_references(config_dir))
-    findings.extend(check_secrets_sanity(config_dir))
-    return findings
+    findings.extend(
+        _run_check("check_dangling_references", lambda: check_dangling_references(config_dir))
+    )
+    findings.extend(_run_check("check_secrets_sanity", lambda: check_secrets_sanity(config_dir)))
+    return _dedupe_findings(findings)
 
 
 # ---------------------------------------------------------------------------
