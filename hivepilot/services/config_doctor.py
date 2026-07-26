@@ -39,6 +39,12 @@ would this have caught" stays discoverable from the code itself:
     ``${secret:NAME}`` reference with no catalog entry, and the recurring
     "empty string treated as configured" fail-open class for secret-typed
     Settings fields.
+  * ``check_role_display_name_collisions`` — incident #8 (five roles all
+    carried ``display_name: "Margaux"``; the Telegram agent registry
+    derives its addressing alias from ``display_name``, so four of the
+    five became unaddressable by name in chat channels -- the engine
+    already logs a ``telegram.agent_registry.alias_collision`` warning at
+    startup, but nobody reads startup logs).
 
 ``run_doctor()`` is the single entry point ``hivepilot config doctor``
 (``hivepilot/cli.py``) calls; every other function here is independently
@@ -752,6 +758,176 @@ def _check_role_overrides_dangling(config_dir: Path | None) -> list[DoctorFindin
     return findings
 
 
+def _iter_role_display_names(
+    roles_section: Any, where: str
+) -> tuple[list[tuple[str, Any]], list[DoctorFinding]]:
+    """Yield ``(role_key, display_name_value)`` pairs from *roles_section*
+    -- the value of roles.yaml's top-level ``roles:`` key.
+
+    Handles both shapes actually seen for this key: the canonical LIST of
+    role mappings each carrying a ``name`` (the only shape
+    ``hivepilot.roles._load_roles_strict`` accepts -- see
+    ``docs/CONFIGURATION.md``'s "roles.yaml -- a LIST under `roles:`"), and
+    a MAPPING keyed by role name (a plausible hand-edited alternative even
+    though the loader doesn't accept it -- the key IS the role name). An
+    entry that isn't itself a mapping (list case) or whose value isn't a
+    mapping (mapping case) yields a ``malformed_role_entry`` finding instead
+    of being silently skipped or crashing -- this module's "I could not
+    inspect this must be a finding, never silence" rule applies here too.
+    """
+    pairs: list[tuple[str, Any]] = []
+    findings: list[DoctorFinding] = []
+
+    if isinstance(roles_section, list):
+        for index, entry in enumerate(roles_section):
+            if not isinstance(entry, dict) or "name" not in entry:
+                findings.append(
+                    _finding(
+                        "error",
+                        "malformed_role_entry",
+                        f"{where} entry #{index} is not a mapping with a 'name' key "
+                        f"(got {type(entry).__name__}) -- not checked for display_name "
+                        "collisions",
+                        "a role entry that isn't a mapping with a 'name' key cannot be "
+                        "identified by its role key in a display_name collision report",
+                        f"fix {where} entry #{index} to be a mapping with a 'name' key",
+                    )
+                )
+                continue
+            pairs.append((entry["name"], entry.get("display_name")))
+    elif isinstance(roles_section, dict):
+        for role_key, entry in roles_section.items():
+            if not isinstance(entry, dict):
+                findings.append(
+                    _finding(
+                        "error",
+                        "malformed_role_entry",
+                        f"{where} entry '{role_key}' is not a mapping (got "
+                        f"{type(entry).__name__}) -- not checked for display_name collisions",
+                        "a role entry that isn't a mapping cannot be inspected for its "
+                        "display_name",
+                        f"fix {where} entry '{role_key}' in roles.yaml to be a mapping",
+                    )
+                )
+                continue
+            pairs.append((role_key, entry.get("display_name")))
+    else:
+        findings.append(
+            _finding(
+                "error",
+                "invalid_config_section",
+                f"{where} must be a list or a mapping, got {type(roles_section).__name__} "
+                "-- display_name collisions could not be checked",
+                "a role roster that is neither a list nor a mapping cannot be inspected "
+                "for display_name collisions",
+                f"fix {where} to be a list of role mappings (see docs/CONFIGURATION.md)",
+            )
+        )
+    return pairs, findings
+
+
+def check_role_display_name_collisions(config_dir: Path | None) -> list[DoctorFinding]:
+    """ERROR for two-or-more roles whose ``display_name`` collides once
+    normalised the same way the Telegram agent registry derives its
+    addressing alias, plus a role whose ``display_name`` is empty or
+    whitespace-only.
+
+    Real incident: five roles (``designer_console``, ``designer_extension``,
+    ``designer_vscode``, ``designer_agent``, ``design_reviewer``) all
+    carried ``display_name: "Margaux"``. The registry's alias-claim logic
+    (``telegram_bot._build_agent_registry``, Phase 4: ``_sanitise_alias(role.
+    display_name.split()[0])``) already detects this collision and logs a
+    ``telegram.agent_registry.alias_collision`` warning at startup -- but
+    nobody reads startup logs, so the collision survived in production
+    until a doctor run surfaced it by accident.
+
+    Deliberately imports and reuses ``telegram_bot._sanitise_alias`` rather
+    than reimplementing case/accent folding: ``hivepilot.roles.Role`` (see
+    ``hivepilot/roles.py``) has no separate ``alias``/``aliases`` field --
+    the alias IS ``display_name``, derived. Guessing a different
+    normalisation (e.g. a plain ``.lower()``) would let this check disagree
+    with what the registry actually does at runtime (e.g. miss an
+    accent-only collision like "Aliénor" vs "Alienor").
+
+    Also flags a whitespace-only ``display_name`` (e.g. ``"   "``)
+    separately from a plain empty one: it is truthy but
+    ``"   ".split()[0]`` raises ``IndexError``, which would crash
+    ``_build_agent_registry()`` at import time -- not merely leave that one
+    role unaddressable.
+    """
+    from hivepilot.services.telegram_bot import _sanitise_alias
+
+    findings: list[DoctorFinding] = []
+    roles_data, load_findings = _load_yaml_checked(_doctor_path("roles.yaml", config_dir))
+    findings.extend(load_findings)
+
+    roles_section = roles_data.get("roles")
+    if roles_section is None:
+        return findings
+
+    pairs, entry_findings = _iter_role_display_names(roles_section, "'roles.yaml' key 'roles'")
+    findings.extend(entry_findings)
+
+    groups: dict[str, list[str]] = {}
+    blank_roles: list[str] = []
+
+    for role_key, display_name in pairs:
+        if not isinstance(display_name, str):
+            continue  # None (unset) or a non-string value: not this check's concern
+        if not display_name.strip():
+            blank_roles.append(role_key)
+            continue
+        normalised = _sanitise_alias(display_name)
+        if not normalised:
+            # A display_name made entirely of non-alphanumeric characters
+            # (e.g. "!!!") sanitises to "" -- the real registry's `_claim`
+            # early-returns on a falsy alias (no crash, no derived alias at
+            # all), the same practical outcome as having no display_name.
+            # Not grouped as a collision and not treated as "blank" (no
+            # crash risk) -- deliberately left uncovered, see PR notes.
+            continue
+        groups.setdefault(normalised, []).append(role_key)
+
+    for normalised, role_keys in sorted(groups.items()):
+        if len(role_keys) < 2:
+            continue
+        sorted_keys = sorted(role_keys)
+        count = len(sorted_keys)
+        findings.append(
+            _finding(
+                "error",
+                "duplicate_role_display_name",
+                f"{count} roles share the same display_name (normalised: '{normalised}'): "
+                f"{', '.join(sorted_keys)}",
+                "the Telegram agent registry derives its addressing alias from "
+                f"display_name -- {count - 1} of these {count} roles become unaddressable "
+                "by name in chat channels; mentions resolve to only one of them "
+                "(whichever wins the registry's deterministic claim order), and the "
+                "engine only logs this as a 'telegram.agent_registry.alias_collision' "
+                "warning at startup, which nobody reads",
+                f"give each of {', '.join(sorted_keys)} a distinct display_name in roles.yaml",
+            )
+        )
+
+    for role_key in sorted(blank_roles):
+        findings.append(
+            _finding(
+                "error",
+                "blank_role_display_name",
+                f"Role '{role_key}' has an empty-or-whitespace-only display_name",
+                "a whitespace-only display_name is truthy but has no tokens: "
+                "display_name.split()[0] raises IndexError, crashing Telegram "
+                "agent-registry construction outright; a purely empty display_name "
+                "silently falls back to the raw role key with no human-friendly alias "
+                "at all -- either way this role has no working name-based address",
+                f"set a non-blank display_name for role '{role_key}' in roles.yaml, or "
+                "remove the display_name key entirely to use the role key as-is",
+            )
+        )
+
+    return findings
+
+
 def _check_only_modules_dangling(config_dir: Path | None) -> list[DoctorFinding]:
     pipelines_data, findings = _load_yaml_checked(_doctor_path("pipelines.yaml", config_dir))
     projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
@@ -1146,6 +1322,12 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
         _run_check("check_dangling_references", lambda: check_dangling_references(config_dir))
     )
     findings.extend(_run_check("check_secrets_sanity", lambda: check_secrets_sanity(config_dir)))
+    findings.extend(
+        _run_check(
+            "check_role_display_name_collisions",
+            lambda: check_role_display_name_collisions(config_dir),
+        )
+    )
     return _dedupe_findings(findings)
 
 
