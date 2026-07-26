@@ -59,7 +59,7 @@ from hivepilot.config import settings
 from hivepilot.services.config_provenance import all_keys, is_secret_field
 from hivepilot.services.config_validation import validate_config
 from hivepilot.services.plugin_installer import KNOWN_EXAMPLE_PLUGINS
-from hivepilot.services.secret_refs import find_secret_refs
+from hivepilot.services.secret_refs import find_secret_refs, has_secret_ref
 
 # ---------------------------------------------------------------------------
 # Findings
@@ -90,7 +90,11 @@ class DoctorFinding:
 
 
 def _finding(severity: str, check: str, message: str, why: str, fix: str) -> DoctorFinding:
-    assert severity in _SEVERITIES, f"invalid severity {severity!r}"
+    if severity not in _SEVERITIES:
+        # `assert` is stripped under `python -O`; a bad severity must be
+        # caught here, not silently let a bogus badge crash `render()`'s
+        # dict lookup later (L1).
+        raise ValueError(f"invalid severity {severity!r}")
     return DoctorFinding(severity=severity, check=check, message=message, why=why, fix=fix)
 
 
@@ -107,28 +111,76 @@ def _doctor_path(filename: str, config_dir: Path | None) -> Path:
     return settings.resolve_config_path(filename)
 
 
-def _load_yaml_or_empty(path: Path) -> dict[str, Any]:
+def _load_yaml_checked(path: Path) -> tuple[dict[str, Any], list[DoctorFinding]]:
+    """Load *path* as YAML, returning ``({}, [])`` only when the file is
+    simply ABSENT (an already-covered case elsewhere -- e.g.
+    ``validate_config``'s ``required_files`` check).
+
+    Never collapse an UNPARSEABLE file (H3) or a parseable-but-non-mapping
+    root (M1) into a silent ``{}`` the way the old ``_load_yaml_or_empty``
+    did: that made a broken ``schedules.yaml`` (which isn't in
+    ``validate_config``'s ``required_files``) produce a clean "OK -- no
+    issues found" instead of a diagnostic. The governing rule for this whole
+    module is that "I could not inspect this" must be an emitted finding,
+    never silence -- so both failure modes return an `error` finding
+    alongside the empty dict for the caller to fold into its own list.
+    """
     if not path.exists():
-        return {}
+        return {}, []
     try:
         with path.open(encoding="utf-8") as handle:
-            return yaml.safe_load(handle) or {}
-    except yaml.YAMLError:
-        return {}
+            data = yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        return {}, [
+            _finding(
+                "error",
+                "unparseable_config_yaml",
+                f"'{path.name}' could not be parsed as YAML ({type(exc).__name__}) -- "
+                "no checks could run against it",
+                "a YAML syntax error in a config file silently disables EVERY doctor "
+                "check that reads it -- schedules.yaml in particular is not in "
+                "validate_config's required_files, so nothing else covers it: a broken "
+                "schedules.yaml used to yield zero findings and a clean exit",
+                f"run `hivepilot validate` for the exact parse error, then fix the YAML "
+                f"syntax in {path.name}",
+            )
+        ]
+    if data is None:
+        return {}, []
+    if not isinstance(data, dict):
+        return {}, [
+            _finding(
+                "error",
+                "invalid_config_yaml_root",
+                f"'{path.name}' parses as YAML but its root is a "
+                f"{type(data).__name__}, not a mapping -- no checks could run against it",
+                "every check in this module expects a top-level mapping (e.g. "
+                "`projects: {...}`); a list/scalar root would otherwise raise "
+                "AttributeError on the first `.get(...)` call and kill the whole report",
+                f"fix {path.name} so its top-level document is a mapping",
+            )
+        ]
+    return data, []
 
 
 # ---------------------------------------------------------------------------
 # Check: resolved absolute paths + cwd-relative warning (incident #1)
 # ---------------------------------------------------------------------------
 
-# (label, raw-path-getter, override-env-var, xdg-chain-aware)
-# xdg_chain-aware fields are resolved via settings.resolve_config_path (the
-# same XDG -> config_repo -> base_dir chain `config sync` writes to); the
-# others (state_db, obsidian_vault) have NO xdg-aware loader anywhere in the
+# (label, settings-ATTRIBUTE-name, override-env-var, xdg-chain-aware)
+# The second element MUST be the real `Settings` attribute name, resolved via
+# `getattr(settings, attr)` below -- NEVER a hardcoded filename string (H1: a
+# hardcoded "state_db" silently diverged from the real default `Path
+# ("state.db")`, and "obsidian_vault" from the real default
+# `Path("obsidian-vault")`, making this command print a state-db path that
+# disagreed with the pre-existing `hivepilot doctor` command). xdg_chain-aware
+# fields are resolved via the same XDG -> config_repo -> base_dir chain
+# `config sync` writes to (mirrored locally in `_walk_xdg_rank`); the others
+# (state_db, obsidian_vault) have NO xdg-aware loader anywhere in the
 # codebase and always resolve via settings.resolve_path -- i.e. base_dir.
 _PATH_FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("state_db", "state_db", "HIVEPILOT_STATE_DB", False),
-    ("prompts_dir", "prompts", "HIVEPILOT_PROMPTS_DIR", True),
+    ("prompts_dir", "prompts_dir", "HIVEPILOT_PROMPTS_DIR", True),
     ("obsidian_vault", "obsidian_vault", "HIVEPILOT_OBSIDIAN_VAULT", False),
 )
 
@@ -137,8 +189,16 @@ def _base_dir_pinned() -> bool:
     """True if the operator explicitly pinned ``base_dir`` via env (the
     documented fix for incident #1) rather than letting it silently default
     to ``Path.cwd()`` at process start -- which differs between a service
-    started at ``cwd=/`` and a CLI invocation from an operator's home dir."""
-    return bool(os.environ.get("HIVEPILOT_BASE_DIR"))
+    started at ``cwd=/`` and a CLI invocation from an operator's home dir.
+
+    H2: a merely-non-empty ``HIVEPILOT_BASE_DIR`` is NOT enough -- ``
+    resolve_path`` is ``(self.base_dir / path).expanduser().resolve()``, so a
+    RELATIVE ``HIVEPILOT_BASE_DIR`` (e.g. ``.``) still anchors every path to
+    the process's cwd; it must be an absolute path to actually pin anything.
+    This mirrors the per-field override check a few lines below, which
+    already required ``.is_absolute()``."""
+    raw = os.environ.get("HIVEPILOT_BASE_DIR", "").strip()
+    return bool(raw) and Path(raw).expanduser().is_absolute()
 
 
 def _walk_xdg_rank(filename: str) -> tuple[Path, int]:
@@ -165,11 +225,12 @@ def describe_resolved_paths() -> list[str]:
         f"config dir       : {settings.xdg_config_home}",
         f"config repo clone: {settings.xdg_data_home / 'config-repo'}",
     ]
-    for label, filename, _env, xdg_aware in _PATH_FIELDS:
+    for label, settings_attr, _env, xdg_aware in _PATH_FIELDS:
+        raw_path = getattr(settings, settings_attr)
         if xdg_aware:
-            resolved, _rank = _walk_xdg_rank(filename)
+            resolved, _rank = _walk_xdg_rank(str(raw_path))
         else:
-            resolved = settings.resolve_path(Path(filename))
+            resolved = settings.resolve_path(raw_path)
         lines.append(f"{label:<17}: {resolved}")
     lines.append(f"topics registry  : {_topics_registry_path()}")
     return lines
@@ -182,12 +243,13 @@ def check_cwd_relative_paths() -> list[DoctorFinding]:
     `base_dir` fallback tier, `base_dir` was never explicitly pinned via
     `HIVEPILOT_BASE_DIR`, and no absolute per-field override is set."""
     findings: list[DoctorFinding] = []
-    for label, filename, override_env, xdg_aware in _PATH_FIELDS:
+    for label, settings_attr, override_env, xdg_aware in _PATH_FIELDS:
         override_value = os.environ.get(override_env)
         if override_value and Path(override_value).expanduser().is_absolute():
             continue  # explicitly pinned for this field -- never cwd-relative
         if xdg_aware:
-            _resolved, rank = _walk_xdg_rank(filename)
+            raw_path = getattr(settings, settings_attr)
+            _resolved, rank = _walk_xdg_rank(str(raw_path))
             if rank in (1, 2):
                 continue  # anchored to XDG or the config repo clone, not cwd
         if _base_dir_pinned():
@@ -363,16 +425,33 @@ def check_plugin_health(plugin_manager: Any) -> list[DoctorFinding]:
 
 
 def _check_schedules_dangling(config_dir: Path | None) -> list[DoctorFinding]:
-    schedules_data = _load_yaml_or_empty(_doctor_path("schedules.yaml", config_dir))
-    projects_data = _load_yaml_or_empty(_doctor_path("projects.yaml", config_dir))
-    tasks_data = _load_yaml_or_empty(_doctor_path("tasks.yaml", config_dir))
+    schedules_data, findings = _load_yaml_checked(_doctor_path("schedules.yaml", config_dir))
+    projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    tasks_data, task_findings = _load_yaml_checked(_doctor_path("tasks.yaml", config_dir))
+    findings.extend(project_findings)
+    findings.extend(task_findings)
 
     project_names: set[str] = set((projects_data.get("projects") or {}).keys())
     task_names: set[str] = set((tasks_data.get("tasks") or {}).keys())
 
-    findings: list[DoctorFinding] = []
     for schedule_name, schedule in (schedules_data.get("schedules") or {}).items():
         if not isinstance(schedule, dict):
+            # M3: a schedule entry that isn't a mapping (e.g. a YAML typo
+            # like `nightly: "my-task"` instead of a mapping) used to be
+            # skipped with ZERO output -- surface it instead.
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_schedule_entry",
+                    f"Schedule '{schedule_name}' is not a mapping (got "
+                    f"{type(schedule).__name__}) -- not checked",
+                    "a schedule entry that isn't a mapping was previously skipped with "
+                    "zero output, silently disabling the dangling-task/dangling-project "
+                    "checks for it",
+                    f"fix the '{schedule_name}' entry in schedules.yaml to be a mapping "
+                    "with 'task'/'projects' keys",
+                )
+            )
             continue
         task_ref = schedule.get("task")
         if task_ref and task_ref not in task_names:
@@ -419,8 +498,9 @@ def _alias_to_role_map() -> dict[str, str]:
 
 
 def _check_role_overrides_dangling(config_dir: Path | None) -> list[DoctorFinding]:
-    policies_data = _load_yaml_or_empty(_doctor_path("policies.yaml", config_dir))
-    roles_data = _load_yaml_or_empty(_doctor_path("roles.yaml", config_dir))
+    policies_data, findings = _load_yaml_checked(_doctor_path("policies.yaml", config_dir))
+    roles_data, roles_findings = _load_yaml_checked(_doctor_path("roles.yaml", config_dir))
+    findings.extend(roles_findings)
 
     role_names: set[str] = {
         role["name"]
@@ -430,12 +510,25 @@ def _check_role_overrides_dangling(config_dir: Path | None) -> list[DoctorFindin
     alias_to_role = _alias_to_role_map()
 
     policies = policies_data.get("policies") or {}
-    entries: list[tuple[str, dict[str, Any]]] = [("default", policies.get("default") or {})]
+    entries: list[tuple[str, Any]] = [("default", policies.get("default") or {})]
     entries.extend((policies.get("projects") or {}).items())
 
-    findings: list[DoctorFinding] = []
     for scope, rules in entries:
         if not isinstance(rules, dict):
+            # M3: a policy scope that isn't a mapping used to be skipped with
+            # ZERO output for every rule under it (role_overrides included).
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_policy_entry",
+                    f"Policy '{scope}' is not a mapping (got {type(rules).__name__}) -- "
+                    "not checked",
+                    "a policy scope that isn't a mapping was previously skipped with zero "
+                    "output, silently disabling every rule under it (role_overrides, "
+                    "block_on_severity, denied/allowed_licenses)",
+                    f"fix the '{scope}' entry in policies.yaml to be a mapping",
+                )
+            )
             continue
         for role_ref in rules.get("role_overrides") or {}:
             if role_ref in role_names:
@@ -471,17 +564,50 @@ def _check_role_overrides_dangling(config_dir: Path | None) -> list[DoctorFindin
 
 
 def _check_only_modules_dangling(config_dir: Path | None) -> list[DoctorFinding]:
-    pipelines_data = _load_yaml_or_empty(_doctor_path("pipelines.yaml", config_dir))
-    projects_data = _load_yaml_or_empty(_doctor_path("projects.yaml", config_dir))
+    pipelines_data, findings = _load_yaml_checked(_doctor_path("pipelines.yaml", config_dir))
+    projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    findings.extend(project_findings)
 
     all_modules: set[str] = set()
     for project in (projects_data.get("projects") or {}).values():
         if isinstance(project, dict):
             all_modules.update((project.get("modules") or {}).keys())
 
-    findings: list[DoctorFinding] = []
     for pipeline_name, pipeline in (pipelines_data.get("pipelines") or {}).items():
+        if not isinstance(pipeline, dict):
+            # M2/M3: its sibling `_check_schedules_dangling` already guards
+            # this; unguarded here, a scalar pipeline entry raised
+            # AttributeError on `.get("stages")` and crashed the whole
+            # doctor report instead of reporting just this one problem.
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_pipeline_entry",
+                    f"Pipeline '{pipeline_name}' is not a mapping (got "
+                    f"{type(pipeline).__name__}) -- not checked",
+                    "a pipeline entry that isn't a mapping crashes this check with "
+                    "AttributeError unless guarded, aborting every OTHER finding "
+                    "already computed in the same doctor run",
+                    f"fix the '{pipeline_name}' entry in pipelines.yaml to be a mapping "
+                    "with a 'stages' list",
+                )
+            )
+            continue
         for stage in pipeline.get("stages") or []:
+            if not isinstance(stage, dict):
+                findings.append(
+                    _finding(
+                        "error",
+                        "malformed_stage_entry",
+                        f"Pipeline '{pipeline_name}' has a stage entry that is not a "
+                        f"mapping (got {type(stage).__name__}) -- not checked",
+                        "a stage entry that isn't a mapping crashes this check with "
+                        "AttributeError unless guarded",
+                        f"fix the malformed stage under pipeline '{pipeline_name}' in "
+                        "pipelines.yaml",
+                    )
+                )
+                continue
             for module_ref in stage.get("only_modules") or []:
                 if module_ref not in all_modules:
                     findings.append(
@@ -502,20 +628,43 @@ def _check_only_modules_dangling(config_dir: Path | None) -> list[DoctorFinding]
 
 def check_dangling_references(config_dir: Path | None) -> list[DoctorFinding]:
     findings: list[DoctorFinding] = []
-    for problem in validate_config(base_dir=config_dir):
+    try:
+        problems = validate_config(base_dir=config_dir)
+    except Exception as exc:  # noqa: BLE001 -- M4: validate_config re-raises a YAML
+        # parse error as ValueError; letting it propagate would LOSE every
+        # finding already computed elsewhere in this doctor run, not just
+        # skip this one check. Never interpolate str(exc) here (may embed
+        # file contents) -- name the exception TYPE only, matching
+        # plugins.py's `run_health_check` discipline.
         findings.append(
             _finding(
                 "error",
-                "dangling_reference",
-                problem,
-                "a stale/typo'd reference is silently ignored until the exact run path "
-                "that touches it fails, deep inside the engine",
-                "`hivepilot validate"
+                "dangling_reference_check_failed",
+                f"`validate_config()` raised {type(exc).__name__} -- dangling-reference "
+                "checks could not run",
+                "a broken config file (e.g. unparseable YAML) makes validate_config() "
+                "raise instead of returning problems, which would otherwise silently "
+                "discard every OTHER finding this doctor run already computed",
+                "run `hivepilot validate"
                 + (f" --dir {config_dir}" if config_dir else "")
-                + "` lists every dangling reference of this kind; edit the named file to "
-                "fix or remove it",
+                + "` directly to see the exact parse error, then fix the offending file",
             )
         )
+    else:
+        for problem in problems:
+            findings.append(
+                _finding(
+                    "error",
+                    "dangling_reference",
+                    problem,
+                    "a stale/typo'd reference is silently ignored until the exact run path "
+                    "that touches it fails, deep inside the engine",
+                    "`hivepilot validate"
+                    + (f" --dir {config_dir}" if config_dir else "")
+                    + "` lists every dangling reference of this kind; edit the named file to "
+                    "fix or remove it",
+                )
+            )
     findings.extend(_check_schedules_dangling(config_dir))
     findings.extend(_check_role_overrides_dangling(config_dir))
     findings.extend(_check_only_modules_dangling(config_dir))
@@ -530,24 +679,28 @@ def check_dangling_references(config_dir: Path | None) -> list[DoctorFinding]:
 def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
     findings: list[DoctorFinding] = []
 
-    # (a) secret-typed Settings fields resolved to an EMPTY string -- the
-    # recurring "empty means unset" fail-open class: code that checks
-    # `if settings.X` treats "" as falsy/unset, but code that checks
-    # `is not None` treats "" as configured and proceeds with a blank
-    # credential. Never prints the value (there is nothing to redact -- an
-    # empty string IS the finding).
+    # (a) secret-typed Settings fields resolved to an EMPTY-OR-WHITESPACE-
+    # ONLY string -- the recurring "empty means unset" fail-open class: code
+    # that checks `if settings.X` treats '' as falsy/unset, but code that
+    # checks `is not None` treats '' as configured and proceeds with a blank
+    # credential. `forges/provider.py`, `swarm_service.py`, and
+    # `config_provenance.py` all guard with `.strip()`, not just `== ""`
+    # (M7) -- a whitespace-only secret value passes `raw == ""` but is just
+    # as blank in practice. Never prints the value (there is nothing to
+    # redact -- an empty string IS the finding).
     for key in all_keys():
         if not is_secret_field(key):
             continue
         raw = getattr(settings, key, None)
-        if isinstance(raw, str) and raw == "":
+        if isinstance(raw, str) and not raw.strip():
             findings.append(
                 _finding(
                     "error",
                     "empty_secret_setting",
-                    f"Setting '{key}' is set to an EMPTY string",
-                    "an empty secret value is a common fail-open: some call sites treat '' "
-                    "as unset (falsy), others treat it as configured-but-blank and proceed",
+                    f"Setting '{key}' is set to an empty-or-whitespace-only string",
+                    "an empty/blank secret value is a common fail-open: some call sites "
+                    "treat '' as unset (falsy), others treat it as configured-but-blank "
+                    "and proceed",
                     f"unset HIVEPILOT_{key.upper()} entirely so '{key}' defaults to None, or "
                     "supply a real value",
                 )
@@ -557,13 +710,39 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
     # project (the catalog is `projects.yaml`'s per-project `secrets:` map --
     # see hivepilot/services/secret_refs.py). Presence-only: never resolves
     # the reference (no network/side effects from a read-only health check).
-    projects_data = _load_yaml_or_empty(_doctor_path("projects.yaml", config_dir))
+    projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    findings.extend(project_findings)
     for project_name, project in (projects_data.get("projects") or {}).items():
         if not isinstance(project, dict):
+            # M3: a project entry that isn't a mapping used to be skipped
+            # with ZERO output for its secrets/env sanity checks.
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_project_entry",
+                    f"Project '{project_name}' is not a mapping (got "
+                    f"{type(project).__name__}) -- not checked",
+                    "a project entry that isn't a mapping was previously skipped with "
+                    "zero output, silently disabling its dangling-secret-ref check",
+                    f"fix the '{project_name}' entry in projects.yaml to be a mapping",
+                )
+            )
             continue
         catalog = project.get("secrets") or {}
         env = project.get("env") or {}
         if not isinstance(env, dict):
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_project_env",
+                    f"Project '{project_name}' env is not a mapping (got "
+                    f"{type(env).__name__}) -- not checked",
+                    "an env block that isn't a mapping was previously skipped with zero "
+                    "output for its dangling ${secret:NAME} reference check",
+                    f"fix the 'env' block under project '{project_name}' in projects.yaml "
+                    "to be a mapping",
+                )
+            )
             continue
         for env_key, env_value in env.items():
             if not isinstance(env_value, str):
@@ -582,6 +761,32 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
                             "secrets: catalog in projects.yaml, or fix the reference",
                         )
                     )
+
+    # (c) M6: settings.swarm_key's own ${secret:NAME} reference (if any)
+    # must also resolve against swarm_secrets. `swarm_service.
+    # resolve_swarm_signing_key` degrades an unresolvable reference to
+    # `None` -- signing/verification silently disabled, not an error --
+    # rather than raising, exactly the "silent until it matters" state this
+    # doctor exists to surface ahead of time.
+    swarm_key = settings.swarm_key
+    if isinstance(swarm_key, str) and has_secret_ref(swarm_key):
+        swarm_catalog = settings.swarm_secrets or {}
+        for ref_name in find_secret_refs(swarm_key):
+            if ref_name not in swarm_catalog:
+                findings.append(
+                    _finding(
+                        "error",
+                        "dangling_swarm_secret_ref",
+                        f"settings.swarm_key references ${{secret:{ref_name}}} which has "
+                        "no entry in swarm_secrets",
+                        "an unresolvable ${secret:NAME} reference in swarm_key makes "
+                        "resolve_swarm_signing_key() degrade to None -- swarm event "
+                        "signing/verification is silently disabled until a peer rejects "
+                        "an unsigned event",
+                        f"add a '{ref_name}:' entry to settings.swarm_secrets "
+                        "(HIVEPILOT_SWARM_SECRETS), or fix the reference in swarm_key",
+                    )
+                )
     return findings
 
 
@@ -592,7 +797,16 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
 
 def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     """Run every check and return the combined findings list (empty means a
-    clean config: `hivepilot config doctor` prints "OK" and exits 0)."""
+    clean config: `hivepilot config doctor` prints "OK" and exits 0).
+
+    NOT side-effect-free (L7): this constructs a real `PluginManager()`,
+    which scans the plugins dir/entry points, compiles and `exec()`s every
+    local plugin file it finds, and (via `check_plugin_health`) runs each
+    plugin's own `health()` callable -- the exact same process-global
+    side effects `plugins list`/`plugins health` have. Callers embedding
+    this in an automated/scheduled context should treat it the same as
+    those commands, not as a pure read.
+    """
     from hivepilot.plugins import PluginManager
 
     findings: list[DoctorFinding] = []
@@ -628,6 +842,25 @@ class PluginVerifyResult:
     importable: bool | None  # pip only: a REAL `importlib.import_module` attempt
     mismatch: str | None  # non-None when pip-truth and import-truth disagree
     detail: str
+
+
+def verify_badge(result: PluginVerifyResult) -> str:
+    """Three-state badge for `plugins verify`'s output line (M5).
+
+    A plugin that is neither importable NOR pip-installed (``mismatch`` is
+    None because pip-truth and import-truth AGREE -- both say "absent") must
+    never render as a plain "ok": an operator scanning the badge column
+    would conclude a genuinely missing dependency works. Likewise a binary
+    probe that reports "NOT FOUND on PATH". ``MISMATCH`` still wins when
+    pip-truth and import-truth actively disagree (the incident #5 namesake-
+    collision / broken-install case)."""
+    if result.mismatch:
+        return "MISMATCH"
+    if result.prereq_kind == "pip" and result.importable is False:
+        return "MISSING"
+    if result.prereq_kind == "binary" and result.present_per_declaration is False:
+        return "MISSING"
+    return "ok"
 
 
 # plugin name -> (import module name, expected PyPI distribution name).
@@ -683,14 +916,25 @@ def _verify_pip_plugin(name: str, import_name: str, distribution: str) -> Plugin
         import_error: str | None = None
     except Exception as exc:  # noqa: BLE001 — reporting the truth, never raising
         importable = False
-        import_error = f"{type(exc).__name__}: {exc}"
+        # L2: name the exception TYPE only, never interpolate str(exc) from
+        # an arbitrary third-party import -- matches the discipline
+        # `plugins.py::run_health_check` already applies (exception details
+        # can embed paths/env values from the failing package's own code).
+        import_error = type(exc).__name__
 
+    metadata_error: str | None = None
     try:
         version = importlib_metadata.version(distribution)
         pip_installed: bool | None = True
     except importlib_metadata.PackageNotFoundError:
         version = None
         pip_installed = False
+    except Exception as exc:  # noqa: BLE001 — L3: corrupt dist-info metadata (or any
+        # other importlib.metadata failure) must not crash `plugins verify`
+        # outright; only `PackageNotFoundError` was caught before.
+        version = None
+        pip_installed = False
+        metadata_error = type(exc).__name__
 
     mismatch: str | None = None
     if importable and not pip_installed:
@@ -711,7 +955,12 @@ def _verify_pip_plugin(name: str, import_name: str, distribution: str) -> Plugin
     elif importable:
         detail = f"importable; pip: '{distribution}' {version} installed"
     else:
-        detail = f"NOT importable ({import_error}); pip: '{distribution}' not installed"
+        pip_detail = (
+            f"pip metadata lookup errored ({metadata_error})"
+            if metadata_error
+            else f"pip: '{distribution}' not installed"
+        )
+        detail = f"NOT importable ({import_error}); {pip_detail}"
 
     return PluginVerifyResult(
         name=name,

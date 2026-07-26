@@ -1123,6 +1123,12 @@ def config_doctor_cmd(
     Every finding names WHAT is wrong, WHY it matters, and the exact
     command/edit to fix it. Exits non-zero only when at least one finding is
     an ERROR (a WARNING alone still exits 0).
+
+    NOT side-effect-free: this constructs a real plugin manager, which scans
+    the plugins directory/entry points, compiles and executes every local
+    plugin file it finds, and runs each plugin's own health() callable --
+    the same process-global side effects `hivepilot plugins list`/`plugins
+    health` already have.
     """
     from hivepilot.services.config_doctor import describe_resolved_paths, run_doctor
 
@@ -3740,7 +3746,7 @@ def plugins_verify() -> None:
     plugin has a mismatch between what pip reports and what actually
     imports.
     """
-    from hivepilot.services.config_doctor import platform_tag, verify_plugins
+    from hivepilot.services.config_doctor import platform_tag, verify_badge, verify_plugins
 
     typer.echo(f"Platform: {platform_tag()}")
     typer.echo("")
@@ -3748,7 +3754,14 @@ def plugins_verify() -> None:
     results = verify_plugins()
     any_mismatch = False
     for result in results:
-        badge = "MISMATCH" if result.mismatch else "ok"
+        # M5: a plugin that is neither importable nor pip-installed used to
+        # render as a plain "ok" badge (mismatch is only set when pip-truth
+        # and import-truth DISAGREE -- both agreeing "absent" fell through
+        # to "ok"). `verify_badge` distinguishes MISMATCH / MISSING / ok so
+        # the badge column alone never overstates a plugin's health;
+        # exit-code semantics are unchanged (still gated on an actual
+        # pip-vs-import MISMATCH, not a cleanly-absent optional dependency).
+        badge = verify_badge(result)
         typer.echo(f"  {result.name:<14} [{result.prereq_kind:<7}] {badge}: {result.detail}")
         if result.mismatch:
             any_mismatch = True
