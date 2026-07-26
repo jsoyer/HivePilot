@@ -197,6 +197,54 @@ def _resolve_or_synthesize_role_prompt_file(role: "Role | None", role_key: str) 
     return str(tmp_path)
 
 
+def _synthetic_project(kind: str) -> ProjectConfig:
+    """Build a minimal, CLEARLY-SYNTHETIC ``ProjectConfig`` for out-of-band,
+    repo-less runner invocations -- ``human_challenge`` (kind="challenge")
+    and ``_handle_agent_requests`` (kind="agent-request") -- that have no
+    real project to resolve via ``self._project()`` (the paused run's
+    ``project`` metadata / a request's target role are not guaranteed to be
+    a key in ``projects.yaml``).
+
+    Root-cause fix for a recurring crash class: ``RunnerPayload.project`` is
+    typed as a plain (non-Optional) ``ProjectConfig`` --  every runner (see
+    e.g. ``hivepilot/runners/claude_runner.py`` lines 369/526/563/569/577/
+    638/643/651/970, and the equivalent ``payload.project.*`` accesses in
+    every other runner under ``hivepilot/runners/``) dereferences
+    ``payload.project.env`` / ``.secrets`` / ``.path`` unconditionally.
+    Passing ``project=None`` from these two call sites violated that type
+    and crashed the very first attribute access reached by whichever runner
+    kind the target role resolved to -- three different crashes so far
+    (missing prompt_file, then ``payload.project.path``, then
+    ``payload.project.env``), each fixed by guarding one more site. Guarding
+    every access is fragile and will keep regressing as new runner code is
+    added; instead, the payload now always carries a *valid* ``ProjectConfig``
+    so every ``payload.project.*`` access just works, for every runner kind,
+    forever -- no more whack-a-mole.
+
+    *kind* is folded into ``description`` (which the Claude runner surfaces
+    verbatim in the assembled prompt via ``_build_prompt``, and which every
+    other runner's ``payload.project.description`` access can also observe)
+    so the synthetic nature is obvious to a human OR an agent reading the
+    prompt/logs -- it can never be mistaken for a real configured project.
+    ``path`` is the system temp directory itself: it always exists (no setup
+    /cleanup required), is never a real project's repository, and is the
+    "least surprising" `cwd` for a runner subprocess that has no actual
+    codebase to work in (a pure question/answer exchange). ``env``/``secrets``
+    are empty and ``claude_md`` is unset -- there is no repository-specific
+    configuration for an invocation with no repository.
+    """
+    return ProjectConfig(
+        path=Path(tempfile.gettempdir()),
+        description=(
+            f"[synthetic project -- no repository context; {kind} invocation "
+            "has no configured project]"
+        ),
+        claude_md=None,
+        env={},
+        secrets={},
+    )
+
+
 def _build_checkpoint_details(
     prior_chunks: list[str],
     completed: list[str],
@@ -2240,7 +2288,7 @@ class Orchestrator:
                 )
                 req_payload = RunnerPayload(
                     project_name=project_names[0] if project_names else "unknown",
-                    project=None,
+                    project=_synthetic_project("agent-request"),
                     task_name=f"request:{target_role_key}",
                     step=req_step,
                     metadata={"extra_prompt": request_prompt, "prior_context": ""},
@@ -3836,7 +3884,7 @@ class Orchestrator:
         )
         payload = RunnerPayload(
             project_name=project_name,
-            project=None,
+            project=_synthetic_project("challenge"),
             task_name="human_challenge:cos",
             step=step,
             metadata={"extra_prompt": challenge_prompt, "prior_context": ""},
