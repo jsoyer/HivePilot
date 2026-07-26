@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+description="HivePilot scheduler daemon"
+command="/opt/hivepilot/venv/bin/hivepilot"
+command_args="schedule daemon --interval 30"
+supervisor="supervise-daemon"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/hivepilot-scheduler.log"
+error_log="/var/log/hivepilot-scheduler.log"
+depend() { need net; after hivepilot-api; }

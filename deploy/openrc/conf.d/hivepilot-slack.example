@@ -1,0 +1,20 @@
+# Copy to /etc/conf.d/hivepilot-slack and fill in the placeholders.
+#
+# OpenRC runs this service with cwd=/ -- keep every path-shaped value below
+# absolute (see deploy/openrc/README.md, "env-silo warning").
+#
+# Socket Mode (this service's default -- outbound-only, no public HTTPS
+# endpoint needed) requires ALL THREE of the values below: the bot token AND
+# the signing secret (both mandatory for every mode -- the slack-bolt App is
+# constructed with both regardless of transport) AND the app-level token
+# (xapp-..., Socket Mode only). See deploy/openrc/README.md.
+
+export HIVEPILOT_BASE_DIR=/data
+export HIVEPILOT_SLACK_BOT_TOKEN=<PASTE_YOUR_XOXB_BOT_TOKEN_HERE>
+export HIVEPILOT_SLACK_SIGNING_SECRET=<paste-your-signing-secret-here>
+export HIVEPILOT_SLACK_APP_TOKEN=<PASTE_YOUR_XAPP_APP_TOKEN_HERE>
+
+# Optional: restrict which channels the bot will respond in / notify (JSON
+# array of channel IDs) -- open to all channels when unset.
+# export HIVEPILOT_SLACK_ALLOWED_CHANNEL_IDS=["C0123456789"]
+# export HIVEPILOT_SLACK_NOTIFICATION_CHANNEL_ID=C0123456789
