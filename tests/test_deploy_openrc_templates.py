@@ -28,6 +28,14 @@ CONFD_DIR = OPENRC_DIR / "conf.d"
 # deploy/openrc/README.md, "Env silos — read this").
 SHARED_ENV_SOURCING_LINE = "[ -f /etc/hivepilot/shared.env ] && . /etc/hivepilot/shared.env"
 
+# A bare `export PATH="..."` REPLACES the inherited PATH instead of
+# prefixing it -- on a real Alpine/OpenRC box that drops `/sbin` from PATH,
+# and `supervise-daemon` lives at `/sbin/supervise-daemon`, so the service
+# fails to start (regression test for a real 20-minute live-debugging
+# incident). Every conf.d example's PATH line must end with `:$PATH"` --
+# i.e. prefix-and-preserve, never a bare replacement.
+PATH_LINE_RE = re.compile(r'^export PATH="[^"]*:\$PATH"$', re.MULTILINE)
+
 # service name -> substring expected in its command_args (real CLI subcommand/mode)
 EXPECTED_COMMAND_ARGS = {
     "hivepilot-api": "api serve",
@@ -133,6 +141,62 @@ def test_discord_conf_example_documents_bot_token():
     # public key is webhook-mode only, not gateway -- must be present but
     # clearly marked optional/commented, never required for the default mode.
     assert "HIVEPILOT_DISCORD_PUBLIC_KEY" in content
+
+
+# ---------------------------------------------------------------------------
+# Regression test: PATH must be prefixed, never replaced (real live incident
+# -- a bare `export PATH="..."` dropped `/sbin` and `supervise-daemon` could
+# not be found, so `hivepilot-slack` failed to start).
+# ---------------------------------------------------------------------------
+
+
+def test_every_conf_d_hivepilot_example_prefixes_path_never_replaces_it():
+    for svc in ALL_SERVICES:
+        path = CONFD_DIR / f"{svc}.example"
+        content = path.read_text()
+        match = PATH_LINE_RE.search(content)
+        assert match, (
+            f'{path} has no `export PATH="...:$PATH"` line -- PATH must be '
+            "prefixed (never replaced), or supervise-daemon (in /sbin) can "
+            "become unfindable on a stripped-down PATH"
+        )
+        # the sourcing line must still be line 1 and the PATH line must come
+        # after it, not before -- shared.env may itself export PATH-adjacent
+        # vars, so ordering matters.
+        lines = content.splitlines()
+        assert lines[0] == SHARED_ENV_SOURCING_LINE
+        path_line_index = next(i for i, line in enumerate(lines) if line == match.group(0))
+        assert path_line_index > 0, (
+            f"{path}: PATH line must come after the shared.env sourcing line"
+        )
+
+
+def test_readme_documents_supervise_daemon_path_troubleshooting():
+    content = (OPENRC_DIR / "README.md").read_text()
+    assert "Troubleshooting" in content
+    assert "supervise-daemon: not found" in content
+    assert "eend: not found" in content
+    assert "zap" in content
+    # the root cause, spelled out, not just the symptom
+    assert "PATH" in content
+
+
+def test_readme_and_conf_d_examples_document_pip_extras():
+    readme = (OPENRC_DIR / "README.md").read_text()
+    assert "hivepilot[slack]" in readme
+    assert "hivepilot[discord]" in readme
+    # slack-bolt/slack-sdk are pure-Python -- safe on musl/Alpine
+    assert "slack-bolt" in readme
+    assert "pure" in readme.lower()
+    # PyNaCl (discord's transitive dep) is a compiled libsodium binding --
+    # verified from pyproject.toml, not pure Python (unlike discord.py itself)
+    assert "PyNaCl" in readme
+
+    slack_content = (CONFD_DIR / "hivepilot-slack.example").read_text()
+    assert "hivepilot[slack]" in slack_content
+
+    discord_content = (CONFD_DIR / "hivepilot-discord.example").read_text()
+    assert "hivepilot[discord]" in discord_content
 
 
 def test_scheduler_conf_example_documents_run_token():
