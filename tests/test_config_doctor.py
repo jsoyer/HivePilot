@@ -1253,6 +1253,80 @@ class TestRunDoctorIntegration:
 
 
 # ---------------------------------------------------------------------------
+# Plugin-double-registration regression (production incident): `run_doctor`
+# constructs its OWN `PluginManager()` for plugin health checks, then
+# `check_dangling_references` -> `validate_config()` conditionally
+# constructs a SECOND, independent `PluginManager()` (only when a task step
+# declares `skills:` -- see `config_validation.validate_config_report`).
+# Unlike every OTHER test in this file, this one does NOT stub
+# `hivepilot.plugins.PluginManager` -- stubbing it is exactly what let this
+# bug ship silently: it replaces BOTH real constructions (doctor's own, and
+# validate_config's lazily-imported one) with the same no-op fake, so the
+# real `_stage_kind` collision path was never exercised end to end.
+# ---------------------------------------------------------------------------
+
+
+class TestPluginDoubleRegistrationRegression:
+    def test_doctor_with_real_runner_plugin_and_skill_ref_does_not_lose_dangling_check(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Exact repro of the reported incident, unmocked end to end: a
+        runner-contributing local-file plugin (modeled on the real
+        `plugins/gh.py`) plus a task step referencing an unknown `skills:`
+        name (the dormant trigger for `validate_config`'s own second
+        `PluginManager()`). Before the fix, doctor's own plugin-health
+        manager and validate_config's second one collided on the plugin's
+        runner kind, producing a `dangling_reference_check_failed` finding
+        INSTEAD OF the real dangling-reference checks actually running."""
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(settings, "base_dir", tmp_path, raising=False)
+
+        (tmp_path / "plugins").mkdir()
+        (tmp_path / "plugins" / "gh.py").write_text(
+            "class GhRunner:\n"
+            "    def __init__(self, definition, settings):\n"
+            "        pass\n\n"
+            "    def run(self, payload):\n"
+            "        return None\n\n"
+            "def register():\n"
+            "    return {'runners': {'gh': GhRunner}}\n",
+            encoding="utf-8",
+        )
+
+        _write_minimal_valid_config(tmp_path)
+        # A `skills:` reference is the dormant trigger for validate_config's
+        # OWN, second, independent `PluginManager()` construction. The
+        # resulting "unknown skill" problem is expected and harmless --
+        # what matters is that check_dangling_references runs at all.
+        (tmp_path / "tasks.yaml").write_text(
+            yaml.dump(
+                {
+                    "tasks": {
+                        "task-a": {
+                            "steps": [
+                                {"name": "s1", "runner": "claude", "skills": ["dummy-skill"]}
+                            ],
+                        }
+                    }
+                }
+            )
+        )
+        (tmp_path / "schedules.yaml").write_text(yaml.dump({"schedules": {}}))
+
+        findings = config_doctor.run_doctor(config_dir=None)
+
+        assert not any(f.check == "dangling_reference_check_failed" for f in findings), (
+            f"dangling-reference checks were lost: {[f.message for f in findings]}"
+        )
+        # The unknown-skill reference is still correctly reported -- proves
+        # check_dangling_references actually RAN end to end (not merely
+        # "didn't crash").
+        assert any(
+            f.check == "dangling_reference" and "dummy-skill" in f.message for f in findings
+        ), f"expected a dangling_reference finding, got: {[f.message for f in findings]}"
+
+
+# ---------------------------------------------------------------------------
 # N1 (2nd Opus review, PR #334): a malformed SECOND-level container (e.g.
 # `projects.yaml` written as a LIST of projects, exactly like `roles.yaml`
 # genuinely IS a list) must never crash the whole doctor report.
