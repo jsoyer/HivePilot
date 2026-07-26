@@ -193,6 +193,68 @@ describe('HomeView — hero KPIs', () => {
     expect(container.querySelector('[data-testid="home-kpi-approvals"]')?.textContent).toContain('1')
   })
 
+  it('BUG FIX: every hero KPI card (incl. Memory health) is the SAME MetricReadout structure — icon + label + value + sub, not a bespoke centered layout', async () => {
+    fetchAnalyticsCost.mockResolvedValue({
+      ...ZERO_COST,
+      overall: { total_steps: 3, input_tokens: 100, output_tokens: 50, cost_usd: 1.5, unpriced_steps: 0 },
+    })
+    fetchAnalyticsSummary.mockResolvedValue({
+      ...ZERO_SUMMARY,
+      total: 4,
+      success_rate: 0.75,
+      outcomes: { succeeded: 3, failed: 1, skipped: 0, other: 0 },
+    })
+    fetchApprovals.mockResolvedValue([SAMPLE_APPROVAL])
+    fetchEfficiency.mockResolvedValue({
+      headroom: { total_compressions: 5, chars_saved: 4000, avg_ratio: 0.5, p95_ratio: 0.6, est_tokens_saved: 1000 },
+      rtk: { gain_pct: 10, tokens_saved: 500, total_commands: 20, saved_series: [], top_commands: null },
+    })
+    fetchMemoryReality.mockResolvedValue({ ...ZERO_MEMORY, total_searches: 10, search_success_rate: 0.9 })
+    fetchRuns.mockResolvedValue([SAMPLE_RUN])
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const kpiTestIds = [
+      'home-kpi-spend',
+      'home-kpi-tokens',
+      'home-kpi-runs',
+      'home-kpi-memory',
+      'home-kpi-approvals',
+    ]
+    for (const testId of kpiTestIds) {
+      const card = container.querySelector(`[data-testid="${testId}"]`) as HTMLElement
+      expect(card, `${testId} should render`).not.toBeNull()
+      // Same primitive (`MetricReadout`), same icon chip, same value/sub
+      // slots — no card gets a bespoke one-off layout (the Memory Health
+      // card used to render a centered `Gauge` with no icon at all).
+      expect(card.querySelector('[data-slot="metric-readout"]'), `${testId} should use MetricReadout`).not.toBeNull()
+      expect(card.querySelector('[data-slot="metric-readout-icon"]'), `${testId} should have an icon chip`).not.toBeNull()
+      expect(card.querySelector('[data-slot="metric-readout-value"]'), `${testId} should have a value slot`).not.toBeNull()
+      expect(card.querySelector('[data-slot="metric-readout-sub"]'), `${testId} should have a sub line`).not.toBeNull()
+    }
+  })
+
+  it('BUG FIX: honest-empty Memory health uses the SAME MetricReadout structure with a placeholder, not a special centered layout', async () => {
+    mockAllZero()
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const card = container.querySelector('[data-testid="home-kpi-memory"]') as HTMLElement
+    expect(card.querySelector('[data-slot="metric-readout"]')).not.toBeNull()
+    expect(card.querySelector('[data-slot="metric-readout-icon"]')).not.toBeNull()
+    const nodata = container.querySelector('[data-testid="home-kpi-memory-nodata"]')
+    expect(nodata).not.toBeNull()
+    expect(card.textContent).toMatch(/no data/i)
+  })
+
   it('clicking a KPI card navigates to the view that explains it', async () => {
     mockAllZero()
 

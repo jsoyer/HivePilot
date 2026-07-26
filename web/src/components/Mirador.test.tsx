@@ -388,6 +388,12 @@ describe('Mirador', () => {
     expect(panel?.textContent).toMatch(/no memory activity recorded yet/i)
   })
 
+  it('BUG FIX: the header hamburger and the sidebar drawer share the SAME breakpoint (md, not lg) — otherwise a realistic desktop window between 768-1023px would show a hidden hamburger to open the drawer but the sidebar itself could never dock statically', () => {
+    const hamburger = container.querySelector('[data-testid="mobile-nav-trigger"]') as HTMLElement
+    expect(hamburger.className).toContain('md:hidden')
+    expect(hamburger.className).not.toMatch(/\blg:hidden\b/)
+  })
+
   it('opens the mobile nav drawer from the header hamburger, and closes it on item click', async () => {
     const nav = container.querySelector('[data-slot="sidebar-nav"]') as HTMLElement
     expect(nav.getAttribute('data-mobile-open')).toBe('false')

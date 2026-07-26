@@ -98,9 +98,14 @@ export function MetricReadout({
           >
             {label}
           </span>
+          {/* Bug fix (permanent clipping): the ancestor `Card` clips
+           * overflow (`overflow-hidden`, for its rounded-corner gradient) —
+           * without `break-words` a long unbroken value (e.g. a big
+           * comma-grouped number) that doesn't fit its column just gets
+           * silently sliced mid-character instead of wrapping. */}
           <span
             data-slot="metric-readout-value"
-            className={cn('metric-mono text-2xl leading-none font-semibold', toneClasses.value)}
+            className={cn('metric-mono text-2xl leading-none font-semibold break-words', toneClasses.value)}
           >
             {value}
           </span>

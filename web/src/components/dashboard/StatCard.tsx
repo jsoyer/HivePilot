@@ -59,7 +59,13 @@ export function StatCard({ icon, label, value, sub, tone = 'default', className 
            * numeral treatment `MetricReadout`/`Gauge` already use, so every
            * metric value across the dashboard reads consistently and never
            * jitters width as digits change. */}
-          <span data-slot="stat-card-value" className={cn('metric-mono text-3xl leading-none', toneClasses.value)}>
+          {/* Bug fix (permanent clipping): see MetricReadout's identical
+           * comment — `break-words` stops the ancestor Card's
+           * `overflow-hidden` from silently slicing an oversized value. */}
+          <span
+            data-slot="stat-card-value"
+            className={cn('metric-mono text-3xl leading-none break-words', toneClasses.value)}
+          >
             {value}
           </span>
           {sub != null && (

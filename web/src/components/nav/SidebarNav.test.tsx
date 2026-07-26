@@ -177,6 +177,37 @@ describe('SidebarNav', () => {
     }
   })
 
+  it('BUG FIX: the nav list starts at the top of the sidebar (no vertical centering gap)', () => {
+    // Regression for the "nav starts ~1/3 down the page" bug: the TabsList's
+    // CVA base classes include `justify-center` (shared with the horizontal
+    // tab-bar use case) — SidebarNav must override it to `justify-start` so
+    // a short group list doesn't get centered inside the flex-1 column that
+    // fills the sidebar's full height.
+    act(() => {
+      root.render(<Harness />)
+    })
+    const list = container.querySelector('[data-slot="tabs-list"]') as HTMLElement
+    expect(list.className).toContain('justify-start')
+    expect(list.className).not.toContain('justify-center')
+  })
+
+  it('BUG FIX: the persistent (non-drawer) sidebar breakpoint is md, not lg — a realistic, non-maximized desktop window must never fall into off-canvas drawer mode', () => {
+    // Regression for "clicking a nav item makes the whole menu disappear":
+    // at the old `lg:` (1024px) breakpoint, any normal desktop browser
+    // window narrower than 1024px CSS px (common: split-screen, non-
+    // maximized windows, smaller laptops) was treated as "mobile" and every
+    // item click closed the off-canvas drawer via `onCloseMobile`,
+    // translating the whole sidebar off-screen with no visible way back.
+    act(() => {
+      root.render(<Harness />)
+    })
+    const nav = container.querySelector('[data-slot="sidebar-nav"]') as HTMLElement
+    expect(nav.className).toContain('md:static')
+    expect(nav.className).toContain('md:translate-x-0')
+    expect(nav.className).not.toMatch(/\blg:static\b/)
+    expect(nav.className).not.toMatch(/\blg:translate-x-0\b/)
+  })
+
   it('IA/Cyber identity: every item has a leading status dot, and the active item is tinted/striped', () => {
     act(() => {
       root.render(<Harness />)

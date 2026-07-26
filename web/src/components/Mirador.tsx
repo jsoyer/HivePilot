@@ -185,7 +185,14 @@ function MiradorShell() {
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="lg:hidden"
+            // Bug fix ("the whole menu disappears"): must match
+            // `SidebarNav`'s own persistent-vs-drawer breakpoint (`md:`,
+            // not the old `lg:`) — otherwise a window between 768-1023px
+            // hides this hamburger (assuming the sidebar docks statically)
+            // while `SidebarNav` still treats that same width as an
+            // off-canvas drawer that closes on every click, with no
+            // hamburger left to reopen it.
+            className="md:hidden"
             data-testid="mobile-nav-trigger"
             aria-label={t('common.openNavigation')}
             onClick={() => setMobileNavOpen(true)}

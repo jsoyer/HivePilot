@@ -38,6 +38,14 @@ describe('MetricReadout', () => {
     expect(value?.className).toContain('metric-mono')
   })
 
+  it('BUG FIX (permanent clipping): the value wraps instead of being silently clipped by the ancestor Card overflow-hidden when it does not fit', () => {
+    act(() => {
+      root.render(<MetricReadout label="Total runs" value={42} />)
+    })
+    const value = container.querySelector('[data-slot="metric-readout-value"]')
+    expect(value?.className).toContain('break-words')
+  })
+
   it('renders a baseline rule under the value', () => {
     act(() => {
       root.render(<MetricReadout label="Total runs" value={42} />)

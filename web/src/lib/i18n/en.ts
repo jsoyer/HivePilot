@@ -313,7 +313,16 @@ export const en = {
   'home.kpiRunsSuccess': 'Runs · success rate',
   'home.kpiRunsSub': 'last 24h',
   'home.kpiMemoryHealth': 'Memory health',
+  // Bug fix (KPI row uniformity): the Memory Health card used to be a
+  // bespoke centered Gauge layout instead of the standard
+  // icon+label+value+sub structure every other hero KPI uses — this sub
+  // line is that card's `sub` slot once it's a normal `MetricReadout`.
+  'home.kpiMemorySub': 'search success rate',
   'home.kpiPendingApprovals': 'Pending approvals',
+  // Bug fix (KPI row uniformity): every hero KPI card now always has a sub
+  // line (Approvals used to be the only one without one, making its card
+  // visibly shorter than its siblings).
+  'home.kpiApprovalsSub': 'awaiting review',
   'home.kpiRequiresRole': 'Requires a higher-role token',
   'home.notAvailable': 'Not available',
   'home.noData': 'No data',
