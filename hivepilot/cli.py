@@ -1101,6 +1101,53 @@ def config_list() -> None:
     Console(width=200).print(table)
 
 
+@config_app.command("doctor")
+def config_doctor_cmd(
+    config_dir: Path | None = typer.Option(
+        None,
+        "--dir",
+        "-d",
+        help=(
+            "Config directory to check dangling references/secrets against "
+            "(mirrors `hivepilot validate --dir`). Omit to check the ACTIVE "
+            "config (XDG_CONFIG_HOME -> config_repo -> base_dir). Path/plugin "
+            "checks always look at the live process's resolved settings, "
+            "regardless of this flag."
+        ),
+    ),
+) -> None:
+    """Single actionable health report: absolute paths (+ cwd-relative
+    warning), config-repo sync drift, enabled-but-not-loaded plugins, plugin
+    dependency health, dangling config references, and secrets sanity.
+
+    Every finding names WHAT is wrong, WHY it matters, and the exact
+    command/edit to fix it. Exits non-zero only when at least one finding is
+    an ERROR (a WARNING alone still exits 0).
+    """
+    from hivepilot.services.config_doctor import describe_resolved_paths, run_doctor
+
+    typer.echo("=== Resolved paths ===")
+    for line in describe_resolved_paths():
+        typer.echo(f"  {line}")
+    typer.echo("")
+
+    findings = run_doctor(config_dir=config_dir)
+    if not findings:
+        typer.echo("OK — no issues found.")
+        return
+
+    typer.echo("=== Findings ===")
+    for finding in findings:
+        typer.echo(finding.render())
+        typer.echo("")
+
+    error_count = sum(1 for f in findings if f.severity == "error")
+    warning_count = sum(1 for f in findings if f.severity == "warning")
+    typer.echo(f"Summary: {error_count} error(s), {warning_count} warning(s)")
+    if error_count:
+        raise typer.Exit(1)
+
+
 # ---------------------------------------------------------------------------
 # Guided config mutations (Sprint 3 of config-edit-commands): project/task/
 # role edit commands. Every write goes through
@@ -3451,6 +3498,18 @@ def validate(
     """Validate cross-references in a HivePilot config directory."""
     from hivepilot.services.config_validation import validate_config_report
 
+    if config_dir is None:
+        # Name the resolution chain when no --dir was given: editing a
+        # config-repo clone and running bare `validate` validates the
+        # untouched ACTIVE config instead, and an unexplained "OK" reads as
+        # success rather than as "you validated the wrong tree".
+        typer.echo(
+            "Validating the ACTIVE config -- chain: $XDG_CONFIG_HOME/hivepilot "
+            "-> config_repo -> base_dir (cwd). Pass --dir <repo clone> to "
+            "validate a config-repo clone BEFORE `hivepilot config sync` "
+            "makes it active."
+        )
+
     report = validate_config_report(base_dir=config_dir)
     # Header first, always -- this is the fix for the confirmed cwd bug
     # ("validate --dir <config-repo>" silently resolved plugins/skills via
@@ -3665,6 +3724,36 @@ def plugins_health() -> None:
     results = _print_health_table(console, orchestrator.plugins, title="Plugin Health")
 
     if any(status == "error" for status, _detail in results.values()):
+        raise typer.Exit(1)
+
+
+@plugins_app.command("verify")
+def plugins_verify() -> None:
+    """For every curated example plugin, attempt the ACTUAL import/binary
+    check its code needs and report the truth -- `pip list` (or a same-named
+    but different package) is not proof an import will actually work.
+
+    Reports the current platform tag once (musl/Alpine ships no wheel for
+    several optional pip extras, e.g. headroom-ai, and will attempt a slow
+    or failing native source build) so an operator can reason about wheel
+    availability without any network call. Exits non-zero if any pip-kind
+    plugin has a mismatch between what pip reports and what actually
+    imports.
+    """
+    from hivepilot.services.config_doctor import platform_tag, verify_plugins
+
+    typer.echo(f"Platform: {platform_tag()}")
+    typer.echo("")
+
+    results = verify_plugins()
+    any_mismatch = False
+    for result in results:
+        badge = "MISMATCH" if result.mismatch else "ok"
+        typer.echo(f"  {result.name:<14} [{result.prereq_kind:<7}] {badge}: {result.detail}")
+        if result.mismatch:
+            any_mismatch = True
+
+    if any_mismatch:
         raise typer.Exit(1)
 
 
