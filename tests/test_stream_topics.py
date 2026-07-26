@@ -1,16 +1,26 @@
-"""Tests for Telegram forum topic routing (per-agent message threads)."""
+"""Tests for Telegram forum topic routing (per-agent message threads).
+
+Includes the cwd-independence regression: `_TOPICS_REGISTRY_PATH` used to be
+a relative `.hivepilot/stream_topics.json`, so an OpenRC service (cwd=/) and
+a CLI run from a login shell (cwd=$HOME) each maintained their OWN registry
+-- the second context never saw a topic the first had already created, so
+`createForumTopic` ran again and duplicated the forum topic in Telegram.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from hivepilot.services.notification_service import (
+    _ensure_topic_thread,
     _load_topics,
     _resolve_agent_key,
     _save_topics,
     _send_telegram,
+    _topics_registry_path,
     stream_agent_turn,
 )
 
@@ -52,8 +62,8 @@ class TestTopicsRegistry:
     def test_round_trip(self, tmp_path: Path, monkeypatch):
         registry_file = tmp_path / "stream_topics.json"
         monkeypatch.setattr(
-            "hivepilot.services.notification_service._TOPICS_REGISTRY_PATH",
-            registry_file,
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: registry_file,
         )
         data = {"cto": 42, "developer": 99}
         _save_topics(data)
@@ -62,20 +72,258 @@ class TestTopicsRegistry:
 
     def test_load_missing_file_returns_empty(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(
-            "hivepilot.services.notification_service._TOPICS_REGISTRY_PATH",
-            tmp_path / "nonexistent.json",
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: tmp_path / "nonexistent.json",
         )
+        # No legacy file at cwd either -> empty.
+        monkeypatch.chdir(tmp_path)
         assert _load_topics() == {}
 
     def test_save_creates_parent_dir(self, tmp_path: Path, monkeypatch):
         nested = tmp_path / "a" / "b" / "topics.json"
         monkeypatch.setattr(
-            "hivepilot.services.notification_service._TOPICS_REGISTRY_PATH",
-            nested,
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: nested,
         )
         _save_topics({"ceo": 1})
         assert nested.exists()
         assert json.loads(nested.read_text()) == {"ceo": 1}
+
+
+# ---------------------------------------------------------------------------
+# _topics_registry_path — absolute, cwd-independent resolution
+# ---------------------------------------------------------------------------
+
+
+class TestTopicsRegistryPathIsAbsoluteAndCwdIndependent:
+    def test_default_path_is_absolute(self, monkeypatch):
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service.settings.stream_topics_registry_path",
+            None,
+            raising=False,
+        )
+        assert _topics_registry_path().is_absolute()
+
+    def test_same_resolved_path_across_different_cwds(self, tmp_path, monkeypatch):
+        """The core regression: two different process cwds must resolve to
+        the SAME absolute registry path, so one context sees the topics the
+        other one created (no duplicate `createForumTopic`)."""
+        cwd_a = tmp_path / "a"
+        cwd_b = tmp_path / "root"
+        cwd_a.mkdir()
+        cwd_b.mkdir()
+
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service.settings.stream_topics_registry_path",
+            None,
+            raising=False,
+        )
+
+        monkeypatch.chdir(cwd_a)
+        path_from_a = _topics_registry_path()
+
+        monkeypatch.chdir(cwd_b)
+        path_from_b = _topics_registry_path()
+
+        assert path_from_a == path_from_b
+        assert path_from_a.is_absolute()
+
+    def test_topic_saved_in_one_cwd_is_found_in_another(self, tmp_path, monkeypatch):
+        """End-to-end regression: save from cwd A, load from cwd B -> same
+        entries (no second registry, no duplicate topic creation)."""
+        xdg_data_home = tmp_path / "xdg-data"
+        cwd_a = tmp_path / "openrc-root"
+        cwd_b = tmp_path / "login-shell-home"
+        cwd_a.mkdir()
+        cwd_b.mkdir()
+
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service.settings.stream_topics_registry_path",
+            None,
+            raising=False,
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(xdg_data_home))
+
+        monkeypatch.chdir(cwd_a)
+        _save_topics({"cto": 175})
+
+        monkeypatch.chdir(cwd_b)
+        assert _load_topics() == {"cto": 175}
+
+    def test_explicit_override_is_resolved_absolute(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service.settings.stream_topics_registry_path",
+            tmp_path / "custom" / "topics.json",
+            raising=False,
+        )
+        assert _topics_registry_path() == tmp_path / "custom" / "topics.json"
+
+
+# ---------------------------------------------------------------------------
+# Legacy migration — cwd-relative `.hivepilot/stream_topics.json` -> new path
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyTopicsMigration:
+    def test_migrates_legacy_relative_registry(self, tmp_path, monkeypatch):
+        new_path = tmp_path / "new" / "stream_topics.json"
+        legacy_cwd = tmp_path / "legacy-cwd"
+        legacy_dir = legacy_cwd / ".hivepilot"
+        legacy_dir.mkdir(parents=True)
+        legacy_file = legacy_dir / "stream_topics.json"
+        legacy_file.write_text(json.dumps({"cto": 175, "developer": 176}), encoding="utf-8")
+
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: new_path,
+        )
+        monkeypatch.chdir(legacy_cwd)
+
+        loaded = _load_topics()
+
+        assert loaded == {"cto": 175, "developer": 176}
+        # The migration is persisted at the NEW path so it only happens once.
+        assert new_path.exists()
+        assert json.loads(new_path.read_text(encoding="utf-8")) == {
+            "cto": 175,
+            "developer": 176,
+        }
+
+    def test_new_path_wins_over_legacy(self, tmp_path, monkeypatch):
+        new_path = tmp_path / "new" / "stream_topics.json"
+        new_path.parent.mkdir(parents=True)
+        new_path.write_text(json.dumps({"cto": 999}), encoding="utf-8")
+
+        legacy_cwd = tmp_path / "legacy-cwd"
+        legacy_dir = legacy_cwd / ".hivepilot"
+        legacy_dir.mkdir(parents=True)
+        (legacy_dir / "stream_topics.json").write_text(json.dumps({"cto": 175}), encoding="utf-8")
+
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: new_path,
+        )
+        monkeypatch.chdir(legacy_cwd)
+
+        assert _load_topics() == {"cto": 999}
+
+    def test_no_legacy_no_new_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: tmp_path / "new" / "stream_topics.json",
+        )
+        monkeypatch.chdir(tmp_path)  # no .hivepilot/ dir here
+        assert _load_topics() == {}
+
+
+# ---------------------------------------------------------------------------
+# _ensure_topic_thread — reuse cached thread id vs create + persist
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureTopicThread:
+    def _make_settings(self):
+        s = MagicMock()
+        s.telegram_bot_token = "tok"
+        s.telegram_stream_chat_id = 999
+        return s
+
+    def test_reuses_cached_thread_id_without_creating(self, tmp_path, monkeypatch):
+        registry_file = tmp_path / "stream_topics.json"
+        registry_file.write_text(json.dumps({"cto": 175}), encoding="utf-8")
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: registry_file,
+        )
+
+        create_calls = {"count": 0}
+
+        def fake_post(*args, **kwargs):
+            create_calls["count"] += 1
+            raise AssertionError("createForumTopic must not be called for a cached agent_key")
+
+        with (
+            patch("hivepilot.services.notification_service.settings", self._make_settings()),
+            patch("hivepilot.services.notification_service.requests.post", fake_post),
+        ):
+            thread_id = _ensure_topic_thread("cto", "Blaise (CTO)")
+
+        assert thread_id == 175
+        assert create_calls["count"] == 0
+
+    def test_creates_and_persists_when_absent(self, tmp_path, monkeypatch):
+        registry_file = tmp_path / "stream_topics.json"
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: registry_file,
+        )
+
+        def fake_post(url, json=None, timeout=None):
+            r = MagicMock()
+            r.json.return_value = {"ok": True, "result": {"message_thread_id": 208}}
+            return r
+
+        with (
+            patch("hivepilot.services.notification_service.settings", self._make_settings()),
+            patch("hivepilot.services.notification_service.requests.post", fake_post),
+        ):
+            thread_id = _ensure_topic_thread("cto", "Blaise (CTO)")
+
+        assert thread_id == 208
+        assert json.loads(registry_file.read_text(encoding="utf-8")) == {"cto": 208}
+
+
+# ---------------------------------------------------------------------------
+# Best-effort: an unwritable registry path never crashes streaming
+# ---------------------------------------------------------------------------
+
+
+class TestUnwritableRegistryIsBestEffort:
+    def test_save_to_unwritable_path_does_not_raise(self, tmp_path, monkeypatch):
+        unwritable_dir = tmp_path / "readonly"
+        unwritable_dir.mkdir()
+        os.chmod(unwritable_dir, 0o400)
+        target = unwritable_dir / "nested" / "stream_topics.json"
+
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: target,
+        )
+        try:
+            _save_topics({"cto": 1})  # must not raise
+        finally:
+            os.chmod(unwritable_dir, 0o700)
+
+    def test_ensure_topic_thread_still_returns_id_when_save_fails(self, tmp_path, monkeypatch):
+        unwritable_dir = tmp_path / "readonly"
+        unwritable_dir.mkdir()
+        os.chmod(unwritable_dir, 0o400)
+        target = unwritable_dir / "nested" / "stream_topics.json"
+
+        monkeypatch.setattr(
+            "hivepilot.services.notification_service._topics_registry_path",
+            lambda: target,
+        )
+
+        def fake_post(url, json=None, timeout=None):
+            r = MagicMock()
+            r.json.return_value = {"ok": True, "result": {"message_thread_id": 42}}
+            return r
+
+        settings_mock = MagicMock()
+        settings_mock.telegram_bot_token = "tok"
+        settings_mock.telegram_stream_chat_id = 999
+
+        try:
+            with (
+                patch("hivepilot.services.notification_service.settings", settings_mock),
+                patch("hivepilot.services.notification_service.requests.post", fake_post),
+            ):
+                thread_id = _ensure_topic_thread("cto", "Blaise (CTO)")
+        finally:
+            os.chmod(unwritable_dir, 0o700)
+
+        assert thread_id == 42  # best-effort: create still succeeds even if persist fails
 
 
 # ---------------------------------------------------------------------------

@@ -314,6 +314,14 @@ class Settings(BaseSettings):
     telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
     telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — route each agent's turns to its own forum topic
     telegram_stream_rich: bool = True  # env: HIVEPILOT_TELEGRAM_STREAM_RICH — render HTML cards with status badge, bullets, links
+    # env: HIVEPILOT_STREAM_TOPICS_REGISTRY_PATH — override for the agent_key
+    # -> message_thread_id registry (see notification_service._topics_registry_path).
+    # None (default) resolves to `xdg_data_home/stream_topics.json` — a stable,
+    # cwd-INDEPENDENT location. This matters: OpenRC services run with cwd=/
+    # while a CLI run from a login shell has cwd=$HOME, so a cwd-relative
+    # default here would split into two registries and cause duplicate
+    # Telegram forum topics (each cwd context creating its own set).
+    stream_topics_registry_path: Path | None = None
     auditor_auto: bool = (
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
