@@ -308,6 +308,14 @@ class Settings(BaseSettings):
     telegram_stream_chat_id: int | None = (
         None  # dedicated channel for the live agent stream (falls back to notification chat)
     )
+    telegram_approval_chat_id: int | None = None  # env: HIVEPILOT_TELEGRAM_APPROVAL_CHAT_ID --
+    # dedicated chat for BLOCKING approval keyboards (pipeline checkpoints, run
+    # approvals). Resolution order at send time: this setting, if set -> else
+    # telegram_stream_chat_id (the forum group, if telegram_stream_topics is
+    # on) -- routed into a dedicated "Approvals" topic -- else the existing
+    # telegram_notification_chat_id/DM behaviour, unchanged. Fully backward
+    # compatible: a deployment that sets neither this nor stream topics keeps
+    # sending approvals to the operator's DM exactly as before.
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
@@ -788,7 +796,12 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("telegram_notification_chat_id", "telegram_stream_chat_id", mode="before")
+    @field_validator(
+        "telegram_notification_chat_id",
+        "telegram_stream_chat_id",
+        "telegram_approval_chat_id",
+        mode="before",
+    )
     @classmethod
     def _coerce_notification_chat_id(cls, v: object) -> object:
         # Lenient: empty -> None; a pasted JSON array / list -> its first id.
