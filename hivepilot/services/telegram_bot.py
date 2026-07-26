@@ -1164,20 +1164,12 @@ async def _cmd_approvals(update, context) -> None:
 def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | None = None):
     """Route an approve/deny to the right orchestrator entrypoint.
 
-    Pipeline-checkpoint approvals resume the parked pipeline; everything else is a
-    single-task approval.
+    Delegates to `Orchestrator.approve_run` -- the single shared helper (also
+    used by `api_service.handle_approval`) that discriminates a pipeline-
+    checkpoint approval (resumes the parked pipeline) from a single-task
+    approval, so this path and the API path can never diverge again.
     """
-    import json
-
-    from hivepilot.services import state_service
-
-    appr = state_service.get_approval(run_id)
-    meta = json.loads(appr.get("metadata") or "{}") if appr else {}
-    if meta.get("kind") == "pipeline_checkpoint":
-        return _get_orch().resume_pipeline(run_id=run_id, approve=approve, approver=approver)
-    return _get_orch().run_approved(
-        run_id=run_id, approve=approve, approver=approver, reason=reason
-    )
+    return _get_orch().approve_run(run_id=run_id, approve=approve, approver=approver, reason=reason)
 
 
 async def _cmd_approve(update, context) -> None:

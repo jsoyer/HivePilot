@@ -1039,3 +1039,49 @@ class TestOnError:
         src = inspect.getsource(telegram_bot._build_application)
         assert "add_error_handler" in src
         assert "_on_error" in src
+
+
+# ---------------------------------------------------------------------------
+# `_dispatch_approval` -- now delegates entirely to the shared
+# `Orchestrator.approve_run` helper (also used by `api_service.handle_approval`
+# for Mirador's "Approve" button), instead of re-implementing the
+# pipeline-checkpoint-vs-task discriminator itself. Regression: the Telegram
+# path's behavior must stay byte-identical (unit-tested directly on the
+# orchestrator in tests/test_pipeline_checkpoint.py::TestApproveRunRouting).
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchApprovalDelegatesToSharedHelper:
+    def test_delegates_to_orchestrator_approve_run(self) -> None:
+        orch = MagicMock()
+        with patch.object(telegram_bot, "_get_orch", return_value=orch):
+            telegram_bot._dispatch_approval(42, approve=True, approver="telegram", reason=None)
+
+        orch.approve_run.assert_called_once_with(
+            run_id=42, approve=True, approver="telegram", reason=None
+        )
+        orch.run_approved.assert_not_called()
+        orch.resume_pipeline.assert_not_called()
+
+    def test_deny_delegates_to_orchestrator_approve_run(self) -> None:
+        orch = MagicMock()
+        with patch.object(telegram_bot, "_get_orch", return_value=orch):
+            telegram_bot._dispatch_approval(7, approve=False, approver="telegram", reason="no good")
+
+        orch.approve_run.assert_called_once_with(
+            run_id=7, approve=False, approver="telegram", reason="no good"
+        )
+        orch.run_approved.assert_not_called()
+        orch.resume_pipeline.assert_not_called()
+
+    def test_no_direct_run_approved_call_in_telegram_bot_source(self) -> None:
+        """Static guard: the routing decision must live in ONE place
+        (`Orchestrator.approve_run`) -- `telegram_bot.py` must never call
+        `run_approved`/`resume_pipeline` directly again for the
+        approve/deny routing decision."""
+        from pathlib import Path
+
+        source = Path(telegram_bot.__file__).read_text()
+        assert ".run_approved(" not in source
+        assert ".resume_pipeline(" not in source
+        assert "_get_orch().approve_run(" in source

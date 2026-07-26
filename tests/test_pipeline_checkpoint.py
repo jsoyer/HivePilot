@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hivepilot.models import PipelineConfig, PipelinesFile, PipelineStage
+from hivepilot.orchestrator import RunResult
 from hivepilot.services.state_service import RunStatus
 
 
@@ -43,7 +46,6 @@ def _orch(pipeline: PipelineConfig):
 
 
 def test_pause_before_stops_pipeline_and_records_checkpoint() -> None:
-    from hivepilot.orchestrator import RunResult
 
     orch = _orch(_pipeline())
     with (
@@ -84,7 +86,6 @@ def test_pause_before_stops_pipeline_and_records_checkpoint() -> None:
 
 
 def test_resume_pipeline_approve_runs_remaining_stages() -> None:
-    from hivepilot.orchestrator import RunResult
 
     orch = _orch(_pipeline())
     approval = {
@@ -181,3 +182,104 @@ def test_resume_pipeline_auto_git_override() -> None:
         orch.resume_pipeline(run_id=7, approve=True, approver="me", auto_git=True)
 
     assert captured["auto_git"] is True  # override wins over stored auto_git=False
+
+
+# ---------------------------------------------------------------------------
+# `Orchestrator.approve_run` -- the single shared routing entrypoint used by
+# both `api_service.handle_approval` (Mirador's "Approve" button) and
+# `telegram_bot._dispatch_approval`. Regression coverage for the live bug:
+# the API called `run_approved` unconditionally, and `run_approved` does
+# `self.tasks.tasks[task_name]` -- for a pipeline checkpoint `task_name` is
+# actually the PIPELINE name (e.g. "noxys"), so it raised a bare `KeyError`
+# instead of routing to `resume_pipeline`.
+# ---------------------------------------------------------------------------
+
+
+class TestApproveRunRouting:
+    def test_pipeline_checkpoint_routes_to_resume_pipeline_not_run_approved(self) -> None:
+        """The live-bug regression: a pipeline-checkpoint approval must call
+        `resume_pipeline`, never `run_approved` (which would KeyError on the
+        pipeline name, e.g. 'noxys', not being a task)."""
+        orch = _orch(_pipeline())
+        approval = {
+            "status": "pending",
+            "task": "noxys",  # the pipeline name, NOT a task -- this is what KeyErrors
+            "metadata": json.dumps({"kind": "pipeline_checkpoint", "pipeline": "noxys"}),
+        }
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval),
+            patch.object(
+                orch, "resume_pipeline", return_value=RunResult("noxys", "noxys", True)
+            ) as mock_resume,
+            patch.object(orch, "run_approved") as mock_run_approved,
+        ):
+            result = orch.approve_run(run_id=7, approve=True, approver="mirador")
+
+        mock_resume.assert_called_once_with(run_id=7, approve=True, approver="mirador")
+        mock_run_approved.assert_not_called()
+        assert result.success is True
+
+    def test_per_task_approval_routes_to_run_approved_unchanged(self) -> None:
+        """A plain per-task approval (no `pipeline_checkpoint` kind) must keep
+        going through `run_approved` -- unchanged behavior."""
+        orch = _orch(_pipeline())
+        approval = {
+            "status": "pending",
+            "task": "build",
+            "metadata": json.dumps({}),
+        }
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval),
+            patch.object(orch, "resume_pipeline") as mock_resume,
+            patch.object(
+                orch, "run_approved", return_value=RunResult("proj", "build", True)
+            ) as mock_run_approved,
+        ):
+            result = orch.approve_run(
+                run_id=8, approve=True, approver="mirador", reason="looks good"
+            )
+
+        mock_run_approved.assert_called_once_with(
+            run_id=8, approve=True, approver="mirador", reason="looks good"
+        )
+        mock_resume.assert_not_called()
+        assert result.success is True
+
+    def test_deny_pipeline_checkpoint_routes_to_resume_pipeline(self) -> None:
+        """Deny on a pipeline checkpoint must also route to `resume_pipeline`
+        (with approve=False), not `run_approved`."""
+        orch = _orch(_pipeline())
+        approval = {
+            "status": "pending",
+            "task": "noxys",
+            "metadata": json.dumps({"kind": "pipeline_checkpoint", "pipeline": "noxys"}),
+        }
+        with (
+            patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval),
+            patch.object(
+                orch, "resume_pipeline", return_value=RunResult("noxys", "noxys", False)
+            ) as mock_resume,
+            patch.object(orch, "run_approved") as mock_run_approved,
+        ):
+            result = orch.approve_run(run_id=9, approve=False, approver="mirador")
+
+        mock_resume.assert_called_once_with(run_id=9, approve=False, approver="mirador")
+        mock_run_approved.assert_not_called()
+        assert result.success is False
+
+    def test_unknown_run_raises_value_error_not_key_error(self) -> None:
+        """No approval row at all -- must raise `ValueError` (caller maps it
+        to a 4xx), never a bare `KeyError`/`AttributeError`."""
+        orch = _orch(_pipeline())
+        with patch("hivepilot.orchestrator.state_service.get_approval", return_value=None):
+            with pytest.raises(ValueError, match="not pending approval"):
+                orch.approve_run(run_id=999, approve=True, approver="mirador")
+
+    def test_already_resolved_run_raises_value_error(self) -> None:
+        """A run whose approval is already approved/denied is not
+        actionable again -- `ValueError`, not a crash."""
+        orch = _orch(_pipeline())
+        approval = {"status": "approved", "task": "build", "metadata": "{}"}
+        with patch("hivepilot.orchestrator.state_service.get_approval", return_value=approval):
+            with pytest.raises(ValueError, match="not pending approval"):
+                orch.approve_run(run_id=10, approve=True, approver="mirador")

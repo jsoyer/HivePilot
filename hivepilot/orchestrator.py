@@ -3459,6 +3459,40 @@ class Orchestrator:
                 logger.warning("auditor.observe_failed", run_id=run_id, error=str(exc))
         return results
 
+    def approve_run(
+        self,
+        *,
+        run_id: int,
+        approve: bool,
+        approver: str,
+        reason: str | None = None,
+    ) -> RunResult:
+        """Single entry point for routing an approve/deny decision.
+
+        A PIPELINE checkpoint (a stage with ``pause_before: true``) parks the
+        run with ``approval["task"]`` set to the *pipeline* name, not a task
+        name -- ``run_approved`` then does ``self.tasks.tasks[task_name]``
+        and raises a bare ``KeyError`` for it (the Mirador "Approve" button
+        500 -- live traceback was ``KeyError: 'noxys'``). This mirrors the
+        discriminator Telegram's ``_dispatch_approval`` already used
+        (``metadata["kind"] == "pipeline_checkpoint"``) -- moved here so
+        every caller that lets an operator approve/deny a run (Mirador's
+        ``POST /v1/approvals/{id}`` in ``api_service.py``, and Telegram's
+        approve/deny buttons in ``telegram_bot.py``) goes through ONE place
+        and the two paths can never diverge again.
+
+        Raises ``ValueError`` if the run has no pending approval (unknown
+        run id or already resolved) -- callers should translate that into a
+        4xx, never let it surface as a 500.
+        """
+        approval = state_service.get_approval(run_id)
+        if not approval or approval.get("status") != "pending":
+            raise ValueError(f"Run {run_id} is not pending approval.")
+        metadata = json.loads(approval.get("metadata") or "{}")
+        if metadata.get("kind") == "pipeline_checkpoint":
+            return self.resume_pipeline(run_id=run_id, approve=approve, approver=approver)
+        return self.run_approved(run_id=run_id, approve=approve, approver=approver, reason=reason)
+
     def resume_pipeline(
         self,
         *,

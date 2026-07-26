@@ -738,12 +738,20 @@ def handle_approval(
                 detail="Cross-tenant approval not allowed",
             )
     with run_duration_seconds.time():
-        result = _get_orchestrator().run_approved(
-            run_id=run_id,
-            approve=action.approve,
-            approver=action.approver,
-            reason=action.reason,
-        )
+        try:
+            result = _get_orchestrator().approve_run(
+                run_id=run_id,
+                approve=action.approve,
+                approver=action.approver,
+                reason=action.reason,
+            )
+        except ValueError as exc:
+            # Not pending / unknown run (or, before this fix, a pipeline
+            # checkpoint's task-name KeyError) must never surface as a raw
+            # 500 -- `Orchestrator.approve_run` routes pipeline checkpoints
+            # to `resume_pipeline` and per-task approvals to `run_approved`,
+            # so the only `ValueError` left here is "not actionable".
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"result": result.__dict__}
 
 
