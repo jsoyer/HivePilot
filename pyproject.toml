@@ -95,6 +95,19 @@ cloud = [
 forge = [
   "httpx>=0.27,<1.0",
 ]
+# Swarm Phase 1 (peer federation bus) redis-streams transport
+# (hivepilot/swarm/redis_transport.py) -- consumer groups (XADD/XREADGROUP/
+# XACK) for the "redis" `HIVEPILOT_SWARM_TRANSPORT`. Imported at module level
+# (mirrors the `forge` extra's httpx above), guarded by
+# `hivepilot/swarm/__init__.py`'s try/except ImportError registration: a
+# core install (no extras) never fails to import `hivepilot.swarm` -- "redis"
+# simply isn't registered in `TRANSPORT_MAP`, so a deployment that requests
+# it without this extra fails closed (`UnknownTransportError`) at resolve
+# time, never an import crash. The DEFAULT transport, "poll", needs this
+# extra for NOTHING -- see `hivepilot/swarm/poll_transport.py`.
+swarm = [
+  "redis>=5.0,<6.0",
+]
 # KMS envelope-encryption secrets backend (plugins/kms.py). `cryptography` powers
 # the AES-256-GCM envelope decrypt; the cloud KMS client libs decrypt the data
 # key / ciphertext. AWS uses boto3 from the [cloud] extra above (not duplicated
@@ -179,6 +192,7 @@ full = [
   "opentelemetry-sdk>=1.24,<2.0",
   "opentelemetry-exporter-otlp-proto-grpc>=1.24,<2.0",
   "httpx>=0.27,<1.0",
+  "redis>=5.0,<6.0",
 ]
 dev = [
   "pytest>=8.0,<9.0",
@@ -212,6 +226,13 @@ dev = [
   # CI (the cloud SDKs boto3/google-cloud-kms/azure are MOCKED in the tests,
   # so only cryptography is needed here; the full `kms` extra stays optional).
   "cryptography>=42.0",
+  # Swarm Phase 1 -- dev/test install includes `redis` so
+  # tests/test_swarm_redis_transport.py's guarded-import path (and the
+  # `hivepilot/swarm/redis_transport.py` module itself) is exercised in CI
+  # against a real `redis` client class (mocked, no real server needed — see
+  # that test module); core install stays extra-free (see the `swarm` extra
+  # above).
+  "redis>=5.0,<6.0",
 ]
 
 [tool.pytest.ini_options]
