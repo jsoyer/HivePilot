@@ -341,3 +341,219 @@ def test_formatted_chunk_send_failure_falls_back_to_plain(
     assert attempts[1]["parse_mode"] is None
     assert "<b>" not in attempts[1]["msg"]
     assert "bold" in attempts[1]["msg"]
+
+
+# ---------------------------------------------------------------------------
+# Stale/closed forum-topic self-heal
+# ---------------------------------------------------------------------------
+
+
+class _FakeTelegramError(Exception):
+    """Stand-in for TelegramSendError carrying only a `.description`."""
+
+    def __init__(self, description: str) -> None:
+        super().__init__(description)
+        self.status_code = 400
+        self.description = description
+
+
+def _stream_topics_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_rich", False, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_topics", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", -100999, raising=False)
+
+
+def test_is_stale_topic_error_matches_known_variants() -> None:
+    assert ns._is_stale_topic_error("Bad Request: message thread not found")
+    assert ns._is_stale_topic_error("Bad Request: TOPIC_DELETED")
+    assert ns._is_stale_topic_error("the message thread not found")
+    assert not ns._is_stale_topic_error("Bad Request: TOPIC_CLOSED")
+    assert not ns._is_stale_topic_error(None)
+
+
+def test_is_closed_topic_error_matches_and_excludes_stale() -> None:
+    assert ns._is_closed_topic_error("Bad Request: TOPIC_CLOSED")
+    assert not ns._is_closed_topic_error("Bad Request: message thread not found")
+    assert not ns._is_closed_topic_error(None)
+
+
+def test_invalidate_topic_removes_and_persists(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry_path = tmp_path / "stream_topics.json"
+    monkeypatch.setattr(ns.settings, "stream_topics_registry_path", str(registry_path))
+    ns._save_topics({"gustave": 208, "aliénor": 42})
+
+    dead = ns._invalidate_topic("gustave")
+
+    assert dead == 208
+    # Persisted: a fresh load no longer contains the dead key.
+    assert ns._load_topics() == {"aliénor": 42}
+    # A second call finds nothing left to invalidate.
+    assert ns._invalidate_topic("gustave") is None
+
+
+def _sequenced_ensure_topic_thread(*values: int | None):
+    """Return a fake `_ensure_topic_thread(agent_key, title)` that yields
+    *values* in order on successive calls — the FIRST call resolves the
+    initial (soon-to-be-dead) thread id, later calls simulate what the
+    self-heal recreate attempt gets back."""
+    it = iter(values)
+
+    def _fn(agent_key: str, title: str):
+        return next(it)
+
+    return _fn
+
+
+def test_stale_topic_self_heals_recreates_and_resends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A send that 400s with "message thread not found" invalidates the
+    registry entry, recreates the topic, and re-sends the SAME content to
+    the NEW thread id — the message is delivered, not lost."""
+    _stream_topics_settings(monkeypatch)
+    # First call (initial resolve) returns the soon-to-be-dead 208; the
+    # second call (triggered by the self-heal recreate) returns a fresh 999.
+    monkeypatch.setattr(ns, "_ensure_topic_thread", _sequenced_ensure_topic_thread(208, 999))
+
+    invalidated: list[str] = []
+    orig_invalidate = ns._invalidate_topic
+
+    def _spy_invalidate(agent_key: str):
+        invalidated.append(agent_key)
+        return orig_invalidate(agent_key)
+
+    monkeypatch.setattr(ns, "_invalidate_topic", _spy_invalidate)
+
+    calls: list[dict] = []
+    call_count = {"n": 0}
+
+    def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
+        call_count["n"] += 1
+        calls.append({"msg": msg, "message_thread_id": message_thread_id})
+        if call_count["n"] == 1:
+            raise _FakeTelegramError("Bad Request: message thread not found")
+
+    monkeypatch.setattr(ns, "_send_telegram", _fake)
+
+    ns.stream_agent_turn(actor="Gustave (Developer)", summary="deploy finished")
+
+    assert invalidated == ["developer"]
+    assert len(calls) == 2
+    assert calls[0]["message_thread_id"] == 208
+    assert calls[1]["message_thread_id"] == 999  # NEW thread id, not the dead one
+    assert calls[1]["message_thread_id"] != calls[0]["message_thread_id"]
+    assert calls[0]["msg"] == calls[1]["msg"]  # identical content, just re-routed
+
+
+def test_stale_topic_recreate_failure_falls_back_to_threadless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If recreating the topic also fails (`_ensure_topic_thread` returns
+    None), the message is still delivered — sent WITHOUT a thread id rather
+    than being dropped. No exception escapes `stream_agent_turn`."""
+    _stream_topics_settings(monkeypatch)
+    # First call resolves 208 (the id that will die); recreate attempt fails
+    # (no forum rights, rate-limited, ...) and returns None.
+    monkeypatch.setattr(ns, "_ensure_topic_thread", _sequenced_ensure_topic_thread(208, None))
+
+    calls: list[dict] = []
+
+    def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
+        calls.append({"msg": msg, "message_thread_id": message_thread_id})
+        if message_thread_id is not None:
+            raise _FakeTelegramError("Bad Request: message thread not found")
+
+    monkeypatch.setattr(ns, "_send_telegram", _fake)
+
+    ns.stream_agent_turn(actor="Gustave (Developer)", summary="deploy finished")  # must not raise
+
+    assert len(calls) == 2
+    assert calls[0]["message_thread_id"] == 208
+    assert calls[1]["message_thread_id"] is None  # threadless General fallback
+    assert calls[1]["msg"] == calls[0]["msg"]  # content preserved, never dropped
+
+
+def test_closed_topic_does_not_recreate_sends_to_general(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CLOSED (not deleted) topic must NOT trigger a recreate — the
+    operator closed it deliberately. The message still reaches the chat's
+    General topic instead."""
+    _stream_topics_settings(monkeypatch)
+
+    recreate_calls: list[str] = []
+
+    def _ensure(agent_key: str, title: str) -> int:
+        recreate_calls.append(agent_key)
+        return 208
+
+    monkeypatch.setattr(ns, "_ensure_topic_thread", _ensure)
+
+    calls: list[dict] = []
+
+    def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
+        calls.append({"msg": msg, "message_thread_id": message_thread_id})
+        if message_thread_id is not None:
+            raise _FakeTelegramError("Bad Request: TOPIC_CLOSED")
+
+    monkeypatch.setattr(ns, "_send_telegram", _fake)
+
+    ns.stream_agent_turn(actor="Gustave (Developer)", summary="deploy finished")
+
+    # Only the initial _ensure_topic_thread call (to get 208) -- no second
+    # (recreate) call for a closed topic.
+    assert recreate_calls == ["developer"]
+    assert len(calls) == 2
+    assert calls[0]["message_thread_id"] == 208
+    assert calls[1]["message_thread_id"] is None  # General, not recreated
+    assert calls[1]["msg"] == calls[0]["msg"]
+
+
+def test_normal_400_error_unchanged_registry_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A normal 400 (e.g. bad markdown, not a topic problem) keeps the
+    EXISTING plain-text-retry-with-same-thread-id behaviour; the registry is
+    never touched."""
+    _stream_topics_settings(monkeypatch)
+    monkeypatch.setattr(ns.settings, "telegram_stream_rich", True, raising=False)
+    monkeypatch.setattr(ns, "_ensure_topic_thread", lambda agent_key, title: 208)
+
+    invalidate_calls: list[str] = []
+    monkeypatch.setattr(
+        ns, "_invalidate_topic", lambda agent_key: invalidate_calls.append(agent_key)
+    )
+
+    calls: list[dict] = []
+
+    def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
+        calls.append({"msg": msg, "message_thread_id": message_thread_id, "parse_mode": parse_mode})
+        if parse_mode == "HTML":
+            raise _FakeTelegramError("Can't parse entities: unbalanced tag")
+
+    monkeypatch.setattr(ns, "_send_telegram", _fake)
+
+    structured = "## status\nPASS\n## summary\n- **bold** thing done\n"
+    ns.stream_agent_turn(actor="Gustave (Developer)", summary=structured)
+
+    assert invalidate_calls == []  # registry never touched for a non-topic 400
+    assert len(calls) == 2
+    assert calls[0]["message_thread_id"] == 208
+    assert calls[1]["message_thread_id"] == 208  # same thread id, unchanged behaviour
+    assert calls[1]["parse_mode"] is None
+
+
+def test_registry_invalidation_persisted_second_call_does_not_reuse_dead_id(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once invalidated, a fresh `_load_topics()` (simulating a brand-new
+    process reading the same on-disk registry) no longer sees the dead id."""
+    registry_path = tmp_path / "stream_topics.json"
+    monkeypatch.setattr(ns.settings, "stream_topics_registry_path", str(registry_path))
+    ns._save_topics({"gustave": 208})
+
+    ns._invalidate_topic("gustave")
+
+    # Simulate a new process: reload from disk from scratch.
+    assert ns._load_topics().get("gustave") is None
