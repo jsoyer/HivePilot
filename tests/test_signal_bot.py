@@ -104,13 +104,13 @@ class TestDispatchText:
     def test_bare_approve_form_reaches_orchestrator(self) -> None:
         """No leading slash — Signal's natural reply style must still route."""
         orch = MagicMock()
-        orch.run_approved.return_value = MagicMock(success=True)
+        orch.approve_run.return_value = MagicMock(success=True)
         with (
             patch("hivepilot.services.chatops_service._verify", lambda required: None),
             patch("hivepilot.services.chatops_service._get_orchestrator", return_value=orch),
         ):
             result = signal_bot._dispatch_text("approve 42")
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42, approve=True, approver="signal", reason=None
         )
         assert "42" in result

@@ -34,6 +34,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import hivepilot.services.discord_bot as discord_bot
+from hivepilot.orchestrator import Orchestrator, RunResult
 from hivepilot.services.concierge_service import ConciergeDecision
 
 ALLOWED_GUILD = 111
@@ -272,15 +273,15 @@ class TestCmdApprovals:
 
 
 class TestCmdApprove:
-    def test_allowed_calls_run_approved(self) -> None:
+    def test_allowed_calls_approve_run(self) -> None:
         orch = MagicMock()
-        orch.run_approved.return_value = types.SimpleNamespace(success=True)
+        orch.approve_run.return_value = types.SimpleNamespace(success=True)
         with (
             patch.object(discord_bot, "_get_orch", return_value=orch),
             patch.object(discord_bot, "_followup_message") as followup,
         ):
             discord_bot.handle_interaction(_command_body("approve", {"run_id": 42}), "sig", "ts")
-        orch.run_approved.assert_called_once_with(run_id=42, approve=True, approver="discord")
+        orch.approve_run.assert_called_once_with(run_id=42, approve=True, approver="discord")
         followup.assert_called_once()
 
     def test_denied_rejected_no_state_mutation(self) -> None:
@@ -297,12 +298,12 @@ class TestCmdApprove:
                 "ts",
             )
         assert result["data"]["content"] == "Unauthorized."
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         followup.assert_not_called()
 
 
 class TestCmdDeny:
-    def test_allowed_calls_run_approved_with_deny(self) -> None:
+    def test_allowed_calls_approve_run_with_deny(self) -> None:
         orch = MagicMock()
         with (
             patch.object(discord_bot, "_get_orch", return_value=orch),
@@ -311,7 +312,7 @@ class TestCmdDeny:
             discord_bot.handle_interaction(
                 _command_body("deny", {"run_id": 42, "reason": "not ready"}), "sig", "ts"
             )
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42, approve=False, approver="discord", reason="not ready"
         )
         followup.assert_called_once()
@@ -332,7 +333,7 @@ class TestCmdDeny:
                 "sig",
                 "ts",
             )
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         followup.assert_not_called()
 
 
@@ -378,27 +379,27 @@ class TestCmdStatus:
 
 
 class TestMessageComponentApprovalButton:
-    def test_allowed_approve_calls_run_approved(self) -> None:
+    def test_allowed_approve_calls_approve_run(self) -> None:
         orch = MagicMock()
-        orch.run_approved.return_value = types.SimpleNamespace(success=True)
+        orch.approve_run.return_value = types.SimpleNamespace(success=True)
         with (
             patch.object(discord_bot, "_get_orch", return_value=orch),
             patch.object(discord_bot, "_followup_message") as followup,
         ):
             result = discord_bot.handle_interaction(_component_body("approve:42"), "sig", "ts")
         assert result == {"type": 5}
-        orch.run_approved.assert_called_once_with(run_id=42, approve=True, approver="discord")
+        orch.approve_run.assert_called_once_with(run_id=42, approve=True, approver="discord")
         followup.assert_called_once()
 
-    def test_allowed_deny_calls_run_approved(self) -> None:
+    def test_allowed_deny_calls_approve_run(self) -> None:
         orch = MagicMock()
         with (
             patch.object(discord_bot, "_get_orch", return_value=orch),
             patch.object(discord_bot, "_followup_message") as followup,
         ):
             discord_bot.handle_interaction(_component_body("deny:42"), "sig", "ts")
-        orch.run_approved.assert_called_once()
-        kwargs = orch.run_approved.call_args.kwargs
+        orch.approve_run.assert_called_once()
+        kwargs = orch.approve_run.call_args.kwargs
         assert kwargs["run_id"] == 42
         assert kwargs["approve"] is False
         assert "alice" in kwargs["reason"]
@@ -406,7 +407,7 @@ class TestMessageComponentApprovalButton:
 
     def test_denied_channel_approve_button_rejected_no_state_mutation(self) -> None:
         """SECURITY REGRESSION GUARD: a button press from a non-allowlisted
-        guild/channel must NOT call run_approved and must get a rejection,
+        guild/channel must NOT call approve_run and must get a rejection,
         with the background dispatch never started."""
         orch = MagicMock()
         with (
@@ -420,7 +421,7 @@ class TestMessageComponentApprovalButton:
             )
         assert result["type"] == 4
         assert result["data"]["content"] == "Unauthorized."
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         followup.assert_not_called()
 
     def test_denied_channel_deny_button_rejected_no_state_mutation(self) -> None:
@@ -434,7 +435,7 @@ class TestMessageComponentApprovalButton:
                 "sig",
                 "ts",
             )
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         followup.assert_not_called()
 
     def test_missing_guild_and_channel_treated_as_unauthorized(self) -> None:
@@ -448,7 +449,7 @@ class TestMessageComponentApprovalButton:
                 _component_body("approve:42", guild_id=None, channel_id=None), "sig", "ts"
             )
         assert result["data"]["content"] == "Unauthorized."
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         followup.assert_not_called()
 
     def test_invalid_custom_id_handled_gracefully(self) -> None:
@@ -458,7 +459,7 @@ class TestMessageComponentApprovalButton:
             patch.object(discord_bot, "_followup_message") as followup,
         ):
             discord_bot.handle_interaction(_component_body("approve:notanumber"), "sig", "ts")
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         followup.assert_called_once()
         assert "Invalid component id" in followup.call_args.args[2]["content"]
 
@@ -679,7 +680,7 @@ class TestRunGateway:
         with patch.object(discord_bot, "_get_orch", return_value=orch):
             asyncio.run(tree.commands["approve"](interaction, 42))
         interaction.response.send_message.assert_awaited_once_with("Unauthorized.", ephemeral=True)
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -930,3 +931,112 @@ class TestOnMessageConciergeYesNo:
             "Cancelled.", allowed_mentions=discord_bot._no_mentions()
         )
         assert ALLOWED_CHANNEL not in discord_bot._pending_concierge
+
+
+# ---------------------------------------------------------------------------
+# `/approve` / `/deny` (and the Approve/Deny buttons) now go through the
+# shared `Orchestrator.approve_run` helper instead of calling `run_approved`
+# directly -- regression coverage for the same pipeline-checkpoint KeyError
+# bug on the Discord channel.
+# ---------------------------------------------------------------------------
+
+
+class _FakeApprovalOrchestrator:
+    """Real `Orchestrator.approve_run` bound to fake `resume_pipeline`/
+    `run_approved` -- exercises the ACTUAL routing method through the
+    Discord handler, not a re-implementation of it."""
+
+    def __init__(self) -> None:
+        self.resume_pipeline_calls: list[dict] = []
+        self.run_approved_calls: list[dict] = []
+
+    def resume_pipeline(self, **kwargs):
+        self.resume_pipeline_calls.append(kwargs)
+        return RunResult("noxys", "noxys", kwargs.get("approve", True))
+
+    def run_approved(self, **kwargs):
+        self.run_approved_calls.append(kwargs)
+        return RunResult("proj", "task", kwargs.get("approve", True))
+
+
+_FakeApprovalOrchestrator.approve_run = Orchestrator.approve_run  # type: ignore[attr-defined]
+
+
+def _pipeline_checkpoint_approval() -> dict:
+    return {
+        "status": "pending",
+        "task": "noxys",  # the pipeline name -- NOT a task -- is what KeyErrors
+        "metadata": json.dumps({"kind": "pipeline_checkpoint", "pipeline": "noxys"}),
+    }
+
+
+def _per_task_approval() -> dict:
+    return {"status": "pending", "task": "build", "metadata": json.dumps({})}
+
+
+class TestDiscordApprovalRoutingThroughSharedHelper:
+    def test_pipeline_checkpoint_approval_routes_to_resume_pipeline(self) -> None:
+        """Live-bug regression on the Discord channel: approving a
+        pipeline-checkpoint run via the `/approve` command must route to
+        `resume_pipeline`, never `run_approved`, and must not raise."""
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(discord_bot, "_get_orch", return_value=fake_orch),
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            discord_bot.handle_interaction(_command_body("approve", {"run_id": 7}), "sig", "ts")
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.run_approved_calls == []
+        followup.assert_called_once()
+
+    def test_per_task_approval_still_routes_to_run_approved(self) -> None:
+        """A plain per-task approval via the `/approve` command must keep
+        routing to `run_approved` -- unchanged behavior."""
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_per_task_approval(),
+            ),
+            patch.object(discord_bot, "_get_orch", return_value=fake_orch),
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            discord_bot.handle_interaction(_command_body("approve", {"run_id": 8}), "sig", "ts")
+        assert len(fake_orch.run_approved_calls) == 1
+        assert fake_orch.resume_pipeline_calls == []
+        followup.assert_called_once()
+
+    def test_deny_pipeline_checkpoint_routes_to_resume_pipeline(self) -> None:
+        """Denying a pipeline checkpoint via the `/deny` command must also
+        route to `resume_pipeline` (approve=False), not `run_approved`."""
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(discord_bot, "_get_orch", return_value=fake_orch),
+            patch.object(discord_bot, "_followup_message"),
+        ):
+            discord_bot.handle_interaction(
+                _command_body("deny", {"run_id": 9, "reason": "not ready"}), "sig", "ts"
+            )
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.resume_pipeline_calls[0]["approve"] is False
+        assert fake_orch.run_approved_calls == []
+
+    def test_no_direct_run_approved_call_in_discord_bot_source(self) -> None:
+        """Static guard: the routing decision must live in ONE place
+        (`Orchestrator.approve_run`) -- `discord_bot.py` must never call
+        `run_approved`/`resume_pipeline` directly again for the
+        approve/deny routing decision."""
+        from pathlib import Path
+
+        source = Path(discord_bot.__file__).read_text()
+        assert ".run_approved(" not in source
+        assert ".resume_pipeline(" not in source
+        assert ".approve_run(" in source

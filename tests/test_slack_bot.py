@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import sys
 import types
 from typing import Any, Callable
@@ -30,6 +31,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import hivepilot.services.slack_bot as slack_bot
+from hivepilot.orchestrator import Orchestrator, RunResult
 
 ALLOWED_CHANNEL = "C-ALLOWED"
 DENIED_CHANNEL = "C-DENIED"
@@ -225,11 +227,11 @@ class TestCmdApprovals:
 
 
 class TestCmdApprove:
-    def test_allowed_channel_calls_run_approved(self) -> None:
+    def test_allowed_channel_calls_approve_run(self) -> None:
         app = _register()
         respond = _respond()
         orch = MagicMock()
-        orch.run_approved.return_value = types.SimpleNamespace(success=True)
+        orch.approve_run.return_value = types.SimpleNamespace(success=True)
         with patch.object(slack_bot, "_get_orch", return_value=orch):
             _call(
                 app.commands["/hp-approve"],
@@ -237,7 +239,7 @@ class TestCmdApprove:
                 command={"channel_id": ALLOWED_CHANNEL, "text": "42"},
                 respond=respond,
             )
-        orch.run_approved.assert_called_once_with(run_id=42, approve=True, approver="slack")
+        orch.approve_run.assert_called_once_with(run_id=42, approve=True, approver="slack")
 
     def test_denied_channel_rejected_no_state_mutation(self) -> None:
         app = _register()
@@ -250,7 +252,7 @@ class TestCmdApprove:
                 command={"channel_id": DENIED_CHANNEL, "text": "42"},
                 respond=respond,
             )
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         respond.assert_called_once_with("Unauthorized channel.")
 
 
@@ -260,7 +262,7 @@ class TestCmdApprove:
 
 
 class TestCmdDeny:
-    def test_allowed_channel_calls_run_approved_with_deny(self) -> None:
+    def test_allowed_channel_calls_approve_run_with_deny(self) -> None:
         app = _register()
         respond = _respond()
         orch = MagicMock()
@@ -271,7 +273,7 @@ class TestCmdDeny:
                 command={"channel_id": ALLOWED_CHANNEL, "text": "42 not ready"},
                 respond=respond,
             )
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42, approve=False, approver="slack", reason="not ready"
         )
 
@@ -286,7 +288,7 @@ class TestCmdDeny:
                 command={"channel_id": DENIED_CHANNEL, "text": "42 not ready"},
                 respond=respond,
             )
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         respond.assert_called_once_with("Unauthorized channel.")
 
 
@@ -331,17 +333,17 @@ class TestCmdStatus:
 #
 # This is the regression guard: without the `_is_allowed` gate in
 # `handle_approval_action`, a button press coming from a non-allowlisted
-# channel would still call `run_approved` and mutate state. These tests FAIL
+# channel would still call `approve_run` and mutate state. These tests FAIL
 # on the pre-fix code.
 # ---------------------------------------------------------------------------
 
 
 class TestHandleApprovalAction:
-    def test_allowed_channel_approve_calls_run_approved(self) -> None:
+    def test_allowed_channel_approve_calls_approve_run(self) -> None:
         app = _register()
         respond = _respond()
         orch = MagicMock()
-        orch.run_approved.return_value = types.SimpleNamespace(success=True)
+        orch.approve_run.return_value = types.SimpleNamespace(success=True)
         body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"username": "alice"}}
         with patch.object(slack_bot, "_get_orch", return_value=orch):
             _call(
@@ -351,15 +353,15 @@ class TestHandleApprovalAction:
                 body=body,
                 respond=respond,
             )
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42, approve=True, approver="slack:alice", reason=None
         )
 
-    def test_allowed_channel_deny_calls_run_approved(self) -> None:
+    def test_allowed_channel_deny_calls_approve_run(self) -> None:
         app = _register()
         respond = _respond()
         orch = MagicMock()
-        orch.run_approved.return_value = types.SimpleNamespace(success=True)
+        orch.approve_run.return_value = types.SimpleNamespace(success=True)
         body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"username": "alice"}}
         with patch.object(slack_bot, "_get_orch", return_value=orch):
             _call(
@@ -369,7 +371,7 @@ class TestHandleApprovalAction:
                 body=body,
                 respond=respond,
             )
-        orch.run_approved.assert_called_once_with(
+        orch.approve_run.assert_called_once_with(
             run_id=42,
             approve=False,
             approver="slack:alice",
@@ -378,7 +380,7 @@ class TestHandleApprovalAction:
 
     def test_denied_channel_approve_button_rejected_no_state_mutation(self) -> None:
         """SECURITY REGRESSION GUARD: a button press from a non-allowlisted
-        channel must NOT call run_approved and must get a rejection ack."""
+        channel must NOT call approve_run and must get a rejection ack."""
         app = _register()
         respond = _respond()
         orch = MagicMock()
@@ -391,7 +393,7 @@ class TestHandleApprovalAction:
                 body=body,
                 respond=respond,
             )
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         respond.assert_called_once_with("Unauthorized channel.")
 
     def test_denied_channel_deny_button_rejected_no_state_mutation(self) -> None:
@@ -407,7 +409,7 @@ class TestHandleApprovalAction:
                 body=body,
                 respond=respond,
             )
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
         respond.assert_called_once_with("Unauthorized channel.")
 
     def test_missing_channel_in_body_treated_as_unauthorized(self) -> None:
@@ -424,7 +426,7 @@ class TestHandleApprovalAction:
                 body=body,
                 respond=respond,
             )
-        orch.run_approved.assert_not_called()
+        orch.approve_run.assert_not_called()
 
     def test_invalid_action_id_still_handled_gracefully(self) -> None:
         app = _register()
@@ -936,3 +938,126 @@ class TestShutdown:
         assert slack_bot._app_instance is not None
         slack_bot.shutdown()
         assert slack_bot._app_instance is None
+
+
+# ---------------------------------------------------------------------------
+# `/hp-approve` / `/hp-deny` now go through the shared `Orchestrator.approve_run`
+# helper (also used by `api_service.handle_approval` / `telegram_bot`) instead
+# of calling `run_approved` directly -- regression coverage for the same
+# pipeline-checkpoint KeyError bug on the Slack channel.
+# ---------------------------------------------------------------------------
+
+
+class _FakeApprovalOrchestrator:
+    """Real `Orchestrator.approve_run` bound to fake `resume_pipeline`/
+    `run_approved` -- exercises the ACTUAL routing method through the Slack
+    handler, not a re-implementation of it."""
+
+    def __init__(self) -> None:
+        self.resume_pipeline_calls: list[dict] = []
+        self.run_approved_calls: list[dict] = []
+
+    def resume_pipeline(self, **kwargs):
+        self.resume_pipeline_calls.append(kwargs)
+        return RunResult("noxys", "noxys", kwargs.get("approve", True))
+
+    def run_approved(self, **kwargs):
+        self.run_approved_calls.append(kwargs)
+        return RunResult("proj", "task", kwargs.get("approve", True))
+
+
+_FakeApprovalOrchestrator.approve_run = Orchestrator.approve_run  # type: ignore[attr-defined]
+
+
+def _pipeline_checkpoint_approval() -> dict:
+    return {
+        "status": "pending",
+        "task": "noxys",  # the pipeline name -- NOT a task -- is what KeyErrors
+        "metadata": json.dumps({"kind": "pipeline_checkpoint", "pipeline": "noxys"}),
+    }
+
+
+def _per_task_approval() -> dict:
+    return {"status": "pending", "task": "build", "metadata": json.dumps({})}
+
+
+class TestSlackApprovalRoutingThroughSharedHelper:
+    def test_pipeline_checkpoint_approval_routes_to_resume_pipeline(self) -> None:
+        """Live-bug regression on the Slack channel: approving a
+        pipeline-checkpoint run via `/hp-approve` must route to
+        `resume_pipeline`, never `run_approved`, and must not raise."""
+        app = _register()
+        respond = _respond()
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(slack_bot, "_get_orch", return_value=fake_orch),
+        ):
+            _call(
+                app.commands["/hp-approve"],
+                ack=_ack(),
+                command={"channel_id": ALLOWED_CHANNEL, "text": "7"},
+                respond=respond,
+            )
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.run_approved_calls == []
+
+    def test_per_task_approval_still_routes_to_run_approved(self) -> None:
+        """A plain per-task approval via `/hp-approve` must keep routing to
+        `run_approved` -- unchanged behavior."""
+        app = _register()
+        respond = _respond()
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_per_task_approval(),
+            ),
+            patch.object(slack_bot, "_get_orch", return_value=fake_orch),
+        ):
+            _call(
+                app.commands["/hp-approve"],
+                ack=_ack(),
+                command={"channel_id": ALLOWED_CHANNEL, "text": "8"},
+                respond=respond,
+            )
+        assert len(fake_orch.run_approved_calls) == 1
+        assert fake_orch.resume_pipeline_calls == []
+
+    def test_deny_pipeline_checkpoint_routes_to_resume_pipeline(self) -> None:
+        """Denying a pipeline checkpoint via `/hp-deny` must also route to
+        `resume_pipeline` (approve=False), not `run_approved`."""
+        app = _register()
+        respond = _respond()
+        fake_orch = _FakeApprovalOrchestrator()
+        with (
+            patch(
+                "hivepilot.orchestrator.state_service.get_approval",
+                return_value=_pipeline_checkpoint_approval(),
+            ),
+            patch.object(slack_bot, "_get_orch", return_value=fake_orch),
+        ):
+            _call(
+                app.commands["/hp-deny"],
+                ack=_ack(),
+                command={"channel_id": ALLOWED_CHANNEL, "text": "9 not ready"},
+                respond=respond,
+            )
+        assert len(fake_orch.resume_pipeline_calls) == 1
+        assert fake_orch.resume_pipeline_calls[0]["approve"] is False
+        assert fake_orch.run_approved_calls == []
+
+    def test_no_direct_run_approved_call_in_slack_bot_source(self) -> None:
+        """Static guard: the routing decision must live in ONE place
+        (`Orchestrator.approve_run`) -- `slack_bot.py` must never call
+        `run_approved`/`resume_pipeline` directly again for the
+        approve/deny routing decision."""
+        from pathlib import Path
+
+        source = Path(slack_bot.__file__).read_text()
+        assert ".run_approved(" not in source
+        assert ".resume_pipeline(" not in source
+        assert ".approve_run(" in source
