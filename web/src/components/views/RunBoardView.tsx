@@ -432,8 +432,18 @@ interface RunBoardProps {
  * status doesn't fit" edge case and stays out of the way otherwise.
  * Mobile: columns stack vertically; `sm:` and up: a horizontally-scrolling
  * row (fixed-width columns) -- a Kanban board's natural responsive shape.
+ *
+ * Bug-debt fix: that horizontal scroll had NO visible affordance, so a
+ * column (e.g. "Failed") could look truncated with no clue there was more
+ * to scroll to -- `kanban-scroll` (see `index.css`) makes it an
+ * always-visible, themed scrollbar; `tabIndex={0}` + `role="region"` +
+ * `aria-label` make the scroll region itself keyboard-focusable (native
+ * arrow/Home/End-key scrolling on a focused overflow container) rather than
+ * only reachable by a mouse drag; `min-w-0` keeps the row shrinkable so
+ * `overflow-x-auto` can never be defeated by an ancestor flex context.
  */
 function RunBoard({ runs, canRun, onOpenDetail, onStopped }: RunBoardProps) {
+  const t = useT()
   const grouped: Record<RunColumn, RunSummary[]> = {
     queued: [],
     running: [],
@@ -447,7 +457,13 @@ function RunBoard({ runs, canRun, onOpenDetail, onStopped }: RunBoardProps) {
   const columns: RunColumn[] = grouped.other.length > 0 ? [...COLUMN_ORDER, 'other'] : COLUMN_ORDER
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:overflow-x-auto sm:pb-2">
+    <div
+      data-testid="run-board-kanban-scroll"
+      role="region"
+      aria-label={t('board.kanbanScrollLabel')}
+      tabIndex={0}
+      className="kanban-scroll flex min-w-0 flex-col gap-4 sm:flex-row sm:overflow-x-auto sm:pb-2"
+    >
       {columns.map((column) => (
         <RunColumnSection
           key={column}

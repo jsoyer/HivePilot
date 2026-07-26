@@ -28,6 +28,14 @@ SECURITY (fail-closed):
     HIGH #2: a claim race-LOSER could otherwise still read the WINNER's
     `claimed` row and run the handler too). A duplicate/redelivered call for
     an event already past `running` is a safe no-op.
+  * At-most-once on handler failure (bug-debt fix): a handler that RAISES
+    never leaves its row stuck `running` forever -- `process_claimed_event`
+    logs the failure explicitly and moves the row to the OTHER defined
+    terminal state, `failed` (`state_service.mark_swarm_event_failed`),
+    which -- like `done`/`skipped` -- can never be re-claimed
+    (`claim_swarm_event`'s `WHERE status='pending'` gate). Never a silent
+    re-queue: see `process_claimed_event`'s docstring for the full
+    rationale.
 """
 
 from __future__ import annotations
@@ -148,15 +156,21 @@ def publish_event(
     """
     s = settings or _default_settings
     event_id = compute_event_id(event_type, dedupe_key)
+    instance_id = get_instance_id(s)
     try:
         key = get_signing_key(s)
         if key is None:
             logger.warning(
-                "swarm.publish_skipped_no_signing_key", event_type=event_type, event_id=event_id
+                "swarm.publish_skipped_no_signing_key",
+                event_id=event_id,
+                type=event_type,
+                tenant=tenant,
+                instance_id=instance_id,
+                outcome="SKIPPED",
+                reason="no_key",
             )
             return PublishResult(PublishStatus.SKIPPED, event_id)
 
-        instance_id = get_instance_id(s)
         event = Event(
             id=event_id,
             type=event_type,
@@ -169,7 +183,15 @@ def publish_event(
 
         inserted = state_service.insert_swarm_event(event)
         if not inserted:
-            logger.info("swarm.publish_deduped", event_id=event_id, type=event_type)
+            logger.info(
+                "swarm.publish_deduped",
+                event_id=event_id,
+                type=event_type,
+                tenant=tenant,
+                instance_id=instance_id,
+                outcome="DEDUPED",
+                reason="already_published",
+            )
             return PublishResult(PublishStatus.DEDUPED, event_id)
 
         try:
@@ -177,11 +199,38 @@ def publish_event(
             transport.publish(event)
         except Exception:  # noqa: BLE001 — broker hand-off failure must never break the caller
             logger.warning(
-                "swarm.publish_transport_error", event_id=event_id, type=event_type, exc_info=True
+                "swarm.publish_transport_error",
+                event_id=event_id,
+                type=event_type,
+                tenant=tenant,
+                instance_id=instance_id,
+                exc_info=True,
             )
+        # Bug-debt fix -- explicit outcome log for the success path too (this
+        # branch previously had NO log line at all besides the transport-hop
+        # failure warning above): event_id/type/tenant/instance_id/outcome
+        # for every publish, not just the rejected/deduped ones.
+        logger.info(
+            "swarm.publish_outcome",
+            event_id=event_id,
+            type=event_type,
+            tenant=tenant,
+            instance_id=instance_id,
+            outcome="PUBLISHED",
+            reason=None,
+        )
         return PublishResult(PublishStatus.PUBLISHED, event_id)
     except Exception:  # noqa: BLE001 — belt-and-suspenders: publish is ALWAYS best-effort
-        logger.warning("swarm.publish_unexpected_error", event_id=event_id, exc_info=True)
+        logger.warning(
+            "swarm.publish_unexpected_error",
+            event_id=event_id,
+            type=event_type,
+            tenant=tenant,
+            instance_id=instance_id,
+            outcome="SKIPPED",
+            reason="unexpected_error",
+            exc_info=True,
+        )
         return PublishResult(PublishStatus.SKIPPED, event_id)
 
 
@@ -207,33 +256,85 @@ def claim_next(
     `NONE` when there was nothing to inspect at all (or no signing key/
     transport is configured); `SKIPPED` when at least one candidate was
     inspected and rejected but none was ultimately claimable.
+
+    Bug-debt fix -- EVERY outcome below (including each per-candidate
+    rejection inside the loop) is logged with `event_id`/`type`/`tenant`/
+    `instance_id`/`outcome` (`CLAIMED`/`DEDUPED`/`SKIPPED`/`REJECTED`) and,
+    for anything other than `CLAIMED`, a `reason` (`bad_signature`/
+    `unserved_tenant`/`no_key`/`not_pending`/...) -- an operator can grep
+    `swarm.outcome`-family events to answer "why did event X never get
+    claimed" without piecing it together across several differently-shaped
+    log lines.
     """
     s = settings or _default_settings
     inst = instance_id or get_instance_id(s)
 
     key = get_signing_key(s)
     if key is None:
-        logger.warning("swarm.claim_next_no_signing_key")
+        logger.warning(
+            "swarm.claim_next_no_signing_key",
+            event_id=None,
+            type=None,
+            tenant=None,
+            instance_id=inst,
+            outcome="SKIPPED",
+            reason="no_key",
+        )
         return ClaimResult(ClaimStatus.NONE, None)
 
     try:
         transport = resolve_transport(s.swarm_transport, instance_id=inst, settings=s)
     except Exception:  # noqa: BLE001 — an unavailable transport degrades to "nothing to claim"
-        logger.warning("swarm.claim_next_transport_unavailable", exc_info=True)
+        logger.warning(
+            "swarm.claim_next_transport_unavailable",
+            event_id=None,
+            type=None,
+            tenant=None,
+            instance_id=inst,
+            outcome="SKIPPED",
+            reason="transport_unavailable",
+            exc_info=True,
+        )
         return ClaimResult(ClaimStatus.NONE, None)
 
     served_tenants = set(s.swarm_served_tenants)
     skipped_any = False
     for event in transport.subscribe(types):
         if event.tenant not in served_tenants:
+            logger.warning(
+                "swarm.event_rejected_unserved_tenant",
+                event_id=event.id,
+                type=event.type,
+                tenant=event.tenant,
+                instance_id=inst,
+                outcome="REJECTED",
+                reason="unserved_tenant",
+            )
             skipped_any = True
             continue
         if not verify_event(event, key):
-            logger.warning("swarm.event_rejected_bad_signature", event_id=event.id, type=event.type)
+            logger.warning(
+                "swarm.event_rejected_bad_signature",
+                event_id=event.id,
+                type=event.type,
+                tenant=event.tenant,
+                instance_id=inst,
+                outcome="REJECTED",
+                reason="bad_signature",
+            )
             state_service.mark_swarm_event_skipped(event.id)
             skipped_any = True
             continue
         if transport.claim(event.id):
+            logger.info(
+                "swarm.event_claimed",
+                event_id=event.id,
+                type=event.type,
+                tenant=event.tenant,
+                instance_id=inst,
+                outcome="CLAIMED",
+                reason=None,
+            )
             return ClaimResult(ClaimStatus.CLAIMED, event)
         # HIGH #2 fix (opus security review): do NOT carry the contended
         # `event` on a DEDUPED result -- a caller that (incorrectly) went on
@@ -242,6 +343,15 @@ def claim_next(
         # from double-executing a handler for an event another instance
         # actually owns. Returning `None` here removes the accidental
         # temptation altogether.
+        logger.info(
+            "swarm.event_claim_race_lost",
+            event_id=event.id,
+            type=event.type,
+            tenant=event.tenant,
+            instance_id=inst,
+            outcome="DEDUPED",
+            reason="not_pending",
+        )
         return ClaimResult(ClaimStatus.DEDUPED, None)
 
     return ClaimResult(ClaimStatus.SKIPPED if skipped_any else ClaimStatus.NONE, None)
@@ -277,11 +387,46 @@ def process_claimed_event(
     -- pass it explicitly when dispatching on behalf of a *different*
     instance_id than the process default (e.g. a test simulating another
     fleet member, or a multi-tenant dispatcher iterating several identities).
+
+    HANDLER-FAILURE SEMANTICS (bug-debt fix -- a crashing handler previously
+    left the row `running` forever, with no reaper: `claim_swarm_event`'s
+    `WHERE status='pending'` gate means a `running` row can never be
+    reclaimed by anyone, so it was silently dead). The chosen semantics are
+    deliberate and documented HERE because this is the ONE place that
+    decides a claimed event's fate: HivePilot's swarm handlers trigger a
+    pipeline RUN (`handle_pr_ready` -> `orchestrator.run_pipeline`), and a
+    pipeline run is NOT an idempotent, safe-to-silently-retry side effect
+    (it can open forge PRs/issues, spend model budget, ...). So Phase 1
+    keeps AT-MOST-ONCE for pipeline triggers, never auto-retry: a raising
+    handler moves the row straight from `running` to the OTHER defined
+    terminal state, `failed` (`state_service.mark_swarm_event_failed`) --
+    "never ran" and "ran once and failed" are both acceptable outcomes,
+    "ran twice" is not. The failure is logged explicitly (event id/type/
+    tenant/instance + the exception) BEFORE the state transition, so an
+    operator/alerting pipeline has a durable audit trail even though the row
+    itself carries no further detail beyond `status='failed'`. The original
+    exception is then RE-RAISED (never swallowed) -- only the swarm ROW's
+    fate is fixed here; the caller (a future fleet worker loop) still sees
+    the failure and decides its own reaction (crash reporting, backing off
+    until its next poll cycle, ...).
     """
     inst = instance_id or get_instance_id(settings)
     if not state_service.mark_swarm_event_running(event.id, claimed_by=inst):
         return False
-    handler(event)
+    try:
+        handler(event)
+    except Exception as exc:  # noqa: BLE001 -- must catch ANY handler failure to fix the row's state
+        logger.error(
+            "swarm.handler_failed",
+            event_id=event.id,
+            type=event.type,
+            tenant=event.tenant,
+            instance_id=inst,
+            error=str(exc),
+            exc_info=True,
+        )
+        state_service.mark_swarm_event_failed(event.id)
+        raise
     state_service.mark_swarm_event_done(event.id)
     return True
 

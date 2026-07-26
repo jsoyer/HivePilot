@@ -810,3 +810,60 @@ class TestInitDbConcurrency:
             assert db.column_exists(conn, "approvals", "tenant")
             assert db.column_exists(conn, "audit_log", "tenant")
             assert db.column_exists(conn, "tokens", "tenant")
+
+
+class TestMarkSwarmEventFailed:
+    """Bug-debt fix: a claimed swarm event whose handler raises must land in
+    a DEFINED terminal state (`failed`), never stay `running` forever with
+    no reaper -- and, like `done`/`skipped`, must never be re-claimable
+    (`claim_swarm_event` only ever matches `status='pending'`)."""
+
+    def _running_event(self, event_id: str = "pr_ready:x") -> None:
+        from hivepilot.swarm.models import Event, compute_event_id
+
+        event = Event(
+            id=compute_event_id("pr_ready", event_id),
+            type="pr_ready",
+            payload={"repo": "acme/widgets"},
+            tenant="default",
+            origin_instance="inst-a",
+        )
+        state_service.insert_swarm_event(event)
+        assert state_service.claim_swarm_event(event.id, claimed_by="inst-a") is True
+        assert state_service.mark_swarm_event_running(event.id, claimed_by="inst-a") is True
+
+    def test_running_event_transitions_to_failed(self) -> None:
+        from hivepilot.swarm.models import compute_event_id
+
+        self._running_event("r:fail:1")
+        event_id = compute_event_id("pr_ready", "r:fail:1")
+
+        assert state_service.mark_swarm_event_failed(event_id) is True
+        row = state_service.get_swarm_event(event_id)
+        assert row is not None
+        assert row["status"] == "failed"
+
+    def test_non_running_event_is_a_no_op(self) -> None:
+        from hivepilot.swarm.models import Event, compute_event_id
+
+        event = Event(
+            id=compute_event_id("pr_ready", "r:fail:2"),
+            type="pr_ready",
+            payload={},
+            tenant="default",
+            origin_instance="inst-a",
+        )
+        state_service.insert_swarm_event(event)  # still `pending`, never claimed
+        assert state_service.mark_swarm_event_failed(event.id) is False
+        row = state_service.get_swarm_event(event.id)
+        assert row is not None
+        assert row["status"] == "pending"
+
+    def test_failed_event_can_never_be_reclaimed(self) -> None:
+        from hivepilot.swarm.models import compute_event_id
+
+        self._running_event("r:fail:3")
+        event_id = compute_event_id("pr_ready", "r:fail:3")
+        assert state_service.mark_swarm_event_failed(event_id) is True
+
+        assert state_service.claim_swarm_event(event_id, claimed_by="inst-b") is False

@@ -21,6 +21,31 @@ from hivepilot.services.token_service import add_token
 _HAS_FPDF = importlib.util.find_spec("fpdf") is not None
 
 
+def test_startup_logs_resolved_paths(caplog):
+    """Bug-debt fix: the API server must log its resolved startup paths
+    ONCE, at INFO, when the process actually starts serving (the FastAPI
+    `startup` lifespan event — only fires inside a `with TestClient(...)`
+    context, unlike the other tests in this module)."""
+    import logging as stdlib_logging
+
+    from hivepilot.services.api_service import app
+    from hivepilot.utils import startup_paths as startup_paths_mod
+
+    # `log_resolved_startup_paths` is idempotent per `Settings` INSTANCE
+    # (see its own module docstring) -- `api_service` calls it with the
+    # process-wide singleton, which an EARLIER test elsewhere in the same
+    # pytest process may have already logged for. Clear the module-level
+    # cache so this test's own assertion is order-independent.
+    startup_paths_mod._logged_for.clear()
+
+    with caplog.at_level(stdlib_logging.INFO):
+        with TestClient(app) as client:
+            client.get("/healthz")
+
+    rendered = "\n".join(r.getMessage() for r in caplog.records)
+    assert "startup.resolved_paths" in rendered
+
+
 def test_healthz_ok():
 
     from hivepilot.services.api_service import app

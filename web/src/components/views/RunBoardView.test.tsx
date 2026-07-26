@@ -174,6 +174,29 @@ describe('RunBoardView', () => {
     expect(queued?.textContent).toMatch(/nothing here/i)
   })
 
+  it('CRITICAL: the Kanban scroll container keeps overflow-x and exposes a discoverable, keyboard-focusable affordance', async () => {
+    fetchRuns.mockResolvedValue([run({ id: 1, status: 'running' })])
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const scrollContainer = container.querySelector('[data-testid="run-board-kanban-scroll"]')
+    expect(scrollContainer).not.toBeNull()
+    // Themed, always-visible scrollbar class (see index.css `.kanban-scroll`)
+    expect(scrollContainer?.className).toMatch(/\bkanban-scroll\b/)
+    // The scroll still actually happens on `sm:` and up.
+    expect(scrollContainer?.className).toMatch(/overflow-x-auto/)
+    // Never defeated by an ancestor flex context.
+    expect(scrollContainer?.className).toMatch(/\bmin-w-0\b/)
+    // Keyboard-scrollable: a focusable region, not mouse-drag-only.
+    expect(scrollContainer?.getAttribute('tabindex')).toBe('0')
+    expect(scrollContainer?.getAttribute('role')).toBe('region')
+    expect(scrollContainer?.getAttribute('aria-label')).toMatch(/scroll/i)
+  })
+
   it('never renders RunSummary.detail (untrusted free text) on a card', async () => {
     fetchRuns.mockResolvedValue([run({ id: 1, detail: 'SECRET INTERNAL DETAIL' })])
     mockRole('run', 1)

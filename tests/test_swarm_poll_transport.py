@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from hivepilot.config import settings
 from hivepilot.services import state_service
 from hivepilot.swarm.models import Event, compute_event_id
@@ -177,3 +179,47 @@ class TestTenantScopedSubscribe:
         seen_ids = {e.id for e in transport.subscribe(["pr_ready"])}
         assert served_event.id in seen_ids
         assert transport.claim(served_event.id) is True
+
+
+class TestEmptyServedTenantsFailClosed:
+    """Bug-debt fix: `swarm_served_tenants=[]` must be fail-CLOSED at the SQL
+    layer itself, not merely saved by a caller-side post-filter. Previously
+    `tenants=self._served_tenants or None` degraded an empty list into
+    `tenants=None` -- "no filter" -- so the SQL query alone would have
+    returned every tenant's pending rows."""
+
+    def test_empty_served_tenants_claims_nothing(self) -> None:
+        transport = PollTransport(
+            settings=settings.model_copy(update={"swarm_served_tenants": []}),
+            instance_id="inst-a",
+        )
+        for i, tenant in enumerate(["tenant-a", "tenant-b", "tenant-c"]):
+            state_service.insert_swarm_event(
+                _event(dedupe_key=f"r:empty-served:{i}", tenant=tenant)
+            )
+
+        seen = list(transport.subscribe(["pr_ready"]))
+        assert seen == []
+
+    def test_empty_served_tenants_never_queries_with_no_filter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct proof the SQL layer is never even reached with a
+        "no filter" call -- `list_pending_swarm_events` must not be invoked
+        at all when the served-tenant set is empty."""
+        import hivepilot.services.state_service as state_service_mod
+
+        called = False
+
+        def _boom(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+            nonlocal called
+            called = True
+            return []
+
+        monkeypatch.setattr(state_service_mod, "list_pending_swarm_events", _boom)
+        transport = PollTransport(
+            settings=settings.model_copy(update={"swarm_served_tenants": []}),
+            instance_id="inst-a",
+        )
+        assert list(transport.subscribe(["pr_ready"])) == []
+        assert called is False

@@ -132,6 +132,36 @@
     }
 }
 
+/* Bug-debt fix: the RunBoard Kanban row scrolls horizontally
+ * (`sm:overflow-x-auto`) but previously showed NO visible affordance, so a
+ * column (e.g. "Failed") could look truncated with no clue there was more
+ * to scroll to. An ALWAYS-VISIBLE, slim, themed scrollbar makes that
+ * discoverable without relying on hover -- both the standard
+ * `scrollbar-width`/`scrollbar-color` properties (Firefox) AND the WebKit
+ * pseudo-elements (Chromium/Safari ignore the standard ones) are styled off
+ * the SAME design tokens (`--color-border`/`--color-muted-foreground`) so
+ * it stays on-brand in both themes. Purely visual: never affects keyboard
+ * scroll (a focusable, `tabIndex`-scrollable container already scrolls
+ * natively via arrow/Home/End keys) or `prefers-reduced-motion` (nothing
+ * here animates). */
+.kanban-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+}
+.kanban-scroll::-webkit-scrollbar {
+    height: 8px;
+}
+.kanban-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+.kanban-scroll::-webkit-scrollbar-thumb {
+    background-color: var(--color-border);
+    border-radius: 9999px;
+}
+.kanban-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-muted-foreground);
+}
+
 :root {
     /* IA/Cyber light palette — a legible daylight derivation of the SAME
      * phosphor/beacon/amber/crit hue family the dark palette below uses
