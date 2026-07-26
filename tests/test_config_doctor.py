@@ -488,6 +488,150 @@ class TestRoleOverridesDangling:
         assert any(f.check == "unparseable_config_yaml" for f in findings)
 
 
+# ---------------------------------------------------------------------------
+# check_role_display_name_collisions -- incident: five roles (designer_console,
+# designer_extension, designer_vscode, designer_agent, design_reviewer) all
+# carried display_name "Margaux"; the Telegram agent registry derives its
+# addressing alias from display_name, so four of the five became
+# unaddressable by name. The engine already logs
+# 'telegram.agent_registry.alias_collision' at startup, but nobody reads
+# startup logs -- this is the silent-degradation gap `config doctor` exists
+# to close.
+# ---------------------------------------------------------------------------
+
+
+class TestRoleDisplayNameCollisions:
+    def test_five_roles_sharing_display_name_flags_one_error_naming_all(
+        self, tmp_path: Path
+    ) -> None:
+        """FAILING fixture reproducing the real incident: against current
+        origin/main (no such check exists yet), `check_role_display_name_
+        collisions` doesn't even exist."""
+        role_names = [
+            "designer_console",
+            "designer_extension",
+            "designer_vscode",
+            "designer_agent",
+            "design_reviewer",
+        ]
+        roles = [{"name": name, "display_name": "Margaux"} for name in role_names]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding.severity == "error"
+        assert finding.check == "duplicate_role_display_name"
+        for name in role_names:
+            assert name in finding.message
+        assert "unaddressable by name" in finding.why
+        assert "mentions resolve to only one of them" in finding.why
+
+    def test_case_and_whitespace_variants_collide(self, tmp_path: Path) -> None:
+        """'Margaux' and 'margaux ' must collide -- case-insensitive and
+        trimmed, matching the real alias derivation's normalisation."""
+        roles = [
+            {"name": "designer_console", "display_name": "Margaux"},
+            {"name": "designer_extension", "display_name": "margaux "},
+        ]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert len(findings) == 1
+        assert findings[0].check == "duplicate_role_display_name"
+        assert "designer_console" in findings[0].message
+        assert "designer_extension" in findings[0].message
+
+    def test_all_distinct_display_names_yields_no_findings(self, tmp_path: Path) -> None:
+        """PASSING fixture: every role has a genuinely unique display_name."""
+        roles = [
+            {"name": "ceo", "display_name": "Aliénor"},
+            {"name": "cto", "display_name": "Blaise"},
+            {"name": "developer", "display_name": "Gustave"},
+            {"name": "reviewer", "display_name": "Victor"},
+        ]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        assert config_doctor.check_role_display_name_collisions(tmp_path) == []
+
+    @pytest.mark.parametrize("blank_value", ["", "   "])
+    def test_blank_display_name_yields_finding(self, tmp_path: Path, blank_value: str) -> None:
+        """An empty or whitespace-only display_name would make the role
+        unaddressable by name (whitespace-only would even crash the real
+        Telegram agent-registry construction: `display_name.split()[0]`
+        raises IndexError on a string with no tokens)."""
+        roles = [{"name": "solo_role", "display_name": blank_value}]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert len(findings) == 1
+        assert findings[0].severity == "error"
+        assert findings[0].check == "blank_role_display_name"
+        assert "solo_role" in findings[0].message
+
+    def test_malformed_roles_yaml_yields_finding_not_crash(self, tmp_path: Path) -> None:
+        """H3: an unparseable roles.yaml must surface a finding, never
+        silently resolve to zero findings and never raise."""
+        (tmp_path / "roles.yaml").write_text("roles: [unclosed\n")
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert any(f.check == "unparseable_config_yaml" for f in findings)
+
+    def test_non_mapping_root_yields_finding_not_crash(self, tmp_path: Path) -> None:
+        """A roles.yaml whose top-level document is a bare list (not a
+        mapping) must surface a finding, never raise AttributeError."""
+        (tmp_path / "roles.yaml").write_text(yaml.dump(["not", "a", "mapping"]))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert any(f.check == "invalid_config_yaml_root" for f in findings)
+
+    def test_roles_section_as_list_is_handled(self, tmp_path: Path) -> None:
+        """The canonical, engine-loaded shape: `roles:` is a LIST of role
+        mappings (see docs/CONFIGURATION.md and hivepilot/roles.py)."""
+        roles = [
+            {"name": "role_a", "display_name": "Same"},
+            {"name": "role_b", "display_name": "Same"},
+        ]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert any(f.check == "duplicate_role_display_name" for f in findings)
+
+    def test_roles_section_as_mapping_is_handled(self, tmp_path: Path) -> None:
+        """An alternate, hand-edited shape: `roles:` is a MAPPING keyed by
+        role name instead of a list -- must be handled, not crash."""
+        roles = {
+            "role_a": {"display_name": "Same"},
+            "role_b": {"display_name": "Same"},
+        }
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert any(f.check == "duplicate_role_display_name" for f in findings)
+
+    def test_malformed_role_entry_in_list_yields_finding_not_crash(self, tmp_path: Path) -> None:
+        (tmp_path / "roles.yaml").write_text(
+            yaml.dump({"roles": ["not-a-mapping", {"name": "chief_of_staff"}]})
+        )
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert any(f.check == "malformed_role_entry" for f in findings)
+
+    def test_absent_roles_file_yields_no_findings(self, tmp_path: Path) -> None:
+        """A missing roles.yaml is an already-covered case elsewhere
+        (validate_config's required_files) -- this check must not crash or
+        invent a finding for it."""
+        assert config_doctor.check_role_display_name_collisions(tmp_path) == []
+
+
 class TestOnlyModulesDangling:
     def test_flags_module_not_defined_anywhere(self, tmp_path: Path) -> None:
         (tmp_path / "projects.yaml").write_text(
