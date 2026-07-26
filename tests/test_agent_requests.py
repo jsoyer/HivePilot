@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from hivepilot.services import notification_service as ns
 from hivepilot.services import state_service
@@ -138,3 +139,56 @@ class TestLogRequestInteraction:
                 actor="CISO", target="CTO", question="[ANSWER] No open CVEs found."
             )
         assert recorded[0]["action"] == "answer"
+
+
+# ---------------------------------------------------------------------------
+# Regression: _handle_agent_requests must reach the runner with a resolved,
+# non-empty prompt_file even though its payload has `project=None` (a
+# question/answer exchange, not a coding task against a real repo) — same
+# bug class as the human_challenge()/CoS live bug ("requires a prompt_file
+# for Claude runner").
+# ---------------------------------------------------------------------------
+
+
+def _make_orchestrator_with_pipeline():
+    from hivepilot.models import PipelineConfig, PipelinesFile, PipelineStage
+    from hivepilot.orchestrator import Orchestrator
+
+    pipeline = PipelineConfig(description="test", stages=[PipelineStage(name="dev", task="dev")])
+    pipelines_file = PipelinesFile(pipelines={"test-pipe": pipeline})
+
+    with (
+        patch("hivepilot.orchestrator.load_projects", return_value=MagicMock(projects={})),
+        patch("hivepilot.orchestrator.load_tasks", return_value=MagicMock(tasks={}, runners={})),
+        patch("hivepilot.orchestrator.load_pipelines", return_value=pipelines_file),
+        patch("hivepilot.orchestrator.RunnerRegistry", return_value=MagicMock()),
+        patch("hivepilot.orchestrator.PluginManager", return_value=MagicMock()),
+        patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+    ):
+        return Orchestrator()
+
+
+class TestHandleAgentRequestsPromptFile:
+    def test_request_reaches_runner_with_resolved_prompt_file(self):
+        orch = _make_orchestrator_with_pipeline()
+        orch.registry = MagicMock()
+        orch.registry.capture_definition = MagicMock(return_value="Kimi K2.7.")
+
+        with (
+            patch("hivepilot.orchestrator.notification_service"),
+            patch("hivepilot.orchestrator.log_request_interaction"),
+        ):
+            result = orch._handle_agent_requests(
+                stage_output="request: CTO — What model runs code generation?",
+                actor="Developer",
+                stage=MagicMock(),
+                project_names=["myproject"],
+                policy=None,
+                budget={"remaining": 5},
+            )
+
+        assert "[ANSWER from CTO]: Kimi K2.7." in result
+        payload = orch.registry.capture_definition.call_args[0][1]
+        assert payload.project is None
+        assert payload.step.prompt_file, "prompt_file must not be empty"
+        assert Path(payload.step.prompt_file).exists()

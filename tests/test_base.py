@@ -14,6 +14,7 @@ from hivepilot.runners.base import (
     RunnerExecutionError,
     RunnerPayload,
     UsageInfo,
+    detect_noop_permission_response,
     pop_last_usage,
     set_last_usage,
 )
@@ -121,3 +122,56 @@ class TestRunnerExecutionError:
 
     def test_is_a_runtime_error(self) -> None:
         assert isinstance(RunnerExecutionError("boom"), RuntimeError)
+
+
+class TestDetectNoopPermissionResponse:
+    """Bug 2 (live): a `developer` stage replied "I need your approval to run
+    shell commands... Should I proceed?", wrote no files, and `claude` still
+    exited 0 -- the orchestrator recorded the step as a SUCCESS. This helper
+    is the conservative detector that turns that class of response into a
+    failure signal, wired at the orchestrator's step-recording path."""
+
+    def test_none_for_empty_or_none_text(self) -> None:
+        assert detect_noop_permission_response("") is None
+        assert detect_noop_permission_response(None) is None  # type: ignore[arg-type]
+
+    def test_matches_the_exact_live_incident_text(self) -> None:
+        text = "I need your approval to run shell commands in this session. Should I proceed?"
+        reason = detect_noop_permission_response(text)
+        assert reason is not None
+        assert "permission" in reason.lower() or "approval" in reason.lower()
+
+    def test_matches_various_positive_phrasings_case_insensitively(self) -> None:
+        positives = [
+            "I NEED YOUR APPROVAL before touching the filesystem.",
+            "I would need permission to modify these files.",
+            "This action requires approval before I can continue.",
+            "That command cannot be used with root privileges here.",
+            "Should I proceed with deleting the branch?",
+            "The tool call needs a permission grant from the operator.",
+            "Unfortunately I don't have permission to execute this.",
+        ]
+        for text in positives:
+            assert detect_noop_permission_response(text) is not None, text
+
+    def test_does_not_false_positive_on_approval_workflow_prose(self) -> None:
+        """A document that merely DISCUSSES an approval workflow (never asks
+        for one) must still be treated as real, completed work."""
+        text = (
+            "# Approval Workflow Spec\n\n"
+            "This document describes the approval workflow used by the "
+            "orchestrator: a checkpoint pauses the run and notifies the "
+            "operator via Telegram, who can approve, deny, or challenge it.\n"
+            "See docs/approvals.md for the full design."
+        )
+        assert detect_noop_permission_response(text) is None
+
+    def test_does_not_false_positive_on_ordinary_prose_mentioning_approval(self) -> None:
+        text = "Added a new `approval` field to the RunResult model and wrote tests for it."
+        assert detect_noop_permission_response(text) is None
+
+    def test_returns_a_distinct_reason_per_pattern(self) -> None:
+        reason_a = detect_noop_permission_response("I need your approval to continue.")
+        reason_b = detect_noop_permission_response("Should I proceed with this change?")
+        assert reason_a is not None
+        assert reason_b is not None

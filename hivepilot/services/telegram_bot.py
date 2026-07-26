@@ -8,6 +8,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
+from hivepilot.services.config_provenance import mask_id
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -18,8 +19,28 @@ logger = get_logger(__name__)
 # Lazily-initialised Application instance (used by webhook/FastAPI mode)
 _app_instance = None
 
-# pending challenge state: {chat_id: (run_id, approver_username)}
-_pending_challenges: dict[int, tuple[int, str]] = {}
+# pending challenge state: {chat_id: (run_id, approver_username)} for a
+# non-forum chat/DM/General topic, or {(chat_id, message_thread_id): (...)}
+# for a FORUM group topic -- see `_challenge_key`. A bug in a live forum
+# group: the "🗣 Challenge / Ask" button's follow-up prompt landed in
+# General (not the topic the operator was watching) because the reply
+# didn't carry `message_thread_id`, AND two different topics could clobber
+# each other's pending challenge because both were keyed by bare `chat_id`.
+_pending_challenges: dict[int | tuple[int, int], tuple[int, str]] = {}
+
+
+def _challenge_key(chat_id: int, thread_id: int | None) -> int | tuple[int, int]:
+    """Return the `_pending_challenges` key for *chat_id*/*thread_id*.
+
+    A composite `(chat_id, thread_id)` key when inside a FORUM topic
+    (`thread_id` not None) -- so a challenge started in one topic can never
+    be answered/clobbered by a message in another topic of the SAME group.
+    A bare `chat_id` key otherwise (DM, non-forum group, or the General
+    topic) -- byte-identical to the pre-fix behaviour for every chat that
+    isn't a forum topic.
+    """
+    return (chat_id, thread_id) if thread_id is not None else chat_id
+
 
 # Natural-language concierge (opt-in, settings.chatops_concierge_enabled):
 # pending destructive route/action decisions awaiting a Yes/No inline-keyboard
@@ -771,22 +792,56 @@ async def _cmd_ask(update: Any, context: Any) -> None:
 
 async def _cmd_mention(update: Any, context: Any) -> None:
     """Handle free-text @mention messages (non-command)."""
-    # Check for pending challenge FIRST
+    # Check for pending challenge FIRST. Looked up by the SAME composite
+    # (chat_id, thread_id) key `_callback_approval` stored it under, so a
+    # follow-up in a DIFFERENT forum topic never consumes a challenge it
+    # didn't ask for. Falls back to the bare `chat_id` key for backward
+    # compat (entries stored before this fix, or a non-forum chat where
+    # `_challenge_key` already collapses to the bare `chat_id`).
     chat_id = update.message.chat.id
-    if chat_id in _pending_challenges and update.message.text:
-        run_id, approver = _pending_challenges.pop(chat_id)
+    thread_id = getattr(update.message, "message_thread_id", None)
+    _challenge_composite_key = _challenge_key(chat_id, thread_id)
+    if _challenge_composite_key in _pending_challenges:
+        pending_key: int | tuple[int, int] | None = _challenge_composite_key
+    elif chat_id in _pending_challenges:
+        pending_key = chat_id
+    else:
+        pending_key = None
+
+    if pending_key is not None and update.message.text:
+        run_id, approver = _pending_challenges.pop(pending_key)
         challenge_text = update.message.text
+        logger.info(
+            "telegram.challenge.received",
+            run_id=run_id,
+            chat_id=mask_id(chat_id),
+            thread_id=thread_id,
+        )
         try:
             cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
         except Exception as exc:
-            logger.error("telegram.challenge.error", run_id=run_id, error=str(exc))
+            logger.error(
+                "telegram.challenge.failed",
+                run_id=run_id,
+                chat_id=mask_id(chat_id),
+                thread_id=thread_id,
+                error=str(exc),
+            )
             await update.message.reply_text(f"⚠️ Challenge error for run #{run_id}: {exc}")
             return
+        logger.info(
+            "telegram.challenge.dispatched",
+            run_id=run_id,
+            chat_id=mask_id(chat_id),
+            thread_id=thread_id,
+        )
         # Show CoS response
         await update.message.reply_text(
             f"🗣 Human → Jules\n{challenge_text}\n\n🛡️ Jules → Human\n{cos_response}"
         )
         # Re-send approval keyboard so user can approve/deny/challenge again
+        # — stays in the SAME topic the challenge conversation is happening
+        # in, for the same reason the challenge prompt itself does.
         try:
             from hivepilot.services import state_service as _ss
 
@@ -799,6 +854,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
                     project=row.get("project", ""),
                     task=row.get("task", ""),
                     details=cos_response[:500] if cos_response else None,
+                    message_thread_id=thread_id,
                 )
         except Exception as exc:
             logger.warning("telegram.challenge.resend_keyboard_error", error=str(exc))
@@ -1361,8 +1417,21 @@ async def _send_approval_keyboard_message(
 
 
 async def _callback_approval(update, context) -> None:
-    """Handle ✅ Approve / ❌ Deny button presses."""
+    """Handle ✅ Approve / ❌ Deny / 🗣 Challenge button presses."""
     query = update.callback_query
+
+    if query.message is None:
+        # Telegram can omit `message` on a callback query (e.g. an old/expired
+        # inline message) -- there is nothing to reply to or edit. Live log
+        # showed a bare `AttributeError: 'NoneType' object has no attribute
+        # 'chat'` here; degrade to an explanatory toast instead of raising.
+        logger.warning("telegram.callback_approval.no_message", data=query.data)
+        await query.answer(
+            "This button can no longer be used (original message unavailable).",
+            show_alert=True,
+        )
+        return
+
     await query.answer()  # acknowledge immediately to remove the loading indicator
 
     if not _require_allowed(query.message.chat.id):
@@ -1380,12 +1449,50 @@ async def _callback_approval(update, context) -> None:
     if action == "challenge":
         approver = query.from_user.username or str(query.from_user.id)
         chat_id = query.message.chat.id
-        _pending_challenges[chat_id] = (run_id, f"telegram:{approver}")
-        await query.message.reply_text(
-            f"✍️ Send your challenge or question for run #{run_id} as your next message"
-            " — the Chief of Staff will respond and may revise the plan."
-            " The run stays paused."
+        # `message_thread_id` is the FORUM topic the button was pressed in
+        # (None for a DM / non-forum group / General topic). Keying the
+        # pending entry by `(chat_id, thread_id)` instead of bare `chat_id`
+        # means a challenge started in one topic can never be clobbered or
+        # answered by a message in a different topic of the same group.
+        thread_id = getattr(query.message, "message_thread_id", None)
+        _pending_challenges[_challenge_key(chat_id, thread_id)] = (
+            run_id,
+            f"telegram:{approver}",
         )
+        logger.info(
+            "telegram.challenge.requested",
+            run_id=run_id,
+            chat_id=mask_id(chat_id),
+            thread_id=thread_id,
+        )
+        reply_kwargs: dict[str, Any] = {}
+        if thread_id is not None:
+            # Explicit `message_thread_id` -- a forum reply does NOT
+            # reliably inherit the topic it's replying within, so the
+            # follow-up prompt used to silently land in General instead of
+            # the topic the operator was actually watching.
+            reply_kwargs["message_thread_id"] = thread_id
+        try:
+            await query.message.reply_text(
+                f"✍️ Send your challenge or question for run #{run_id} as your next message"
+                " — the Chief of Staff will respond and may revise the plan."
+                " The run stays paused.",
+                **reply_kwargs,
+            )
+            logger.info(
+                "telegram.challenge.prompt_sent",
+                run_id=run_id,
+                chat_id=mask_id(chat_id),
+                thread_id=thread_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "telegram.challenge.prompt_failed",
+                run_id=run_id,
+                chat_id=mask_id(chat_id),
+                thread_id=thread_id,
+                error=str(exc),
+            )
         return
 
     approve = action == "approve"

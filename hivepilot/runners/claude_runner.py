@@ -908,12 +908,20 @@ class ClaudeRunner(BaseRunner):
             f"Project: {payload.project_name}",
             f"Task: {payload.task_name}",
             f"Step: {payload.step.name}",
-            f"Repository path: {payload.project.path}",
         ]
-        if payload.project.description:
-            sections.append(f"Project description: {payload.project.description}")
-        if payload.project.claude_md:
-            sections.append(f"Repository instructions file: {payload.project.claude_md}")
+        # `payload.project` is None for out-of-band, repo-less invocations —
+        # the human-challenge/ask feature and direct inter-agent requests
+        # (`orchestrator.human_challenge` / `_process_agent_requests`) build a
+        # payload with no ProjectConfig since there is no repository context,
+        # just a question/answer exchange. Guard every `payload.project.*`
+        # access so those call sites don't crash with
+        # `AttributeError: 'NoneType' object has no attribute 'path'`.
+        if payload.project is not None:
+            sections.append(f"Repository path: {payload.project.path}")
+            if payload.project.description:
+                sections.append(f"Project description: {payload.project.description}")
+            if payload.project.claude_md:
+                sections.append(f"Repository instructions file: {payload.project.claude_md}")
         if knowledge_context:
             sections.append(f"Knowledge context:\n{knowledge_context}")
         lessons_context = self._build_lessons_context(payload)
@@ -929,7 +937,7 @@ class ClaudeRunner(BaseRunner):
         prior = payload.metadata.get("prior_context")
         if prior:
             sections.append(f"Outputs from previous agents:\n{prior}")
-        target_repo = str(payload.project.path) if payload.project.path else "."
+        target_repo = str(payload.project.path) if payload.project and payload.project.path else "."
         obsidian_vault = (
             str(self.settings.obsidian_vault)
             if getattr(self.settings, "obsidian_vault", None)
