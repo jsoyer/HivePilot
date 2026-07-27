@@ -776,6 +776,217 @@ class TestUsageCaptureFlagOnWellFormed:
         assert m.call_count == 1
 
 
+class TestUsageCaptureModelUsagePrimary:
+    """usage-capture-modelusage fix: a real Claude CLI envelope reports
+    empty/zero top-level `usage` (the fields are near-worthless once prompt
+    caching is in play) and puts the REAL numbers in `modelUsage`, keyed by
+    canonical model id. This must be read as the PRIMARY source."""
+
+    def test_modelusage_only_envelope_yields_correct_tokens_and_canonical_model(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps(
+            {
+                "result": "AGENT SAID THIS",
+                "usage": {
+                    "input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 0,
+                },
+                "modelUsage": {
+                    "claude-haiku-4-5-20251001": {
+                        "inputTokens": 1304,
+                        "outputTokens": 20,
+                        "cacheReadInputTokens": 0,
+                        "cacheCreationInputTokens": 0,
+                        "costUSD": 0.001404,
+                        "canonicalModel": "claude-haiku-4-5",
+                        "provider": "firstParty",
+                    }
+                },
+            }
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            out = runner.capture(payload)
+
+        assert out == "AGENT SAID THIS"
+        usage = pop_last_usage()
+        assert usage is not None
+        assert usage.input_tokens == 1304
+        assert usage.output_tokens == 20
+        assert usage.model == "claude-haiku-4-5", (
+            "must use the canonicalModel field (price-map-shaped id), not the dated dict key"
+        )
+        assert usage.cost_usd == 0.001404
+        assert usage.cache_read_tokens == 0
+        assert usage.cache_creation_tokens == 0
+
+    def test_cache_read_and_creation_tokens_captured_distinctly(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps(
+            {
+                "result": "TEXT",
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "modelUsage": {
+                    "claude-sonnet-4-5-20250929": {
+                        "inputTokens": 10,
+                        "outputTokens": 50,
+                        "cacheReadInputTokens": 40000,
+                        "cacheCreationInputTokens": 2000,
+                        "costUSD": 0.05,
+                        "canonicalModel": "claude-sonnet-4-5",
+                    }
+                },
+            }
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            runner.capture(payload)
+
+        usage = pop_last_usage()
+        assert usage is not None
+        assert usage.cache_read_tokens == 40000
+        assert usage.cache_creation_tokens == 2000
+        # Cache volume must never be folded into input_tokens.
+        assert usage.input_tokens == 10
+
+    def test_legacy_usage_only_envelope_still_works(self, tmp_path: Path, monkeypatch) -> None:
+        """Regression: an envelope with NO `modelUsage` key at all (older CLI
+        shape) must still be parsed via the top-level `usage` block exactly
+        as before this fix."""
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps(
+            {
+                "result": "AGENT SAID THIS",
+                "usage": {"input_tokens": 123, "output_tokens": 45},
+                "total_cost_usd": 0.0067,
+                "model": "claude-sonnet-4-6",
+            }
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            out = runner.capture(payload)
+
+        assert out == "AGENT SAID THIS"
+        usage = pop_last_usage()
+        assert usage is not None
+        assert usage.input_tokens == 123
+        assert usage.output_tokens == 45
+        assert usage.cost_usd == 0.0067
+        assert usage.model == "claude-sonnet-4-6"
+        assert usage.cache_read_tokens is None
+        assert usage.cache_creation_tokens is None
+
+    def test_multi_model_envelope_attributed_per_documented_rule(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Attribution rule (documented on `_extract_model_usage`): tokens
+        and cost are SUMMED across every model in `modelUsage` (that's the
+        real total cost of the step); the step's recorded `model` is the
+        DOMINANT one (most input+output+cache tokens) -- here, sonnet."""
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps(
+            {
+                "result": "TEXT",
+                "usage": {},
+                "modelUsage": {
+                    "claude-haiku-4-5-20251001": {
+                        "inputTokens": 100,
+                        "outputTokens": 20,
+                        "costUSD": 0.001,
+                        "canonicalModel": "claude-haiku-4-5",
+                    },
+                    "claude-sonnet-4-5-20250929": {
+                        "inputTokens": 5000,
+                        "outputTokens": 3000,
+                        "costUSD": 0.05,
+                        "canonicalModel": "claude-sonnet-4-5",
+                    },
+                },
+            }
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            runner.capture(payload)
+
+        usage = pop_last_usage()
+        assert usage is not None
+        assert usage.input_tokens == 5100
+        assert usage.output_tokens == 3020
+        assert usage.cost_usd == pytest.approx(0.051)
+        assert usage.model == "claude-sonnet-4-5"
+
+    def test_model_missing_from_price_map_never_silently_zero_costed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A `modelUsage` entry with no self-reported `costUSD` AND a model
+        id absent from the price map must leave the step's cost UNPRICED
+        (None) -- never silently attributed a $0.0 cost."""
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from hivepilot.runners.base import pop_last_usage
+
+        payload = _usage_payload(tmp_path)
+        runner = _runner()
+        monkeypatch.setattr(runner.settings, "claude_capture_usage", True, raising=False)
+        envelope = json.dumps(
+            {
+                "result": "TEXT",
+                "usage": {},
+                "modelUsage": {
+                    "some-brand-new-unlisted-model": {
+                        "inputTokens": 100,
+                        "outputTokens": 20,
+                        "canonicalModel": "some-brand-new-unlisted-model",
+                    }
+                },
+            }
+        )
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as m:
+            m.return_value = MagicMock(stdout=envelope, returncode=0)
+            runner.capture(payload)
+
+        usage = pop_last_usage()
+        assert usage is not None
+        assert usage.cost_usd is None
+        assert usage.input_tokens == 100
+        assert usage.model == "some-brand-new-unlisted-model"
+
+
 class TestUsageCaptureGracefulDegradation:
     def test_malformed_json_falls_back_to_raw_text_and_null_usage(
         self, tmp_path: Path, monkeypatch

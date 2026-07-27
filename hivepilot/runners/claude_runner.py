@@ -150,6 +150,132 @@ def _insert_output_format_json(argv: list[str]) -> list[str]:
     return [*argv[:2], "--output-format", "json", *argv[2:]]
 
 
+def _num(value: Any) -> float | int | None:
+    """Return *value* unchanged when it's a real (non-bool) number, else
+    ``None``. ``bool`` is explicitly excluded even though it's an ``int``
+    subclass in Python — a stray ``True``/``False`` in a token/cost field
+    must never be silently coerced to ``1``/``0``.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def _extract_model_usage(data: dict[str, Any]) -> UsageInfo | None:
+    """Parse the ``modelUsage`` block of a ``claude --output-format json``
+    envelope — the PRIMARY usage source (usage-capture-modelusage fix).
+
+    Real envelopes were found to report an empty/zero top-level ``usage``
+    block once prompt caching is active (almost all of a turn's real input
+    comes from the cache, which ``usage.input_tokens`` does not count), while
+    the actual per-model numbers — including the CANONICAL model id, which is
+    exactly the price-map's key shape — live in ``modelUsage``:
+
+        "modelUsage": {"claude-haiku-4-5-20251001": {
+            "inputTokens": 1304, "outputTokens": 20,
+            "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+            "costUSD": 0.001404, "canonicalModel": "claude-haiku-4-5"}}
+
+    Attribution rule (a response may report SEVERAL models — e.g. an agent
+    that internally dispatched sub-turns on a cheaper model): tokens (base
+    input/output AND both cache categories) and cost are SUMMED across every
+    entry — that is the step's real total resource usage and real total
+    bill, and the only representation that can never understate it. The
+    step's single ``model`` field is set to the DOMINANT entry (the one with
+    the most combined input+output+cache tokens) — the model that did most
+    of the work — since a single ``steps.model`` column cannot hold a set;
+    the per-model detail lives only in this function's summation, not as a
+    persisted breakdown (documented trade-off — the existing schema is
+    one-row-per-step, not one-row-per-model-per-step).
+
+    Cost precedence per entry: a model's own self-reported ``costUSD`` is
+    authoritative (it is the CLI's own, real-time computed bill — always
+    preferred over a stale local estimate). Only when ``costUSD`` is absent
+    for an entry does this fall back to ``pricing.estimate_cost`` for that
+    entry's tokens. If EITHER path fails to produce a cost for ANY entry
+    (missing costUSD AND the model/cache rate isn't in the price map), the
+    step's total ``cost_usd`` is ``None`` — never a partial sum that LOOKS
+    like the full total while silently missing one model's contribution.
+    Token totals are still returned in that case (tokens are unambiguous
+    even when cost isn't).
+
+    Returns ``None`` when ``modelUsage`` is absent, not a dict, empty, or
+    contains no entry that is itself a dict — signals the caller to fall
+    back to the legacy top-level ``usage`` block.
+    """
+    from hivepilot.services import pricing
+
+    model_usage = data.get("modelUsage")
+    if not isinstance(model_usage, dict) or not model_usage:
+        return None
+
+    total_input = 0
+    total_output = 0
+    total_cache_read = 0
+    total_cache_creation = 0
+    total_cost: float | None = 0.0
+    any_entry = False
+    dominant_model: str | None = None
+    dominant_weight: int = -1
+
+    for key, entry in model_usage.items():
+        if not isinstance(entry, dict):
+            continue
+        any_entry = True
+
+        entry_input = int(_num(entry.get("inputTokens")) or 0)
+        entry_output = int(_num(entry.get("outputTokens")) or 0)
+        entry_cache_read = int(_num(entry.get("cacheReadInputTokens")) or 0)
+        entry_cache_creation = int(_num(entry.get("cacheCreationInputTokens")) or 0)
+
+        total_input += entry_input
+        total_output += entry_output
+        total_cache_read += entry_cache_read
+        total_cache_creation += entry_cache_creation
+
+        canonical = entry.get("canonicalModel")
+        model_id = canonical if isinstance(canonical, str) and canonical else key
+
+        weight = entry_input + entry_output + entry_cache_read + entry_cache_creation
+        if weight >= dominant_weight:
+            dominant_weight = weight
+            dominant_model = model_id
+
+        if total_cost is not None:
+            raw_cost = _num(entry.get("costUSD"))
+            if raw_cost is not None:
+                total_cost += float(raw_cost)
+            else:
+                estimated = pricing.estimate_cost(
+                    model_id,
+                    entry_input,
+                    entry_output,
+                    cache_read_tokens=entry_cache_read,
+                    cache_creation_tokens=entry_cache_creation,
+                )
+                if estimated is None:
+                    # Fail closed on the TOTAL, not this one entry: a partial
+                    # sum would look like a complete total while silently
+                    # missing this model's real, billed contribution.
+                    total_cost = None
+                else:
+                    total_cost += estimated
+
+    if not any_entry:
+        return None
+
+    return UsageInfo(
+        input_tokens=total_input,
+        output_tokens=total_output,
+        cache_read_tokens=total_cache_read,
+        cache_creation_tokens=total_cache_creation,
+        cost_usd=total_cost,
+        model=dominant_model,
+    )
+
+
 def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
     """Parse a ``claude --output-format json`` stdout envelope.
 
@@ -160,12 +286,18 @@ def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
     None-safe: a CLI that reports the text but not, say, cost still yields a
     usable result with ``cost_usd=None`` rather than discarding everything.
 
-    Assumption (🟡 MEDIUM — not verified against live CLI output, mocked in
-    tests): the envelope shape is
+    Primary source: ``modelUsage`` (see ``_extract_model_usage`` for the
+    parsing/attribution/cost-precedence rules) — real operator envelopes
+    were found to leave the top-level ``usage`` block at all-zero once
+    prompt caching is active, with the actual token/cost/canonical-model
+    data living only in ``modelUsage``. Fallback (🟢 verified against a real
+    envelope for the ``modelUsage`` shape; legacy ``usage``-only shape kept
+    exactly as it was, still mocked-only): a legacy/older envelope shape
     ``{"result": str, "usage": {"input_tokens": int, "output_tokens": int},
-    "total_cost_usd": float, "model": str}``. Any deviation degrades
-    gracefully via the None-safe field extraction below plus the caller's
-    fallback-to-raw-stdout path when this function returns None.
+    "total_cost_usd": float, "model": str}`` is used whenever ``modelUsage``
+    is absent, malformed, or empty — this is the ONLY path older CLI
+    versions / other conforming envelopes ever hit, and its behaviour is
+    byte-identical to before this fix.
     """
     try:
         data = json.loads(stdout)
@@ -176,6 +308,10 @@ def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
     text = data.get("result")
     if not isinstance(text, str):
         return None
+
+    model_usage_result = _extract_model_usage(data)
+    if model_usage_result is not None:
+        return text, model_usage_result
 
     usage_field = data.get("usage")
     raw_input = usage_field.get("input_tokens") if isinstance(usage_field, dict) else None

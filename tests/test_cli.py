@@ -291,6 +291,86 @@ class TestObsidianCli:
         assert "missing" in result.output.lower() or "04 - Engineering" in result.output
 
 
+class TestCostsBackfillCli:
+    """`hivepilot costs backfill` (usage-capture-modelusage fix) -- an
+    explicit, opt-in one-off recompute, never an automatic migration side
+    effect. Defaults to a dry run; `--apply` is required to actually write."""
+
+    def _seed_unpriced_step(self) -> int:
+        from hivepilot.services import db, state_service
+
+        state_service.init_db()
+        with db.connect() as conn:
+            run_id = db.insert_returning_id(
+                conn,
+                "INSERT INTO runs (project, task, status, tenant) VALUES (?, ?, ?, ?)",
+                ("proj", "task", "success", "default"),
+            )
+            return db.insert_returning_id(
+                conn,
+                db.ph(
+                    "INSERT INTO steps (run_id, step, status, provider, model, "
+                    "input_tokens, output_tokens, cost_usd) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (run_id, "s1", "success", "claude", "claude-sonnet-4-6", 1_000_000, 500_000, None),
+            )
+
+    def test_dry_run_by_default_does_not_write(self) -> None:
+        from hivepilot.services import db
+
+        step_id = self._seed_unpriced_step()
+        runner = CliRunner()
+        result = runner.invoke(app, ["costs", "backfill"])
+
+        assert result.exit_code == 0, result.output
+        assert "dry" in result.output.lower() or "would" in result.output.lower()
+        with db.connect() as conn:
+            row = conn.execute(
+                db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)
+            ).fetchone()
+        assert row["cost_usd"] is None
+
+    def test_apply_flag_writes_the_recomputed_cost(self) -> None:
+        from hivepilot.services import db
+
+        step_id = self._seed_unpriced_step()
+        runner = CliRunner()
+        result = runner.invoke(app, ["costs", "backfill", "--apply"])
+
+        assert result.exit_code == 0, result.output
+        with db.connect() as conn:
+            row = conn.execute(
+                db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)
+            ).fetchone()
+        assert row["cost_usd"] == 10.5
+
+    def test_reports_still_unpriced_count(self) -> None:
+        from hivepilot.services import db, state_service
+
+        state_service.init_db()
+        with db.connect() as conn:
+            run_id = db.insert_returning_id(
+                conn,
+                "INSERT INTO runs (project, task, status, tenant) VALUES (?, ?, ?, ?)",
+                ("proj", "task", "success", "default"),
+            )
+            conn.execute(
+                db.ph(
+                    "INSERT INTO steps (run_id, step, status, provider, model, "
+                    "input_tokens, output_tokens, cost_usd) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (run_id, "s1", "success", "claude", "never-priced-model", 100, 100, None),
+            )
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["costs", "backfill"])
+
+        assert result.exit_code == 0, result.output
+        assert "1" in result.output
+
+
 # ---------------------------------------------------------------------------
 # schedule health / schedule list -- source: autopilot entries (task=None)
 # ---------------------------------------------------------------------------

@@ -66,19 +66,23 @@ def _seed_step_with_usage(
     cost_usd: float | None = None,
     timestamp: str = "2026-01-01 00:00:00",
     role: str | None = None,
+    cache_read_tokens: int | None = None,
+    cache_creation_tokens: int | None = None,
 ) -> None:
     """Seed helper for Phase 24b.2b cost tests — writes the token/cost
     columns state_service.record_step() also accepts, via direct SQL for
     deterministic control (mirrors `_seed_step`). `role` is additive
-    (Mirador Agent Panels backend sprint)."""
+    (Mirador Agent Panels backend sprint). `cache_read_tokens`/
+    `cache_creation_tokens` are additive (usage-capture-modelusage fix)."""
     state_service.init_db()
     with db.connect() as conn:
         conn.execute(
             db.ph(
                 "INSERT INTO steps "
                 "(run_id, step, status, timestamp, provider, model, "
-                "input_tokens, output_tokens, cost_usd, role) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "input_tokens, output_tokens, cost_usd, role, "
+                "cache_read_tokens, cache_creation_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
             (
                 run_id,
@@ -91,6 +95,8 @@ def _seed_step_with_usage(
                 output_tokens,
                 cost_usd,
                 role,
+                cache_read_tokens,
+                cache_creation_tokens,
             ),
         )
 
@@ -923,6 +929,57 @@ class TestCostSummary:
         assert result["overall"]["unpriced_steps"] == 0
         assert result["by_provider"] == []
         assert result["by_model"] == []
+
+    def test_estimate_includes_cache_tokens_at_their_own_rate(self) -> None:
+        """When cost isn't self-reported, the price-map estimate fallback
+        must account for cache_read/cache_creation tokens too -- they are
+        billed and must never be silently dropped from the estimate."""
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=None,
+            cache_read_tokens=1_000_000,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        # claude-sonnet-4-6 default cache_read rate: 0.3 USD/Mtok.
+        assert result["overall"]["cost_usd"] == 0.3
+        assert result["overall"]["unpriced_steps"] == 0
+
+    def test_cache_tokens_without_a_cache_rate_marks_step_unpriced(self, monkeypatch) -> None:
+        """A model priced for base input/output but with no cache rate on
+        record cannot be honestly estimated once cache tokens are involved
+        -- must count as unpriced, never silently ignore the cache volume."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "llm_price_map",
+            {"no-cache-rate-model": {"input": 1.0, "output": 1.0}},
+            raising=False,
+        )
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "s1",
+            "success",
+            provider="claude",
+            model="no-cache-rate-model",
+            input_tokens=100,
+            output_tokens=100,
+            cost_usd=None,
+            cache_read_tokens=1_000_000,
+        )
+
+        result = analytics_service.cost_summary(days=None)
+        assert result["overall"]["unpriced_steps"] == 1
+        assert result["overall"]["cost_usd"] == 0.0
 
 
 # ---------------------------------------------------------------------------

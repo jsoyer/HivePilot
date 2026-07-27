@@ -1005,6 +1005,61 @@ class TestUsageThreading:
             output_tokens=50,
             cost_usd=0.02,
             role="reviewer",
+            cache_read_tokens=None,
+            cache_creation_tokens=None,
+        )
+
+    def test_captured_usage_threads_cache_tokens(self) -> None:
+        """usage-capture-modelusage fix: cache-read/cache-creation tokens
+        (prompt caching, billed at different rates than base input/output)
+        must reach `state_service.record_step` as their own fields."""
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+        from hivepilot.runners.base import UsageInfo
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        orch.registry.capture_definition.return_value = "agent output"
+        task = TaskConfig(
+            description="t",
+            role="reviewer",
+            engine="native",
+            steps=[TaskStep(name="s", runner="claude", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        usage = UsageInfo(
+            input_tokens=10,
+            output_tokens=50,
+            cache_read_tokens=40000,
+            cache_creation_tokens=2000,
+            cost_usd=0.05,
+            model="claude-sonnet-4-5",
+        )
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_step,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+            patch("hivepilot.orchestrator.pop_last_usage", return_value=usage),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="x",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+            )
+
+        mock_step.assert_called_once_with(
+            1,
+            "s",
+            "success",
+            provider="codex",
+            model="claude-sonnet-4-5",
+            input_tokens=10,
+            output_tokens=50,
+            cost_usd=0.05,
+            role="reviewer",
+            cache_read_tokens=40000,
+            cache_creation_tokens=2000,
         )
 
     def test_captured_usage_model_overrides_resolved_model(self) -> None:

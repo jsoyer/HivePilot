@@ -367,6 +367,41 @@ class TestStepsUsageMigration:
         assert row["cost_usd"] is None
 
 
+class TestStepsCacheTokenMigration:
+    """usage-capture-modelusage fix: cache-read/cache-creation tokens are
+    billed at different rates than base input/output tokens and are now
+    captured -- must be persisted as their OWN columns, same additive
+    ALTER TABLE ... ADD COLUMN idiom as input_tokens/output_tokens/cost_usd."""
+
+    def test_columns_exist_after_init_db(self) -> None:
+        init_db()
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "cache_read_tokens")
+            assert db.column_exists(conn, "steps", "cache_creation_tokens")
+
+    def test_pre_existing_db_without_cache_columns_gets_them(self) -> None:
+        state_service.init_db()
+        with db.connect() as conn:
+            conn.execute("ALTER TABLE steps DROP COLUMN cache_read_tokens")
+            conn.execute("ALTER TABLE steps DROP COLUMN cache_creation_tokens")
+            conn.execute(
+                "INSERT INTO steps (run_id, step, status, provider, model) VALUES (?, ?, ?, ?, ?)",
+                (1, "legacy-step", "success", "claude", "claude-sonnet-4-6"),
+            )
+        with db.connect() as conn:
+            assert not db.column_exists(conn, "steps", "cache_read_tokens")
+
+        init_db()  # idempotent migration must backfill the missing columns
+
+        with db.connect() as conn:
+            assert db.column_exists(conn, "steps", "cache_read_tokens")
+            assert db.column_exists(conn, "steps", "cache_creation_tokens")
+            row = conn.execute("SELECT * FROM steps WHERE step='legacy-step'").fetchone()
+        assert row is not None
+        assert row["cache_read_tokens"] is None
+        assert row["cache_creation_tokens"] is None
+
+
 class TestRecordStepUsage:
     def test_persists_tokens_and_cost_when_given(self) -> None:
         run_id = record_run_start("proj", "task")
@@ -384,6 +419,31 @@ class TestRecordStepUsage:
         assert rows[0]["input_tokens"] == 123
         assert rows[0]["output_tokens"] == 45
         assert rows[0]["cost_usd"] == 0.0067
+
+    def test_persists_cache_tokens_when_given(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(
+            run_id,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-5",
+            input_tokens=10,
+            output_tokens=50,
+            cache_read_tokens=40000,
+            cache_creation_tokens=2000,
+            cost_usd=0.05,
+        )
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["cache_read_tokens"] == 40000
+        assert rows[0]["cache_creation_tokens"] == 2000
+
+    def test_cache_tokens_null_when_omitted(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "s1", "success", provider="claude", model="claude-sonnet-4-6")
+        rows = get_steps_for_run(run_id)
+        assert rows[0]["cache_read_tokens"] is None
+        assert rows[0]["cache_creation_tokens"] is None
 
     def test_tokens_and_cost_null_when_omitted(self) -> None:
         """Backward-compat: existing callers that never pass usage kwargs

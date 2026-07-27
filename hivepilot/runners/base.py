@@ -215,12 +215,22 @@ class UsageInfo:
     call (Phase 24b.2a — opt-in usage capture). All fields are optional and
     None-safe: a runner (or CLI response) that doesn't self-report a given
     field simply leaves it None rather than inventing a value.
+
+    ``cache_read_tokens``/``cache_creation_tokens`` (usage-capture-modelusage
+    fix) are prompt-caching token counts -- ``input_tokens`` alone dramatically
+    UNDERCOUNTS real volume once caching is in play (a cache hit means the
+    real prompt bytes show up here, not in ``input_tokens``), and these two
+    categories are billed at DIFFERENT rates from base input/output tokens
+    and from each other, so they are tracked as distinct fields rather than
+    folded into ``input_tokens``.
     """
 
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
     model: str | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
 
 
 # ``capture()`` returns only ``str`` (the existing, widely-relied-on contract

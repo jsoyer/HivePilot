@@ -566,6 +566,13 @@ def _record_step_success(
     ``role`` is additive and optional (Mirador Agent Panels backend sprint —
     per-role activity attribution): the caller's already-resolved
     ``task.role`` (``None`` for a non-role task, never invented here).
+
+    ``usage.cache_read_tokens``/``usage.cache_creation_tokens``
+    (usage-capture-modelusage fix) are threaded through unconditionally
+    whenever *usage* is present -- prompt-cache tokens billed at different
+    rates than base input/output tokens, so they must reach
+    ``state_service.record_step`` as their own fields rather than being
+    silently dropped or folded into the base counts.
     """
     if usage is None:
         state_service.record_step(
@@ -582,6 +589,8 @@ def _record_step_success(
         output_tokens=usage.output_tokens,
         cost_usd=usage.cost_usd,
         role=role,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_creation_tokens=usage.cache_creation_tokens,
     )
 
 

@@ -188,6 +188,15 @@ def init_db() -> None:
         # "unknown" bucket (see analytics_service.cost_summary/agents_summary)
         # rather than dropping or misattributing those rows.
         _add_column_if_missing(conn, "steps", "role TEXT")
+        # Idempotent migration (usage-capture-modelusage fix): prompt-cache
+        # read/creation tokens are billed at DIFFERENT rates from base
+        # input/output tokens and from each other (see
+        # `claude_runner._extract_model_usage` / `pricing.estimate_cost`) --
+        # tracked as their own columns rather than folded into
+        # input_tokens/output_tokens, same additive ALTER TABLE ... ADD
+        # COLUMN pattern as every other steps migration above.
+        _add_column_if_missing(conn, "steps", "cache_read_tokens INTEGER")
+        _add_column_if_missing(conn, "steps", "cache_creation_tokens INTEGER")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS interactions (
@@ -451,6 +460,8 @@ def record_step(
     output_tokens: int | None = None,
     cost_usd: float | None = None,
     role: str | None = None,
+    cache_read_tokens: int | None = None,
+    cache_creation_tokens: int | None = None,
 ) -> None:
     """Record a step outcome.
 
@@ -470,6 +481,11 @@ def record_step(
     pass the resolved role name (``TaskConfig.role``) when one genuinely
     applies to the step being recorded; a plain, non-role step passes
     ``None`` (honest NULL) rather than an invented role.
+
+    ``cache_read_tokens``/``cache_creation_tokens`` are additive and optional
+    (usage-capture-modelusage fix): prompt-cache tokens, billed at different
+    rates than base input/output tokens — existing callers that omit them
+    are unaffected and persist ``NULL`` for both, exactly as before this fix.
     """
     init_db()
     # Choke point: `detail` often carries `str(exc)` from a failed step, which
@@ -483,8 +499,9 @@ def record_step(
             db.ph(
                 "INSERT INTO steps "
                 "(run_id, step, status, detail, provider, model, "
-                "input_tokens, output_tokens, cost_usd, role) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "input_tokens, output_tokens, cost_usd, role, "
+                "cache_read_tokens, cache_creation_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
             (
                 run_id,
@@ -497,6 +514,8 @@ def record_step(
                 output_tokens,
                 cost_usd,
                 role,
+                cache_read_tokens,
+                cache_creation_tokens,
             ),
         )
     if _METRICS_AVAILABLE and _metrics is not None:
