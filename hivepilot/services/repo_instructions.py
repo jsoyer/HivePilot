@@ -54,22 +54,39 @@ _SECTION_INTRO = (
 )
 
 
-def _declared_files(project: ProjectConfig) -> list[str]:
+def declared_instruction_files(
+    claude_md: str | None, instruction_files: list[str] | None
+) -> list[str]:
     """Ordered, de-duplicated list of declared instruction file paths:
     ``claude_md`` first (preserves today's single-file behavior/ordering),
     then ``instruction_files``, skipping any exact-string duplicate so a
     config that lists the same file in both fields doesn't inject it twice.
+
+    Public (primitives-only signature, not ``ProjectConfig``) so a caller
+    that only has raw/untrusted YAML values -- e.g.
+    ``hivepilot.services.config_doctor``'s dangling-instruction-file check,
+    which must keep working even for a project entry that fails
+    ``ProjectConfig`` validation entirely -- can reuse this EXACT ordering/
+    dedup rule instead of reimplementing it and risking disagreement with
+    what actually gets inlined into the prompt at run time.
     """
     declared: list[str] = []
-    if project.claude_md:
-        declared.append(project.claude_md)
-    for name in project.instruction_files or []:
+    if claude_md:
+        declared.append(claude_md)
+    for name in instruction_files or []:
         if name not in declared:
             declared.append(name)
     return declared
 
 
-def _resolve_path(project_path: Path, declared: str) -> Path:
+def _declared_files(project: ProjectConfig) -> list[str]:
+    """Thin ``ProjectConfig``-typed wrapper around
+    :func:`declared_instruction_files` -- kept so every existing call site in
+    this module stays unchanged."""
+    return declared_instruction_files(project.claude_md, project.instruction_files)
+
+
+def resolve_instruction_file_path(project_path: Path, declared: str) -> Path:
     """Resolve *declared* against *project_path*.
 
     Resolution rule (deliberately simple/explicit, no implicit search):
@@ -82,11 +99,21 @@ def _resolve_path(project_path: Path, declared: str) -> Path:
       ``claude_md: "../CLAUDE.md"``) without HivePilot ever walking parent
       directories on its own -- the operator states the relationship
       explicitly in config, HivePilot never guesses it.
+
+    Public (not ``_resolve_path``) so `config_doctor`'s dangling-instruction-
+    file check calls this SAME function rather than reimplementing
+    resolution -- a check that disagrees with the runtime is worse than no
+    check.
     """
     candidate = Path(declared).expanduser()
     if candidate.is_absolute():
         return candidate
     return (project_path / candidate).resolve()
+
+
+# Backward-compatible private alias -- every pre-existing call site inside
+# this module keeps working unchanged.
+_resolve_path = resolve_instruction_file_path
 
 
 def _missing_file_block(declared: str, resolved: Path, project_path: Path) -> str:
