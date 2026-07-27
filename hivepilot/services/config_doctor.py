@@ -46,6 +46,25 @@ would this have caught" stays discoverable from the code itself:
     already logs a ``telegram.agent_registry.alias_collision`` warning at
     startup, but nobody reads startup logs).
 
+The ``config-doctor-session-incidents`` sprint added three more checks from a
+separate, later production-debugging session (numbered independently from
+the incidents above to avoid collision):
+
+  * ``check_dangling_instruction_files`` — session-incident #1 (HIGHEST
+    VALUE): ``ProjectConfig.claude_md``/``.instruction_files`` named a
+    repository instructions file ABSENT from the repo, and nothing reported
+    it for months -- every agent ran without the governance context its own
+    prompt asserted was provided inline. Reuses
+    ``hivepilot.services.repo_instructions``'s own resolution rather than
+    reimplementing it.
+  * ``check_shared_obsidian_vault`` — session-incident #2: ``Settings.
+    obsidian_vault`` is a single GLOBAL path, but several projects/pipelines
+    commonly coexist on one machine. Informational only -- a known engine
+    limitation, not a misconfiguration.
+  * ``check_vault_git_state`` — session-incident #3: ``obsidian_service.py``
+    has no git capability at all; on the operator's box the vault sat 67
+    files uncommitted for 6 days. Local git state only, no network calls.
+
 ``run_doctor()`` is the single entry point ``hivepilot config doctor``
 (``hivepilot/cli.py``) calls; every other function here is independently
 unit-testable and returns a list of ``DoctorFinding`` (empty means "no
@@ -1240,6 +1259,286 @@ def check_secrets_sanity(config_dir: Path | None) -> list[DoctorFinding]:
 
 
 # ---------------------------------------------------------------------------
+# Check: dangling claude_md / instruction_files references (incident #1,
+# HIGHEST VALUE from the session that produced this module's second batch of
+# checks). `ProjectConfig.claude_md` / `.instruction_files` name repository
+# instruction files inlined into every agent's prompt (see
+# `hivepilot.services.repo_instructions`). On the operator's box,
+# `claude_md: CLAUDE.md` pointed at a file ABSENT from the repo, and nothing
+# reported it -- for months every agent ran without the governance context
+# the prompts asserted was provided inline.
+#
+# Reuses `repo_instructions.declared_instruction_files` /
+# `.resolve_instruction_file_path` verbatim -- a check that disagrees with
+# the runtime's own resolution is worse than no check at all.
+# ---------------------------------------------------------------------------
+
+
+def check_dangling_instruction_files(config_dir: Path | None) -> list[DoctorFinding]:
+    from hivepilot.services.repo_instructions import (
+        declared_instruction_files,
+        resolve_instruction_file_path,
+    )
+
+    projects_data, findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    projects_section, section_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(section_findings)
+
+    for project_name, project in projects_section.items():
+        if not isinstance(project, dict):
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_project_entry",
+                    f"Project '{project_name}' is not a mapping (got "
+                    f"{type(project).__name__}) -- not checked",
+                    "a project entry that isn't a mapping was previously skipped with "
+                    "zero output, silently disabling its dangling-instruction-file check",
+                    f"fix the '{project_name}' entry in projects.yaml to be a mapping",
+                )
+            )
+            continue
+
+        claude_md = project.get("claude_md")
+        instruction_files = project.get("instruction_files")
+
+        if claude_md is not None and not isinstance(claude_md, str):
+            findings.append(
+                _finding(
+                    "error",
+                    "invalid_instruction_file_declaration",
+                    f"Project '{project_name}' claude_md must be a string, got "
+                    f"{type(claude_md).__name__} -- not checked",
+                    "a non-string claude_md cannot be resolved by "
+                    "repo_instructions.resolve_instruction_file_path -- ProjectConfig "
+                    "would reject this at real load time, but a raw YAML edit can still "
+                    "produce it",
+                    f"fix the 'claude_md' entry under project '{project_name}' in "
+                    "projects.yaml to be a string filename",
+                )
+            )
+            claude_md = None
+        if instruction_files is not None and not isinstance(instruction_files, list):
+            findings.append(
+                _finding(
+                    "error",
+                    "invalid_instruction_file_declaration",
+                    f"Project '{project_name}' instruction_files must be a list, got "
+                    f"{type(instruction_files).__name__} -- not checked",
+                    "a non-list instruction_files cannot be walked by "
+                    "repo_instructions.declared_instruction_files",
+                    f"fix the 'instruction_files' entry under project '{project_name}' in "
+                    "projects.yaml to be a list of string filenames",
+                )
+            )
+            instruction_files = None
+        elif isinstance(instruction_files, list) and not all(
+            isinstance(entry, str) for entry in instruction_files
+        ):
+            findings.append(
+                _finding(
+                    "error",
+                    "invalid_instruction_file_declaration",
+                    f"Project '{project_name}' instruction_files contains a non-string "
+                    "entry -- not checked",
+                    "a non-string entry cannot be resolved as a filename",
+                    f"fix the 'instruction_files' list under project '{project_name}' in "
+                    "projects.yaml so every entry is a string filename",
+                )
+            )
+            instruction_files = None
+
+        declared = declared_instruction_files(claude_md, instruction_files)
+        if not declared:
+            continue
+
+        raw_path = project.get("path")
+        if not raw_path or not isinstance(raw_path, str):
+            findings.append(
+                _finding(
+                    "error",
+                    "project_missing_path",
+                    f"Project '{project_name}' declares instruction files "
+                    f"({', '.join(declared)}) but has no valid 'path' to resolve them "
+                    "against",
+                    "repo_instructions resolves every declared file relative to the "
+                    "project's path -- without one, resolution cannot be checked at all",
+                    f"add a valid 'path' to project '{project_name}' in projects.yaml",
+                )
+            )
+            continue
+
+        project_path = Path(raw_path).expanduser()
+        for declared_name in declared:
+            resolved = resolve_instruction_file_path(project_path, declared_name)
+            if not resolved.is_file():
+                findings.append(
+                    _finding(
+                        "error",
+                        "dangling_instruction_file",
+                        f"Project '{project_name}' declares instruction file "
+                        f"'{declared_name}' which does not resolve to a real file "
+                        f"(resolved: {resolved}; searched directory: {resolved.parent})",
+                        "a declared repository-instructions file that cannot be found is "
+                        "silently absent from every agent's prompt -- the prompt still "
+                        "asserts governance context was provided inline, but it never "
+                        "was, and nothing reported this on the operator's box for months",
+                        f"create '{declared_name}' at {resolved} (searched directory: "
+                        f"{resolved.parent}), or fix/remove the reference in "
+                        f"project '{project_name}''s projects.yaml entry",
+                    )
+                )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Check: `Settings.obsidian_vault` is a single GLOBAL setting while several
+# projects/pipelines commonly coexist on one machine (incident #2). This is a
+# known ENGINE LIMITATION, not a misconfiguration -- informational only, so
+# an operator learns it from the tool instead of a surprise the first time
+# they want a personal vault separate from a product vault.
+# ---------------------------------------------------------------------------
+
+
+def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
+    if not settings.obsidian_enabled:
+        return []
+
+    projects_data, findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    projects_section, section_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(section_findings)
+
+    project_count = len(projects_section)
+    if project_count < 2:
+        return findings
+
+    findings.append(
+        _finding(
+            "info",
+            "shared_obsidian_vault",
+            f"{project_count} projects are configured, but Settings.obsidian_vault is a "
+            "single GLOBAL path -- every project's HivePilot artifacts land in the SAME "
+            "vault",
+            "the Obsidian vault destination is a machine-wide setting, not a per-project "
+            "or per-pipeline one. Several pipelines on the same host (e.g. your own "
+            "HivePilot work vs. a product pipeline) cannot be routed to different vaults "
+            "today -- this is a known engine limitation, not something you misconfigured",
+            "no config fix today (per-project/per-pipeline vault destination is a "
+            "separate, larger change) -- if this matters for your setup, run pipelines "
+            "that need a different vault on their own HivePilot host/instance, each with "
+            "its own HIVEPILOT_OBSIDIAN_VAULT",
+        )
+    )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Check: vault writes are never committed (incident #3). `obsidian_service.py`
+# has NO git capability at all -- on the operator's box the vault sat 67
+# files uncommitted for 6 days: the "brain" recorded nothing durably unless a
+# human remembered to commit. Local git state only (no fetch/network calls),
+# consistent with this doctor's offline discipline.
+# ---------------------------------------------------------------------------
+
+
+def check_vault_git_state() -> list[DoctorFinding]:
+    vault_path = settings.resolve_path(settings.obsidian_vault)
+    if not vault_path.is_dir():
+        return []  # vault not created yet -- nothing written, nothing to report
+
+    from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Repo
+
+    try:
+        repo = Repo(vault_path, search_parent_directories=True)
+    except (InvalidGitRepositoryError, NoSuchPathError):
+        return [
+            _finding(
+                "info",
+                "vault_not_git_repo",
+                f"The Obsidian vault at {vault_path} is not a git repository",
+                "every artifact HivePilot writes to this vault exists ONLY on this host "
+                "until a human turns it into a git repo and commits -- on the operator's "
+                "box, 67 files sat uncommitted for 6 days because nothing records vault "
+                "writes durably by default",
+                "run `git init` in the vault (and add a remote) if you want vault writes "
+                "to be durable/shareable, or ignore this if the vault is deliberately "
+                "local-only",
+            )
+        ]
+    except Exception as exc:  # noqa: BLE001 -- "could not inspect this" must be a
+        # finding, never silence or a crash: mirrors this module's governing rule.
+        return [
+            _finding(
+                "error",
+                "vault_git_state_check_failed",
+                f"Could not inspect the git state of the vault at {vault_path}: "
+                f"{type(exc).__name__}",
+                "a broken git checkout at the vault path would otherwise silently "
+                "disable this check with no output at all",
+                f"inspect the vault's git state manually, e.g. `git -C {vault_path} status`",
+            )
+        ]
+
+    try:
+        porcelain = repo.git.status("--porcelain")
+    except Exception as exc:  # noqa: BLE001 -- same "never silent" rule as above
+        return [
+            _finding(
+                "error",
+                "vault_git_state_check_failed",
+                f"Could not read git status for the vault at {vault_path}: {type(exc).__name__}",
+                "an unreadable git status silently disables the uncommitted-artifacts "
+                "check unless reported explicitly",
+                f"inspect the vault's git state manually, e.g. `git -C {vault_path} status`",
+            )
+        ]
+
+    findings: list[DoctorFinding] = []
+    uncommitted = len([line for line in porcelain.splitlines() if line.strip()])
+    if uncommitted:
+        findings.append(
+            _finding(
+                "warning",
+                "vault_uncommitted_artifacts",
+                f"{uncommitted} artifact(s) written to the Obsidian vault are "
+                "uncommitted -- they exist only on this host",
+                "HivePilot's obsidian_service has no git capability at all: nothing "
+                "commits a vault write unless a human remembers to. On the operator's "
+                "box this reached 67 uncommitted files across 6 days before anyone "
+                "noticed",
+                f"run `git -C {vault_path} add -A && git -C {vault_path} commit`, or "
+                "enable settings.auto_commit_vault (HIVEPILOT_AUTO_COMMIT_VAULT) so "
+                "pipeline runs commit automatically",
+            )
+        )
+
+    try:
+        ahead_raw = repo.git.rev_list("@{u}..HEAD", "--count").strip()
+        ahead = int(ahead_raw) if ahead_raw else 0
+    except GitCommandError:
+        # No upstream configured for the current branch -- a deliberately
+        # local-only vault, not a problem this check should report: there is
+        # nowhere to push these commits TO.
+        ahead = 0
+    if ahead:
+        findings.append(
+            _finding(
+                "warning",
+                "vault_unpushed_commits",
+                f"{ahead} commit(s) in the Obsidian vault are committed locally but never pushed",
+                "a commit that only exists on this host is one disk failure away from "
+                "being the operator's only durable record of what HivePilot did",
+                f"run `git -C {vault_path} push`",
+            )
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1328,6 +1627,19 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
             lambda: check_role_display_name_collisions(config_dir),
         )
     )
+    findings.extend(
+        _run_check(
+            "check_dangling_instruction_files",
+            lambda: check_dangling_instruction_files(config_dir),
+        )
+    )
+    findings.extend(
+        _run_check(
+            "check_shared_obsidian_vault",
+            lambda: check_shared_obsidian_vault(config_dir),
+        )
+    )
+    findings.extend(_run_check("check_vault_git_state", check_vault_git_state))
     return _dedupe_findings(findings)
 
 
