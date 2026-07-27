@@ -602,15 +602,22 @@ def _step_cost(row: dict[str, Any]) -> tuple[float, bool]:
     """Effective cost for one `steps` row + whether it was priced at all.
 
     Precedence: self-reported ``cost_usd`` (authoritative) > an estimate from
-    the price map (`pricing.estimate_cost`) > unpriced (contributes 0.0 to
-    the cost total but is flagged so callers never silently present a total
-    that omits unpriced steps as if it were complete).
+    the price map (`pricing.estimate_cost`, INCLUDING cache_read_tokens/
+    cache_creation_tokens -- usage-capture-modelusage fix: cache tokens are
+    billed and must never be silently dropped from the estimate) > unpriced
+    (contributes 0.0 to the cost total but is flagged so callers never
+    silently present a total that omits unpriced steps as if it were
+    complete).
     """
     cost_usd = row.get("cost_usd")
     if cost_usd is not None:
         return float(cost_usd), True
     estimated = pricing.estimate_cost(
-        row.get("model"), row.get("input_tokens"), row.get("output_tokens")
+        row.get("model"),
+        row.get("input_tokens"),
+        row.get("output_tokens"),
+        cache_read_tokens=row.get("cache_read_tokens") or 0,
+        cache_creation_tokens=row.get("cache_creation_tokens") or 0,
     )
     if estimated is not None:
         return estimated, True
@@ -707,6 +714,8 @@ def cost_summary(
         SELECT s.provider AS provider, s.model AS model, r.project AS project,
                s.role AS role,
                s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
+               s.cache_read_tokens AS cache_read_tokens,
+               s.cache_creation_tokens AS cache_creation_tokens,
                s.cost_usd AS cost_usd
         FROM steps s
         JOIN runs r ON r.id = s.run_id
@@ -826,6 +835,8 @@ def models_summary(
     sql = f"""
         SELECT s.model AS model, s.status AS status,
                s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
+               s.cache_read_tokens AS cache_read_tokens,
+               s.cache_creation_tokens AS cache_creation_tokens,
                s.cost_usd AS cost_usd
         FROM steps s
         JOIN runs r ON r.id = s.run_id
@@ -977,6 +988,8 @@ def agents_summary(
     sql = f"""
         SELECT s.role AS role, s.run_id AS run_id, s.status AS status,
                s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
+               s.cache_read_tokens AS cache_read_tokens,
+               s.cache_creation_tokens AS cache_creation_tokens,
                s.cost_usd AS cost_usd, s.timestamp AS timestamp
         FROM steps s
         JOIN runs r ON r.id = s.run_id

@@ -1742,6 +1742,111 @@ def check_display_timezone() -> list[DoctorFinding]:
 
 
 # ---------------------------------------------------------------------------
+# check_cost_accounting (usage-capture-modelusage fix) -- `budget_daily_usd`,
+# the autopilot admission check, and the partition-dispatch cost gate all
+# read `analytics_service.cost_summary`'s totals (via `autopilot_queue.
+# spent_today_usd`); a ceiling computed from an understated cost protects
+# nothing. This check has TWO independent triggers:
+#
+#   1. An ABNORMAL SHARE of steps with a recorded model have no cost signal
+#      at all (no self-reported `cost_usd` and no price-map match) --
+#      symptomatic of a parsing bug (the incident this fix addresses) or a
+#      price map that's fallen behind reality.
+#   2. A SPECIFIC model id has NEVER once been priced -- surfaced even when
+#      it's a small share of overall traffic, since a whole model silently
+#      contributing $0.0 forever is a real, actionable gap regardless of
+#      its volume.
+#
+# Anti-noise (a real production lesson -- an earlier check, #4b, reported 17
+# false positives out of 19 and the operator stopped reading it):
+#   - The "unknown" bucket (NULL model -- e.g. a shell/non-agent runner that
+#     never had a cost concept in the first place) is EXCLUDED entirely from
+#     both triggers -- that's a legitimate "cost doesn't apply" case, never
+#     an anomaly.
+#   - Both triggers are sample-size-gated (a brand-new install with a
+#     handful of steps must never fire).
+#   - A model that's absent from the static price map but self-reports
+#     `cost_usd` on every step is NOT flagged by trigger 2 -- the price map
+#     is only a fallback, so an absent entry is harmless as long as nothing
+#     ever needs it.
+# ---------------------------------------------------------------------------
+
+_COST_ACCOUNTING_MIN_TOTAL_SAMPLE = 10
+_COST_ACCOUNTING_UNPRICED_SHARE_THRESHOLD = 0.15
+_COST_ACCOUNTING_MIN_MODEL_SAMPLE = 5
+
+
+def check_cost_accounting() -> list[DoctorFinding]:
+    """Flag an abnormal share of unpriced steps, or a recorded model id that
+    has never once been priced -- see the module-level comment block above
+    for the full trigger/anti-noise rationale. Reads the same 30-day window
+    the cost dashboard shows (`analytics_service.cost_summary`'s default).
+    """
+    from hivepilot.services import analytics_service
+    from hivepilot.services.pricing import _effective_price_map
+
+    summary = analytics_service.cost_summary(days=30)
+    known_models = [row for row in summary["by_model"] if row["model"] != "unknown"]
+
+    findings: list[DoctorFinding] = []
+
+    total_known_steps = sum(row["total_steps"] for row in known_models)
+    total_unpriced = sum(row["unpriced_steps"] for row in known_models)
+    if total_known_steps >= _COST_ACCOUNTING_MIN_TOTAL_SAMPLE:
+        share = total_unpriced / total_known_steps
+        if share > _COST_ACCOUNTING_UNPRICED_SHARE_THRESHOLD:
+            unpriced_models = sorted(
+                row["model"] for row in known_models if row["unpriced_steps"] > 0
+            )
+            findings.append(
+                _finding(
+                    "warning",
+                    "cost_accounting_unpriced_share",
+                    f"{total_unpriced}/{total_known_steps} ({share:.0%}) of steps with a "
+                    "recorded model in the last 30 days have NO cost signal at all (no "
+                    f"self-reported cost, no price-map match) -- affected model(s): "
+                    f"{', '.join(unpriced_models)}",
+                    "`budget_daily_usd`, the autopilot admission check, and the "
+                    "partition-dispatch cost gate all read this same total (`analytics_"
+                    "service.cost_summary` via `autopilot_queue.spent_today_usd`) -- a "
+                    "ceiling computed from an understated cost protects nothing",
+                    "add pricing for the listed model(s) via HIVEPILOT_LLM_PRICE_MAP, "
+                    "confirm the recorded model id is a real canonical id (not a bare CLI "
+                    "alias or a stale one), or run `hivepilot costs backfill --dry-run` to "
+                    "see how many historical rows a price-map fix would recover",
+                )
+            )
+
+    price_map = _effective_price_map()
+    never_priced = sorted(
+        row["model"]
+        for row in known_models
+        if row["total_steps"] >= _COST_ACCOUNTING_MIN_MODEL_SAMPLE
+        and row["unpriced_steps"] == row["total_steps"]
+        and row["model"] not in price_map
+    )
+    if never_priced:
+        findings.append(
+            _finding(
+                "warning",
+                "cost_accounting_model_missing_from_price_map",
+                f"model id(s) {', '.join(never_priced)} have never had a single priced step "
+                "in the last 30 days and are absent from the effective price map",
+                "every step for these models silently contributes $0.0 to every cost total "
+                "(dashboard, budget_daily_usd, autopilot admission, partition-dispatch cost "
+                "gate) -- indistinguishable from 'genuinely free' unless you already know to "
+                "check unpriced_steps",
+                "add an entry for each listed model to HIVEPILOT_LLM_PRICE_MAP (see "
+                "hivepilot.services.pricing.DEFAULT_PRICE_MAP for the {input, output, "
+                "cache_read, cache_write} shape), or confirm the runner's CLI is expected "
+                "to self-report its own cost instead",
+            )
+        )
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1845,6 +1950,7 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     findings.extend(_run_check("check_vault_git_state", check_vault_git_state))
     findings.extend(_run_check("check_display_timezone", check_display_timezone))
     findings.extend(_run_check("check_retry_queue_backlog", check_retry_queue_backlog))
+    findings.extend(_run_check("check_cost_accounting", check_cost_accounting))
     return _dedupe_findings(findings)
 
 
