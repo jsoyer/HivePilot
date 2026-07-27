@@ -16,6 +16,9 @@ export function ThemeToggle() {
       type="button"
       variant="ghost"
       size="icon-sm"
+      // `icon-sm` is 28x28 — under the comfortable touch target. `touch-target`
+      // expands only the hit area, and only on a coarse pointer (see index.css).
+      className="touch-target"
       onClick={toggle}
       aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
       title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}

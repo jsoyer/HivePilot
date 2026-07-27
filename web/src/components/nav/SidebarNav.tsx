@@ -140,7 +140,10 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
                     // lets the leading status dot below react to the SAME
                     // Base UI `data-active` attribute this trigger already
                     // uses for its own styling.
-                    'group/navitem min-h-10 w-full justify-start gap-2 rounded-md border-l-2 border-l-transparent px-2 text-sm',
+                    // Mobile audit: 40px rows in the drawer sit just under the
+                    // comfortable touch target. 44px below `md:`, unchanged (40px)
+                    // once the sidebar docks and is driven by a mouse.
+                    'group/navitem min-h-11 w-full justify-start gap-2 rounded-md border-l-2 border-l-transparent px-2 text-sm md:min-h-10',
                     'data-active:border-l-[var(--color-good)] data-active:bg-gradient-to-r data-active:from-[var(--color-good)]/10 data-active:to-transparent',
                   )}
                   title={item.label}

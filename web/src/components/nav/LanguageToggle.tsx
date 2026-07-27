@@ -21,7 +21,7 @@ export function LanguageToggle() {
       onClick={toggle}
       aria-label={isFrench ? t('common.switchToEnglish') : t('common.switchToFrench')}
       title={isFrench ? t('common.switchToEnglish') : t('common.switchToFrench')}
-      className="text-xs font-semibold uppercase"
+      className="touch-target text-xs font-semibold uppercase"
     >
       {isFrench ? 'FR' : 'EN'}
     </Button>
