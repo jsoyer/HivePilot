@@ -34,6 +34,8 @@ import {
   fetchPanel,
   fetchPanels,
   fetchPluginsHealth,
+  fetchProjectNames,
+  fetchTaskNames,
   fetchStepFailures,
   postJson,
   resumeAutopilot,
@@ -305,5 +307,51 @@ describe('pollen-api fetch wrappers', () => {
       const result = parseGraphRunSelector({ runs: [] })
       expect(result).toEqual({ runs: [], selectedRunId: null, live: false })
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Catalogue endpoints (GET /v1/projects, GET /v1/tasks) — these back the
+// pick-lists that replaced the "New Run" form's free-text project/task boxes.
+// ---------------------------------------------------------------------------
+
+describe('catalogue endpoints', () => {
+  it('toNameList accepts a JSON array of names (the /v1/tasks shape)', async () => {
+    const { toNameList } = await import('./pollen-api')
+    expect(toNameList(['deploy', 'audit'])).toEqual(['audit', 'deploy'])
+  })
+
+  it('toNameList accepts a name-keyed mapping (the /v1/projects shape)', async () => {
+    const { toNameList } = await import('./pollen-api')
+    expect(toNameList({ 'acme-web': { path: '/x' }, api: { path: '/y' } })).toEqual(['acme-web', 'api'])
+  })
+
+  it('toNameList drops non-string entries and blanks rather than coercing them', async () => {
+    const { toNameList } = await import('./pollen-api')
+    expect(toNameList(['deploy', 3, null, '  ', 'audit'])).toEqual(['audit', 'deploy'])
+  })
+
+  it('toNameList yields an empty list for a shape it cannot read', async () => {
+    const { toNameList } = await import('./pollen-api')
+    expect(toNameList(null)).toEqual([])
+    expect(toNameList(42)).toEqual([])
+    expect(toNameList('deploy')).toEqual([])
+  })
+
+  it('toNameList de-duplicates', async () => {
+    const { toNameList } = await import('./pollen-api')
+    expect(toNameList(['deploy', 'deploy'])).toEqual(['deploy'])
+  })
+
+  it('fetchProjectNames calls GET /v1/projects and treats a 403 as forbidden', async () => {
+    apiFetchMock.mockResolvedValue({ 'acme-web': {} })
+    await expect(fetchProjectNames()).resolves.toEqual(['acme-web'])
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/projects', { on403: 'forbidden' })
+  })
+
+  it('fetchTaskNames calls GET /v1/tasks and treats a 403 as forbidden', async () => {
+    apiFetchMock.mockResolvedValue(['deploy'])
+    await expect(fetchTaskNames()).resolves.toEqual(['deploy'])
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/tasks', { on403: 'forbidden' })
   })
 })

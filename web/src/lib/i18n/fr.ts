@@ -30,6 +30,7 @@ export const fr: Record<TranslationKey, string> = {
   'common.status': 'Statut',
   'common.run': 'Exécution',
   'common.actions': 'Actions',
+  'common.cancel': 'Annuler',
   'common.processing': 'Traitement en cours…',
   'common.starting': 'Démarrage…',
   'common.stopping': 'Arrêt en cours…',
@@ -214,8 +215,21 @@ export const fr: Record<TranslationKey, string> = {
   'runs.descriptionReadOnly':
     'Exécutions récentes (lecture seule — un jeton de rang run peut en déclencher de nouvelles).',
   'runs.noRuns': 'Aucune exécution pour le moment.',
-  'runs.taskPlaceholder': 'ex. deploy',
-  'runs.projectPlaceholder': 'ex. acme-web',
+  // Ces libellés d'invite ne servent QUE de repli, quand le catalogue
+  // (`/v1/tasks`, `/v1/projects`) est indisponible ou réellement vide. Le
+  // chemin normal est une liste déroulante des valeurs connues du serveur.
+  'runs.taskPlaceholder': 'Nom de la tâche',
+  'runs.projectPlaceholder': 'Nom du projet',
+  'runs.chooseTask': 'Choisir une tâche…',
+  'runs.chooseProject': 'Choisir un projet…',
+  'runs.taskCatalogueUnavailable':
+    'Liste des tâches indisponible — saisissez le nom tel qu’il figure dans votre configuration.',
+  'runs.projectCatalogueUnavailable':
+    'Liste des projets indisponible — saisissez le nom tel qu’il figure dans votre configuration.',
+  'runs.newRunTitle': 'Nouvelle exécution',
+  'runs.newRunHelp':
+    'Choisissez un projet et une tâche. L’exécution démarre aussitôt et apparaît sur le tableau.',
+  'runs.newRunCloseAriaLabel': 'Fermer le formulaire de nouvelle exécution',
   'runs.extraPromptLabel': 'Prompt supplémentaire (optionnel)',
   'runs.extraPromptPlaceholder': 'Contexte additionnel pour cette exécution…',
   'runs.autoGitLabel': 'Actions git automatiques (commit/push)',
@@ -233,8 +247,33 @@ export const fr: Record<TranslationKey, string> = {
     'Statut en direct de chaque exécution, regroupé par étape — cliquez sur une carte pour le détail.',
   'board.descriptionReadOnly':
     "Statut en direct de chaque exécution, regroupé par étape (lecture seule — un jeton de rang run peut en déclencher de nouvelles).",
-  'board.noRunsAtAll': "Aucune exécution pour le moment — déclenchez-en une ci-dessus pour la voir ici.",
-  'board.columnEmpty': 'Rien ici.',
+  'board.noRunsTitle': 'Aucune exécution pour le moment',
+  'board.noRunsBody':
+    'Chaque pipeline que vous déclenchez apparaît ici, regroupé par étape, et se rafraîchit tout seul toutes les quelques secondes. Lancez-en un pour remplir le tableau.',
+  'board.noRunsBodyReadOnly':
+    'Chaque pipeline déclenché sur ce tenant apparaît ici, regroupé par étape. Rien n’a encore tourné.',
+  'board.noMatchTitle': 'Aucune exécution ne correspond à ces filtres',
+  'board.noMatchBody':
+    'Le tableau contient bien des exécutions, mais aucune pour ce couple projet / tâche.',
+  'board.clearFilters': 'Réinitialiser les filtres',
+  'board.allProjects': 'Tous les projets',
+  'board.allTasks': 'Toutes les tâches',
+  'board.density': 'Densité',
+  'board.densityComfortable': 'Confortable',
+  'board.densityCompact': 'Compacte',
+  'board.showingCount': '{shown} exécutions sur {total}',
+  // Motifs d'échec / de pause, déduits du statut canonique de l'exécution —
+  // le seul « pourquoi » réel exposé par la liste (`detail` est du texte
+  // libre non fiable, jamais affiché).
+  'board.reasonFailed': 'Le pipeline a signalé un échec.',
+  'board.reasonDenied': 'Un approbateur a refusé cette exécution.',
+  'board.reasonRateLimit': 'Interrompue par une limite de débit du fournisseur.',
+  'board.reasonAuthExpired': 'Identifiants du fournisseur expirés.',
+  'board.reasonTestFailure': 'Les tests ont échoué.',
+  'board.reasonSecurityBlocker': 'Bloquée par un garde-fou de sécurité.',
+  'board.reasonCancelled': 'Arrêtée par un opérateur.',
+  'board.reasonPaused': 'Mise en pause en cours d’exécution — en attente de reprise.',
+  'board.reasonDeferred': 'Reportée — nouvelle tentative plus tard.',
   'board.colQueued': 'File',
   'board.colRunning': 'En cours',
   'board.colWaitingApproval': "Attente d'approbation",

@@ -30,6 +30,7 @@ export const en = {
   'common.status': 'Status',
   'common.run': 'Run',
   'common.actions': 'Actions',
+  'common.cancel': 'Cancel',
   'common.processing': 'Processing…',
   'common.starting': 'Starting…',
   'common.stopping': 'Stopping…',
@@ -214,8 +215,19 @@ export const en = {
   'runs.descriptionCanRun': 'Trigger a new run and watch its status update live.',
   'runs.descriptionReadOnly': 'Recent runs (read-only — a run-rank token can trigger new ones).',
   'runs.noRuns': 'No runs yet.',
-  'runs.taskPlaceholder': 'e.g. deploy',
-  'runs.projectPlaceholder': 'e.g. acme-web',
+  // Placeholders are ONLY reached by the free-text fallback in
+  // `NewRunDrawer` (when a catalogue endpoint is unavailable or genuinely
+  // empty). The normal path is a pick-list of server-known values.
+  'runs.taskPlaceholder': 'Task name',
+  'runs.projectPlaceholder': 'Project name',
+  'runs.chooseTask': 'Choose a task…',
+  'runs.chooseProject': 'Choose a project…',
+  'runs.taskCatalogueUnavailable': 'Task list unavailable — type the name as declared in your config.',
+  'runs.projectCatalogueUnavailable':
+    'Project list unavailable — type the name as declared in your config.',
+  'runs.newRunTitle': 'New run',
+  'runs.newRunHelp': 'Pick a project and a task. The run starts immediately and appears on the board.',
+  'runs.newRunCloseAriaLabel': 'Close the new run form',
   'runs.extraPromptLabel': 'Extra prompt (optional)',
   'runs.extraPromptPlaceholder': 'Additional context for this run…',
   'runs.autoGitLabel': 'Auto-commit/push git actions',
@@ -232,8 +244,32 @@ export const en = {
   'board.description': 'Live status of every run, grouped by stage — click a card for detail.',
   'board.descriptionReadOnly':
     'Live status of every run, grouped by stage (read-only — a run-rank token can trigger new ones).',
-  'board.noRunsAtAll': 'No runs yet — trigger one above to see it here.',
-  'board.columnEmpty': 'Nothing here.',
+  'board.noRunsTitle': 'No runs yet',
+  'board.noRunsBody':
+    'Every pipeline you trigger shows up here, grouped by stage, and updates itself every few seconds. Start one to fill the board.',
+  'board.noRunsBodyReadOnly':
+    'Every pipeline triggered on this tenant shows up here, grouped by stage. Nothing has run yet.',
+  'board.noMatchTitle': 'No run matches these filters',
+  'board.noMatchBody': 'There are runs on the board, just none for this project/task combination.',
+  'board.clearFilters': 'Clear filters',
+  'board.allProjects': 'All projects',
+  'board.allTasks': 'All tasks',
+  'board.density': 'Density',
+  'board.densityComfortable': 'Comfortable',
+  'board.densityCompact': 'Compact',
+  'board.showingCount': '{shown} of {total} runs',
+  // Failure/pause reasons, derived from the canonical run status — the only
+  // real "why" the list endpoint carries (`detail` is untrusted free text
+  // and is never rendered).
+  'board.reasonFailed': 'The pipeline reported a failure.',
+  'board.reasonDenied': 'An approver denied this run.',
+  'board.reasonRateLimit': 'Stopped by a provider rate limit.',
+  'board.reasonAuthExpired': 'Provider credentials expired.',
+  'board.reasonTestFailure': 'Tests failed.',
+  'board.reasonSecurityBlocker': 'Blocked by a security gate.',
+  'board.reasonCancelled': 'Stopped by an operator.',
+  'board.reasonPaused': 'Paused mid-run — waiting to be resumed.',
+  'board.reasonDeferred': 'Deferred — will retry later.',
   'board.colQueued': 'Queued',
   'board.colRunning': 'Running',
   'board.colWaitingApproval': 'Waiting approval',

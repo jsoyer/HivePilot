@@ -13,6 +13,7 @@ export interface EmptyStateProps {
   /** Optional primary action (a Button) that would start filling it. */
   action?: ReactNode
   className?: string
+  'data-testid'?: string
 }
 
 /**
@@ -27,10 +28,18 @@ export interface EmptyStateProps {
  * empty state is not an alert — it must not compete with a real failure
  * for attention.
  */
-export function EmptyState({ icon, title, body, action, className }: EmptyStateProps) {
+export function EmptyState({
+  icon,
+  title,
+  body,
+  action,
+  className,
+  'data-testid': testId,
+}: EmptyStateProps) {
   return (
     <div
       data-slot="empty-state"
+      data-testid={testId}
       className={cn(
         'flex flex-col items-start gap-2 rounded-lg border border-dashed border-border bg-muted/20 p-4',
         className,

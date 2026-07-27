@@ -1,15 +1,20 @@
-import { type FormEvent, type KeyboardEvent, useEffect, useState } from 'react'
+import { Plus } from 'lucide-react'
+import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select } from '@/components/ui/select'
+import { EmptyState } from '@/components/dashboard/EmptyState'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
+import { formatAge, formatClock, formatElapsed, formatTimestamp } from '@/lib/format-time'
 import { useT, type TranslationKey } from '@/lib/i18n'
-import { cancelRun, createRun, fetchRuns, type RunSummary } from '@/lib/pollen-api'
+import { cancelRun, fetchRuns, type RunSummary } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
+import { usePersistedState } from '@/lib/use-persisted-state'
 import { cn } from '@/lib/utils'
+import { NewRunDrawer } from './NewRunDrawer'
 import { RunDetailPanel } from './RunDetailPanel'
 
 /** Poll cadence for `GET /v1/runs` — status transitions (running ->
@@ -91,36 +96,33 @@ const STRIPE_CLASS: Partial<Record<RunColumn, string>> = {
   waitingApproval: 'border-l-4 border-l-[var(--color-warn)]',
 }
 
-function formatDurationSeconds(totalSeconds: number): string {
-  const days = Math.floor(totalSeconds / 86400)
-  const hours = Math.floor((totalSeconds % 86400) / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  if (days > 0) return `${days}d`
-  if (hours > 0) return `${hours}h`
-  if (minutes > 0) return `${minutes}m`
-  return `${totalSeconds}s`
-}
-
-/** Elapsed time from `iso` to now, as a short "2d"/"3h"/"12m"/"45s" string —
- * mirrors `HomeView`'s own `formatAge` (each view owns a small copy of this
- * formatting helper, same convention as `formatTimestamp` above).
- * Unparseable/missing input renders as "—", never a fabricated age. */
-function formatAge(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return '—'
-  return formatDurationSeconds(Math.max(0, Math.round((Date.now() - date.getTime()) / 1000)))
-}
-
-/** Elapsed time BETWEEN two timestamps (a finished run's actual duration),
- * same short-string format as `formatAge`. `null`/unparseable either side
- * renders "—", never a fabricated duration. */
-function formatElapsed(startIso: string | null | undefined, endIso: string | null | undefined): string {
-  if (!startIso || !endIso) return '—'
-  const start = new Date(startIso)
-  const end = new Date(endIso)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '—'
-  return formatDurationSeconds(Math.max(0, Math.round((end.getTime() - start.getTime()) / 1000)))
+/**
+ * Why a run is not nominal, in words, keyed off the ONLY real signal the
+ * list endpoint carries: the canonical status.
+ *
+ * `RunSummary.detail` is untrusted, unredacted free text and is never
+ * rendered anywhere in this app, so it cannot be the failure reason. The
+ * status string, however, IS the classification the pipeline itself
+ * assigned (`test_failure`, `security_blocker`, `rate_limit`, ...), which is
+ * exactly the "why" an operator scanning the board needs. A status with no
+ * entry here gets NO reason line — never a guessed one.
+ *
+ * Deliberately NOT shown on a card: cost. `GET /v1/runs` has no cost field
+ * (only the per-run drill-down aggregates per-step cost), and fetching a
+ * detail per card on every poll tick is exactly the N-requests-per-tick
+ * pattern this view has always refused. A cost figure on a card would have
+ * to be invented.
+ */
+const REASON_KEY: Record<string, TranslationKey> = {
+  failed: 'board.reasonFailed',
+  denied: 'board.reasonDenied',
+  rate_limit: 'board.reasonRateLimit',
+  auth_expired: 'board.reasonAuthExpired',
+  test_failure: 'board.reasonTestFailure',
+  security_blocker: 'board.reasonSecurityBlocker',
+  cancelled: 'board.reasonCancelled',
+  paused: 'board.reasonPaused',
+  deferred: 'board.reasonDeferred',
 }
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' {
@@ -128,129 +130,6 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
   if (DONE_STATUSES.has(normalised)) return 'default'
   if (FAILED_STATUSES.has(normalised) || normalised === 'cancelled') return 'destructive'
   return 'secondary'
-}
-
-interface NewRunFormProps {
-  onCreated: () => void
-}
-
-/**
- * New Run form — only rendered by the parent (`RunBoardView` below) when
- * `useRole().can('run')` (defense-in-depth; `POST /v1/runs` enforces the
- * same `run` role server-side regardless of what the client shows, see
- * `create_run` in `api_service.py`). Task/project are required client-side;
- * extra_prompt/auto_git are optional. `POST /v1/runs` is asynchronous — it
- * returns 202 immediately and the pipeline runs on a background thread
- * server-side — so submission resolves fast regardless of how long the
- * triggered run itself takes; `onCreated` forces an immediate board refresh
- * instead of waiting for the next poll tick.
- */
-function NewRunForm({ onCreated }: NewRunFormProps) {
-  const t = useT()
-  const [task, setTask] = useState('')
-  const [project, setProject] = useState('')
-  const [extraPrompt, setExtraPrompt] = useState('')
-  const [autoGit, setAutoGit] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const canSubmit = task.trim().length > 0 && project.trim().length > 0 && !submitting
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!canSubmit) return
-    setSubmitting(true)
-    setError(null)
-    try {
-      await createRun({
-        task: task.trim(),
-        project: project.trim(),
-        extra_prompt: extraPrompt.trim() ? extraPrompt.trim() : undefined,
-        auto_git: autoGit,
-      })
-      setTask('')
-      setProject('')
-      setExtraPrompt('')
-      setAutoGit(false)
-      onCreated()
-    } catch (err) {
-      setError(err instanceof ApiForbiddenError ? t('runs.insufficientRoleCreate') : describeApiError(err))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="mb-6 flex flex-col gap-3 border-b border-border pb-6">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="flex flex-col gap-1">
-          <label htmlFor="new-run-task" className="text-sm font-medium">
-            {t('common.task')}
-          </label>
-          <Input
-            id="new-run-task"
-            value={task}
-            onChange={(event) => setTask(event.target.value)}
-            placeholder={t('runs.taskPlaceholder')}
-            required
-            disabled={submitting}
-          />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="new-run-project" className="text-sm font-medium">
-            {t('common.project')}
-          </label>
-          <Input
-            id="new-run-project"
-            value={project}
-            onChange={(event) => setProject(event.target.value)}
-            placeholder={t('runs.projectPlaceholder')}
-            required
-            disabled={submitting}
-          />
-        </div>
-      </div>
-      <div className="flex flex-col gap-1">
-        <label htmlFor="new-run-extra-prompt" className="text-sm font-medium">
-          {t('runs.extraPromptLabel')}
-        </label>
-        <textarea
-          id="new-run-extra-prompt"
-          value={extraPrompt}
-          onChange={(event) => setExtraPrompt(event.target.value)}
-          placeholder={t('runs.extraPromptPlaceholder')}
-          disabled={submitting}
-          rows={3}
-          className="w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
-        />
-      </div>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={autoGit}
-          onChange={(event) => setAutoGit(event.target.checked)}
-          disabled={submitting}
-          className="size-4 rounded border-input"
-        />
-        {t('runs.autoGitLabel')}
-      </label>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={!canSubmit}>
-          {submitting ? t('common.starting') : t('runs.newRunButton')}
-        </Button>
-        {submitting && (
-          <span role="status" className="text-sm text-muted-foreground">
-            {t('common.starting')}
-          </span>
-        )}
-      </div>
-      {error && (
-        <div role="alert" className="text-sm text-destructive">
-          {error}
-        </div>
-      )}
-    </form>
-  )
 }
 
 interface StopButtonProps {
@@ -318,27 +197,46 @@ function StopButton({ run, onStopped }: StopButtonProps) {
   )
 }
 
+export type BoardDensity = 'comfortable' | 'compact'
+
 interface RunCardProps {
   run: RunSummary
   column: RunColumn
+  density: BoardDensity
   canRun: boolean
   onOpenDetail: (runId: number) => void
   onStopped: () => void
 }
 
 /**
- * One Kanban card — project·task, status badge, and age (running/queued) or
- * actual duration (terminal, when `finished_at` is present). Never renders
- * `RunSummary.detail` (untrusted free text, same caveat as `Approval.
- * metadata` elsewhere in this app) -- only the typed, structural fields.
- * The whole card is clickable (opens `RunDetailPanel` for this run);
- * keyboard-operable via `role="button"`/`tabIndex`/Enter-or-Space (this is
- * a `div`, not a native `<button>`, because it also hosts a real nested
- * `<button>` -- the Stop control -- which native button-in-button nesting
- * disallows).
+ * One Kanban card.
+ *
+ * Visual hierarchy, in priority order for someone scanning the board:
+ *  1. a severity stripe on the two columns that need a human;
+ *  2. the status chip, in semantic colour;
+ *  3. the project (the thing an operator recognises), at full weight;
+ *  4. everything else — run id, task, when it started, how long it took —
+ *     in muted mono, subordinate.
+ *
+ * The "when" was the biggest omission in the previous card: it showed only
+ * "ran for 8s" with no clue WHEN. Every card now carries a real local
+ * timestamp (`formatClock`, full stamp on hover via `title`) next to the
+ * duration.
+ *
+ * Never renders `RunSummary.detail` (untrusted free text) — only typed,
+ * structural fields, plus a translated reason derived from the canonical
+ * status (see `REASON_KEY`).
+ *
+ * The whole card is clickable (opens `RunDetailPanel`); keyboard-operable
+ * via `role="button"`/`tabIndex`/Enter-or-Space (this is a `div`, not a
+ * native `<button>`, because it also hosts a real nested `<button>` — the
+ * Stop control — which native button-in-button nesting disallows).
  */
-function RunCard({ run, column, canRun, onOpenDetail, onStopped }: RunCardProps) {
+function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunCardProps) {
   const t = useT()
+  const compact = density === 'compact'
+  const reasonKey = REASON_KEY[run.status.trim().toLowerCase()]
+  const duration = run.finished_at ? formatElapsed(run.started_at, run.finished_at) : formatAge(run.started_at)
 
   function open() {
     onOpenDetail(run.id)
@@ -360,20 +258,47 @@ function RunCard({ run, column, canRun, onOpenDetail, onStopped }: RunCardProps)
       aria-label={t('board.cardAriaLabel', { id: run.id, task: run.task, project: run.project })}
       onClick={open}
       onKeyDown={handleKeyDown}
-      className={cn('cursor-pointer gap-2 p-3 transition-colors hover:bg-muted/50', STRIPE_CLASS[column])}
+      className={cn(
+        'cursor-pointer gap-1.5 transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+        compact ? 'p-2' : 'p-3',
+        STRIPE_CLASS[column],
+      )}
     >
-      <div className="flex flex-col gap-1 text-sm">
-        <div className="flex items-center justify-between gap-2">
-          <span className="truncate font-medium">{run.project}</span>
-          <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
-        </div>
-        <span className="truncate text-muted-foreground">{run.task}</span>
-        <span className="text-xs text-muted-foreground">
-          {run.finished_at
-            ? t('board.duration', { duration: formatElapsed(run.started_at, run.finished_at) })
-            : t('board.startedAgo', { age: formatAge(run.started_at) })}
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('truncate font-medium', compact && 'text-xs')}>{run.project}</span>
+        <Badge variant={statusVariant(run.status)} className="shrink-0">
+          {run.status}
+        </Badge>
       </div>
+
+      <div className="flex items-baseline justify-between gap-2 text-xs">
+        <span className="truncate text-muted-foreground">{run.task}</span>
+        <span className="metric-mono shrink-0 text-muted-foreground">#{run.id}</span>
+      </div>
+
+      {!compact && (
+        <div className="metric-mono flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+          <span title={formatTimestamp(run.started_at)}>{formatClock(run.started_at)}</span>
+          <span>
+            {run.finished_at
+              ? t('board.duration', { duration })
+              : t('board.startedAgo', { age: duration })}
+          </span>
+        </div>
+      )}
+
+      {!compact && reasonKey && (
+        <p
+          data-testid={`run-board-reason-${run.id}`}
+          className={cn(
+            'text-xs',
+            column === 'failed' ? 'text-[var(--color-crit)]' : 'text-muted-foreground',
+          )}
+        >
+          {t(reasonKey)}
+        </p>
+      )}
+
       {canRun && run.status === 'running' && <StopButton run={run} onStopped={onStopped} />}
     </Card>
   )
@@ -382,30 +307,68 @@ function RunCard({ run, column, canRun, onOpenDetail, onStopped }: RunCardProps)
 interface RunColumnSectionProps {
   column: RunColumn
   runs: RunSummary[]
+  density: BoardDensity
   canRun: boolean
   onOpenDetail: (runId: number) => void
   onStopped: () => void
 }
 
-function RunColumnSection({ column, runs, canRun, onOpenDetail, onStopped }: RunColumnSectionProps) {
+/**
+ * One board column.
+ *
+ * An EMPTY column collapses to a narrow rail instead of claiming the same
+ * width as a column with forty cards in it — the previous board gave three
+ * empty columns equal width and repeated "Nothing here." in each of them.
+ * The count badge already says the column is empty; the body just holds an
+ * em-dash so the rail still reads as a column and not as a rendering
+ * failure.
+ */
+function RunColumnSection({
+  column,
+  runs,
+  density,
+  canRun,
+  onOpenDetail,
+  onStopped,
+}: RunColumnSectionProps) {
   const t = useT()
+  const empty = runs.length === 0
+
   return (
-    <div data-testid={`run-board-column-${column}`} className="flex flex-col gap-2 sm:w-72 sm:shrink-0">
-      <div className="flex items-center justify-between px-1">
-        <h3 className="text-sm font-semibold">{t(COLUMN_LABEL_KEY[column])}</h3>
-        <Badge variant="outline" data-testid={`run-board-count-${column}`}>
+    <div
+      data-testid={`run-board-column-${column}`}
+      data-empty={empty ? 'true' : 'false'}
+      className={cn(
+        'flex flex-col gap-2 sm:shrink-0',
+        empty ? 'sm:w-28' : 'sm:w-72',
+        empty && 'opacity-70',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 px-1">
+        <h3 className={cn('truncate text-sm font-semibold', empty && 'text-muted-foreground')}>
+          {t(COLUMN_LABEL_KEY[column])}
+        </h3>
+        <Badge variant="outline" data-testid={`run-board-count-${column}`} className="metric-mono shrink-0">
           {runs.length}
         </Badge>
       </div>
-      <div className="flex min-h-16 flex-col gap-2 rounded-lg bg-muted/30 p-2">
-        {runs.length === 0 ? (
-          <p className="px-1 text-xs text-muted-foreground">{t('board.columnEmpty')}</p>
+      <div
+        className={cn(
+          'flex flex-col gap-2 rounded-lg bg-muted/30 p-2',
+          empty ? 'min-h-10 items-center justify-center' : 'min-h-16',
+        )}
+      >
+        {empty ? (
+          <span aria-hidden="true" className="metric-mono text-xs text-muted-foreground">
+            —
+          </span>
         ) : (
           runs.map((run) => (
             <RunCard
               key={run.id}
               run={run}
               column={column}
+              density={density}
               canRun={canRun}
               onOpenDetail={onOpenDetail}
               onStopped={onStopped}
@@ -419,6 +382,7 @@ function RunColumnSection({ column, runs, canRun, onOpenDetail, onStopped }: Run
 
 interface RunBoardProps {
   runs: RunSummary[]
+  density: BoardDensity
   canRun: boolean
   onOpenDetail: (runId: number) => void
   onStopped: () => void
@@ -431,18 +395,15 @@ interface RunBoardProps {
  * operator always sees the full board shape; `'other'` is the true "if a
  * status doesn't fit" edge case and stays out of the way otherwise.
  * Mobile: columns stack vertically; `sm:` and up: a horizontally-scrolling
- * row (fixed-width columns) -- a Kanban board's natural responsive shape.
+ * row -- a Kanban board's natural responsive shape.
  *
- * Bug-debt fix: that horizontal scroll had NO visible affordance, so a
- * column (e.g. "Failed") could look truncated with no clue there was more
- * to scroll to -- `kanban-scroll` (see `index.css`) makes it an
- * always-visible, themed scrollbar; `tabIndex={0}` + `role="region"` +
- * `aria-label` make the scroll region itself keyboard-focusable (native
- * arrow/Home/End-key scrolling on a focused overflow container) rather than
- * only reachable by a mouse drag; `min-w-0` keeps the row shrinkable so
- * `overflow-x-auto` can never be defeated by an ancestor flex context.
+ * The scroll region owns its own overflow (`kanban-scroll`, see
+ * `index.css`) so the page body never scrolls sideways; `tabIndex={0}` +
+ * `role="region"` + `aria-label` make it keyboard-scrollable rather than
+ * mouse-drag-only; `min-w-0` keeps the row shrinkable so `overflow-x-auto`
+ * can never be defeated by an ancestor flex context.
  */
-function RunBoard({ runs, canRun, onOpenDetail, onStopped }: RunBoardProps) {
+function RunBoard({ runs, density, canRun, onOpenDetail, onStopped }: RunBoardProps) {
   const t = useT()
   const grouped: Record<RunColumn, RunSummary[]> = {
     queued: [],
@@ -462,13 +423,14 @@ function RunBoard({ runs, canRun, onOpenDetail, onStopped }: RunBoardProps) {
       role="region"
       aria-label={t('board.kanbanScrollLabel')}
       tabIndex={0}
-      className="kanban-scroll flex min-w-0 flex-col gap-4 sm:flex-row sm:overflow-x-auto sm:pb-2"
+      className="kanban-scroll flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:overflow-x-auto sm:pb-2"
     >
       {columns.map((column) => (
         <RunColumnSection
           key={column}
           column={column}
           runs={grouped[column]}
+          density={density}
           canRun={canRun}
           onOpenDetail={onOpenDetail}
           onStopped={onStopped}
@@ -478,30 +440,138 @@ function RunBoard({ runs, canRun, onOpenDetail, onStopped }: RunBoardProps) {
   )
 }
 
+const ALL = '__all__'
+
+interface ToolbarProps {
+  projects: string[]
+  tasks: string[]
+  project: string
+  task: string
+  density: BoardDensity
+  shown: number
+  total: number
+  onProject: (value: string) => void
+  onTask: (value: string) => void
+  onDensity: (value: BoardDensity) => void
+}
+
 /**
- * Run Board — the Mirador Operate section's primary view (Mirador Operate
- * section PRD: replaces the flat `RunsView` table with a Kanban board,
- * demoting the node-graph out of top-level prominence -- see
- * `nav-config.ts`). `GET /v1/runs` (tenant-filtered for non-admin roles,
- * see `list_runs` in `api_service.py`), polled every `POLL_INTERVAL_MS` so
- * status transitions show up without a manual refresh. A New Run form
- * (`POST /v1/runs`, async — 202 + background execution) is shown only for
- * `useRole().can('run')` — the server enforces the same `run` role
- * regardless of what the client shows.
+ * Board controls: two filters and a density toggle.
  *
- * `GET /v1/runs` itself requires a `run`-rank token (stricter than the
- * token gate's own `read` floor) — a plain `read` token 403s and sees a
- * graceful message (same carve-out pattern as `ApprovalsView`/`Mem0View`/
- * `GraphView` — none of which route their endpoint-specific 403 message
- * through `AsyncSection`, which only knows the generic error case).
+ * The filter options are derived from the runs actually on the board, not
+ * from the full `/v1/projects` / `/v1/tasks` catalogue — filtering to a
+ * project with nothing on the board would just produce five empty columns.
+ * (The New Run drawer, which needs the values the SERVER accepts rather
+ * than the ones currently visible, uses the catalogue endpoints instead.)
+ */
+function Toolbar({
+  projects,
+  tasks,
+  project,
+  task,
+  density,
+  shown,
+  total,
+  onProject,
+  onTask,
+  onDensity,
+}: ToolbarProps) {
+  const t = useT()
+
+  return (
+    <div
+      data-testid="run-board-toolbar"
+      className="flex flex-wrap items-end gap-3 border-b border-border pb-3"
+    >
+      <div className="flex flex-col gap-1">
+        <label htmlFor="run-filter-project" className="eyebrow">
+          {t('common.project')}
+        </label>
+        <Select
+          id="run-filter-project"
+          className="min-w-40"
+          value={project}
+          onChange={(event) => onProject(event.target.value)}
+        >
+          <option value={ALL}>{t('board.allProjects')}</option>
+          {projects.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label htmlFor="run-filter-task" className="eyebrow">
+          {t('common.task')}
+        </label>
+        <Select
+          id="run-filter-task"
+          className="min-w-40"
+          value={task}
+          onChange={(event) => onTask(event.target.value)}
+        >
+          <option value={ALL}>{t('board.allTasks')}</option>
+          {tasks.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <span className="eyebrow">{t('board.density')}</span>
+        <div className="flex overflow-hidden rounded-md border border-border" data-testid="run-board-density">
+          {(['comfortable', 'compact'] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              data-testid={`run-board-density-${option}`}
+              aria-pressed={density === option}
+              onClick={() => onDensity(option)}
+              className={cn(
+                'px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                density === option
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-transparent text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {option === 'comfortable' ? t('board.densityComfortable') : t('board.densityCompact')}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <span
+        data-testid="run-board-result-count"
+        className="metric-mono ml-auto text-xs text-muted-foreground"
+      >
+        {t('board.showingCount', { shown, total })}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Run Board — the Operate section's primary view.
  *
- * Clicking any card opens `RunDetailPanel` (`GET /v1/runs/{run_id}`) for
- * that run's step-level timeline. Card-level runner/model is deliberately
- * NOT shown -- `RunSummary` (the list endpoint) has no such field, only
- * per-step `RunDetail.steps[].provider`/`.model` does; fetching per-card
- * detail for the whole board would mean N detail requests per poll tick
- * for N cards, which this view does not do -- runner/model is available
- * once a card is opened, in the drill-down.
+ * Content first: the board fills the view, and "New run" is a header button
+ * that opens a drawer (`NewRunDrawer`). The previous layout nailed a
+ * permanently-open creation form to the top third of the page, above any
+ * content, with free-text project/task boxes for values the server can
+ * enumerate.
+ *
+ * `GET /v1/runs` (tenant-filtered for non-admin roles, see `list_runs` in
+ * `api_service.py`), polled every `POLL_INTERVAL_MS` so status transitions
+ * show up without a manual refresh. It requires a `run`-rank token (stricter
+ * than the token gate's own `read` floor) — a plain `read` token 403s and
+ * sees a graceful message.
+ *
+ * Clicking any card opens `RunDetailPanel` for that run's step-level
+ * timeline (which is also where per-step provider/model/token/cost live —
+ * the list endpoint carries none of it, so the board never claims to).
  */
 export function RunBoardView() {
   const t = useT()
@@ -509,6 +579,10 @@ export function RunBoardView() {
   const canRun = can('run')
   const [refreshKey, setRefreshKey] = useState(0)
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [projectFilter, setProjectFilter] = useState<string>(ALL)
+  const [taskFilter, setTaskFilter] = useState<string>(ALL)
+  const [density, setDensity] = usePersistedState<BoardDensity>('pollen.board.density', 'comfortable')
   const state = useAsyncData(() => fetchRuns(), [refreshKey])
   const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
@@ -521,11 +595,28 @@ export function RunBoardView() {
     return () => window.clearInterval(interval)
   }, [])
 
-  function handleCreated() {
-    setRefreshKey((key) => key + 1)
-  }
+  const runs = state.status === 'success' ? state.data : []
 
-  function handleStopped() {
+  const projects = useMemo(
+    () => [...new Set(runs.map((r) => r.project))].sort((a, b) => a.localeCompare(b)),
+    [runs],
+  )
+  const tasks = useMemo(
+    () => [...new Set(runs.map((r) => r.task))].sort((a, b) => a.localeCompare(b)),
+    [runs],
+  )
+
+  const filtered = useMemo(
+    () =>
+      runs.filter(
+        (run) =>
+          (projectFilter === ALL || run.project === projectFilter) &&
+          (taskFilter === ALL || run.task === taskFilter),
+      ),
+    [runs, projectFilter, taskFilter],
+  )
+
+  function handleRefresh() {
     setRefreshKey((key) => key + 1)
   }
 
@@ -535,10 +626,16 @@ export function RunBoardView() {
         <CardHeader>
           <CardTitle>{t('nav.runs')}</CardTitle>
           <CardDescription>{canRun ? t('board.description') : t('board.descriptionReadOnly')}</CardDescription>
+          {canRun && (
+            <CardAction>
+              <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>
+                <Plus className="size-4" />
+                {t('runs.newRunButton')}
+              </Button>
+            </CardAction>
+          )}
         </CardHeader>
-        <CardContent>
-          {canRun && <NewRunForm onCreated={handleCreated} />}
-
+        <CardContent className="flex flex-col gap-4">
           {isForbidden && (
             <div
               data-testid="runs-forbidden"
@@ -564,22 +661,73 @@ export function RunBoardView() {
             </div>
           )}
 
-          {!isForbidden && state.status === 'success' && state.data.length === 0 && (
-            <p data-testid="run-board-empty" className="text-sm text-muted-foreground">
-              {t('board.noRunsAtAll')}
-            </p>
+          {!isForbidden && state.status === 'success' && runs.length === 0 && (
+            <EmptyState
+              data-testid="run-board-empty"
+              title={t('board.noRunsTitle')}
+              body={canRun ? t('board.noRunsBody') : t('board.noRunsBodyReadOnly')}
+              action={
+                canRun ? (
+                  <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>
+                    <Plus className="size-4" />
+                    {t('runs.newRunButton')}
+                  </Button>
+                ) : undefined
+              }
+              className="max-w-xl"
+            />
           )}
 
-          {!isForbidden && state.status === 'success' && state.data.length > 0 && (
-            <RunBoard
-              runs={state.data}
-              canRun={canRun}
-              onOpenDetail={setSelectedRunId}
-              onStopped={handleStopped}
-            />
+          {!isForbidden && state.status === 'success' && runs.length > 0 && (
+            <>
+              <Toolbar
+                projects={projects}
+                tasks={tasks}
+                project={projectFilter}
+                task={taskFilter}
+                density={density}
+                shown={filtered.length}
+                total={runs.length}
+                onProject={setProjectFilter}
+                onTask={setTaskFilter}
+                onDensity={setDensity}
+              />
+
+              {filtered.length === 0 ? (
+                <EmptyState
+                  title={t('board.noMatchTitle')}
+                  body={t('board.noMatchBody')}
+                  action={
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setProjectFilter(ALL)
+                        setTaskFilter(ALL)
+                      }}
+                    >
+                      {t('board.clearFilters')}
+                    </Button>
+                  }
+                  className="max-w-xl"
+                />
+              ) : (
+                <RunBoard
+                  runs={filtered}
+                  density={density}
+                  canRun={canRun}
+                  onOpenDetail={setSelectedRunId}
+                  onStopped={handleRefresh}
+                />
+              )}
+            </>
           )}
         </CardContent>
       </Card>
+
+      {creating && canRun && (
+        <NewRunDrawer onCreated={handleRefresh} onClose={() => setCreating(false)} />
+      )}
       <RunDetailPanel runId={selectedRunId} onClose={() => setSelectedRunId(null)} />
     </>
   )
