@@ -864,6 +864,11 @@ def handle_approval(
 #   - `POST /v1/partitions/{id}/ratify`                -> `approve`
 #     Ratification IS an approval, and it is the single gate between a
 #     proposal and N dispatched agents.
+#   - `POST /v1/partitions/{id}/preview`               -> `approve`
+#     A DRY RUN of that same gate (Sprint 4, for Pollen's ratification
+#     view). It changes nothing, but it reports the exact verdict the
+#     ratification would produce -- so anything less than `approve` would
+#     make it a cheaper oracle for probing policy than the action itself.
 #   - `POST /v1/partitions/{id}/cancel`                -> `run`
 #     Mirrors `POST /v1/runs/{run_id}/cancel`: stopping work is deliberately
 #     a LOWER bar than starting it.
@@ -938,6 +943,40 @@ class PartitionDetail(PartitionSummary):
     waves: list[list[str]] = []
     parallelism: PartitionParallelism | None = None
     tasks: list[PartitionTaskRow] = []
+
+
+class PartitionPreviewRequest(BaseModel):
+    """A dry run of the gate over the plan currently in the operator's
+    editor. `outward_consent` mirrors the checkbox's live state so the
+    verdict the UI shows is the verdict it would actually get."""
+
+    partition_json: str
+    outward_consent: bool = False
+
+
+class PartitionPreviewResponse(BaseModel):
+    """The gate's verdict for a plan that has NOT been submitted.
+
+    `ok` is the single thing Pollen gates its dispatch button on — it is
+    `validate_ratification`'s own answer, not a browser-side re-derivation of
+    the rules. `code`/`status_code`/`detail` are the refusing
+    `RatificationError`'s own attributes, carried verbatim so there is still
+    exactly one definition of "a stale digest is a 409".
+
+    `outward_actions` is always the LIVE-config-computed footprint (never the
+    plan's self-declared `outward` flags), so the consent warning can name
+    the exact actions while the checkbox is still unticked.
+    """
+
+    ok: bool
+    code: str | None = None
+    status_code: int | None = None
+    detail: str | None = None
+    outward_actions: list[str] = []
+    total_cost_usd: float | None = None
+    waves: list[list[str]] = []
+    task_ids: list[str] = []
+    parallelism: PartitionParallelism | None = None
 
 
 class PartitionRatifyRequest(BaseModel):
@@ -1085,6 +1124,102 @@ def get_partition_endpoint(
     detail.waves = [list(wave) for wave in partition_service.plan_waves(plan)]
     detail.parallelism = _parallelism_model(partition_service.effective_parallelism(plan))
     return detail
+
+
+@v1.post("/partitions/{partition_id}/preview")
+def preview_partition_endpoint(
+    partition_id: str,
+    body: PartitionPreviewRequest,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> PartitionPreviewResponse:
+    """Dry-run the ratification gate over an edited plan. Changes NOTHING.
+
+    Gated at `approve`, the same rank as the ratification itself: this
+    endpoint reports the exact policy verdict a ratification would produce,
+    so a lower rank here would make it a cheaper oracle for probing policy
+    than the action it previews. Cross-tenant is 403 and an unknown id is
+    404, both identical to `ratify_partition_endpoint` — the two must not
+    disagree about who may look at what.
+
+    Every answer comes from the SAME functions the real gate runs
+    (`validate_ratification`, `assess_outward`, `plan_waves`,
+    `effective_parallelism`). Nothing here re-derives a rule, and the
+    refusing error's own `code`/`status_code`/message travel to the browser
+    verbatim.
+
+    A refusal is reported as HTTP 200 with `ok: false`, deliberately. A 4xx
+    would be indistinguishable from a network failure in the browser and
+    would discard the structured verdict — the outward footprint, the wave
+    plan and the effective parallelism the operator needs precisely WHEN the
+    plan is being refused. The gate's own status code still travels, as
+    data. The authoritative refusal remains `POST .../ratify`, which is
+    unchanged and still fail-closed on its own.
+
+    Nothing is persisted: `validate_ratification` writes no denial rows (only
+    `ratify_partition` does), so an operator editing JSON never floods the
+    audit log.
+    """
+    from hivepilot.partition import PartitionError, load_partition
+    from hivepilot.services import partition_service
+
+    row = partition_service.get_partition(partition_id, tenant=None)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partition not found")
+    row_tenant = str(row.get("tenant") or "default")
+    if caller.role != "admin" and row_tenant != caller.tenant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-tenant preview not allowed",
+        )
+
+    try:
+        plan = load_partition(body.partition_json)
+    except PartitionError as exc:
+        # Step 1 refused, so there is no plan to derive an outward footprint,
+        # a wave plan or a parallelism figure from. Reporting empty lists
+        # here would read as "nothing outward" — the UI must show the parse
+        # error INSTEAD of a footprint, never alongside a fabricated one.
+        return PartitionPreviewResponse(
+            ok=False,
+            code=partition_service.MalformedPlanError.code,
+            status_code=partition_service.MalformedPlanError.status_code,
+            detail=str(exc),
+        )
+
+    # Computed BEFORE the verdict and outside any `except`: the consent
+    # warning must name the outward actions precisely in the case where the
+    # gate refuses for want of consent. `assess_outward` is itself
+    # fail-closed (unresolvable pipeline config yields the FULL outward set),
+    # so an exception escaping here is a genuine 500 — never a silently
+    # empty, and therefore reassuring, action list.
+    assessment = partition_service.assess_outward(plan)
+    waves = [list(wave) for wave in partition_service.plan_waves(plan)]
+
+    parallelism: PartitionParallelism | None = None
+    try:
+        parallelism = _parallelism_model(partition_service.effective_parallelism(plan))
+    except Exception:  # noqa: BLE001 - a display figure renders "—", never a guessed number
+        parallelism = None
+
+    verdict = PartitionPreviewResponse(
+        ok=True,
+        outward_actions=sorted(assessment.actions),
+        total_cost_usd=assessment.total_cost_usd,
+        waves=waves,
+        task_ids=[task.id for task in plan.tasks],
+        parallelism=parallelism,
+    )
+
+    try:
+        partition_service.validate_ratification(
+            plan, outward_consent=body.outward_consent, tenant=row_tenant
+        )
+    except partition_service.RatificationError as exc:
+        verdict.ok = False
+        verdict.code = exc.code
+        verdict.status_code = exc.status_code
+        verdict.detail = str(exc)
+    return verdict
 
 
 @v1.post("/partitions/{partition_id}/ratify")
