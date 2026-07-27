@@ -68,6 +68,7 @@ hivepilot interactive
 | [docs/SKILLS.md](docs/SKILLS.md) | Plugin-contributed skills |
 | [docs/DEBATE-AND-LESSONS.md](docs/DEBATE-AND-LESSONS.md) | Dual-model debate + judge/arbiter PR gate, and the auto-learning lessons loop |
 | [docs/AUTOPILOT.md](docs/AUTOPILOT.md) | Guarded objective queue + fail-closed autonomous dispatch gate |
+| [docs/PARTITIONS.md](docs/PARTITIONS.md) | Propose -> ratify -> dispatch: partition one work item into N budgeted tasks, ratify it in the browser with a separate outward-action consent, dispatch in parallel with a durable journal |
 | [docs/SECURITY.md](docs/SECURITY.md) | Approval gates, secrets masking, CVE gate, fail-closed model |
 | [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Telegram/Slack/Discord/Notion/Linear/Obsidian/Caddy/n8n/SSH remote agents |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | Pollen dashboard (TUI + web) |
