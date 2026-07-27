@@ -133,6 +133,23 @@ def test_usage_info_defaults_all_none() -> None:
     assert usage.output_tokens is None
     assert usage.cost_usd is None
     assert usage.model is None
+    assert usage.cache_read_tokens is None
+    assert usage.cache_creation_tokens is None
+
+
+def test_usage_info_accepts_cache_token_fields() -> None:
+    """Cache read/creation tokens (prompt caching) are billed at DIFFERENT
+    rates than base input/output tokens -- they must be tracked as distinct
+    fields, never folded into input_tokens (see the usage-capture-modelusage
+    fix)."""
+    usage = UsageInfo(
+        input_tokens=1,
+        output_tokens=2,
+        cache_read_tokens=100,
+        cache_creation_tokens=200,
+    )
+    assert usage.cache_read_tokens == 100
+    assert usage.cache_creation_tokens == 200
 
 
 def test_usage_info_is_frozen() -> None:
