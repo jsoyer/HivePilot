@@ -1152,6 +1152,24 @@ describe('PartitionsView — journal mobile safety', () => {
 
     const link = journalCell('parse-guard', 'pr').querySelector('a') as HTMLAnchorElement
     expect(link.className).toMatch(/touch-target/)
+    expect(link.className).toContain('min-h-11')
+  })
+
+  // Measured in Chromium at 390px: with `break-all` on the anchor and
+  // `whitespace-normal` on the cell, a real PR URL wrapped inside the
+  // column and made the row 300px tall. The URL stays on one line and is
+  // reached by scrolling the table, which is the affordance this table
+  // already has.
+  it('never wraps a PR URL inside its column', async () => {
+    mount()
+    await openJournal()
+
+    const cell = journalCell('parse-guard', 'pr')
+    const link = cell.querySelector('a') as HTMLAnchorElement
+    expect(cell.className).not.toContain('whitespace-normal')
+    expect(link.className).not.toContain('break-all')
+    // Shown in full — never truncated, never shortened to a derived `…/42`.
+    expect(link.textContent).toBe('https://github.com/acme/api/pull/42')
   })
 })
 

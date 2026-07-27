@@ -739,20 +739,21 @@ function JournalPr({ task }: { task: PartitionTaskRow }) {
 
   const href = navigableHref(task.pr_url)
   if (href === null) {
-    return (
-      <span title={t('partitions.prNotWebTitle')} className="break-all">
-        {task.pr_url}
-      </span>
-    )
+    return <span title={t('partitions.prNotWebTitle')}>{task.pr_url}</span>
   }
 
+  // Deliberately NOT `break-all`: measured in Chromium at 390px, wrapping a
+  // real PR URL inside this column turned the row 300px tall. The URL is
+  // shown in full, on one line, and reached by scrolling the table — the
+  // affordance this table already has — rather than truncated (which hides)
+  // or shortened to `…/42` (which would be derived, not recorded).
   return (
     <a
       href={href}
       target="_blank"
       rel="noreferrer noopener"
       aria-label={t('partitions.prAriaLabel', { id: task.task_id })}
-      className="touch-target inline-flex min-h-11 items-center break-all text-foreground underline underline-offset-4"
+      className="touch-target inline-flex min-h-11 items-center text-foreground underline underline-offset-4"
     >
       {task.pr_url}
     </a>
@@ -844,7 +845,7 @@ function PartitionJournal({ tasks }: { tasks: PartitionTaskRow[] }) {
               <TableCell data-column="claimed" className="metric-mono">
                 {formatTimestamp(task.claimed_at)}
               </TableCell>
-              <TableCell data-column="pr" className="whitespace-normal">
+              <TableCell data-column="pr">
                 <JournalPr task={task} />
               </TableCell>
               <TableCell data-column="cost" className="text-right">
