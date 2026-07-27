@@ -253,6 +253,50 @@ Configure the vault path via `HIVEPILOT_OBSIDIAN_VAULT`. Vault content written b
 is secrets-masked. See [PLUGINS.md](PLUGINS.md) for how the Obsidian plugin registers its
 notifier and hooks.
 
+### Vault layout (where HivePilot writes)
+
+HivePilot writes into a small, fixed set of folders below the vault root. Every write goes
+through `ObsidianService`, which confines each writer to one folder and rejects any path that
+would escape it. The folder names are **constants in the engine**, not configuration — only
+the vault *root* is configurable.
+
+| Vault path | Written by | Constant / builder |
+| --- | --- | --- |
+| `02 - Artifacts/<role>/<date>-<slug>.md` | `ObsidianService.write_artifact()` — the canonical, human-facing copy of a stage deliverable, filed by the producing role | `ARTIFACT_TARGET_FOLDER` (`hivepilot/services/obsidian_service.py`) |
+| `03 - Decisions/<date>-<slug>.md` | `ObsidianService.write_adr()` — architecture decision records | `ADR_TARGET_FOLDER` (`hivepilot/services/obsidian_service.py`) |
+| `12 - HivePilot/Runs/<date>-run<id>-<stage>.md` | `pipelines.write_stage_artifact()` — the internal per-stage run log | `HIVEPILOT_SUBTREE` + `_RUNS_SUBFOLDER` (`hivepilot/pipelines.py`) |
+| `12 - HivePilot/Runs/<date>.md` | Obsidian plugin daily journal (`append_daily`) | `HIVEPILOT_SUBTREE` (`hivepilot/services/obsidian_service.py`) |
+| `12 - HivePilot/Interactions/` | Per-stage interaction log | `hivepilot/services/interaction_service.py` |
+| `12 - HivePilot/Audit/` | Auditor observations and proposals | `hivepilot/services/auditor_service.py` |
+| `12 - HivePilot/Docs/changelog-run-<id>.md` | Stages with `commits_vault: true` | `hivepilot/orchestrator.py` |
+
+**Stage deliverables (`02 - Artifacts/`).** For each pipeline stage, HivePilot writes *two*
+copies: the internal run log under `12 - HivePilot/Runs/`, and — when the stage's task
+declares a `role` — a canonical deliverable under `02 - Artifacts/<role>/`. The chain is
+`Orchestrator.run_pipeline` → `pipelines.write_stage_artifact(..., role=...)` →
+`ObsidianService.write_artifact()`. The `role` subfolder is the task's role string, slugified
+so an unexpected value cannot introduce path separators.
+
+HivePilot writes this copy itself rather than asking the agent to write it, because agents run
+headless (`--print`), where the Write tool is unavailable and the vault is outside the agent's
+accessible directories. Prompts should therefore *describe* the artifact, not try to save it.
+
+Two cases are skipped deliberately: the `developer` role (its deliverable is a code diff that
+belongs in the project's git repo, not the vault) and blank stage output (no empty artifact
+files). A stage whose task declares no role gets the run-log copy only. The artifact copy is
+best-effort — a vault write failure is logged (`obsidian.artifact_write_failed`) and never
+fails or pauses the run.
+
+**Audit-only folders.** `hivepilot obsidian audit` also reports on folders HivePilot never
+writes to (`02 - Architecture`, `02 - Design`, `04 - PRDs`, …). Their presence in the audit
+report means "expected in this vault layout", **not** "HivePilot writes here". Only the folders
+in the table above receive engine writes.
+
+**Other vault layouts.** The folder names above follow one numbered-folder Obsidian convention.
+An organisation using a different vault layout should point `HIVEPILOT_OBSIDIAN_VAULT` at a
+vault that adopts these folder names, or leave the vault integration disabled
+(`HIVEPILOT_OBSIDIAN_ENABLED=false`) — the subfolder names are not currently configurable.
+
 ## Caddy (reverse proxy for the API)
 
 Manage a Caddy reverse proxy in front of the HTTP API:
