@@ -16,6 +16,7 @@ from pathlib import Path
 
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+from hivepilot.roles import _resolve_prompt_path
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.services import state_service
 from hivepilot.services.obsidian_service import ObsidianService
@@ -23,12 +24,67 @@ from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-AUDITOR_PROMPT = Path(__file__).resolve().parent.parent.parent / "prompts" / "agents" / "auditor.md"
+# Bug 2 fix (run 243, live incident): "Prompt file not found:
+# /opt/hivepilot/venv/lib/python3.14/site-packages/prompts/agents/auditor.md".
+#
+# The prompt filename Henri's own prompt is seeded/overridden under, relative
+# to `prompts/agents/` -- resolved lazily by `_auditor_prompt_path()` below,
+# NEVER as a module-level constant (see that function's docstring for why).
+_AUDITOR_PROMPT_FILENAME = "auditor.md"
+
+
+def _auditor_prompt_path() -> Path:
+    """Resolve Henri's own prompt file through the EXACT SAME config chain
+    every role prompt uses (`hivepilot.roles._resolve_prompt_path`): XDG
+    config home -> config repo -> base_dir/cwd -> the packaged copy. This is
+    the mechanism that makes `developer.md` (and every other role prompt)
+    resolve correctly on a pip-installed deployment whose
+    ``HIVEPILOT_CONFIG_REPO`` carries its own ``prompts/agents/`` tree.
+
+    The auditor used to hardcode
+    ``Path(__file__).resolve().parent.parent.parent / "prompts" / "agents" /
+    "auditor.md"`` as a MODULE-LEVEL constant. That guess is correct only in
+    a source checkout: `hivepilot/services/auditor_service.py`'s
+    `.parent.parent.parent` is the repo root there, but under a pip install
+    (`.../site-packages/hivepilot/services/auditor_service.py`) it lands at
+    `site-packages/` -- one level ABOVE the `hivepilot` package -- so
+    `site-packages/prompts/agents/auditor.md` never exists (the top-level
+    `prompts/` tree is deliberately NOT shipped as package_data; see
+    `pyproject.toml`'s `[tool.setuptools.package-data]` comment -- it is
+    operator-editable / config-repo-seeded, exactly like every role prompt).
+    Worse, that ALREADY-absolute guess was then passed straight into
+    `PromptCliRunner._load_prompt`'s own `settings.resolve_config_path(...)`
+    call, which is a no-op for an absolute path (joining an absolute path
+    onto any base just returns the absolute path per `pathlib`'s
+    `Path.__truediv__`) -- so the config-repo/XDG tiers were never actually
+    consulted for the auditor at all, unlike every other role.
+
+    Resolved as a FUNCTION (not a module-level constant) so it re-resolves
+    against the CURRENT config-repo/XDG state on every call, and so it can
+    raise an ACTIONABLE error (see below) instead of silently handing a
+    nonexistent path to the runner, which would otherwise surface only as a
+    bare, unexplained ``FileNotFoundError`` from deep inside
+    ``PromptCliRunner._load_prompt``.
+    """
+    resolved = _resolve_prompt_path(_AUDITOR_PROMPT_FILENAME, settings)
+    if not resolved.exists():
+        raise FileNotFoundError(
+            f"Henri's own prompt file ({_AUDITOR_PROMPT_FILENAME!r}) could not be "
+            f"found in any of the usual locations: {settings.xdg_config_home}/prompts/"
+            f"agents/, the config repo (HIVEPILOT_CONFIG_REPO), "
+            f"{settings.base_dir}/prompts/agents/, or the packaged copy. "
+            "This is expected on a pip install whose config repo doesn't carry a "
+            "prompts/agents/ tree yet. "
+            "fix: add prompts/agents/auditor.md to your HIVEPILOT_CONFIG_REPO (copy "
+            "it from https://github.com/jsoyer/HivePilot/blob/main/prompts/agents/"
+            "auditor.md if you don't have one) and run `hivepilot config sync`."
+        )
+    return resolved
 
 
 def _run_henri(project: ProjectConfig, context: str, registry, *, label: str) -> str:
     """Invoke Henri (Mistral via the vibe runner) with the auditor prompt + context."""
-    step = TaskStep(name=label, runner="vibe", prompt_file=str(AUDITOR_PROMPT))
+    step = TaskStep(name=label, runner="vibe", prompt_file=str(_auditor_prompt_path()))
     payload = RunnerPayload(
         project_name=project.path.name,
         project=project,

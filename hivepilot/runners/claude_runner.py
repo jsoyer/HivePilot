@@ -19,6 +19,7 @@ from hivepilot.runners.base import (
     RunnerExecutionError,
     RunnerPayload,
     UsageInfo,
+    classify_signal_exit,
     resolve_runner_effort,
     set_last_usage,
 )
@@ -460,6 +461,17 @@ class ClaudeRunner(BaseRunner):
         combined stderr/stdout tail the caller extracted; it is redacted
         here (via `redact_text`) before being excerpted so a resolved
         `${secret:NAME}` value can never leak into this log line either.
+
+        Bug 1 (run 243, live incident): a negative `exit_code` means the
+        process was killed by a POSIX signal (`-N` == signal N) -- an
+        INFRASTRUCTURE failure that never ran to completion, so `stderr_text`
+        is typically empty (the process never got to write anything) and
+        `_detect_known_hint`'s stderr-signature matching can never fire for
+        it. `classify_signal_exit` covers this case independently of
+        stderr: when the exit code is a signal death, its `signal` name is
+        added to the context and its actionable `message` is used as the
+        `hint` whenever no stderr-based hint already matched (a stderr-based
+        signature, if one somehow matched anyway, is more specific and wins).
         """
         redacted = redact_text(stderr_text) if stderr_text else stderr_text
         context: dict[str, Any] = {
@@ -475,6 +487,12 @@ class ClaudeRunner(BaseRunner):
             "stderr_excerpt": redacted[:300] if redacted else "",
         }
         hint = _detect_known_hint(stderr_text) if stderr_text else None
+        signal_death = classify_signal_exit(exit_code)
+        if signal_death is not None:
+            context["signal"] = signal_death.signal_name
+            context["deliberate_stop"] = signal_death.deliberate
+            if hint is None:
+                hint = signal_death.message
         if hint:
             context["hint"] = hint
         return context

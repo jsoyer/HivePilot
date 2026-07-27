@@ -169,6 +169,138 @@ class TestRunPipelineStatusTransitions:
             f"Expected TEST_FAILURE status, got: {actual_status}"
         )
 
+    def test_failing_stage_sigkilled_records_infrastructure_failure(self) -> None:
+        """Bug 1 (run 243, live incident): the `claude` subprocess was
+        SIGKILLed (exit_code=-9, the kernel OOM-killer) mid-`Implementation`
+        stage and the pipeline recorded `test_failure` -- actively
+        misleading, since no test ever ran. A stage failure whose ONLY
+        failed result is a signal death (negative exit_code) must be
+        classified as INFRASTRUCTURE_FAILURE, never TEST_FAILURE."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline("stage-a", "stage-b")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        run_task_calls: list[str] = []
+
+        def _run_task_sigkilled_first(**kwargs: object) -> list[RunResult]:
+            task_name = str(kwargs["task_name"])
+            run_task_calls.append(task_name)
+            if task_name == "stage-a":
+                return [RunResult("proj", task_name, False, "claude exited -9: ", exit_code=-9)]
+            return [RunResult("proj", task_name, True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=243),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=_run_task_sigkilled_first),
+        ):
+            orch.run_pipeline(
+                project_names=["proj"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        assert "stage-b" not in run_task_calls, (
+            f"stage-b should not run after stage-a's fatal signal death: {run_task_calls}"
+        )
+        mock_complete.assert_called_once()
+        complete_call = mock_complete.call_args
+        actual_status = complete_call.kwargs.get("status") or (
+            complete_call.args[1] if len(complete_call.args) >= 2 else None
+        )
+        assert actual_status == RunStatus.INFRASTRUCTURE_FAILURE.value, (
+            f"Expected INFRASTRUCTURE_FAILURE status for a SIGKILLed stage, got: {actual_status}"
+        )
+
+    def test_failing_stage_sigtermed_is_not_reported_as_test_failure(self) -> None:
+        """SIGTERM (-15) is a deliberate stop/cancel request, not a crash and
+        not a test failure -- it must not share TEST_FAILURE's bucket."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline("stage-a", "stage-b")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        def _run_task_sigtermed_first(**kwargs: object) -> list[RunResult]:
+            task_name = str(kwargs["task_name"])
+            if task_name == "stage-a":
+                return [RunResult("proj", task_name, False, "claude exited -15: ", exit_code=-15)]
+            return [RunResult("proj", task_name, True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=244),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=_run_task_sigtermed_first),
+        ):
+            orch.run_pipeline(
+                project_names=["proj"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        mock_complete.assert_called_once()
+        complete_call = mock_complete.call_args
+        actual_status = complete_call.kwargs.get("status") or (
+            complete_call.args[1] if len(complete_call.args) >= 2 else None
+        )
+        assert actual_status != RunStatus.TEST_FAILURE.value
+        assert actual_status == RunStatus.CANCELLED.value
+
+    def test_failing_stage_with_positive_exit_code_keeps_test_failure(self) -> None:
+        """Regression guard: a genuine command failure (positive exit code,
+        e.g. a real failing test suite) must keep the EXISTING TEST_FAILURE
+        classification exactly -- only signal deaths change classification.
+        """
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = _make_pipeline("stage-a", "stage-b")
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        def _run_task_real_failure_first(**kwargs: object) -> list[RunResult]:
+            task_name = str(kwargs["task_name"])
+            if task_name == "stage-a":
+                return [
+                    RunResult(
+                        "proj", task_name, False, "claude exited 1: assertion failed", exit_code=1
+                    )
+                ]
+            return [RunResult("proj", task_name, True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=245),
+            patch("hivepilot.orchestrator.state_service.complete_run") as mock_complete,
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=_run_task_real_failure_first),
+        ):
+            orch.run_pipeline(
+                project_names=["proj"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        mock_complete.assert_called_once()
+        complete_call = mock_complete.call_args
+        actual_status = complete_call.kwargs.get("status") or (
+            complete_call.args[1] if len(complete_call.args) >= 2 else None
+        )
+        assert actual_status == RunStatus.TEST_FAILURE.value, (
+            f"Expected TEST_FAILURE status for a positive exit code, got: {actual_status}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Per-stage artifact tests

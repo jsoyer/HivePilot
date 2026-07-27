@@ -55,6 +55,7 @@ from hivepilot.runners.base import (
     RunnerPayload,
     UsageInfo,
     apply_skill_if_supported,
+    classify_signal_exit,
     detect_noop_permission_response,
     pop_last_usage,
     validate_runner_mode,
@@ -1252,6 +1253,48 @@ class RunResult:
     # True for a stage skipped via only_components/only_tags scoping — distinct
     # from both success and failure in the run record (PRD A1 §6).
     skipped: bool = False
+    # Bug 1 fix (run 243, live incident): the runner's raw exit code, when
+    # available -- `None` for a success, a non-runner failure (e.g. a policy
+    # gate block), or any exception without a `.context["exit_code"]`. A
+    # NEGATIVE value means the process was killed by a POSIX signal (see
+    # `hivepilot.runners.base.classify_signal_exit`); a pipeline stage uses
+    # this to distinguish an INFRASTRUCTURE failure (signal death) from a
+    # genuine test/logic failure (positive exit code) when classifying the
+    # stage's final `RunStatus` (`_classify_stage_failure`). Defaulted so
+    # every EXISTING positional `RunResult(...)` call site stays unchanged.
+    exit_code: int | None = None
+
+
+def _classify_stage_failure(stage_results: list[RunResult]) -> RunStatus:
+    """Classify a failed pipeline stage's final ``RunStatus`` from its
+    ``stage_results`` (Bug 1 fix, run 243 live incident).
+
+    A stage that failed because a runner subprocess was KILLED BY A SIGNAL
+    (a negative ``exit_code`` -- see ``classify_signal_exit``) is an
+    INFRASTRUCTURE failure, never ``TEST_FAILURE``: the command never ran to
+    completion, so nothing about "the tests" or "the agent's logic" can be
+    blamed. A stage whose failed results are ALL a deliberate SIGTERM (an
+    intentional stop/cancel, not a crash) is reported as ``CANCELLED``
+    instead of a crash bucket.
+
+    Any stage failure that includes so much as ONE result that is NOT a
+    signal death (a positive non-zero exit code, or any exception unrelated
+    to a runner subprocess signal -- a genuine test failure, bad agent
+    logic, a policy-gate block, ...) keeps the EXISTING ``TEST_FAILURE``
+    classification UNCHANGED -- this function only ever narrows/reclassifies
+    a stage whose failures are ALL signal deaths. Mixing a real failure with
+    a signal death must still surface as something the operator investigates
+    the same way as before (TEST_FAILURE), rather than being hidden behind
+    an infrastructure bucket that implies "nothing to do with the run
+    itself".
+    """
+    failed = [r for r in stage_results if not r.success]
+    deaths = [classify_signal_exit(r.exit_code) for r in failed]
+    if not failed or any(death is None for death in deaths):
+        return RunStatus.TEST_FAILURE
+    if all(death.deliberate for death in deaths):  # type: ignore[union-attr]
+        return RunStatus.CANCELLED
+    return RunStatus.INFRASTRUCTURE_FAILURE
 
 
 class Orchestrator:
@@ -1875,7 +1918,23 @@ class Orchestrator:
                     # exception message, so a single redaction point avoids a
                     # raw `str(exc)` slipping through to any one of them.
                     exc_text = redact_text(str(exc))
-                    results.append(RunResult(project.path.name, task_name, False, exc_text))
+                    # Bug 1 fix (run 243, live incident): carry the runner's
+                    # exit_code onto the RunResult too (when the raising
+                    # exception has one in its structured `.context`, e.g.
+                    # `RunnerExecutionError`) -- a pipeline stage's
+                    # `_classify_stage_failure` needs it to distinguish a
+                    # signal death (INFRASTRUCTURE_FAILURE) from a genuine
+                    # test/logic failure (TEST_FAILURE, unchanged).
+                    exit_code = (
+                        failure_context.get("exit_code")
+                        if isinstance(failure_context, dict)
+                        else None
+                    )
+                    results.append(
+                        RunResult(
+                            project.path.name, task_name, False, exc_text, exit_code=exit_code
+                        )
+                    )
                     if run_ids.get(project.path.name):
                         state_service.complete_run(run_ids[project.path.name], "failed", str(exc))
                     notification_service.send_notification(
@@ -3537,7 +3596,7 @@ class Orchestrator:
                     stage=stage.name,
                     remaining=[s.name for s in next_stages],
                 )
-                final_status = RunStatus.TEST_FAILURE
+                final_status = _classify_stage_failure(stage_results)
                 try:
                     self.plugins.run_hook(
                         "on_error",

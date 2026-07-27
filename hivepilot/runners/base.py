@@ -279,3 +279,106 @@ def detect_noop_permission_response(text: str | None) -> str | None:
                 f"completed work (matched phrase: {pattern!r})"
             )
     return None
+
+
+# Explicit-failure-logs follow-up (Bug 1, run 243 live incident): a runner
+# subprocess exit code, `-N` for signal `N` per the POSIX/`subprocess`
+# convention (see `subprocess.CalledProcessError.returncode`,
+# `os.WIFSIGNALED`), means the OS killed the process -- it never ran to
+# completion, so nothing about "the tests" or "the agent's logic" can be
+# blamed. A run that recorded `-9` (SIGKILL, almost always the kernel
+# OOM-killer) as `test_failure` sends the operator debugging the wrong
+# thing entirely. This is distinct from the command actually running and
+# reporting ITS OWN failure via a positive exit code (real test failure /
+# bad agent logic) -- that classification must never change.
+@dataclass(frozen=True, slots=True)
+class SignalDeath:
+    """Classification of a runner subprocess killed by a POSIX signal.
+
+    ``deliberate`` is ``True`` only for SIGTERM: an intentional stop/cancel
+    request (e.g. systemd/container shutdown, a manual `kill`), never a
+    crash -- callers must not report it as one. Every other signal
+    (SIGKILL, SIGABRT, SIGSEGV, ...) is a genuine, non-deliberate
+    INFRASTRUCTURE failure. ``message`` is an actionable, operator-facing
+    string in the WHAT/WHY/FIX spirit of ``hivepilot.services.config_doctor``
+    findings.
+    """
+
+    signal_number: int
+    signal_name: str
+    deliberate: bool
+    message: str
+
+
+def classify_signal_exit(exit_code: int | None) -> SignalDeath | None:
+    """Classify *exit_code* as a POSIX signal death, or return ``None`` when
+    it is not one.
+
+    Returns ``None`` for ``exit_code is None`` or ``exit_code >= 0`` -- the
+    command actually ran and either succeeded or reported ITS OWN, genuine
+    failure via a positive exit code (a real test failure, bad agent logic,
+    a CLI usage error, ...). Only a NEGATIVE exit code (per
+    ``subprocess.CalledProcessError.returncode``'s ``-N`` == "killed by
+    signal N" convention) is ever classified here -- callers must never
+    reclassify a positive exit code based on this function.
+
+    Never raises: an unrecognised signal number (rare, platform-specific)
+    still yields a ``SignalDeath`` with a synthesised ``SIG<N>`` name rather
+    than crashing the classifier itself while it is handling an already
+    unusual failure.
+    """
+    if exit_code is None or exit_code >= 0:
+        return None
+    import signal as _signal
+
+    signum = -exit_code
+    try:
+        signal_name = _signal.Signals(signum).name
+    except ValueError:
+        signal_name = f"SIG{signum}"
+
+    if signum == _signal.SIGTERM:
+        return SignalDeath(
+            signal_number=signum,
+            signal_name=signal_name,
+            deliberate=True,
+            message=(
+                f"the runner process was terminated by {signal_name} — a deliberate "
+                "stop/cancel request (e.g. a service restart, a container shutdown, "
+                "or a manual `kill`), never a test/logic failure and never treated "
+                "as an unexpected process failure."
+            ),
+        )
+
+    if signum == _signal.SIGKILL:
+        return SignalDeath(
+            signal_number=signum,
+            signal_name=signal_name,
+            deliberate=False,
+            message=(
+                f"the runner process was killed by {signal_name} — the operating "
+                "system killed it, almost always the OOM (out-of-memory) killer. "
+                "This is an INFRASTRUCTURE failure, not a test/logic failure: the "
+                "command never ran to completion, so nothing about the tests or "
+                "the agent's own logic can be blamed (this is also why stderr is "
+                "typically empty -- the process never got to write anything). "
+                "why: an LXC/container with an unlimited memory.max can still be "
+                "OOM-killed by a contended HOST kernel — check memory AVAILABLE "
+                "(not total, not `free`'s cached/buffered figure) on the host at "
+                "the time of the run, e.g. `free -m`'s 'available' column or the "
+                "cgroup's `memory.current` vs `memory.max`. "
+                "fix: raise the container's memory limit/reservation, reduce "
+                "concurrent runner load, or move this task to a host with more "
+                "available memory."
+            ),
+        )
+
+    return SignalDeath(
+        signal_number=signum,
+        signal_name=signal_name,
+        deliberate=False,
+        message=(
+            f"the runner process crashed with {signal_name} (signal {signum}) — an "
+            "INFRASTRUCTURE failure (the OS terminated it), not a test/logic failure."
+        ),
+    )
