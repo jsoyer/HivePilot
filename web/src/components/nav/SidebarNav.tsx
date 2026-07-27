@@ -1,6 +1,8 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useT } from '@/lib/i18n'
+import { useEscapeKey } from '@/lib/use-escape-key'
 import { cn } from '@/lib/utils'
 import { usePersistedState } from '@/lib/use-persisted-state'
 import type { NavGroup } from './nav-config'
@@ -49,7 +51,18 @@ export interface SidebarNavProps {
  * `mobileOpen`/`onCloseMobile` props from the header's hamburger button.
  */
 export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProps) {
+  const t = useT()
   const [collapsed, setCollapsed] = usePersistedState(COLLAPSED_STORAGE_KEY, false)
+
+  // Mobile audit: this was the one dismissible overlay in Pollen that Escape
+  // did NOT close — it could only be dismissed by tapping the backdrop or a
+  // nav item, both of which are undiscoverable and neither of which a
+  // keyboard user can reach while the drawer covers the page. Shares the
+  // exact hook `ui/drawer.tsx` uses rather than hand-rolling a second copy.
+  // Guarded on `mobileOpen` because, unlike `Drawer`, this component stays
+  // mounted when closed (it is translated off-canvas, not unmounted), so an
+  // unguarded listener would swallow Escape from the ⌘K palette.
+  useEscapeKey(mobileOpen, onCloseMobile)
 
   return (
     <>
@@ -65,8 +78,19 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
         data-slot="sidebar-nav"
         data-collapsed={collapsed}
         data-mobile-open={mobileOpen}
+        // Only a dialog while it behaves like one (an off-canvas overlay on
+        // top of the page). Once it docks statically at `md:` it is just a
+        // landmark, and announcing a permanently-open modal dialog there
+        // would be a lie — hence the runtime `mobileOpen` check rather than
+        // static attributes.
+        {...(mobileOpen
+          ? { role: 'dialog' as const, 'aria-modal': true, 'aria-label': t('common.navigation') }
+          : {})}
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col gap-3 overflow-y-auto border-r border-border bg-card p-2 transition-transform duration-200 ease-out md:static md:z-auto md:h-auto md:w-56 md:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col gap-3 overflow-y-auto border-r border-border bg-card p-2 md:static md:z-auto md:h-auto md:w-56 md:translate-x-0',
+          // Respect prefers-reduced-motion: the slide-in is decorative, so
+          // it is opt-in via `motion-safe:` rather than always-on.
+          'motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out',
           mobileOpen && 'translate-x-0',
           collapsed && 'md:w-16',
         )}

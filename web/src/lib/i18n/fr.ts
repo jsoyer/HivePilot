@@ -14,6 +14,7 @@ export const fr: Record<TranslationKey, string> = {
   'common.disable': 'Désactiver',
   'common.working': 'En cours…',
   'common.openNavigation': 'Ouvrir la navigation',
+  'common.navigation': 'Navigation',
   'common.expandSidebar': 'Déplier la barre latérale',
   'common.collapseSidebar': 'Réduire la barre latérale',
   'common.switchToLightTheme': 'Passer au thème clair',

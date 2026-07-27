@@ -229,4 +229,66 @@ describe('SidebarNav', () => {
     expect(costTab.getAttribute('aria-selected')).toBe('true')
     expect(analyticsTab.getAttribute('aria-selected')).toBe('false')
   })
+
+  // Mobile audit: the drawer could only be dismissed by tapping the backdrop
+  // or a nav item. Both were verified working in a real browser, but neither
+  // is reachable from a keyboard, and Escape — which closes every other
+  // overlay in this app — did nothing.
+  describe('mobile drawer dismissal', () => {
+    function pressEscape() {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
+    }
+
+    it('closes on Escape while open', () => {
+      const onCloseMobile = vi.fn()
+      act(() => {
+        root.render(<Harness mobileOpen onCloseMobile={onCloseMobile} />)
+      })
+      pressEscape()
+      expect(onCloseMobile).toHaveBeenCalledTimes(1)
+    })
+
+    // Unlike `ui/drawer.tsx`, this component stays mounted when closed (it is
+    // translated off-canvas). An unguarded listener would therefore swallow
+    // Escape from the ⌘K command palette on every screen.
+    it('CRITICAL: does not consume Escape while closed', () => {
+      const onCloseMobile = vi.fn()
+      act(() => {
+        root.render(<Harness mobileOpen={false} onCloseMobile={onCloseMobile} />)
+      })
+      pressEscape()
+      expect(onCloseMobile).not.toHaveBeenCalled()
+    })
+
+    it('announces itself as a modal dialog only while open', () => {
+      act(() => {
+        root.render(<Harness mobileOpen />)
+      })
+      const openPanel = container.querySelector('[data-slot="sidebar-nav"]')!
+      expect(openPanel.getAttribute('role')).toBe('dialog')
+      expect(openPanel.getAttribute('aria-modal')).toBe('true')
+      expect(openPanel.getAttribute('aria-label')).toBe('Navigation')
+
+      // Docked at `md:` it is a plain landmark, not a permanently-open modal.
+      act(() => {
+        root.render(<Harness mobileOpen={false} />)
+      })
+      const closedPanel = container.querySelector('[data-slot="sidebar-nav"]')!
+      expect(closedPanel.getAttribute('role')).toBeNull()
+      expect(closedPanel.getAttribute('aria-modal')).toBeNull()
+    })
+
+    it('gates its slide-in animation behind motion-safe', () => {
+      act(() => {
+        root.render(<Harness mobileOpen />)
+      })
+      const panel = container.querySelector('[data-slot="sidebar-nav"]')!
+      expect(panel.className).toContain('motion-safe:transition-transform')
+      // An unconditional `transition-transform` would ignore the user's
+      // reduced-motion preference.
+      expect(panel.className).not.toMatch(/(^|\s)transition-transform/)
+    })
+  })
 })

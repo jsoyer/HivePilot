@@ -14,6 +14,9 @@ export const en = {
   'common.disable': 'Disable',
   'common.working': 'Working…',
   'common.openNavigation': 'Open navigation',
+  // Accessible name for the mobile navigation drawer itself (the dialog),
+  // as opposed to `common.openNavigation` which names the button that opens it.
+  'common.navigation': 'Navigation',
   'common.expandSidebar': 'Expand sidebar',
   'common.collapseSidebar': 'Collapse sidebar',
   'common.switchToLightTheme': 'Switch to light theme',
