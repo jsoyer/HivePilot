@@ -936,6 +936,23 @@ class Settings(BaseSettings):
         ],
     )
 
+    # ---- inline-repo-instructions PRD ----
+    # Hard byte cap on a SINGLE resolved `ProjectConfig.claude_md` /
+    # `.instruction_files` entry before it is inlined into the prompt by
+    # `hivepilot.services.repo_instructions` — same posture as
+    # `obsidian_recall_max_bytes` above (bound an injected block, never
+    # silently truncate: the module appends an explicit notice when this
+    # fires). Default is generous enough for a real multi-hundred-line
+    # instructions file while still bounding a pathological huge one.
+    # env: HIVEPILOT_INSTRUCTION_FILE_MAX_BYTES
+    instruction_file_max_bytes: int = 20_000
+    # Hard byte cap on the COMBINED size of every instructions file injected
+    # for one project (claude_md + instruction_files together) — bounds the
+    # worst case of a project declaring many large files even though each
+    # individually stays under `instruction_file_max_bytes`.
+    # env: HIVEPILOT_INSTRUCTION_FILES_MAX_TOTAL_BYTES
+    instruction_files_max_total_bytes: int = 60_000
+
     # Optional path to a Unicode-capable TTF font (e.g. DejaVu Sans) used by
     # the PDF analytics export (`api_service._pdf_response`) so non-latin
     # project/task/provider names render correctly instead of degrading to

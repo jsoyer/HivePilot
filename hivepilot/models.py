@@ -202,6 +202,19 @@ class ProjectConfig(BaseModel):
     path: Path
     description: str | None = None
     claude_md: str | None = None
+    # ---- inline-repo-instructions PRD ----
+    # Generic list of repository instruction/context files (e.g. AGENTS.md,
+    # AGENT-GOVERNANCE.md, .cursorrules, .windsurfrules, GEMINI.md) whose
+    # CONTENT is resolved and inlined into the agent prompt by
+    # `hivepilot.services.repo_instructions.build_repo_instructions_section`
+    # -- see that module for resolution/redaction/size-cap behavior.
+    # Deliberately named for what it IS (repository instruction/context
+    # files), not after any one vendor's convention (unlike `claude_md`,
+    # kept above for backward compatibility -- both fields can be set
+    # independently and are injected together, `claude_md` first). `None`
+    # (the default) means "no additional files" -- zero behavior change for
+    # every existing config that doesn't declare this field.
+    instruction_files: list[str] | None = None
     default_branch: str = "main"
     owner_repo: str | None = None
     # ---- forge plugin type (forge-plugin-type-phase1 PRD, Sprint 1) ----
@@ -260,6 +273,14 @@ class ProjectConfig(BaseModel):
         if v not in FORGE_MAP:
             raise ValueError(f"Unknown forge {v!r}; available: {sorted(FORGE_MAP)}")
         return v
+
+    @field_validator("instruction_files")
+    @classmethod
+    def _dedup_instruction_files(cls, v: list[str] | None) -> list[str] | None:
+        """Same dedup-preserving-order posture as `TaskStep.skills` — a
+        duplicate entry (e.g. someone re-listing `claude_md`'s file in
+        `instruction_files` too) collapses to one, first occurrence wins."""
+        return _dedup_ordered(v)
 
     @model_validator(mode="after")
     def expand_path(self) -> ProjectConfig:
