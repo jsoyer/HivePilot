@@ -586,6 +586,103 @@ def check_plugin_health(plugin_manager: Any) -> list[DoctorFinding]:
 
 
 # ---------------------------------------------------------------------------
+# Check: retry_queue abnormal backlog (fix/retry-queue-drain incident)
+#
+# 197 `groomer-scan` retries sat PENDING and past-due in retry_queue for 7
+# days: `retry_service.enqueue()` (the plain exponential-backoff path
+# `schedule_service.run_entry()` uses on an ordinary task failure) writes
+# rows with `context IS NULL`; the scheduler daemon's only reader
+# (`scheduler_daemon._process_deferred_rows`) filtered `context IS NOT
+# NULL` -- a guard written exclusively for the quota-deferred subtype, so a
+# context-less row was never drained by anything. `hivepilot schedule
+# health` printed the raw pending count the whole time but never flagged it
+# as abnormal -- exactly the invisible-degradation class `config doctor`
+# exists to catch.
+#
+# Deliberately conservative (the check_enabled_plugins_loaded 17-false-
+# positives lesson applies here too): a handful of rows still waiting out
+# their own backoff window is completely normal and produces NO finding.
+# Only rows overdue by more than `settings.retry_queue_stale_after_hours`
+# count as "stuck" -- backoff delays here are minutes, not hours, so ANY
+# row overdue that long in a system where the daemon is actually ticking
+# means the drain genuinely isn't reaching it.
+# ---------------------------------------------------------------------------
+
+
+def check_retry_queue_backlog() -> list[DoctorFinding]:
+    from datetime import datetime, timedelta, timezone
+
+    from hivepilot.services import db, state_service
+    from hivepilot.utils.display_time import _parse_stored
+
+    state_service.init_db()
+    with db.connect() as conn:
+        rows = conn.execute(db.ph("SELECT * FROM retry_queue WHERE status='pending'")).fetchall()
+
+    if not rows:
+        return []
+
+    now = datetime.now(timezone.utc)
+    threshold = timedelta(hours=settings.retry_queue_stale_after_hours)
+
+    stuck: list[dict[str, Any]] = []
+    unknown: list[dict[str, Any]] = []
+    for row in rows:
+        row_dict = dict(row)
+        raw_next = row_dict.get("next_retry_at")
+        parsed = _parse_stored(raw_next) if raw_next else None
+        if parsed is None:
+            unknown.append(row_dict)
+            continue
+        if now - parsed > threshold:
+            stuck.append(row_dict)
+
+    findings: list[DoctorFinding] = []
+
+    if unknown:
+        ids = ", ".join(str(r["id"]) for r in unknown[:10])
+        more = "..." if len(unknown) > 10 else ""
+        findings.append(
+            _finding(
+                "error",
+                "retry_queue_unparseable_timestamp",
+                f"{len(unknown)} retry_queue row(s) have a next_retry_at that could not be "
+                f"parsed (ids: {ids}{more})",
+                "a row whose due-ness cannot be determined is never picked up by the drain "
+                "(fail-closed) -- it sits pending forever with no other signal",
+                "inspect the row directly (`hivepilot schedule retry-list --status pending`) "
+                "and fix or delete its next_retry_at value",
+            )
+        )
+
+    if stuck:
+        sample = stuck[0]
+        oldest_overdue = max(now - _parse_stored(r["next_retry_at"]) for r in stuck)
+        oldest_days, oldest_rem = divmod(int(oldest_overdue.total_seconds()), 86400)
+        oldest_hours = oldest_rem // 3600
+        severity = "error" if len(stuck) >= settings.retry_queue_backlog_error_count else "warning"
+        findings.append(
+            _finding(
+                severity,
+                "retry_queue_backlog",
+                f"{len(stuck)} retry_queue row(s) are pending and overdue by more than "
+                f"{settings.retry_queue_stale_after_hours}h (oldest overdue: {oldest_days}d "
+                f"{oldest_hours}h; e.g. task={sample.get('task')!r} "
+                f"error={str(sample.get('error'))[:120]!r})",
+                "the scheduler daemon drains the retry queue at most one row per tick -- a "
+                "row still overdue by hours means either the daemon isn't running, or "
+                "something is preventing the drain from ever reaching it (this is exactly "
+                "how 197 groomer-scan retries sat pending for 7 days with zero signal)",
+                "run `hivepilot schedule health` for the live count, `hivepilot schedule "
+                "retry-list --status pending` to inspect the rows, and confirm the scheduler "
+                "daemon (`hivepilot schedule daemon`) is actually running",
+            )
+        )
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Check: dangling references (incident #7, plus #6's alias variant)
 # ---------------------------------------------------------------------------
 
@@ -846,35 +943,45 @@ def _iter_role_display_names(
 
 
 def check_role_display_name_collisions(config_dir: Path | None) -> list[DoctorFinding]:
-    """ERROR for two-or-more roles whose ``display_name`` collides once
-    normalised the same way the Telegram agent registry derives its
-    addressing alias, plus a role whose ``display_name`` is empty or
-    whitespace-only.
+    """ERROR for two-or-more roles whose ``display_name`` would collide on
+    the SAME alias the Telegram agent registry actually derives, plus a
+    role whose ``display_name`` is empty/whitespace-only, or non-blank but
+    sanitises to an empty alias.
 
     Real incident: five roles (``designer_console``, ``designer_extension``,
     ``designer_vscode``, ``designer_agent``, ``design_reviewer``) all
     carried ``display_name: "Margaux"``. The registry's alias-claim logic
-    (``telegram_bot._build_agent_registry``, Phase 4: ``_sanitise_alias(role.
-    display_name.split()[0])``) already detects this collision and logs a
-    ``telegram.agent_registry.alias_collision`` warning at startup -- but
-    nobody reads startup logs, so the collision survived in production
-    until a doctor run surfaced it by accident.
+    (``telegram_bot._build_agent_registry``, Phase 4) already detected this
+    collision and logged a ``telegram.agent_registry.alias_collision``
+    warning at startup -- but nobody reads startup logs, so the collision
+    survived in production until a doctor run surfaced it by accident. The
+    FIRST version of this check made things worse, not better: it compared
+    whole ``display_name`` strings (e.g. "Margaux" vs "Margaux (Console)"
+    look distinct that way), which disagreed with the registry's real
+    first-token-based derivation and reported ZERO collisions while the
+    engine logged four -- a check that disagrees with the mechanism it
+    guards actively certifies a broken state.
 
-    Deliberately imports and reuses ``telegram_bot._sanitise_alias`` rather
-    than reimplementing case/accent folding: ``hivepilot.roles.Role`` (see
-    ``hivepilot/roles.py``) has no separate ``alias``/``aliases`` field --
-    the alias IS ``display_name``, derived. Guessing a different
-    normalisation (e.g. a plain ``.lower()``) would let this check disagree
-    with what the registry actually does at runtime (e.g. miss an
-    accent-only collision like "Aliénor" vs "Alienor").
+    Deliberately imports and REPLAYS ``telegram_bot._display_name_alias_
+    claims`` -- the exact same claim-attempt function Phase 4 of
+    ``_build_agent_registry`` uses -- rather than reimplementing any
+    normalisation or priority rule locally. This is what makes it
+    structurally impossible for this check to disagree with the live
+    registry again: whatever the registry's derivation rule is, THIS is it.
 
-    Also flags a whitespace-only ``display_name`` (e.g. ``"   "``)
-    separately from a plain empty one: it is truthy but
-    ``"   ".split()[0]`` raises ``IndexError``, which would crash
-    ``_build_agent_registry()`` at import time -- not merely leave that one
-    role unaddressable.
+    Also flags:
+      * a whitespace-only ``display_name`` (e.g. ``"   "``) separately from
+        a plain empty one: it is truthy but ``"   ".split()[0]`` would raise
+        ``IndexError`` if reached un-guarded by the registry.
+      * a non-blank ``display_name`` that sanitises to an empty string
+        (e.g. ``"!!!"``) -- the registry's ``_claim`` silently no-ops on an
+        empty alias (see its early return), so this role gets NO
+        display-name-derived alias at all, with zero warning at startup.
+        The recurring "empty/absent treated as no constraint" bug class
+        this repo tracks: an empty derived alias must be a finding, never
+        silently skipped.
     """
-    from hivepilot.services.telegram_bot import _sanitise_alias
+    from hivepilot.services.telegram_bot import _display_name_alias_claims, _sanitise_alias
 
     findings: list[DoctorFinding] = []
     roles_data, load_findings = _load_yaml_checked(_doctor_path("roles.yaml", config_dir))
@@ -887,8 +994,9 @@ def check_role_display_name_collisions(config_dir: Path | None) -> list[DoctorFi
     pairs, entry_findings = _iter_role_display_names(roles_section, "'roles.yaml' key 'roles'")
     findings.extend(entry_findings)
 
-    groups: dict[str, list[str]] = {}
+    display_names: dict[str, str] = {}
     blank_roles: list[str] = []
+    unusable_roles: list[str] = []
 
     for role_key, display_name in pairs:
         if not isinstance(display_name, str):
@@ -896,33 +1004,45 @@ def check_role_display_name_collisions(config_dir: Path | None) -> list[DoctorFi
         if not display_name.strip():
             blank_roles.append(role_key)
             continue
-        normalised = _sanitise_alias(display_name)
-        if not normalised:
+        if not _sanitise_alias(display_name):
             # A display_name made entirely of non-alphanumeric characters
-            # (e.g. "!!!") sanitises to "" -- the real registry's `_claim`
-            # early-returns on a falsy alias (no crash, no derived alias at
-            # all), the same practical outcome as having no display_name.
-            # Not grouped as a collision and not treated as "blank" (no
-            # crash risk) -- deliberately left uncovered, see PR notes.
+            # (e.g. "!!!") sanitises to "" -- distinct from "blank" (no
+            # IndexError crash risk) but still leaves the role with NO
+            # working display-name-derived alias, silently.
+            unusable_roles.append(role_key)
             continue
-        groups.setdefault(normalised, []).append(role_key)
+        display_names[role_key] = display_name
 
-    for normalised, role_keys in sorted(groups.items()):
+    # Replay the SAME claim-attempt sequence the live registry's Phase 4
+    # applies -- never a reimplementation, so this can never silently
+    # disagree with what actually gets claimed/logged at runtime.
+    claimed: dict[str, str] = {}
+    attempts: dict[str, list[str]] = {}
+    for alias, role_key in _display_name_alias_claims(display_names):
+        seen = attempts.setdefault(alias, [])
+        if role_key not in seen:
+            seen.append(role_key)
+        claimed.setdefault(alias, role_key)
+
+    for alias, role_keys in sorted(attempts.items()):
         if len(role_keys) < 2:
             continue
         sorted_keys = sorted(role_keys)
         count = len(sorted_keys)
+        winner = claimed[alias]
+        losers = [k for k in sorted_keys if k != winner]
         findings.append(
             _finding(
                 "error",
                 "duplicate_role_display_name",
-                f"{count} roles share the same display_name (normalised: '{normalised}'): "
-                f"{', '.join(sorted_keys)}",
+                f"{count} roles derive the same Telegram alias '{alias}' from their "
+                f"display_name: {', '.join(sorted_keys)}",
                 "the Telegram agent registry derives its addressing alias from "
-                f"display_name -- {count - 1} of these {count} roles become unaddressable "
-                "by name in chat channels; mentions resolve to only one of them "
-                "(whichever wins the registry's deterministic claim order), and the "
-                "engine only logs this as a 'telegram.agent_registry.alias_collision' "
+                f"display_name -- {count - 1} of these {count} roles "
+                f"({', '.join(losers)}) become unaddressable by name in chat channels; "
+                f"mentions resolve to only one of them (currently '{winner}', "
+                "deterministic claim order), and "
+                "the engine only logs this as a 'telegram.agent_registry.alias_collision' "
                 "warning at startup, which nobody reads",
                 f"give each of {', '.join(sorted_keys)} a distinct display_name in roles.yaml",
             )
@@ -941,6 +1061,23 @@ def check_role_display_name_collisions(config_dir: Path | None) -> list[DoctorFi
                 "at all -- either way this role has no working name-based address",
                 f"set a non-blank display_name for role '{role_key}' in roles.yaml, or "
                 "remove the display_name key entirely to use the role key as-is",
+            )
+        )
+
+    for role_key in sorted(unusable_roles):
+        findings.append(
+            _finding(
+                "error",
+                "unusable_role_display_name",
+                f"Role '{role_key}' has a display_name that sanitises to an empty alias "
+                "once accents/punctuation are stripped",
+                "the Telegram agent registry's `_claim` silently no-ops on an empty "
+                "alias -- this role gets NO display-name-derived alias at all and is "
+                "only addressable via its role key or a curated alias, with zero "
+                "warning at startup",
+                f"set a display_name for role '{role_key}' that contains at least one "
+                "letter or digit, or remove the display_name key entirely to use the "
+                "role key as-is",
             )
         )
 
@@ -1812,6 +1949,7 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     )
     findings.extend(_run_check("check_vault_git_state", check_vault_git_state))
     findings.extend(_run_check("check_display_timezone", check_display_timezone))
+    findings.extend(_run_check("check_retry_queue_backlog", check_retry_queue_backlog))
     findings.extend(_run_check("check_cost_accounting", check_cost_accounting))
     return _dedupe_findings(findings)
 

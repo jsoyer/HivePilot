@@ -472,6 +472,29 @@ class TestScheduleHealthCommand:
         assert "CEST" in result.output
         assert "<25" not in result.output
 
+    def test_shows_expired_count(self) -> None:
+        """fix/retry-queue-drain: `schedule health` must also surface the
+        expired-by-TTL count -- a backlog that silently ages out must still
+        be visible to the operator, not just 'pending'/'running'/'dead'."""
+
+        def fake_list_queue(status=None):
+            if status == "expired":
+                return [{"id": 1}, {"id": 2}]
+            return []
+
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch("hivepilot.services.schedule_service.load_schedules", return_value={}),
+            patch("hivepilot.services.retry_service.list_queue", side_effect=fake_list_queue),
+            patch("hivepilot.services.retry_service.list_dlq", return_value=[]),
+        ):
+            result = runner.invoke(app, ["schedule", "health"])
+
+        assert result.exit_code == 0, result.output
+        assert "Expired" in result.output
+        assert "2" in result.output
+
 
 class TestScheduleListCommand:
     """`hivepilot schedule list` should print a readable label for

@@ -206,11 +206,92 @@ _CURATED_ALIASES: dict[str, list[str]] = {
 #   1. a role's own exact name        — ALWAYS wins, can never be stolen
 #   2. a role's separator-free name   (e.g. "release_manager" -> "releasemanager")
 #   3. curated aliases (_CURATED_ALIASES) — unchanged from before this fix
-#   4. the first token of display_name (e.g. "Aliénor" -> "alienor")
+#   4. aliases derived from display_name — see `_display_name_alias_claims`
 # A later phase never overwrites an earlier phase's claim; on a collision the
 # losing alias is dropped for that role (logged) — the role stays addressable
 # via its other aliases / its own name, and no alias is ever silently
 # repointed at the wrong role.
+def _display_name_alias_claims(display_names: dict[str, str]) -> list[tuple[str, str]]:
+    """Return the ordered `(alias, role_key)` claim ATTEMPTS Phase 4 of
+    `_build_agent_registry` makes from role display names, for an arbitrary
+    `role_key -> display_name` mapping.
+
+    Deliberately returns raw attempts, not a resolved winner map — the
+    CALLER decides how ties are broken: `_build_agent_registry` replays each
+    attempt through the real `_claim` (which logs
+    `telegram.agent_registry.alias_collision` and drops the loser's alias);
+    `config_doctor.check_role_display_name_collisions` replays it through a
+    throwaway claim map to build a human-readable finding naming every
+    colliding role. Same function, two consumers — this is what makes it
+    impossible for the doctor's collision check to disagree with what the
+    live registry actually does.
+
+    Real incident this fixes: five roles' display_name all started with
+    "Margaux" ("Margaux", "Margaux (Console)", "Margaux (Extension)",
+    "Margaux (VS Code)", "Margaux (Agent)"). The old single-tier rule
+    (`_sanitise_alias(display_name.split()[0])`) collapsed all five to
+    "margaux" — one role won it, the other four silently lost their
+    display-name-derived alias entirely.
+
+    Two-tier priority per role (role_keys always processed in SORTED order,
+    so this is deterministic regardless of dict iteration order):
+
+      1. First-token alias — ONLY when the first word of `display_name` is
+         unique across every role_key considered here. A role's first name
+         is inherently ambiguous when 2+ roles share it — claiming the bare
+         first-token alias for whichever role happens to sort first would
+         silently make the rest unaddressable while looking like a
+         deliberate choice, and is exactly the incident above. A
+         single-word display_name (e.g. "Blaise") trivially has a unique
+         first token (itself), so an operator's existing short alias never
+         changes because of this fix.
+      2. Full-display-name alias — the ENTIRE display_name sanitised as one
+         token (accents folded, spaces/punctuation stripped). Always
+         attempted for any non-blank display_name — this is what makes
+         "Margaux (Console)" -> "margauxconsole" distinct from "Margaux" ->
+         "margaux" even though they share a first word. Two roles only
+         collide here when their display_name is IDENTICAL once sanitised
+         (e.g. two roles both literally "Margaux", or "Jean-Paul" vs
+         "Jean Paul") — a genuine naming collision, correctly still
+         reported.
+
+    A blank/whitespace-only display_name, or one that sanitises to an empty
+    string (e.g. "!!!"), contributes NO claim attempts at all — mirrors
+    `_claim`'s existing empty-alias early return, never crashes.
+    """
+    role_keys = sorted(display_names.keys())
+
+    first_tokens: dict[str, list[str]] = {}
+    for role_key in role_keys:
+        display_name = display_names.get(role_key) or ""
+        tokens = display_name.split()
+        if not tokens:
+            continue
+        token = _sanitise_alias(tokens[0])
+        if token:
+            first_tokens.setdefault(token, []).append(role_key)
+
+    claims: list[tuple[str, str]] = []
+    for role_key in role_keys:
+        display_name = display_names.get(role_key) or ""
+        tokens = display_name.split()
+        if not tokens:
+            continue
+        first = _sanitise_alias(tokens[0])
+        if first and len(first_tokens.get(first, [])) == 1:
+            claims.append((first, role_key))
+
+    for role_key in role_keys:
+        display_name = display_names.get(role_key) or ""
+        if not display_name.strip():
+            continue
+        full = _sanitise_alias(display_name)
+        if full:
+            claims.append((full, role_key))
+
+    return claims
+
+
 def _build_agent_registry() -> dict[str, dict[str, Any]]:
     from hivepilot.roles import ROLES
 
@@ -251,13 +332,19 @@ def _build_agent_registry() -> dict[str, dict[str, Any]]:
         for alias in _CURATED_ALIASES.get(role_key, []):
             _claim(alias, role_key)
 
-    # Phase 4: derived first-name alias, lowest priority — dropped on any
-    # collision with a name/curated alias already claimed above.
-    for role_key in role_keys:
-        role = ROLES[role_key]
-        if role.display_name:
-            first = _sanitise_alias(role.display_name.split()[0])
-            _claim(first, role_key)
+    # Phase 4: derived aliases from display_name, lowest priority — dropped
+    # on any collision with a name/curated alias already claimed above (or
+    # with each other). See `_display_name_alias_claims` docstring for the
+    # two-tier priority + collision semantics — SHARED with
+    # config_doctor.check_role_display_name_collisions so the two can never
+    # drift apart again.
+    display_names = {
+        role_key: ROLES[role_key].display_name
+        for role_key in role_keys
+        if ROLES[role_key].display_name
+    }
+    for alias, role_key in _display_name_alias_claims(display_names):
+        _claim(alias, role_key)
 
     registry: dict[str, dict[str, Any]] = {}
     for role_key in role_keys:

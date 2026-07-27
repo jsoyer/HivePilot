@@ -28,6 +28,7 @@ import {
   fetchModels,
   fetchRun,
   fetchVerdicts,
+  parseGraphRunSelector,
   pauseAutopilot,
   postApproval,
   fetchPanel,
@@ -268,5 +269,41 @@ describe('pollen-api fetch wrappers', () => {
   it('fetchVerdicts adds a role filter and a custom limit when given', async () => {
     await fetchVerdicts('reviewer', 200)
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/verdicts?limit=200&role=reviewer', { on403: 'forbidden' })
+  })
+
+  describe('parseGraphRunSelector', () => {
+    it('returns null when meta has no runs array at all (a different source, or an old response)', () => {
+      expect(parseGraphRunSelector({})).toBeNull()
+      expect(parseGraphRunSelector({ runs: 'not-an-array' })).toBeNull()
+    })
+
+    it('parses a well-formed run selector', () => {
+      const result = parseGraphRunSelector({
+        runs: [
+          { id: 1, started_at: '2026-01-01 00:00:00', status: 'complete' },
+          { id: 2, started_at: null, status: 'running' },
+        ],
+        selected_run_id: 2,
+        live: true,
+      })
+      expect(result).toEqual({
+        runs: [
+          { id: 1, started_at: '2026-01-01 00:00:00', status: 'complete' },
+          { id: 2, started_at: null, status: 'running' },
+        ],
+        selectedRunId: 2,
+        live: true,
+      })
+    })
+
+    it('drops malformed run entries (missing numeric id) instead of crashing', () => {
+      const result = parseGraphRunSelector({ runs: [{ id: 'not-a-number' }, { id: 3 }, 'garbage', null] })
+      expect(result?.runs).toEqual([{ id: 3, started_at: null, status: null }])
+    })
+
+    it('defaults selectedRunId to null and live to false when absent', () => {
+      const result = parseGraphRunSelector({ runs: [] })
+      expect(result).toEqual({ runs: [], selectedRunId: null, live: false })
+    })
   })
 })

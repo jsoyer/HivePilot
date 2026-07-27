@@ -225,6 +225,253 @@ class TestSchedulerDaemonDeferredProcessing:
         assert row[1] == 3
 
 
+def _insert_backoff_row(
+    db: Path,
+    *,
+    next_retry_at: datetime,
+    schedule_name: str = "groomer",
+    task: str = "groomer-scan",
+    projects: list[str] | None = None,
+    attempt: int = 1,
+    max_attempts: int = 3,
+    status: str = "pending",
+    created_at: datetime | str | None = None,
+) -> int:
+    """Insert a PLAIN backoff-retry row (context IS NULL) -- exactly what
+    `retry_service.enqueue()` writes on an ordinary schedule task failure
+    (`schedule_service.run_entry`'s except branch). This is the subtype the
+    retry-queue-drain incident was about: nothing ever read these rows."""
+    created = created_at.isoformat() if isinstance(created_at, datetime) else created_at
+    with sqlite3.connect(str(db)) as conn:
+        if created is not None:
+            cur = conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    schedule_name,
+                    task,
+                    json.dumps(projects or ["repo-y"]),
+                    "[Errno 2] No such file or directory: '/root/noxys'",
+                    attempt,
+                    max_attempts,
+                    status,
+                    next_retry_at.isoformat(),
+                    created,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    schedule_name,
+                    task,
+                    json.dumps(projects or ["repo-y"]),
+                    "[Errno 2] No such file or directory: '/root/noxys'",
+                    attempt,
+                    max_attempts,
+                    status,
+                    next_retry_at.isoformat(),
+                ),
+            )
+        conn.commit()
+        return int(cur.lastrowid)  # type: ignore[arg-type]
+
+
+class TestSchedulerDaemonBackoffRetryDrain:
+    """fix/retry-queue-drain: `retry_service.enqueue()`'s plain backoff rows
+    (context IS NULL) were never read by anything -- this is the reader.
+    Every test here FAILS against unfixed `origin/main` (no
+    `_process_backoff_retries` method exists at all)."""
+
+    def test_due_backoff_row_is_drained_and_dispatched(self, tmp_path, monkeypatch):
+        """A due, context-less pending row IS picked up and run_task called
+        -- this is the exact 197-row incident scenario."""
+        db = _make_db(tmp_path)
+        import hivepilot.services.state_service as svc
+
+        monkeypatch.setattr(svc, "DB_PATH", str(db))
+        monkeypatch.setattr(svc, "init_db", lambda: None)
+
+        past = datetime.now(timezone.utc) - timedelta(days=7)
+        row_id = _insert_backoff_row(db, next_retry_at=past)
+
+        run_task_calls: list[dict] = []
+        mock_orch = MagicMock()
+        mock_orch.run_task.side_effect = lambda **kw: run_task_calls.append(kw)
+
+        with patch("hivepilot.services.scheduler_daemon.Orchestrator", return_value=mock_orch):
+            from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+            daemon = SchedulerDaemon()
+            daemon._process_backoff_retries()
+
+        assert len(run_task_calls) == 1
+        assert run_task_calls[0]["task_name"] == "groomer-scan"
+        assert run_task_calls[0]["project_names"] == ["repo-y"]
+
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute("SELECT status FROM retry_queue WHERE id=?", (row_id,)).fetchone()
+        assert row[0] == "done"
+
+    def test_future_backoff_row_is_not_dispatched(self, tmp_path, monkeypatch):
+        db = _make_db(tmp_path)
+        import hivepilot.services.state_service as svc
+
+        monkeypatch.setattr(svc, "DB_PATH", str(db))
+        monkeypatch.setattr(svc, "init_db", lambda: None)
+
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        _insert_backoff_row(db, next_retry_at=future)
+
+        mock_orch = MagicMock()
+        with patch("hivepilot.services.scheduler_daemon.Orchestrator", return_value=mock_orch):
+            from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+            daemon = SchedulerDaemon()
+            daemon._process_backoff_retries()
+
+        mock_orch.run_task.assert_not_called()
+
+    def test_naive_and_aware_next_retry_at_both_eventually_drain(self, tmp_path, monkeypatch):
+        """Regression for the naive-vs-aware timestamp theory: a row stored
+        with SQLite's naive CURRENT_TIMESTAMP shape and a row stored with an
+        aware ISO-8601 offset must BOTH be recognised as due."""
+        db = _make_db(tmp_path)
+        import hivepilot.services.state_service as svc
+
+        monkeypatch.setattr(svc, "DB_PATH", str(db))
+        monkeypatch.setattr(svc, "init_db", lambda: None)
+
+        aware_past = datetime.now(timezone.utc) - timedelta(minutes=5)
+        _insert_backoff_row(db, next_retry_at=aware_past, schedule_name="aware-row")
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "naive-row",
+                    "groomer-scan",
+                    json.dumps(["repo-y"]),
+                    "err",
+                    1,
+                    3,
+                    "pending",
+                    "2020-01-01 00:00:00",
+                ),
+            )
+            conn.commit()
+
+        run_task_calls: list[dict] = []
+        mock_orch = MagicMock()
+        mock_orch.run_task.side_effect = lambda **kw: run_task_calls.append(kw)
+
+        with patch("hivepilot.services.scheduler_daemon.Orchestrator", return_value=mock_orch):
+            from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+            daemon = SchedulerDaemon()
+            daemon._process_backoff_retries()
+            daemon._process_backoff_retries()
+
+        assert len(run_task_calls) == 2
+
+    def test_backlog_drains_one_row_per_tick_not_all_at_once(self, tmp_path, monkeypatch):
+        """Bound-the-blast-radius requirement: a backlog of many due rows
+        must dispatch AT MOST ONE per `_process_backoff_retries()` call --
+        mirrors `autopilot_queue.drain_one()`'s one-per-tick contract."""
+        db = _make_db(tmp_path)
+        import hivepilot.services.state_service as svc
+
+        monkeypatch.setattr(svc, "DB_PATH", str(db))
+        monkeypatch.setattr(svc, "init_db", lambda: None)
+
+        past = datetime.now(timezone.utc) - timedelta(days=7)
+        for i in range(5):
+            _insert_backoff_row(db, next_retry_at=past, schedule_name=f"groomer-{i}")
+
+        mock_orch = MagicMock()
+        with patch("hivepilot.services.scheduler_daemon.Orchestrator", return_value=mock_orch):
+            from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+            daemon = SchedulerDaemon()
+            daemon._process_backoff_retries()
+
+        assert mock_orch.run_task.call_count == 1
+
+        with sqlite3.connect(str(db)) as conn:
+            pending_left = conn.execute(
+                "SELECT COUNT(*) FROM retry_queue WHERE status='pending'"
+            ).fetchone()[0]
+        assert pending_left == 4
+
+    def test_drain_failure_is_surfaced_not_swallowed(self, tmp_path, monkeypatch, caplog):
+        """A row that exhausts max_attempts must be marked 'dead' AND
+        logged at error level -- 'a drain that silently does nothing is
+        worse than no drain'."""
+        db = _make_db(tmp_path)
+        import hivepilot.services.state_service as svc
+
+        monkeypatch.setattr(svc, "DB_PATH", str(db))
+        monkeypatch.setattr(svc, "init_db", lambda: None)
+
+        past = datetime.now(timezone.utc) - timedelta(days=7)
+        row_id = _insert_backoff_row(db, next_retry_at=past, attempt=2, max_attempts=3)
+
+        mock_orch = MagicMock()
+        mock_orch.run_task.side_effect = RuntimeError(
+            "[Errno 2] No such file or directory: '/root/noxys'"
+        )
+
+        with (
+            patch("hivepilot.services.scheduler_daemon.Orchestrator", return_value=mock_orch),
+            caplog.at_level("ERROR", logger="hivepilot.services.scheduler_daemon"),
+        ):
+            from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+            daemon = SchedulerDaemon()
+            daemon._process_backoff_retries()
+
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute(
+                "SELECT status, attempt FROM retry_queue WHERE id=?", (row_id,)
+            ).fetchone()
+        assert row[0] == "dead"
+        assert row[1] == 3
+        assert any("rerun_backoff_dead" in rec.message for rec in caplog.records)
+
+    def test_stale_row_expires_before_it_would_dispatch(self, tmp_path, monkeypatch, caplog):
+        """A row far older than the TTL is expired (and logged), never
+        dispatched -- 'expiry must be visible, never silent'."""
+        db = _make_db(tmp_path)
+        import hivepilot.services.state_service as svc
+
+        monkeypatch.setattr(svc, "DB_PATH", str(db))
+        monkeypatch.setattr(svc, "init_db", lambda: None)
+
+        old = datetime.now(timezone.utc) - timedelta(days=7)
+        row_id = _insert_backoff_row(db, next_retry_at=old, created_at=old)
+
+        mock_orch = MagicMock()
+        with (
+            patch("hivepilot.services.scheduler_daemon.Orchestrator", return_value=mock_orch),
+            caplog.at_level("WARNING", logger="hivepilot.services.scheduler_daemon"),
+        ):
+            from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+            daemon = SchedulerDaemon()
+            daemon._expire_stale_retries()
+            daemon._process_backoff_retries()
+
+        mock_orch.run_task.assert_not_called()
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute("SELECT status FROM retry_queue WHERE id=?", (row_id,)).fetchone()
+        assert row[0] == "expired"
+        assert any("retry_expired" in rec.message for rec in caplog.records)
+
+
 class TestSchedulerDaemonHotReload:
     """Phase 26b — opt-in (`settings.plugins_hot_reload`) mtime-based plugin
     hot-reload wiring on `SchedulerDaemon`. Uses the daemon's OWN dedicated,

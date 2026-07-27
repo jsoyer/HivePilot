@@ -925,5 +925,52 @@ class TestMarkSwarmEventFailed:
         self._running_event("r:fail:3")
         event_id = compute_event_id("pr_ready", "r:fail:3")
         assert state_service.mark_swarm_event_failed(event_id) is True
-
         assert state_service.claim_swarm_event(event_id, claimed_by="inst-b") is False
+
+
+# ---------------------------------------------------------------------------
+# list_all_runs / list_recent_runs — deterministic "most recent run" ordering
+# (Pollen graph-cascade rebuild). `started_at` is SQLite `CURRENT_TIMESTAMP`
+# (SECOND resolution) — two runs recorded within the same wall-clock second
+# (routine in tests, and possible in fast-firing real usage) previously had
+# NO deterministic tiebreak, so "the last run" was whichever row SQLite
+# happened to return first for a tied `ORDER BY started_at DESC` — a real
+# correctness gap for `pipeline_source.py`'s "last run" resolution and any
+# other caller relying on recency. `id` (the table's autoincrement PK) is
+# monotonically increasing and always distinct, so `ORDER BY started_at
+# DESC, id DESC` makes ties resolve to the row inserted LAST, deterministically.
+# ---------------------------------------------------------------------------
+
+
+class TestRunRecencyOrdering:
+    def _force_same_started_at(self, run_ids: list[int]) -> None:
+        """Directly rewrite `started_at` to an IDENTICAL value for every id
+        in *run_ids* — simulates two runs recorded within the same SQLite
+        `CURRENT_TIMESTAMP` second, which real usage can hit but a fast unit
+        test normally can't reproduce via timing alone."""
+        with db.connect() as conn:
+            for run_id in run_ids:
+                conn.execute(
+                    db.ph("UPDATE runs SET started_at=? WHERE id=?"),
+                    ("2026-01-01 00:00:00", run_id),
+                )
+
+    def test_list_all_runs_breaks_started_at_tie_by_id_desc(self) -> None:
+        run_a = record_run_start("demo", "demo")
+        run_b = record_run_start("demo", "demo")
+        self._force_same_started_at([run_a, run_b])
+
+        runs = state_service.list_all_runs()
+        tied = [r for r in runs if r["id"] in (run_a, run_b)]
+        assert [r["id"] for r in tied] == [run_b, run_a], (
+            "tied started_at must resolve to the LAST-inserted run first (id DESC)"
+        )
+
+    def test_list_recent_runs_breaks_started_at_tie_by_id_desc(self) -> None:
+        run_a = record_run_start("demo", "demo")
+        run_b = record_run_start("demo", "demo")
+        self._force_same_started_at([run_a, run_b])
+
+        runs = state_service.list_recent_runs()
+        tied = [r for r in runs if r["id"] in (run_a, run_b)]
+        assert [r["id"] for r in tied] == [run_b, run_a]

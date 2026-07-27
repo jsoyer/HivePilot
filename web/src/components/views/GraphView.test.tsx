@@ -84,6 +84,34 @@ const GRAPH: GraphData = {
     { source: 'b', target: 'c', kind: null, label: null },
   ],
   layout_hint: null,
+  meta: {},
+}
+
+// A `pipeline`-source-shaped graph exposing the run-selector `meta` shape
+// (see `parseGraphRunSelector`) — used by the run-selector/live-toggle
+// tests below. `live: true` mirrors an in-progress run.
+const GRAPH_WITH_LIVE_RUN: GraphData = {
+  ...GRAPH,
+  source: 'pipeline',
+  meta: {
+    runs: [
+      { id: 2, started_at: '2026-07-20T10:00:00', status: 'running' },
+      { id: 1, started_at: '2026-07-19T10:00:00', status: 'complete' },
+    ],
+    selected_run_id: 2,
+    live: true,
+  },
+}
+
+// Same shape, but the selected run has already finished — `live: false`.
+const GRAPH_WITH_FINISHED_RUN: GraphData = {
+  ...GRAPH,
+  source: 'pipeline',
+  meta: {
+    runs: [{ id: 1, started_at: '2026-07-19T10:00:00', status: 'complete' }],
+    selected_run_id: 1,
+    live: false,
+  },
 }
 
 const DETAIL: GraphDetail = {
@@ -299,6 +327,7 @@ describe('GraphView', () => {
     nodes: [{ id: 'error', label: 'ValueError', kind: 'error', status: 'error', group: null, badges: [], meta: {} }],
     edges: [],
     layout_hint: null,
+    meta: {},
   }
 
   it('CRITICAL: shows a friendly hint (not a red error node) when a required param is missing', async () => {
@@ -393,6 +422,185 @@ describe('GraphView', () => {
     // A purely client-side rendering toggle — never triggers a re-fetch of
     // the already-loaded graph.
     expect(fetchGraph.mock.calls.length).toBe(fetchCallsBefore)
+  })
+
+  it('Pollen cascade rebuild: color-by supports a third "role" option alongside status/kind', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const roleButton = container.querySelector('[data-testid="graph-color-by-role"]') as HTMLElement
+    expect(roleButton).not.toBeNull()
+    expect(roleButton.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => {
+      roleButton.click()
+      await Promise.resolve()
+    })
+
+    expect(roleButton.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('Pollen cascade rebuild: no run selector for a source with no run-selector meta', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="graph-run-selector"]')).toBeNull()
+  })
+
+  it('Pollen cascade rebuild: shows a run selector + Live toggle for a live run, and re-fetches with run_id on selection', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH_WITH_LIVE_RUN)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // Switch to the `pipeline` source (the `plugins` default has no run
+    // concept) — mirrors the existing "shows a param input…" test's
+    // source-switch flow.
+    const select = container.querySelector('#graph-source-select') as HTMLSelectElement
+    await act(async () => {
+      select.value = 'pipeline'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const runSelect = container.querySelector('#graph-run-select') as HTMLSelectElement
+    expect(runSelect).not.toBeNull()
+    expect(runSelect.textContent).toContain('#2')
+    expect(runSelect.textContent).toContain('#1')
+
+    const liveToggle = container.querySelector('[data-testid="graph-live-toggle"]') as HTMLElement
+    expect(liveToggle).not.toBeNull()
+    expect(liveToggle.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => {
+      runSelect.value = '1'
+      runSelect.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchGraph).toHaveBeenLastCalledWith('pipeline', { run_id: '1' })
+  })
+
+  it('Pollen cascade rebuild: hides the Live toggle for a finished (non-live) run', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH_WITH_FINISHED_RUN)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="graph-run-selector"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="graph-live-toggle"]')).toBeNull()
+  })
+
+  it('Pollen cascade rebuild: Live toggle polls (re-fetches) on an interval while a live run is displayed', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchGraphSources.mockResolvedValue(SOURCES)
+      fetchGraph.mockResolvedValue(GRAPH_WITH_LIVE_RUN)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      const callsBefore = fetchGraph.mock.calls.length
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(fetchGraph.mock.calls.length).toBeGreaterThan(callsBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Pollen cascade rebuild: turning the Live toggle off stops polling', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchGraphSources.mockResolvedValue(SOURCES)
+      fetchGraph.mockResolvedValue(GRAPH_WITH_LIVE_RUN)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      const liveToggle = container.querySelector('[data-testid="graph-live-toggle"]') as HTMLElement
+      await act(async () => {
+        liveToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        await Promise.resolve()
+      })
+      expect(liveToggle.getAttribute('aria-pressed')).toBe('false')
+
+      const callsBefore = fetchGraph.mock.calls.length
+
+      await act(async () => {
+        vi.advanceTimersByTime(15000)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(fetchGraph.mock.calls.length).toBe(callsBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Pollen cascade rebuild: the Reload button re-fetches the graph with the same params', async () => {
+    fetchGraphSources.mockResolvedValue(SOURCES)
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const callsBefore = fetchGraph.mock.calls.length
+    const reloadButton = container.querySelector('[data-testid="graph-reload-button"]') as HTMLElement
+    expect(reloadButton).not.toBeNull()
+
+    await act(async () => {
+      reloadButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchGraph.mock.calls.length).toBe(callsBefore + 1)
+    expect(fetchGraph).toHaveBeenLastCalledWith('plugins', {})
   })
 
   it('renders French title and copy when the language is fr (P1a)', async () => {

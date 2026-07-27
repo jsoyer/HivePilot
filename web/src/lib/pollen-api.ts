@@ -720,6 +720,56 @@ export interface GraphData {
   nodes: GraphNode[]
   edges: GraphEdge[]
   layout_hint: string | null
+  /** Pollen graph-cascade rebuild: a generic, arbitrary, source-authored
+   * extensibility hook (mirrors `GraphNode.meta`) — see `hivepilot/graph.py`'s
+   * `GraphData` docstring. The built-in `pipeline` source uses it to expose
+   * a run selector: `{ runs: GraphRunOption[], selected_run_id: number |
+   * null, live: boolean }` — see `parseGraphRunSelector` below, which reads
+   * this defensively (never trusts the shape blindly; it's server-authored
+   * but arbitrary per the closed contract's own design). A source that
+   * doesn't populate it leaves this at `{}`. */
+  meta: Record<string, unknown>
+}
+
+/** One entry of the `pipeline` source's `GraphData.meta.runs` — a recent
+ * run summary for the run-selector dropdown. Deliberately narrower than
+ * `RunSummary` (`GET /v1/runs`, gated at the higher `run` role) — this
+ * travels over the `read`-gated `/v1/graph/*` endpoints, so it carries only
+ * id/started_at/status, never `detail` (untrusted free text) or tenant. */
+export interface GraphRunOption {
+  id: number
+  started_at: string | null
+  status: string | null
+}
+
+/** Defensively parses `GraphData.meta` into the `pipeline` source's run-
+ * selector shape, or `null` when *meta* doesn't look like that shape at all
+ * (a different source, or a `pipeline` response predating this field) —
+ * `GraphView` renders no run selector at all in that case, never a crash
+ * from blindly trusting arbitrary source-authored `meta`. */
+export function parseGraphRunSelector(
+  meta: Record<string, unknown>,
+): { runs: GraphRunOption[]; selectedRunId: number | null; live: boolean } | null {
+  const rawRuns = meta.runs
+  if (!Array.isArray(rawRuns)) return null
+  const runs: GraphRunOption[] = []
+  for (const entry of rawRuns) {
+    if (
+      entry &&
+      typeof entry === 'object' &&
+      typeof (entry as Record<string, unknown>).id === 'number'
+    ) {
+      const record = entry as Record<string, unknown>
+      runs.push({
+        id: record.id as number,
+        started_at: typeof record.started_at === 'string' ? record.started_at : null,
+        status: typeof record.status === 'string' ? record.status : null,
+      })
+    }
+  }
+  const selectedRunId = typeof meta.selected_run_id === 'number' ? meta.selected_run_id : null
+  const live = meta.live === true
+  return { runs, selectedRunId, live }
 }
 
 export interface GraphSourceSummary {

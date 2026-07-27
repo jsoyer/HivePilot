@@ -454,6 +454,34 @@ class Settings(BaseSettings):
     worker_fallback_local: bool = False  # on worker failure, run the step locally (W3)
     worker_max_concurrency: int = 4  # max concurrent dispatches to a single worker (W4)
 
+    # ---- Retry-queue drain (fix/retry-queue-drain) ----
+    # Incident: `retry_service.enqueue()` (the plain exponential-backoff path
+    # `schedule_service.run_entry()` uses on an ordinary task failure) writes
+    # rows with `context IS NULL`. The scheduler daemon's ONLY reader
+    # (`_process_deferred_rows`) filters `context IS NOT NULL` — written
+    # exclusively for the quota-deferred subtype (`enqueue_deferred()`). A
+    # context-less row was never drained by anything: 197 `groomer-scan`
+    # retries sat `pending` and past-due for 7 days with zero operator
+    # signal. `hivepilot.services.scheduler_daemon._process_backoff_retries`
+    # now drains that previously-undrained subtype, bounded to at most one
+    # row per tick (same "one per tick" bound as `autopilot_queue.drain_one`).
+    #
+    # TTL: a retry whose own context is this old is unlikely to fix itself
+    # (its failure cause — e.g. a path that no longer exists — will not have
+    # changed) and is unlikely to still be useful to run unattended. `<= 0`
+    # disables expiry entirely. env: HIVEPILOT_RETRY_QUEUE_TTL_DAYS
+    retry_queue_ttl_days: float = 3.0
+    # `config doctor` / `check_retry_queue_backlog` threshold: a PENDING row
+    # overdue (now - next_retry_at) by more than this many hours is "stuck"
+    # -- backoff delays here are minutes, not hours, so ANY row overdue this
+    # long in a healthy system means the daemon isn't draining it. Kept
+    # deliberately generous to avoid false positives on a merely slow tick.
+    # env: HIVEPILOT_RETRY_QUEUE_STALE_AFTER_HOURS
+    retry_queue_stale_after_hours: int = 24
+    # Number of stuck rows at which `check_retry_queue_backlog` escalates
+    # from `warning` to `error` severity. env: HIVEPILOT_RETRY_QUEUE_BACKLOG_ERROR_COUNT
+    retry_queue_backlog_error_count: int = 20
+
     # ---- herdr runner plugin (plugins/herdr.py) ----
     # Config for the first-party `herdr` runner plugin: executes each step
     # inside a dedicated herdr (terminal multiplexer for coding agents) pane

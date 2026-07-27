@@ -562,12 +562,14 @@ def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[st
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                db.ph("SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC LIMIT ?"),
+                db.ph(
+                    "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC LIMIT ?"
+                ),
                 (tenant, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                db.ph("SELECT * FROM runs ORDER BY started_at DESC LIMIT ?"), (limit,)
+                db.ph("SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?"), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
 
@@ -1097,15 +1099,24 @@ def get_token(token: str) -> dict[str, Any] | None:
 
 
 def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:
+    """Every run row, most recent first. Pollen graph-cascade rebuild:
+    `started_at` is SQLite `CURRENT_TIMESTAMP` (SECOND resolution) — two
+    runs recorded within the same wall-clock second tie on that column
+    alone, so `id DESC` (the table's monotonically increasing, always-
+    distinct autoincrement PK) breaks the tie deterministically in favor of
+    the LAST-inserted row, instead of leaving "the most recent run" to
+    SQLite's unspecified tie order. Callers relying on recency —
+    `hivepilot/graph_sources/pipeline_source.py`'s "last run" resolution
+    chief among them — depend on this being deterministic."""
     init_db()
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                db.ph("SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC"),
+                db.ph("SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC"),
                 (tenant,),
             ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM runs ORDER BY started_at DESC").fetchall()
+            rows = conn.execute("SELECT * FROM runs ORDER BY started_at DESC, id DESC").fetchall()
     return [dict(row) for row in rows]
 
 

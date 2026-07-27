@@ -165,6 +165,16 @@ export const fr: Record<TranslationKey, string> = {
   'graph.colorBy': 'Couleur par',
   'graph.colorByStatus': 'Statut',
   'graph.colorByKind': 'Type',
+  'graph.colorByRole': 'Rôle',
+  'graph.run': 'Run',
+  'graph.latestRun': 'Dernier run',
+  'graph.live': 'En direct',
+  'graph.reload': 'Recharger',
+  'graph.canvasHint': 'glisser les nœuds pour les organiser · molette pour zoomer',
+  'graph.statusSuccess': 'succès',
+  'graph.statusRunning': 'en cours',
+  'graph.statusSkipped': 'ignoré',
+  'graph.statusFailed': 'échoué',
 
   // ---- Mem0 view ---------------------------------------------------------
   'mem0.title': 'Recherche de mémoire Mem0',

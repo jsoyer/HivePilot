@@ -600,6 +600,55 @@ class TestStageScoping:
             f"skipped stage's output must not reach prior_chunks/artifact, got: {artifact_stages}"
         )
 
+    def test_skip_records_step_row_for_pipeline_source_visibility(self) -> None:
+        """Pollen graph-cascade rebuild: a scope-skipped stage must persist a
+        `state_service.record_step(..., status="skipped", ...)` row, keyed
+        `skip:<stage.name>` — this is the ONLY way `pipeline_source.py` can
+        later distinguish "considered and skipped" from "no data yet" for
+        THIS run (there is no other per-stage skip record in `state.db`).
+        Before this fix, a skipped stage's task was simply never invoked and
+        no step row existed at all, so the graph view could not render it as
+        dimmed-but-present."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="build", task="build", only_components=["c9"]),
+                PipelineStage(name="ship", task="ship"),
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=101),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_record_step,
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(
+                orch,
+                "run_task",
+                side_effect=lambda **kw: [RunResult("proj", kw["task_name"], True)],
+            ),
+        ):
+            orch.run_pipeline(
+                project_names=["c1"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+                simulate=True,
+                components=["c1", "c2"],
+            )
+
+        skip_calls = [
+            c for c in mock_record_step.call_args_list if c.kwargs.get("status") == "skipped"
+        ]
+        assert len(skip_calls) == 1
+        assert skip_calls[0].args[0] == 101
+        assert skip_calls[0].kwargs.get("step") == "skip:build"
+
     def test_skipped_stage_not_in_prior_chunks(self) -> None:
         """prior_chunks is untouched by a skipped stage: the next stage's
         prior_context (built from prior_chunks) carries no trace of it."""
@@ -1140,6 +1189,61 @@ class TestOnlyModulesScopeGate:
         assert by_target["test-pipe:extension-design"].success is True, (
             "a scope-skip must never be recorded as a failure"
         )
+
+    def test_surfaces_skip_records_step_row_for_pipeline_source_visibility(self) -> None:
+        """Pollen graph-cascade rebuild: the SURFACES declared-scope skip
+        gate must ALSO persist a `record_step(..., status="skipped", ...)`
+        row (mirrors the only_components/only_tags gate's own fix) — both
+        skip gates share the exact same "task never invoked, no step row"
+        problem, so `pipeline_source.py` needs the same signal from either
+        one to render a skipped stage as dimmed-but-present rather than
+        indistinguishable from "no data yet"."""
+        from hivepilot.orchestrator import RunResult
+
+        pipeline = PipelineConfig(
+            description="t",
+            stages=[
+                PipelineStage(name="scope", task="scope", declares_surfaces=True),
+                PipelineStage(
+                    name="console-design", task="console-design", only_modules=["console"]
+                ),
+                PipelineStage(
+                    name="extension-design", task="extension-design", only_modules=["extension"]
+                ),
+            ],
+        )
+        orch = _make_orchestrator_with_pipeline(pipeline)
+        orch.projects = TestOnlyModulesScoping._projects_with_modules(
+            noxys={"console": "apps/console", "extension": "apps/extension"}
+        )
+
+        def fake_run_task(**kw):
+            if kw["task_name"] == "scope":
+                return [RunResult("noxys", "scope", True, "SURFACES: console")]
+            return [RunResult("noxys", kw["task_name"], True)]
+
+        with (
+            patch("hivepilot.orchestrator.state_service.record_run_start", return_value=401),
+            patch("hivepilot.orchestrator.state_service.complete_run"),
+            patch("hivepilot.orchestrator.state_service.record_step") as mock_record_step,
+            patch("hivepilot.orchestrator.write_stage_artifact", return_value=None),
+            patch("hivepilot.orchestrator.validate_pipeline", return_value=None),
+            patch.object(orch, "run_task", side_effect=fake_run_task),
+        ):
+            orch.run_pipeline(
+                project_names=["noxys"],
+                pipeline_name="test-pipe",
+                extra_prompt=None,
+                auto_git=False,
+                dry_run=True,
+            )
+
+        skip_calls = [
+            c for c in mock_record_step.call_args_list if c.kwargs.get("status") == "skipped"
+        ]
+        assert len(skip_calls) == 1
+        assert skip_calls[0].args[0] == 401
+        assert skip_calls[0].kwargs.get("step") == "skip:extension-design"
 
     def test_surfaces_none_skips_all_only_modules_stages(self) -> None:
         """An earlier stage declares `SURFACES: none`: every only_modules
