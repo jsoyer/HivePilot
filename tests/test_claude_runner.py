@@ -860,6 +860,78 @@ def test_build_prompt_governance_repo_empty_when_not_configured(
 
 
 # ---------------------------------------------------------------------------
+# inline-repo-instructions PRD — `_build_prompt` inlines the CONTENT of a
+# project's declared repository instructions file(s) instead of only naming
+# them (see hivepilot.services.repo_instructions). Root-cause bug: the old
+# line was `f"Repository instructions file: {payload.project.claude_md}"` —
+# a bare filename, never read, and silent when the file didn't exist.
+# ---------------------------------------------------------------------------
+
+
+def test_build_prompt_inlines_claude_md_content(tmp_path: Path) -> None:
+    (tmp_path / "CLAUDE.md").write_text("Never force-push to main.", encoding="utf-8")
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path, claude_md="CLAUDE.md"),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+        secrets={},
+    )
+    out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+    assert "Never force-push to main." in out
+    assert "Repository instructions file: CLAUDE.md" not in out
+
+
+def test_build_prompt_inlines_multiple_instruction_files_in_order(tmp_path: Path) -> None:
+    (tmp_path / "CLAUDE.md").write_text("CLAUDE-CONTENT", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("AGENTS-CONTENT", encoding="utf-8")
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(
+            path=tmp_path, claude_md="CLAUDE.md", instruction_files=["AGENTS.md"]
+        ),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+        secrets={},
+    )
+    out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+    assert out.index("CLAUDE-CONTENT") < out.index("AGENTS-CONTENT")
+
+
+def test_build_prompt_warns_visibly_on_missing_instructions_file(tmp_path: Path, caplog) -> None:
+    import logging
+
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path, claude_md="DOES-NOT-EXIST.md"),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+        secrets={},
+    )
+    with caplog.at_level(logging.WARNING):
+        out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+    assert "DOES-NOT-EXIST.md" in out
+    assert "NOT FOUND" in out.upper()
+    assert "repo_instructions.missing_file" in caplog.text
+
+
+def test_build_prompt_no_instructions_section_when_none_declared(tmp_path: Path) -> None:
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="t",
+        step=TaskStep(name="s", runner="claude"),
+        metadata={},
+        secrets={},
+    )
+    out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+    assert "Repository instructions" not in out
+
+
+# ---------------------------------------------------------------------------
 # Reasoning-effort knob (MAX_THINKING_TOKENS) — ClaudeRunner._resolve_effort /
 # _effort_env_overlay, and both env-injection points (_build_invocation's own
 # env AND the bwrap-sandbox env_overlay in run()/capture()).
