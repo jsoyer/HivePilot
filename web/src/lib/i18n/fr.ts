@@ -464,8 +464,16 @@ export const fr: Record<TranslationKey, string> = {
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',
   'agents.description':
-    'Activité réelle par rôle — coût, exécutions, leçons et verdicts. Lecture seule pour tout jeton.',
-  'agents.noRoster': "Aucun effectif d'agents configuré.",
+    'Ce que coûte chaque rôle et à quelle fréquence il réussit. Sélectionnez un rôle pour ses leçons et ses verdicts.',
+  'agents.colRole': 'Rôle',
+  'agents.rowAriaLabel': 'Ouvrir le détail de {name}',
+  'agents.attentionTitle': '{count} rôle(s) à surveiller',
+  'agents.allClear': 'Tous les rôles sont nominaux — aucun verdict négatif, aucun taux de réussite faible.',
+  'agents.reasonVerdict': 'dernier verdict autre qu’une acceptation',
+  'agents.reasonLowSuccess': 'taux de réussite de {rate} %',
+  'agents.noRoster': 'Aucun rôle configuré',
+  'agents.noRosterBody':
+    'Les rôles se déclarent dans votre configuration (roles.yaml). Dès qu’un rôle existe et qu’une exécution lui attribue une étape, son coût et son taux de réussite apparaissent ici.',
   'agents.forbidden': "Impossible de charger l'activité des agents pour le tenant de votre jeton.",
   'agents.verdictsForbidden':
     "Impossible de charger les signaux de sévérité des verdicts pour le tenant de votre jeton.",
@@ -478,10 +486,9 @@ export const fr: Record<TranslationKey, string> = {
   'agents.tokensLabel': 'Jetons (entrée/sortie)',
   'agents.lastActiveLabel': 'Dernière activité',
   'agents.successRateLabel': 'Taux de réussite',
-  'agents.unknownTitle': 'Non attribué (avant le suivi par rôle)',
+  'agents.unknownTitle': 'Activité non attribuée',
   'agents.unknownDescription':
-    "Activité historique enregistrée sans attribution de rôle — steps.role n'existe qu'après le déploiement de ce sprint.",
-  'agents.unknownEmpty': 'Aucune activité non attribuée.',
+    'Enregistrée avant l’existence de l’attribution par rôle. Elle ne peut être rattachée à aucun rôle et n’entre donc dans aucun chiffre ci-dessus.',
   'agents.detailAriaLabel': "Détail de l'agent : {name}",
   'agents.closeAriaLabel': "Fermer le détail de l'agent",
   'agents.lessonsTitle': 'Leçons récentes',

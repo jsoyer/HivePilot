@@ -458,8 +458,16 @@ export const en = {
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',
-  'agents.description': 'Real per-role activity — cost, runs, lessons, and verdicts. Read-only for every token.',
-  'agents.noRoster': 'No agent roster configured.',
+  'agents.description': 'What each role costs and how often it succeeds. Select a role for its lessons and verdicts.',
+  'agents.colRole': 'Role',
+  'agents.rowAriaLabel': 'Open detail for {name}',
+  'agents.attentionTitle': '{count} role(s) need attention',
+  'agents.allClear': 'All roles nominal — no failing verdicts, no low success rate.',
+  'agents.reasonVerdict': 'recent verdict was not an accept',
+  'agents.reasonLowSuccess': 'success rate {rate}%',
+  'agents.noRoster': 'No agent roster configured',
+  'agents.noRosterBody':
+    'Roles are declared in your config (roles.yaml). Once a role exists and a run attributes a step to it, its cost and success rate appear here.',
   'agents.forbidden': "Unable to load agent activity for your token's tenant.",
   'agents.verdictsForbidden': "Unable to load verdict severity signals for your token's tenant.",
   'agents.noActivityYet': 'No activity attributed yet.',
@@ -471,10 +479,9 @@ export const en = {
   'agents.tokensLabel': 'Tokens (in/out)',
   'agents.lastActiveLabel': 'Last active',
   'agents.successRateLabel': 'Success rate',
-  'agents.unknownTitle': 'Unattributed (before role tracking)',
+  'agents.unknownTitle': 'Unattributed activity',
   'agents.unknownDescription':
-    'Historical activity recorded with no role attribution — steps.role only exists after this sprint shipped.',
-  'agents.unknownEmpty': 'No unattributed activity.',
+    'Recorded before per-role attribution existed. It cannot be assigned to a role, so it is excluded from every figure above.',
   'agents.detailAriaLabel': 'Agent detail: {name}',
   'agents.closeAriaLabel': 'Close agent detail',
   'agents.lessonsTitle': 'Recent lessons',

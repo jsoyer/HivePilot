@@ -441,6 +441,7 @@ function RunBoard({ runs, density, canRun, onOpenDetail, onStopped }: RunBoardPr
 }
 
 const ALL = '__all__'
+const NO_RUNS: RunSummary[] = []
 
 interface ToolbarProps {
   projects: string[]
@@ -595,7 +596,9 @@ export function RunBoardView() {
     return () => window.clearInterval(interval)
   }, [])
 
-  const runs = state.status === 'success' ? state.data : []
+  // A module-level constant for the not-yet-loaded case, so `runs` keeps a
+  // stable identity between renders and the memos below actually memoize.
+  const runs = state.status === 'success' ? state.data : NO_RUNS
 
   const projects = useMemo(
     () => [...new Set(runs.map((r) => r.project))].sort((a, b) => a.localeCompare(b)),
