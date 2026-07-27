@@ -19,7 +19,11 @@ import pytest
 from hivepilot.config import Settings
 from hivepilot.models import ProjectConfig
 from hivepilot.services.config_provenance import register_secret_value
-from hivepilot.services.repo_instructions import build_repo_instructions_section
+from hivepilot.services.repo_instructions import (
+    build_repo_instructions_section,
+    declared_instruction_files,
+    resolve_instruction_file_path,
+)
 
 
 def _settings(**overrides) -> Settings:
@@ -173,3 +177,61 @@ def test_duplicate_declared_file_not_injected_twice(tmp_path: Path) -> None:
     out = build_repo_instructions_section(project, _settings())
     assert out is not None
     assert out.count("DUP-CONTENT") == 1
+
+
+# ---------------------------------------------------------------------------
+# Public resolution helpers (config-doctor-session-incidents sprint): the
+# EXACT resolution `build_repo_instructions_section` uses, exposed as
+# primitives so `hivepilot.services.config_doctor`'s dangling-instruction-
+# file check can reuse it verbatim instead of reimplementing (a check that
+# disagrees with the runtime is worse than no check).
+# ---------------------------------------------------------------------------
+
+
+class TestDeclaredInstructionFiles:
+    def test_claude_md_only(self) -> None:
+        assert declared_instruction_files("CLAUDE.md", None) == ["CLAUDE.md"]
+
+    def test_claude_md_and_instruction_files_ordered(self) -> None:
+        assert declared_instruction_files("CLAUDE.md", ["AGENTS.md", "RULES.md"]) == [
+            "CLAUDE.md",
+            "AGENTS.md",
+            "RULES.md",
+        ]
+
+    def test_neither_declared_is_empty(self) -> None:
+        assert declared_instruction_files(None, None) == []
+
+    def test_duplicate_across_both_fields_collapses(self) -> None:
+        assert declared_instruction_files("CLAUDE.md", ["CLAUDE.md"]) == ["CLAUDE.md"]
+
+
+class TestResolveInstructionFilePath:
+    def test_relative_resolves_against_project_path(self, tmp_path: Path) -> None:
+        resolved = resolve_instruction_file_path(tmp_path, "CLAUDE.md")
+        assert resolved == (tmp_path / "CLAUDE.md").resolve()
+
+    def test_absolute_path_used_as_is(self, tmp_path: Path) -> None:
+        absolute = tmp_path / "elsewhere" / "GOVERNANCE.md"
+        resolved = resolve_instruction_file_path(tmp_path, str(absolute))
+        assert resolved == absolute
+
+    def test_parent_relative_resolves_outside_project(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "repo"
+        project_root.mkdir()
+        resolved = resolve_instruction_file_path(project_root, "../CLAUDE.md")
+        assert resolved == (tmp_path / "CLAUDE.md").resolve()
+
+    def test_matches_build_repo_instructions_section_resolution(self, tmp_path: Path) -> None:
+        """Anti-Goodhart: this public helper must resolve to the SAME path
+        the real prompt-building path uses -- write a file only the correct
+        resolution would find, and confirm both entry points agree."""
+        (tmp_path / "AGENTS.md").write_text("SHARED-RESOLUTION-CONTENT", encoding="utf-8")
+        project = ProjectConfig(path=tmp_path, instruction_files=["AGENTS.md"])
+        out = build_repo_instructions_section(project, _settings())
+        assert out is not None
+        assert "SHARED-RESOLUTION-CONTENT" in out
+
+        resolved = resolve_instruction_file_path(tmp_path, "AGENTS.md")
+        assert resolved.is_file()
+        assert resolved.read_text(encoding="utf-8") == "SHARED-RESOLUTION-CONTENT"
