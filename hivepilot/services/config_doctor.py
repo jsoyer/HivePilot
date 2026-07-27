@@ -586,6 +586,107 @@ def check_plugin_health(plugin_manager: Any) -> list[DoctorFinding]:
 
 
 # ---------------------------------------------------------------------------
+# Check: retry_queue abnormal backlog (fix/retry-queue-drain incident)
+#
+# 197 `groomer-scan` retries sat PENDING and past-due in retry_queue for 7
+# days: `retry_service.enqueue()` (the plain exponential-backoff path
+# `schedule_service.run_entry()` uses on an ordinary task failure) writes
+# rows with `context IS NULL`; the scheduler daemon's only reader
+# (`scheduler_daemon._process_deferred_rows`) filtered `context IS NOT
+# NULL` -- a guard written exclusively for the quota-deferred subtype, so a
+# context-less row was never drained by anything. `hivepilot schedule
+# health` printed the raw pending count the whole time but never flagged it
+# as abnormal -- exactly the invisible-degradation class `config doctor`
+# exists to catch.
+#
+# Deliberately conservative (the check_enabled_plugins_loaded 17-false-
+# positives lesson applies here too): a handful of rows still waiting out
+# their own backoff window is completely normal and produces NO finding.
+# Only rows overdue by more than `settings.retry_queue_stale_after_hours`
+# count as "stuck" -- backoff delays here are minutes, not hours, so ANY
+# row overdue that long in a system where the daemon is actually ticking
+# means the drain genuinely isn't reaching it.
+# ---------------------------------------------------------------------------
+
+
+def check_retry_queue_backlog() -> list[DoctorFinding]:
+    from datetime import datetime, timedelta, timezone
+
+    from hivepilot.services import db, state_service
+    from hivepilot.utils.display_time import _parse_stored
+
+    state_service.init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            db.ph("SELECT * FROM retry_queue WHERE status='pending'")
+        ).fetchall()
+
+    if not rows:
+        return []
+
+    now = datetime.now(timezone.utc)
+    threshold = timedelta(hours=settings.retry_queue_stale_after_hours)
+
+    stuck: list[dict[str, Any]] = []
+    unknown: list[dict[str, Any]] = []
+    for row in rows:
+        row_dict = dict(row)
+        raw_next = row_dict.get("next_retry_at")
+        parsed = _parse_stored(raw_next) if raw_next else None
+        if parsed is None:
+            unknown.append(row_dict)
+            continue
+        if now - parsed > threshold:
+            stuck.append(row_dict)
+
+    findings: list[DoctorFinding] = []
+
+    if unknown:
+        ids = ", ".join(str(r["id"]) for r in unknown[:10])
+        more = "..." if len(unknown) > 10 else ""
+        findings.append(
+            _finding(
+                "error",
+                "retry_queue_unparseable_timestamp",
+                f"{len(unknown)} retry_queue row(s) have a next_retry_at that could not be "
+                f"parsed (ids: {ids}{more})",
+                "a row whose due-ness cannot be determined is never picked up by the drain "
+                "(fail-closed) -- it sits pending forever with no other signal",
+                "inspect the row directly (`hivepilot schedule retry-list --status pending`) "
+                "and fix or delete its next_retry_at value",
+            )
+        )
+
+    if stuck:
+        sample = stuck[0]
+        oldest_overdue = max(now - _parse_stored(r["next_retry_at"]) for r in stuck)
+        oldest_days, oldest_rem = divmod(int(oldest_overdue.total_seconds()), 86400)
+        oldest_hours = oldest_rem // 3600
+        severity = (
+            "error" if len(stuck) >= settings.retry_queue_backlog_error_count else "warning"
+        )
+        findings.append(
+            _finding(
+                severity,
+                "retry_queue_backlog",
+                f"{len(stuck)} retry_queue row(s) are pending and overdue by more than "
+                f"{settings.retry_queue_stale_after_hours}h (oldest overdue: {oldest_days}d "
+                f"{oldest_hours}h; e.g. task={sample.get('task')!r} "
+                f"error={str(sample.get('error'))[:120]!r})",
+                "the scheduler daemon drains the retry queue at most one row per tick -- a "
+                "row still overdue by hours means either the daemon isn't running, or "
+                "something is preventing the drain from ever reaching it (this is exactly "
+                "how 197 groomer-scan retries sat pending for 7 days with zero signal)",
+                "run `hivepilot schedule health` for the live count, `hivepilot schedule "
+                "retry-list --status pending` to inspect the rows, and confirm the scheduler "
+                "daemon (`hivepilot schedule daemon`) is actually running",
+            )
+        )
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Check: dangling references (incident #7, plus #6's alias variant)
 # ---------------------------------------------------------------------------
 
@@ -1707,6 +1808,9 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     )
     findings.extend(_run_check("check_vault_git_state", check_vault_git_state))
     findings.extend(_run_check("check_display_timezone", check_display_timezone))
+    findings.extend(
+        _run_check("check_retry_queue_backlog", check_retry_queue_backlog)
+    )
     return _dedupe_findings(findings)
 
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -246,6 +246,221 @@ class TestListDlq:
             base_delay_minutes=1,
         )
         assert retry_service.list_dlq() == []
+
+
+class TestDueBackoffRows:
+    """Tests for retry_service.due_backoff_rows() — the previously-missing
+    reader for plain exponential-backoff rows (context IS NULL), the root
+    cause of the 197-row retry-queue-never-drains incident."""
+
+    def test_due_row_is_returned(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("groomer", "groomer-scan", "[]", "path missing", 1, 3, "pending", past),
+            )
+            conn.commit()
+        due = retry_service.due_backoff_rows(limit=1)
+        assert len(due) == 1
+        assert due[0]["task"] == "groomer-scan"
+
+    def test_future_row_is_not_due(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("groomer", "groomer-scan", "[]", "err", 1, 3, "pending", future),
+            )
+            conn.commit()
+        assert retry_service.due_backoff_rows(limit=5) == []
+
+    def test_row_with_context_is_excluded(self, isolated_db: Path) -> None:
+        """Rows with a context blob belong to the quota-deferred subtype
+        (already drained by scheduler_daemon._process_deferred_rows) — this
+        function is deliberately scoped to the OTHER subtype only."""
+        state_service.init_db()
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("quota-deferred", "dev", "[]", "err", 1, 3, "pending", past, '{"task": "dev"}'),
+            )
+            conn.commit()
+        assert retry_service.due_backoff_rows(limit=5) == []
+
+    def test_naive_and_aware_timestamps_both_compare_correctly(self, isolated_db: Path) -> None:
+        """created_at/next_retry_at can be stored in two different formats
+        (naive SQLite CURRENT_TIMESTAMP vs aware ISO-8601 from enqueue()'s
+        own .isoformat()) — due-ness must be computed correctly for BOTH."""
+        state_service.init_db()
+        naive_past = "2020-01-01 00:00:00"  # SQLite CURRENT_TIMESTAMP shape, no tz
+        aware_past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        with sqlite3.connect(isolated_db) as conn:
+            for name, ts in (("naive-row", naive_past), ("aware-row", aware_past)):
+                conn.execute(
+                    "INSERT INTO retry_queue "
+                    "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (name, "t", "[]", "e", 1, 3, "pending", ts),
+                )
+            conn.commit()
+        due = retry_service.due_backoff_rows(limit=5)
+        assert {row["schedule_name"] for row in due} == {"naive-row", "aware-row"}
+
+    def test_unparseable_timestamp_is_never_due(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("bad", "t", "[]", "e", 1, 3, "pending", "not-a-date"),
+            )
+            conn.commit()
+        assert retry_service.due_backoff_rows(limit=5) == []
+
+    def test_limit_bounds_result_and_returns_oldest_first(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        now = datetime.now(timezone.utc)
+        with sqlite3.connect(isolated_db) as conn:
+            for i, minutes_ago in enumerate([1, 30, 10]):
+                ts = (now - timedelta(minutes=minutes_ago)).isoformat()
+                conn.execute(
+                    "INSERT INTO retry_queue "
+                    "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (f"s{i}", "t", "[]", "e", 1, 3, "pending", ts),
+                )
+            conn.commit()
+        due = retry_service.due_backoff_rows(limit=1)
+        assert len(due) == 1
+        assert due[0]["schedule_name"] == "s1"  # 30 minutes ago == oldest
+
+
+class TestClaimRow:
+    def test_claim_pending_row_succeeds(self, isolated_db: Path) -> None:
+        row_id = retry_service.enqueue(
+            schedule_name="s", task="t", projects=[], error="e",
+            attempt=1, max_attempts=3, base_delay_minutes=1,
+        )
+        assert retry_service.claim_row(row_id) is True
+        rows = retry_service.list_queue()
+        assert rows[0]["status"] == "running"
+
+    def test_claim_already_running_row_fails(self, isolated_db: Path) -> None:
+        row_id = retry_service.enqueue(
+            schedule_name="s", task="t", projects=[], error="e",
+            attempt=1, max_attempts=3, base_delay_minutes=1,
+        )
+        assert retry_service.claim_row(row_id) is True
+        assert retry_service.claim_row(row_id) is False
+
+
+class TestMarkTransitions:
+    def test_mark_done(self, isolated_db: Path) -> None:
+        row_id = retry_service.enqueue(
+            schedule_name="s", task="t", projects=[], error="e",
+            attempt=1, max_attempts=3, base_delay_minutes=1,
+        )
+        retry_service.mark_done(row_id)
+        assert retry_service.list_queue()[0]["status"] == "done"
+
+    def test_mark_retry_reschedules(self, isolated_db: Path) -> None:
+        row_id = retry_service.enqueue(
+            schedule_name="s", task="t", projects=[], error="e",
+            attempt=1, max_attempts=3, base_delay_minutes=1,
+        )
+        next_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        retry_service.mark_retry(row_id, attempt=2, next_retry_at=next_at)
+        row = retry_service.list_queue()[0]
+        assert row["status"] == "pending"
+        assert row["attempt"] == 2
+
+    def test_mark_dead(self, isolated_db: Path) -> None:
+        row_id = retry_service.enqueue(
+            schedule_name="s", task="t", projects=[], error="e",
+            attempt=2, max_attempts=3, base_delay_minutes=1,
+        )
+        retry_service.mark_dead(row_id, attempt=3)
+        row = retry_service.list_queue()[0]
+        assert row["status"] == "dead"
+        assert row["attempt"] == 3
+
+
+class TestExpireStale:
+    def test_old_pending_row_expires(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        old_created = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("s", "t", "[]", "e", 1, 3, "pending", old_created, old_created),
+            )
+            conn.commit()
+        expired = retry_service.expire_stale(3.0)
+        assert len(expired) == 1
+        assert retry_service.list_queue()[0]["status"] == "expired"
+
+    def test_recent_pending_row_is_untouched(self, isolated_db: Path) -> None:
+        row_id = retry_service.enqueue(
+            schedule_name="s", task="t", projects=[], error="e",
+            attempt=1, max_attempts=3, base_delay_minutes=1,
+        )
+        expired = retry_service.expire_stale(3.0)
+        assert expired == []
+        assert retry_service.list_queue()[0]["status"] == "pending"
+        assert row_id  # sanity
+
+    def test_non_pending_rows_are_never_expired(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("s", "t", "[]", "e", 3, 3, "dead", old, old),
+            )
+            conn.commit()
+        expired = retry_service.expire_stale(3.0)
+        assert expired == []
+
+    def test_ttl_zero_or_negative_disables_expiry(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        old = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("s", "t", "[]", "e", 1, 3, "pending", old, old),
+            )
+            conn.commit()
+        assert retry_service.expire_stale(0) == []
+        assert retry_service.list_queue()[0]["status"] == "pending"
+
+    def test_unparseable_created_at_is_never_expired(self, isolated_db: Path) -> None:
+        state_service.init_db()
+        with sqlite3.connect(isolated_db) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("s", "t", "[]", "e", 1, 3, "pending", "2099-01-01T00:00:00+00:00", "garbage"),
+            )
+            conn.commit()
+        assert retry_service.expire_stale(3.0) == []
 
 
 class TestPurgeDlq:
