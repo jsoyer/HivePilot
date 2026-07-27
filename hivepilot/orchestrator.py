@@ -3198,6 +3198,10 @@ class Orchestrator:
             # failure, never confused with a real completed stage).
             if _stage_should_skip(stage, group_tags, selected_components):
                 target_components = sorted(_resolve_stage_target_components(stage, group_tags))
+                skip_detail = (
+                    f"skipped: scoped to {target_components}, disjoint from "
+                    f"selected components {selected_components}"
+                )
                 logger.info(
                     "pipeline.stage_skipped",
                     pipeline=pipeline_name,
@@ -3212,12 +3216,23 @@ class Orchestrator:
                         or (project_names[0] if project_names else pipeline_name),
                         target=f"{pipeline_name}:{stage.name}",
                         success=True,
-                        detail=(
-                            f"skipped: scoped to {target_components}, disjoint from "
-                            f"selected components {selected_components}"
-                        ),
+                        detail=skip_detail,
                         skipped=True,
                     )
+                )
+                # Pollen graph-cascade rebuild: a scope-skipped stage's task is
+                # NEVER invoked, so — unlike every other stage — no `steps`
+                # row would otherwise exist for it this run. Without this,
+                # `hivepilot/graph_sources/pipeline_source.py` can't tell
+                # "considered and skipped" apart from "no data yet" and would
+                # render it identically to a stage the pipeline hasn't
+                # reached. `step` is namespaced `skip:<stage.name>` (stage
+                # names are unique within a pipeline; a task's OWN step names
+                # — e.g. "step-1" — are a different, unrelated key space) so
+                # `pipeline_source.py` can look this up directly without
+                # colliding with real per-step-name matching.
+                state_service.record_step(
+                    run_id, step=f"skip:{stage.name}", status="skipped", detail=skip_detail
                 )
                 continue
 
@@ -3235,6 +3250,10 @@ class Orchestrator:
             # with only_modules unset (returns None, never matches).
             scoped_modules = _resolve_scoped_modules(stage, selected_modules)
             if scoped_modules is not None and not scoped_modules:
+                skip_detail = (
+                    f"skipped: only_modules={stage.only_modules} disjoint from "
+                    f"declared SURFACES scope {sorted(selected_modules) if selected_modules else []}"
+                )
                 logger.info(
                     "pipeline.stage_skipped_surface_scope",
                     pipeline=pipeline_name,
@@ -3247,12 +3266,17 @@ class Orchestrator:
                         project=project_names[0] if project_names else pipeline_name,
                         target=f"{pipeline_name}:{stage.name}",
                         success=True,
-                        detail=(
-                            f"skipped: only_modules={stage.only_modules} disjoint from "
-                            f"declared SURFACES scope {sorted(selected_modules) if selected_modules else []}"
-                        ),
+                        detail=skip_detail,
                         skipped=True,
                     )
+                )
+                # Pollen graph-cascade rebuild: same rationale as the
+                # only_components/only_tags skip gate above — persist a real
+                # `steps` row so `pipeline_source.py` can render this stage
+                # dimmed-but-present instead of indistinguishable from
+                # "not reached yet".
+                state_service.record_step(
+                    run_id, step=f"skip:{stage.name}", status="skipped", detail=skip_detail
                 )
                 continue
 

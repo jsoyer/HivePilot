@@ -132,6 +132,31 @@
     }
 }
 
+/* Pollen graph-cascade rebuild: the "a stage currently running" particle
+ * traveling along a `flow` edge (`GraphCanvas.tsx`'s `<animateMotion>`
+ * circles) — visible by default, `.graph-particle-static` (a single
+ * motionless dot at the edge midpoint, still conveying "this edge is
+ * active" without any movement) hidden by default. `prefers-reduced-motion:
+ * reduce` flips which one is visible, PURELY via CSS — same discipline as
+ * `.flow-edge-path` above: this file, not `GraphCanvas.tsx`, owns every
+ * reduced-motion decision, so no component ever needs its own JS
+ * `matchMedia` check. Motion is never lost as information: the static dot
+ * still marks exactly which edge is in flight. */
+.graph-particle-motion {
+    display: block;
+}
+.graph-particle-static {
+    display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .graph-particle-motion {
+        display: none;
+    }
+    .graph-particle-static {
+        display: block;
+    }
+}
+
 /* Bug-debt fix: the RunBoard Kanban row scrolls horizontally
  * (`sm:overflow-x-auto`) but previously showed NO visible affordance, so a
  * column (e.g. "Failed") could look truncated with no clue there was more

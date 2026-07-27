@@ -114,7 +114,12 @@ class TestGraphDataEndpoint:
         resp = api_client.get("/v1/graph/plugins", headers=_auth(raw))
         assert resp.status_code == 200
         data = resp.json()
-        assert set(data.keys()) == {"source", "nodes", "edges", "layout_hint"}
+        # `meta` (Pollen graph-cascade rebuild): a generic, arbitrary
+        # per-source hook (mirrors `GraphNode.meta`) — see `hivepilot/graph.py`'s
+        # `GraphData` docstring. `plugins` doesn't populate it, but the key
+        # is always present (defaults to `{}`), same as `layout_hint`.
+        assert set(data.keys()) == {"source", "nodes", "edges", "layout_hint", "meta"}
+        assert data["meta"] == {}
         assert data["source"] == "plugins"
         assert len(data["nodes"]) >= 1
         kinds = {n["kind"] for n in data["nodes"]}

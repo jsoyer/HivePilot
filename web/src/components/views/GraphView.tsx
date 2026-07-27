@@ -10,6 +10,7 @@ import {
   fetchGraph,
   fetchGraphNode,
   fetchGraphSources,
+  parseGraphRunSelector,
   type GraphData,
   type GraphDetail,
   type GraphNode,
@@ -18,6 +19,16 @@ import {
 import { useAsyncData } from '@/lib/use-async-data'
 import { GraphCanvas, type GraphColorBy } from './GraphCanvas'
 import { PanelRenderer } from './PanelRenderer'
+
+// Reuses `HomeView`'s `POLL_INTERVAL_MS` + `setInterval`/`refreshKey` pattern
+// (not `useAsyncData`'s own polling — it has none): a run that's still
+// `live` (per `parseGraphRunSelector`) refetches on this cadence WHILE the
+// "Live" toggle is on, via `useAsyncData`'s existing stale-while-revalidate
+// path (`isRefreshing`, no skeleton flash). A finished run never polls —
+// "a completed run is a static record, not a live flow" (see
+// `GraphCanvas.tsx`'s particle-motion comment for the same principle
+// applied to the canvas itself).
+const RUN_POLL_INTERVAL_MS = 5000
 
 /**
  * Graph tab — `GET /v1/graph/sources` + `GET /v1/graph/{source}` +
@@ -40,11 +51,25 @@ export function GraphView() {
   const [appliedParams, setAppliedParams] = useState<Record<string, string>>({})
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set())
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
-  // "Service Map" visual identity: a color-by toggle (status vs. kind) —
-  // purely a client-side rendering choice over the SAME already-fetched
-  // graph, so it never triggers a re-fetch (unlike selectedSourceName/
-  // appliedParams above).
+  // "Service Map" visual identity: a color-by toggle (status vs. kind vs.
+  // role) — purely a client-side rendering choice over the SAME
+  // already-fetched graph, so it never triggers a re-fetch (unlike
+  // selectedSourceName/appliedParams above).
   const [colorBy, setColorBy] = useState<GraphColorBy>('status')
+  // Run selector — `null` means "let the source pick" (the `pipeline`
+  // source defaults to the latest run); an explicit id is threaded through
+  // as an UNDECLARED `run_id` query param (the backend's `GraphContext.
+  // params` is `dict(request.query_params)` unfiltered — see `fetchGraph`'s
+  // docstring), never added to `GraphSourceSpec.params` (that would force a
+  // mandatory freeform text box on every source).
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
+  // "Live" toggle — only ever surfaced (see JSX below) when the currently
+  // selected run's own `meta.live` says it's still running; a finished run
+  // never shows this control at all.
+  const [liveEnabled, setLiveEnabled] = useState(true)
+  // Bumped by the live-poll interval AND by the manual "Reload" button —
+  // both are "refetch the same params again", just triggered differently.
+  const [refreshKey, setRefreshKey] = useState(0)
 
   // Default to the first registered source once the list loads — only if
   // the caller hasn't already picked one (never overrides a user choice).
@@ -58,10 +83,37 @@ export function GraphView() {
   const selectedSource: GraphSourceSummary | undefined = sources.find((s) => s.name === selectedSourceName)
 
   const graphState = useAsyncData<GraphData | null>(
-    () => (selectedSourceName === null ? Promise.resolve(null) : fetchGraph(selectedSourceName, appliedParams)),
-    [selectedSourceName, JSON.stringify(appliedParams)],
+    () =>
+      selectedSourceName === null
+        ? Promise.resolve(null)
+        : fetchGraph(selectedSourceName, {
+            ...appliedParams,
+            ...(selectedRunId !== null ? { run_id: String(selectedRunId) } : {}),
+          }),
+    [selectedSourceName, JSON.stringify(appliedParams), selectedRunId, refreshKey],
   )
   const graphData = graphState.status === 'success' ? graphState.data : null
+
+  // Feature-detected, not source-name-matched: any source may populate
+  // `meta.runs` (see `parseGraphRunSelector`'s docstring) — only the
+  // built-in `pipeline` source does today, but a third-party `GraphSource`
+  // plugin could too, and GraphView must not hardcode "pipeline" anywhere.
+  const runSelector = useMemo(
+    () => (graphData ? parseGraphRunSelector(graphData.meta) : null),
+    [graphData],
+  )
+
+  // Poll only while the user has "Live" on AND the currently-displayed run
+  // is itself still live — a finished run is a static record (see
+  // `RUN_POLL_INTERVAL_MS` comment above), so this effect is a no-op for it
+  // regardless of the toggle's state.
+  useEffect(() => {
+    if (!liveEnabled || !runSelector?.live) return
+    const interval = window.setInterval(() => {
+      setRefreshKey((key) => key + 1)
+    }, RUN_POLL_INTERVAL_MS)
+    return () => window.clearInterval(interval)
+  }, [liveEnabled, runSelector?.live])
 
   const detailState = useAsyncData<GraphDetail | null>(
     () =>
@@ -125,6 +177,12 @@ export function GraphView() {
     setAppliedParams({})
     setHiddenKinds(new Set())
     setSelectedNodeId(null)
+    setSelectedRunId(null)
+    setLiveEnabled(true)
+  }
+
+  function handleReload() {
+    setRefreshKey((key) => key + 1)
   }
 
   function handleParamsSubmit(event: FormEvent<HTMLFormElement>) {
@@ -214,6 +272,18 @@ export function GraphView() {
                   </Button>
                 </form>
               )}
+
+              {selectedSourceName !== null && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-testid="graph-reload-button"
+                  onClick={handleReload}
+                >
+                  {t('graph.reload')}
+                </Button>
+              )}
             </div>
 
             {graphState.status === 'loading' && (
@@ -297,6 +367,56 @@ export function GraphView() {
                   </div>
                 )}
 
+                {/* Run selector — feature-detected via `parseGraphRunSelector`
+                 * (see `runSelector` above), so a source with no run concept
+                 * (e.g. `plugins`) never shows this at all. Rendered outside
+                 * the `nodes.length > 0` branch below so it's still usable
+                 * even when the currently-selected run happens to have zero
+                 * evidence rows yet. */}
+                {runSelector && runSelector.runs.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3" data-testid="graph-run-selector">
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="graph-run-select" className="text-sm font-medium">
+                        {t('graph.run')}
+                      </label>
+                      <select
+                        id="graph-run-select"
+                        value={selectedRunId ?? ''}
+                        onChange={(event) =>
+                          setSelectedRunId(event.target.value === '' ? null : Number(event.target.value))
+                        }
+                        className="h-8 min-w-40 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        <option value="">{t('graph.latestRun')}</option>
+                        {runSelector.runs.map((run) => (
+                          <option key={run.id} value={run.id}>
+                            #{run.id} — {run.started_at ?? '—'} ({run.status ?? '—'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Only shown while the currently-displayed run is
+                     * itself still live — a finished run is a static
+                     * record, so there's nothing to toggle for it. */}
+                    {runSelector.live && (
+                      <button
+                        type="button"
+                        data-testid="graph-live-toggle"
+                        aria-pressed={liveEnabled}
+                        onClick={() => setLiveEnabled((prev) => !prev)}
+                        className={`h-7 rounded-md border border-border px-2.5 text-xs font-medium transition-colors ${
+                          liveEnabled
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-transparent text-muted-foreground hover:bg-muted'
+                        }`}
+                      >
+                        {t('graph.live')}
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {graphData.nodes.length === 0 && (
                   <p className="text-sm text-muted-foreground">{t('graph.noNodes')}</p>
                 )}
@@ -309,7 +429,7 @@ export function GraphView() {
                     <div className="flex items-center gap-2" data-testid="graph-color-by">
                       <span className="eyebrow">{t('graph.colorBy')}</span>
                       <div className="flex overflow-hidden rounded-md border border-border">
-                        {(['status', 'kind'] as const).map((option) => (
+                        {(['status', 'kind', 'role'] as const).map((option) => (
                           <button
                             key={option}
                             type="button"
@@ -322,7 +442,11 @@ export function GraphView() {
                                 : 'bg-transparent text-muted-foreground hover:bg-muted'
                             }`}
                           >
-                            {option === 'status' ? t('graph.colorByStatus') : t('graph.colorByKind')}
+                            {option === 'status'
+                              ? t('graph.colorByStatus')
+                              : option === 'kind'
+                                ? t('graph.colorByKind')
+                                : t('graph.colorByRole')}
                           </button>
                         ))}
                       </div>

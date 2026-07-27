@@ -294,6 +294,277 @@ class TestKeyedContextEdges:
 
 
 # ---------------------------------------------------------------------------
+# Status vocabulary (Pollen graph-cascade rebuild) — real per-stage
+# ok/error/skipped/running/pending/warn, derived only from real `steps`
+# rows for THIS run. Stages run strictly sequentially
+# (`Orchestrator._run_pipeline_body`), so evidence (a matched step OR a
+# `skip:<stage>` marker row — see the orchestrator.py skip-gate fix) forms
+# a PREFIX of the stage list.
+# ---------------------------------------------------------------------------
+
+
+def _three_stage_config() -> tuple[PipelinesFile, TasksFile]:
+    stages = [PipelineStage(name=n, task=f"task-{n}") for n in ["A", "B", "C"]]
+    pipelines = PipelinesFile(pipelines={"demo": PipelineConfig(description="d", stages=stages)})
+    tasks = TasksFile(
+        tasks={
+            f"task-{n}": TaskConfig(description="d", steps=[TaskStep(name=f"step-{n}", runner="claude")])
+            for n in ["A", "B", "C"]
+        }
+    )
+    return pipelines, tasks
+
+
+@pytest.fixture()
+def three_stage_config(monkeypatch):
+    pipelines, tasks = _three_stage_config()
+    monkeypatch.setattr(pipeline_source, "load_pipelines", lambda: pipelines)
+    monkeypatch.setattr(pipeline_source, "load_tasks", lambda: tasks)
+
+
+class TestStageStatusVocabulary:
+    def test_running_stage_is_first_with_no_evidence_while_run_in_flight(self, three_stage_config):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="running", tenant="default")
+        state_service.record_step(run_id, "step-A", "success")
+
+        ctx = graph_module.GraphContext(tenant="default", role="read", params={"pipeline": "demo"})
+        data = _build_graph(ctx)
+        statuses = {n.label: n.status for n in data.nodes}
+        assert statuses == {"A": "ok", "B": "running", "C": "pending"}
+
+    def test_terminal_run_with_gap_is_warn_never_running_or_pending(self, three_stage_config):
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("demo", "demo", status="failed", tenant="default")
+
+        ctx = graph_module.GraphContext(tenant="default", role="read", params={"pipeline": "demo"})
+        data = _build_graph(ctx)
+        statuses = {n.label: n.status for n in data.nodes}
+        # A terminal (non-"running") run with NO evidence anywhere is an
+        # anomaly, never fabricated as "running"/"pending" — falls back to
+        # the same "warn" semantics as before this sprint.
+        assert statuses == {"A": "warn", "B": "warn", "C": "warn"}
+
+    def test_scope_skipped_stage_is_skipped_not_warn_and_does_not_block_later_stages(
+        self, three_stage_config
+    ):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(run_id, "step-A", "success")
+        state_service.record_step(run_id, step="skip:B", status="skipped", detail="disjoint scope")
+        state_service.record_step(run_id, "step-C", "success")
+
+        ctx = graph_module.GraphContext(tenant="default", role="read", params={"pipeline": "demo"})
+        data = _build_graph(ctx)
+        statuses = {n.label: n.status for n in data.nodes}
+        assert statuses == {"A": "ok", "B": "skipped", "C": "ok"}
+
+    def test_skip_marker_counts_as_evidence_next_stage_is_running_while_in_flight(
+        self, three_stage_config
+    ):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="running", tenant="default")
+        state_service.record_step(run_id, "step-A", "success")
+        state_service.record_step(run_id, step="skip:B", status="skipped")
+
+        ctx = graph_module.GraphContext(tenant="default", role="read", params={"pipeline": "demo"})
+        data = _build_graph(ctx)
+        statuses = {n.label: n.status for n in data.nodes}
+        assert statuses == {"A": "ok", "B": "skipped", "C": "running"}
+
+
+# ---------------------------------------------------------------------------
+# Run selection (`?run_id=`) — Pollen graph-cascade rebuild's run selector.
+# Falls back to the LAST run (byte-identical default behavior) when absent,
+# invalid, unknown, or belonging to another tenant.
+# ---------------------------------------------------------------------------
+
+
+class TestRunSelection:
+    def test_explicit_run_id_overrides_last_run(self, patched_config):
+        from hivepilot.services import state_service
+
+        old_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(old_run_id, "step-1", "success")
+        state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        new_run_id_2 = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(new_run_id_2, "step-1", "failed")
+
+        ctx_explicit = graph_module.GraphContext(
+            tenant="default", role="read", params={"pipeline": "demo", "run_id": str(old_run_id)}
+        )
+        data = _build_graph(ctx_explicit)
+        assert all(n.status == "ok" for n in data.nodes)
+
+    def test_default_without_run_id_param_is_last_run(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        old_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(old_run_id, "step-1", "success")
+        new_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(new_run_id, "step-1", "failed")
+
+        data = _build_graph(ctx)
+        assert all(n.status == "error" for n in data.nodes)
+
+    def test_run_id_from_another_tenant_is_ignored(self, patched_config):
+        """A caller must never be able to select ANOTHER tenant's run by
+        guessing its numeric id — falls back to the caller's own last run
+        (or none) instead, exactly like an unknown id."""
+        from hivepilot.services import state_service
+
+        acme_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="acme")
+        state_service.record_step(acme_run_id, "step-1", "success")
+        globex_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="globex")
+        state_service.record_step(globex_run_id, "step-1", "failed")
+
+        ctx_globex = graph_module.GraphContext(
+            tenant="globex", role="read", params={"pipeline": "demo", "run_id": str(acme_run_id)}
+        )
+        data = _build_graph(ctx_globex)
+        assert all(n.status == "error" for n in data.nodes), "must show globex's own run, never acme's"
+
+    def test_unknown_run_id_falls_back_to_last_run(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(run_id, "step-1", "success")
+
+        ctx_bogus = graph_module.GraphContext(
+            tenant="default", role="read", params={"pipeline": "demo", "run_id": "99999999"}
+        )
+        data = _build_graph(ctx_bogus)
+        assert all(n.status == "ok" for n in data.nodes)
+
+    def test_non_numeric_run_id_falls_back_to_last_run(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(run_id, "step-1", "success")
+
+        ctx_bogus = graph_module.GraphContext(
+            tenant="default", role="read", params={"pipeline": "demo", "run_id": "not-a-number"}
+        )
+        data = _build_graph(ctx_bogus)
+        assert all(n.status == "ok" for n in data.nodes)
+
+
+# ---------------------------------------------------------------------------
+# GraphData.meta run selector / live hint (Pollen graph-cascade rebuild) —
+# generic `GraphData.meta` extensibility hook (`hivepilot/graph.py`), NOT a
+# hardcoded field on the closed contract.
+# ---------------------------------------------------------------------------
+
+
+class TestGraphMetaRunSelector:
+    def test_meta_exposes_recent_runs_and_live_true_for_in_flight_run(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="running", tenant="default")
+        data = _build_graph(ctx)
+        assert data.meta["selected_run_id"] == run_id
+        assert data.meta["live"] is True
+        assert run_id in [r["id"] for r in data.meta["runs"]]
+
+    def test_meta_live_false_for_a_finished_run(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        data = _build_graph(ctx)
+        assert data.meta["live"] is False
+
+    def test_meta_empty_when_no_run_exists_yet(self, ctx, patched_config):
+        data = _build_graph(ctx)
+        assert data.meta["selected_run_id"] is None
+        assert data.meta["live"] is False
+        assert data.meta["runs"] == []
+
+    def test_meta_never_leaks_another_tenants_runs(self, patched_config):
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("demo", "demo", status="running", tenant="acme")
+
+        ctx_globex = graph_module.GraphContext(
+            tenant="globex", role="read", params={"pipeline": "demo"}
+        )
+        data = _build_graph(ctx_globex)
+        assert data.meta["runs"] == []
+
+
+# ---------------------------------------------------------------------------
+# Per-stage node metrics (model/tokens/cost/duration) — Pollen graph-cascade
+# rebuild's translation of the reference's `REQ/S ERR% AVG PODS` card table.
+# Every value comes from a real `steps` row; absent data is an explicit
+# em-dash, never a fabricated zero/placeholder.
+# ---------------------------------------------------------------------------
+
+_EM_DASH = "—"
+
+
+class TestNodeMetrics:
+    def test_metrics_present_from_real_step_data(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(
+            run_id,
+            "step-1",
+            "success",
+            model="claude-opus",
+            input_tokens=100,
+            output_tokens=50,
+            cost_usd=0.42,
+        )
+        data = _build_graph(ctx)
+        node_a = next(n for n in data.nodes if n.label == "A")
+        assert node_a.meta["model"] == "claude-opus"
+        assert node_a.meta["tokens"] == "100/50"
+        assert "0.42" in node_a.meta["cost"]
+
+    def test_metrics_are_em_dash_when_absent_never_a_fabricated_zero(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        state_service.record_run_start("demo", "demo", status="running", tenant="default")
+        data = _build_graph(ctx)
+        node_a = next(n for n in data.nodes if n.label == "A")
+        assert node_a.meta["model"] == _EM_DASH
+        assert node_a.meta["tokens"] == _EM_DASH
+        assert node_a.meta["cost"] == _EM_DASH
+        assert node_a.meta["duration"] == _EM_DASH
+
+    def test_no_secret_value_in_node_metrics(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(
+            run_id, "step-1", "failed", detail="sk-pipeline-secret-should-never-leak-metrics"
+        )
+        data = _build_graph(ctx)
+        assert "sk-pipeline-secret-should-never-leak-metrics" not in str(data)
+
+
+class TestFlowEdgeLabels:
+    def test_flow_edge_label_reflects_downstream_stage_metrics(self, ctx, patched_config):
+        from hivepilot.services import state_service
+
+        run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        state_service.record_step(run_id, "step-1", "success", input_tokens=10, output_tokens=5)
+        data = _build_graph(ctx)
+        flow_edge = next(e for e in data.edges if e.kind == "flow")
+        assert flow_edge.label is not None
+        assert "10/5" in flow_edge.label
+
+    def test_flow_edge_label_is_none_when_no_data(self, ctx, patched_config):
+        data = _build_graph(ctx)
+        flow_edge = next(e for e in data.edges if e.kind == "flow")
+        assert flow_edge.label is None
+
+
+# ---------------------------------------------------------------------------
 # _node_detail
 # ---------------------------------------------------------------------------
 
