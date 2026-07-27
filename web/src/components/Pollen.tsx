@@ -71,7 +71,7 @@ const BUILTIN_TABS = [
   // NAV_GROUP_ORDER (an observability surface over the fleet's roles).
   { value: 'agents', labelKey: 'nav.agents', Panel: AgentsView, Icon: Users },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
-  // and Réalité (quality) built-ins merged into ONE `memory` item, plus a
+  // and memory-quality built-ins merged into ONE `memory` item, plus a
   // new Growth tab (`/v1/memory/growth`) — see `MemoryView`'s own
   // docstring for the internal Quality/Growth/Search tab layout. Read-only
   // for any token; individual `/v1/memory/*` endpoints gate themselves.
@@ -110,7 +110,7 @@ function panelTabValue(name: string): string {
  * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`,
  * `/v1/memory/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`, see `./views/*`
  * and `@/lib/pollen-api`) — Memory itself merges the FORMER separate Mem0
- * (search) and Réalité (quality) built-ins into one item with internal
+ * (search) and memory-quality built-ins into one item with internal
  * Quality/Growth/Search tabs (see `MemoryView`'s own docstring) — grouped by
  * `./nav/nav-config`'s `buildNavGroups`, plus one DYNAMIC item per
  * plugin-contributed `panel` (Sprint 3 web surface, `GET /v1/panels`) —

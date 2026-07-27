@@ -19,7 +19,7 @@ export interface SidebarNavProps {
 }
 
 /**
- * Left sidebar navigation (Mirador → "Vigie" dashboard upgrade, P0b) —
+ * Left sidebar navigation (Pollen dashboard upgrade, P0b) —
  * replaces the old flat top tab bar. Renders the SAME underlying
  * `Tabs`/`TabsList`/`TabsTrigger` primitives `Pollen.tsx` already used for
  * the tab bar (just restyled + grouped), so the existing uncontrolled

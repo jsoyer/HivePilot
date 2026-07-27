@@ -28,7 +28,7 @@ export interface StatCardProps {
 /**
  * A single dashboard stat: icon chip + uppercase label + big value + an
  * optional sub-metric line. Reusable building block for Pollen's
- * "Vigie"-style dashboard (Analytics, Cost, Health, Runs).
+ * instrument-panel dashboard (Analytics, Cost, Health, Runs).
  */
 export function StatCard({ icon, label, value, sub, tone = 'default', className }: StatCardProps) {
   const toneClasses = TONE_CLASSES[tone]

@@ -39,7 +39,7 @@ function normalize(value: string): string {
 }
 
 /**
- * ⌘K / Ctrl+K command palette (Mirador -> "Vigie" upgrade, P1b) — a
+ * ⌘K / Ctrl+K command palette (Pollen dashboard upgrade, P1b) — a
  * filterable modal that jumps to any nav view or runs a quick action
  * (toggle theme, switch language).
  *

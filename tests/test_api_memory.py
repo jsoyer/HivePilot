@@ -1,5 +1,5 @@
 """Tests for the `/v1/memory/*` endpoints (memory-quality instrumentation
-subsystem backing Pollen's "Réalité" view).
+subsystem backing Pollen's Memory > Quality view).
 
 Mirrors the auth/tenant-isolation/empty-state patterns established for the
 `/v1/analytics/*` endpoints in `test_api_service.py` — every read endpoint

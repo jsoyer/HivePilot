@@ -1533,7 +1533,7 @@ def post_autopilot_resume(
 
 
 # ---------------------------------------------------------------------------
-# Memory-quality instrumentation subsystem — backs Pollen's "Réalité" view.
+# Memory-quality instrumentation subsystem — backs Pollen's Memory > Quality view.
 # Sibling to the analytics endpoints above, same shape: every GET endpoint
 # Depends(require_role("read")), tenant-filtered from the caller's token via
 # `_memory_tenant` (mirrors `_analytics_tenant`: admin -> unscoped/`None`,
@@ -1557,7 +1557,7 @@ def post_autopilot_resume(
 # no `tenant` field; see `plugins/mem0.py`'s instrumentation call sites for
 # the full investigation) and so every event lands under `tenant="default"`.
 # In a multi-tenant deployment, a non-admin caller whose own tenant isn't
-# `"default"` will therefore see an empty Réalité view even once mem0 is
+# `"default"` will therefore see an empty Memory > Quality view even once mem0 is
 # active, until a real tenant signal is threaded down to the hook — that is
 # NOT a bug in the scoping here, it's a gap in what the writer can attribute
 # today.
@@ -2124,11 +2124,19 @@ def _enforce_graph_min_role(
 @v1.get("/graph/sources", dependencies=[Depends(require_role("read"))])
 @app.get("/graph/sources", dependencies=[Depends(require_role("read"))])
 def list_graph_sources_endpoint() -> dict[str, Any]:
-    """Every registered graph source (name/title/min_role/params) — mirrors
-    `list_panels_endpoint` above. Source metadata is configuration, not
-    secret; every `read` token sees the full list regardless of its own
-    role (a source's own `min_role` only gates *fetching its data*, via
-    `get_graph_endpoint`/`get_graph_node_detail_endpoint` below)."""
+    """Every registered graph source (name/title/min_role/params, plus any
+    enumerable values for those params) — mirrors `list_panels_endpoint`
+    above. Source metadata is configuration, not secret; every `read` token
+    sees the full list regardless of its own role (a source's own `min_role`
+    only gates *fetching its data*, via `get_graph_endpoint`/
+    `get_graph_node_detail_endpoint` below).
+
+    `param_options` is a HINT for building a pick-list instead of a
+    free-text box (see `GraphSourceSpec.param_options`). It never validates
+    anything: a source still rejects an unknown value itself, and a param
+    absent from the mapping simply has no enumerable values.
+    `safe_param_options` guarantees this listing cannot 500 because one
+    source's option provider raised."""
     sources = graph_module.list_graph_sources()
     return {
         "sources": [
@@ -2137,6 +2145,7 @@ def list_graph_sources_endpoint() -> dict[str, Any]:
                 "title": s.title or s.name,
                 "min_role": s.min_role,
                 "params": list(s.params),
+                "param_options": graph_module.safe_param_options(s),
             }
             for s in sources
         ]

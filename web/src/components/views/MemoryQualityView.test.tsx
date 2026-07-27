@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // auto-escaping. Avoids `node:fs` so this test stays consistent with the
 // rest of `src/`, which targets the browser (`tsconfig.app.json` has no
 // `"node"` types).
-import realityViewSource from './RealityView.tsx?raw'
+import qualityViewSource from './MemoryQualityView.tsx?raw'
 import { ApiForbiddenError } from '@/lib/api'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type {
@@ -28,7 +28,7 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
   return { ...actual, ...mocks }
 })
 
-import { RealityView } from './RealityView'
+import { MemoryQualityView } from './MemoryQualityView'
 
 let container: HTMLDivElement
 let root: Root
@@ -113,7 +113,7 @@ function mockAllSuccess() {
 
 function mount() {
   act(() => {
-    root.render(<RealityView />)
+    root.render(<MemoryQualityView />)
   })
 }
 
@@ -132,7 +132,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('RealityView', () => {
+describe('MemoryQualityView', () => {
   it('shows loading indicators before any endpoint resolves', () => {
     for (const mock of Object.values(mocks)) mock.mockReturnValue(new Promise(() => {}))
     mount()
@@ -190,7 +190,7 @@ describe('RealityView', () => {
       await Promise.resolve()
     })
 
-    const empty = container.querySelector('[data-testid="reality-empty-state"]')
+    const empty = container.querySelector('[data-testid="memory-quality-empty-state"]')
     expect(empty).not.toBeNull()
     expect(empty?.textContent).toMatch(/no memory activity recorded yet/i)
     expect(container.querySelector('[data-slot="stat-card"]')).toBeNull()
@@ -294,7 +294,7 @@ describe('RealityView', () => {
   })
 
   it('never uses dangerouslySetInnerHTML anywhere in the component source', () => {
-    expect(realityViewSource).not.toContain('dangerouslySetInnerHTML')
+    expect(qualityViewSource).not.toContain('dangerouslySetInnerHTML')
   })
 
   it('shows the ApiForbidden state for a section whose endpoint 403s, without breaking the others', async () => {
@@ -309,7 +309,7 @@ describe('RealityView', () => {
       await Promise.resolve()
     })
 
-    expect(container.querySelector('[data-testid="reality-forbidden-gaps"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="memory-quality-forbidden-gaps"]')).not.toBeNull()
     expect(container.querySelector('[role="alert"]')).toBeNull()
     // The other sections still rendered — one 403 doesn't blank the panel.
     expect(container.textContent).toContain('Spot on')
@@ -329,7 +329,7 @@ describe('RealityView', () => {
 
     const alert = container.querySelector('[role="alert"]')
     expect(alert?.textContent).toContain('network down')
-    expect(container.querySelector('[data-testid="reality-forbidden-gaps"]')).toBeNull()
+    expect(container.querySelector('[data-testid="memory-quality-forbidden-gaps"]')).toBeNull()
   })
 
   it('renders French card titles when the language is fr (P1a)', async () => {
@@ -339,7 +339,7 @@ describe('RealityView', () => {
     await act(async () => {
       root.render(
         <LanguageProvider>
-          <RealityView />
+          <MemoryQualityView />
         </LanguageProvider>,
       )
       await Promise.resolve()

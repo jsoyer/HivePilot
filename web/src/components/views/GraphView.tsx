@@ -1,8 +1,11 @@
+import { Workflow } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
+import { EmptyState } from '@/components/dashboard/EmptyState'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
@@ -71,11 +74,17 @@ export function GraphView() {
   // both are "refetch the same params again", just triggered differently.
   const [refreshKey, setRefreshKey] = useState(0)
 
-  // Default to the first registered source once the list loads — only if
-  // the caller hasn't already picked one (never overrides a user choice).
+  // Content first: default to the first source that needs NO parameters, so
+  // opening this tab always renders a graph. The previous default was simply
+  // `sources[0]` — alphabetically the `pipeline` source, which requires a
+  // `pipeline` param — so the view opened EMPTY behind "enter `pipeline`
+  // above and click Load", asking an operator to guess a name before seeing
+  // anything at all. Falls back to the first source when every registered
+  // one takes a parameter. Never overrides a choice the caller already made.
   useEffect(() => {
     if (selectedSourceName === null && sources.length > 0) {
-      setSelectedSourceName(sources[0].name)
+      const parameterless = sources.find((source) => source.params.length === 0)
+      setSelectedSourceName((parameterless ?? sources[0]).name)
     }
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [sources])
@@ -236,40 +245,75 @@ export function GraphView() {
                 <label htmlFor="graph-source-select" className="text-sm font-medium">
                   {t('graph.source')}
                 </label>
-                <select
+                <Select
                   id="graph-source-select"
+                  className="min-w-40"
                   value={selectedSourceName ?? ''}
                   onChange={(event) => handleSourceChange(event.target.value)}
-                  className="h-8 min-w-40 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                   {sources.map((source) => (
                     <option key={source.name} value={source.name}>
                       {source.title}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
+              {/* A source's required params are offered as a PICK-LIST
+                * whenever the backend can enumerate them (`param_options`,
+                * e.g. every pipeline declared in `pipelines.yaml`). Only a
+                * param it cannot enumerate falls back to a text box — the
+                * same "free text is a last resort, never the default"
+                * rule the New Run drawer follows. Selecting a value applies
+                * it immediately; there is nothing to type, so there is
+                * nothing to submit. */}
               {selectedSource && selectedSource.params.length > 0 && (
                 <form className="flex flex-wrap items-end gap-2" onSubmit={handleParamsSubmit}>
-                  {selectedSource.params.map((param) => (
-                    <div key={param} className="flex flex-col gap-1">
-                      <label htmlFor={`graph-param-${param}`} className="text-sm font-medium">
-                        {param}
-                      </label>
-                      <Input
-                        id={`graph-param-${param}`}
-                        value={paramInputs[param] ?? ''}
-                        onChange={(event) =>
-                          setParamInputs((prev) => ({ ...prev, [param]: event.target.value }))
-                        }
-                        placeholder={param}
-                      />
-                    </div>
-                  ))}
-                  <Button type="submit" size="sm">
-                    {t('common.load')}
-                  </Button>
+                  {selectedSource.params.map((param) => {
+                    const options = selectedSource.param_options?.[param] ?? []
+                    return (
+                      <div key={param} className="flex flex-col gap-1">
+                        <label htmlFor={`graph-param-${param}`} className="eyebrow">
+                          {param}
+                        </label>
+                        {options.length > 0 ? (
+                          <Select
+                            id={`graph-param-${param}`}
+                            className="min-w-48"
+                            value={appliedParams[param] ?? ''}
+                            onChange={(event) => {
+                              const value = event.target.value
+                              setParamInputs((prev) => ({ ...prev, [param]: value }))
+                              setAppliedParams((prev) => ({ ...prev, [param]: value }))
+                            }}
+                          >
+                            <option value="">{t('graph.chooseParam', { param })}</option>
+                            {options.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </Select>
+                        ) : (
+                          <Input
+                            id={`graph-param-${param}`}
+                            value={paramInputs[param] ?? ''}
+                            onChange={(event) =>
+                              setParamInputs((prev) => ({ ...prev, [param]: event.target.value }))
+                            }
+                            placeholder={param}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                  {selectedSource.params.some(
+                    (param) => (selectedSource.param_options?.[param] ?? []).length === 0,
+                  ) && (
+                    <Button type="submit" size="sm">
+                      {t('common.load')}
+                    </Button>
+                  )}
                 </form>
               )}
 
@@ -319,23 +363,19 @@ export function GraphView() {
             {graphState.status === 'success' && graphData && errorNode && (
               <>
                 {missingParams.length > 0 ? (
-                  <div
+                  <EmptyState
                     data-testid="graph-missing-param-hint"
-                    className="rounded-lg border border-dashed border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground"
-                  >
-                    {t('graph.missingParamHintLead', {
-                      countLabel:
-                        missingParams.length === 1 ? t('graph.aParameter') : t('graph.parameters'),
-                    })}{' '}
-                    {missingParams.map((param, index) => (
-                      <span key={param}>
-                        {index > 0 && (index === missingParams.length - 1 ? t('common.and') : ', ')}
-                        <span className="font-medium text-foreground">{param}</span>
-                      </span>
-                    ))}{' '}
-                    {t('graph.missingParamHintTail')}{' '}
-                    <span className="font-medium text-foreground">{t('common.load')}</span>.
-                  </div>
+                    icon={<Workflow className="size-4" />}
+                    title={t('graph.missingParamTitle', { params: missingParams.join(', ') })}
+                    body={
+                      missingParams.every(
+                        (param) => (selectedSource?.param_options?.[param] ?? []).length > 0,
+                      )
+                        ? t('graph.missingParamBodySelect')
+                        : t('graph.missingParamBodyType')
+                    }
+                    className="max-w-xl"
+                  />
                 ) : (
                   <div
                     role="alert"
@@ -379,13 +419,13 @@ export function GraphView() {
                       <label htmlFor="graph-run-select" className="text-sm font-medium">
                         {t('graph.run')}
                       </label>
-                      <select
+                      <Select
                         id="graph-run-select"
+                        className="min-w-40"
                         value={selectedRunId ?? ''}
                         onChange={(event) =>
                           setSelectedRunId(event.target.value === '' ? null : Number(event.target.value))
                         }
-                        className="h-8 min-w-40 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                       >
                         <option value="">{t('graph.latestRun')}</option>
                         {runSelector.runs.map((run) => (
@@ -393,7 +433,7 @@ export function GraphView() {
                             #{run.id} — {run.started_at ?? '—'} ({run.status ?? '—'})
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     </div>
 
                     {/* Only shown while the currently-displayed run is

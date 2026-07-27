@@ -352,7 +352,9 @@ describe('GraphView', () => {
     const hint = container.querySelector('[data-testid="graph-missing-param-hint"]')
     expect(hint).not.toBeNull()
     expect(hint?.textContent).toContain('pipeline')
-    expect(hint?.textContent).toContain('Load')
+    // This fixture declares no enumerable values, so free text is the
+    // documented last resort and the Load button is what applies it.
+    expect(hint?.textContent).toMatch(/type one above and click Load/i)
     // No scary error card, and no error node handed to the canvas.
     expect(container.querySelector('[data-testid="graph-error-node"]')).toBeNull()
     expect(container.querySelector('[data-testid="graph-canvas-stub"]')).toBeNull()
@@ -622,5 +624,137 @@ describe('GraphView', () => {
     expect(container.textContent).toContain('Graphe')
     expect(container.textContent).toContain('Source')
     expect(container.textContent).toContain('Sélectionnez un nœud pour voir le détail.')
+  })
+
+  // -------------------------------------------------------------------------
+  // Content first: the Graph tab must never open empty behind a form.
+  // In production `GET /v1/graph/sources` is sorted by name, so "pipeline"
+  // (which REQUIRES a `?pipeline=`) came first and the old `sources[0]`
+  // default rendered nothing until the operator guessed a pipeline name.
+  // -------------------------------------------------------------------------
+
+  it('CRITICAL: defaults to a source that needs no parameter, even when a param-requiring one sorts first', async () => {
+    fetchGraphSources.mockResolvedValue({
+      sources: [
+        { name: 'pipeline', title: 'Pipeline', min_role: 'read', params: ['pipeline'] },
+        { name: 'plugins', title: 'Plugins', min_role: 'read', params: [] },
+      ],
+    })
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect((container.querySelector('#graph-source-select') as HTMLSelectElement).value).toBe('plugins')
+    expect(container.querySelector('[data-testid="graph-missing-param-hint"]')).toBeNull()
+    expect(container.querySelector('[data-testid="graph-canvas-stub"]')).not.toBeNull()
+  })
+
+  it('falls back to the first source when every registered source takes a parameter', async () => {
+    fetchGraphSources.mockResolvedValue({
+      sources: [{ name: 'pipeline', title: 'Pipeline', min_role: 'read', params: ['pipeline'] }],
+    })
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect((container.querySelector('#graph-source-select') as HTMLSelectElement).value).toBe('pipeline')
+  })
+
+  it('CRITICAL: an enumerable parameter renders a pick-list, not a free-text box, and applies on selection', async () => {
+    fetchGraphSources.mockResolvedValue({
+      sources: [
+        {
+          name: 'pipeline',
+          title: 'Pipeline',
+          min_role: 'read',
+          params: ['pipeline'],
+          param_options: { pipeline: ['nightly', 'release'] },
+        },
+      ],
+    })
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const field = container.querySelector('#graph-param-pipeline') as HTMLSelectElement
+    expect(field.tagName).toBe('SELECT')
+    expect(Array.from(field.querySelectorAll('option')).map((o) => o.value)).toEqual([
+      '',
+      'nightly',
+      'release',
+    ])
+    // Nothing to type means nothing to submit.
+    expect(field.closest('form')?.querySelector('button[type="submit"]')).toBeNull()
+
+    await act(async () => {
+      field.value = 'release'
+      field.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchGraph).toHaveBeenLastCalledWith('pipeline', { pipeline: 'release' })
+  })
+
+  it('keeps a free-text box, with its Load button, for a parameter the backend cannot enumerate', async () => {
+    fetchGraphSources.mockResolvedValue({
+      sources: [
+        { name: 'pipeline', title: 'Pipeline', min_role: 'read', params: ['pipeline'], param_options: {} },
+      ],
+    })
+    fetchGraph.mockResolvedValue(GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const field = container.querySelector('#graph-param-pipeline') as HTMLInputElement
+    expect(field.tagName).toBe('INPUT')
+    expect(field.closest('form')?.querySelector('button[type="submit"]')).not.toBeNull()
+  })
+
+  it('the missing-parameter state tells the operator to choose, not to guess, when values are enumerable', async () => {
+    fetchGraphSources.mockResolvedValue({
+      sources: [
+        {
+          name: 'pipeline',
+          title: 'Pipeline',
+          min_role: 'read',
+          params: ['pipeline'],
+          param_options: { pipeline: ['nightly'] },
+        },
+      ],
+    })
+    fetchGraph.mockResolvedValue(ERROR_GRAPH)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const hint = container.querySelector('[data-testid="graph-missing-param-hint"]')
+    expect(hint).not.toBeNull()
+    expect(hint?.textContent).toMatch(/choose one from the selector above/i)
+    expect(hint?.textContent).not.toMatch(/click Load/i)
   })
 })

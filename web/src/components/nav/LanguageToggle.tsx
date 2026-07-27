@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import { useLanguage } from '@/lib/i18n'
 
 /**
- * FR/EN language toggle for the header (Mirador -> "Vigie" upgrade, P1a) —
+ * FR/EN language toggle for the header (Pollen dashboard upgrade, P1a) —
  * mirrors `ThemeToggle`'s shape (a single icon-size button, aria-label
  * describes the NEXT action) so the two toggles read as one family in the
  * header, but shows the target language as text ("EN"/"FR") rather than an

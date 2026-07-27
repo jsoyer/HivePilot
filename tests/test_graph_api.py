@@ -80,8 +80,17 @@ class TestGraphSourcesListEndpoint:
         assert resp.status_code == 200
         data = resp.json()["sources"]
         plugins_entry = next(s for s in data if s["name"] == "plugins")
-        assert set(plugins_entry.keys()) == {"name", "title", "min_role", "params"}
+        assert set(plugins_entry.keys()) == {
+            "name",
+            "title",
+            "min_role",
+            "params",
+            "param_options",
+        }
         assert plugins_entry["min_role"] == "read"
+        # A source with no params has nothing enumerable to offer.
+        assert plugins_entry["params"] == []
+        assert plugins_entry["param_options"] == {}
 
     def test_unversioned_route_also_registered(
         self, api_client, tmp_tokens_file, isolated_graph_sources

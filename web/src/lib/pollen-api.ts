@@ -518,6 +518,50 @@ export function postApproval(runId: number, action: ApprovalActionInput): Promis
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/projects, GET /v1/tasks — the CATALOGUE endpoints. Both gate at
+// `read` (see `list_projects`/`list_tasks` in `api_service.py`), so any token
+// that can open Pollen at all can enumerate them.
+//
+// Why they exist here: `POST /v1/runs` takes a `project` and a `task` that
+// must both already be declared in config. The web UI used to ask an
+// operator to TYPE them into free-text boxes with `e.g. deploy` hints, which
+// is a guessing game with a 4xx at the end of it. These two fetchers turn
+// both fields into a pick-list of the values the server actually accepts.
+//
+// Response shapes are deliberately parsed DEFENSIVELY:
+//   - `/v1/tasks` returns `list(tasks.keys())` — a JSON array of names.
+//   - `/v1/projects` returns the `projects` MAPPING (name -> project config),
+//     whose values carry config detail this module has no business typing.
+// `toNameList` accepts either shape and yields sorted names, so a backend
+// that later switches one for the other cannot break the selector. Anything
+// else (null, a number, a nested object) yields an EMPTY list, and every
+// caller treats "empty catalogue" as "fall back to a free-text field" rather
+// than "lock the operator out of creating a run".
+// ---------------------------------------------------------------------------
+
+/** Normalises `string[]` or `Record<string, unknown>` into sorted names.
+ * Non-string array entries are dropped, not coerced — a name we cannot
+ * trust is worse than a name we do not offer. */
+export function toNameList(payload: unknown): string[] {
+  const names = Array.isArray(payload)
+    ? payload.filter((entry): entry is string => typeof entry === 'string')
+    : payload !== null && typeof payload === 'object'
+      ? Object.keys(payload as Record<string, unknown>)
+      : []
+  return [...new Set(names.map((name) => name.trim()).filter((name) => name.length > 0))].sort((a, b) =>
+    a.localeCompare(b),
+  )
+}
+
+export async function fetchProjectNames(): Promise<string[]> {
+  return toNameList(await apiFetch<unknown>('/v1/projects', { on403: 'forbidden' }))
+}
+
+export async function fetchTaskNames(): Promise<string[]> {
+  return toNameList(await apiFetch<unknown>('/v1/tasks', { on403: 'forbidden' }))
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/runs, POST /v1/runs — Mirador actionable dashboard PRD, Sprint 3.
 // Shapes transcribed from `hivepilot/services/state_service.py`'s `runs`
 // table (`CREATE TABLE ... runs`, columns: id/project/task/status/detail/
@@ -777,6 +821,12 @@ export interface GraphSourceSummary {
   title: string
   min_role: string
   params: string[]
+  /** Enumerable values for some of `params`, when the source can list them
+   * (see `GraphSourceSpec.param_options` server-side). A HINT for rendering
+   * a pick-list instead of a free-text box — never a constraint, and a param
+   * may legitimately be absent here. Optional on the wire so an older
+   * backend, or a hand-rolled fixture, still parses. */
+  param_options?: Record<string, string[]>
 }
 
 export interface GraphSourcesResponse {
@@ -821,7 +871,7 @@ export function fetchGraphNode(source: string, nodeId: string): Promise<GraphDet
 
 // ---------------------------------------------------------------------------
 // GET /v1/memory/reality, /v1/memory/gaps, /v1/memory/evaluations,
-// /v1/memory/journal — backs Pollen's "Réalité" memory-quality view. Shapes
+// /v1/memory/journal — backs Pollen's "Memory > Quality" memory-quality view. Shapes
 // transcribed directly from `hivepilot/services/memory_service.py`'s
 // `reality_summary`/`gaps_by_namespace`/`recent_evaluations`/
 // `activity_journal` and `api_service.py`'s `memory_reality`/`memory_gaps`/
@@ -834,13 +884,13 @@ export function fetchGraphNode(source: string, nodeId: string): Promise<GraphDet
 // (mirroring `fetchMemories`/`fetchPanel`/`fetchGraph` above) purely as
 // defense-in-depth: if a future tenant-scoping change ever raises this
 // floor, a 403 must not silently clear an otherwise-valid token out from
-// under every other tab — `RealityView` peels `ApiForbiddenError` off per
+// under every other tab — `MemoryQualityView` peels `ApiForbiddenError` off per
 // section, exactly like `GraphView`'s per-source handling.
 //
 // `namespace` / `query_or_key` / `note` / `actor` / `top_queries` are all
 // caller-influenced free text (whatever a plugin passed to
 // `memory_service.record_*`, e.g. `plugins/mem0.py`) — UNTRUSTED, same trust
-// class as `PanelData`/`GraphDetail` above. `RealityView` renders every one
+// class as `PanelData`/`GraphDetail` above. `MemoryQualityView` renders every one
 // of them via plain JSX interpolation only, never `dangerouslySetInnerHTML`.
 // ---------------------------------------------------------------------------
 

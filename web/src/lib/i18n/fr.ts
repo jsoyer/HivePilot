@@ -3,7 +3,7 @@ import type { TranslationKey } from './en'
 /**
  * French dictionary — typed `Record<TranslationKey, string>` against `en.ts`
  * so a missing or extra key is a COMPILE error, not a silent runtime gap.
- * The operator is a native FR speaker (Mirador -> "Vigie" upgrade, P1a) —
+ * The operator is a native FR speaker (Pollen dashboard upgrade, P1a) —
  * natural French copy, not a literal word-for-word translation. Product/
  * technical proper nouns ("Pollen", "Mem0") are left untranslated.
  */
@@ -30,6 +30,7 @@ export const fr: Record<TranslationKey, string> = {
   'common.status': 'Statut',
   'common.run': 'Exécution',
   'common.actions': 'Actions',
+  'common.cancel': 'Annuler',
   'common.processing': 'Traitement en cours…',
   'common.starting': 'Démarrage…',
   'common.stopping': 'Arrêt en cours…',
@@ -142,7 +143,7 @@ export const fr: Record<TranslationKey, string> = {
   // ---- Graph view ------------------------------------------------------
   'graph.title': 'Graphe',
   'graph.description':
-    "Vues natives en graphe de l'état de HivePilot — déplacez/zoomez le canevas, cliquez sur un nœud pour le détail.",
+    "Vues natives en graphe de l'état de HivePilot. Déplacez et zoomez le canevas ; sélectionnez un nœud pour son détail.",
   'graph.loadingSources': 'Chargement des sources…',
   'graph.noSources': 'Aucune source de graphe enregistrée.',
   'graph.source': 'Source',
@@ -152,10 +153,12 @@ export const fr: Record<TranslationKey, string> = {
   'graph.requiresTokenNote':
     'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule cette source de graphe nécessite un rôle supérieur.',
   'graph.higherPrivilege': 'à privilège supérieur',
-  'graph.aParameter': 'un paramètre',
-  'graph.parameters': 'des paramètres',
-  'graph.missingParamHintLead': 'Cette source nécessite {countLabel} pour charger les données. Renseignez',
-  'graph.missingParamHintTail': 'ci-dessus puis cliquez sur',
+  'graph.chooseParam': 'Choisir un {param}…',
+  'graph.missingParamTitle': 'Choisissez un {params} à afficher',
+  'graph.missingParamBodySelect':
+    'Cette source en affiche un à la fois. Choisissez-en un dans le sélecteur ci-dessus et le graphe se charge aussitôt.',
+  'graph.missingParamBodyType':
+    'Cette source ne peut pas énumérer ses valeurs acceptées : saisissez-en une ci-dessus puis cliquez sur Charger.',
   'graph.failedToLoad': 'Échec du chargement de ce graphe ({label}). Réessayez ou choisissez une autre source.',
   'graph.noNodes': "Cette source n'a encore aucun nœud.",
   'graph.selectNodeForDetail': 'Sélectionnez un nœud pour voir le détail.',
@@ -214,8 +217,21 @@ export const fr: Record<TranslationKey, string> = {
   'runs.descriptionReadOnly':
     'Exécutions récentes (lecture seule — un jeton de rang run peut en déclencher de nouvelles).',
   'runs.noRuns': 'Aucune exécution pour le moment.',
-  'runs.taskPlaceholder': 'ex. deploy',
-  'runs.projectPlaceholder': 'ex. acme-web',
+  // Ces libellés d'invite ne servent QUE de repli, quand le catalogue
+  // (`/v1/tasks`, `/v1/projects`) est indisponible ou réellement vide. Le
+  // chemin normal est une liste déroulante des valeurs connues du serveur.
+  'runs.taskPlaceholder': 'Nom de la tâche',
+  'runs.projectPlaceholder': 'Nom du projet',
+  'runs.chooseTask': 'Choisir une tâche…',
+  'runs.chooseProject': 'Choisir un projet…',
+  'runs.taskCatalogueUnavailable':
+    'Liste des tâches indisponible — saisissez le nom tel qu’il figure dans votre configuration.',
+  'runs.projectCatalogueUnavailable':
+    'Liste des projets indisponible — saisissez le nom tel qu’il figure dans votre configuration.',
+  'runs.newRunTitle': 'Nouvelle exécution',
+  'runs.newRunHelp':
+    'Choisissez un projet et une tâche. L’exécution démarre aussitôt et apparaît sur le tableau.',
+  'runs.newRunCloseAriaLabel': 'Fermer le formulaire de nouvelle exécution',
   'runs.extraPromptLabel': 'Prompt supplémentaire (optionnel)',
   'runs.extraPromptPlaceholder': 'Contexte additionnel pour cette exécution…',
   'runs.autoGitLabel': 'Actions git automatiques (commit/push)',
@@ -233,8 +249,33 @@ export const fr: Record<TranslationKey, string> = {
     'Statut en direct de chaque exécution, regroupé par étape — cliquez sur une carte pour le détail.',
   'board.descriptionReadOnly':
     "Statut en direct de chaque exécution, regroupé par étape (lecture seule — un jeton de rang run peut en déclencher de nouvelles).",
-  'board.noRunsAtAll': "Aucune exécution pour le moment — déclenchez-en une ci-dessus pour la voir ici.",
-  'board.columnEmpty': 'Rien ici.',
+  'board.noRunsTitle': 'Aucune exécution pour le moment',
+  'board.noRunsBody':
+    'Chaque pipeline que vous déclenchez apparaît ici, regroupé par étape, et se rafraîchit tout seul toutes les quelques secondes. Lancez-en un pour remplir le tableau.',
+  'board.noRunsBodyReadOnly':
+    'Chaque pipeline déclenché sur ce tenant apparaît ici, regroupé par étape. Rien n’a encore tourné.',
+  'board.noMatchTitle': 'Aucune exécution ne correspond à ces filtres',
+  'board.noMatchBody':
+    'Le tableau contient bien des exécutions, mais aucune pour ce couple projet / tâche.',
+  'board.clearFilters': 'Réinitialiser les filtres',
+  'board.allProjects': 'Tous les projets',
+  'board.allTasks': 'Toutes les tâches',
+  'board.density': 'Densité',
+  'board.densityComfortable': 'Confortable',
+  'board.densityCompact': 'Compacte',
+  'board.showingCount': '{shown} exécutions sur {total}',
+  // Motifs d'échec / de pause, déduits du statut canonique de l'exécution —
+  // le seul « pourquoi » réel exposé par la liste (`detail` est du texte
+  // libre non fiable, jamais affiché).
+  'board.reasonFailed': 'Le pipeline a signalé un échec.',
+  'board.reasonDenied': 'Un approbateur a refusé cette exécution.',
+  'board.reasonRateLimit': 'Interrompue par une limite de débit du fournisseur.',
+  'board.reasonAuthExpired': 'Identifiants du fournisseur expirés.',
+  'board.reasonTestFailure': 'Les tests ont échoué.',
+  'board.reasonSecurityBlocker': 'Bloquée par un garde-fou de sécurité.',
+  'board.reasonCancelled': 'Arrêtée par un opérateur.',
+  'board.reasonPaused': 'Mise en pause en cours d’exécution — en attente de reprise.',
+  'board.reasonDeferred': 'Reportée — nouvelle tentative plus tard.',
   'board.colQueued': 'File',
   'board.colRunning': 'En cours',
   'board.colWaitingApproval': "Attente d'approbation",
@@ -261,50 +302,52 @@ export const fr: Record<TranslationKey, string> = {
   'runDetail.requiresTokenLead': "Le détail d'exécution nécessite un jeton de rang",
   'runDetail.requiresTokenTail': '(ou supérieur).',
 
-  // ---- Réalité view (tableau de bord de qualité de la mémoire) ---------
-  'reality.kpiTitle': 'Qualité de la mémoire',
-  'reality.searchSuccessRate': 'Taux de succès des recherches',
-  'reality.noResultSearches': 'Recherches sans résultat',
-  'reality.avgFreshness': 'Fraîcheur moyenne des rappels',
-  'reality.declaredReliability': 'Fiabilité déclarée',
-  'reality.onNSearches': 'sur {count} recherches',
-  'reality.onNEvaluations': 'sur {count} évaluations',
-  'reality.noSamples': 'Aucune donnée',
-  'reality.noKpiData': 'Aucune recherche ni évaluation enregistrée sur cette période.',
-  'reality.gapsTitle': 'Lacunes par namespace',
-  'reality.gapsDescription': 'Recherches sans résultat regroupées par namespace, les plus nombreuses en premier',
-  'reality.noGaps': 'Aucune lacune de recherche enregistrée.',
-  'reality.topQueriesLabel': 'requêtes principales :',
-  'reality.evaluationsTitle': 'Évaluations récentes',
-  'reality.evaluationsDescription': 'Retour humain « cette mémoire était-elle utile ? »',
-  'reality.noEvaluations': "Aucune évaluation enregistrée pour l'instant.",
-  'reality.useful': 'Utile',
-  'reality.notUseful': 'Pas utile',
-  'reality.journalTitle': 'Journal récent',
-  'reality.journalDescription':
+  // ---- Memory quality view (tableau de bord de qualité de la mémoire) ---------
+  'quality.kpiTitle': 'Qualité de la mémoire',
+  'quality.searchSuccessRate': 'Taux de succès des recherches',
+  'quality.noResultSearches': 'Recherches sans résultat',
+  'quality.avgFreshness': 'Fraîcheur moyenne des rappels',
+  'quality.declaredReliability': 'Fiabilité déclarée',
+  'quality.onNSearches': 'sur {count} recherches',
+  'quality.onNEvaluations': 'sur {count} évaluations',
+  'quality.noSamples': 'Aucune donnée',
+  'quality.noKpiData': 'Aucune recherche ni évaluation enregistrée sur cette période.',
+  'quality.gapsTitle': 'Lacunes par namespace',
+  'quality.gapsDescription': 'Recherches sans résultat regroupées par namespace, les plus nombreuses en premier',
+  'quality.noGaps': 'Aucune lacune de recherche enregistrée.',
+  'quality.topQueriesLabel': 'requêtes principales :',
+  'quality.evaluationsTitle': 'Évaluations récentes',
+  'quality.evaluationsDescription': 'Retour humain « cette mémoire était-elle utile ? »',
+  'quality.noEvaluations': "Aucune évaluation enregistrée pour l'instant.",
+  'quality.useful': 'Utile',
+  'quality.notUseful': 'Pas utile',
+  'quality.journalTitle': 'Journal récent',
+  'quality.journalDescription':
     'Événements mémoire les plus récents (recherche / lecture / stockage), les plus récents en premier',
-  'reality.noJournal': "Aucune activité mémoire enregistrée pour l'instant.",
-  'reality.colTs': 'Heure',
-  'reality.colOp': 'Opération',
-  'reality.colNamespace': 'Namespace',
-  'reality.colQuery': 'Requête / clé',
-  'reality.colResult': 'Résultat',
-  'reality.colFreshness': 'Fraîcheur',
-  'reality.colActor': 'Acteur',
-  'reality.emptyState':
-    "Aucune activité mémoire enregistrée pour le moment — la vue Réalité se remplit à mesure que les agents recherchent ou stockent de la mémoire (mem0).",
-  'reality.requiresTokenLead': 'Cette section nécessite un rôle',
-  'reality.requiresTokenTail': 'à privilège supérieur.',
-  'reality.requiresTokenNote':
+  'quality.noJournal': "Aucune activité mémoire enregistrée pour l'instant.",
+  'quality.colTs': 'Heure',
+  'quality.colOp': 'Opération',
+  'quality.colNamespace': 'Namespace',
+  'quality.colQuery': 'Requête / clé',
+  'quality.colResult': 'Résultat',
+  'quality.colFreshness': 'Fraîcheur',
+  'quality.colActor': 'Acteur',
+  'quality.emptyTitle': 'Aucune activité mémoire enregistrée pour le moment',
+  'quality.emptyState':
+    "Ces indicateurs proviennent de l'instrumentation mem0, qui est facultative. Une fois activée, dès que les agents recherchent et stockent de la mémoire, le taux de succès des recherches, la fraîcheur du rappel et les manques par namespace apparaissent ici.",
+  'quality.requiresTokenLead': 'Cette section nécessite un rôle',
+  'quality.requiresTokenTail': 'à privilège supérieur.',
+  'quality.requiresTokenNote':
     'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule cette section nécessite un rôle supérieur.',
 
   // ---- Memory view (onglets unifiés Qualité/Croissance/Recherche) ------
+  'memory.description':
+    'Si la mémoire aide réellement (Qualité), quelle quantité elle représente (Croissance), et ce qu’elle contient (Recherche).',
   'memory.tabQuality': 'Qualité',
   'memory.tabGrowth': 'Croissance',
   'memory.tabSearch': 'Recherche',
   'memory.growthTitle': 'Croissance de la mémoire',
-  'memory.growthDescription':
-    'Ce qui est stocké, où, dans le temps, et par qui — GET /v1/memory/growth',
+  'memory.growthDescription': 'Ce qui est stocké, où, dans le temps, et par qui.',
   'memory.totalMemories': 'Total des mémoires',
   'memory.byNamespaceTitle': 'Mémoires par namespace',
   'memory.growthOverTimeTitle': 'Croissance dans le temps',
@@ -312,7 +355,9 @@ export const fr: Record<TranslationKey, string> = {
   'memory.byActorTitle': 'Par acteur',
   'memory.authorshipNotAvailable':
     "Une répartition humain / agent n'est pas disponible — la vraie répartition par acteur est affichée à la place.",
-  'memory.growthEmptyState': 'Aucune croissance de mémoire enregistrée sur cette période.',
+  'memory.growthEmptyTitle': 'Rien de stocké sur cette période',
+  'memory.growthEmptyState':
+    'Les répartitions par namespace et par acteur se remplissent à mesure que les agents stockent des mémoires. Rien n’a été écrit ces 30 derniers jours.',
 
   // ---- Home view (vue d'accueil par défaut) -----------------------------
   'home.subtitle': "Votre flotte en un coup d'œil — cliquez sur un chiffre pour l'explorer.",
@@ -412,21 +457,37 @@ export const fr: Record<TranslationKey, string> = {
   'autopilot.spentToday': "Dépensé aujourd'hui",
   'autopilot.remaining': 'Restant',
   'autopilot.unknown': 'inconnu',
-  'autopilot.noBudget': 'Aucun budget quotidien configuré.',
+  'autopilot.noBudgetTitle': 'Aucun plafond de dépense quotidien',
+  'autopilot.noBudgetBody':
+    'Renseignez budget_daily_usd dans policies.yaml pour plafonner ce que l’autopilote peut dépenser par jour. Sans ce plafond, les dispatches ne sont soumis à aucun garde-fou budgétaire.',
   'autopilot.budgetBurn': 'Consommation du budget',
   'autopilot.queueTitle': "File d'objectifs",
-  'autopilot.queueEmpty': 'File vide.',
+  'autopilot.queueEmptyTitle': 'Aucun objectif en file',
+  'autopilot.queueEmptyBody':
+    'Les objectifs arrivent ici lorsqu’un pipeline planifié ou une analyse de dérive en soulève un. L’autopilote en traite au plus un par cycle.',
   'autopilot.enqueuedAgo': 'ajoutée il y a {age}',
   'autopilot.dispatchesTitle': 'Dispatches récents',
-  'autopilot.dispatchesEmpty': 'Aucun dispatch pour le moment.',
+  'autopilot.dispatchesEmptyTitle': 'Aucun dispatch pour le moment',
+  'autopilot.dispatchesEmptyBody':
+    'Un dispatch est enregistré chaque fois que l’autopilote sort un objectif de la file — uniquement pour les pipelines autorisés ci-dessous.',
   'autopilot.allowlistTitle': 'Pipelines autorisés',
-  'autopilot.allowlistEmpty': "Rien n'est autorisé — l'autopilote est effectivement inactif.",
+  'autopilot.allowlistEmptyTitle': 'Aucun pipeline ne peut être lancé automatiquement',
+  'autopilot.allowlistEmptyBody':
+    'L’autopilote peut toujours mettre des objectifs en file, mais il n’en exécutera aucun. Ajoutez un pipeline à auto_dispatch dans policies.yaml pour l’autoriser à agir.',
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',
   'agents.description':
-    'Activité réelle par rôle — coût, exécutions, leçons et verdicts. Lecture seule pour tout jeton.',
-  'agents.noRoster': "Aucun effectif d'agents configuré.",
+    'Ce que coûte chaque rôle et à quelle fréquence il réussit. Sélectionnez un rôle pour ses leçons et ses verdicts.',
+  'agents.colRole': 'Rôle',
+  'agents.rowAriaLabel': 'Ouvrir le détail de {name}',
+  'agents.attentionTitle': '{count} rôle(s) à surveiller',
+  'agents.allClear': 'Tous les rôles sont nominaux — aucun verdict négatif, aucun taux de réussite faible.',
+  'agents.reasonVerdict': 'dernier verdict autre qu’une acceptation',
+  'agents.reasonLowSuccess': 'taux de réussite de {rate} %',
+  'agents.noRoster': 'Aucun rôle configuré',
+  'agents.noRosterBody':
+    'Les rôles se déclarent dans votre configuration (roles.yaml). Dès qu’un rôle existe et qu’une exécution lui attribue une étape, son coût et son taux de réussite apparaissent ici.',
   'agents.forbidden': "Impossible de charger l'activité des agents pour le tenant de votre jeton.",
   'agents.verdictsForbidden':
     "Impossible de charger les signaux de sévérité des verdicts pour le tenant de votre jeton.",
@@ -439,10 +500,9 @@ export const fr: Record<TranslationKey, string> = {
   'agents.tokensLabel': 'Jetons (entrée/sortie)',
   'agents.lastActiveLabel': 'Dernière activité',
   'agents.successRateLabel': 'Taux de réussite',
-  'agents.unknownTitle': 'Non attribué (avant le suivi par rôle)',
+  'agents.unknownTitle': 'Activité non attribuée',
   'agents.unknownDescription':
-    "Activité historique enregistrée sans attribution de rôle — steps.role n'existe qu'après le déploiement de ce sprint.",
-  'agents.unknownEmpty': 'Aucune activité non attribuée.',
+    'Enregistrée avant l’existence de l’attribution par rôle. Elle ne peut être rattachée à aucun rôle et n’entre donc dans aucun chiffre ci-dessus.',
   'agents.detailAriaLabel': "Détail de l'agent : {name}",
   'agents.closeAriaLabel': "Fermer le détail de l'agent",
   'agents.lessonsTitle': 'Leçons récentes',

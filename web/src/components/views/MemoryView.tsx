@@ -2,6 +2,7 @@ import { Database, Layers, TrendingUp, Users } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
+import { EmptyState } from '@/components/dashboard/EmptyState'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { Sparkline } from '@/components/dashboard/Sparkline'
 import { ApiForbiddenError } from '@/lib/api'
@@ -10,18 +11,18 @@ import { fetchMemoryGrowth } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 import { Mem0View } from './Mem0View'
-import { RealityView } from './RealityView'
+import { MemoryQualityView } from './MemoryQualityView'
 
 const DAYS = 30
 
 /**
  * Growth tab body — `GET /v1/memory/growth`: total memory count
  * (`MetricReadout`), a namespace breakdown and a by-actor breakdown (both
- * `DistributionBar`, same primitive, same convention as `RealityView`'s
+ * `DistributionBar`, same primitive, same convention as `MemoryQualityView`'s
  * gaps-by-namespace section), and a growth-over-time trend (`Sparkline`
  * from `growth_series`).
  *
- * **Honesty over completeness** (mirrors `RealityView`'s and `HomeView`'s
+ * **Honesty over completeness** (mirrors `MemoryQualityView`'s and `HomeView`'s
  * convention): a genuinely-empty response (`total === 0` and every
  * breakdown/series empty — the opt-in memory instrumentation has never
  * fired) renders ONE plain empty-state message via `AsyncSection`'s own
@@ -35,13 +36,13 @@ const DAYS = 30
  * **403 handling**: `fetchMemoryGrowth` opts into `on403: 'forbidden'`
  * (same as every other `/v1/memory/*` fetcher) — a 403 is peeled off
  * BEFORE `AsyncSection` and rendered as the same "requires a
- * higher-privilege token" banner `RealityView` uses for its own sections
+ * higher-privilege token" banner `MemoryQualityView` uses for its own sections
  * (reusing its `reality.requiresToken*` keys — identical semantics, so no
  * second copy of the same three strings).
  *
  * **Security**: `namespace`/`actor` (from `memories_by_namespace`/
  * `by_actor`) are caller-influenced free text, same untrusted trust class
- * as everywhere else under `/v1/memory/*` (see `RealityView`'s module
+ * as everywhere else under `/v1/memory/*` (see `MemoryQualityView`'s module
  * note) — `DistributionBar` renders both via plain JSX text
  * interpolation only, never a raw-HTML injection prop.
  */
@@ -55,25 +56,28 @@ function GrowthTab() {
         data-testid="memory-growth-forbidden"
         className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
       >
-        {t('reality.requiresTokenLead')}{' '}
-        <span className="font-medium text-foreground">{t('reality.requiresTokenTail')}</span>{' '}
-        {t('reality.requiresTokenNote')}
+        {t('quality.requiresTokenLead')}{' '}
+        <span className="font-medium text-foreground">{t('quality.requiresTokenTail')}</span>{' '}
+        {t('quality.requiresTokenNote')}
       </div>
     )
   }
 
   return (
-    <AsyncSection
-      state={growth}
-      isEmpty={(data) =>
+    <AsyncSection state={growth} isEmpty={() => false}>
+      {(data) =>
         data.total === 0 &&
         data.memories_by_namespace.length === 0 &&
         data.growth_series.length === 0 &&
-        data.by_actor.length === 0
-      }
-      emptyMessage={t('memory.growthEmptyState')}
-    >
-      {(data) => (
+        data.by_actor.length === 0 ? (
+          <EmptyState
+            data-testid="memory-growth-empty"
+            icon={<Database className="size-4" />}
+            title={t('memory.growthEmptyTitle')}
+            body={t('memory.growthEmptyState')}
+            className="max-w-2xl"
+          />
+        ) : (
         <div className="flex flex-col gap-6">
           <MetricReadout
             icon={<Database className="size-4" />}
@@ -129,18 +133,19 @@ function GrowthTab() {
             {t('memory.authorshipNotAvailable')}
           </p>
         </div>
-      )}
+        )
+      }
     </AsyncSection>
   )
 }
 
 /**
- * Unified Memory view — merges the formerly-separate "Réalité" (memory
+ * Unified Memory view — merges the formerly-separate "Memory > Quality" (memory
  * quality) and "Mem0" (search) built-in tabs into ONE, plus a new Growth
  * tab (`/v1/memory/growth`), grouped under a single "Memory" nav entry
  * (see `nav-config.ts`'s `NAV_GROUP_ORDER`). Default tab is Quality.
  *
- * **Quality** and **Search** render the EXISTING `RealityView`/`Mem0View`
+ * **Quality** and **Search** render the EXISTING `MemoryQualityView`/`Mem0View`
  * components UNCHANGED, as full tab panels — their own loading/error/
  * empty/403 handling, and every one of their existing tests, keep working
  * exactly as before; only where they're mounted in the shell changed (they
@@ -151,7 +156,7 @@ function GrowthTab() {
  * outer shell `Tabs` in `Pollen.tsx` (nested Base UI `Tabs.Root`s don't
  * share state) — Base UI only mounts the ACTIVE panel's `Tabs.Panel` (the
  * same "one `[role=\"tabpanel\"]` at a time" behavior the outer shell
- * already relies on), so `RealityView`/`Mem0View`/`GrowthTab` each only
+ * already relies on), so `MemoryQualityView`/`Mem0View`/`GrowthTab` each only
  * fetch their own data once their tab is actually selected, never all
  * three eagerly on mount.
  */
@@ -159,14 +164,23 @@ export function MemoryView() {
   const t = useT()
 
   return (
-    <Tabs defaultValue="quality" className="gap-4">
-      <TabsList>
+    // `orientation` is stated explicitly rather than relied on as a default:
+    // this Tabs root is mounted INSIDE the app shell's vertical Tabs root,
+    // and the two used to collide over a shared Tailwind `group/tabs` name —
+    // which is what rendered this tab bar as a vertical stack in a tiny box.
+    // See `ui/tabs.tsx` for the fix.
+    <Tabs defaultValue="quality" orientation="horizontal" className="gap-4">
+      <div className="flex flex-col gap-1">
+        <h2 className="font-heading text-base font-medium">{t('nav.memory')}</h2>
+        <p className="text-sm text-muted-foreground">{t('memory.description')}</p>
+      </div>
+      <TabsList data-testid="memory-tabs" className="w-full max-w-md sm:w-fit">
         <TabsTrigger value="quality">{t('memory.tabQuality')}</TabsTrigger>
         <TabsTrigger value="growth">{t('memory.tabGrowth')}</TabsTrigger>
         <TabsTrigger value="search">{t('memory.tabSearch')}</TabsTrigger>
       </TabsList>
       <TabsContent value="quality">
-        <RealityView />
+        <MemoryQualityView />
       </TabsContent>
       <TabsContent value="growth">
         <Card>

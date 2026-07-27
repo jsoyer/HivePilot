@@ -480,6 +480,26 @@ def _node_detail(ctx: GraphContext, node_id: str) -> GraphDetail | None:
     )
 
 
+def _pipeline_options() -> dict[str, list[str]]:
+    """Every pipeline name declared in `pipelines.yaml`, so a consumer can
+    offer a pick-list instead of asking an operator to TYPE a name it
+    already knows (Pollen's Graph view used to open empty behind exactly
+    that free-text box).
+
+    Config-derived and not tenant-scoped, deliberately: pipeline NAMES are
+    the same configuration `hivepilot pipelines list` already prints to
+    anyone who can read the config, and this returns names only — no stage
+    detail, no run data, nothing tenant-owned. Fetching a pipeline's actual
+    graph still goes through the normal per-request path.
+
+    Raising is harmless (`safe_param_options` swallows it and the consumer
+    falls back to free text), but a missing/empty `pipelines.yaml` is a
+    perfectly normal deployment state, not an error, so it simply yields an
+    empty list.
+    """
+    return {"pipeline": sorted(load_pipelines().pipelines)}
+
+
 PIPELINE_GRAPH_SOURCE = GraphSourceSpec(
     name="pipeline",
     data=_build_graph,
@@ -487,4 +507,5 @@ PIPELINE_GRAPH_SOURCE = GraphSourceSpec(
     title="Pipeline",
     min_role="read",
     params=("pipeline",),
+    param_options=_pipeline_options,
 )

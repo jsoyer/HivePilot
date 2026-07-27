@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 
 /**
- * Grouped sidebar navigation (Mirador → "Vigie" dashboard upgrade, P0b).
+ * Grouped sidebar navigation (Pollen dashboard upgrade, P0b).
  * Mirrors the operator's mockup section labels — VUE D'ENSEMBLE / AGENTS /
  * SYSTÈME / MÉMOIRE — mapped onto Pollen's actual built-in tabs (see
  * `Pollen.tsx`'s `BUILTIN_TABS`).
@@ -49,7 +49,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   { label: 'nav.spend', values: ['cost', 'models', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
-  // and Réalité (quality) built-ins merged into ONE `memory` item backed by
+  // and memory-quality built-ins merged into ONE `memory` item backed by
   // `MemoryView`'s internal Quality/Growth/Search tabs (see `Pollen.tsx`'s
   // `BUILTIN_TABS`) — a single-entry-with-tabs destination reads cleaner
   // than three separate top-level nav items for what is really one

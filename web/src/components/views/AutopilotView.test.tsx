@@ -197,7 +197,7 @@ describe('AutopilotView', () => {
     expect(container.querySelector('[data-testid="autopilot-dispatches-empty"]')).not.toBeNull()
   })
 
-  it('CRITICAL: honest empty allowlist shows "nothing allowlisted" note', async () => {
+  it('CRITICAL: an empty allowlist states the CONSEQUENCE, not just that it is empty', async () => {
     fetchAutopilot.mockResolvedValue({ ...BASE_STATE, auto_dispatch_allowlist: [] })
     mockRole('run', 1)
 
@@ -206,11 +206,15 @@ describe('AutopilotView', () => {
       await Promise.resolve()
     })
 
-    expect(container.querySelector('[data-testid="autopilot-allowlist-empty"]')).not.toBeNull()
-    expect(container.textContent).toMatch(/effectively idle/i)
+    const empty = container.querySelector('[data-testid="autopilot-allowlist-empty"]')
+    expect(empty).not.toBeNull()
+    // Says what it means...
+    expect(empty?.textContent).toMatch(/never run one/i)
+    // ...and what would change it.
+    expect(empty?.textContent).toMatch(/auto_dispatch in policies\.yaml/i)
   })
 
-  it('CRITICAL: budget_daily_usd null renders "no daily budget configured", never a fake gauge', async () => {
+  it('CRITICAL: budget_daily_usd null explains what to configure, and renders no fake gauge', async () => {
     fetchAutopilot.mockResolvedValue({ ...BASE_STATE, budget_daily_usd: null })
     mockRole('run', 1)
 
@@ -450,5 +454,64 @@ describe('AutopilotView', () => {
 
     expect(container.textContent).toContain('Autopilote')
     expect(container.textContent).toContain('En pause')
+  })
+
+  it('CRITICAL: every empty section says what would fill it, never just "nothing"', async () => {
+    fetchAutopilot.mockResolvedValue({
+      ...BASE_STATE,
+      queue: [],
+      recent_dispatches: [],
+      auto_dispatch_allowlist: [],
+    })
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const queue = container.querySelector('[data-testid="autopilot-queue-empty"]')
+    const dispatches = container.querySelector('[data-testid="autopilot-dispatches-empty"]')
+    expect(queue?.textContent).toMatch(/scheduled pipeline or a drift scan/i)
+    expect(dispatches?.textContent).toMatch(/each time autopilot drains an objective/i)
+    // The old copy is gone.
+    expect(container.textContent).not.toMatch(/queue empty\./i)
+    expect(container.textContent).not.toMatch(/no dispatches yet\./i)
+  })
+
+  it('CRITICAL: renders as one card, not five near-empty stacked cards', async () => {
+    fetchAutopilot.mockResolvedValue({
+      ...BASE_STATE,
+      queue: [],
+      recent_dispatches: [],
+      auto_dispatch_allowlist: [],
+    })
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelectorAll('[data-slot="card"]')).toHaveLength(1)
+  })
+
+  it('distinguishes an unconfigured budget (em-dash) from an unmeasurable spend ("unknown")', async () => {
+    fetchAutopilot.mockResolvedValue({
+      ...BASE_STATE,
+      budget_daily_usd: null,
+      budget_spent_today: null,
+      budget_remaining: null,
+    })
+    mockRole('run', 1)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('\u2014')
+    expect(container.textContent).toMatch(/unknown/i)
+    expect(container.textContent).not.toMatch(/\$0\.00/)
   })
 })

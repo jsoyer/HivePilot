@@ -1,5 +1,5 @@
 /**
- * Lightweight custom i18n mechanism (Mirador -> "Vigie" upgrade, P1a) —
+ * Lightweight custom i18n mechanism (Pollen dashboard upgrade, P1a) —
  * a React context + a `t(key, params?)` lookup function over two bundled TS
  * dictionaries (`./en.ts` / `./fr.ts`, no network/locale files). English is
  * the default AND the fallback for any key missing from a non-English

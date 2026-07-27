@@ -1,9 +1,12 @@
-import { X } from 'lucide-react'
-import { useState } from 'react'
+import { AlertTriangle } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Drawer } from '@/components/ui/drawer'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { EmptyState } from '@/components/dashboard/EmptyState'
 import { ApiForbiddenError } from '@/lib/api'
+import { EM_DASH, formatAge } from '@/lib/format-time'
 import { useT } from '@/lib/i18n'
 import {
   type AgentRoster,
@@ -30,6 +33,13 @@ import { AsyncSection } from './AsyncSection'
  * `fetchVerdicts`'s own `limit` contract (never silently unbounded). */
 const SEVERITY_VERDICTS_LIMIT = 200
 
+/** Below this, a role's success rate is a problem worth surfacing at the
+ * top of the page. Matches `rateTone`'s `crit` threshold. */
+const CRIT_RATE = 0.5
+/** Below this, a role's success rate is worth a warning tone but not the
+ * attention band. */
+const WARN_RATE = 0.8
+
 function formatCost(n: number): string {
   return `$${n.toFixed(3)}`
 }
@@ -38,34 +48,24 @@ function formatTokens(n: number): string {
   return n.toLocaleString('en-US')
 }
 
-const RATE_TONE_CLASS: Record<'good' | 'warn' | 'crit', string> = {
+type Tone = 'good' | 'warn' | 'crit'
+
+const TONE_TEXT: Record<Tone, string> = {
   good: 'text-[var(--color-good)]',
   warn: 'text-[var(--color-warn)]',
   crit: 'text-[var(--color-crit)]',
 }
 
-function rateTone(rate: number): 'good' | 'warn' | 'crit' {
-  if (rate >= 0.8) return 'good'
-  if (rate >= 0.5) return 'warn'
-  return 'crit'
+const TONE_STRIPE: Record<Tone, string> = {
+  good: '',
+  warn: 'border-l-4 border-l-[var(--color-warn)]',
+  crit: 'border-l-4 border-l-[var(--color-crit)]',
 }
 
-/** Elapsed time from `iso` to now, as a short "2d"/"3h"/"12m"/"45s" string —
- * same convention as `AutopilotView`/`RunBoardView`'s own copy of this
- * helper. Unparseable/missing input renders as "—", never a fabricated
- * age. */
-function formatAge(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return '—'
-  const totalSeconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000))
-  const days = Math.floor(totalSeconds / 86400)
-  const hours = Math.floor((totalSeconds % 86400) / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  if (days > 0) return `${days}d`
-  if (hours > 0) return `${hours}h`
-  if (minutes > 0) return `${minutes}m`
-  return `${totalSeconds}s`
+function rateTone(rate: number): Tone {
+  if (rate >= WARN_RATE) return 'good'
+  if (rate >= CRIT_RATE) return 'warn'
+  return 'crit'
 }
 
 /**
@@ -88,141 +88,325 @@ function isNonNominalDecision(decision: string | null): boolean {
   return decision === null || decision.trim().toUpperCase() !== 'ACCEPT'
 }
 
-interface SuccessRateReadoutProps {
+/**
+ * The single "how bad is this role" judgement, computed once and reused by
+ * the attention band, the row stripe and the sort order — so the three can
+ * never disagree.
+ *
+ * `crit` means a human should look now: a recent non-`ACCEPT` verdict, or a
+ * success rate under 50%. `warn` is a rate under 80%. Everything else,
+ * INCLUDING a role with no data at all, is `good` — a role is never flagged
+ * for being quiet.
+ */
+function roleTone(agent: AgentRoster, nonNominalVerdict: boolean): Tone {
+  if (nonNominalVerdict) return 'crit'
+  if (agent.success_rate === null) return 'good'
+  return rateTone(agent.success_rate)
+}
+
+const TONE_RANK: Record<Tone, number> = { crit: 0, warn: 1, good: 2 }
+
+interface SuccessRateCellProps {
   rate: SuccessRate
   roleName: string
-}
-
-/** `SuccessRate` is `number | null` — `null` means zero attempts in-window
- * (`_attempt_success_rate` excludes skipped/other from its denominator),
- * rendered as an honest "no attempts yet" instead of a fabricated
- * percentage, mirroring `ModelsView`'s `SuccessRateCell`. */
-function SuccessRateReadout({ rate, roleName }: SuccessRateReadoutProps) {
-  const t = useT()
-  if (rate === null) {
-    return (
-      <span data-testid={`agent-no-success-rate-${roleName}`} className="text-muted-foreground">
-        {t('agents.noAttemptsYet')}
-      </span>
-    )
-  }
-  return <span className={RATE_TONE_CLASS[rateTone(rate)]}>{Math.round(rate * 100)}%</span>
-}
-
-interface AgentCardProps {
-  agent: AgentRoster
-  nonNominal: boolean
-  selected: boolean
-  onSelect: () => void
+  attributed: boolean
 }
 
 /**
- * One roster card. `attributed: false` -> an honest "no activity attributed
- * yet" state, never a fabricated `0%`/rollup (see `AgentsResponse`'s
- * docstring in `pollen-api.ts`). `display_name`/`title` are role config
- * text, `name` is an identifier — none of it is ever HTML-rendered, only
- * plain JSX interpolation (React auto-escapes), so even a role name/display
- * name that happens to contain markup can never execute.
+ * `SuccessRate` is `number | null` — `null` means zero attempts in-window
+ * (`_attempt_success_rate` excludes skipped/other from its denominator),
+ * rendered as an em-dash with an explanatory title instead of a fabricated
+ * percentage.
+ *
+ * The number itself carries the weight: a below-threshold rate is bold and
+ * tinted, a healthy one is plain. In the previous card grid a lone 20% sat
+ * among fourteen 100%s in identical type, which is exactly how the single
+ * most important signal on the page went unnoticed.
  */
-function AgentCard({ agent, nonNominal, selected, onSelect }: AgentCardProps) {
+function SuccessRateCell({ rate, roleName, attributed }: SuccessRateCellProps) {
   const t = useT()
-  const label = agent.display_name ?? agent.name
+  if (rate === null) {
+    return (
+      <span
+        data-testid={`agent-no-success-rate-${roleName}`}
+        title={attributed ? t('agents.noAttemptsYet') : t('agents.noActivityYet')}
+        className="text-muted-foreground"
+      >
+        {EM_DASH}
+      </span>
+    )
+  }
+  const tone = rateTone(rate)
+  return (
+    <span
+      data-testid={`agent-success-rate-${roleName}`}
+      className={cn('metric-mono', TONE_TEXT[tone], tone === 'good' ? 'font-normal' : 'font-semibold')}
+    >
+      {Math.round(rate * 100)}%
+    </span>
+  )
+}
+
+interface CostCellProps {
+  agent: AgentRoster
+  max: number
+}
+
+/**
+ * Cost, with magnitude encoded as weight AND as a proportional bar.
+ *
+ * The review's complaint was that `$7.259` and `$0.000` rendered in
+ * identical type, so the roster's one expensive role was invisible. The bar
+ * is drawn relative to the biggest spender on screen, and the numeral gets
+ * full foreground weight once a role accounts for a meaningful share.
+ *
+ * An unattributed role has no cost to report at all and renders an em-dash —
+ * never `$0.000`, which would read as a measured zero.
+ */
+function CostCell({ agent, max }: CostCellProps) {
+  if (!agent.attributed) {
+    return <span className="text-muted-foreground">{EM_DASH}</span>
+  }
+  const share = max > 0 ? agent.cost_usd / max : 0
+  const prominent = share >= 0.25
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <span
+        data-testid={`agent-cost-${agent.name}`}
+        className={cn(
+          'metric-mono',
+          prominent ? 'font-semibold text-foreground' : 'text-muted-foreground',
+        )}
+      >
+        {formatCost(agent.cost_usd)}
+      </span>
+      <span aria-hidden="true" className="h-1 w-16 overflow-hidden rounded-full bg-muted">
+        <span
+          data-testid={`agent-cost-bar-${agent.name}`}
+          className="block h-full rounded-full bg-[var(--color-primary)]"
+          style={{ width: `${Math.round(Math.max(0, Math.min(1, share)) * 100)}%` }}
+        />
+      </span>
+    </div>
+  )
+}
+
+interface RosterRow {
+  agent: AgentRoster
+  tone: Tone
+  nonNominalVerdict: boolean
+}
+
+interface AttentionBandProps {
+  rows: RosterRow[]
+  onSelect: (name: string) => void
+}
+
+/**
+ * The answer to "is anything wrong?", above the roster, before an operator
+ * has to read fifteen rows to find out.
+ *
+ * Only roles the `roleTone` judgement calls `crit` appear here. When
+ * nothing is wrong this component renders a quiet all-clear line rather
+ * than nothing at all — the absence of a band is ambiguous, an explicit
+ * "all clear" is not.
+ */
+function AttentionBand({ rows, onSelect }: AttentionBandProps) {
+  const t = useT()
+  const critical = rows.filter((row) => row.tone === 'crit')
+
+  if (critical.length === 0) {
+    return (
+      <p data-testid="agents-all-clear" className="text-sm text-[var(--color-good)]">
+        {t('agents.allClear')}
+      </p>
+    )
+  }
 
   return (
-    <button
-      type="button"
-      data-testid={`agent-card-${agent.name}`}
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={cn(
-        'flex flex-col gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm transition-colors hover:bg-muted/50',
-        selected && 'ring-2 ring-ring',
-        nonNominal && 'border-l-4 border-l-[var(--color-crit)]',
-      )}
+    <div
+      data-testid="agents-attention-band"
+      className="flex flex-col gap-2 rounded-lg border border-[var(--color-crit)]/40 bg-[var(--color-crit)]/5 p-3"
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate font-medium">{label}</span>
-          {agent.title && <span className="truncate text-xs text-muted-foreground">{agent.title}</span>}
-        </div>
-        {nonNominal && (
-          <Badge variant="destructive" data-testid={`agent-nonnominal-${agent.name}`}>
-            {t('agents.attentionBadge')}
-          </Badge>
-        )}
+      <div className="flex items-center gap-2">
+        <AlertTriangle aria-hidden="true" className="size-4 text-[var(--color-crit)]" />
+        <span className="text-sm font-medium">{t('agents.attentionTitle', { count: critical.length })}</span>
       </div>
+      <ul className="flex flex-col gap-1">
+        {critical.map(({ agent, nonNominalVerdict }) => (
+          <li key={agent.name}>
+            <button
+              type="button"
+              data-testid={`agents-attention-${agent.name}`}
+              onClick={() => onSelect(agent.name)}
+              className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-1 py-0.5 text-left text-sm hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <span className="font-medium">{agent.display_name ?? agent.name}</span>
+              <span className="text-muted-foreground">
+                {nonNominalVerdict
+                  ? t('agents.reasonVerdict')
+                  : t('agents.reasonLowSuccess', {
+                      rate: String(Math.round((agent.success_rate ?? 0) * 100)),
+                    })}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
 
-      {!agent.attributed ? (
-        <p data-testid={`agent-no-activity-${agent.name}`} className="text-xs text-muted-foreground">
-          {t('agents.noActivityYet')}
-        </p>
-      ) : (
-        <div className="metric-mono grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-          <span className="text-muted-foreground">{t('agents.costLabel')}</span>
-          <span>{formatCost(agent.cost_usd)}</span>
-          <span className="text-muted-foreground">{t('agents.runsLabel')}</span>
-          <span>{agent.run_count.toLocaleString('en-US')}</span>
-          <span className="text-muted-foreground">{t('agents.stepsLabel')}</span>
-          <span>{agent.step_count.toLocaleString('en-US')}</span>
-          <span className="text-muted-foreground">{t('agents.tokensLabel')}</span>
-          <span>
-            {formatTokens(agent.input_tokens)} / {formatTokens(agent.output_tokens)}
-          </span>
-          <span className="text-muted-foreground">{t('agents.lastActiveLabel')}</span>
-          <span>{formatAge(agent.last_active)}</span>
-          <span className="text-muted-foreground">{t('agents.successRateLabel')}</span>
-          <SuccessRateReadout rate={agent.success_rate} roleName={agent.name} />
-        </div>
-      )}
-    </button>
+interface RosterTableProps {
+  rows: RosterRow[]
+  maxCost: number
+  selected: string | null
+  onSelect: (name: string) => void
+}
+
+/**
+ * The roster as a table, not fifteen identical cards.
+ *
+ * Cards make values incomparable: each one is its own `label: value` list,
+ * so reading "which role costs the most" means reading every card. A table
+ * puts the same figure in the same column at the same x-position, which is
+ * what makes a $7.259 stand out from a $0.000 without any decoration at
+ * all — the weight and the bar then reinforce it.
+ *
+ * Sorted by severity first, then by cost descending: the two questions an
+ * operator actually opens this page with, in that order.
+ *
+ * The table scrolls inside its own container (see `ui/table.tsx`), so a
+ * narrow viewport never scrolls the page body sideways.
+ */
+function RosterTable({ rows, maxCost, selected, onSelect }: RosterTableProps) {
+  const t = useT()
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{t('agents.colRole')}</TableHead>
+          <TableHead className="text-right">{t('agents.successRateLabel')}</TableHead>
+          <TableHead className="text-right">{t('agents.costLabel')}</TableHead>
+          <TableHead className="text-right">{t('agents.runsLabel')}</TableHead>
+          <TableHead className="text-right">{t('agents.stepsLabel')}</TableHead>
+          <TableHead className="text-right">{t('agents.tokensLabel')}</TableHead>
+          <TableHead className="text-right">{t('agents.lastActiveLabel')}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map(({ agent, tone }) => (
+          <TableRow
+            key={agent.name}
+            data-testid={`agent-row-${agent.name}`}
+            role="button"
+            tabIndex={0}
+            aria-label={t('agents.rowAriaLabel', { name: agent.display_name ?? agent.name })}
+            aria-pressed={selected === agent.name}
+            onClick={() => onSelect(agent.name)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                onSelect(agent.name)
+              }
+            }}
+            className={cn(
+              'cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+              TONE_STRIPE[tone],
+              selected === agent.name && 'bg-muted/60',
+            )}
+          >
+            <TableCell>
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate font-medium">{agent.display_name ?? agent.name}</span>
+                {agent.title && (
+                  <span className="truncate text-xs text-muted-foreground">{agent.title}</span>
+                )}
+                {!agent.attributed && (
+                  <span
+                    data-testid={`agent-no-activity-${agent.name}`}
+                    className="text-xs text-muted-foreground"
+                  >
+                    {t('agents.noActivityYet')}
+                  </span>
+                )}
+              </div>
+            </TableCell>
+            <TableCell className="text-right">
+              <SuccessRateCell
+                rate={agent.success_rate}
+                roleName={agent.name}
+                attributed={agent.attributed}
+              />
+            </TableCell>
+            <TableCell className="text-right">
+              <CostCell agent={agent} max={maxCost} />
+            </TableCell>
+            <TableCell className="metric-mono text-right text-muted-foreground">
+              {agent.attributed ? agent.run_count.toLocaleString('en-US') : EM_DASH}
+            </TableCell>
+            <TableCell className="metric-mono text-right text-muted-foreground">
+              {agent.attributed ? agent.step_count.toLocaleString('en-US') : EM_DASH}
+            </TableCell>
+            <TableCell className="metric-mono text-right whitespace-nowrap text-muted-foreground">
+              {agent.attributed
+                ? `${formatTokens(agent.input_tokens)} / ${formatTokens(agent.output_tokens)}`
+                : EM_DASH}
+            </TableCell>
+            <TableCell className="metric-mono text-right text-muted-foreground">
+              {formatAge(agent.last_active)}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
 /**
- * The top-level `"unknown"` (NULL-role) bucket — historical/unattributed
- * activity, kept visually distinct (dashed border) from the real roster so
- * it never reads as "just another agent". An honest "nothing unattributed"
- * empty state when `step_count === 0`, never a zeroed-out card that looks
- * like a loading glitch.
+ * The top-level `"unknown"` (NULL-role) bucket — activity recorded before
+ * per-role attribution existed, kept visually distinct (dashed border) from
+ * the real roster so it never reads as "just another agent".
+ *
+ * The backend's `unknown.note` is deliberately NOT rendered: it explains an
+ * implementation detail (which sprint added the `steps.role` column) to
+ * whoever reads the API, not something an operator can act on. The heading
+ * and one plain sentence carry the operator-relevant fact — this activity
+ * predates attribution and cannot be assigned to a role.
  */
 function UnknownBucketCard({ unknown }: { unknown: AgentUnknownBucket }) {
   const t = useT()
 
+  if (unknown.step_count === 0) {
+    return null
+  }
+
   return (
-    <Card data-testid="agents-unknown-bucket" className="border-dashed">
-      <CardHeader>
-        <CardTitle className="text-sm">{t('agents.unknownTitle')}</CardTitle>
-        <CardDescription>{t('agents.unknownDescription')}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {unknown.step_count === 0 ? (
-          <p data-testid="agents-unknown-empty" className="text-sm text-muted-foreground">
-            {t('agents.unknownEmpty')}
-          </p>
-        ) : (
-          <div className="metric-mono grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground">{t('agents.costLabel')}</span>
-              <span>{formatCost(unknown.cost_usd)}</span>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground">{t('agents.runsLabel')}</span>
-              <span>{unknown.run_count.toLocaleString('en-US')}</span>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground">{t('agents.stepsLabel')}</span>
-              <span>{unknown.step_count.toLocaleString('en-US')}</span>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-xs text-muted-foreground">{t('agents.tokensLabel')}</span>
-              <span>
-                {formatTokens(unknown.input_tokens)} / {formatTokens(unknown.output_tokens)}
-              </span>
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    <div data-testid="agents-unknown-bucket" className="rounded-lg border border-dashed border-border p-3">
+      <p className="mb-2 text-sm font-medium">{t('agents.unknownTitle')}</p>
+      <p className="mb-3 max-w-prose text-xs text-muted-foreground">{t('agents.unknownDescription')}</p>
+      <div className="metric-mono grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+        <div className="flex flex-col">
+          <span className="text-xs text-muted-foreground">{t('agents.costLabel')}</span>
+          <span>{formatCost(unknown.cost_usd)}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-xs text-muted-foreground">{t('agents.runsLabel')}</span>
+          <span>{unknown.run_count.toLocaleString('en-US')}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-xs text-muted-foreground">{t('agents.stepsLabel')}</span>
+          <span>{unknown.step_count.toLocaleString('en-US')}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-xs text-muted-foreground">{t('agents.tokensLabel')}</span>
+          <span>
+            {formatTokens(unknown.input_tokens)} / {formatTokens(unknown.output_tokens)}
+          </span>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -250,7 +434,7 @@ function LessonItem({ lesson }: { lesson: Lesson }) {
 }
 
 /** A verdict's `summary` is caller-supplied free text — UNTRUSTED, same
- * caveat as `LessonItem` above. Severity stripe mirrors the roster card's
+ * caveat as `LessonItem` above. Severity stripe mirrors the roster row's
  * (`isNonNominalDecision`). */
 function VerdictItem({ verdict }: { verdict: Verdict }) {
   const t = useT()
@@ -284,11 +468,10 @@ interface AgentDetailPanelProps {
 }
 
 /**
- * Per-role drill-down — a right-side drawer (mirrors `RunDetailPanel`'s
- * layout convention) fetching `GET /v1/lessons?role=` and
- * `GET /v1/verdicts?role=` scoped to the selected role, opened by clicking
- * an `AgentCard`. Renders nothing when `role` is `null`, so `AgentsView` can
- * mount it unconditionally.
+ * Per-role drill-down — a right-side drawer fetching `GET /v1/lessons?role=`
+ * and `GET /v1/verdicts?role=` scoped to the selected role, opened by
+ * activating a roster row. Renders nothing when `role` is `null`, so
+ * `AgentsView` can mount it unconditionally.
  */
 function AgentDetailPanel({ role, displayName, onClose }: AgentDetailPanelProps) {
   const t = useT()
@@ -308,112 +491,96 @@ function AgentDetailPanel({ role, displayName, onClose }: AgentDetailPanelProps)
   const title = displayName ?? role
 
   return (
-    <>
-      <div
-        data-testid="agent-detail-backdrop"
-        aria-hidden="true"
-        className="fixed inset-0 z-40 bg-black/50"
-        onClick={onClose}
-      />
-      <div
-        role="dialog"
-        aria-label={t('agents.detailAriaLabel', { name: title })}
-        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col gap-4 overflow-y-auto border-l border-border bg-card p-4 shadow-xl sm:p-6"
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t('agents.closeAriaLabel')}
-            onClick={onClose}
+    <Drawer
+      title={title}
+      ariaLabel={t('agents.detailAriaLabel', { name: title })}
+      closeLabel={t('agents.closeAriaLabel')}
+      onClose={onClose}
+    >
+      <div>
+        <h3 className="mb-2 text-sm font-semibold">{t('agents.lessonsTitle')}</h3>
+        {lessonsForbidden ? (
+          <div
+            role="alert"
+            data-testid="agent-lessons-forbidden"
+            className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
           >
-            <X className="size-4" />
-          </Button>
-        </div>
-
-        <div>
-          <h3 className="mb-2 text-sm font-semibold">{t('agents.lessonsTitle')}</h3>
-          {lessonsForbidden ? (
-            <div
-              role="alert"
-              data-testid="agent-lessons-forbidden"
-              className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
-            >
-              {t('agents.forbidden')}
-            </div>
-          ) : (
-            <AsyncSection
-              state={lessonsState}
-              isEmpty={(data) => data.lessons.length === 0}
-              emptyMessage={t('agents.noLessons')}
-            >
-              {(data) => (
-                <ul className="flex flex-col gap-2">
-                  {data.lessons.map((lesson) => (
-                    <LessonItem key={lesson.id} lesson={lesson} />
-                  ))}
-                </ul>
-              )}
-            </AsyncSection>
-          )}
-        </div>
-
-        <div>
-          <h3 className="mb-2 text-sm font-semibold">{t('agents.verdictsTitle')}</h3>
-          {verdictsForbidden ? (
-            <div
-              role="alert"
-              data-testid="agent-verdicts-forbidden"
-              className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
-            >
-              {t('agents.forbidden')}
-            </div>
-          ) : (
-            <AsyncSection
-              state={verdictsState}
-              isEmpty={(data) => data.verdicts.length === 0}
-              emptyMessage={t('agents.noVerdicts')}
-            >
-              {(data) => (
-                <ul className="flex flex-col gap-2">
-                  {data.verdicts.map((verdict) => (
-                    <VerdictItem key={verdict.id} verdict={verdict} />
-                  ))}
-                </ul>
-              )}
-            </AsyncSection>
-          )}
-        </div>
+            {t('agents.forbidden')}
+          </div>
+        ) : (
+          <AsyncSection
+            state={lessonsState}
+            isEmpty={(data) => data.lessons.length === 0}
+            emptyMessage={t('agents.noLessons')}
+          >
+            {(data) => (
+              <ul className="flex flex-col gap-2">
+                {data.lessons.map((lesson) => (
+                  <LessonItem key={lesson.id} lesson={lesson} />
+                ))}
+              </ul>
+            )}
+          </AsyncSection>
+        )}
       </div>
-    </>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold">{t('agents.verdictsTitle')}</h3>
+        {verdictsForbidden ? (
+          <div
+            role="alert"
+            data-testid="agent-verdicts-forbidden"
+            className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
+          >
+            {t('agents.forbidden')}
+          </div>
+        ) : (
+          <AsyncSection
+            state={verdictsState}
+            isEmpty={(data) => data.verdicts.length === 0}
+            emptyMessage={t('agents.noVerdicts')}
+          >
+            {(data) => (
+              <ul className="flex flex-col gap-2">
+                {data.verdicts.map((verdict) => (
+                  <VerdictItem key={verdict.id} verdict={verdict} />
+                ))}
+              </ul>
+            )}
+          </AsyncSection>
+        )}
+      </div>
+    </Drawer>
   )
 }
 
 /**
- * Mirador "Agents" view — the frontend for the Mirador Agent Panels backend
- * sprint: `GET /v1/agents` (the full role roster left-joined with real
+ * Agents — `GET /v1/agents` (the full role roster left-joined with real
  * per-role activity), `GET /v1/lessons`, `GET /v1/verdicts`. Read-only for
  * every token (all three endpoints gate at `read`).
  *
+ * What the operator review asked for, and where it lives:
+ *  - the worst role first, not buried among fourteen healthy ones ->
+ *    `AttentionBand` + the severity-then-cost sort in `rows`;
+ *  - cost that reads at a glance -> `CostCell`'s weight + proportional bar;
+ *  - comparable figures -> a table, not fifteen identical cards.
+ *
+ * `AgentsResponse.note` is deliberately NOT rendered. It is a five-line
+ * engineering rationale about when the `steps.role` column was introduced
+ * and why no latency figure exists — a changelog entry, useful to whoever
+ * reads the API, useless to whoever operates it. The two operator-relevant
+ * consequences are expressed directly instead: an unattributed role says
+ * "no activity attributed yet", and no latency column exists at all.
+ *
  * Honesty, enforced end to end:
- * - `attributed: false` -> "No activity attributed yet", never a fabricated
- *   `0%` success rate (see `AgentCard`).
- * - `success_rate: null` -> "No attempts yet", never rendered as a number
- *   (see `SuccessRateReadout`) — this can happen even for an attributed
- *   role (zero *attempted* outcomes in a skipped-only window).
- * - The NULL-role `unknown` bucket is a visually distinct card, never
- *   folded into the roster grid, with its own honest empty state and the
- *   backend's `note` rendered verbatim (see `UnknownBucketCard`).
- * - No latency figure is ever shown — the backend never returns one.
- * - A severity stripe/badge appears ONLY on a role with a recent
- *   non-`"ACCEPT"` verdict (`hasNonNominalVerdict`, sourced from an
- *   unfiltered `GET /v1/verdicts`' `by_role` aggregation) — a nominal role,
- *   or one with no verdict history at all, stays visually clean.
- * - Every free-text field (lesson `text`, verdict `summary`, role
- *   `display_name`/`title`) renders via plain JSX interpolation only —
- *   never `dangerouslySetInnerHTML`.
+ *  - `attributed: false` -> every metric cell renders an em-dash, never a
+ *    fabricated `$0.000`/`0%`.
+ *  - `success_rate: null` -> an em-dash with an explanatory title, never a
+ *    number (this happens even for an attributed role, in a skipped-only
+ *    window).
+ *  - a role is never flagged for having NO data — quiet is not a fault.
+ *  - every free-text field (lesson `text`, verdict `summary`, role
+ *    `display_name`/`title`) renders via plain JSX interpolation only.
  */
 export function AgentsView() {
   const t = useT()
@@ -423,12 +590,31 @@ export function AgentsView() {
 
   const isAgentsForbidden = agentsState.status === 'error' && agentsState.error instanceof ApiForbiddenError
   const isVerdictsForbidden = verdictsState.status === 'error' && verdictsState.error instanceof ApiForbiddenError
-  const byRole = verdictsState.status === 'success' ? verdictsState.data.by_role : {}
+  const byRole = verdictsState.status === 'success' ? verdictsState.data.by_role : undefined
 
-  const selectedAgent =
-    agentsState.status === 'success'
-      ? (agentsState.data.agents.find((agent) => agent.name === selectedRole) ?? null)
-      : null
+  const agents = agentsState.status === 'success' ? agentsState.data.agents : undefined
+
+  const rows: RosterRow[] = useMemo(() => {
+    if (!agents) return []
+    return agents
+      .map((agent) => {
+        const nonNominalVerdict = hasNonNominalVerdict(byRole?.[agent.name])
+        return { agent, nonNominalVerdict, tone: roleTone(agent, nonNominalVerdict) }
+      })
+      .sort(
+        (a, b) =>
+          TONE_RANK[a.tone] - TONE_RANK[b.tone] ||
+          b.agent.cost_usd - a.agent.cost_usd ||
+          a.agent.name.localeCompare(b.agent.name),
+      )
+  }, [agents, byRole])
+
+  const maxCost = useMemo(
+    () => rows.reduce((max, row) => (row.agent.attributed ? Math.max(max, row.agent.cost_usd) : max), 0),
+    [rows],
+  )
+
+  const selectedAgent = agents?.find((agent) => agent.name === selectedRole) ?? null
 
   return (
     <div className="flex flex-col gap-4">
@@ -437,7 +623,7 @@ export function AgentsView() {
           <CardTitle>{t('agents.title')}</CardTitle>
           <CardDescription>{t('agents.description')}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
           {isAgentsForbidden ? (
             <div
               role="alert"
@@ -447,35 +633,28 @@ export function AgentsView() {
               {t('agents.forbidden')}
             </div>
           ) : (
-            <AsyncSection
-              state={agentsState}
-              isEmpty={(data) => data.agents.length === 0}
-              emptyMessage={t('agents.noRoster')}
-            >
-              {(data) => (
-                <div className="flex flex-col gap-4">
-                  <p data-testid="agents-note" className="text-xs text-muted-foreground">
-                    {data.note}
-                  </p>
-
-                  <div
-                    data-testid="agents-roster-grid"
-                    className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
-                  >
-                    {data.agents.map((agent) => (
-                      <AgentCard
-                        key={agent.name}
-                        agent={agent}
-                        nonNominal={hasNonNominalVerdict(byRole[agent.name])}
-                        selected={selectedRole === agent.name}
-                        onSelect={() => setSelectedRole(agent.name)}
-                      />
-                    ))}
+            <AsyncSection state={agentsState} isEmpty={() => false}>
+              {(data) =>
+                data.agents.length === 0 ? (
+                  <EmptyState
+                    data-testid="agents-empty"
+                    title={t('agents.noRoster')}
+                    body={t('agents.noRosterBody')}
+                    className="max-w-xl"
+                  />
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    <AttentionBand rows={rows} onSelect={setSelectedRole} />
+                    <RosterTable
+                      rows={rows}
+                      maxCost={maxCost}
+                      selected={selectedRole}
+                      onSelect={setSelectedRole}
+                    />
+                    <UnknownBucketCard unknown={data.unknown} />
                   </div>
-
-                  <UnknownBucketCard unknown={data.unknown} />
-                </div>
-              )}
+                )
+              }
             </AsyncSection>
           )}
         </CardContent>

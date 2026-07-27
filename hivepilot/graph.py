@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from hivepilot.plugins import (
     PanelStatSection,
@@ -151,6 +151,20 @@ class GraphSourceSpec:
     title: str | None = None
     min_role: str = "read"
     params: tuple[str, ...] = ()
+    #: Optional zero-argument callable returning ``{param_name: [value, ...]}``
+    #: for the params in ``params`` whose accepted values are ENUMERABLE from
+    #: configuration (e.g. the ``pipeline`` source's declared pipeline names).
+    #:
+    #: This exists so a consumer can offer a pick-list instead of a free-text
+    #: box. Pollen's Graph view opened EMPTY and asked an operator to guess a
+    #: pipeline name into a text field before it would show anything at all.
+    #:
+    #: A source may omit it entirely (``None``), omit individual params, or
+    #: return an empty list for one — all three mean "not enumerable, fall
+    #: back to free text". It is a HINT, never a constraint: nothing here
+    #: validates or restricts what a caller may actually send, and the source
+    #: must keep rejecting an unknown value itself.
+    param_options: Callable[[], Mapping[str, Sequence[str]]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +229,43 @@ def get_graph_source(name: str) -> GraphSourceSpec | None:
     """Look up a single registered graph source by name, or `None` if
     unknown — callers (the API layer) must treat `None` as 404."""
     return _GRAPH_SOURCES.get(name)
+
+
+def safe_param_options(spec: GraphSourceSpec) -> dict[str, list[str]]:
+    """`spec.param_options()`, normalised and guaranteed not to raise.
+
+    Same never-raise discipline as `run_graph_fetch` below: listing the
+    sources is a metadata call that must never 500 because one source's
+    option provider hit a malformed config file. Anything unusable — a
+    missing callable, a raising one, a non-mapping return, a key that is not
+    a declared param, a non-string value — is dropped, yielding `{}` or a
+    partial mapping. Every consumer already treats a missing/empty entry as
+    "not enumerable, fall back to free text", so degrading is safe.
+
+    Values are de-duplicated and sorted so the pick-list order is stable
+    across requests rather than dependent on dict iteration order.
+    """
+    provider = spec.param_options
+    if provider is None:
+        return {}
+    try:
+        raw = provider()
+    except Exception:  # noqa: BLE001 - metadata must never break the listing
+        return {}
+    if not isinstance(raw, Mapping):
+        return {}
+
+    declared = set(spec.params)
+    options: dict[str, list[str]] = {}
+    for key, values in raw.items():
+        if not isinstance(key, str) or key not in declared:
+            continue
+        if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+            continue
+        names = sorted({v.strip() for v in values if isinstance(v, str) and v.strip()})
+        if names:
+            options[key] = names
+    return options
 
 
 # ---------------------------------------------------------------------------
