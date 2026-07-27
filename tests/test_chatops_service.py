@@ -70,6 +70,33 @@ class TestHandleSignal:
             result = chatops_service.handle_signal({"text": "/status"})
         assert "acme" in result and "deploy" in result
 
+    def test_status_command_shows_local_display_time_not_raw_utc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reproduces the production incident: a run stored at 09:08 UTC
+        (SQLite CURRENT_TIMESTAMP format) actually started 11:08 local time
+        in Europe/Paris (CEST) — the chat reply must show the LOCAL, marked
+        time, not the raw UTC value."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        runs = [
+            {
+                "status": "failed",
+                "project": "groomer",
+                "task": "scan",
+                "started_at": "2026-07-27 09:08:32",
+            }
+        ]
+        with (
+            patch.object(chatops_service, "_get_orchestrator", return_value=MagicMock()),
+            patch("hivepilot.services.state_service.list_recent_runs", return_value=runs),
+        ):
+            result = chatops_service.handle_signal({"text": "/status"})
+        assert "09:08" not in result
+        assert "11:08" in result
+        assert "CEST" in result
+
     def test_status_command_no_runs(self) -> None:
         with (
             patch.object(chatops_service, "_get_orchestrator", return_value=MagicMock()),
@@ -422,6 +449,27 @@ class TestConciergeApproveDenyRoutingThroughSharedHelper:
 
     def teardown_method(self, method) -> None:
         chatops_service._pending_concierge_text.clear()
+
+
+class TestFormatApprovalsDisplaysLocalTime:
+    def test_requested_at_uses_local_display_time_not_raw_utc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        pending = [
+            {
+                "run_id": 7,
+                "project": "groomer",
+                "task": "scan",
+                "requested_at": "2026-07-27 09:08:32",
+            }
+        ]
+        result = chatops_service._format_approvals(pending)
+        assert "09:08" not in result
+        assert "11:08" in result
+        assert "CEST" in result
 
 
 def test_no_direct_run_approved_call_in_chatops_service_source() -> None:

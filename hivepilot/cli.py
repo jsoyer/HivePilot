@@ -663,6 +663,7 @@ def schedule_health(
 
     from hivepilot.services import retry_service, state_service
     from hivepilot.services.schedule_service import load_schedules
+    from hivepilot.utils import display_time
 
     schedules = load_schedules()
     now = datetime.now(timezone.utc)
@@ -677,7 +678,7 @@ def schedule_health(
             next_run = last + timedelta(minutes=entry.interval_minutes)
             due_in = (next_run - now).total_seconds()
             next_str = f"due in {int(due_in)}s" if due_in > 0 else "OVERDUE"
-            last_str = last.strftime("%Y-%m-%d %H:%M:%S")
+            last_str = display_time.to_display(last)
         else:
             next_str = "never run"
             last_str = "never"
@@ -845,6 +846,8 @@ def approvals_list(
         None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
     ),
 ) -> None:
+    from hivepilot.utils import display_time
+
     _require_cli_role("run", token)
     pending = state_service.get_pending_approvals()
     if not pending:
@@ -854,7 +857,8 @@ def approvals_list(
         metadata = json.loads(entry["metadata"] or "{}")
         typer.echo(
             f"- run_id={entry['run_id']} project={entry['project']} task={entry['task']} "
-            f"requested={entry['requested_at']} extra_prompt={metadata.get('extra_prompt')}"
+            f"requested={display_time.to_display(entry['requested_at'])} "
+            f"extra_prompt={metadata.get('extra_prompt')}"
         )
 
 
@@ -2499,6 +2503,8 @@ def drift_status_cmd(
     tenant: str = typer.Option("default", "--tenant", help="Tenant to scope this read to"),
 ) -> None:
     """Show recent drift-scan history."""
+    from hivepilot.utils import display_time
+
     rows = state_service.get_recent_drift_scans(project=project, limit=limit, tenant=tenant)
     if not rows:
         typer.echo("No drift scans recorded.")
@@ -2514,8 +2520,10 @@ def drift_status_cmd(
             )
         else:
             changes = "-"
+        checked_at = row.get("checked_at")
+        checked_str = display_time.to_display(checked_at) if checked_at else "?"
         typer.echo(
-            f"{str(row.get('checked_at', '?')):<20} {str(row.get('project', '?')):<20} "
+            f"{checked_str:<20} {str(row.get('project', '?')):<20} "
             f"{str(row.get('runner', '?')):<10} {str(row.get('status', '?')):<8} {changes}"
         )
 
@@ -2526,14 +2534,20 @@ def drift_report_cmd(
     tenant: str = typer.Option("default", "--tenant", help="Tenant to scope this read to"),
 ) -> None:
     """Show the current no-drift baseline + recent history for a project."""
+    from hivepilot.utils import display_time
+
     if project is not None:
         baseline = state_service.get_drift_baseline(project, tenant=tenant)
         if baseline is None:
             typer.echo(f"No no-drift baseline recorded yet for {project}.")
         else:
+            baseline_checked_at = baseline.get("checked_at")
+            baseline_checked_str = (
+                display_time.to_display(baseline_checked_at) if baseline_checked_at else "?"
+            )
             typer.echo(
                 f"Baseline ({project}): last clean scan at "
-                f"{baseline.get('checked_at', '?')} via {baseline.get('runner', '?')}"
+                f"{baseline_checked_str} via {baseline.get('runner', '?')}"
             )
         typer.echo("")
 
@@ -2544,8 +2558,10 @@ def drift_report_cmd(
 
     typer.echo("Recent history:")
     for row in rows:
+        row_checked_at = row.get("checked_at")
+        row_checked_str = display_time.to_display(row_checked_at) if row_checked_at else "?"
         typer.echo(
-            f"  {row.get('checked_at', '?')}  {str(row.get('project', '?')):<20} "
+            f"  {row_checked_str}  {str(row.get('project', '?')):<20} "
             f"{str(row.get('status', '?')):<8} "
             f"(+{row.get('to_add') or 0} ~{row.get('to_change') or 0} "
             f"-{row.get('to_destroy') or 0})"

@@ -215,6 +215,7 @@ def _exec_deny(run_id: int, reason: str) -> str:
 
 def _exec_status() -> str:
     from hivepilot.services import state_service
+    from hivepilot.utils import display_time
 
     try:
         runs = state_service.list_recent_runs(limit=5)
@@ -222,7 +223,10 @@ def _exec_status() -> str:
         return f"Error: {exc}"
     if not runs:
         return "No recent runs."
-    lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
+    lines = [
+        f"[{r['status']}] {r['project']} / {r['task']} — {display_time.to_display(r['started_at'])}"
+        for r in runs
+    ]
     return "Recent runs:\n" + "\n".join(lines)
 
 

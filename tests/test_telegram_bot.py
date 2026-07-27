@@ -139,6 +139,64 @@ class TestCmdInteractionsFormatting:
         assert "all" in call_text
 
 
+class TestCmdStatusDisplaysLocalTime:
+    """Reproduces the production incident: a run stored at 09:08 UTC
+    (SQLite CURRENT_TIMESTAMP format) actually started 11:08 local time in
+    Europe/Paris (CEST) — `/status` must show the LOCAL, marked time."""
+
+    def test_started_at_uses_local_display_time_not_raw_utc(self, monkeypatch):
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        update = _make_update()
+        context = _make_context()
+        runs = [
+            {
+                "status": "failed",
+                "project": "groomer",
+                "task": "scan",
+                "started_at": "2026-07-27 09:08:32",
+            }
+        ]
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch("hivepilot.services.state_service.list_recent_runs", return_value=runs),
+        ):
+            asyncio.run(telegram_bot._cmd_status(update, context))
+
+        call_text = update.message.reply_text.call_args[0][0]
+        assert "09:08" not in call_text
+        assert "11:08" in call_text
+        assert "CEST" in call_text
+
+
+class TestCmdStepsDisplaysLocalTime:
+    def test_step_timestamp_uses_local_display_time_not_raw_utc(self, monkeypatch):
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        update = _make_update()
+        context = _make_context(args=["42"])
+        steps = [
+            {
+                "status": "failed",
+                "step": "scan",
+                "timestamp": "2026-07-27 09:08:32",
+                "detail": None,
+            }
+        ]
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch("hivepilot.services.state_service.get_steps_for_run", return_value=steps),
+        ):
+            asyncio.run(telegram_bot._cmd_steps(update, context))
+
+        call_text = update.message.reply_text.call_args[0][0]
+        assert "09:08" not in call_text
+        assert "11:08" in call_text
+        assert "CEST" in call_text
+
+
 class TestCmdInteractionsLimitArg:
     """Numeric first arg is forwarded as limit to the store."""
 

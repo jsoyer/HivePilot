@@ -328,6 +328,36 @@ class TestCmdStatus:
         mock_runs.assert_not_called()
         respond.assert_called_once_with("Unauthorized channel.")
 
+    def test_started_at_uses_local_display_time_not_raw_utc(self, monkeypatch) -> None:
+        """Reproduces the production incident: a run stored at 09:08 UTC
+        (SQLite CURRENT_TIMESTAMP format) actually started 11:08 local time
+        in Europe/Paris (CEST) — `/hp-status` must show the LOCAL, marked
+        time, not the raw UTC value."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        app = _register()
+        respond = _respond()
+        runs = [
+            {
+                "status": "failed",
+                "project": "groomer",
+                "task": "scan",
+                "started_at": "2026-07-27 09:08:32",
+            }
+        ]
+        with patch("hivepilot.services.state_service.list_recent_runs", return_value=runs):
+            _call(
+                app.commands["/hp-status"],
+                ack=_ack(),
+                command={"channel_id": ALLOWED_CHANNEL},
+                respond=respond,
+            )
+        out = respond.call_args.args[0]
+        assert "09:08" not in out
+        assert "11:08" in out
+        assert "CEST" in out
+
 
 # ---------------------------------------------------------------------------
 # Approval-button handler (`handle_approval_action`) — the security fix.
