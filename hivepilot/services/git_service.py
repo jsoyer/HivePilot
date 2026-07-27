@@ -12,6 +12,7 @@ from git import GitCommandError, Repo  # type: ignore
 from hivepilot.config import settings
 from hivepilot.forges import resolve_forge
 from hivepilot.models import GitActions, ProjectConfig
+from hivepilot.services.pr_body import resolve_pr_body_file
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -299,7 +300,10 @@ def perform_git_actions(
         if git.push:
             push(project.path, "origin", branch)
     if git.create_pr:
-        create_pr(project=project, branch=branch, git=git)
+        # task_result (THIS stage's own output) is the richest fallback
+        # content available for a declared-but-missing/empty pr_body_file --
+        # see create_pr/resolve_pr_body_file for why that fallback exists.
+        create_pr(project=project, branch=branch, git=git, task_result=task_result)
     # Promote-to-ready and merge are release-gate actions -- gate them on the
     # stage's own verdict (see _agent_verdict_blocked above). create_pr is NOT
     # gated: opening (or keeping) the draft PR must still happen even when the
@@ -352,7 +356,9 @@ def _publish_pr_ready_best_effort(project: ProjectConfig, branch: str, kind: str
         )
 
 
-def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
+def create_pr(
+    *, project: ProjectConfig, branch: str, git: GitActions, task_result: str | None = None
+) -> None:
     """Open a pull request via the project's forge provider (developer-opens-PR flow).
 
     Phase 1 (forge plugin type): thin wrapper around
@@ -362,12 +368,38 @@ def create_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
     inline (that logic now lives in
     ``hivepilot.forges.github.GitHubForge.open_pr``).
 
+    ``pr_body_file`` fix: ``git.pr_body_file`` is a task-config-declared
+    filename the engine itself never writes -- nothing upstream ever
+    verified it actually existed before handing it to a forge, so a missing
+    file crashed the whole PR-creation call (losing the stage's entire
+    already-paid-for output; see ``resolve_pr_body_file`` for the full
+    writeup). When a file IS declared, ``resolve_pr_body_file`` resolves it
+    (relative to *project.path*, never the orchestrator process's cwd) if
+    present and non-blank, and otherwise materializes a redacted,
+    size-capped fallback body from *task_result* (falling further back to
+    ``git.pr_title``/``git.commit_message``, then a generic message) --
+    logging a warning whenever the declared file couldn't actually be used.
+    When NO file is declared, ``git`` is passed through completely
+    unchanged -- every forge (github/forgejo/gitlab) already has its own
+    correct, tested "no custom body" default for that case, so this fix
+    applies without touching any individual ``ForgeProvider`` implementation
+    or altering pre-existing, already-correct behaviour.
+
     Swarm Phase 1: on a SUCCESSFUL open, best-effort publishes a `pr_ready`
     event (kind="opened") -- see `_publish_pr_ready_best_effort`. A raised
     forge error propagates unchanged (unaffected by this addition); nothing
     is ever published for a PR that failed to open.
     """
-    resolve_forge(project).open_pr(project=project, branch=branch, git=git)
+    with resolve_pr_body_file(
+        base_dir=project.path, git=git, fallback_text=task_result
+    ) as body_path:
+        # `body_path` is None when `pr_body_file` was never declared -- leave
+        # `git` untouched so every forge's own "no custom body" default stays
+        # byte-identical (see resolve_pr_body_file's docstring).
+        effective_git = (
+            git if body_path is None else git.model_copy(update={"pr_body_file": str(body_path)})
+        )
+        resolve_forge(project).open_pr(project=project, branch=branch, git=effective_git)
     _publish_pr_ready_best_effort(project, branch, "opened")
 
 

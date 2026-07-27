@@ -244,3 +244,64 @@ def test_perform_git_actions_promotes_when_no_task_result(tmp_path: Path) -> Non
             project_name="p", project=project, git=ga, task_result="plain unstructured output"
         )
     mock_promote2.assert_called_once()
+
+
+class _CapturingForge:
+    """Minimal ForgeProvider double that records the `git` kwarg `open_pr`
+    was actually called with (and eagerly reads its resolved `pr_body_file`
+    content, since `create_pr` deletes a FALLBACK tempfile as soon as
+    `open_pr` returns -- exactly like a real forge would have already
+    consumed it by then)."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.received_git: GitActions | None = None
+        self.received_body: str | None = None
+
+    def open_pr(self, *, project, branch, git) -> None:  # noqa: ANN001
+        self.received_git = git
+        self.received_body = Path(git.pr_body_file).read_text(encoding="utf-8")
+
+
+def _register_capturing_forge(name: str) -> _CapturingForge:
+    from hivepilot.forges.provider import ForgeRegistry
+
+    forge = _CapturingForge(name)
+    ForgeRegistry.register(name, forge, override=True)  # type: ignore[arg-type]
+    return forge
+
+
+def test_create_pr_falls_back_when_pr_body_file_missing(tmp_path: Path) -> None:
+    """CORRECTNESS (the headline bug): a declared-but-never-written
+    pr_body_file must not crash create_pr and lose the whole stage's output
+    -- it must open the PR with a fallback body built from task_result."""
+    from hivepilot.forges.provider import FORGE_MAP
+
+    forge = _register_capturing_forge("capturing-missing")
+    try:
+        project = ProjectConfig(path=tmp_path, forge="capturing-missing")
+        ga = GitActions(create_pr=True, pr_body_file="PR_BODY.md")  # never written
+        git_service.create_pr(
+            project=project, branch="hivepilot/x", git=ga, task_result="Stage did real work."
+        )
+        assert forge.received_git is not None
+        assert "Stage did real work." in forge.received_body
+    finally:
+        FORGE_MAP.pop("capturing-missing", None)
+
+
+def test_create_pr_uses_declared_file_unchanged_when_present(tmp_path: Path) -> None:
+    """Regression guard: a present, non-blank declared file's content
+    reaches the forge exactly as before this fix."""
+    from hivepilot.forges.provider import FORGE_MAP
+
+    forge = _register_capturing_forge("capturing-present")
+    try:
+        (tmp_path / "PR_BODY.md").write_text("## Real agent-written body\n", encoding="utf-8")
+        project = ProjectConfig(path=tmp_path, forge="capturing-present")
+        ga = GitActions(create_pr=True, pr_body_file="PR_BODY.md")
+        git_service.create_pr(project=project, branch="hivepilot/x", git=ga, task_result="ignored")
+        assert forge.received_git is not None
+        assert forge.received_body == "## Real agent-written body\n"
+    finally:
+        FORGE_MAP.pop("capturing-present", None)
