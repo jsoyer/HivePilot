@@ -705,3 +705,284 @@ def test_empty_allowed_licenses_list_is_flagged(tmp_path: Path) -> None:
 
     matching = [p for p in problems if "allowed_licenses" in p and "demo" in p]
     assert matching, f"Expected a problem naming the empty allowed_licenses, got: {problems}"
+
+
+# ---------------------------------------------------------------------------
+# Dangling `prompt_file` references (task steps + roles) -- real incident:
+# an operator's tasks.yaml referenced a `prompt_file` that did not exist
+# anywhere on the box; both `hivepilot validate` and `hivepilot config
+# doctor` reported zero findings, and the failure only surfaced at RUNTIME.
+# ---------------------------------------------------------------------------
+
+
+def _write_config_with_task_step(base_dir: Path, step: dict) -> None:
+    """Minimal config + one task ('pentest') with exactly one step, for
+    isolating the task-step `prompt_file` check from every other check in
+    `validate_config_report`."""
+    (base_dir / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+    (base_dir / "roles.yaml").write_text(yaml.dump({"roles": []}))
+    (base_dir / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+    (base_dir / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+    (base_dir / "tasks.yaml").write_text(yaml.dump({"tasks": {"pentest": {"steps": [step]}}}))
+    (base_dir / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+
+class TestDanglingTaskStepPromptFile:
+    """Explicit base_dir (isolated-directory contract): `prompt_file`
+    resolves LITERALLY relative to base_dir, matching every other check in
+    this function's explicit_base_dir branch."""
+
+    def test_missing_prompt_file_is_reported_with_task_and_step_name(self, tmp_path: Path) -> None:
+        _write_config_with_task_step(
+            tmp_path,
+            {"name": "security review", "runner": "claude", "prompt_file": "security_review.md"},
+        )
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        matching = [p for p in problems if "security_review.md" in p]
+        assert matching, f"Expected a dangling prompt_file problem, got: {problems}"
+        assert any("pentest" in p and "security review" in p for p in matching), matching
+        assert any("searched" in p for p in matching), matching
+
+    def test_existing_prompt_file_relative_to_explicit_base_dir_is_clean(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "security_review.md").write_text("# security review")
+        _write_config_with_task_step(
+            tmp_path,
+            {"name": "security review", "runner": "claude", "prompt_file": "security_review.md"},
+        )
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert problems == [], f"Unexpected problems: {problems}"
+
+    def test_empty_prompt_file_is_reported(self, tmp_path: Path) -> None:
+        _write_config_with_task_step(
+            tmp_path, {"name": "s", "runner": "claude", "prompt_file": "   "}
+        )
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert any("empty-or-whitespace-only" in p for p in problems), problems
+
+    def test_no_prompt_file_key_is_not_flagged(self, tmp_path: Path) -> None:
+        """A step that doesn't use a prompt_file at all (e.g. a `shell`
+        runner) must never be flagged -- absence is not the same as an
+        empty/dangling reference."""
+        _write_config_with_task_step(
+            tmp_path, {"name": "local validation", "runner": "shell", "command": "pytest"}
+        )
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert problems == [], f"Unexpected problems: {problems}"
+
+    def test_non_mapping_task_entry_is_reported_not_crashed(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": []}))
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+        (tmp_path / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {"broken": "not-a-mapping"}}))
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert any("broken" in p and "not a mapping" in p for p in problems), problems
+
+    def test_non_list_steps_is_reported_not_crashed(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": []}))
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+        (tmp_path / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+        (tmp_path / "tasks.yaml").write_text(
+            yaml.dump({"tasks": {"pentest": {"steps": "not-a-list"}}})
+        )
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert any("pentest" in p and "steps" in p for p in problems), problems
+
+    def test_non_mapping_step_entry_is_reported_not_crashed(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": []}))
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+        (tmp_path / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+        (tmp_path / "tasks.yaml").write_text(
+            yaml.dump({"tasks": {"pentest": {"steps": ["not-a-mapping"]}}})
+        )
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert any("pentest" in p and "not a mapping" in p for p in problems), problems
+
+
+class TestDanglingTaskStepPromptFileResolutionChainTiers:
+    """Non-explicit base_dir: `prompt_file` must resolve through the EXACT
+    same tiered chain the runtime uses (`Settings.resolve_config_path` --
+    XDG -> config_repo -> base_dir), so this check can never drift from
+    what actually happens when the step runs. Each tier is exercised
+    independently -- a prompt_file present at ANY one of the three tiers
+    must report zero problems."""
+
+    def test_resolves_via_xdg_tier(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        xdg_dir = tmp_path / "xdg" / "hivepilot"
+        xdg_dir.mkdir(parents=True)
+        (xdg_dir / "security_review.md").write_text("# review")
+        _write_config_with_task_step(
+            xdg_dir,
+            {"name": "security review", "runner": "claude", "prompt_file": "security_review.md"},
+        )
+        (xdg_dir / "prompts" / "agents").mkdir(parents=True)
+
+        empty_cwd = tmp_path / "empty-cwd"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setattr(config_validation.settings, "config_repo", None, raising=False)
+
+        problems = config_validation.validate_config()
+
+        assert problems == [], f"Unexpected problems (xdg tier): {problems}"
+
+    def test_resolves_via_config_repo_tier(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        empty_xdg = tmp_path / "empty-xdg"
+        empty_xdg.mkdir()
+        config_repo_dir = tmp_path / "config-repo"
+        config_repo_dir.mkdir()
+        (config_repo_dir / "security_review.md").write_text("# review")
+        _write_config_with_task_step(
+            config_repo_dir,
+            {"name": "security review", "runner": "claude", "prompt_file": "security_review.md"},
+        )
+        (config_repo_dir / "prompts" / "agents").mkdir(parents=True)
+
+        empty_base_dir = tmp_path / "empty-base-dir"
+        empty_base_dir.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(empty_xdg))
+        monkeypatch.setattr(config_validation.settings, "config_repo", str(config_repo_dir))
+        monkeypatch.setattr(config_validation.settings, "base_dir", empty_base_dir, raising=False)
+
+        problems = config_validation.validate_config()
+
+        assert problems == [], f"Unexpected problems (config_repo tier): {problems}"
+
+    def test_resolves_via_base_dir_tier(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        empty_xdg = tmp_path / "empty-xdg"
+        empty_xdg.mkdir()
+        base_dir = tmp_path / "base-dir"
+        base_dir.mkdir()
+        (base_dir / "security_review.md").write_text("# review")
+        _write_config_with_task_step(
+            base_dir,
+            {"name": "security review", "runner": "claude", "prompt_file": "security_review.md"},
+        )
+        (base_dir / "prompts" / "agents").mkdir(parents=True)
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(empty_xdg))
+        monkeypatch.setattr(config_validation.settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(config_validation.settings, "base_dir", base_dir, raising=False)
+
+        problems = config_validation.validate_config()
+
+        assert problems == [], f"Unexpected problems (base_dir tier): {problems}"
+
+    def test_missing_everywhere_reports_all_searched_dirs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        empty_xdg = tmp_path / "empty-xdg"
+        empty_xdg.mkdir()
+        base_dir = tmp_path / "base-dir"
+        base_dir.mkdir()
+        _write_config_with_task_step(
+            base_dir,
+            {"name": "security review", "runner": "claude", "prompt_file": "security_review.md"},
+        )
+        (base_dir / "prompts" / "agents").mkdir(parents=True)
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(empty_xdg))
+        monkeypatch.setattr(config_validation.settings, "config_repo", None, raising=False)
+        monkeypatch.setattr(config_validation.settings, "base_dir", base_dir, raising=False)
+
+        problems = config_validation.validate_config()
+
+        matching = [p for p in problems if "security_review.md" in p]
+        assert matching, f"Expected a dangling prompt_file problem, got: {problems}"
+        assert any(str(empty_xdg) in p and str(base_dir) in p for p in matching), matching
+
+
+class TestRoleDanglingPromptFileFailClosed:
+    """Fail-closed hardening for the pre-existing role `prompt_file` check:
+    a non-mapping role entry and an empty-or-whitespace-only `prompt_file`
+    used to be silently skipped instead of reported."""
+
+    def test_non_mapping_role_entry_is_reported_not_skipped(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": ["not-a-mapping"]}))
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+        (tmp_path / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {}}))
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert any("index 0" in p and "not a mapping" in p for p in problems), problems
+
+    def test_empty_role_prompt_file_is_reported_not_skipped(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "roles.yaml").write_text(
+            yaml.dump({"roles": [{"name": "planner", "prompt_file": ""}]})
+        )
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+        (tmp_path / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {}}))
+        (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+        problems = config_validation.validate_config(base_dir=tmp_path)
+
+        assert any("planner" in p and "empty-or-whitespace-only" in p for p in problems), problems
+
+
+def test_real_repository_root_config_validates_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression guard against the real dogfooded config: this repo's OWN
+    root tasks.yaml/roles.yaml (resolved via the default base_dir tier --
+    see tests/conftest.py::_isolate_config_resolution, which pins
+    settings.base_dir to the repo root and clears XDG/config_repo for
+    every test) must report ZERO dangling `prompt_file` problems. Before
+    this sprint's fix, several of this repo's own tasks (`docs`, `pentest`,
+    `arch`, `refactor`, `codex-audit`, `gemini-brief`, `opencode-fix`,
+    `ollama-scan`) referenced a bare filename (e.g. `security_review.md`)
+    that only exists under `prompts/`, not at the repo root -- the EXACT
+    incident this sprint fixes, silently present in this repo's own
+    dogfooded config the whole time."""
+    problems = config_validation.validate_config()
+
+    prompt_file_problems = [p for p in problems if "prompt_file" in p]
+    assert prompt_file_problems == [], f"Unexpected problems: {prompt_file_problems}"
+
+
+def test_malformed_tasks_yaml_raises_instead_of_reporting_clean(tmp_path: Path) -> None:
+    """A tasks.yaml with a genuine YAML syntax error must never be silently
+    treated as "no dangling prompt_file references" -- `validate_config`
+    raises (the pre-existing, established contract for every required
+    file; `config_doctor.check_dangling_references` already degrades this
+    to a single named finding for `hivepilot config doctor` -- see
+    TestDanglingReferencesIntegration.test_malformed_projects_yaml_yields_
+    finding_not_traceback in test_config_doctor.py). This is never a
+    silent clean pass and never an unrelated crash type."""
+    (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+    (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": []}))
+    (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": {}}))
+    (tmp_path / "groups.yaml").write_text(yaml.dump({"groups": {}}))
+    (tmp_path / "tasks.yaml").write_text("tasks: [unclosed\n")
+    (tmp_path / "pipelines.yaml").write_text(yaml.dump({"pipelines": {}}))
+
+    with pytest.raises(ValueError, match="YAML parse error"):
+        config_validation.validate_config(base_dir=tmp_path)

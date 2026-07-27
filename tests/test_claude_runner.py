@@ -41,6 +41,30 @@ def test_build_prompt_without_prior_context_is_clean(tmp_path: Path) -> None:
     assert "INSTRUCTIONS" in out
 
 
+def test_assemble_prompt_missing_file_names_task_step_and_searched_dirs(tmp_path: Path) -> None:
+    """Real incident: the raw error used to read just ``Prompt file not
+    found: /security_review.md`` -- naming neither the offending task/step
+    nor the OTHER directories that were also searched. The improved
+    message must name all three."""
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="pentest",
+        step=TaskStep(name="security review", runner="claude", prompt_file="does_not_exist.md"),
+        metadata={},
+        secrets={},
+    )
+    runner = _runner()
+    with pytest.raises(FileNotFoundError) as excinfo:
+        runner._assemble_prompt(payload)
+    message = str(excinfo.value)
+    assert "pentest" in message
+    assert "security review" in message
+    assert "does_not_exist.md" in message
+    for search_dir in runner.settings.config_path_search_dirs():
+        assert str(search_dir) in message, f"{search_dir} missing from: {message}"
+
+
 def test_build_prompt_tolerates_missing_project() -> None:
     """human_challenge()/agent-request re-invocations build a repo-less
     payload (``project=None`` — it's a Q&A/challenge exchange, not a coding

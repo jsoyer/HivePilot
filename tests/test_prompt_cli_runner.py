@@ -9,12 +9,37 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 from hivepilot.runners.prompt_cli_runner import PromptCliRunner, VibeRunner
 
 # ── VibeRunner defaults ───────────────────────────────────────────────────────
+
+
+def test_load_prompt_missing_file_names_task_step_and_searched_dirs(tmp_path: Path) -> None:
+    """Mirrors ClaudeRunner's improved message: names the offending
+    task/step and every directory `Settings.resolve_config_path` searched,
+    instead of just the final resolved path."""
+    payload = RunnerPayload(
+        project_name="p",
+        project=ProjectConfig(path=tmp_path),
+        task_name="pentest",
+        step=TaskStep(name="security review", runner="vibe", prompt_file="does_not_exist.md"),
+        metadata={},
+        secrets={},
+    )
+    runner = _cli_runner()
+    with pytest.raises(FileNotFoundError) as excinfo:
+        runner._load_prompt(payload)
+    message = str(excinfo.value)
+    assert "pentest" in message
+    assert "security review" in message
+    assert "does_not_exist.md" in message
+    for search_dir in runner.settings.config_path_search_dirs():
+        assert str(search_dir) in message, f"{search_dir} missing from: {message}"
 
 
 def test_vibe_runner_defaults() -> None:

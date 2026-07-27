@@ -951,6 +951,74 @@ class TestDanglingReferencesIntegration:
         assert "unclosed" not in failure_finding.message
 
 
+class TestDanglingTaskStepPromptFileIntegration:
+    """Real incident: an operator's tasks.yaml referenced a `prompt_file`
+    that did not exist anywhere on the box; `hivepilot config doctor`
+    reported zero findings. `check_dangling_references` wraps EVERY
+    `validate_config()` problem (the same bridge that already surfaces a
+    role's dangling `prompt_file`, a pipeline's unknown task, etc.) with
+    this module's WHAT/WHY/FIX shape -- so a new dangling task-step
+    `prompt_file` problem string needs no separate doctor-side check to
+    show up here."""
+
+    def test_missing_task_step_prompt_file_is_reported(self, tmp_path: Path) -> None:
+        _write_minimal_valid_config(tmp_path)
+        (tmp_path / "tasks.yaml").write_text(
+            yaml.dump(
+                {
+                    "tasks": {
+                        "pentest": {
+                            "steps": [
+                                {
+                                    "name": "security review",
+                                    "runner": "claude",
+                                    "prompt_file": "security_review.md",
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor.check_dangling_references(tmp_path)
+
+        assert findings, "expected a finding for the dangling task-step prompt_file"
+        matching = [f for f in findings if "security_review.md" in f.message]
+        assert matching, f"Expected a prompt_file finding, got: {[f.message for f in findings]}"
+        assert any("pentest" in f.message and "security review" in f.message for f in matching), (
+            matching
+        )
+        assert any("searched" in f.message for f in matching), matching
+        for f in matching:
+            assert f.severity == "error"
+            assert f.why, "finding must carry a WHY"
+            assert f.fix, "finding must carry a FIX"
+
+    def test_resolvable_task_step_prompt_file_is_clean(self, tmp_path: Path) -> None:
+        _write_minimal_valid_config(tmp_path)
+        (tmp_path / "security_review.md").write_text("# security review")
+        (tmp_path / "tasks.yaml").write_text(
+            yaml.dump(
+                {
+                    "tasks": {
+                        "pentest": {
+                            "steps": [
+                                {
+                                    "name": "security review",
+                                    "runner": "claude",
+                                    "prompt_file": "security_review.md",
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+        )
+
+        assert config_doctor.check_dangling_references(tmp_path) == []
+
+
 # ---------------------------------------------------------------------------
 # check_secrets_sanity
 # ---------------------------------------------------------------------------

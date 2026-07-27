@@ -1075,5 +1075,27 @@ class Settings(BaseSettings):
 
         return self.resolve_path(name)
 
+    def config_path_search_dirs(self) -> list[Path]:
+        """Every directory `resolve_config_path()` actually consults, in
+        priority order (XDG -> config_repo -> base_dir) -- WITHOUT
+        resolving any particular filename.
+
+        Exists so an error message or validation finding can name exactly
+        WHERE a reference was searched instead of only printing the final
+        resolved path -- which, when nothing exists anywhere, is just the
+        base_dir tier's guess (e.g. a service running with `cwd=/` prints
+        `/security_review.md`, telling the operator nothing about the
+        other two tiers that were also checked). Deliberately mirrors
+        `resolve_config_path`'s tier order exactly (same `_config_repo_
+        local_path()` local-directory guard) so a caller can never drift
+        from the real resolution chain by reimplementing it.
+        """
+        dirs = [self.xdg_config_home]
+        local_repo = self._config_repo_local_path()
+        if local_repo is not None:
+            dirs.append(local_repo)
+        dirs.append(self.base_dir)
+        return dirs
+
 
 settings = Settings()

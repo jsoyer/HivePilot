@@ -69,7 +69,7 @@ tasks:
       - name: rewrite docs
         runner: claude
         runner_ref: claude-docs
-        prompt_file: docs_rewrite.md
+        prompt_file: prompts/docs_rewrite.md
         timeout_seconds: 3600
         metadata:
           claude_profile: automation
@@ -113,7 +113,7 @@ tasks:
       - name: security review
         runner: claude
         runner_ref: claude-security
-        prompt_file: security_review.md
+        prompt_file: prompts/security_review.md
         timeout_seconds: 5400
         metadata:
           claude_profile: architecture
@@ -134,7 +134,7 @@ tasks:
       - name: architecture review
         runner: claude
         runner_ref: claude-architect
-        prompt_file: architecture_review.md
+        prompt_file: prompts/architecture_review.md
         timeout_seconds: 3600
         metadata:
           claude_profile: architecture
@@ -150,7 +150,7 @@ tasks:
       - name: refactor
         runner: claude
         runner_ref: claude-refactor
-        prompt_file: refactor.md
+        prompt_file: prompts/refactor.md
         timeout_seconds: 5400
         metadata:
           claude_profile: coding
@@ -208,7 +208,7 @@ tasks:
       - name: codex review
         runner: codex
         runner_ref: codex-default
-        prompt_file: architecture_review.md
+        prompt_file: prompts/architecture_review.md
     git:
       commit: false
       push: false
@@ -220,7 +220,7 @@ tasks:
       - name: gemini summary
         runner: gemini
         runner_ref: gemini-cli
-        prompt_file: docs_rewrite.md
+        prompt_file: prompts/docs_rewrite.md
     git:
       commit: false
       push: false
@@ -232,7 +232,7 @@ tasks:
       - name: opencode patch
         runner: opencode
         runner_ref: opencode-fastfix
-        prompt_file: refactor.md
+        prompt_file: prompts/refactor.md
     git:
       commit: false
       push: false
@@ -244,7 +244,7 @@ tasks:
       - name: ollama scan
         runner: ollama
         runner_ref: ollama-local
-        prompt_file: security_review.md
+        prompt_file: prompts/security_review.md
     git:
       commit: false
       push: false
