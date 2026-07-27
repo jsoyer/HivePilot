@@ -1168,6 +1168,127 @@ class TestSecretsSanity:
 
 
 # ---------------------------------------------------------------------------
+# check_cost_accounting (usage-capture-modelusage fix) -- fires on an
+# abnormal share of unpriced steps, or a recorded model id absent from the
+# price map. Two rules apply: (1) "I could not inspect this" must produce a
+# finding, never silence; (2) no noise -- an earlier check (#4b) emitted 17
+# false positives out of 19 and the operator stopped reading it, so this
+# check is sample-size-gated and excludes the "unknown" (NULL-model, e.g.
+# shell-runner) bucket entirely -- that's a legitimate "cost doesn't apply"
+# case, never an anomaly.
+# ---------------------------------------------------------------------------
+
+
+def _seed_cost_step(
+    run_id: int,
+    step: str,
+    *,
+    model: str | None,
+    cost_usd: float | None = None,
+    input_tokens: int | None = 100,
+    output_tokens: int | None = 100,
+) -> None:
+    from hivepilot.services import db, state_service
+
+    state_service.init_db()
+    with db.connect() as conn:
+        conn.execute(
+            db.ph(
+                "INSERT INTO steps (run_id, step, status, provider, model, "
+                "input_tokens, output_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (run_id, step, "success", "claude", model, input_tokens, output_tokens, cost_usd),
+        )
+
+
+def _seed_cost_run() -> int:
+    from hivepilot.services import db, state_service
+
+    state_service.init_db()
+    with db.connect() as conn:
+        return db.insert_returning_id(
+            conn,
+            "INSERT INTO runs (project, task, status, tenant) VALUES (?, ?, ?, ?)",
+            ("proj", "task", "success", "default"),
+        )
+
+
+class TestCheckCostAccounting:
+    def test_silent_on_empty_db(self) -> None:
+        assert config_doctor.check_cost_accounting() == []
+
+    def test_silent_below_minimum_sample_size(self) -> None:
+        """A handful of unpriced steps for a brand-new install must not fire
+        -- not enough data to call it an anomaly (anti-noise rule)."""
+        run_id = _seed_cost_run()
+        for i in range(3):
+            _seed_cost_step(run_id, f"s{i}", model="totally-unlisted-model", cost_usd=None)
+
+        assert config_doctor.check_cost_accounting() == []
+
+    def test_fires_on_abnormal_unpriced_share(self) -> None:
+        run_id = _seed_cost_run()
+        for i in range(20):
+            _seed_cost_step(run_id, f"s{i}", model="totally-unlisted-model", cost_usd=None)
+
+        findings = config_doctor.check_cost_accounting()
+        assert any(f.check == "cost_accounting_unpriced_share" for f in findings)
+
+    def test_silent_when_fully_priced(self) -> None:
+        run_id = _seed_cost_run()
+        for i in range(20):
+            _seed_cost_step(run_id, f"s{i}", model="claude-sonnet-4-6", cost_usd=0.01)
+
+        assert config_doctor.check_cost_accounting() == []
+
+    def test_silent_when_only_unknown_model_bucket_is_unpriced(self) -> None:
+        """NULL-model steps (e.g. a shell runner) never self-report cost --
+        that's expected, not an anomaly, and must never inflate the share."""
+        run_id = _seed_cost_run()
+        for i in range(20):
+            _seed_cost_step(run_id, f"s{i}", model=None, cost_usd=None)
+
+        assert config_doctor.check_cost_accounting() == []
+
+    def test_fires_on_model_missing_from_price_map_even_with_low_overall_share(self) -> None:
+        """A specific model that has NEVER been priced must be surfaced even
+        when it's a small fraction of overall (well-priced) traffic."""
+        run_id = _seed_cost_run()
+        for i in range(30):
+            _seed_cost_step(run_id, f"priced-{i}", model="claude-sonnet-4-6", cost_usd=0.01)
+        for i in range(5):
+            _seed_cost_step(run_id, f"unpriced-{i}", model="totally-unlisted-model", cost_usd=None)
+
+        findings = config_doctor.check_cost_accounting()
+        model_findings = [
+            f for f in findings if f.check == "cost_accounting_model_missing_from_price_map"
+        ]
+        assert model_findings, [f.message for f in findings]
+        assert "totally-unlisted-model" in model_findings[0].message
+
+    def test_silent_for_model_absent_from_price_map_but_self_reporting_cost(self) -> None:
+        """A model absent from the static price map is harmless as long as
+        it self-reports cost_usd every time -- the price map is only a
+        FALLBACK, so this must not be flagged as a gap."""
+        run_id = _seed_cost_run()
+        for i in range(20):
+            _seed_cost_step(run_id, f"s{i}", model="brand-new-model-with-self-reported-cost", cost_usd=0.02)
+
+        assert config_doctor.check_cost_accounting() == []
+
+    def test_findings_have_actionable_why_and_fix(self) -> None:
+        run_id = _seed_cost_run()
+        for i in range(20):
+            _seed_cost_step(run_id, f"s{i}", model="totally-unlisted-model", cost_usd=None)
+
+        findings = config_doctor.check_cost_accounting()
+        assert findings
+        for finding in findings:
+            assert finding.why
+            assert finding.fix
+
+
+# ---------------------------------------------------------------------------
 # run_doctor / CLI integration
 # ---------------------------------------------------------------------------
 
