@@ -13,6 +13,7 @@ from hivepilot.runners.base import (
     BaseRunner,
     RunnerPayload,
     UsageInfo,
+    prompt_file_not_found_message,
     resolve_runner_effort,
     set_last_usage,
 )
@@ -45,7 +46,9 @@ class PromptCliRunner(BaseRunner):
             raise ValueError(f"Step '{payload.step.name}' must set prompt_file for CLI runner.")
         prompt_path = self.settings.resolve_config_path(prompt_file)
         if not prompt_path.exists():
-            raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+            raise FileNotFoundError(
+                prompt_file_not_found_message(payload, self.settings, prompt_file, prompt_path)
+            )
         from hivepilot.config import settings
         from hivepilot.utils.prompt_vars import render_prompt_vars
 
