@@ -367,3 +367,61 @@ class TestReconcilerScope:
     def test_reconciling_an_empty_journal_is_a_no_op(self, live_config) -> None:
         state_service.init_db()
         assert partition_service.reconcile_stale_claims(older_than_seconds=0) == ()
+
+
+class TestStartupHook:
+    """The reconciler is a STARTUP reconciler (spec section 8) -- wired, not
+    merely defined."""
+
+    def test_the_api_startup_event_runs_the_reconciler(self, live_config, monkeypatch) -> None:
+        import asyncio
+
+        from hivepilot.services import api_service
+
+        called: list[dict[str, Any]] = []
+
+        def _record(**kwargs: Any) -> tuple:
+            called.append(kwargs)
+            return ()
+
+        monkeypatch.setattr(partition_service, "reconcile_stale_claims", _record)
+
+        asyncio.run(api_service._reconcile_partition_claims())
+
+        assert len(called) == 1
+
+    def test_a_failing_sweep_never_prevents_startup(self, live_config, monkeypatch) -> None:
+        import asyncio
+
+        from hivepilot.services import api_service
+
+        def _boom(**kwargs: Any) -> tuple:
+            raise RuntimeError("journal unreadable")
+
+        monkeypatch.setattr(partition_service, "reconcile_stale_claims", _boom)
+
+        # Must not raise: an API server still has to start.
+        asyncio.run(api_service._reconcile_partition_claims())
+
+
+class TestLostClaimCleanup:
+    def test_a_lost_running_transition_leaves_no_dangling_run_row(
+        self, live_config, monkeypatch
+    ) -> None:
+        """If another dispatcher moves the row between our claim and our
+        `claimed -> running` transition, we must not run AND must not leave a
+        `running` run row nothing will ever finish."""
+        partition_id = _ratified(_plan(_task("a")))
+        monkeypatch.setattr(partition_service, "mark_task_running", lambda *args, **kwargs: False)
+        orch = RecordingOrchestrator()
+
+        outcome = partition_service.dispatch_partition(partition_id, orchestrator=orch)
+
+        assert orch.calls == []
+        assert outcome.dispatched == ()
+        terminal = [
+            run
+            for run in state_service.list_recent_runs(limit=50)
+            if str(run["status"]) == "failed"
+        ]
+        assert terminal, "the orphaned run row should have been resolved, not left running"

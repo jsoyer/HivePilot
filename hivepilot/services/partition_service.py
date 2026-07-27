@@ -1706,12 +1706,22 @@ def _dispatch_chunk(
         ):
             # Somebody else moved the row out from under this claim. Do NOT
             # run: the journal, not this function's local state, is the truth.
+            # The run/queue rows created a moment ago are resolved rather than
+            # left dangling in `running` forever -- a row nothing will ever
+            # finish is indistinguishable from a hung run.
             logger.warning(
                 "partition.task_running_transition_lost",
                 partition_id=partition_id,
                 task_id=task_id,
                 run_id=run_id,
             )
+            try:
+                state_service.complete_run(
+                    run_id, "failed", "partition task claim was lost before dispatch"
+                )
+            except Exception:  # noqa: BLE001 - bookkeeping only
+                logger.warning("partition.orphan_run_cleanup_failed", run_id=run_id)
+            _mark_queue_row(queue_id, "blocked")
             continue
 
         # --- 3. SUBMIT -----------------------------------------------------

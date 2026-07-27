@@ -91,6 +91,34 @@ async def _log_startup_paths() -> None:
     log_resolved_startup_paths(settings)
 
 
+# -- Partition claim reconciliation (propose -> ratify -> dispatch PRD, §8) --
+@app.on_event("startup")
+async def _reconcile_partition_claims() -> None:
+    """Rewind partition claims a crashed dispatcher left behind.
+
+    A crash between `claim_task` and the run-row creation leaves a
+    `status='claimed' AND run_id IS NULL` row -- visible, and by construction
+    never a double dispatch. This sweeps exactly those, exactly once (the
+    release is a conditional UPDATE), and only past the staleness threshold
+    so a LIVE dispatcher mid-claim is never rewound out from under itself.
+
+    Never fatal: an API server must still start when the journal cannot be
+    read.
+    """
+    from hivepilot.utils.logging import get_logger
+
+    try:
+        from hivepilot.services import partition_service
+
+        released = partition_service.reconcile_stale_claims()
+        if released:
+            get_logger(__name__).info("api.partition_claims_reconciled", released=len(released))
+    except Exception as exc:  # noqa: BLE001 - startup must never die on a maintenance sweep
+        get_logger(__name__).warning(
+            "api.partition_reconcile_failed", error=f"{exc.__class__.__name__}: {exc}"
+        )
+
+
 # -- Body size limit (Phase 14b) -------------------------------------------
 _MAX_BODY_BYTES = getattr(settings, "api_max_body_size", 1_048_576)  # 1 MB default
 
@@ -984,11 +1012,18 @@ def list_partitions_endpoint(
     caller: token_service.TokenEntry = Depends(require_role("run")),
 ) -> list[PartitionSummary]:
     """List partitions, newest first, scoped to the caller's tenant (admin:
-    every tenant)."""
+    every tenant).
+
+    `limit` is clamped to `[1, 500]` rather than trusted: an unbounded,
+    caller-supplied page size on an endpoint that returns whole plan
+    metadata is a free amplification lever.
+    """
     from hivepilot.services import partition_service
 
     rows = partition_service.list_partitions(
-        tenant=_partition_row_tenant(caller), status=status_filter, limit=limit
+        tenant=_partition_row_tenant(caller),
+        status=status_filter,
+        limit=max(1, min(int(limit), 500)),
     )
     return [_partition_summary(row) for row in rows]
 
