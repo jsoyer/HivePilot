@@ -825,8 +825,7 @@ class TestUsageCaptureModelUsagePrimary:
         assert usage.input_tokens == 1304
         assert usage.output_tokens == 20
         assert usage.model == "claude-haiku-4-5", (
-            "must use the canonicalModel field (price-map-shaped id), not the "
-            "dated dict key"
+            "must use the canonicalModel field (price-map-shaped id), not the dated dict key"
         )
         assert usage.cost_usd == 0.001404
         assert usage.cache_read_tokens == 0
