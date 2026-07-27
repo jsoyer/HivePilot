@@ -95,7 +95,7 @@ export function ModelsView() {
                   />
                 </div>
 
-                <Table>
+                <Table scrollLabel={t('models.tableScrollLabel')}>
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t('models.title')}</TableHead>

@@ -283,7 +283,7 @@ function RosterTable({ rows, maxCost, selected, onSelect }: RosterTableProps) {
   const t = useT()
 
   return (
-    <Table>
+    <Table scrollLabel={t('agents.tableScrollLabel')}>
       <TableHeader>
         <TableRow>
           <TableHead>{t('agents.colRole')}</TableHead>

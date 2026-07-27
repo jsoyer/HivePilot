@@ -113,6 +113,8 @@ export const fr: Record<TranslationKey, string> = {
   'cost.tokensInOut': 'Tokens (entrée/sortie)',
   'cost.costLabel': 'Coût',
   'cost.model': 'Modèle',
+  'cost.byModelScrollLabel': 'Dépenses par modèle, faites défiler horizontalement pour voir les autres colonnes',
+  'cost.byProjectScrollLabel': 'Dépenses par projet, faites défiler horizontalement pour voir les autres colonnes',
   'cost.windowSelectorLabel': 'Période',
   'cost.windowDays': '{days}j',
   'cost.byModelTitle': 'Dépense par modèle',
@@ -401,6 +403,7 @@ export const fr: Record<TranslationKey, string> = {
 
   // ---- Models view (section Dépenses de Pollen) ------------------------
   'models.title': 'Modèles',
+  'models.tableScrollLabel': 'Tableau des modèles, faites défiler horizontalement pour voir les autres colonnes',
   'models.description': 'Coût, volume de tokens et taux de réussite par modèle',
   'models.noModels': "Aucune donnée de modèle pour l'instant.",
   'models.costPerSuccessfulRun': 'Coût par run réussi',
@@ -481,6 +484,7 @@ export const fr: Record<TranslationKey, string> = {
   'agents.description':
     'Ce que coûte chaque rôle et à quelle fréquence il réussit. Sélectionnez un rôle pour ses leçons et ses verdicts.',
   'agents.colRole': 'Rôle',
+  'agents.tableScrollLabel': 'Tableau des agents, faites défiler horizontalement pour voir les autres colonnes',
   'agents.rowAriaLabel': 'Ouvrir le détail de {name}',
   'agents.attentionTitle': '{count} rôle(s) à surveiller',
   'agents.allClear': 'Tous les rôles sont nominaux — aucun verdict négatif, aucun taux de réussite faible.',

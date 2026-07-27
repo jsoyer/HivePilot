@@ -169,22 +169,40 @@
  * scroll (a focusable, `tabIndex`-scrollable container already scrolls
  * natively via arrow/Home/End keys) or `prefers-reduced-motion` (nothing
  * here animates). */
-.kanban-scroll {
+/* Mobile audit: the same reasoning applies verbatim to the shared table
+ * container (`ui/table.tsx`), which was measured hiding 43-53% of the Agents
+ * / Models / Cost tables at 390px with no affordance at all. `.table-scroll`
+ * is the identical treatment, so a cut-off table and a cut-off Kanban look
+ * and behave the same way. */
+.kanban-scroll,
+.table-scroll {
     scrollbar-width: thin;
     scrollbar-color: var(--color-border) transparent;
 }
-.kanban-scroll::-webkit-scrollbar {
+.kanban-scroll::-webkit-scrollbar,
+.table-scroll::-webkit-scrollbar {
     height: 8px;
 }
-.kanban-scroll::-webkit-scrollbar-track {
+.kanban-scroll::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-track {
     background: transparent;
 }
-.kanban-scroll::-webkit-scrollbar-thumb {
+.kanban-scroll::-webkit-scrollbar-thumb,
+.table-scroll::-webkit-scrollbar-thumb {
     background-color: var(--color-border);
     border-radius: 9999px;
 }
-.kanban-scroll::-webkit-scrollbar-thumb:hover {
+.kanban-scroll::-webkit-scrollbar-thumb:hover,
+.table-scroll::-webkit-scrollbar-thumb:hover {
     background-color: var(--color-muted-foreground);
+}
+
+/* A focusable scroll region must show where focus is (the container itself
+ * has no other visual state). Only applies once `ui/table.tsx` has measured
+ * real overflow and made it focusable. */
+.table-scroll[data-scrollable="true"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
 }
 
 /* Mobile audit: the header controls (hamburger, search, language, theme) use

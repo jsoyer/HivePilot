@@ -117,6 +117,10 @@ export const en = {
   'cost.tokensInOut': 'Tokens (in/out)',
   'cost.costLabel': 'Cost',
   'cost.model': 'Model',
+  // Accessible names for the horizontal scroll region a wide table becomes on
+  // a narrow viewport (see ui/table.tsx) — announced only when it overflows.
+  'cost.byModelScrollLabel': 'Spend by model, scroll horizontally for more columns',
+  'cost.byProjectScrollLabel': 'Spend by project, scroll horizontally for more columns',
   'cost.windowSelectorLabel': 'Time window',
   'cost.windowDays': '{days}d',
   'cost.byModelTitle': 'Spend by model',
@@ -404,6 +408,7 @@ export const en = {
 
   // ---- Models view (Mirador Spend section) ------------------------------
   'models.title': 'Models',
+  'models.tableScrollLabel': 'Models table, scroll horizontally for more columns',
   'models.description': 'Per-model cost, token volume, and success rate',
   'models.noModels': 'No model data yet.',
   'models.costPerSuccessfulRun': 'Cost per successful run',
@@ -478,6 +483,7 @@ export const en = {
   'agents.title': 'Agents',
   'agents.description': 'What each role costs and how often it succeeds. Select a role for its lessons and verdicts.',
   'agents.colRole': 'Role',
+  'agents.tableScrollLabel': 'Agents table, scroll horizontally for more columns',
   'agents.rowAriaLabel': 'Open detail for {name}',
   'agents.attentionTitle': '{count} role(s) need attention',
   'agents.allClear': 'All roles nominal — no failing verdicts, no low success rate.',

@@ -2,13 +2,54 @@
 
 import * as React from "react"
 
+import { useOverflowX } from "@/lib/use-overflow-x"
 import { cn } from "@/lib/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+export interface TableProps extends React.ComponentProps<"table"> {
+  /**
+   * Accessible name for the horizontal scroll region, used ONLY when the
+   * table actually overflows its container. Supply it for any table wide
+   * enough to be cut off on a phone (Cost / Models / Agents); without it the
+   * container is still keyboard-scrollable, it just isn't announced as a
+   * named region — which is better than an unnamed `role="region"`.
+   */
+  scrollLabel?: string
+}
+
+/**
+ * A table plus the scroll container that owns its overflow.
+ *
+ * The container has always been `overflow-x-auto`, which is what keeps a wide
+ * table from scrolling the page body sideways. The mobile audit found the
+ * other half of the problem: at 390px the Agents table is 717px wide inside a
+ * 334px box (53% hidden), Models 660/334, Cost 584/334 — with no visible
+ * affordance that anything was hidden, and no way to reach the hidden columns
+ * from a keyboard, since the container was neither focusable nor labelled.
+ *
+ * When (and only when) the content actually overflows, the container becomes
+ * a real scroll region: focusable, so arrow/Home/End keys scroll it, and
+ * announced via `role="region"` when the caller supplied a `scrollLabel`.
+ * The `table-scroll` class gives it the same always-visible slim scrollbar
+ * the RunBoard Kanban already uses (see `index.css`) so the affordance is
+ * visible without hover. On a desktop where nothing overflows, none of this
+ * applies and no stray tab stop is introduced.
+ */
+function Table({ className, scrollLabel, ...props }: TableProps) {
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const scrollable = useOverflowX(containerRef)
+
   return (
     <div
+      ref={containerRef}
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      data-scrollable={scrollable}
+      className="table-scroll relative w-full overflow-x-auto"
+      {...(scrollable
+        ? {
+            tabIndex: 0,
+            ...(scrollLabel ? { role: "region", "aria-label": scrollLabel } : {}),
+          }
+        : {})}
     >
       <table
         data-slot="table"
