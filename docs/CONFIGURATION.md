@@ -442,6 +442,47 @@ policies:
 security-scanner failure (not just a finding above `block_on_severity`) also blocks the run.
 See [SECURITY.md](SECURITY.md) for the full fail-closed model.
 
+### Autopilot and partition fields
+
+Resolved by `hivepilot/services/autopilot_policy.py` from the same
+`default` → `projects.<name>` merge. Every one of them is fail-closed:
+absent, empty, non-numeric, zero and negative all mean **deny**, never
+"unconstrained".
+
+- `auto_dispatch: list` — pipelines autopilot may dispatch unattended.
+  Absent/empty ⇒ nothing auto-dispatches ([AUTOPILOT.md](AUTOPILOT.md))
+- `budget_daily_usd: float | None` — positive daily spend ceiling. Absent or
+  `<= 0` ⇒ no auto-dispatch and no partition
+- `outward_actions: list` — **allowlist** of outward tokens a ratified
+  partition may be consented to perform (`git_push`, `forge_pr`,
+  `forge_merge`, `forge_issue`, `forge_release`, `notify`, `vault_write`,
+  `external_api`). Absent or `[]` ⇒ **nothing outward may ever be consented
+  to** for that project. A ticked checkbox can never authorise what policy
+  never allowed
+- `max_partition_cost_usd: float | None` — per-partition USD admission
+  ceiling. Absent or `<= 0` ⇒ no partition may be ratified for that project
+- `max_task_wall_clock_seconds: int | None` — per-task wall-clock ceiling.
+  Absent or `<= 0` ⇒ no partition may be ratified for that project
+
+```yaml
+policies:
+  projects:
+    acme-api:
+      auto_dispatch: [docs-refresh]
+      budget_daily_usd: 20.0
+      outward_actions: [git_push, forge_pr]
+      max_partition_cost_usd: 5.0
+      max_task_wall_clock_seconds: 1800
+```
+
+A project with none of the three partition keys is simply not
+partition-capable — that is not a misconfiguration and `hivepilot config
+doctor` says nothing about it. A project that sets one of them but has no
+positive `max_partition_cost_usd` **is** reported (`config doctor` check
+`partition_missing_cost_ceiling`), because the gate then refuses every
+partition naming it and the refusal only surfaces after a human has reviewed
+a plan. See [PARTITIONS.md](PARTITIONS.md).
+
 ## groups.yaml — `Group`
 
 Defines multi-repo / monorepo groupings for coordinated pipeline runs across components.
@@ -567,3 +608,4 @@ For the complete variable list, consult `.env.example` in the repo root.
 - [SECURITY.md](SECURITY.md)
 - [RUNNERS.md](RUNNERS.md)
 - [DEBATE-AND-LESSONS.md](DEBATE-AND-LESSONS.md)
+- [PARTITIONS.md](PARTITIONS.md)

@@ -501,7 +501,9 @@ export const en = {
   // ---- ratification drawer --------------------------------------------
   'partitions.drawerTitle': 'Ratify partition',
   'partitions.drawerAriaLabel': 'Ratify partition {id}',
-  'partitions.closeAriaLabel': 'Close the ratification panel',
+  // One panel serves both the ratification form and the journal, so the
+  // close control is named after the panel, not after one of its two jobs.
+  'partitions.closeAriaLabel': 'Close the partition panel',
   'partitions.planTitle': 'Plan',
   'partitions.planLabel': 'Partition plan (JSON)',
   'partitions.planHint':
@@ -573,6 +575,40 @@ export const en = {
   'partitions.insufficientRole': 'Your token cannot ratify a partition — this needs an approve-rank token.',
   'partitions.errorStale':
     'This partition changed since you opened it. Reload it and review the new plan before ratifying.',
+
+  // ---- dispatch journal (Sprint 5) -------------------------------------
+  // The journal is a record, not a status page: it says what happened, who
+  // caused it, what it cost, and what came out of it. Where the engine does
+  // not know something it says so — an em-dash for "not recorded", the word
+  // "unknown" for "recorded as unmeasurable". Never a zero, never a guess.
+  'partitions.history': 'Journal',
+  'partitions.historyAriaLabel': 'Open the dispatch journal for partition {id}',
+  'partitions.journalTitle': 'Dispatch journal',
+  'partitions.journalDrawerTitle': 'Partition journal',
+  'partitions.journalDrawerAriaLabel': 'Dispatch journal for partition {id}',
+  'partitions.journalScrollLabel':
+    'Dispatch journal — scroll sideways for the remaining columns',
+  'partitions.journalEmptyTitle': 'Nothing dispatched yet',
+  'partitions.journalEmptyBody':
+    'One row lands here per task the moment this partition is ratified and its first wave is claimed. A proposed partition has nothing to report yet.',
+  'partitions.colTask': 'Task',
+  'partitions.colStatus': 'Status',
+  'partitions.colActor': 'Actor',
+  'partitions.colClaimed': 'Claimed',
+  'partitions.colPr': 'PR',
+  'partitions.colCost': 'Cost',
+  'partitions.colAttempt': 'Attempt',
+  'partitions.costUnknown': 'unknown',
+  'partitions.costUnknownTitle':
+    'This task reached a terminal state but no step reported a cost. The spend is unknown, not zero.',
+  'partitions.prNoneTitle': 'No pull request URL was recorded for this task.',
+  'partitions.prNotWebTitle':
+    'Recorded verbatim: this value is not an http(s) URL, so it is shown as text and not turned into a link.',
+  'partitions.prAriaLabel': 'Open the pull request recorded for task {id}',
+  'partitions.journalPrNote':
+    'A task with no PR link shows —. The engine attributes a URL only when exactly one pull request was opened inside that task’s window, so two tasks running against the same project at once are both recorded as —. A missing link is a gap; a wrong link would be a lie.',
+  'partitions.journalSkippedNote':
+    'skipped means the task never ran because a prerequisite failed — deliberately recorded as skipped and not as failed.',
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',

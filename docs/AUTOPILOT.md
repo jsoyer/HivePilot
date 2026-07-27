@@ -45,6 +45,17 @@ next, instead of a human hard-coding a fixed `task:` in `schedules.yaml`.
 At most **one** objective is dispatched per schedule tick, regardless of
 how many rows are queued.
 
+### Partitions share this queue, but not this drain
+
+A ratified partition writes its tasks into the same `autopilot_queue` table
+under `kind='partition_task'`, reusing its atomic claim and its pause/stop
+kill switch. `next_dispatchable` filters `kind='objective'`, so `drain_one`
+and the partition dispatcher can never contend for the same row — and the
+one-per-tick rule above is unaffected by a partition running alongside it.
+The two differ in what authorises them: an objective is dispatched by the
+fail-closed `autopilot_gate` with no human in the loop, a partition only ever
+by an explicit human ratification. See [PARTITIONS.md](PARTITIONS.md).
+
 ## Queue lifecycle
 
 ```
@@ -70,9 +81,12 @@ proposed --(human `promote`)--> queued --(gate ALLOW)--> running --> done
 
 ## `policies.yaml` schema
 
-Two new, **optional**, **disabled-by-default** fields, resolved per project
-by `hivepilot/services/autopilot_policy.py` (default → project-override
-merge, exactly like every other policy field):
+Two **optional**, **disabled-by-default** fields, resolved per project by
+`hivepilot/services/autopilot_policy.py` (default → project-override merge,
+exactly like every other policy field). The same module resolves three more
+for partitions — `outward_actions`, `max_partition_cost_usd` and
+`max_task_wall_clock_seconds`, all fail-closed the same way; see
+[PARTITIONS.md](PARTITIONS.md).
 
 ```yaml
 policies:

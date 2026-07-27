@@ -1,4 +1,4 @@
-import { AlertTriangle, GitBranch, Layers, ShieldAlert, Split } from 'lucide-react'
+import { AlertTriangle, GitBranch, Layers, ScrollText, ShieldAlert, Split } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { EmptyState } from '@/components/dashboard/EmptyState'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
@@ -8,15 +8,24 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Drawer } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { ApiError, ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
-import { EM_DASH, formatAge, formatDurationSeconds } from '@/lib/format-time'
+import { EM_DASH, formatAge, formatDurationSeconds, formatTimestamp } from '@/lib/format-time'
 import { type TranslationKey, useT } from '@/lib/i18n'
 import {
   type PartitionDetail,
   type PartitionParallelism,
   type PartitionPreview,
   type PartitionSummary,
+  type PartitionTaskRow,
   fetchPartition,
   fetchPartitions,
   previewPartition,
@@ -676,8 +685,203 @@ function RatifyForm({ detail, onRatified }: RatifyFormProps) {
   )
 }
 
+/** Journal statuses, from `partition_tasks.status` (spec §8). Rendered as
+ * the engine's own token, never a re-worded label: this is a durable record,
+ * and the word in the row is the word in the database. */
+const JOURNAL_STATUS_VARIANT: Record<
+  string,
+  'default' | 'secondary' | 'destructive' | 'outline'
+> = {
+  pending: 'outline',
+  claimed: 'outline',
+  running: 'secondary',
+  committed: 'default',
+  failed: 'destructive',
+  skipped: 'outline',
+  cancelled: 'secondary',
+}
+
+/** The four states in which a task is finished with. Reaching one of these
+ * without a recorded cost means the cost is UNMEASURABLE, which is a
+ * different fact from "not measured yet" — see `JournalCost`. */
+const TERMINAL_JOURNAL_STATUSES = ['committed', 'failed', 'skipped', 'cancelled']
+
+/**
+ * The stored PR value, but only when it is something a browser may navigate
+ * to.
+ *
+ * `pr_url` originates outside this process (a forge provider's response), so
+ * it is untrusted input in the ordinary sense: an `href` accepts
+ * `javascript:` and `data:` and React will not stop it. Anything that is not
+ * http(s) is therefore rendered as TEXT, verbatim — the operator still sees
+ * exactly what the journal holds, they just cannot click it. Returning
+ * `null` here never hides data.
+ */
+function navigableHref(raw: string): string | null {
+  try {
+    const parsed = new URL(raw)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? raw : null
+  } catch {
+    return null
+  }
+}
+
+function JournalPr({ task }: { task: PartitionTaskRow }) {
+  const t = useT()
+
+  if (task.pr_url === null) {
+    // The em-dash is the honest rendering of a NULL the engine deliberately
+    // wrote: `_capture_pr_url` attributes a URL only when exactly one PR was
+    // opened in the task's window, so two concurrent tasks on one project
+    // both land here. A missing link is a gap; a wrong link would be a lie.
+    return <span title={t('partitions.prNoneTitle')}>{EM_DASH}</span>
+  }
+
+  const href = navigableHref(task.pr_url)
+  if (href === null) {
+    return (
+      <span title={t('partitions.prNotWebTitle')} className="break-all">
+        {task.pr_url}
+      </span>
+    )
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      aria-label={t('partitions.prAriaLabel', { id: task.task_id })}
+      className="touch-target inline-flex min-h-11 items-center break-all text-foreground underline underline-offset-4"
+    >
+      {task.pr_url}
+    </a>
+  )
+}
+
+/**
+ * Two absences that must never look alike.
+ *
+ * An em-dash means "no value was recorded" — the task has not finished, so
+ * there is nothing to report yet. The word "unknown" means "the task IS
+ * finished and no step reported a cost", which is a measurement gap the
+ * operator can act on. `$0.00` would claim the work was free, and is never
+ * rendered for either case.
+ */
+function JournalCost({ task }: { task: PartitionTaskRow }) {
+  const t = useT()
+
+  if (task.cost_usd !== null) {
+    return <span className="metric-mono">${task.cost_usd.toFixed(2)}</span>
+  }
+  if (TERMINAL_JOURNAL_STATUSES.includes(task.status)) {
+    return (
+      <span title={t('partitions.costUnknownTitle')} className="text-muted-foreground">
+        {t('partitions.costUnknown')}
+      </span>
+    )
+  }
+  return <span className="text-muted-foreground">{EM_DASH}</span>
+}
+
+/**
+ * The dispatch journal — one row per `(partition, task)`, straight from
+ * `partition_tasks`.
+ *
+ * Seven columns do not fit a phone, so this reuses the shared `Table`, whose
+ * container owns its own horizontal overflow and announces itself as a
+ * labelled scroll region only when it actually overflows. The page body
+ * never scrolls sideways, on any viewport.
+ *
+ * Nothing here is derived or inferred. Status, actor, claim time, PR, cost
+ * and attempt are all printed as recorded, and every absence is printed as
+ * an absence.
+ */
+function PartitionJournal({ tasks }: { tasks: PartitionTaskRow[] }) {
+  const t = useT()
+
+  if (tasks.length === 0) {
+    return (
+      <EmptyState
+        data-testid="partitions-journal-empty"
+        icon={<ScrollText className="size-4" />}
+        title={t('partitions.journalEmptyTitle')}
+        body={t('partitions.journalEmptyBody')}
+      />
+    )
+  }
+
+  const hasSkipped = tasks.some((task) => task.status === 'skipped')
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Table data-testid="partitions-journal-table" scrollLabel={t('partitions.journalScrollLabel')}>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t('partitions.colTask')}</TableHead>
+            <TableHead>{t('partitions.colStatus')}</TableHead>
+            <TableHead>{t('partitions.colActor')}</TableHead>
+            <TableHead>{t('partitions.colClaimed')}</TableHead>
+            <TableHead>{t('partitions.colPr')}</TableHead>
+            <TableHead className="text-right">{t('partitions.colCost')}</TableHead>
+            <TableHead className="text-right">{t('partitions.colAttempt')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {tasks.map((task) => (
+            <TableRow key={task.task_id} data-testid={`partition-journal-${task.task_id}`}>
+              <TableCell data-column="task" className="metric-mono">
+                {task.task_id}
+              </TableCell>
+              <TableCell data-column="status">
+                <Badge variant={JOURNAL_STATUS_VARIANT[task.status] ?? 'secondary'}>
+                  {task.status}
+                </Badge>
+              </TableCell>
+              <TableCell data-column="actor" className="metric-mono">
+                {task.claimed_by ?? EM_DASH}
+              </TableCell>
+              <TableCell data-column="claimed" className="metric-mono">
+                {formatTimestamp(task.claimed_at)}
+              </TableCell>
+              <TableCell data-column="pr" className="whitespace-normal">
+                <JournalPr task={task} />
+              </TableCell>
+              <TableCell data-column="cost" className="text-right">
+                <JournalCost task={task} />
+              </TableCell>
+              <TableCell data-column="attempt" className="metric-mono text-right">
+                {task.attempt}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <p
+        data-testid="partitions-journal-pr-note"
+        className="text-xs break-words text-muted-foreground"
+      >
+        {t('partitions.journalPrNote')}
+      </p>
+      {hasSkipped && (
+        <p
+          data-testid="partitions-journal-skipped-note"
+          className="text-xs break-words text-muted-foreground"
+        >
+          {t('partitions.journalSkippedNote')}
+        </p>
+      )}
+    </div>
+  )
+}
+
 interface RatifyDrawerProps {
   partitionId: string
+  /** Whether THIS caller can still ratify — decided in the list from the
+   * summary's status and the token's rank. It only names the panel; the
+   * authority to ratify is the server's, re-checked from the loaded detail
+   * below and again by the gate itself. */
+  ratifiable: boolean
   onClose: () => void
   onRatified: () => void
 }
@@ -688,15 +892,19 @@ interface RatifyDrawerProps {
  * page body on a phone. Widened past the default `max-w-lg`: a JSON document
  * in a 512px column is unreadable on a laptop, and the drawer is full-width
  * below `sm:` regardless. */
-function RatifyDrawer({ partitionId, onClose, onRatified }: RatifyDrawerProps) {
+function RatifyDrawer({ partitionId, ratifiable, onClose, onRatified }: RatifyDrawerProps) {
   const t = useT()
   const state = useAsyncData(() => fetchPartition(partitionId), [partitionId])
   const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   return (
     <Drawer
-      title={t('partitions.drawerTitle')}
-      ariaLabel={t('partitions.drawerAriaLabel', { id: partitionId })}
+      title={ratifiable ? t('partitions.drawerTitle') : t('partitions.journalDrawerTitle')}
+      ariaLabel={
+        ratifiable
+          ? t('partitions.drawerAriaLabel', { id: partitionId })
+          : t('partitions.journalDrawerAriaLabel', { id: partitionId })
+      }
       closeLabel={t('partitions.closeAriaLabel')}
       onClose={onClose}
       className="max-w-full sm:max-w-3xl"
@@ -711,18 +919,32 @@ function RatifyDrawer({ partitionId, onClose, onRatified }: RatifyDrawerProps) {
         </div>
       ) : (
         <AsyncSection state={state} isEmpty={() => false}>
-          {(detail) =>
-            detail.status === RATIFIABLE_STATUS ? (
-              <RatifyForm detail={detail} onRatified={onRatified} />
-            ) : (
-              <div
-                data-testid="partitions-not-ratifiable"
-                className="rounded-lg border border-border bg-muted/50 p-3 text-sm break-words text-muted-foreground"
-              >
-                {t('partitions.notRatifiable', { status: detail.status })}
-              </div>
-            )
-          }
+          {(detail) => (
+            <div className="flex flex-col gap-5">
+              {detail.status === RATIFIABLE_STATUS ? (
+                <RatifyForm detail={detail} onRatified={onRatified} />
+              ) : (
+                <div
+                  data-testid="partitions-not-ratifiable"
+                  className="rounded-lg border border-border bg-muted/50 p-3 text-sm break-words text-muted-foreground"
+                >
+                  {t('partitions.notRatifiable', { status: detail.status })}
+                </div>
+              )}
+              {/* The record is shown for EVERY status, including `proposed`:
+               * the empty journal states, in words, that rows appear once
+               * the first wave is claimed — which is more useful than
+               * hiding the section and leaving the operator to wonder
+               * whether anything ran. */}
+              <section className="flex flex-col gap-3">
+                <SectionHeader
+                  index={detail.status === RATIFIABLE_STATUS ? '05' : '01'}
+                  title={t('partitions.journalTitle')}
+                />
+                <PartitionJournal tasks={detail.tasks} />
+              </section>
+            </div>
+          )}
         </AsyncSection>
       )}
     </Drawer>
@@ -741,7 +963,12 @@ const STATUS_BADGE_VARIANT: Record<string, 'default' | 'secondary' | 'destructiv
 
 /**
  * Partitions — `GET /v1/partitions` (tenant-scoped, `run` floor), with the
- * ratification flow behind the shared `Drawer`.
+ * ratification flow AND the dispatch journal behind the shared `Drawer`.
+ *
+ * One row, one control. An approver looking at a `proposed` partition gets
+ * Review; everyone else, and every partition past `proposed`, gets the
+ * record. Both open the same drawer, which always ends with the journal —
+ * hiding it would leave "did anything actually run?" unanswered.
  *
  * Visible to any token like every other built-in tab, but the list endpoint
  * itself needs `run` (a partition document carries every task's full prompt),
@@ -821,7 +1048,11 @@ export function PartitionsView() {
                         <span className="metric-mono text-xs text-muted-foreground">
                           {t('partitions.proposedAgo', { age: formatAge(partition.created_ts) })}
                         </span>
-                        {canRatify && partition.status === RATIFIABLE_STATUS && (
+                        {/* Exactly one control per row. An approver looking
+                         * at a proposal gets Review — the drawer it opens
+                         * carries the journal too. Everyone else, and every
+                         * partition past `proposed`, gets the record. */}
+                        {canRatify && partition.status === RATIFIABLE_STATUS ? (
                           <Button
                             type="button"
                             size="sm"
@@ -830,6 +1061,17 @@ export function PartitionsView() {
                             onClick={() => setOpenId(partition.id)}
                           >
                             {t('partitions.review')}
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="touch-target ml-auto"
+                            aria-label={t('partitions.historyAriaLabel', { id: partition.id })}
+                            onClick={() => setOpenId(partition.id)}
+                          >
+                            {t('partitions.history')}
                           </Button>
                         )}
                       </div>
@@ -845,6 +1087,15 @@ export function PartitionsView() {
       {openId !== null && (
         <RatifyDrawer
           partitionId={openId}
+          ratifiable={
+            canRatify &&
+            (state.status === 'success'
+              ? state.data.some(
+                  (partition) =>
+                    partition.id === openId && partition.status === RATIFIABLE_STATUS,
+                )
+              : false)
+          }
           onClose={() => setOpenId(null)}
           onRatified={handleRatified}
         />

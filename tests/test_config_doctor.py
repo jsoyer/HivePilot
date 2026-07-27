@@ -2904,3 +2904,233 @@ class TestDisplayTimezoneCheck:
         assert len(findings) == 1
         assert findings[0].severity == "warning"
         assert findings[0].check == "display_timezone_fallback_utc"
+
+
+# ---------------------------------------------------------------------------
+# check_partition_readiness -- propose->ratify->dispatch PRD, sprint S5.
+#
+# Two checks, both aimed at a partition that is configured but silently
+# cannot do what the operator believes it does:
+#
+#   1. `claude_max_concurrency: 1` (the DEFAULT) turns "N parallel agents"
+#      into one agent N times.
+#   2. no positive `max_partition_cost_usd` makes the ratification gate
+#      refuse EVERY partition naming that project -- and the refusal only
+#      surfaces after a human has already reviewed a plan and pressed
+#      dispatch.
+#
+# Anti-noise contract, tested explicitly below: a project that is NOT
+# partition-capable is never a finding, and both checks aggregate into a
+# single finding naming every affected project rather than one per project
+# (incident #4b: 17 false positives out of 19 findings and the operator
+# stopped reading the report).
+# ---------------------------------------------------------------------------
+
+
+class TestPartitionReadiness:
+    @staticmethod
+    def _write(tmp_path: Path, projects: dict, policies: dict) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": projects}))
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": policies}))
+
+    def test_partition_capable_project_without_cost_ceiling_is_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAILING fixture: `outward_actions` declares partition intent, but
+        with no `max_partition_cost_usd` the gate refuses every partition."""
+        monkeypatch.setattr(settings, "claude_max_concurrency", 4, raising=False)
+        self._write(
+            tmp_path,
+            {"acme-api": {"path": "~/dev/acme-api"}},
+            {"projects": {"acme-api": {"outward_actions": ["git_push"]}}},
+        )
+
+        findings = config_doctor.check_partition_readiness(tmp_path)
+
+        assert len(findings) == 1
+        assert findings[0].check == "partition_missing_cost_ceiling"
+        assert findings[0].severity == "error"
+        assert "acme-api" in findings[0].message
+        assert "max_partition_cost_usd" in findings[0].fix
+
+    def test_zero_cost_ceiling_is_treated_as_absent_not_as_a_ceiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`autopilot_policy._positive_float` resolves 0/negative/bool/
+        non-numeric to None (deny). The doctor must read the value through
+        that SAME resolver, not through a bare `in` test, or it would call a
+        `max_partition_cost_usd: 0` project healthy while the gate denies."""
+        monkeypatch.setattr(settings, "claude_max_concurrency", 4, raising=False)
+        for bad in (0, -1, True, "not-a-number"):
+            self._write(
+                tmp_path,
+                {"acme-api": {"path": "~/dev/acme-api"}},
+                {"projects": {"acme-api": {"max_partition_cost_usd": bad}}},
+            )
+            findings = config_doctor.check_partition_readiness(tmp_path)
+            assert [f.check for f in findings] == ["partition_missing_cost_ceiling"], bad
+
+    def test_positive_cost_ceiling_is_silent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "claude_max_concurrency", 4, raising=False)
+        self._write(
+            tmp_path,
+            {"acme-api": {"path": "~/dev/acme-api"}},
+            {
+                "projects": {
+                    "acme-api": {"outward_actions": ["git_push"], "max_partition_cost_usd": 5.0}
+                }
+            },
+        )
+
+        assert config_doctor.check_partition_readiness(tmp_path) == []
+
+    def test_a_project_that_is_not_partition_capable_is_never_a_finding(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The anti-noise rule, stated as a test: an ordinary project with no
+        partition keys at all must produce ZERO findings even on the
+        default-throttled host that check #1 exists for."""
+        monkeypatch.setattr(settings, "claude_max_concurrency", 1, raising=False)
+        self._write(
+            tmp_path,
+            {"acme-api": {"path": "~/dev/acme-api"}},
+            {"projects": {"acme-api": {"require_approval": True, "budget_daily_usd": 5.0}}},
+        )
+
+        assert config_doctor.check_partition_readiness(tmp_path) == []
+
+    def test_claude_max_concurrency_one_is_flagged_when_partitions_are_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "claude_max_concurrency", 1, raising=False)
+        self._write(
+            tmp_path,
+            {"acme-api": {"path": "~/dev/acme-api"}},
+            {"projects": {"acme-api": {"max_partition_cost_usd": 5.0}}},
+        )
+
+        findings = config_doctor.check_partition_readiness(tmp_path)
+
+        assert len(findings) == 1
+        assert findings[0].check == "partition_parallelism_capped_at_one"
+        assert findings[0].severity == "warning"
+        assert "acme-api" in findings[0].message
+        assert "claude_max_concurrency" in findings[0].message
+        assert "HIVEPILOT_CLAUDE_MAX_CONCURRENCY" in findings[0].fix
+
+    def test_raised_concurrency_is_silent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "claude_max_concurrency", 3, raising=False)
+        self._write(
+            tmp_path,
+            {"acme-api": {"path": "~/dev/acme-api"}},
+            {"projects": {"acme-api": {"max_partition_cost_usd": 5.0}}},
+        )
+
+        assert config_doctor.check_partition_readiness(tmp_path) == []
+
+    def test_both_checks_aggregate_into_one_finding_each_naming_every_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Anti-noise: three affected projects must not become six findings."""
+        monkeypatch.setattr(settings, "claude_max_concurrency", 1, raising=False)
+        self._write(
+            tmp_path,
+            {
+                "acme-api": {"path": "~/dev/acme-api"},
+                "acme-web": {"path": "~/dev/acme-web"},
+                "acme-worker": {"path": "~/dev/acme-worker"},
+            },
+            {"default": {"outward_actions": ["git_push"]}},
+        )
+
+        findings = config_doctor.check_partition_readiness(tmp_path)
+
+        assert sorted(f.check for f in findings) == [
+            "partition_missing_cost_ceiling",
+            "partition_parallelism_capped_at_one",
+        ]
+        for finding in findings:
+            for project in ("acme-api", "acme-web", "acme-worker"):
+                assert project in finding.message
+
+    def test_project_block_overrides_a_partition_capable_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`default` + project override is the same merge order
+        `autopilot_policy.get_autopilot_policy` uses -- a project that sets
+        its own positive ceiling is healthy even when `default` has none."""
+        monkeypatch.setattr(settings, "claude_max_concurrency", 4, raising=False)
+        self._write(
+            tmp_path,
+            {"acme-api": {"path": "~/dev/acme-api"}, "acme-web": {"path": "~/dev/acme-web"}},
+            {
+                "default": {"outward_actions": ["git_push"]},
+                "projects": {"acme-api": {"max_partition_cost_usd": 5.0}},
+            },
+        )
+
+        findings = config_doctor.check_partition_readiness(tmp_path)
+
+        assert len(findings) == 1
+        assert "acme-web" in findings[0].message
+        assert "acme-api" not in findings[0].message
+
+    def test_unparseable_policies_yaml_yields_a_finding_not_silence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The module's governing rule: "I could not inspect this" must
+        produce a finding, never silence."""
+        monkeypatch.setattr(settings, "claude_max_concurrency", 1, raising=False)
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"acme-api": {}}}))
+        (tmp_path / "policies.yaml").write_text("policies: [unclosed\n")
+
+        findings = config_doctor.check_partition_readiness(tmp_path)
+
+        assert any(f.check == "unparseable_config_yaml" for f in findings)
+
+    def test_non_mapping_policies_section_yields_a_finding_not_a_crash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "claude_max_concurrency", 1, raising=False)
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"acme-api": {}}}))
+        (tmp_path / "policies.yaml").write_text(yaml.dump({"policies": ["not", "a", "mapping"]}))
+
+        findings = config_doctor.check_partition_readiness(tmp_path)
+
+        assert any(f.check == "invalid_config_section" for f in findings)
+
+    def test_non_mapping_policy_scope_yields_a_finding_not_silence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "claude_max_concurrency", 4, raising=False)
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"acme-api": {}}}))
+        (tmp_path / "policies.yaml").write_text(
+            yaml.dump({"policies": {"projects": {"acme-api": "not-a-mapping"}}})
+        )
+
+        findings = config_doctor.check_partition_readiness(tmp_path)
+
+        assert any(f.check == "malformed_policy_entry" for f in findings)
+
+    def test_wired_into_run_doctor(self, tmp_path: Path) -> None:
+        """A check that exists but is never registered in `run_doctor()` is
+        exactly as invisible as no check at all -- assert it's reachable
+        through the real entry point, not just directly callable."""
+        _write_minimal_valid_config(tmp_path)
+        (tmp_path / "policies.yaml").write_text(
+            yaml.dump({"policies": {"projects": {"demo": {"outward_actions": ["git_push"]}}}})
+        )
+
+        fake_manager = SimpleNamespace(
+            loaded=[SimpleNamespace(name=stem) for stem in _currently_enabled_plugin_stems()],
+            check_all=lambda: {},
+        )
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("hivepilot.plugins.PluginManager", lambda: fake_manager, raising=False)
+            findings = config_doctor.run_doctor(config_dir=tmp_path)
+
+        assert any(f.check == "partition_missing_cost_ceiling" for f in findings)

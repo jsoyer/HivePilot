@@ -65,6 +65,15 @@ the incidents above to avoid collision):
     has no git capability at all; on the operator's box the vault sat 67
     files uncommitted for 6 days. Local git state only, no network calls.
 
+The propose→ratify→dispatch PRD (sprint S5) added one more:
+
+  * ``check_partition_readiness`` — two ways a partition setup is
+    CONFIGURED yet silently cannot do what the operator believes: the
+    default ``claude_max_concurrency: 1`` turns "N parallel agents" into
+    one agent N times, and a missing ``max_partition_cost_usd`` makes the
+    ratification gate refuse every partition for that project (fail-closed,
+    never unbounded) at the moment a human presses dispatch.
+
 ``run_doctor()`` is the single entry point ``hivepilot config doctor``
 (``hivepilot/cli.py``) calls; every other function here is independently
 unit-testable and returns a list of ``DoctorFinding`` (empty means "no
@@ -1847,6 +1856,196 @@ def check_cost_accounting() -> list[DoctorFinding]:
 
 
 # ---------------------------------------------------------------------------
+# check_partition_readiness -- propose->ratify->dispatch PRD, spec section 9
+# (S5). Both findings below describe a partition setup that is CONFIGURED but
+# silently cannot do what the operator believes it does:
+#
+#   1. `claude_max_concurrency` defaults to 1 (`config.py`), and
+#      `runner_throttle` caps every `claude`-kind runner at it -- so a plan
+#      that says "3 parallel agents" is one agent three times. The ratify
+#      view already shows the computed effective number at the moment of
+#      dispatch; this check surfaces the same truth BEFORE a plan is written
+#      around a parallelism the host will not deliver.
+#   2. `max_partition_cost_usd` is the partition admission ceiling and is
+#      fail-closed (`autopilot_policy`: absent / null / non-numeric / bool /
+#      zero / negative all resolve to `None`, which
+#      `partition_service._check_policy` turns into "no partition may be
+#      ratified for it"). Without it, the feature looks configured and
+#      refuses every single plan -- and the refusal only appears after a
+#      human has already reviewed a partition and pressed dispatch.
+#
+# Anti-noise contract (incident #4b: 17 false positives out of 19 findings
+# and the operator stopped reading the report):
+#   - A project that is NOT partition-capable is never a finding. "Partition-
+#     capable" means the operator explicitly wrote at least one of the three
+#     partition policy keys somewhere that applies to that project -- an
+#     ordinary project that has simply never heard of partitions is not a
+#     misconfiguration.
+#   - Each check emits ONE finding naming every affected project, never one
+#     finding per project.
+# ---------------------------------------------------------------------------
+
+# The three per-project keys `autopilot_policy.AutopilotPolicy` adds for
+# partitions. Presence of ANY of them (in the project block or the inherited
+# `default` block) is what "the operator intends to use partitions here"
+# means -- there is no separate `partitions_enabled` flag to read.
+_PARTITION_POLICY_KEYS = (
+    "outward_actions",
+    "max_partition_cost_usd",
+    "max_task_wall_clock_seconds",
+)
+
+
+def _partition_capable_projects(
+    config_dir: Path | None,
+) -> tuple[dict[str, dict[str, Any]], list[DoctorFinding]]:
+    """Return ``{project_name: merged policy block}`` for every project that
+    is partition-capable, plus any findings raised while inspecting the
+    config.
+
+    The merge order (``policies.default`` then ``policies.projects.<name>``,
+    project wins) is deliberately the same one
+    ``autopilot_policy.get_autopilot_policy`` uses, so this check can never
+    call a project healthy that the real gate would refuse.
+
+    Every "I could not inspect this" path yields a finding rather than
+    silence: an unparseable file, a non-mapping ``policies:``/``projects:``
+    container, and a policy scope that is not a mapping.
+    """
+    findings: list[DoctorFinding] = []
+
+    projects_data, projects_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    findings.extend(projects_findings)
+    known_projects, known_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(known_findings)
+
+    policies_data, policies_findings = _load_yaml_checked(_doctor_path("policies.yaml", config_dir))
+    findings.extend(policies_findings)
+    policies_section, section_findings = _checked_container(
+        policies_data, "policies", "'policies.yaml' key 'policies'"
+    )
+    findings.extend(section_findings)
+
+    default_block = policies_section.get("default") or {}
+    if not isinstance(default_block, dict):
+        findings.append(
+            _finding(
+                "error",
+                "malformed_policy_entry",
+                "Policy 'default' is not a mapping (got "
+                f"{type(default_block).__name__}) -- partition readiness not checked",
+                "every project inherits the default block, so a malformed one silently "
+                "removes the partition keys from EVERY project's effective policy",
+                "fix the 'default' entry in policies.yaml to be a mapping",
+            )
+        )
+        default_block = {}
+
+    scoped, scoped_findings = _checked_container(
+        policies_section, "projects", "'policies.yaml' key 'policies.projects'"
+    )
+    findings.extend(scoped_findings)
+
+    capable: dict[str, dict[str, Any]] = {}
+    for project_name in sorted(known_projects):
+        project_block = scoped.get(project_name) or {}
+        if not isinstance(project_block, dict):
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_policy_entry",
+                    f"Policy '{project_name}' is not a mapping (got "
+                    f"{type(project_block).__name__}) -- partition readiness not checked "
+                    "for it",
+                    "a policy scope that isn't a mapping is skipped with zero output, "
+                    "silently hiding whether that project is partition-capable at all",
+                    f"fix the '{project_name}' entry in policies.yaml to be a mapping",
+                )
+            )
+            continue
+        merged = {**default_block, **project_block}
+        if any(key in merged for key in _PARTITION_POLICY_KEYS):
+            capable[project_name] = merged
+
+    return capable, findings
+
+
+def check_partition_readiness(config_dir: Path | None = None) -> list[DoctorFinding]:
+    """Two actionable checks over partition-capable projects -- see the
+    comment block above for the incident each one maps to and for the
+    anti-noise contract they are both written against."""
+    # The gate's OWN fail-closed coercion, imported rather than
+    # re-implemented: a local copy would drift, and the two rules that make
+    # this check correct (a `bool` is not a number even though it is an
+    # `int`; zero and negative resolve to "deny", never to "unbounded") are
+    # exactly the ones a re-implementation would get wrong.
+    from hivepilot.services.autopilot_policy import _positive_float
+
+    capable, findings = _partition_capable_projects(config_dir)
+    if not capable:
+        return findings
+
+    missing_ceiling = sorted(
+        name
+        for name, merged in capable.items()
+        if _positive_float(merged.get("max_partition_cost_usd")) is None
+    )
+    if missing_ceiling:
+        named = ", ".join(missing_ceiling)
+        findings.append(
+            _finding(
+                "error",
+                "partition_missing_cost_ceiling",
+                f"project(s) {named} are partition-capable (policies.yaml sets at least one "
+                f"of {', '.join(_PARTITION_POLICY_KEYS)}) but have no positive "
+                "max_partition_cost_usd -- the ratification gate refuses every partition "
+                "naming them",
+                "max_partition_cost_usd is the partition admission ceiling and is "
+                "fail-closed: absent, null, non-numeric, zero and negative all resolve to "
+                "'no partition may be ratified for this project', never to an unbounded "
+                "ceiling -- so the feature looks configured and silently denies, and the "
+                "denial only surfaces after a human has reviewed a plan and pressed "
+                "dispatch",
+                "set a positive max_partition_cost_usd under policies.projects.<name> (or "
+                "policies.default) in policies.yaml; the same scope also needs a positive "
+                "budget_daily_usd and max_task_wall_clock_seconds, which are fail-closed "
+                "the same way. If these projects are not meant to be partition-capable, "
+                "remove their partition keys instead",
+            )
+        )
+
+    runner_cap = getattr(settings, "claude_max_concurrency", 1)
+    try:
+        runner_cap = int(runner_cap)
+    except (TypeError, ValueError):
+        runner_cap = 1
+    if runner_cap <= 1:
+        named = ", ".join(sorted(capable))
+        findings.append(
+            _finding(
+                "warning",
+                "partition_parallelism_capped_at_one",
+                f"claude_max_concurrency={runner_cap} while project(s) {named} are "
+                "partition-capable -- a partition asking for N parallel agents runs one "
+                "agent N times on this host",
+                "runner_throttle caps every claude-kind runner at "
+                "settings.claude_max_concurrency (default 1), so 'max_parallel: 3' is not "
+                "3x faster, it is the same work serialised -- and each task's "
+                "wall_clock_seconds ceiling was almost certainly sized for the parallel "
+                "case, so the later waves are the ones that get killed",
+                "raise HIVEPILOT_CLAUDE_MAX_CONCURRENCY to the number of concurrent claude "
+                "sessions this host can genuinely afford, or keep partitions honest by "
+                "planning them with policy.max_parallel: 1 so the plan states what "
+                "actually happens",
+            )
+        )
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1951,6 +2150,12 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     findings.extend(_run_check("check_display_timezone", check_display_timezone))
     findings.extend(_run_check("check_retry_queue_backlog", check_retry_queue_backlog))
     findings.extend(_run_check("check_cost_accounting", check_cost_accounting))
+    findings.extend(
+        _run_check(
+            "check_partition_readiness",
+            lambda: check_partition_readiness(config_dir),
+        )
+    )
     return _dedupe_findings(findings)
 
 
