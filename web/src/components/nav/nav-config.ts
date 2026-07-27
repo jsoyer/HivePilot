@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 
 /**
- * Grouped sidebar navigation (Mirador → "Vigie" dashboard upgrade, P0b).
+ * Grouped sidebar navigation (Pollen dashboard upgrade, P0b).
  * Mirrors the operator's mockup section labels — VUE D'ENSEMBLE / AGENTS /
  * SYSTÈME / MÉMOIRE — mapped onto Pollen's actual built-in tabs (see
  * `Pollen.tsx`'s `BUILTIN_TABS`).

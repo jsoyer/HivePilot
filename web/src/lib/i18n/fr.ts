@@ -3,7 +3,7 @@ import type { TranslationKey } from './en'
 /**
  * French dictionary — typed `Record<TranslationKey, string>` against `en.ts`
  * so a missing or extra key is a COMPILE error, not a silent runtime gap.
- * The operator is a native FR speaker (Mirador -> "Vigie" upgrade, P1a) —
+ * The operator is a native FR speaker (Pollen dashboard upgrade, P1a) —
  * natural French copy, not a literal word-for-word translation. Product/
  * technical proper nouns ("Pollen", "Mem0") are left untranslated.
  */

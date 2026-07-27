@@ -299,9 +299,35 @@
     --violet: #8b7cf6;
 }
 
+/* Accessibility: honour `prefers-reduced-motion` app-wide, not just for the
+ * two graph-canvas animations that already opt out individually below. The
+ * loading skeletons (`animate-pulse`) and every hover/colour transition are
+ * decoration; none of them carries information, so they can be reduced to a
+ * single frame without losing anything. Deliberately NOT `animation: none`
+ * on everything: a `0.01ms` duration still fires `animationend`, so a
+ * component that (today or later) waits for one cannot deadlock. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    }
+  /* Accessibility: a visible keyboard focus state everywhere. The scaffold
+   * only set a translucent `outline-ring/50` with no width, so on several
+   * surfaces (kanban cards, roster rows, segmented toggles, selects) a
+   * keyboard user had no reliable indication of where they were. Applied on
+   * `:focus-visible` only, so a mouse click never draws a ring. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
     }
   body {
     @apply bg-background text-foreground;
