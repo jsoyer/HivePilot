@@ -4569,6 +4569,309 @@ def autopilot_status(
 
 
 # ---------------------------------------------------------------------------
+# Partitions (propose -> ratify -> dispatch PRD, Sprint 3 -- spec §4/§5/§7)
+#
+# The proposer is CONFIG, never engine code: a normal role in `roles.yaml`
+# running a normal pipeline in `pipelines.yaml`, whose final stage shells out
+# to `hivepilot partition submit`. That CLI seam (the `autopilot enqueue`
+# precedent) works with ANY runner -- unlike scraping a fenced JSON block out
+# of stage output, which only works for text-emitting agent runners and
+# re-opens an untrusted-output parsing surface.
+#
+# `ratify` deliberately carries TWO independent flags: `--approver` (who
+# approved the plan) and `--consent` (may this become visible outside this
+# machine). They are separate axes -- ratification says "this is the right
+# work", consent says "publish it" -- and `--consent` defaults to OFF, so an
+# outward-acting pipeline is refused unless the operator says so explicitly.
+# ---------------------------------------------------------------------------
+
+partition_app = typer.Typer(help="Propose -> ratify -> dispatch work partitions")
+app.add_typer(partition_app, name="partition")
+
+_NO_PR_URL = "—"
+
+
+def _partition_service():
+    from hivepilot.services import partition_service
+
+    return partition_service
+
+
+@partition_app.command("submit")
+def partition_submit(
+    file: Path = typer.Option(..., "--file", help="Path to the partition JSON document"),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        help="Verify the plan against a live source, as '<kind>:<ref>' (e.g. text:docs/bug.md)",
+    ),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant to scope this partition to"),
+    proposer_run_id: Optional[int] = typer.Option(
+        None, "--proposer-run-id", help="Run id of the proposer that generated this plan"
+    ),
+    allow_source_drift: bool = typer.Option(
+        False,
+        "--allow-source-drift",
+        help="Submit even when --source no longer matches the digest the plan declares",
+    ),
+) -> None:
+    """Submit a PROPOSED partition. Never dispatches anything.
+
+    With `--source <kind>:<ref>` the source is re-fetched through the
+    fail-closed `partition_sources` registry and its digest compared against
+    the one the plan declares. A mismatch means the work item moved under the
+    proposal, and is refused unless `--allow-source-drift` is passed --
+    fail-closed: an unverifiable claim is not a verified one.
+    """
+    from hivepilot.partition import PartitionError, load_partition
+    from hivepilot.partition_sources import UnknownSourceError, resolve_source
+
+    service = _partition_service()
+
+    try:
+        plan_json = Path(file).read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Could not read {file}: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        plan = load_partition(plan_json)
+    except PartitionError as exc:
+        typer.echo(f"Invalid partition document: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if source:
+        kind, _, ref = source.partition(":")
+        if not kind or not ref:
+            typer.echo("--source must be '<kind>:<ref>', e.g. text:docs/bug-1234.md")
+            raise typer.Exit(code=1)
+        try:
+            document = resolve_source(kind).fetch(ref)
+        except UnknownSourceError as exc:
+            typer.echo(f"Unknown partition source: {exc}")
+            raise typer.Exit(code=1) from exc
+        except Exception as exc:  # noqa: BLE001 - an unfetchable source is a refusal, not a crash
+            typer.echo(f"Could not fetch source {source!r}: {exc}")
+            raise typer.Exit(code=1) from exc
+        declared = plan.source.digest
+        if declared and declared != document.digest:
+            typer.echo(
+                f"Source digest drift: plan declares {declared}, {source} is now {document.digest}."
+            )
+            if not allow_source_drift:
+                typer.echo("Refusing to submit (pass --allow-source-drift to override).")
+                raise typer.Exit(code=1)
+        elif not declared:
+            typer.echo(f"Plan declares no source digest; {source} is currently {document.digest}.")
+
+    partition_id = service.create_partition(
+        plan_json=plan_json, tenant=tenant, proposer_run_id=proposer_run_id
+    )
+    typer.echo(f"Submitted partition {partition_id} ({len(plan.tasks)} task(s), status: proposed).")
+    typer.echo(f"Digest: {service.partition_digest(plan_json)}")
+
+
+@partition_app.command("show")
+def partition_show(
+    partition_id: str = typer.Argument(..., help="Partition id"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant the partition belongs to"),
+    plan: bool = typer.Option(False, "--plan", help="Also print the full plan JSON"),
+) -> None:
+    """Show a partition: status, consent, the computed outward footprint, and
+    the EFFECTIVE parallelism this host would actually give it."""
+    from hivepilot.partition import PartitionError, load_partition
+
+    service = _partition_service()
+    row = service.get_partition(partition_id, tenant=tenant)
+    if row is None:
+        typer.echo(f"Unknown partition {partition_id!r}.")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Partition:  {row['id']}")
+    typer.echo(f"Tenant:     {row.get('tenant')}")
+    typer.echo(f"Status:     {row.get('status')}")
+    typer.echo(f"Source:     {row.get('source_kind')}:{row.get('source_ref')}")
+    typer.echo(f"Digest:     {row.get('proposed_digest')}")
+    typer.echo(f"Consent:    {bool(row.get('outward_consent'))}")
+    if row.get("ratified_by"):
+        typer.echo(f"Ratified:   {row.get('ratified_by')} at {row.get('ratified_at')}")
+
+    document = str(row.get("ratified_json") or row.get("proposed_json") or "")
+    try:
+        parsed = load_partition(document)
+    except PartitionError as exc:
+        typer.echo(f"Plan no longer parses: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    assessment = service.assess_outward(parsed)
+    parallelism = service.effective_parallelism(parsed)
+    waves = service.plan_waves(parsed)
+
+    typer.echo(f"Outward:    {', '.join(sorted(assessment.actions)) or 'none'}")
+    typer.echo(f"Cost sum:   ${assessment.total_cost_usd:.2f}")
+    typer.echo(
+        f"Parallel:   requested={parallelism.requested} effective={parallelism.effective} "
+        f"(concurrency_limit={parallelism.concurrency_limit}, runner_cap="
+        f"{parallelism.runner_cap if parallelism.runner_cap < 2**31 - 1 else 'unlimited'})"
+    )
+    for note in parallelism.notes:
+        typer.echo(f"  ! {note}")
+    for index, wave in enumerate(waves):
+        typer.echo(f"Wave {index}:     {', '.join(wave)}")
+    if plan:
+        typer.echo(document)
+
+
+@partition_app.command("ratify")
+def partition_ratify(
+    partition_id: str = typer.Argument(..., help="Partition id"),
+    approver: str = typer.Option(..., "--approver", help="Who is approving this plan"),
+    file: Optional[Path] = typer.Option(
+        None, "--file", help="An EDITED plan to ratify instead of the proposed one"
+    ),
+    consent: bool = typer.Option(
+        False,
+        "--consent",
+        help="Consent to outward-visible action (branches pushed, PRs opened). Default: OFF",
+    ),
+    expected_digest: Optional[str] = typer.Option(
+        None, "--expected-digest", help="Refuse if the stored proposed digest differs"
+    ),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant the partition belongs to"),
+    dispatch: bool = typer.Option(
+        True, "--dispatch/--no-dispatch", help="Dispatch immediately after ratifying"
+    ),
+) -> None:
+    """Ratify a partition and (by default) dispatch it.
+
+    `--expected-digest` is optional here and defaults to the digest read from
+    the journal at the start of THIS command. That is not a weakening of the
+    stale-plan guard: the guard exists for a browser tab holding a plan
+    rendered minutes ago, whereas a CLI invocation reads the plan and ratifies
+    it in the same breath. Pass `--expected-digest` explicitly (e.g. from a
+    prior `partition show`) to get the strict check.
+    """
+    service = _partition_service()
+
+    row = service.get_partition(partition_id, tenant=tenant)
+    if row is None:
+        typer.echo(f"Unknown partition {partition_id!r}.")
+        raise typer.Exit(code=1)
+
+    if file is not None:
+        try:
+            partition_json = Path(file).read_text(encoding="utf-8")
+        except OSError as exc:
+            typer.echo(f"Could not read {file}: {exc}")
+            raise typer.Exit(code=1) from exc
+    else:
+        partition_json = str(row.get("proposed_json") or "")
+
+    try:
+        outcome = service.ratify_partition(
+            partition_id,
+            partition_json=partition_json,
+            outward_consent=consent,
+            approver=approver,
+            expected_digest=expected_digest or str(row.get("proposed_digest") or ""),
+            tenant=tenant,
+        )
+    except service.RatificationError as exc:
+        typer.echo(f"Ratification refused ({exc.code}): {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if outcome.idempotent:
+        typer.echo(
+            f"Partition {partition_id} is already {outcome.status!r} -- no-op, nothing dispatched."
+        )
+        return
+
+    typer.echo(f"Ratified partition {partition_id} by {approver}.")
+    typer.echo(f"Outward actions: {', '.join(outcome.outward_actions) or 'none'}")
+    typer.echo(f"Outward consent: {outcome.outward_consent}")
+    typer.echo(f"Tasks: {len(outcome.task_ids)}")
+    for warning in outcome.warnings:
+        typer.echo(f"  ! {warning}")
+
+    if not dispatch:
+        typer.echo("Not dispatching (--no-dispatch).")
+        return
+
+    result = service.dispatch_partition(
+        partition_id, orchestrator=Orchestrator(), tenant=tenant, claimed_by=approver
+    )
+    typer.echo(
+        f"Dispatched {len(result.dispatched)} task(s) across {len(result.waves)} wave(s) "
+        f"at effective parallelism {result.effective_parallelism}."
+    )
+    typer.echo(
+        f"committed={len(result.committed)} failed={len(result.failed)} "
+        f"skipped={len(result.skipped)} cancelled={len(result.cancelled)}"
+    )
+    if result.halted_reason:
+        typer.echo(f"Halted: {result.halted_reason}")
+
+
+@partition_app.command("status")
+def partition_status(
+    partition_id: str = typer.Argument(..., help="Partition id"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant the partition belongs to"),
+) -> None:
+    """The dispatch journal for a partition: task, status, run, attempt, cost, PR link."""
+    service = _partition_service()
+    row = service.get_partition(partition_id, tenant=tenant)
+    if row is None:
+        typer.echo(f"Unknown partition {partition_id!r}.")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Partition {row['id']} ({row.get('status')})")
+    rows = service.list_partition_tasks(partition_id)
+    if not rows:
+        typer.echo("No task rows yet (a partition writes them at ratification).")
+        return
+
+    typer.echo(f"{'Task':<24} {'Status':<10} {'Run':<8} {'Try':<4} {'Cost':<8} PR")
+    typer.echo("-" * 80)
+    for task_row in rows:
+        run_id = task_row.get("run_id")
+        cost = task_row.get("cost_usd")
+        typer.echo(
+            f"{str(task_row['task_id']):<24} {str(task_row['status']):<10} "
+            f"{(str(run_id) if run_id is not None else '-'):<8} "
+            f"{int(task_row.get('attempt') or 0):<4} "
+            f"{(f'{float(cost):.2f}' if cost is not None else '-'):<8} "
+            # A NULL PR url is shown as an em-dash, NEVER as a guessed link:
+            # the forge either told us the URL or it did not.
+            f"{task_row.get('pr_url') or _NO_PR_URL}"
+        )
+
+
+@partition_app.command("cancel")
+def partition_cancel(
+    partition_id: str = typer.Argument(..., help="Partition id"),
+    actor: str = typer.Option(..., "--actor", help="Who is cancelling"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant the partition belongs to"),
+) -> None:
+    """Veto a proposed partition, or cooperatively cancel a dispatching one.
+
+    A RUNNING agent is never killed -- it is asked to stop at its next step
+    boundary. Tasks that already committed or failed keep their recorded
+    outcome.
+    """
+    service = _partition_service()
+    try:
+        cancelled = service.cancel_partition(partition_id, actor=actor, tenant=tenant)
+    except service.PartitionNotFoundError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    if not cancelled:
+        typer.echo(f"Partition {partition_id}: nothing left to cancel (vetoed if it was proposed).")
+        return
+    typer.echo(f"Cancelled {len(cancelled)} task(s): {', '.join(cancelled)}")
+
+
+# ---------------------------------------------------------------------------
 # Agent file-ownership conflict detection (Phase 16 C1 — read-only CLI)
 #
 # `hivepilot ownership check` is a manual, read-only inspection over the pure

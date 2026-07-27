@@ -91,6 +91,34 @@ async def _log_startup_paths() -> None:
     log_resolved_startup_paths(settings)
 
 
+# -- Partition claim reconciliation (propose -> ratify -> dispatch PRD, §8) --
+@app.on_event("startup")
+async def _reconcile_partition_claims() -> None:
+    """Rewind partition claims a crashed dispatcher left behind.
+
+    A crash between `claim_task` and the run-row creation leaves a
+    `status='claimed' AND run_id IS NULL` row -- visible, and by construction
+    never a double dispatch. This sweeps exactly those, exactly once (the
+    release is a conditional UPDATE), and only past the staleness threshold
+    so a LIVE dispatcher mid-claim is never rewound out from under itself.
+
+    Never fatal: an API server must still start when the journal cannot be
+    read.
+    """
+    from hivepilot.utils.logging import get_logger
+
+    try:
+        from hivepilot.services import partition_service
+
+        released = partition_service.reconcile_stale_claims()
+        if released:
+            get_logger(__name__).info("api.partition_claims_reconciled", released=len(released))
+    except Exception as exc:  # noqa: BLE001 - startup must never die on a maintenance sweep
+        get_logger(__name__).warning(
+            "api.partition_reconcile_failed", error=f"{exc.__class__.__name__}: {exc}"
+        )
+
+
 # -- Body size limit (Phase 14b) -------------------------------------------
 _MAX_BODY_BYTES = getattr(settings, "api_max_body_size", 1_048_576)  # 1 MB default
 
@@ -821,6 +849,347 @@ def handle_approval(
             detail=f"Approval processing failed for run {run_id}: {exc}",
         ) from exc
     return {"result": result.__dict__}
+
+
+# ---------------------------------------------------------------------------
+# Partitions (propose -> ratify -> dispatch PRD, Sprint 3 -- spec §5/§7).
+#
+# `/v1`-only, like every other endpoint added after Phase 14b.
+#
+# RBAC floors, and why each is where it is:
+#   - `GET /v1/partitions`, `GET /v1/partitions/{id}`  -> `run`
+#     A partition document carries every task's full PROMPT, which is the
+#     same class of content `GET /v1/runs/{run_id}` guards at `run` rather
+#     than `read`. A bare `read` token must not be able to harvest it.
+#   - `POST /v1/partitions/{id}/ratify`                -> `approve`
+#     Ratification IS an approval, and it is the single gate between a
+#     proposal and N dispatched agents.
+#   - `POST /v1/partitions/{id}/cancel`                -> `run`
+#     Mirrors `POST /v1/runs/{run_id}/cancel`: stopping work is deliberately
+#     a LOWER bar than starting it.
+#
+# Tenant isolation mirrors the endpoints each one is modelled on: the GETs
+# report a cross-tenant id as 404 (never leaking that another tenant has a
+# partition with that id -- same rule as `get_run`), while the two writes
+# report 403 (`handle_approval`/`cancel_run`'s shape, where the caller
+# already had to hold `approve`/`run` and the distinction is actionable).
+#
+# **The error mapping is NEVER re-derived here.** Every refusal
+# `partition_service` raises carries its own `status_code`/`code` next to the
+# rule it belongs to, so this layer TRANSLATES and nothing more -- there is
+# exactly one definition of "a stale digest is a 409", and it lives with the
+# digest check.
+# ---------------------------------------------------------------------------
+
+
+class PartitionSummary(BaseModel):
+    id: str
+    tenant: str = "default"
+    status: str
+    source_kind: str | None = None
+    source_ref: str | None = None
+    proposed_digest: str | None = None
+    ratified_digest: str | None = None
+    outward_consent: bool = False
+    ratified_by: str | None = None
+    ratified_at: str | None = None
+    created_ts: str | None = None
+    updated_ts: str | None = None
+
+
+class PartitionTaskRow(BaseModel):
+    task_id: str
+    status: str
+    run_id: int | None = None
+    queue_id: int | None = None
+    attempt: int = 0
+    claimed_by: str | None = None
+    claimed_at: str | None = None
+    # `None` means the forge did not report a URL. Pollen renders it as "—".
+    # It is NEVER a fabricated link.
+    pr_url: str | None = None
+    cost_usd: float | None = None
+    wall_clock_seconds: int | None = None
+
+
+class PartitionParallelism(BaseModel):
+    """The EFFECTIVE parallelism this host would give the plan.
+
+    Surfaced (spec §7) because `runner_throttle` caps the `claude` runner at
+    `claude_max_concurrency`, default **1** -- so a `max_parallel: 3` plan is
+    one agent three times on a default install, and the ratify UI must say so
+    rather than promising three.
+    """
+
+    requested: int
+    effective: int
+    concurrency_limit: int
+    runner_cap: int
+    runner_kinds: list[str] = []
+    notes: list[str] = []
+
+
+class PartitionDetail(PartitionSummary):
+    proposed_json: str | None = None
+    ratified_json: str | None = None
+    ratified_diff: str | None = None
+    outward_actions: list[str] = []
+    total_cost_usd: float | None = None
+    waves: list[list[str]] = []
+    parallelism: PartitionParallelism | None = None
+    tasks: list[PartitionTaskRow] = []
+
+
+class PartitionRatifyRequest(BaseModel):
+    partition_json: str
+    outward_consent: bool = False
+    approver: str = "api"
+    expected_digest: str | None = None
+    # One click ratifies AND dispatches (spec §12.5): a ratified-but-
+    # undispatched partition is a dangling state that goes stale as the repo
+    # moves. The CONSENT decoupling (`outward_consent`) is the strong half and
+    # is preserved; the STEP decoupling is not.
+    dispatch: bool = True
+
+
+class PartitionRatifyResponse(BaseModel):
+    partition_id: str
+    status: str
+    ratified_digest: str
+    outward_actions: list[str]
+    outward_consent: bool
+    task_ids: list[str]
+    diff: str
+    warnings: list[str] = []
+    idempotent: bool = False
+    dispatching: bool = False
+    parallelism: PartitionParallelism | None = None
+
+
+class PartitionCancelResponse(BaseModel):
+    partition_id: str
+    cancelled_tasks: list[str]
+
+
+def _partition_row_tenant(caller: token_service.TokenEntry) -> str | None:
+    """`None` (every tenant) for admin, else the caller's own tenant --
+    the same convention `_analytics_tenant` uses."""
+    return None if caller.role == "admin" else caller.tenant
+
+
+def _parallelism_model(assessment: object) -> PartitionParallelism:
+    return PartitionParallelism(
+        requested=getattr(assessment, "requested", 1),
+        effective=getattr(assessment, "effective", 1),
+        concurrency_limit=getattr(assessment, "concurrency_limit", 1),
+        runner_cap=getattr(assessment, "runner_cap", 1),
+        runner_kinds=list(getattr(assessment, "runner_kinds", ())),
+        notes=list(getattr(assessment, "notes", ())),
+    )
+
+
+def _partition_summary(row: dict) -> PartitionSummary:
+    return PartitionSummary(
+        id=str(row.get("id")),
+        tenant=str(row.get("tenant") or "default"),
+        status=str(row.get("status") or "unknown"),
+        source_kind=row.get("source_kind"),
+        source_ref=row.get("source_ref"),
+        proposed_digest=row.get("proposed_digest"),
+        ratified_digest=row.get("ratified_digest"),
+        outward_consent=bool(row.get("outward_consent")),
+        ratified_by=row.get("ratified_by"),
+        ratified_at=str(row["ratified_at"]) if row.get("ratified_at") is not None else None,
+        created_ts=str(row["created_ts"]) if row.get("created_ts") is not None else None,
+        updated_ts=str(row["updated_ts"]) if row.get("updated_ts") is not None else None,
+    )
+
+
+@v1.get("/partitions")
+def list_partitions_endpoint(
+    status_filter: str | None = None,
+    limit: int = 50,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> list[PartitionSummary]:
+    """List partitions, newest first, scoped to the caller's tenant (admin:
+    every tenant).
+
+    `limit` is clamped to `[1, 500]` rather than trusted: an unbounded,
+    caller-supplied page size on an endpoint that returns whole plan
+    metadata is a free amplification lever.
+    """
+    from hivepilot.services import partition_service
+
+    rows = partition_service.list_partitions(
+        tenant=_partition_row_tenant(caller),
+        status=status_filter,
+        limit=max(1, min(int(limit), 500)),
+    )
+    return [_partition_summary(row) for row in rows]
+
+
+@v1.get("/partitions/{partition_id}")
+def get_partition_endpoint(
+    partition_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> PartitionDetail:
+    """A single partition with its plan, journal rows, computed outward
+    footprint, wave plan and EFFECTIVE parallelism.
+
+    A cross-tenant id reports 404 exactly like a missing one (`get_run`'s
+    rule): a GET must never let an unauthorized caller distinguish "wrong
+    tenant" from "doesn't exist".
+    """
+    from hivepilot.partition import PartitionError, load_partition
+    from hivepilot.services import partition_service
+
+    row = partition_service.get_partition(partition_id, tenant=_partition_row_tenant(caller))
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partition not found")
+
+    detail = PartitionDetail(
+        **_partition_summary(row).model_dump(),
+        proposed_json=row.get("proposed_json"),
+        ratified_json=row.get("ratified_json"),
+        ratified_diff=row.get("ratified_diff"),
+        tasks=[
+            PartitionTaskRow(
+                task_id=str(task_row["task_id"]),
+                status=str(task_row["status"]),
+                run_id=task_row.get("run_id"),
+                queue_id=task_row.get("queue_id"),
+                attempt=int(task_row.get("attempt") or 0),
+                claimed_by=task_row.get("claimed_by"),
+                claimed_at=(
+                    str(task_row["claimed_at"]) if task_row.get("claimed_at") is not None else None
+                ),
+                pr_url=task_row.get("pr_url"),
+                cost_usd=task_row.get("cost_usd"),
+                wall_clock_seconds=task_row.get("wall_clock_seconds"),
+            )
+            for task_row in partition_service.list_partition_tasks(partition_id)
+        ],
+    )
+
+    document = str(row.get("ratified_json") or row.get("proposed_json") or "")
+    try:
+        plan = load_partition(document)
+    except PartitionError:
+        # An unparseable stored plan is reported as "no derived view", never
+        # as a 500 and never as a fabricated empty wave plan.
+        return detail
+
+    assessment = partition_service.assess_outward(plan)
+    detail.outward_actions = sorted(assessment.actions)
+    detail.total_cost_usd = assessment.total_cost_usd
+    detail.waves = [list(wave) for wave in partition_service.plan_waves(plan)]
+    detail.parallelism = _parallelism_model(partition_service.effective_parallelism(plan))
+    return detail
+
+
+@v1.post("/partitions/{partition_id}/ratify")
+def ratify_partition_endpoint(
+    partition_id: str,
+    body: PartitionRatifyRequest,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> PartitionRatifyResponse:
+    """Ratify a (possibly edited) plan and, by default, dispatch it.
+
+    Cross-tenant ⇒ 403, mirroring `handle_approval`. Every other refusal is
+    `partition_service`'s own, translated via its `status_code`: malformed
+    400, referential 400, policy 403, consent 403, stale digest 409, unknown
+    partition 404. This layer adds NO rules of its own -- adding one here
+    would be a second, drifting copy of the gate.
+    """
+    from hivepilot.services import partition_service
+
+    row = partition_service.get_partition(partition_id, tenant=None)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partition not found")
+    row_tenant = str(row.get("tenant") or "default")
+    if caller.role != "admin" and row_tenant != caller.tenant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-tenant ratification not allowed",
+        )
+
+    try:
+        outcome = partition_service.ratify_partition(
+            partition_id,
+            partition_json=body.partition_json,
+            outward_consent=body.outward_consent,
+            approver=body.approver,
+            expected_digest=body.expected_digest,
+            tenant=row_tenant,
+        )
+    except partition_service.RatificationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    parallelism = None
+    try:
+        from hivepilot.partition import load_partition
+
+        parallelism = _parallelism_model(
+            partition_service.effective_parallelism(load_partition(body.partition_json))
+        )
+    except Exception:  # noqa: BLE001 - a display figure must never fail a completed ratification
+        parallelism = None
+
+    dispatching = False
+    if body.dispatch and not outcome.idempotent:
+        # `dispatch_partition` BLOCKS at every wave boundary, so it runs on
+        # its own coordinator thread and this handler returns immediately --
+        # the same "return the handle, not the result" shape as
+        # `POST /v1/runs`.
+        partition_service.dispatch_partition_background(
+            partition_id,
+            orchestrator=_get_orchestrator(),
+            tenant=row_tenant,
+            claimed_by=body.approver,
+        )
+        dispatching = True
+
+    return PartitionRatifyResponse(
+        partition_id=outcome.partition_id,
+        status=outcome.status,
+        ratified_digest=outcome.ratified_digest,
+        outward_actions=list(outcome.outward_actions),
+        outward_consent=outcome.outward_consent,
+        task_ids=list(outcome.task_ids),
+        diff=outcome.diff,
+        warnings=list(outcome.warnings),
+        idempotent=outcome.idempotent,
+        dispatching=dispatching,
+        parallelism=parallelism,
+    )
+
+
+@v1.post("/partitions/{partition_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+def cancel_partition_endpoint(
+    partition_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> PartitionCancelResponse:
+    """Veto a proposed partition, or cooperatively cancel a dispatching one.
+
+    Cross-tenant ⇒ 403, mirroring `POST /v1/runs/{run_id}/cancel`. A running
+    agent is never killed -- `async_run_service.request_cancel` sets the
+    cooperative flag its step loop checks at the next boundary.
+    """
+    from hivepilot.services import partition_service
+
+    row = partition_service.get_partition(partition_id, tenant=None)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partition not found")
+    row_tenant = str(row.get("tenant") or "default")
+    if caller.role != "admin" and row_tenant != caller.tenant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Cross-tenant cancel not allowed"
+        )
+
+    cancelled = partition_service.cancel_partition(
+        partition_id, actor=f"api:{caller.role}", tenant=row_tenant
+    )
+    return PartitionCancelResponse(partition_id=partition_id, cancelled_tasks=list(cancelled))
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,59 @@ from hivepilot.config import Settings
 from hivepilot.models import GitActions, ProjectConfig
 
 
+def extract_pr_url(raw: object) -> str | None:
+    """Best-effort, NEVER-fabricating extraction of a change-request URL.
+
+    Propose -> ratify -> dispatch PRD (spec §8): ``open_pr`` is widened to
+    ``-> str | None`` so the partition journal can record a real PR link.
+    The contract this helper enforces is that a provider either returns a URL
+    the FORGE ITSELF reported, or ``None`` -- never a URL this codebase
+    assembled from a slug and a guessed number. The journal shows "—" for
+    ``None``, which is honest; a fabricated link that 404s is not.
+
+    Accepts whatever a provider has in hand (``gh``'s stdout, a JSON field,
+    ``None``, or -- in a test double -- a ``MagicMock``) and returns the LAST
+    ``http(s)://`` token in it, or ``None``. Non-``str`` input, blank input,
+    and input with no absolute URL all resolve to ``None``: "I could not read
+    a URL" must never resolve to "here is a URL".
+    """
+    if not isinstance(raw, str):
+        return None
+    found: str | None = None
+    for token in raw.split():
+        candidate = token.strip().rstrip(".,;)")
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            found = candidate
+    return found
+
+
+def extract_pr_url_from_response(response: object, key: str) -> str | None:
+    """Read *key* out of an HTTP *response*'s JSON body as an absolute URL.
+
+    The API twin of :func:`extract_pr_url`, for providers that create a
+    change request over HTTP (Forgejo's ``html_url``, GitLab's ``web_url``)
+    rather than by shelling out. Same contract: the value must be an
+    absolute ``http(s)`` URL the FORGE reported, or the answer is ``None``.
+
+    Every failure mode -- a response object with no ``.json()``, a body that
+    isn't a mapping, a missing/blank/relative/non-string value, or a
+    ``.json()`` that raises -- resolves to ``None``. A PR whose URL we cannot
+    read is recorded as "no URL", never as a guessed one, and never as an
+    exception that would retroactively fail an ALREADY-OPENED PR.
+    """
+    getter = getattr(response, "json", None)
+    if not callable(getter):
+        return None
+    try:
+        body = getter()
+    except Exception:  # noqa: BLE001 - the PR is already open; reading it back must never fail it
+        return None
+    if not isinstance(body, dict):
+        return None
+    return extract_pr_url(body.get(key))
+
+
 class ForgeProvider(Protocol):
     """Structural interface for a hosted git-forge integration.
 
@@ -82,7 +135,7 @@ class ForgeProvider(Protocol):
         generate_notes: bool = True,
     ) -> None: ...
 
-    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None: ...
+    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> str | None: ...
 
     def promote_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None: ...
 

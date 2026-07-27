@@ -18,7 +18,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from hivepilot.config import Settings
 from hivepilot.config import settings as _settings
-from hivepilot.forges.provider import ForgeRegistry
+from hivepilot.forges.provider import ForgeRegistry, extract_pr_url
 from hivepilot.models import GitActions, ProjectConfig
 from hivepilot.utils.logging import get_logger
 from hivepilot.utils.shell import run_command
@@ -179,8 +179,23 @@ class GitHubForge:
 
     # ---- change-request lifecycle (ported from hivepilot.services.git_service) ----
 
-    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None:
-        """Open a pull request via the gh CLI (run from the project repo)."""
+    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> str | None:
+        """Open a pull request via the gh CLI (run from the project repo).
+
+        Returns the PR's URL, or ``None`` when one could not be read back
+        from ``gh``'s output (propose -> ratify -> dispatch PRD, spec §8).
+        **Never a fabricated/derived URL** -- an unreadable URL is reported
+        honestly as ``None`` and the partition journal then shows "—", the
+        same stated position as the ``steps.role`` migration comment in
+        ``state_service``. `gh pr create` prints exactly one line, the URL of
+        the PR it just created, so this reads it back rather than guessing at
+        `https://github.com/<slug>/pull/<n>` (which would require a number
+        this call never learns).
+
+        Only ``stdout`` is captured -- ``stderr`` still streams to the
+        console, so a failure is exactly as visible as it was before, and
+        ``check=True`` still raises on a non-zero exit.
+        """
         base = project.default_branch or "main"
         title = git.pr_title or f"HivePilot: {branch}"
         cmd = [
@@ -201,14 +216,19 @@ class GitHubForge:
         else:
             cmd += ["--body", "Automated pull request opened by HivePilot."]
         try:
-            subprocess.run(cmd, cwd=str(project.path), check=True, text=True)
+            completed = subprocess.run(
+                cmd, cwd=str(project.path), check=True, text=True, stdout=subprocess.PIPE
+            )
+            url = extract_pr_url(getattr(completed, "stdout", None))
             logger.info(
                 "git.pr_created",
                 project=project.path.name,
                 branch=branch,
                 base=base,
                 draft=git.draft,
+                pr_url_captured=url is not None,
             )
+            return url
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Failed to create PR for {project.path.name}: {exc}") from exc
 

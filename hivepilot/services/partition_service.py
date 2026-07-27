@@ -64,11 +64,15 @@ from __future__ import annotations
 
 import difflib
 import json
+import threading
 import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from hivepilot.partition import PartitionError, PartitionPlan, load_partition
+from hivepilot.config import settings
+from hivepilot.partition import DependencyCycleError, PartitionError, PartitionPlan, load_partition
 from hivepilot.partition_sources import compute_digest
 from hivepilot.services import autopilot_queue, db, project_service, state_service
 from hivepilot.services.autopilot_policy import AutopilotPolicy, get_autopilot_policy
@@ -1032,3 +1036,928 @@ def _record_denial(
         approver=approver,
         code=code,
     )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 -- the wave planner (spec section 7)
+# ---------------------------------------------------------------------------
+
+#: Task states from which nothing more will ever happen.
+TERMINAL_TASK_STATUSES = frozenset({"committed", "failed", "skipped", "cancelled"})
+
+#: How long a `claimed` row with no `run_id` must sit before the startup
+#: reconciler rewinds it. A crash leaves such a row behind instantly, but so
+#: does a LIVE dispatcher in the microseconds between `claim_task` and
+#: `mark_task_running` -- rewinding that one would hand the same task to a
+#: second dispatcher, which is the exact double-dispatch this whole
+#: claim-before-create design exists to prevent. So the threshold is
+#: generous, and it errs towards leaving a row stuck (visible, recoverable by
+#: an operator) rather than towards releasing one that is still owned.
+STALE_CLAIM_SECONDS = 300
+
+
+def plan_waves(plan: PartitionPlan) -> tuple[tuple[str, ...], ...]:
+    """The partition's `depends_on` DAG as topological LEVELS (spec section 7).
+
+    Wave 0 is every task with no dependencies; wave N+1 is every task all of
+    whose dependencies live in waves 0..N. Task ids within a wave are sorted
+    for a stable, reproducible plan (the dispatcher's chunking, and every
+    test's expectations, depend on the order being deterministic rather than
+    dict-insertion-dependent).
+
+    `hivepilot.partition` already rejects cycles, unknown ids and duplicate
+    ids at load time, so a cycle cannot normally reach here -- but this
+    re-raises `DependencyCycleError` rather than silently returning a partial
+    plan if one ever did. A wave planner that quietly drops the tasks it
+    could not order would dispatch a SUBSET of a ratified partition, which is
+    a different plan from the one the human approved.
+    """
+    remaining = {task.id: set(task.depends_on) for task in plan.tasks}
+    waves: list[tuple[str, ...]] = []
+    done: set[str] = set()
+    while remaining:
+        ready = tuple(sorted(tid for tid, deps in remaining.items() if deps <= done))
+        if not ready:
+            raise DependencyCycleError(
+                "cannot order partition tasks into waves -- unresolvable "
+                f"depends_on among {sorted(remaining)}"
+            )
+        waves.append(ready)
+        done.update(ready)
+        for tid in ready:
+            del remaining[tid]
+    return tuple(waves)
+
+
+# ---------------------------------------------------------------------------
+# Effective parallelism (spec section 7) -- surfaced, never assumed
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ParallelismAssessment:
+    """What "N parallel agents" actually means on THIS host's config.
+
+    `runner_throttle` caps the `claude` runner kind at
+    `settings.claude_max_concurrency`, whose default is **1** -- so a plan
+    asking for `max_parallel: 3` really is one agent, three times, on a
+    default install. Surfacing the computed `effective` number (and WHY it is
+    what it is, via `notes`) is what keeps the ratify UI from promising
+    parallelism the host will not deliver.
+    """
+
+    requested: int
+    concurrency_limit: int
+    runner_cap: int
+    runner_kinds: tuple[str, ...]
+    effective: int
+    notes: tuple[str, ...]
+
+
+#: Sentinel meaning "this runner kind is not throttled", mirroring
+#: `runner_throttle._UNLIMITED`.
+_UNLIMITED = 2**31 - 1
+
+
+def _runner_kinds_for_plan(plan: PartitionPlan) -> tuple[frozenset[str], bool]:
+    """The runner kinds this plan's pipelines would actually use.
+
+    Resolution reuses the REAL resolvers (`project_service.load_pipelines`/
+    `load_tasks` and `hivepilot.roles.resolve_runner`) rather than
+    re-parsing YAML into a second, drifting interpretation of what a stage
+    runs.
+
+    Returns `(kinds, fully_resolved)`. `fully_resolved=False` means at least
+    one stage could not be resolved, and the caller must then assume the
+    THROTTLED kind: an unknown pipeline must never be reported as
+    "unthrottled, run them all at once". Under-promising parallelism is
+    harmless; over-promising it is the dishonesty this whole assessment
+    exists to prevent.
+    """
+    kinds: set[str] = set()
+    fully_resolved = True
+    try:
+        from hivepilot import roles as roles_module
+
+        pipelines = project_service.load_pipelines().pipelines
+        tasks = project_service.load_tasks().tasks
+    except Exception:  # noqa: BLE001 - unresolvable config assumes the throttled kind
+        return frozenset({_THROTTLED_RUNNER_KIND}), False
+
+    for task in plan.tasks:
+        pipeline = pipelines.get(task.pipeline)
+        stages = getattr(pipeline, "stages", None) if pipeline is not None else None
+        if not stages:
+            fully_resolved = False
+            continue
+        for stage in stages:
+            task_def = tasks.get(getattr(stage, "task", "") or "")
+            role_name = getattr(task_def, "role", None) if task_def is not None else None
+            if not role_name:
+                fully_resolved = False
+                continue
+            try:
+                runner_kind, _model, _effort = roles_module.resolve_runner(role_name)
+            except Exception:  # noqa: BLE001 - an unresolvable role assumes the throttled kind
+                fully_resolved = False
+                continue
+            kinds.add(str(runner_kind))
+    return frozenset(kinds), fully_resolved
+
+
+#: The one runner kind `hivepilot.services.runner_throttle` actually caps.
+_THROTTLED_RUNNER_KIND = "claude"
+
+
+def effective_parallelism(plan: PartitionPlan) -> ParallelismAssessment:
+    """Compute `min(policy.max_parallel, settings.concurrency_limit, runner cap)`.
+
+    Never returns less than 1: a computed cap of zero would mean "dispatch
+    nothing", and silently dispatching nothing is a worse failure than
+    dispatching serially. A zero/negative configured limit is reported in
+    `notes` and floored to 1 rather than honoured.
+    """
+    notes: list[str] = []
+    requested = max(int(plan.policy.max_parallel), 1)
+
+    configured_limit = int(getattr(settings, "concurrency_limit", 1) or 1)
+    if configured_limit < 1:
+        notes.append(
+            f"settings.concurrency_limit={configured_limit} is not a usable cap; treated as 1"
+        )
+        configured_limit = 1
+
+    kinds, fully_resolved = _runner_kinds_for_plan(plan)
+    throttled = _THROTTLED_RUNNER_KIND in kinds or not fully_resolved
+    if not fully_resolved:
+        notes.append(
+            "at least one task's pipeline/role could not be resolved to a runner "
+            f"kind; assuming the throttled {_THROTTLED_RUNNER_KIND!r} cap (fail-closed)"
+        )
+    if throttled:
+        runner_cap = max(int(getattr(settings, "claude_max_concurrency", 1) or 1), 1)
+        if runner_cap < requested:
+            notes.append(
+                f"runner_throttle caps {_THROTTLED_RUNNER_KIND!r} at "
+                f"claude_max_concurrency={runner_cap}: this plan asks for "
+                f"{requested} parallel tasks but will run at most {runner_cap} "
+                "at a time"
+            )
+    else:
+        runner_cap = _UNLIMITED
+
+    effective = max(min(requested, configured_limit, runner_cap), 1)
+    return ParallelismAssessment(
+        requested=requested,
+        concurrency_limit=configured_limit,
+        runner_cap=runner_cap,
+        runner_kinds=tuple(sorted(kinds)),
+        effective=effective,
+        notes=tuple(notes),
+    )
+
+
+# ---------------------------------------------------------------------------
+# The dispatcher (spec section 7)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DispatchOutcome:
+    """What one `dispatch_partition` call actually did.
+
+    `halted_reason` is non-`None` whenever the dispatcher stopped before
+    every task reached a terminal state -- a paused kill switch, an exhausted
+    budget, an unratified partition, or a `halt` failure policy. The
+    remaining tasks are left exactly as they were (`pending`) or `cancelled`,
+    never silently marked done.
+    """
+
+    partition_id: str
+    status: str
+    waves: tuple[tuple[str, ...], ...]
+    effective_parallelism: int
+    dispatched: tuple[str, ...] = ()
+    committed: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+    cancelled: tuple[str, ...] = ()
+    halted_reason: str | None = None
+
+
+#: A wave's latch wait is bounded by the wave's own declared
+#: `wall_clock_seconds` plus this margin (process start-up, git clone, the
+#: journal write after the run itself). It is a WAIT bound, not a kill: the
+#: dispatcher never terminates a running agent, it only stops waiting for it
+#: -- after which the task's dependents see a non-`committed` prerequisite
+#: and are honestly `skipped`.
+WAVE_WAIT_MARGIN_SECONDS = 120
+
+SubmitFn = Callable[[int, Callable[[], None]], None]
+
+
+def _default_submit(run_id: int, fn: Callable[[], None]) -> None:
+    from hivepilot.services import async_run_service
+
+    async_run_service.submit_run(run_id, fn)
+
+
+def _resolve_project_name(target: str) -> str:
+    """The `runs.project` value for a `<project>` / `<project>/<module>`
+    target. Falls back to the raw target when config cannot resolve it, so a
+    journal row is still written under a name a human recognizes -- the
+    ratification gate already refused unresolvable targets, so this is a
+    belt-and-braces path, never the normal one."""
+    try:
+        project, _module = project_service.resolve_project_target(target)
+        return str(project.path.name)
+    except Exception:  # noqa: BLE001 - never let a name lookup break a dispatch
+        return target
+
+
+def _create_run_row(*, project_name: str, pipeline: str, tenant: str) -> int:
+    """Create the `runs` row for a partition task.
+
+    Deliberately a named module-level indirection rather than an inline call:
+    it is the exact instant "claim before create" is about, so it is also the
+    exact instant a crash-recovery test needs to interrupt.
+    """
+    return state_service.record_run_start(project_name, pipeline, status="running", tenant=tenant)
+
+
+def _run_cost_usd(run_id: int) -> float | None:
+    """The measured cost of *run_id*, summed from `steps.cost_usd`.
+
+    Returns `None` -- not `0.0` -- when no step reported a cost: an unpriced
+    runner (`shell`, `ansible`, `kubectl`) genuinely has no known cost, and
+    recording that as "$0.00 spent" would be a fabricated measurement. The
+    journal shows an unknown cost as unknown.
+    """
+    try:
+        steps = state_service.get_steps_for_run(run_id)
+    except Exception:  # noqa: BLE001 - cost bookkeeping must never fail a dispatch
+        return None
+    values = [
+        float(step["cost_usd"])
+        for step in steps
+        if isinstance(step, dict) and step.get("cost_usd") is not None
+    ]
+    return sum(values) if values else None
+
+
+def _capture_pr_url(mark: int, project_name: str) -> str | None:
+    """The PR URL this task's run opened, or `None`.
+
+    Reads the `git_service` PR ledger for entries recorded after *mark* for
+    *project_name*. **Exactly one match is attributed; zero or several are
+    `None`.** Two concurrent tasks targeting the same project could each open
+    a PR inside the other's window, and there is no honest way to tell them
+    apart from here -- so both record `NULL` and the journal shows "—". A
+    missing link is a gap; a wrong link is a lie.
+    """
+    try:
+        from hivepilot.services import git_service
+
+        urls = git_service.pr_urls_since(mark, project=project_name)
+    except Exception:  # noqa: BLE001 - never let link capture fail an otherwise-good run
+        return None
+    if len(urls) == 1:
+        return urls[0]
+    if len(urls) > 1:
+        logger.warning(
+            "partition.pr_url_ambiguous",
+            project=project_name,
+            candidates=len(urls),
+        )
+    return None
+
+
+def _results_succeeded(results: Any) -> bool:
+    """Did `run_pipeline` report success for EVERY result it returned?
+
+    Fail-closed on emptiness: an empty result list is not evidence that the
+    work succeeded, it is the absence of evidence, and `committed` is a claim
+    the journal makes to a human. A result object without a `success`
+    attribute is likewise treated as a failure rather than assumed good.
+    """
+    try:
+        items = list(results)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    return all(bool(getattr(item, "success", False)) for item in items)
+
+
+def _wave_halt_reason(
+    plan: PartitionPlan, wave_task_ids: Sequence[str], *, tenant: str
+) -> str | None:
+    """Re-check the kill switch and the budget BEFORE a wave (spec section 7).
+
+    Returns a reason string to halt on, or `None` to proceed. Every
+    unresolvable input halts: an unknown daily budget, an unconfigured
+    ceiling, or a spend lookup that raises are all "I cannot tell whether
+    this is affordable", which must never mean "spend it".
+    """
+    if autopilot_queue.is_paused(tenant=tenant):
+        return "autopilot is paused/stopped for this tenant"
+
+    by_id = {task.id: task for task in plan.tasks}
+    wave_tasks = [by_id[tid] for tid in wave_task_ids if tid in by_id]
+    if not wave_tasks:
+        return None
+    wave_cost = sum(task.budget.cost_usd for task in wave_tasks)
+
+    try:
+        spent = autopilot_queue.spent_today_usd(tenant=tenant)
+    except Exception as exc:  # noqa: BLE001 - unknown spend halts, never proceeds
+        return f"daily spend could not be resolved ({exc.__class__.__name__}: {exc})"
+
+    for target in sorted({task.project for task in wave_tasks}):
+        policy = get_autopilot_policy(_policy_project_key(target))
+        daily = policy.budget_daily_usd
+        if daily is None or daily <= 0:
+            return f"project {target!r} has no positive budget_daily_usd configured"
+        if spent >= daily:
+            return (
+                f"daily budget for project {target!r} is exhausted "
+                f"(spent ${spent:.2f} of ${daily:.2f})"
+            )
+        if spent + wave_cost > daily:
+            return (
+                f"this wave's declared budget ${wave_cost:.2f} would exceed the "
+                f"remaining daily budget for project {target!r} "
+                f"(${daily:.2f} - ${spent:.2f} spent)"
+            )
+    return None
+
+
+def _cancel_remaining(partition_id: str, task_ids: Sequence[str]) -> tuple[str, ...]:
+    """Cooperatively stop every not-yet-terminal task in *task_ids*.
+
+    A task with a `run_id` gets `async_run_service.request_cancel` -- the
+    COOPERATIVE flag the step loop checks at its next boundary. **A running
+    agent is never killed**; the process is asked to stop, and if it doesn't,
+    it finishes. A task without a run has not started, and
+    `mark_task_cancelled` (a `pending|claimed -> cancelled` conditional
+    UPDATE) is the whole of its cancellation.
+    """
+    cancelled: list[str] = []
+    rows = {row["task_id"]: row for row in list_partition_tasks(partition_id)}
+    for task_id in task_ids:
+        row = rows.get(task_id)
+        if row is None or str(row.get("status")) in TERMINAL_TASK_STATUSES:
+            continue
+        run_id = row.get("run_id")
+        if run_id is not None:
+            try:
+                from hivepilot.services import async_run_service
+
+                async_run_service.request_cancel(int(run_id))
+            except Exception:  # noqa: BLE001 - best-effort cooperative signal
+                logger.warning(
+                    "partition.request_cancel_failed",
+                    partition_id=partition_id,
+                    task_id=task_id,
+                )
+        if mark_task_cancelled(partition_id, task_id):
+            cancelled.append(task_id)
+    return tuple(cancelled)
+
+
+def dispatch_partition(  # noqa: PLR0912, PLR0915 - one linear state machine, kept in one place
+    partition_id: str,
+    *,
+    orchestrator: Any,
+    tenant: str = "default",
+    claimed_by: str | None = None,
+    resume: bool = False,
+    submit: SubmitFn | None = None,
+) -> DispatchOutcome:
+    """Dispatch a RATIFIED partition, wave by wave (spec section 7).
+
+    The gate is `mark_partition_dispatching` -- a conditional
+    ``ratified -> dispatching`` UPDATE. It returns `False` from `proposed`,
+    which is the persistence-level half of "a partition never dispatches
+    without human ratification": there is no code path here that can start a
+    task from a proposed plan, because there is no branch that proceeds when
+    that transition loses.
+
+    Per task, in this order: **atomic claim -> create the run row ->
+    submit**. A crash between the claim and the run row leaves a visible
+    `claimed` row with `run_id IS NULL` -- recoverable by
+    `reconcile_stale_claims`, and never a double dispatch, because the claim
+    itself is the conditional UPDATE that only one caller can win.
+
+    Between waves, the kill switch and the daily budget are re-checked
+    (`_wave_halt_reason`), so `hivepilot autopilot pause` halts the next wave
+    at the next wave boundary.
+
+    A failed task's dependents are **`skipped`, never `failed`** -- running a
+    task whose prerequisite failed is a correctness bug, not a policy choice.
+    Independent siblings follow `plan.policy.on_task_failure`
+    (`continue` by default); `halt` additionally cooperatively cancels
+    everything not yet started.
+
+    *resume* accepts a partition already in `dispatching` (e.g. one halted by
+    a pause). This can never double-dispatch: every task still goes through
+    `claim_task`, whose ``pending -> claimed`` conditional UPDATE a
+    finished/running task can no longer satisfy.
+    """
+    submit_fn: SubmitFn = submit or _default_submit
+    owner = claimed_by or f"dispatcher-{uuid.uuid4().hex[:8]}"
+
+    row = get_partition(partition_id, tenant=tenant)
+    if row is None:
+        raise PartitionNotFoundError(f"Unknown partition {partition_id!r}.")
+
+    ratified_json = str(row.get("ratified_json") or "")
+    if not ratified_json.strip():
+        # Fail-closed: no ratified document means no human ever approved a
+        # plan, whatever the status column happens to say.
+        return DispatchOutcome(
+            partition_id=partition_id,
+            status=str(row.get("status") or "unknown"),
+            waves=(),
+            effective_parallelism=0,
+            halted_reason="partition has no ratified plan -- nothing may be dispatched",
+        )
+
+    try:
+        plan = load_partition(ratified_json)
+    except PartitionError as exc:
+        return DispatchOutcome(
+            partition_id=partition_id,
+            status=str(row.get("status") or "unknown"),
+            waves=(),
+            effective_parallelism=0,
+            halted_reason=f"ratified plan no longer parses: {exc}",
+        )
+
+    waves = plan_waves(plan)
+    parallelism = effective_parallelism(plan)
+
+    won = mark_partition_dispatching(partition_id)
+    if not won:
+        current = str((get_partition(partition_id, tenant=tenant) or {}).get("status") or "unknown")
+        if not (resume and current == "dispatching"):
+            logger.warning(
+                "partition.dispatch_refused",
+                partition_id=partition_id,
+                status=current,
+                resume=resume,
+            )
+            return DispatchOutcome(
+                partition_id=partition_id,
+                status=current,
+                waves=waves,
+                effective_parallelism=parallelism.effective,
+                halted_reason=(f"partition is {current!r}, not 'ratified' -- refusing to dispatch"),
+            )
+
+    outward_consent = bool(row.get("outward_consent"))
+    by_id = {task.id: task for task in plan.tasks}
+    dispatched: list[str] = []
+    skipped: list[str] = []
+    cancelled: list[str] = []
+    halted_reason: str | None = None
+
+    logger.info(
+        "partition.dispatch_started",
+        partition_id=partition_id,
+        tenant=tenant,
+        waves=len(waves),
+        tasks=len(plan.tasks),
+        requested_parallelism=parallelism.requested,
+        effective_parallelism=parallelism.effective,
+        outward_consent=outward_consent,
+    )
+
+    for wave_index, wave in enumerate(waves):
+        halted_reason = _wave_halt_reason(plan, wave, tenant=tenant)
+        if halted_reason:
+            logger.info(
+                "partition.wave_halted",
+                partition_id=partition_id,
+                wave=wave_index,
+                reason=halted_reason,
+            )
+            break
+
+        statuses = {
+            row["task_id"]: str(row["status"]) for row in list_partition_tasks(partition_id)
+        }
+        runnable: list[str] = []
+        for task_id in wave:
+            blockers = [
+                dep for dep in by_id[task_id].depends_on if statuses.get(dep) != "committed"
+            ]
+            if blockers:
+                # A prerequisite that did not COMMIT (failed, skipped,
+                # cancelled, or still running past its wait bound) means this
+                # task must not run. `skipped` -- never `failed`: the task
+                # itself did nothing wrong.
+                if mark_task_skipped(partition_id, task_id):
+                    skipped.append(task_id)
+                    logger.info(
+                        "partition.task_skipped_unmet_dependency",
+                        partition_id=partition_id,
+                        task_id=task_id,
+                        blockers=blockers,
+                    )
+                continue
+            if statuses.get(task_id) == "pending":
+                runnable.append(task_id)
+
+        cap = parallelism.effective
+        for chunk_start in range(0, len(runnable), cap):
+            chunk = runnable[chunk_start : chunk_start + cap]
+            latches = _dispatch_chunk(
+                partition_id,
+                plan=plan,
+                task_ids=chunk,
+                owner=owner,
+                tenant=tenant,
+                outward_consent=outward_consent,
+                orchestrator=orchestrator,
+                submit_fn=submit_fn,
+            )
+            dispatched.extend(task_id for task_id, _event, _budget in latches)
+            for task_id, event, budget in latches:
+                if not event.wait(timeout=budget + WAVE_WAIT_MARGIN_SECONDS):
+                    logger.warning(
+                        "partition.task_wait_timed_out",
+                        partition_id=partition_id,
+                        task_id=task_id,
+                        waited_seconds=budget + WAVE_WAIT_MARGIN_SECONDS,
+                    )
+
+        statuses = {
+            row["task_id"]: str(row["status"]) for row in list_partition_tasks(partition_id)
+        }
+        wave_failed = [tid for tid in wave if statuses.get(tid) == "failed"]
+        if wave_failed and plan.policy.on_task_failure == "halt":
+            remaining = [tid for w in waves[wave_index + 1 :] for tid in w]
+            cancelled.extend(_cancel_remaining(partition_id, remaining))
+            halted_reason = (
+                f"on_task_failure='halt' and task(s) {sorted(wave_failed)} failed -- "
+                "remaining tasks cooperatively cancelled"
+            )
+            break
+
+    final = {row["task_id"]: str(row["status"]) for row in list_partition_tasks(partition_id)}
+    committed = tuple(sorted(tid for tid, st in final.items() if st == "committed"))
+    failed = tuple(sorted(tid for tid, st in final.items() if st == "failed"))
+
+    if halted_reason is None and all(st in TERMINAL_TASK_STATUSES for st in final.values()):
+        # `dispatching` NEVER auto-completes (spec section 8) -- it is
+        # completed here, explicitly, only once every task actually reached a
+        # terminal state.
+        if failed:
+            mark_partition_failed(partition_id)
+        else:
+            mark_partition_completed(partition_id)
+
+    status = str((get_partition(partition_id, tenant=tenant) or {}).get("status") or "unknown")
+    outcome = DispatchOutcome(
+        partition_id=partition_id,
+        status=status,
+        waves=waves,
+        effective_parallelism=parallelism.effective,
+        dispatched=tuple(dispatched),
+        committed=committed,
+        failed=failed,
+        skipped=tuple(sorted(set(skipped))),
+        cancelled=tuple(sorted(set(cancelled))),
+        halted_reason=halted_reason,
+    )
+    logger.info(
+        "partition.dispatch_finished",
+        partition_id=partition_id,
+        status=status,
+        dispatched=len(outcome.dispatched),
+        committed=len(outcome.committed),
+        failed=len(outcome.failed),
+        skipped=len(outcome.skipped),
+        cancelled=len(outcome.cancelled),
+        halted_reason=halted_reason,
+    )
+    return outcome
+
+
+def _dispatch_chunk(
+    partition_id: str,
+    *,
+    plan: PartitionPlan,
+    task_ids: Sequence[str],
+    owner: str,
+    tenant: str,
+    outward_consent: bool,
+    orchestrator: Any,
+    submit_fn: SubmitFn,
+) -> list[tuple[str, threading.Event, int]]:
+    """Claim, create and submit each task in *task_ids*; return their latches.
+
+    The returned `(task_id, done_event, wall_clock_budget)` triples are what
+    the caller waits on before opening the next wave -- a wave boundary is a
+    real barrier, not a hope.
+    """
+    by_id = {task.id: task for task in plan.tasks}
+    latches: list[tuple[str, threading.Event, int]] = []
+
+    for task_id in task_ids:
+        task = by_id[task_id]
+
+        # --- 1. CLAIM (before anything is created) -------------------------
+        if not claim_task(partition_id, task_id, claimed_by=owner):
+            # Lost the conditional UPDATE: another dispatcher owns this task,
+            # or it is no longer `pending`. Never a second dispatch.
+            continue
+
+        project_name = _resolve_project_name(task.project)
+
+        # --- 2. CREATE (queue row + run row) -------------------------------
+        try:
+            queue_id = autopilot_queue.enqueue(
+                project_name,
+                task.pipeline,
+                f"partition {partition_id} task {task_id}",
+                tenant=tenant,
+                # `running`, not `queued`/`proposed`: this row is dispatched
+                # by THIS call, so it must never look dispatchable to anything
+                # else. `kind='partition_task'` already keeps `drain_one`
+                # away (`next_dispatchable` filters `kind='objective'`); the
+                # state is the second, independent reason.
+                state="running",
+                kind=autopilot_queue.KIND_PARTITION_TASK,
+            )
+            run_id = _create_run_row(
+                project_name=project_name, pipeline=task.pipeline, tenant=tenant
+            )
+        except Exception:  # noqa: BLE001 - nothing ran, so rewind the claim immediately
+            logger.exception(
+                "partition.task_create_failed", partition_id=partition_id, task_id=task_id
+            )
+            release_stale_claim(partition_id, task_id)
+            continue
+
+        if not mark_task_running(
+            partition_id, task_id, claimed_by=owner, run_id=run_id, queue_id=queue_id
+        ):
+            # Somebody else moved the row out from under this claim. Do NOT
+            # run: the journal, not this function's local state, is the truth.
+            # The run/queue rows created a moment ago are resolved rather than
+            # left dangling in `running` forever -- a row nothing will ever
+            # finish is indistinguishable from a hung run.
+            logger.warning(
+                "partition.task_running_transition_lost",
+                partition_id=partition_id,
+                task_id=task_id,
+                run_id=run_id,
+            )
+            try:
+                state_service.complete_run(
+                    run_id, "failed", "partition task claim was lost before dispatch"
+                )
+            except Exception:  # noqa: BLE001 - bookkeeping only
+                logger.warning("partition.orphan_run_cleanup_failed", run_id=run_id)
+            _mark_queue_row(queue_id, "blocked")
+            continue
+
+        # --- 3. SUBMIT -----------------------------------------------------
+        done = threading.Event()
+        submit_fn(
+            run_id,
+            _make_task_work(
+                partition_id,
+                task=task,
+                owner=owner,
+                run_id=run_id,
+                queue_id=queue_id,
+                project_name=project_name,
+                outward_consent=outward_consent,
+                orchestrator=orchestrator,
+                done=done,
+            ),
+        )
+        latches.append((task_id, done, int(task.budget.wall_clock_seconds)))
+
+    return latches
+
+
+def _make_task_work(
+    partition_id: str,
+    *,
+    task: Any,
+    owner: str,
+    run_id: int,
+    queue_id: int,
+    project_name: str,
+    outward_consent: bool,
+    orchestrator: Any,
+    done: threading.Event,
+) -> Callable[[], None]:
+    """Build the background callable one partition task runs as.
+
+    `auto_git=outward_consent` reuses the EXISTING, proven runtime
+    suppressor (`orchestrator`'s `auto_git` plumbing) rather than adding a
+    second one: a partition ratified without outward consent runs with git
+    actions suppressed, so nothing is pushed and no PR is opened.
+    """
+
+    def _work() -> None:
+        from hivepilot.services import git_service
+
+        mark = git_service.pr_ledger_mark()
+        try:
+            results = orchestrator.run_pipeline(
+                project_names=[task.project],
+                pipeline_name=task.pipeline,
+                extra_prompt=task.prompt,
+                auto_git=outward_consent,
+                concurrency=1,
+            )
+        except Exception:  # noqa: BLE001 - never silently swallowed; the journal records it
+            logger.exception(
+                "partition.task_dispatch_failed",
+                partition_id=partition_id,
+                task_id=task.id,
+                run_id=run_id,
+            )
+            mark_task_failed(
+                partition_id, task.id, claimed_by=owner, cost_usd=_run_cost_usd(run_id)
+            )
+            _mark_queue_row(queue_id, "blocked")
+            done.set()
+            return
+
+        cost = _run_cost_usd(run_id)
+        if _results_succeeded(results):
+            pr_url = _capture_pr_url(mark, project_name) if outward_consent else None
+            mark_task_committed(
+                partition_id, task.id, claimed_by=owner, pr_url=pr_url, cost_usd=cost
+            )
+            _mark_queue_row(queue_id, "done", cost_usd=cost)
+        else:
+            mark_task_failed(partition_id, task.id, claimed_by=owner, cost_usd=cost)
+            _mark_queue_row(queue_id, "blocked")
+        done.set()
+
+    return _work
+
+
+def _mark_queue_row(queue_id: int, state: str, *, cost_usd: float | None = None) -> None:
+    """Mirror a task's terminal state onto its `autopilot_queue` row so the
+    existing queue CLI/panel shows partition work too. Best-effort: the
+    journal, not the queue, is the partition's source of truth."""
+    try:
+        autopilot_queue.mark(queue_id, state, cost_usd=cost_usd)
+    except Exception:  # noqa: BLE001 - queue bookkeeping never fails a dispatch
+        logger.warning("partition.queue_mark_failed", queue_id=queue_id, state=state)
+
+
+def dispatch_partition_background(
+    partition_id: str,
+    *,
+    orchestrator: Any,
+    tenant: str = "default",
+    claimed_by: str | None = None,
+    resume: bool = False,
+) -> threading.Thread:
+    """Run `dispatch_partition` on a daemon thread and return it.
+
+    `dispatch_partition` BLOCKS at every wave boundary (that is what makes a
+    wave a barrier), so an HTTP handler must never call it inline. Each
+    individual task still goes through `async_run_service.submit_run`, so the
+    thread this starts is a coordinator, not a worker.
+    """
+
+    def _run() -> None:
+        try:
+            dispatch_partition(
+                partition_id,
+                orchestrator=orchestrator,
+                tenant=tenant,
+                claimed_by=claimed_by,
+                resume=resume,
+            )
+        except Exception:  # noqa: BLE001 - nothing upstream is left to receive this
+            logger.exception("partition.background_dispatch_failed", partition_id=partition_id)
+
+    thread = threading.Thread(
+        target=_run, name=f"hivepilot-partition-{partition_id[:8]}", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def cancel_partition(partition_id: str, *, actor: str, tenant: str = "default") -> tuple[str, ...]:
+    """Stop a partition: veto it while `proposed`, else cooperatively cancel
+    every task that has not yet reached a terminal state.
+
+    Returns the task ids actually cancelled. A `committed`/`failed` task is
+    never rewritten -- history is not editable -- and a RUNNING agent is
+    never killed, only asked to stop at its next step boundary.
+    """
+    row = get_partition(partition_id, tenant=tenant)
+    if row is None:
+        raise PartitionNotFoundError(f"Unknown partition {partition_id!r}.")
+
+    if str(row.get("status")) == "proposed":
+        veto_partition(partition_id, actor=actor)
+        return ()
+
+    task_ids = [str(r["task_id"]) for r in list_partition_tasks(partition_id)]
+    cancelled = _cancel_remaining(partition_id, task_ids)
+    state_service.record_interaction(
+        actor=actor,
+        action="partition.cancel",
+        target=partition_id,
+        summary=f"Partition {partition_id} cancelled by {actor}; {len(cancelled)} task(s) stopped.",
+        metadata={"partition_id": partition_id, "cancelled_tasks": list(cancelled)},
+    )
+    logger.info(
+        "partition.cancelled", partition_id=partition_id, actor=actor, cancelled=len(cancelled)
+    )
+    return cancelled
+
+
+# ---------------------------------------------------------------------------
+# The startup reconciler (spec section 8)
+# ---------------------------------------------------------------------------
+
+
+def _claim_is_stale(claimed_at: Any, *, older_than_seconds: int) -> bool:
+    """Is a claim old enough to rewind?
+
+    `older_than_seconds <= 0` means "every claim" -- an explicit operator
+    instruction, used by the startup sweep of a single-instance deployment.
+
+    Otherwise the timestamp must PARSE and be old enough. An absent or
+    unparseable `claimed_at` is treated as NOT stale: rewinding a claim that
+    might still be owned hands the same task to a second dispatcher, and a
+    double dispatch is strictly worse than a row an operator has to look at.
+    """
+    if older_than_seconds <= 0:
+        return True
+    if not isinstance(claimed_at, str) or not claimed_at.strip():
+        return False
+    text = claimed_at.strip().replace("T", " ").replace("Z", "")
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        return datetime.now(timezone.utc) - parsed >= timedelta(seconds=older_than_seconds)
+    return False
+
+
+def reconcile_stale_claims(
+    *, tenant: str | None = None, older_than_seconds: int = STALE_CLAIM_SECONDS
+) -> tuple[tuple[str, str], ...]:
+    """Rewind crashed claims to `pending`, EXACTLY ONCE (spec section 8).
+
+    Sweeps precisely the rows a crash between "claim" and "create the run
+    row" leaves behind: ``status='claimed' AND run_id IS NULL``. A claim that
+    DID reach `mark_task_running` has a `run_id` and is therefore never
+    rewound -- which is what makes recovery incapable of double-dispatching a
+    task that already started.
+
+    "Exactly once" is not a bookkeeping flag: `release_stale_claim` is a
+    conditional ``claimed -> pending`` UPDATE, so a second reconciler (or a
+    second call) sees `rowcount == 0` and reports nothing. Only rows THIS
+    call actually won are returned.
+
+    `dispatching` partitions are deliberately left alone --
+    `dispatching` never auto-completes.
+    """
+    state_service.init_db()
+    sql = (
+        "SELECT t.partition_id, t.task_id, t.claimed_at FROM partition_tasks t "
+        "JOIN partitions p ON p.id = t.partition_id "
+        "WHERE t.status='claimed' AND t.run_id IS NULL"
+    )
+    params: list[Any] = []
+    if tenant is not None:
+        sql += " AND p.tenant=?"
+        params.append(tenant)
+    with db.connect() as conn:
+        rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
+
+    released: list[tuple[str, str]] = []
+    for row in rows:
+        partition_id = str(row["partition_id"])
+        task_id = str(row["task_id"])
+        if not _claim_is_stale(row["claimed_at"], older_than_seconds=older_than_seconds):
+            continue
+        if release_stale_claim(partition_id, task_id):
+            released.append((partition_id, task_id))
+
+    logger.info(
+        "partition.reconciled",
+        tenant=tenant,
+        candidates=len(rows),
+        released=len(released),
+        older_than_seconds=older_than_seconds,
+    )
+    return tuple(released)
