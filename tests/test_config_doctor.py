@@ -2073,3 +2073,440 @@ class TestPluginsVerifyCli:
         result = runner.invoke(app, ["plugins", "verify"])
 
         assert result.exit_code == 1, result.output
+
+
+# ---------------------------------------------------------------------------
+# Incident #1 (HIGHEST VALUE, config-doctor-session-incidents sprint): a
+# `claude_md` / `instruction_files` reference pointing at a repo instructions
+# file ABSENT from the repo used to produce zero findings anywhere -- every
+# agent ran without governance context for months. Reuses
+# `hivepilot.services.repo_instructions`'s OWN resolution
+# (`declared_instruction_files` / `resolve_instruction_file_path`) rather
+# than reimplementing it, so this check can never disagree with what
+# `build_repo_instructions_section` actually does at run time.
+# ---------------------------------------------------------------------------
+
+
+class TestDanglingInstructionFiles:
+    def test_no_projects_yields_no_findings(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert findings == []
+
+    def test_project_with_no_declared_files_yields_no_findings(self, tmp_path: Path) -> None:
+        """Signal-to-noise: `claude_md`/`instruction_files` are dormant
+        (None) by default -- a project that never sets them must yield
+        ZERO findings, not a false positive."""
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump({"projects": {"acme": {"path": str(tmp_path / "acme")}}})
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert findings == []
+
+    def test_existing_claude_md_yields_no_findings(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "acme"
+        project_dir.mkdir()
+        (project_dir / "CLAUDE.md").write_text("# governance", encoding="utf-8")
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump({"projects": {"acme": {"path": str(project_dir), "claude_md": "CLAUDE.md"}}})
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert findings == []
+
+    def test_dangling_claude_md_names_project_declared_resolved_and_searched_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Real incident: `claude_md: CLAUDE.md` pointed at a file absent
+        from the repo, and nothing reported it for months. The finding must
+        name the project, the declared filename, the resolved path, and the
+        directory searched -- exactly what an operator needs to fix it."""
+        project_dir = tmp_path / "acme"
+        project_dir.mkdir()
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump({"projects": {"acme": {"path": str(project_dir), "claude_md": "CLAUDE.md"}}})
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        dangling = [f for f in findings if f.check == "dangling_instruction_file"]
+        assert dangling, f"expected a dangling_instruction_file finding, got: {findings}"
+        message = dangling[0].message
+        assert dangling[0].severity == "error"
+        assert "acme" in message
+        assert "CLAUDE.md" in message
+        assert str((project_dir / "CLAUDE.md").resolve()) in message
+        assert str(project_dir.resolve()) in message
+
+    def test_dangling_instruction_files_entry_is_also_flagged(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "acme"
+        project_dir.mkdir()
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {
+                    "projects": {
+                        "acme": {
+                            "path": str(project_dir),
+                            "instruction_files": ["AGENTS.md"],
+                        }
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        dangling = [f for f in findings if f.check == "dangling_instruction_file"]
+        assert dangling and "AGENTS.md" in dangling[0].message
+
+    def test_reuses_repo_instructions_resolution_not_a_reimplementation(
+        self, tmp_path: Path
+    ) -> None:
+        """Anti-Goodhart: a monorepo/umbrella `../CLAUDE.md` reference must
+        resolve the SAME way `repo_instructions.resolve_instruction_file_path`
+        resolves it (relative to the project path, no implicit walk) -- proof
+        this check calls the real resolver instead of a parallel one that
+        could silently disagree."""
+        outside = tmp_path / "CLAUDE.md"
+        outside.write_text("# umbrella governance", encoding="utf-8")
+        project_dir = tmp_path / "repo"
+        project_dir.mkdir()
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {"projects": {"acme": {"path": str(project_dir), "claude_md": "../CLAUDE.md"}}}
+            )
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert not any(f.check == "dangling_instruction_file" for f in findings)
+
+    def test_non_string_claude_md_yields_malformed_finding_not_crash(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {"projects": {"acme": {"path": str(tmp_path), "claude_md": ["not", "a", "str"]}}}
+            )
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert any(f.check == "invalid_instruction_file_declaration" for f in findings)
+
+    def test_non_list_instruction_files_yields_malformed_finding_not_crash(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {"projects": {"acme": {"path": str(tmp_path), "instruction_files": "not-a-list"}}}
+            )
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert any(f.check == "invalid_instruction_file_declaration" for f in findings)
+
+    def test_non_mapping_project_entry_yields_finding_not_silence(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"acme": "not-a-mapping"}}))
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert any(f.check == "malformed_project_entry" for f in findings)
+
+    def test_missing_project_path_yields_finding_not_crash(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump({"projects": {"acme": {"claude_md": "CLAUDE.md"}}})
+        )
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert any(f.check == "project_missing_path" for f in findings)
+
+    def test_malformed_projects_yaml_yields_finding_not_silence(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text("projects: [unclosed\n")
+
+        findings = config_doctor.check_dangling_instruction_files(tmp_path)
+
+        assert any(f.check == "unparseable_config_yaml" for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# Incident #2: `Settings.obsidian_vault` is a single GLOBAL path -- with N
+# projects/pipelines on one machine, they cannot be routed to different
+# vaults. Informational only (a known engine limitation, not a
+# misconfiguration): severity must be "info", never "error"/"warning".
+# ---------------------------------------------------------------------------
+
+
+class TestSharedObsidianVaultLimitation:
+    def test_single_project_yields_no_finding(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(settings, "obsidian_enabled", True, raising=False)
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump({"projects": {"acme": {"path": str(tmp_path)}}})
+        )
+
+        findings = config_doctor.check_shared_obsidian_vault(tmp_path)
+
+        assert findings == []
+
+    def test_no_projects_yields_no_finding(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(settings, "obsidian_enabled", True, raising=False)
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+
+        findings = config_doctor.check_shared_obsidian_vault(tmp_path)
+
+        assert findings == []
+
+    def test_multiple_projects_yields_info_finding_naming_the_limitation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(settings, "obsidian_enabled", True, raising=False)
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {
+                    "projects": {
+                        "personal": {"path": str(tmp_path / "a")},
+                        "product": {"path": str(tmp_path / "b")},
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor.check_shared_obsidian_vault(tmp_path)
+
+        shared = [f for f in findings if f.check == "shared_obsidian_vault"]
+        assert shared, f"expected a shared_obsidian_vault finding, got: {findings}"
+        assert shared[0].severity == "info", "a known limitation must never be error/warning"
+        assert "2" in shared[0].message
+
+    def test_obsidian_disabled_yields_no_finding(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(settings, "obsidian_enabled", False, raising=False)
+        (tmp_path / "projects.yaml").write_text(
+            yaml.dump(
+                {
+                    "projects": {
+                        "personal": {"path": str(tmp_path / "a")},
+                        "product": {"path": str(tmp_path / "b")},
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor.check_shared_obsidian_vault(tmp_path)
+
+        assert findings == []
+
+    def test_malformed_projects_yaml_yields_finding_not_silence(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(settings, "obsidian_enabled", True, raising=False)
+        (tmp_path / "projects.yaml").write_text("projects: [unclosed\n")
+
+        findings = config_doctor.check_shared_obsidian_vault(tmp_path)
+
+        assert any(f.check == "unparseable_config_yaml" for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# Incident #3: `obsidian_service.py` has NO git capability -- on the
+# operator's box the vault sat 67 files uncommitted for 6 days. Local git
+# state only (no fetch/network), consistent with this doctor's offline
+# discipline.
+# ---------------------------------------------------------------------------
+
+
+def _init_repo(path: Path):
+    import git as gitlib
+
+    repo = gitlib.Repo.init(path)
+    with repo.config_writer() as cw:
+        cw.set_value("user", "name", "Test")
+        cw.set_value("user", "email", "test@example.com")
+    return repo
+
+
+class TestVaultGitState:
+    def test_vault_absent_yields_no_findings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_path_env(monkeypatch)
+        monkeypatch.setenv("HIVEPILOT_BASE_DIR", str(tmp_path))
+        monkeypatch.setattr(settings, "obsidian_vault", Path("does-not-exist"), raising=False)
+
+        findings = config_doctor.check_vault_git_state()
+
+        assert findings == []
+
+    def test_vault_not_a_git_repo_yields_info(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_path_env(monkeypatch)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "note.md").write_text("hello", encoding="utf-8")
+        monkeypatch.setattr(settings, "obsidian_vault", vault, raising=False)
+
+        findings = config_doctor.check_vault_git_state()
+
+        not_repo = [f for f in findings if f.check == "vault_not_git_repo"]
+        assert not_repo, f"expected vault_not_git_repo, got: {findings}"
+        assert not_repo[0].severity == "info"
+
+    def test_clean_committed_vault_yields_no_findings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_path_env(monkeypatch)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "note.md").write_text("hello", encoding="utf-8")
+        repo = _init_repo(vault)
+        repo.git.add("-A")
+        repo.git.commit("-m", "initial")
+        monkeypatch.setattr(settings, "obsidian_vault", vault, raising=False)
+
+        findings = config_doctor.check_vault_git_state()
+
+        assert findings == []
+
+    def test_uncommitted_artifacts_yield_warning_with_count(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Real incident: 67 files sat uncommitted for 6 days -- only ever
+        visible on the host, never durable/shared."""
+        _clear_path_env(monkeypatch)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "committed.md").write_text("hello", encoding="utf-8")
+        repo = _init_repo(vault)
+        repo.git.add("-A")
+        repo.git.commit("-m", "initial")
+        (vault / "run-1.md").write_text("artifact 1", encoding="utf-8")
+        (vault / "run-2.md").write_text("artifact 2", encoding="utf-8")
+        monkeypatch.setattr(settings, "obsidian_vault", vault, raising=False)
+
+        findings = config_doctor.check_vault_git_state()
+
+        uncommitted = [f for f in findings if f.check == "vault_uncommitted_artifacts"]
+        assert uncommitted, f"expected vault_uncommitted_artifacts, got: {findings}"
+        assert uncommitted[0].severity == "warning"
+        assert "2" in uncommitted[0].message
+
+    def test_unpushed_commits_yield_warning_with_count(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_path_env(monkeypatch)
+        remote_bare = tmp_path / "remote.git"
+        import git as gitlib
+
+        gitlib.Repo.init(remote_bare, bare=True)
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "note.md").write_text("hello", encoding="utf-8")
+        repo = _init_repo(vault)
+        repo.git.add("-A")
+        repo.git.commit("-m", "initial")
+        repo.create_remote("origin", str(remote_bare))
+        repo.git.push("-u", "origin", repo.active_branch.name)
+
+        (vault / "note2.md").write_text("second commit", encoding="utf-8")
+        repo.git.add("-A")
+        repo.git.commit("-m", "second, never pushed")
+        monkeypatch.setattr(settings, "obsidian_vault", vault, raising=False)
+
+        findings = config_doctor.check_vault_git_state()
+
+        unpushed = [f for f in findings if f.check == "vault_unpushed_commits"]
+        assert unpushed, f"expected vault_unpushed_commits, got: {findings}"
+        assert unpushed[0].severity == "warning"
+        assert "1" in unpushed[0].message
+
+    def test_no_upstream_configured_is_not_reported_as_unpushed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A deliberately local-only vault (no remote at all) must not be
+        misreported as having unpushed commits -- there is nowhere to push
+        to, which is a legitimate setup, not a problem."""
+        _clear_path_env(monkeypatch)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "note.md").write_text("hello", encoding="utf-8")
+        repo = _init_repo(vault)
+        repo.git.add("-A")
+        repo.git.commit("-m", "initial")
+        monkeypatch.setattr(settings, "obsidian_vault", vault, raising=False)
+
+        findings = config_doctor.check_vault_git_state()
+
+        assert not any(f.check == "vault_unpushed_commits" for f in findings)
+
+    def test_broken_git_checkout_yields_finding_not_crash(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Governing principle: 'I could not inspect this' must be a
+        finding, never silence or a crash."""
+        _clear_path_env(monkeypatch)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / ".git").write_text("gitdir: /does/not/exist\n", encoding="utf-8")
+        monkeypatch.setattr(settings, "obsidian_vault", vault, raising=False)
+
+        findings = config_doctor.check_vault_git_state()
+
+        assert any(f.check == "vault_git_state_check_failed" for f in findings)
+        assert any(f.severity == "error" for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# Noise-floor regression (mandatory per sprint spec): a realistic config with
+# everything at defaults must produce ZERO ERROR findings from the THREE new
+# checks added in this sprint, end to end through `run_doctor`.
+# ---------------------------------------------------------------------------
+
+
+class TestSessionIncidentsNoiseFloor:
+    def test_default_config_yields_zero_errors_from_new_checks(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_path_env(monkeypatch)
+        monkeypatch.setenv("HIVEPILOT_BASE_DIR", str(tmp_path))
+        monkeypatch.setattr(settings, "config_repo", None, raising=False)
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        _write_minimal_valid_config(config_dir)
+        (config_dir / "schedules.yaml").write_text(yaml.dump({"schedules": {}}))
+
+        fake_manager = SimpleNamespace(
+            loaded=[SimpleNamespace(name=stem) for stem in _currently_enabled_plugin_stems()],
+            check_all=lambda: {},
+        )
+        monkeypatch.setattr("hivepilot.plugins.PluginManager", lambda: fake_manager, raising=False)
+
+        findings = config_doctor.run_doctor(config_dir=config_dir)
+
+        new_checks = {
+            "dangling_instruction_file",
+            "invalid_instruction_file_declaration",
+            "project_missing_path",
+            "shared_obsidian_vault",
+            "vault_not_git_repo",
+            "vault_uncommitted_artifacts",
+            "vault_unpushed_commits",
+            "vault_git_state_check_failed",
+        }
+        error_findings = [f for f in findings if f.check in new_checks and f.severity == "error"]
+        assert error_findings == [], (
+            f"a default config must yield zero ERROR findings from the new checks, "
+            f"got: {[(f.check, f.message) for f in error_findings]}"
+        )
