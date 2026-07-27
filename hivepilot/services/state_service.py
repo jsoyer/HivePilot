@@ -401,6 +401,84 @@ def init_db() -> None:
             )
             """
         )
+        # Propose -> ratify -> dispatch PRD, Sprint 2 (spec §8, "the journal").
+        # `runs`/`steps`/`interactions` above already give durable execution
+        # history; what is genuinely absent is (a) the (partition, task) ->
+        # run mapping, (b) a claim lifecycle over it, (c) the outward-consent
+        # record, and (d) the PR link. These two tables hold exactly that and
+        # nothing that already exists elsewhere.
+        #
+        # The `approvals` table above is deliberately NOT reused: it is
+        # `PRIMARY KEY(run_id)`, whereas a partition PRECEDES and SPANS N
+        # runs -- there is no single run_id to key it by at ratification
+        # time.
+        #
+        # `id` is a caller-supplied opaque string (a uuid4 hex from
+        # `partition_service.create_partition`), so it is the PRIMARY KEY
+        # directly rather than an autoincrement column -- same shape as
+        # `swarm_events` above, and it keeps a partition id stable across
+        # instances/exports.
+        #
+        # status: proposed | ratified | dispatching | completed | failed |
+        #         vetoed | expired
+        # Every transition is a conditional `UPDATE ... WHERE status=?`
+        # returning `rowcount == 1` (see `partition_service`), literally the
+        # `claim_swarm_event`/`mark_swarm_event_running` idiom below -- not a
+        # second mechanism, the same one.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS partitions (
+                id TEXT PRIMARY KEY,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                source_kind TEXT,
+                source_ref TEXT,
+                source_digest TEXT,
+                proposer_run_id INTEGER,
+                proposed_json TEXT NOT NULL,
+                proposed_digest TEXT NOT NULL,
+                ratified_json TEXT,
+                ratified_digest TEXT,
+                ratified_diff TEXT,
+                outward_consent INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'proposed',
+                ratified_by TEXT,
+                ratified_at TIMESTAMP,
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # status: pending | claimed | running | committed | failed | skipped |
+        #         cancelled
+        # `committed` means the task's run terminated successfully AND, when
+        # outward was consented, a PR URL was captured. `pr_url` stays NULL
+        # when the forge cannot cheaply produce one -- the journal shows "—".
+        # NEVER a fabricated URL (same stated position as the `steps.role`
+        # migration comment above: an unknown value is surfaced honestly as
+        # NULL, never backfilled with a guess).
+        # `attempt` supports retry-as-a-NEW-run under the same
+        # (partition_id, task_id): a ratified partition is immutable, so a
+        # retry never mutates the plan, only adds an attempt.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS partition_tasks (
+                partition_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                queue_id INTEGER,
+                run_id INTEGER,
+                attempt INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                claimed_by TEXT,
+                claimed_at TIMESTAMP,
+                pr_url TEXT,
+                cost_usd REAL,
+                wall_clock_seconds INTEGER,
+                updated_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (partition_id, task_id),
+                FOREIGN KEY(partition_id) REFERENCES partitions(id) ON DELETE CASCADE
+            )
+            """
+        )
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:

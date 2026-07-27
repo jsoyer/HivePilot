@@ -52,13 +52,46 @@ from typing import Any
 import yaml
 
 from hivepilot.config import settings
-from hivepilot.services import db
+from hivepilot.services import db, state_service
 from hivepilot.services.autopilot_policy import AutopilotPolicy, get_autopilot_policy
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 _VALID_STATES = {"proposed", "queued", "running", "done", "blocked", "vetoed"}
+
+# Propose -> ratify -> dispatch PRD (spec §7): the queue TABLE is reused as
+# the dispatch substrate for ratified partition tasks, distinguished by an
+# additive `kind` column. `drain_one` (the unattended autopilot tick) only
+# ever picks `objective` rows, and the partition dispatcher only ever picks
+# `partition_task` rows, so the two never contend for the same row.
+KIND_OBJECTIVE = "objective"
+KIND_PARTITION_TASK = "partition_task"
+_VALID_KINDS = {KIND_OBJECTIVE, KIND_PARTITION_TASK}
+
+# Propose -> ratify -> dispatch PRD (spec §6): the CLOSED vocabulary of
+# outward-visible actions. "Outward" ("may this become visible outside this
+# machine") is a DISTINCT axis from `is_destructive` ("could this damage the
+# target system"): `terraform apply` is destructive and not outward;
+# `gh pr create` is outward and not destructive. Two independent booleans,
+# both of which must be satisfied.
+#
+# v1 enforcement scope is git/forge only: `notify`/`vault_write`/
+# `external_api` are declared here and surfaced in the consent warning, but
+# a run-scoped `outward_allowed` flag is NOT threaded to those subsystems in
+# v1 -- a stated gap, not a silent one (see spec §6 and §11.4).
+OUTWARD_ACTIONS: frozenset[str] = frozenset(
+    {
+        "git_push",  # GitActions.push
+        "forge_pr",  # GitActions.create_pr / promote_pr -> ForgeProvider.open_pr
+        "forge_merge",  # GitActions.merge_pr -- ALWAYS refused in a partition dispatch
+        "forge_issue",  # ForgeProvider.create_issue
+        "forge_release",  # ForgeProvider.create_release
+        "notify",  # notification_service outbound
+        "vault_write",  # obsidian_service / PipelineStage.commits_vault
+        "external_api",  # plugins declaring the `network` capability
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +116,17 @@ def _init_queue_db() -> None:
                 updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+        # Idempotent, additive migration (propose -> ratify -> dispatch PRD,
+        # spec §7): every pre-existing row predates partitions and is
+        # therefore an `objective` -- which is exactly what the column
+        # DEFAULT backfills it to, so `drain_one`'s behaviour on an existing
+        # prod DB is byte-identical to before this column existed. Same
+        # `_add_column_if_missing` idiom (and the same race-safety) as every
+        # `state_service.init_db` migration; imported rather than
+        # re-implemented so there is only ever one such helper.
+        state_service._add_column_if_missing(
+            conn, "autopilot_queue", f"kind TEXT NOT NULL DEFAULT '{KIND_OBJECTIVE}'"
         )
 
 
@@ -110,6 +154,9 @@ class QueueItem:
     cost_usd: float | None
     created_ts: str
     updated_ts: str
+    # Additive, defaulted LAST so every existing positional/keyword
+    # construction of this dataclass keeps working unchanged.
+    kind: str = KIND_OBJECTIVE
 
 
 def _row_to_item(row: Any) -> QueueItem:
@@ -123,7 +170,23 @@ def _row_to_item(row: Any) -> QueueItem:
         cost_usd=row["cost_usd"],
         created_ts=row["created_ts"],
         updated_ts=row["updated_ts"],
+        kind=_row_kind(row),
     )
+
+
+def _row_kind(row: Any) -> str:
+    """Read a row's `kind`, defaulting to `objective`.
+
+    Fail-safe (not fail-open: `objective` is the MORE restricted bucket for
+    the partition dispatcher, and the pre-migration meaning for `drain_one`):
+    a row read through a cursor that predates the migration has no `kind`
+    key at all, and a NULL from a hand-written INSERT resolves the same way.
+    """
+    try:
+        value = row["kind"]
+    except (KeyError, IndexError, TypeError):
+        return KIND_OBJECTIVE
+    return str(value) if value else KIND_OBJECTIVE
 
 
 # ---------------------------------------------------------------------------
@@ -138,19 +201,28 @@ def enqueue(
     *,
     tenant: str = "default",
     state: str = "proposed",
+    kind: str = KIND_OBJECTIVE,
 ) -> int:
     """Propose a new objective. Never accepts anything but plain strings for
     (project, pipeline, reason) -- callers (e.g. the CLI) must never pass a
-    RunResult/detail payload here."""
+    RunResult/detail payload here.
+
+    `kind` defaults to `objective`, so every pre-existing caller enqueues
+    exactly the row it did before the column existed. An unknown kind is
+    rejected up front (same shape as the `state` guard) rather than silently
+    written -- an unrecognized kind would be invisible to BOTH drains.
+    """
     if state not in _VALID_STATES:
         raise ValueError(f"Invalid autopilot queue state: {state!r}")
+    if kind not in _VALID_KINDS:
+        raise ValueError(f"Invalid autopilot queue kind: {kind!r}")
     _init_queue_db()
     with db.connect() as conn:
         row_id = db.insert_returning_id(
             conn,
-            "INSERT INTO autopilot_queue (tenant, project, pipeline, reason, state) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (tenant, project, pipeline, reason, state),
+            "INSERT INTO autopilot_queue (tenant, project, pipeline, reason, state, kind) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (tenant, project, pipeline, reason, state, kind),
         )
     logger.info(
         "autopilot.enqueue",
@@ -159,14 +231,18 @@ def enqueue(
         pipeline=pipeline,
         tenant=tenant,
         state=state,
+        kind=kind,
     )
     return row_id
 
 
-def list_queue(*, tenant: str | None = "default", state: str | None = None) -> list[QueueItem]:
+def list_queue(
+    *, tenant: str | None = "default", state: str | None = None, kind: str | None = None
+) -> list[QueueItem]:
     """List queue rows. `tenant=None` means "all tenants" (never the
     implicit default) -- matches the rest of the codebase's tenant-scoping
-    convention."""
+    convention. `kind=None` (the default) means "every kind", so existing
+    callers see exactly the rows they saw before the column existed."""
     _init_queue_db()
     sql = "SELECT * FROM autopilot_queue WHERE 1=1"
     params: list[Any] = []
@@ -176,6 +252,9 @@ def list_queue(*, tenant: str | None = "default", state: str | None = None) -> l
     if state is not None:
         sql += " AND state=?"
         params.append(state)
+    if kind is not None:
+        sql += " AND kind=?"
+        params.append(kind)
     sql += " ORDER BY created_ts ASC, id ASC"
     with db.connect() as conn:
         rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
@@ -183,25 +262,36 @@ def list_queue(*, tenant: str | None = "default", state: str | None = None) -> l
 
 
 def next_dispatchable(*, tenant: str = "default") -> QueueItem | None:
-    """Return the oldest row in state `queued`; if none, the oldest row in
-    state `proposed`. This function only *picks a candidate* -- it never
-    decides ALLOW/DENY itself; that's `autopilot_gate()`'s job."""
+    """Return the oldest `kind='objective'` row in state `queued`; if none,
+    the oldest `kind='objective'` row in state `proposed`. This function only
+    *picks a candidate* -- it never decides ALLOW/DENY itself; that's
+    `autopilot_gate()`'s job.
+
+    The `kind='objective'` filter (propose -> ratify -> dispatch PRD, spec
+    §7) is what keeps `drain_one` -- the UNATTENDED autopilot tick -- from
+    ever picking up a `partition_task` row. A partition task is dispatched
+    only by the partition dispatcher, only after a HUMAN ratified the plan,
+    and must never be re-dispatched unattended through `autopilot_gate`
+    (whose `require_approval == False` condition is the exact inverse of a
+    human-ratified plan). The two drains therefore never contend for the
+    same row.
+    """
     _init_queue_db()
     with db.connect() as conn:
         row = conn.execute(
             db.ph(
-                "SELECT * FROM autopilot_queue WHERE tenant=? AND state='queued' "
+                "SELECT * FROM autopilot_queue WHERE tenant=? AND state='queued' AND kind=? "
                 "ORDER BY created_ts ASC, id ASC LIMIT 1"
             ),
-            (tenant,),
+            (tenant, KIND_OBJECTIVE),
         ).fetchone()
         if row is None:
             row = conn.execute(
                 db.ph(
-                    "SELECT * FROM autopilot_queue WHERE tenant=? AND state='proposed' "
+                    "SELECT * FROM autopilot_queue WHERE tenant=? AND state='proposed' AND kind=? "
                     "ORDER BY created_ts ASC, id ASC LIMIT 1"
                 ),
-                (tenant,),
+                (tenant, KIND_OBJECTIVE),
             ).fetchone()
     return _row_to_item(row) if row is not None else None
 
@@ -356,25 +446,48 @@ def _load_raw_yaml(filename: Any) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def pipeline_would_auto_merge(pipeline_name: str) -> bool:
-    """Would running *pipeline_name* result in an autonomous PR merge
-    (`git.merge_pr: true` on any task one of its stages references)?
+def pipeline_outward_actions(pipeline_name: str) -> frozenset[str]:
+    """Which OUTWARD-visible actions (see `OUTWARD_ACTIONS`) would running
+    *pipeline_name* perform, according to LIVE config?
 
-    Fail-closed: an unknown pipeline, a pipeline with no stages, an unknown
-    task, or any malformed config all return `True` (refuse) -- only a
-    pipeline whose every resolved task's `git.merge_pr` is explicitly
-    false/absent returns `False`.
+    Generalized from `pipeline_would_auto_merge` (now a thin wrapper over
+    this function, below) for the propose -> ratify -> dispatch PRD, spec
+    §5.3: a ratified partition's computed outward set must be a subset of
+    the target project's `outward_actions` allowlist.
+
+    Resolution, per stage of the pipeline:
+
+    | config                                | token          |
+    |---------------------------------------|----------------|
+    | task `git.push: true`                 | `git_push`     |
+    | task `git.create_pr`/`promote_pr`     | `forge_pr`     |
+    | task `git.merge_pr: true`             | `forge_merge`  |
+    | stage `commits_vault: true`           | `vault_write`  |
+
+    The other declared tokens (`forge_issue`, `forge_release`, `notify`,
+    `external_api`) have no static pipeline-config surface to resolve from
+    in v1 and are therefore never *derived* here -- but they ARE part of the
+    fail-closed full set below, so an unresolvable config still refuses
+    them. This is the stated v1 gap from spec §6, not a silent omission.
+
+    **Fail-closed to the FULL set** -- an unknown pipeline, a pipeline with
+    no stages, an unknown/unnamed task, or any malformed config all return
+    `OUTWARD_ACTIONS` in its entirety, exactly mirroring
+    `pipeline_would_auto_merge`'s pre-existing fail-closed-to-`True`
+    behaviour (the full set contains `forge_merge`, so the wrapper below
+    still answers `True` for every one of those cases). "I cannot tell what
+    this pipeline would do" must never resolve to "it would do nothing".
 
     Deliberately reads `pipelines.yaml`/`tasks.yaml` as raw YAML (not via
-    `hivepilot.models.PipelinesFile`/`TasksFile`) so this module has zero
-    dependency on `hivepilot/models.py`.
+    `hivepilot.models.PipelinesFile`/`TasksFile`) so this module keeps its
+    zero dependency on `hivepilot/models.py`.
 
-    The whole load-and-walk below runs inside a single `try/except Exception`
+    The whole load-and-walk runs inside a single `try/except Exception`
     backstop: malformed YAML (`yaml.YAMLError`) or a config shape that
     doesn't match expectations (e.g. a `git:`/pipeline/stage entry that is a
-    string or list instead of a mapping, raising `AttributeError`/`TypeError`
-    from a stray `.get(...)`) must never propagate out of this function --
-    it must resolve to `True` (refuse), exactly like the explicit
+    string or list instead of a mapping, raising `AttributeError`/
+    `TypeError` from a stray `.get(...)`) must never propagate out of this
+    function -- it resolves to the full set, exactly like the explicit
     unknown-pipeline/unknown-task cases below.
     """
     try:
@@ -383,29 +496,55 @@ def pipeline_would_auto_merge(pipeline_name: str) -> bool:
 
         pipeline_def = pipelines.get(pipeline_name)
         if not pipeline_def:
-            return True
+            return OUTWARD_ACTIONS
 
         stages = pipeline_def.get("stages") or []
         if not stages:
-            return True
+            return OUTWARD_ACTIONS
 
+        actions: set[str] = set()
         for stage in stages:
             task_name = stage.get("task") if isinstance(stage, dict) else None
             if not task_name or task_name not in tasks:
-                return True
+                return OUTWARD_ACTIONS
+            if stage.get("commits_vault", False):
+                actions.add("vault_write")
             task_def = tasks.get(task_name) or {}
             git_block = task_def.get("git") or {}
+            if git_block.get("push", False):
+                actions.add("git_push")
+            if git_block.get("create_pr", False) or git_block.get("promote_pr", False):
+                actions.add("forge_pr")
             if git_block.get("merge_pr", False):
-                return True
+                actions.add("forge_merge")
 
-        return False
-    except Exception as exc:  # noqa: BLE001 - fail-closed: can't tell -> assume auto-merge -> deny
+        return frozenset(actions)
+    except Exception as exc:  # noqa: BLE001 - fail-closed: can't tell -> assume everything -> deny
         logger.warning(
-            "autopilot.pipeline_would_auto_merge_malformed_config",
+            "autopilot.pipeline_outward_actions_malformed_config",
             pipeline=pipeline_name,
             error=f"{exc.__class__.__name__}: {exc}",
         )
-        return True
+        return OUTWARD_ACTIONS
+
+
+def pipeline_would_auto_merge(pipeline_name: str) -> bool:
+    """Would running *pipeline_name* result in an autonomous PR merge
+    (`git.merge_pr: true` on any task one of its stages references)?
+
+    A thin wrapper over `pipeline_outward_actions` -- one resolution
+    mechanism, not two. Behaviour is unchanged from before that
+    generalization: every case that used to return `True` (unknown pipeline,
+    no stages, unknown/unnamed task, malformed config, or an actual
+    `merge_pr: true`) still does, because all of the fail-closed cases
+    resolve to the FULL `OUTWARD_ACTIONS` set, which contains `forge_merge`.
+
+    Kept as a named function (rather than inlining the membership test at
+    `autopilot_gate`'s call site) because it is the gate's documented
+    condition (d) and both the gate's own tests and the module docstring
+    refer to it by name.
+    """
+    return "forge_merge" in pipeline_outward_actions(pipeline_name)
 
 
 # ---------------------------------------------------------------------------

@@ -3724,6 +3724,27 @@ class Orchestrator:
         of each one re-implementing it (e.g. Telegram's ``_dispatch_approval``
         used to log this locally; it now just delegates here).
 
+        Propose -> ratify -> dispatch PRD, Sprint 2 (spec section 5): a THIRD
+        route, ``metadata["kind"] == "partition_ratify"``, is added here
+        rather than as a parallel approval path, so Pollen, Telegram, Slack,
+        Discord and the CLI all keep reaching partition ratification through
+        this ONE place. That route delegates to
+        ``partition_service.ratify_partition``/``veto_partition``, which own
+        the fail-closed validation order; this method contributes only the
+        routing and the ``pending`` precondition above.
+
+        Two properties of that route are deliberate. First, **consent is not
+        inferable from an approve click**: ``approve_run``'s signature has no
+        consent argument, so this route can only ever ratify with
+        ``outward_consent=False``. A plan with a non-empty outward set is
+        therefore refused here (naming the actions), and the operator must
+        grant consent explicitly through the dedicated ratify endpoint --
+        outward consent stays a separate axis from approval, exactly as
+        spec section 6 requires. Second, an approval row for this kind
+        carries no plan blob: the plan ratified is the STORED proposed plan,
+        so this route cannot be used to smuggle an edited plan past the
+        editable-JSON surface.
+
         Raises ``ValueError`` if the run has no pending approval (unknown
         run id or already resolved) -- callers should translate that into a
         4xx, never let it surface as a 500.
@@ -3738,6 +3759,14 @@ class Orchestrator:
             )
             raise ValueError(f"Run {run_id} is not pending approval.")
         metadata = json.loads(approval.get("metadata") or "{}")
+        if metadata.get("kind") == "partition_ratify":
+            return self._approve_partition_ratify(
+                run_id=run_id,
+                metadata=metadata,
+                approve=approve,
+                approver=approver,
+                reason=reason,
+            )
         route = "pipeline_checkpoint" if metadata.get("kind") == "pipeline_checkpoint" else "task"
         logger.info(
             "approval.dispatch",
@@ -3764,6 +3793,102 @@ class Orchestrator:
                 error=str(exc),
             )
             raise
+
+    def _approve_partition_ratify(
+        self,
+        *,
+        run_id: int,
+        metadata: dict[str, Any],
+        approve: bool,
+        approver: str,
+        reason: str | None = None,
+    ) -> RunResult:
+        """The ``metadata["kind"] == "partition_ratify"`` route of
+        ``approve_run`` (propose -> ratify -> dispatch PRD, spec section 5).
+
+        Deny vetoes the partition (``proposed -> vetoed``); approve ratifies
+        the STORED proposed plan with ``outward_consent=False``.
+
+        ``outward_consent=False`` is not a default that a caller may
+        override here -- it is the only value this route can produce, by
+        construction, because ``approve_run`` has no consent parameter.
+        Consent is a SEPARATE axis from approval (spec section 6): a
+        generic "Approve" button on a chat platform must never be able to
+        authorize pushing branches and opening PRs. A plan with a non-empty
+        outward set is therefore refused here by
+        ``partition_service`` itself, naming the exact actions, and the
+        operator grants consent through the dedicated ratify surface.
+
+        Every refusal from the gate is surfaced as a failed ``RunResult``
+        rather than an exception: the caller already resolved a pending
+        approval row, and an operator pressing "Approve" on an
+        out-of-policy plan is a normal, expected outcome, not a 500.
+        """
+        from hivepilot.services import partition_service
+
+        partition_id = str(metadata.get("partition_id") or "")
+        logger.info(
+            "approval.dispatch",
+            run_id=run_id,
+            route="partition_ratify",
+            partition_id=partition_id,
+            approve=approve,
+            approver=approver,
+        )
+        if not partition_id:
+            # Fail closed: an approval row claiming this kind but carrying no
+            # partition id is malformed -- never guess which partition was
+            # meant.
+            logger.error("approval.dispatch_failed", run_id=run_id, route="partition_ratify")
+            state_service.update_approval(run_id, "denied", approver)
+            return RunResult(
+                "-", "partition_ratify", False, "Malformed partition approval: no partition_id."
+            )
+
+        tenant = str(metadata.get("tenant") or "default")
+        if not approve:
+            partition_service.veto_partition(partition_id, actor=approver)
+            state_service.update_approval(run_id, "denied", approver)
+            return RunResult(
+                "-",
+                "partition_ratify",
+                False,
+                reason or f"Partition {partition_id} vetoed by {approver}.",
+            )
+
+        record = partition_service.get_partition(partition_id, tenant=tenant)
+        if record is None:
+            state_service.update_approval(run_id, "denied", approver)
+            return RunResult("-", "partition_ratify", False, f"Unknown partition {partition_id!r}.")
+
+        try:
+            outcome = partition_service.ratify_partition(
+                partition_id,
+                partition_json=str(record.get("proposed_json") or ""),
+                outward_consent=False,
+                approver=approver,
+                expected_digest=str(record.get("proposed_digest") or ""),
+                tenant=tenant,
+            )
+        except partition_service.RatificationError as exc:
+            logger.warning(
+                "approval.dispatch_failed",
+                run_id=run_id,
+                route="partition_ratify",
+                partition_id=partition_id,
+                approver=approver,
+                error=str(exc),
+            )
+            return RunResult("-", "partition_ratify", False, str(exc))
+
+        state_service.update_approval(run_id, "approved", approver)
+        return RunResult(
+            "-",
+            "partition_ratify",
+            True,
+            f"Partition {partition_id} ratified by {approver} "
+            f"({len(outcome.task_ids)} task(s), outward consent NOT granted).",
+        )
 
     def resume_pipeline(
         self,

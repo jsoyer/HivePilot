@@ -1,6 +1,6 @@
 """Autopilot-specific policy extensions.
 
-Adds two fields to the per-project policy surface, read from the SAME
+Adds five fields to the per-project policy surface, read from the SAME
 ``policies.yaml`` the rest of the codebase already loads:
 
 - ``auto_dispatch``: an explicit per-project allowlist of pipeline names the
@@ -9,6 +9,20 @@ Adds two fields to the per-project policy surface, read from the SAME
 - ``budget_daily_usd``: a positive daily USD spend ceiling. Absent, ``None``,
   or ``<= 0`` ⇒ disabled (no budget configured means no auto-dispatch,
   never an unbounded budget).
+- ``outward_actions`` (propose→ratify→dispatch PRD, spec §6): an explicit
+  per-project ALLOWLIST of outward-action tokens (see
+  ``autopilot_queue.OUTWARD_ACTIONS``) a ratified partition may ever be
+  consented to perform for this project. **Absent or empty ⇒ nothing
+  outward may ever be consented to** — a ticked consent checkbox can never
+  authorize what policy never allowed. This is deliberately spelled out
+  because "empty value read as 'no constraint'" is a documented recurring
+  fail-open bug class in this repo.
+- ``max_partition_cost_usd`` (spec §5.3): a positive per-partition USD
+  admission ceiling. Absent/``None``/``<= 0`` ⇒ no partition may be
+  ratified for this project (never an unbounded ceiling).
+- ``max_task_wall_clock_seconds`` (spec §5.3): a positive per-task wall
+  clock ceiling. Absent/``None``/``<= 0`` ⇒ no partition may be ratified
+  for this project (never an unbounded ceiling).
 
 This module deliberately does **not** modify ``hivepilot/services/policy_service.py``
 or ``hivepilot/models.py`` (both are owned by parallel work) -- it reuses
@@ -41,11 +55,19 @@ class AutopilotPolicy:
     future caller constructing this dataclass directly -- bypassing
     ``get_autopilot_policy`` -- can never accidentally end up with
     "approval not required" as the default.
+
+    The three partition fields default to the most restrictive possible
+    value for the same reason: an empty ``outward_actions`` allowlist means
+    "nothing outward", and a ``None`` ceiling means "no partition may be
+    ratified", never "unbounded".
     """
 
     auto_dispatch: list[str] = field(default_factory=list)
     require_approval: bool = True
     budget_daily_usd: float | None = None
+    outward_actions: list[str] = field(default_factory=list)
+    max_partition_cost_usd: float | None = None
+    max_task_wall_clock_seconds: int | None = None
 
 
 def _raw_policies() -> dict:
@@ -72,9 +94,12 @@ def get_autopilot_policy(project_name: str) -> AutopilotPolicy:
     configures ``auto_dispatch``/``budget_daily_usd`` but never explicitly
     sets ``require_approval``.
 
-    Malformed values fail closed: a non-list ``auto_dispatch`` becomes an
-    empty list; a non-numeric ``budget_daily_usd`` becomes ``None`` (both
-    resolve to "disabled" in the gate, never to "allow everything").
+    Malformed values fail closed: a non-list ``auto_dispatch``/
+    ``outward_actions`` becomes an empty list; a non-numeric
+    ``budget_daily_usd``/``max_partition_cost_usd``/
+    ``max_task_wall_clock_seconds`` becomes ``None`` (all of which resolve
+    to "disabled"/"deny" in their respective gates, never to "allow
+    everything").
     """
     policies = _raw_policies()
     default_block = policies.get("default") or {}
@@ -106,8 +131,58 @@ def get_autopilot_policy(project_name: str) -> AutopilotPolicy:
     else:
         require_approval = True
 
+    # Propose->ratify->dispatch PRD (spec §6): an ALLOWLIST, never a
+    # denylist. A missing key, an explicit `outward_actions: []`, a non-list
+    # value, and a list whose entries aren't strings ALL resolve to the empty
+    # allowlist -- which `partition_service` treats as "nothing outward may
+    # ever be consented to for this project", never as "unconstrained".
+    raw_outward = merged.get("outward_actions")
+    if isinstance(raw_outward, list):
+        outward_actions = [str(item) for item in raw_outward if isinstance(item, str) and item]
+    else:
+        outward_actions = []
+
     return AutopilotPolicy(
         auto_dispatch=auto_dispatch,
         require_approval=require_approval,
         budget_daily_usd=budget_daily_usd,
+        outward_actions=outward_actions,
+        max_partition_cost_usd=_positive_float(merged.get("max_partition_cost_usd")),
+        max_task_wall_clock_seconds=_positive_int(merged.get("max_task_wall_clock_seconds")),
     )
+
+
+def _positive_float(raw: object) -> float | None:
+    """Coerce *raw* to a strictly-positive float, or ``None``.
+
+    Fail-closed: absent, ``None``, non-numeric, ``bool``, zero and negative
+    all resolve to ``None`` (which every consuming gate treats as "deny"),
+    never to an unbounded ceiling.
+    """
+    # `bool` is excluded explicitly because it is an `int` subclass in
+    # Python: without this, `max_partition_cost_usd: true` would silently
+    # resolve to a $1.00 ceiling instead of being rejected as malformed.
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+    elif isinstance(raw, str):
+        try:
+            value = float(raw)
+        except ValueError:
+            return None
+    else:
+        return None
+    return value if value > 0 else None
+
+
+def _positive_int(raw: object) -> int | None:
+    """Coerce *raw* to a strictly-positive int, or ``None`` -- same
+    fail-closed contract as ``_positive_float``. A fractional value is
+    truncated, so anything under 1 second resolves to ``None`` (deny)
+    rather than to a zero-second, unenforceable ceiling."""
+    value = _positive_float(raw)
+    if value is None:
+        return None
+    truncated = int(value)
+    return truncated if truncated > 0 else None
