@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import { en } from '@/lib/i18n/en'
 import { fr } from '@/lib/i18n/fr'
-import type { PartitionDetail, PartitionPreview, PartitionSummary } from '@/lib/pollen-api'
+import type {
+  PartitionDetail,
+  PartitionPreview,
+  PartitionSummary,
+  PartitionTaskRow,
+} from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
 const { fetchPartitions, fetchPartition, previewPartition, ratifyPartition, useRoleMock } =
@@ -847,5 +852,368 @@ describe('PartitionsView — mobile safety', () => {
       .querySelector('.grid')!
     expect(grid.className).toContain('grid-cols-1')
     expect(grid.className).toContain('sm:grid-cols-2')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sprint 5 — the dispatch journal.
+//
+// The journal is the durable record of what a ratified partition actually
+// did. Every assertion below is about HONESTY, because that is the only
+// property a record has: a terminal status is shown as the engine recorded
+// it, an unrecorded PR is an em-dash and never a plausible link, and an
+// unmeasured cost is the word "unknown" and never $0.00.
+// ---------------------------------------------------------------------------
+
+const JOURNAL_TASKS: PartitionTaskRow[] = [
+  {
+    task_id: 'parse-guard',
+    status: 'committed',
+    run_id: 91,
+    queue_id: 11,
+    attempt: 1,
+    claimed_by: 'dispatcher-a',
+    claimed_at: '2026-07-27T10:05:00Z',
+    pr_url: 'https://github.com/acme/api/pull/42',
+    cost_usd: 1.25,
+    wall_clock_seconds: 1500,
+  },
+  {
+    task_id: 'ship',
+    status: 'failed',
+    run_id: 92,
+    queue_id: 12,
+    attempt: 2,
+    claimed_by: 'dispatcher-a',
+    claimed_at: '2026-07-27T10:06:00Z',
+    pr_url: null,
+    cost_usd: 0.4,
+    wall_clock_seconds: 1200,
+  },
+  {
+    task_id: 'announce',
+    status: 'skipped',
+    run_id: null,
+    queue_id: 13,
+    attempt: 1,
+    claimed_by: null,
+    claimed_at: null,
+    pr_url: null,
+    cost_usd: null,
+    wall_clock_seconds: null,
+  },
+  {
+    task_id: 'cleanup',
+    status: 'cancelled',
+    run_id: 93,
+    queue_id: 14,
+    attempt: 1,
+    claimed_by: 'dispatcher-b',
+    claimed_at: '2026-07-27T10:07:00Z',
+    pr_url: null,
+    cost_usd: null,
+    wall_clock_seconds: null,
+  },
+]
+
+const COMPLETED_SUMMARY: PartitionSummary = {
+  ...SUMMARY,
+  status: 'completed',
+  ratified_by: 'jerome',
+  ratified_at: '2026-07-27T10:04:00Z',
+  outward_consent: true,
+}
+
+const COMPLETED_DETAIL: PartitionDetail = {
+  ...DETAIL,
+  ...COMPLETED_SUMMARY,
+  ratified_json: JSON.stringify(PLAN),
+  tasks: JOURNAL_TASKS,
+}
+
+async function openJournal() {
+  await settle()
+  const history = container.querySelector(
+    'button[aria-label="Open the dispatch journal for partition part-abc123"]',
+  ) as HTMLButtonElement
+  await act(async () => {
+    history.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await Promise.resolve()
+  })
+  await settle()
+}
+
+function journalRow(taskId: string): HTMLTableRowElement {
+  return document.querySelector(`[data-testid="partition-journal-${taskId}"]`) as HTMLTableRowElement
+}
+
+function journalCell(taskId: string, column: string): HTMLTableCellElement {
+  return journalRow(taskId).querySelector(`[data-column="${column}"]`) as HTMLTableCellElement
+}
+
+describe('PartitionsView — dispatch journal', () => {
+  beforeEach(() => {
+    fetchPartitions.mockResolvedValue([COMPLETED_SUMMARY])
+    fetchPartition.mockResolvedValue(COMPLETED_DETAIL)
+    previewPartition.mockResolvedValue(preview())
+    mockRole('approve', 2)
+  })
+
+  it('CRITICAL: renders every terminal status as the engine recorded it', async () => {
+    mount()
+    await openJournal()
+
+    expect(journalCell('parse-guard', 'status').textContent).toBe('committed')
+    expect(journalCell('ship', 'status').textContent).toBe('failed')
+    expect(journalCell('announce', 'status').textContent).toBe('skipped')
+    expect(journalCell('cleanup', 'status').textContent).toBe('cancelled')
+  })
+
+  it('CRITICAL: a NULL PR renders an em-dash and no link at all', async () => {
+    mount()
+    await openJournal()
+
+    const cell = journalCell('ship', 'pr')
+    expect(cell.textContent).toBe('—')
+    expect(cell.querySelector('a')).toBeNull()
+  })
+
+  it('links a recorded PR to exactly the URL the journal stored', async () => {
+    mount()
+    await openJournal()
+
+    const link = journalCell('parse-guard', 'pr').querySelector('a') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('https://github.com/acme/api/pull/42')
+    expect(link.textContent).toContain('https://github.com/acme/api/pull/42')
+    expect(link.rel).toContain('noopener')
+  })
+
+  it('CRITICAL: a non-http PR value is rendered as text, never as a navigable link', async () => {
+    fetchPartition.mockResolvedValue({
+      ...COMPLETED_DETAIL,
+      tasks: [{ ...JOURNAL_TASKS[0], pr_url: 'javascript:alert(1)' }],
+    })
+    mount()
+    await openJournal()
+
+    const cell = journalCell('parse-guard', 'pr')
+    expect(cell.querySelector('a')).toBeNull()
+    expect(cell.textContent).toContain('javascript:alert(1)')
+  })
+
+  it('CRITICAL: an unmeasured cost on a finished task reads "unknown", never $0.00', async () => {
+    mount()
+    await openJournal()
+
+    const cell = journalCell('cleanup', 'cost')
+    expect(cell.textContent).toBe('unknown')
+    expect(cell.textContent).not.toContain('0.00')
+  })
+
+  it('keeps the two absences distinct: em-dash for a task that never ran', async () => {
+    fetchPartition.mockResolvedValue({
+      ...COMPLETED_DETAIL,
+      tasks: [{ ...JOURNAL_TASKS[2], task_id: 'queued-task', status: 'pending' }],
+    })
+    mount()
+    await openJournal()
+
+    // Not terminal: nothing was measured because nothing ran. That is an
+    // absence of a value, not an unmeasurable one.
+    expect(journalCell('queued-task', 'cost').textContent).toBe('—')
+  })
+
+  it('renders a recorded cost with two decimals', async () => {
+    mount()
+    await openJournal()
+
+    expect(journalCell('parse-guard', 'cost').textContent).toBe('$1.25')
+  })
+
+  it('renders an unrecorded actor and timestamp as em-dashes', async () => {
+    mount()
+    await openJournal()
+
+    expect(journalCell('announce', 'actor').textContent).toBe('—')
+    expect(journalCell('announce', 'claimed').textContent).toBe('—')
+  })
+
+  it('shows the attempt number so a retry is distinguishable from a first run', async () => {
+    mount()
+    await openJournal()
+
+    expect(journalCell('ship', 'attempt').textContent).toBe('2')
+  })
+
+  it('explains why a PR link can be missing rather than leaving the em-dash unexplained', async () => {
+    mount()
+    await openJournal()
+
+    const note = document.querySelector('[data-testid="partitions-journal-pr-note"]')!
+    expect(note.textContent).toMatch(/a wrong link would be a lie/i)
+  })
+
+  it('explains that skipped is not failed', async () => {
+    mount()
+    await openJournal()
+
+    expect(
+      document.querySelector('[data-testid="partitions-journal-skipped-note"]')!.textContent,
+    ).toMatch(/prerequisite failed/i)
+  })
+
+  it('renders an empty journal with a body that says what would fill it', async () => {
+    fetchPartition.mockResolvedValue({ ...COMPLETED_DETAIL, tasks: [] })
+    mount()
+    await openJournal()
+
+    const empty = document.querySelector('[data-testid="partitions-journal-empty"]')!
+    expect(empty.textContent).toMatch(/first wave is claimed/i)
+    expect(document.querySelector('[data-testid="partitions-journal-table"]')).toBeNull()
+  })
+
+  it('offers the journal even to a token that cannot ratify', async () => {
+    mockRole('run', 1)
+    mount()
+    await settle()
+
+    expect(
+      container.querySelector(
+        'button[aria-label="Open the dispatch journal for partition part-abc123"]',
+      ),
+    ).not.toBeNull()
+  })
+
+  it('CRITICAL: a proposed partition an approver can ratify still exposes its journal', async () => {
+    fetchPartitions.mockResolvedValue([SUMMARY])
+    fetchPartition.mockResolvedValue({ ...DETAIL, tasks: JOURNAL_TASKS })
+    mount()
+    await openDrawer()
+
+    // Same drawer, both jobs: the ratification form AND the record.
+    expect(document.querySelector('[data-testid="partition-plan-editor"]')).not.toBeNull()
+    expect(journalCell('parse-guard', 'status').textContent).toBe('committed')
+  })
+
+  it('names the panel after the journal when there is nothing left to ratify', async () => {
+    mount()
+    await openJournal()
+
+    expect(
+      document.querySelector('[role="dialog"]')!.getAttribute('aria-label'),
+    ).toBe('Dispatch journal for partition part-abc123')
+  })
+})
+
+describe('PartitionsView — journal mobile safety', () => {
+  beforeEach(() => {
+    fetchPartitions.mockResolvedValue([COMPLETED_SUMMARY])
+    fetchPartition.mockResolvedValue(COMPLETED_DETAIL)
+    mockRole('approve', 2)
+  })
+
+  // Seven columns cannot fit 390px. The rule the mobile audit set is that a
+  // wide table scrolls INSIDE its own container and the page body never
+  // scrolls sideways — which is exactly what `Table` + `Drawer` already do,
+  // so the journal must reuse them rather than hand-roll a grid.
+  it('puts the journal inside the shared Table scroll container, inside the drawer', async () => {
+    mount()
+    await openJournal()
+
+    const table = document.querySelector('[data-testid="partitions-journal-table"]')!
+    const scroller = table.closest('[data-slot="table-container"]')
+    expect(scroller).not.toBeNull()
+    // The scroll container is INSIDE the drawer, which owns its own scroll —
+    // so the seven columns can never widen the page body.
+    expect(scroller!.closest('[role="dialog"]')).not.toBeNull()
+  })
+
+  it('leaves the list itself free of any horizontal scroll container', async () => {
+    mount()
+    await settle()
+
+    expect(container.querySelector('[data-slot="table-container"]')).toBeNull()
+    expect(container.querySelector('.overflow-x-auto')).toBeNull()
+  })
+
+  it('gives the journal control a 44px tap target', async () => {
+    mount()
+    await settle()
+
+    const history = container.querySelector(
+      'button[aria-label="Open the dispatch journal for partition part-abc123"]',
+    ) as HTMLButtonElement
+    expect(history.className).toMatch(/touch-target/)
+  })
+
+  it('gives a PR link a 44px tap target', async () => {
+    mount()
+    await openJournal()
+
+    const link = journalCell('parse-guard', 'pr').querySelector('a') as HTMLAnchorElement
+    expect(link.className).toMatch(/touch-target/)
+    expect(link.className).toContain('min-h-11')
+  })
+
+  // Measured in Chromium at 390px: with `break-all` on the anchor and
+  // `whitespace-normal` on the cell, a real PR URL wrapped inside the
+  // column and made the row 300px tall. The URL stays on one line and is
+  // reached by scrolling the table, which is the affordance this table
+  // already has.
+  it('never wraps a PR URL inside its column', async () => {
+    mount()
+    await openJournal()
+
+    const cell = journalCell('parse-guard', 'pr')
+    const link = cell.querySelector('a') as HTMLAnchorElement
+    expect(cell.className).not.toContain('whitespace-normal')
+    expect(link.className).not.toContain('break-all')
+    // Shown in full — never truncated, never shortened to a derived `…/42`.
+    expect(link.textContent).toBe('https://github.com/acme/api/pull/42')
+  })
+})
+
+describe('PartitionsView — journal in French', () => {
+  it('translates the journal headers natively', async () => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
+    fetchPartitions.mockResolvedValue([COMPLETED_SUMMARY])
+    fetchPartition.mockResolvedValue(COMPLETED_DETAIL)
+    mockRole('approve', 2)
+
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <PartitionsView />
+        </LanguageProvider>,
+      )
+      await Promise.resolve()
+    })
+    await settle()
+
+    const history = container.querySelector(
+      'button[aria-label="Ouvrir le journal de lancement de la partition part-abc123"]',
+    ) as HTMLButtonElement
+    await act(async () => {
+      history.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    await settle()
+
+    const table = document.querySelector('[data-testid="partitions-journal-table"]')!
+    expect(table.textContent).toContain('Tâche')
+    expect(table.textContent).toContain('Réservée le')
+    expect(table.textContent).toContain('Tentative')
+    // The recorded engine token is NOT translated — it is the stored value.
+    expect(journalCell('announce', 'status').textContent).toBe('skipped')
+  })
+
+  it('keeps en and fr at key parity for every journal key', () => {
+    const journalKeys = Object.keys(en).filter(
+      (key) => key.startsWith('partitions.journal') || key.startsWith('partitions.col'),
+    )
+    expect(journalKeys.length).toBeGreaterThan(0)
+    for (const key of journalKeys) {
+      expect(Object.keys(fr)).toContain(key)
+    }
   })
 })

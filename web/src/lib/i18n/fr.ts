@@ -503,7 +503,9 @@ export const fr: Record<TranslationKey, string> = {
   // ---- panneau de ratification ----------------------------------------
   'partitions.drawerTitle': 'Ratifier la partition',
   'partitions.drawerAriaLabel': 'Ratifier la partition {id}',
-  'partitions.closeAriaLabel': 'Fermer le panneau de ratification',
+  // Un seul panneau porte la ratification et le journal : le bouton de
+  // fermeture est donc nommé d'après le panneau, pas d'après l'un des deux.
+  'partitions.closeAriaLabel': 'Fermer le panneau de partition',
   'partitions.planTitle': 'Plan',
   'partitions.planLabel': 'Plan de partition (JSON)',
   'partitions.planHint':
@@ -576,6 +578,41 @@ export const fr: Record<TranslationKey, string> = {
     'Votre jeton ne permet pas de ratifier une partition : il faut un jeton de rang approve.',
   'partitions.errorStale':
     "Cette partition a changé depuis que vous l'avez ouverte. Rechargez-la et relisez le nouveau plan avant de ratifier.",
+
+  // ---- journal de lancement (sprint 5) ---------------------------------
+  // Le journal est un compte rendu, pas un tableau de bord : il dit ce qui
+  // s'est passé, qui l'a déclenché, ce que ça a coûté et ce qui en est
+  // sorti. Là où le moteur ne sait pas, il le dit — un tiret cadratin pour
+  // « non enregistré », le mot « inconnu » pour « enregistré mais non
+  // mesurable ». Jamais un zéro, jamais une supposition.
+  'partitions.history': 'Journal',
+  'partitions.historyAriaLabel': 'Ouvrir le journal de lancement de la partition {id}',
+  'partitions.journalTitle': 'Journal de lancement',
+  'partitions.journalDrawerTitle': 'Journal de la partition',
+  'partitions.journalDrawerAriaLabel': 'Journal de lancement de la partition {id}',
+  'partitions.journalScrollLabel':
+    'Journal de lancement — faites défiler horizontalement pour voir les autres colonnes',
+  'partitions.journalEmptyTitle': 'Aucun lancement pour le moment',
+  'partitions.journalEmptyBody':
+    "Une ligne apparaît ici par tâche dès que cette partition est ratifiée et que sa première vague est réservée. Une partition seulement proposée n'a encore rien à raconter.",
+  'partitions.colTask': 'Tâche',
+  'partitions.colStatus': 'Statut',
+  'partitions.colActor': 'Auteur',
+  'partitions.colClaimed': 'Réservée le',
+  'partitions.colPr': 'PR',
+  'partitions.colCost': 'Coût',
+  'partitions.colAttempt': 'Tentative',
+  'partitions.costUnknown': 'inconnu',
+  'partitions.costUnknownTitle':
+    "Cette tâche est arrivée à son terme mais aucune étape n'a rapporté de coût. La dépense est inconnue, pas nulle.",
+  'partitions.prNoneTitle': "Aucune URL de pull request n'a été enregistrée pour cette tâche.",
+  'partitions.prNotWebTitle':
+    "Reproduit tel quel : cette valeur n'est pas une URL http(s), elle est donc affichée comme du texte et non transformée en lien.",
+  'partitions.prAriaLabel': 'Ouvrir la pull request enregistrée pour la tâche {id}',
+  'partitions.journalPrNote':
+    "Une tâche sans lien de PR affiche —. Le moteur n'attribue une URL que lorsqu'une seule pull request a été ouverte pendant la fenêtre de la tâche : deux tâches lancées en même temps sur le même projet sont donc toutes deux enregistrées comme —. Un lien manquant est un trou ; un mauvais lien serait un mensonge.",
+  'partitions.journalSkippedNote':
+    "skipped signifie que la tâche n'a jamais démarré parce qu'un prérequis a échoué — enregistrée délibérément comme skipped et non comme failed.",
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',
