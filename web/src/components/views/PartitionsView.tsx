@@ -335,10 +335,14 @@ function OutwardConsent({ actions, consent, disabled, onChange }: OutwardConsent
           </Badge>
         ))}
       </div>
-      <label className="touch-target flex items-start gap-2 text-sm">
+      {/* The wrapping `<label>` is the tap target — clicking anywhere on it
+       * toggles the input — so the 44px minimum is enforced on the ROW
+       * (`min-h-11`), not by inflating the checkbox glyph out of proportion.
+       * Measured at 390px: the box itself is 16px, the row is 44px. */}
+      <label className="touch-target flex min-h-11 items-center gap-2 py-1 text-sm">
         <input
           type="checkbox"
-          className="mt-0.5 size-4 shrink-0 accent-[var(--color-warn)]"
+          className="size-5 shrink-0 accent-[var(--color-warn)]"
           checked={consent}
           disabled={disabled}
           aria-label={t('partitions.outwardConsentLabel')}
@@ -617,13 +621,20 @@ function RatifyForm({ detail, onRatified }: RatifyFormProps) {
         {verdict !== null && verdict.waves.length > 0 && (
           <div className="flex flex-col gap-1.5">
             <span className="text-xs text-muted-foreground">{t('partitions.wavesLabel')}</span>
-            <div className="flex flex-wrap gap-1.5">
+            {/* Deliberately NOT `Badge`: a badge is `h-5 whitespace-nowrap`,
+             * and a wave holding a long task id then ran past the viewport at
+             * 390px and was clipped with no affordance (measured in Chromium).
+             * Wave membership is a list of identifiers, not a chip. */}
+            <ul data-testid="partitions-waves" className="flex flex-col gap-1">
               {verdict.waves.map((wave, index) => (
-                <Badge key={`wave-${index}`} variant="secondary" className="metric-mono">
+                <li
+                  key={`wave-${index}`}
+                  className="metric-mono text-xs break-words text-muted-foreground"
+                >
                   {t('partitions.waveNumber', { index: index + 1 })}: {wave.join(', ')}
-                </Badge>
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
         )}
       </section>

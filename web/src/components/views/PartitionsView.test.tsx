@@ -810,6 +810,34 @@ describe('PartitionsView — mobile safety', () => {
     ).toMatch(/touch-target/)
   })
 
+  // Measured in Chromium at 390px: rendered as `Badge` (h-5, whitespace-nowrap)
+  // a wave holding a long task id ran past `innerWidth` and was clipped with no
+  // affordance — the exact failure mode the mobile audit set out to remove.
+  it('lets a wave with a long task id wrap instead of running off a phone screen', async () => {
+    previewPartition.mockResolvedValue(
+      preview({ waves: [['ship-the-fix-with-a-deliberately-long-identifier']] }),
+    )
+    mount()
+    await openDrawer()
+
+    const waves = document.querySelector('[data-testid="partitions-waves"]')!
+    expect(waves.textContent).toContain('ship-the-fix-with-a-deliberately-long-identifier')
+    for (const item of waves.querySelectorAll('li')) {
+      expect(item.className).toContain('break-words')
+      expect(item.className).not.toContain('whitespace-nowrap')
+    }
+  })
+
+  it('gives the consent row a 44px minimum height, since the label is the tap target', async () => {
+    previewPartition.mockResolvedValue(preview({ ok: false, code: 'consent_required' }))
+    mount()
+    await openDrawer()
+
+    const label = consentCheckbox().closest('label')!
+    expect(label.className).toContain('min-h-11')
+    expect(label.className).toContain('touch-target')
+  })
+
   it('keeps the budget controls stacked below sm so they never sit side by side on a phone', async () => {
     mount()
     await openDrawer()
