@@ -85,7 +85,43 @@ ownership_app = typer.Typer(
     help="Agent file-ownership conflict detection (read-only; enforcement gate deferred)"
 )
 app.add_typer(ownership_app, name="ownership")
+costs_app = typer.Typer(help="Cost accounting utilities")
+app.add_typer(costs_app, name="costs")
 logger = get_logger(__name__)
+
+
+@costs_app.command("backfill")
+def costs_backfill_cmd(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help=(
+            "Actually write the recomputed cost_usd values. Default is a dry "
+            "run: report what would change without touching the database."
+        ),
+    ),
+) -> None:
+    """Recompute `cost_usd` for historical steps that have no usable cost
+    signal (NULL, or the impossible 0.0-with-real-tokens shape), using the
+    price map + the model/token counts already on each row.
+
+    Explicit, opt-in, one-off command -- never run automatically as a
+    migration side effect. Honesty boundary: the raw CLI envelope was never
+    persisted for a successful step, so cache-read/cache-creation token
+    counts for pre-fix rows cannot be recovered -- this only recomputes from
+    base input/output tokens, a lower bound for any row that had real cache
+    activity. A model still absent from the price map after this fix is left
+    honestly unpriced and reported under "still unpriced", never fabricated.
+    """
+    from hivepilot.services.cost_backfill import backfill_unpriced_costs
+
+    result = backfill_unpriced_costs(apply=apply)
+    mode = "Applied" if apply else "Dry run (would apply)"
+    typer.echo(f"{mode}: scanned {result.scanned} candidate step(s).")
+    typer.echo(f"  priced now: {result.updated}")
+    typer.echo(f"  still unpriced (model not in price map): {result.still_unpriced}")
+    if not apply and result.updated:
+        typer.echo("Re-run with --apply to write these values.")
 
 
 @secrets_app.command("cache-clear")
