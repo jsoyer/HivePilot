@@ -169,22 +169,73 @@
  * scroll (a focusable, `tabIndex`-scrollable container already scrolls
  * natively via arrow/Home/End keys) or `prefers-reduced-motion` (nothing
  * here animates). */
-.kanban-scroll {
+/* Mobile audit: the same reasoning applies verbatim to the shared table
+ * container (`ui/table.tsx`), which was measured hiding 43-53% of the Agents
+ * / Models / Cost tables at 390px with no affordance at all. `.table-scroll`
+ * is the identical treatment, so a cut-off table and a cut-off Kanban look
+ * and behave the same way. */
+.kanban-scroll,
+.table-scroll {
     scrollbar-width: thin;
     scrollbar-color: var(--color-border) transparent;
 }
-.kanban-scroll::-webkit-scrollbar {
+.kanban-scroll::-webkit-scrollbar,
+.table-scroll::-webkit-scrollbar {
     height: 8px;
 }
-.kanban-scroll::-webkit-scrollbar-track {
+.kanban-scroll::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-track {
     background: transparent;
 }
-.kanban-scroll::-webkit-scrollbar-thumb {
+.kanban-scroll::-webkit-scrollbar-thumb,
+.table-scroll::-webkit-scrollbar-thumb {
     background-color: var(--color-border);
     border-radius: 9999px;
 }
-.kanban-scroll::-webkit-scrollbar-thumb:hover {
+.kanban-scroll::-webkit-scrollbar-thumb:hover,
+.table-scroll::-webkit-scrollbar-thumb:hover {
     background-color: var(--color-muted-foreground);
+}
+
+/* A focusable scroll region must show where focus is (the container itself
+ * has no other visual state). Only applies once `ui/table.tsx` has measured
+ * real overflow and made it focusable. */
+.table-scroll[data-scrollable="true"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* Mobile audit: the header controls (hamburger, search, language, theme) use
+ * the shared `icon-sm` size, which is 28x28 CSS px — measured at both 390px
+ * and 768px. That is well under the ~44px comfortable touch target, and the
+ * hamburger in particular is the ONLY way to reach navigation on a phone.
+ *
+ * Growing the button itself would mean changing the shared shadcn size scale,
+ * which would repaint the whole desktop header — a redesign, not an
+ * adaptation. Instead this expands only the HIT AREA, and only on a coarse
+ * pointer (touch), via a transparent centred pseudo-element. Nothing is
+ * painted, so the control looks pixel-identical in every theme and at every
+ * width; a mouse/trackpad user is unaffected because the query never matches.
+ *
+ * Requires the host element to establish a positioning context — every
+ * `Button` is `inline-flex`, so `position: relative` is added here rather
+ * than relying on the caller to remember it. */
+@media (pointer: coarse) {
+    .touch-target {
+        position: relative;
+    }
+
+    .touch-target::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        translate: -50% -50%;
+        width: max(100%, 44px);
+        height: max(100%, 44px);
+        /* Purely a hit area — never paints, never affects layout. */
+        background: transparent;
+    }
 }
 
 :root {

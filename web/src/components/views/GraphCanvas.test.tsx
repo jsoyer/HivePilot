@@ -90,4 +90,16 @@ describe('GraphCanvas source', () => {
   it('Pollen cascade rebuild: nodes are draggable (onNodesChange wired), matching the "drag nodes to arrange" hint', () => {
     expect(source).toMatch(/onNodesChange/)
   })
+
+  // Mobile audit, measured in a real browser: the minimap renders a fixed
+  // 202x152px, which is 18% of the whole canvas area at 390px and 44% of its
+  // width at 768px — and it sat directly on top of the canvas hint text,
+  // covering 69% of it at 390px and 37% at 768px (overlapping text is the
+  // defect; the wasted canvas is the aggravation). At 1440px there is no
+  // overlap at all, so this is purely a small-viewport problem.
+  it('mobile-first: hides the fixed-size minimap below lg, where it covers the hint text', () => {
+    const minimap = source.slice(source.indexOf('<MiniMap'), source.indexOf('</ReactFlow>'))
+    expect(minimap).toMatch(/hidden!/)
+    expect(minimap).toMatch(/lg:block!/)
+  })
 })

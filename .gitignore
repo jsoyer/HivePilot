@@ -35,3 +35,6 @@ docs/session-learnings.md
 # zero Node at runtime); node_modules and any local dist/ are never committed.
 web/node_modules/
 web/dist/
+
+# Local audit/verification artifacts (screenshots, reports) - never commit
+.artifacts/

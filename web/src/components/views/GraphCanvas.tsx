@@ -554,12 +554,20 @@ export function GraphCanvas({
          * faint dot-grid texture behind the canvas; layering react-flow's
          * OWN dot background on top would double it up. */}
         <Controls position="bottom-left" />
+        {/* Mobile audit: `<MiniMap>` renders a FIXED 202x152px regardless of
+         * viewport. Measured, that is 18% of the entire canvas area at 390px
+         * and 44% of its width at 768px — and it sits directly on top of the
+         * canvas hint text below, covering 69% of it at 390px and 37% at
+         * 768px. A minimap of an already-small canvas earns none of that
+         * space, so it is hidden below `lg:`; at 1440px there was no overlap
+         * and nothing changes. `!` on both utilities because react-flow ships
+         * its own `.react-flow__minimap` positioning rules. */}
         <MiniMap
           pannable
           zoomable
           nodeColor={(node) => minimapNodeColor(node, colorBy)}
           maskColor="color-mix(in srgb, var(--color-background) 70%, transparent)"
-          className="rounded-md! border border-border bg-card/80!"
+          className="hidden! rounded-md! border border-border bg-card/80! lg:block!"
         />
       </ReactFlow>
       <p

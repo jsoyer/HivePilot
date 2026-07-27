@@ -14,6 +14,9 @@ export const en = {
   'common.disable': 'Disable',
   'common.working': 'Working…',
   'common.openNavigation': 'Open navigation',
+  // Accessible name for the mobile navigation drawer itself (the dialog),
+  // as opposed to `common.openNavigation` which names the button that opens it.
+  'common.navigation': 'Navigation',
   'common.expandSidebar': 'Expand sidebar',
   'common.collapseSidebar': 'Collapse sidebar',
   'common.switchToLightTheme': 'Switch to light theme',
@@ -114,6 +117,10 @@ export const en = {
   'cost.tokensInOut': 'Tokens (in/out)',
   'cost.costLabel': 'Cost',
   'cost.model': 'Model',
+  // Accessible names for the horizontal scroll region a wide table becomes on
+  // a narrow viewport (see ui/table.tsx) — announced only when it overflows.
+  'cost.byModelScrollLabel': 'Spend by model, scroll horizontally for more columns',
+  'cost.byProjectScrollLabel': 'Spend by project, scroll horizontally for more columns',
   'cost.windowSelectorLabel': 'Time window',
   'cost.windowDays': '{days}d',
   'cost.byModelTitle': 'Spend by model',
@@ -401,6 +408,7 @@ export const en = {
 
   // ---- Models view (Mirador Spend section) ------------------------------
   'models.title': 'Models',
+  'models.tableScrollLabel': 'Models table, scroll horizontally for more columns',
   'models.description': 'Per-model cost, token volume, and success rate',
   'models.noModels': 'No model data yet.',
   'models.costPerSuccessfulRun': 'Cost per successful run',
@@ -475,6 +483,7 @@ export const en = {
   'agents.title': 'Agents',
   'agents.description': 'What each role costs and how often it succeeds. Select a role for its lessons and verdicts.',
   'agents.colRole': 'Role',
+  'agents.tableScrollLabel': 'Agents table, scroll horizontally for more columns',
   'agents.rowAriaLabel': 'Open detail for {name}',
   'agents.attentionTitle': '{count} role(s) need attention',
   'agents.allClear': 'All roles nominal — no failing verdicts, no low success rate.',

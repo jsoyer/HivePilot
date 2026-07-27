@@ -192,7 +192,7 @@ function PollenShell() {
             // while `SidebarNav` still treats that same width as an
             // off-canvas drawer that closes on every click, with no
             // hamburger left to reopen it.
-            className="md:hidden"
+            className="touch-target md:hidden"
             data-testid="mobile-nav-trigger"
             aria-label={t('common.openNavigation')}
             onClick={() => setMobileNavOpen(true)}
@@ -224,7 +224,7 @@ function PollenShell() {
               type="button"
               variant="outline"
               size="sm"
-              className="gap-2 text-muted-foreground"
+              className="touch-target gap-2 text-muted-foreground"
               onClick={() => setPaletteOpen(true)}
               aria-label={t('header.search')}
             >

@@ -292,6 +292,67 @@ describe('ApprovalsView', () => {
     expect(container.textContent).toContain('Refuser')
   })
 
+  // Mobile audit: measured in a real browser, the six-column table needs
+  // ~925px, but the sidebar docks at `md:` so the content column is only
+  // ~456px at 768px and ~760px at 1024px. `Requested`/`Status`/`Actions` —
+  // including the Approve and Deny buttons, this view's entire reason to
+  // exist — sat off-screen behind an undiscoverable horizontal scroll (0 of
+  // 14 action buttons in-viewport at both widths). The stacked-card layout
+  // therefore has to hold until `xl:` (1280px), the first width where the
+  // table actually fits. These assertions lock that breakpoint: a future
+  // edit that drops back to `sm:`/`lg:` makes the primary action
+  // unreachable on every phone and tablet again.
+  it('keeps the stacked-card layout until xl so the actions stay reachable on tablets', async () => {
+    fetchApprovals.mockResolvedValue([SAMPLE_APPROVAL])
+    mockRole('approve', 2)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const table = container.querySelector('table')!
+    expect(table.className).toContain('xl:table')
+    expect(table.className).not.toContain('sm:table')
+    expect(table.className).not.toContain('lg:table')
+
+    const header = container.querySelector('thead')!
+    expect(header.className).toContain('xl:table-header-group')
+
+    // Every cell flips to `table-cell` at the SAME breakpoint as the table
+    // itself — a mismatch is what produces a half-collapsed row.
+    for (const cell of container.querySelectorAll('td')) {
+      expect(cell.className).toContain('xl:table-cell')
+      expect(cell.className).not.toContain('sm:table-cell')
+      expect(cell.className).not.toContain('lg:table-cell')
+    }
+
+    // The per-cell "Project:" style labels only exist in card mode, so they
+    // must hide at the same breakpoint the table appears.
+    const labels = container.querySelectorAll('td > span.xl\\:hidden')
+    expect(labels.length).toBeGreaterThan(0)
+  })
+
+  it('lets long task names wrap in card mode instead of clipping', async () => {
+    fetchApprovals.mockResolvedValue([
+      { ...SAMPLE_APPROVAL, task: 'full_release_pipeline_with_adversarial_review' },
+    ])
+    mockRole('approve', 2)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    // `TableCell`'s shared base is `whitespace-nowrap` (correct for a real
+    // table row); in card mode that turned a long task name into horizontal
+    // overflow, so each cell must opt back into wrapping below `lg:`.
+    for (const cell of container.querySelectorAll('td')) {
+      expect(cell.className).toContain('whitespace-normal')
+      expect(cell.className).toContain('xl:whitespace-nowrap')
+    }
+  })
+
   it('renders the French empty state when the language is fr', async () => {
     window.localStorage.setItem(LANG_STORAGE_KEY, JSON.stringify('fr'))
     fetchApprovals.mockResolvedValue([])

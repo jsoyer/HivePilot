@@ -154,7 +154,7 @@ export function CostView() {
                         segments={data.by_model.map((row) => ({ key: row.model, label: row.model, value: row.cost_usd }))}
                         total={data.overall.cost_usd}
                       />
-                      <Table>
+                      <Table scrollLabel={t('cost.byModelScrollLabel')}>
                         <TableHeader>
                           <TableRow>
                             <TableHead>{t('cost.model')}</TableHead>
@@ -188,7 +188,7 @@ export function CostView() {
                   {data.by_project.length === 0 ? (
                     <p className="text-sm text-muted-foreground">{t('cost.noByProject')}</p>
                   ) : (
-                    <Table>
+                    <Table scrollLabel={t('cost.byProjectScrollLabel')}>
                       <TableHeader>
                         <TableRow>
                           <TableHead>{t('common.project')}</TableHead>

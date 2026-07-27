@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
-import { useEffect, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { useEscapeKey } from '@/lib/use-escape-key'
 import { cn } from '@/lib/utils'
 
 export interface DrawerProps {
@@ -40,13 +41,11 @@ export function Drawer({
   children,
   className,
 }: DrawerProps) {
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  // This component only mounts while open, so the hook is always enabled
+  // here. `nav/SidebarNav.tsx` shares the same hook for its own mobile
+  // drawer, which stays mounted (translated off-canvas) and so passes its
+  // real open state.
+  useEscapeKey(true, onClose)
 
   const label = ariaLabel ?? (typeof title === 'string' ? title : undefined)
 

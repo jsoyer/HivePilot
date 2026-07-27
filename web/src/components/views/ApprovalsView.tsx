@@ -175,8 +175,26 @@ export function ApprovalsView() {
         {!isForbidden && (
           <AsyncSection state={state} isEmpty={(data) => data.length === 0} emptyMessage={t('approvals.noPending')}>
             {(data) => (
-              <Table className="block sm:table">
-                <TableHeader className="hidden sm:table-header-group">
+              // Mobile audit: this switched to a real table at `sm:` (640px).
+              // Measured in a real browser, the six columns need ~925px, and
+              // the sidebar already docks at `md:` — so the content column is
+              // only ~456px at 768px and ~760px at 1024px. `Requested`/
+              // `Status`/`Actions` (the Approve and Deny buttons — this
+              // view's entire reason to exist) sat off-screen behind an
+              // undiscoverable horizontal scroll at BOTH widths: 0 of 14
+              // action buttons were within the viewport at 768px and at
+              // 1024px.
+              //
+              // The stacked-card layout therefore has to hold until `xl:`
+              // (1280px), which is the first breakpoint where the table
+              // actually fits (measured: 14/14 buttons visible, 0px hidden).
+              // `lg:` was tried first and still hid 165px at 1024px. Above
+              // 1280px the table is exactly what it always was.
+              //
+              // Nothing here narrows the data — the card layout shows the
+              // same six fields, just stacked with their labels.
+              <Table className="block xl:table">
+                <TableHeader className="hidden xl:table-header-group">
                   <TableRow>
                     <TableHead>{t('common.run')}</TableHead>
                     <TableHead>{t('common.project')}</TableHead>
@@ -186,33 +204,39 @@ export function ApprovalsView() {
                     {canApprove && <TableHead>{t('common.actions')}</TableHead>}
                   </TableRow>
                 </TableHeader>
-                <TableBody className="block sm:table-row-group">
+                <TableBody className="block xl:table-row-group">
                   {data.map((approval) => (
                     <TableRow
                       key={approval.run_id}
-                      className="mb-3 block rounded-lg border border-border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:border-t-0 sm:p-0"
+                      className="mb-3 block rounded-lg border border-border p-3 xl:mb-0 xl:table-row xl:rounded-none xl:border-x-0 xl:border-t-0 xl:p-0"
                     >
-                      <TableCell className="block sm:table-cell">
-                        <span className="mr-1 font-medium sm:hidden">{t('common.run')}:</span>#{approval.run_id}
+                      {/* `TableCell`'s shared base is `whitespace-nowrap`,
+                       * which is right for a table row and wrong for a card:
+                       * a long `task` (e.g.
+                       * `full_release_pipeline_with_adversarial_review`) then
+                       * overflowed the card instead of wrapping. Each cell
+                       * opts back into wrapping below `xl:`. */}
+                      <TableCell className="block whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('common.run')}:</span>#{approval.run_id}
                       </TableCell>
-                      <TableCell className="block sm:table-cell">
-                        <span className="mr-1 font-medium sm:hidden">{t('common.project')}:</span>
+                      <TableCell className="block break-words whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('common.project')}:</span>
                         {approval.project}
                       </TableCell>
-                      <TableCell className="block sm:table-cell">
-                        <span className="mr-1 font-medium sm:hidden">{t('common.task')}:</span>
+                      <TableCell className="block break-words whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('common.task')}:</span>
                         {approval.task}
                       </TableCell>
-                      <TableCell className="block sm:table-cell">
-                        <span className="mr-1 font-medium sm:hidden">{t('approvals.requested')}:</span>
+                      <TableCell className="block whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('approvals.requested')}:</span>
                         {formatRequestedAt(approval.requested_at)}
                       </TableCell>
-                      <TableCell className="block sm:table-cell">
-                        <span className="mr-1 font-medium sm:hidden">{t('common.status')}:</span>
+                      <TableCell className="block whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('common.status')}:</span>
                         <Badge variant="secondary">{approval.status}</Badge>
                       </TableCell>
                       {canApprove && (
-                        <TableCell className="block pt-2 sm:table-cell sm:pt-2">
+                        <TableCell className="block whitespace-normal pt-2 xl:table-cell xl:pt-2 xl:whitespace-nowrap">
                           <RowActions approval={approval} onDone={handleDone} />
                         </TableCell>
                       )}
