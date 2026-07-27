@@ -218,7 +218,11 @@ describe('MemoryView — Growth tab honesty', () => {
     await clickTab('Growth')
 
     expect(container.querySelector('[data-slot="metric-readout-value"]')).toBeNull()
-    expect(container.textContent).toMatch(/no.*memory.*growth|no.*growth.*recorded/i)
+    // Empty means "what would fill this", not "nothing".
+    const empty = container.querySelector('[data-testid="memory-growth-empty"]')
+    expect(empty).not.toBeNull()
+    expect(empty?.textContent).toMatch(/nothing stored in this window/i)
+    expect(empty?.textContent).toMatch(/as agents store memories/i)
   })
 
   it('shows a graceful "requires token" message for a 403 on /v1/memory/growth', async () => {
@@ -272,5 +276,32 @@ describe('MemoryView — security', () => {
 
   it('never uses dangerouslySetInnerHTML anywhere in the component source', () => {
     expect(memoryViewSource).not.toContain('dangerouslySetInnerHTML')
+  })
+
+  // Regression: the app shell mounts a VERTICAL Tabs root (sidebar nav) and
+  // this view mounts its own horizontal Tabs inside it. They used to collide
+  // over a shared Tailwind `group/tabs` name, which rendered this tab bar as
+  // a vertical stack in a tiny box.
+  it('CRITICAL: the tab bar stays horizontal when nested inside a vertical Tabs root', async () => {
+    const { Tabs, TabsContent } = await import('@/components/ui/tabs')
+    await act(async () => {
+      root.render(
+        <Tabs orientation="vertical" defaultValue="memory">
+          <TabsContent value="memory">
+            <MemoryView />
+          </TabsContent>
+        </Tabs>,
+      )
+      await Promise.resolve()
+    })
+
+    const list = container.querySelector('[data-testid="memory-tabs"]')
+    expect(list).not.toBeNull()
+    expect(list?.getAttribute('data-orientation')).toBe('horizontal')
+    // No UNCONDITIONAL flex-col, and no ancestor-scoped orientation variant
+    // (only the self-scoped `data-vertical:` one, which cannot match here).
+    expect(list?.className).not.toMatch(/(^|\s)flex-col(\s|$)/)
+    expect(list?.className).not.toMatch(/group-data-vertical\/tabs/)
+    expect(list?.className).toMatch(/data-vertical:flex-col/)
   })
 })

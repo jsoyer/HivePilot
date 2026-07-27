@@ -325,26 +325,31 @@ export const en = {
   'quality.colResult': 'Result',
   'quality.colFreshness': 'Freshness',
   'quality.colActor': 'Actor',
+  'quality.emptyTitle': 'No memory activity recorded yet',
   'quality.emptyState':
-    'No memory activity recorded yet — the Memory > Quality view populates as agents search/store memory (mem0).',
+    'These figures come from mem0 instrumentation, which is opt-in. Once it is enabled and agents start searching and storing memory, search success, recall freshness and the gaps by namespace appear here.',
   'quality.requiresTokenLead': 'This section requires a',
   'quality.requiresTokenTail': 'higher-privilege token.',
   'quality.requiresTokenNote':
     'Your current token can still use the other Pollen tabs — only this section needs a higher role.',
 
   // ---- Memory view (unified Quality/Growth/Search tabs) -----------------
+  'memory.description':
+    'Whether the memory substrate actually helps (Quality), how much of it there is (Growth), and what is in it (Search).',
   'memory.tabQuality': 'Quality',
   'memory.tabGrowth': 'Growth',
   'memory.tabSearch': 'Search',
   'memory.growthTitle': 'Memory growth',
-  'memory.growthDescription': 'How much is stored, where, over time, and by whom — GET /v1/memory/growth',
+  'memory.growthDescription': 'How much is stored, where, over time, and by whom.',
   'memory.totalMemories': 'Total memories',
   'memory.byNamespaceTitle': 'Memories by namespace',
   'memory.growthOverTimeTitle': 'Growth over time',
   'memory.noGrowthSeries': 'No growth recorded in this window.',
   'memory.byActorTitle': 'By actor',
   'memory.authorshipNotAvailable': 'A human-vs-agent authorship split is not available — showing the real by-actor breakdown instead.',
-  'memory.growthEmptyState': 'No memory growth recorded in this window.',
+  'memory.growthEmptyTitle': 'Nothing stored in this window',
+  'memory.growthEmptyState':
+    'The namespace and per-actor breakdowns fill in as agents store memories. Nothing has been written in the last 30 days.',
 
   // ---- Home view (default landing view) ---------------------------------
   'home.subtitle': 'Your fleet at a glance — click any figure to dig in.',

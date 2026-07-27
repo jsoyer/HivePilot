@@ -2,6 +2,7 @@ import { Database, Layers, TrendingUp, Users } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
+import { EmptyState } from '@/components/dashboard/EmptyState'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { Sparkline } from '@/components/dashboard/Sparkline'
 import { ApiForbiddenError } from '@/lib/api'
@@ -63,17 +64,20 @@ function GrowthTab() {
   }
 
   return (
-    <AsyncSection
-      state={growth}
-      isEmpty={(data) =>
+    <AsyncSection state={growth} isEmpty={() => false}>
+      {(data) =>
         data.total === 0 &&
         data.memories_by_namespace.length === 0 &&
         data.growth_series.length === 0 &&
-        data.by_actor.length === 0
-      }
-      emptyMessage={t('memory.growthEmptyState')}
-    >
-      {(data) => (
+        data.by_actor.length === 0 ? (
+          <EmptyState
+            data-testid="memory-growth-empty"
+            icon={<Database className="size-4" />}
+            title={t('memory.growthEmptyTitle')}
+            body={t('memory.growthEmptyState')}
+            className="max-w-2xl"
+          />
+        ) : (
         <div className="flex flex-col gap-6">
           <MetricReadout
             icon={<Database className="size-4" />}
@@ -129,7 +133,8 @@ function GrowthTab() {
             {t('memory.authorshipNotAvailable')}
           </p>
         </div>
-      )}
+        )
+      }
     </AsyncSection>
   )
 }
@@ -159,8 +164,17 @@ export function MemoryView() {
   const t = useT()
 
   return (
-    <Tabs defaultValue="quality" className="gap-4">
-      <TabsList>
+    // `orientation` is stated explicitly rather than relied on as a default:
+    // this Tabs root is mounted INSIDE the app shell's vertical Tabs root,
+    // and the two used to collide over a shared Tailwind `group/tabs` name —
+    // which is what rendered this tab bar as a vertical stack in a tiny box.
+    // See `ui/tabs.tsx` for the fix.
+    <Tabs defaultValue="quality" orientation="horizontal" className="gap-4">
+      <div className="flex flex-col gap-1">
+        <h2 className="font-heading text-base font-medium">{t('nav.memory')}</h2>
+        <p className="text-sm text-muted-foreground">{t('memory.description')}</p>
+      </div>
+      <TabsList data-testid="memory-tabs" className="w-full max-w-md sm:w-fit">
         <TabsTrigger value="quality">{t('memory.tabQuality')}</TabsTrigger>
         <TabsTrigger value="growth">{t('memory.tabGrowth')}</TabsTrigger>
         <TabsTrigger value="search">{t('memory.tabSearch')}</TabsTrigger>

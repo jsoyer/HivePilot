@@ -1,8 +1,9 @@
-import { CheckCircle2, Clock, SearchX, ShieldCheck, XCircle } from 'lucide-react'
+import { Brain, CheckCircle2, Clock, SearchX, ShieldCheck, XCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
+import { EmptyState } from '@/components/dashboard/EmptyState'
 import { StatCard, type StatCardTone } from '@/components/dashboard/StatCard'
 import { ApiForbiddenError } from '@/lib/api'
 import { useT } from '@/lib/i18n'
@@ -150,9 +151,13 @@ export function MemoryQualityView() {
     return (
       <Card>
         <CardContent>
-          <p data-testid="memory-quality-empty-state" className="text-sm text-muted-foreground">
-            {t('quality.emptyState')}
-          </p>
+          <EmptyState
+            data-testid="memory-quality-empty-state"
+            icon={<Brain className="size-4" />}
+            title={t('quality.emptyTitle')}
+            body={t('quality.emptyState')}
+            className="max-w-2xl"
+          />
         </CardContent>
       </Card>
     )

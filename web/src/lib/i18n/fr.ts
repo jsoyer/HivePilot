@@ -330,20 +330,22 @@ export const fr: Record<TranslationKey, string> = {
   'quality.colResult': 'Résultat',
   'quality.colFreshness': 'Fraîcheur',
   'quality.colActor': 'Acteur',
+  'quality.emptyTitle': 'Aucune activité mémoire enregistrée pour le moment',
   'quality.emptyState':
-    "Aucune activité mémoire enregistrée pour le moment — la vue Memory quality se remplit à mesure que les agents recherchent ou stockent de la mémoire (mem0).",
+    "Ces indicateurs proviennent de l'instrumentation mem0, qui est facultative. Une fois activée, dès que les agents recherchent et stockent de la mémoire, le taux de succès des recherches, la fraîcheur du rappel et les manques par namespace apparaissent ici.",
   'quality.requiresTokenLead': 'Cette section nécessite un rôle',
   'quality.requiresTokenTail': 'à privilège supérieur.',
   'quality.requiresTokenNote':
     'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule cette section nécessite un rôle supérieur.',
 
   // ---- Memory view (onglets unifiés Qualité/Croissance/Recherche) ------
+  'memory.description':
+    'Si la mémoire aide réellement (Qualité), quelle quantité elle représente (Croissance), et ce qu’elle contient (Recherche).',
   'memory.tabQuality': 'Qualité',
   'memory.tabGrowth': 'Croissance',
   'memory.tabSearch': 'Recherche',
   'memory.growthTitle': 'Croissance de la mémoire',
-  'memory.growthDescription':
-    'Ce qui est stocké, où, dans le temps, et par qui — GET /v1/memory/growth',
+  'memory.growthDescription': 'Ce qui est stocké, où, dans le temps, et par qui.',
   'memory.totalMemories': 'Total des mémoires',
   'memory.byNamespaceTitle': 'Mémoires par namespace',
   'memory.growthOverTimeTitle': 'Croissance dans le temps',
@@ -351,7 +353,9 @@ export const fr: Record<TranslationKey, string> = {
   'memory.byActorTitle': 'Par acteur',
   'memory.authorshipNotAvailable':
     "Une répartition humain / agent n'est pas disponible — la vraie répartition par acteur est affichée à la place.",
-  'memory.growthEmptyState': 'Aucune croissance de mémoire enregistrée sur cette période.',
+  'memory.growthEmptyTitle': 'Rien de stocké sur cette période',
+  'memory.growthEmptyState':
+    'Les répartitions par namespace et par acteur se remplissent à mesure que les agents stockent des mémoires. Rien n’a été écrit ces 30 derniers jours.',
 
   // ---- Home view (vue d'accueil par défaut) -----------------------------
   'home.subtitle': "Votre flotte en un coup d'œil — cliquez sur un chiffre pour l'explorer.",
