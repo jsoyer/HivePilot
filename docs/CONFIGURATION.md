@@ -174,7 +174,13 @@ Defines reusable runner definitions and the tasks (sequences of steps) that use 
 - `merge_method` (default `"merge"`)
 - `commit_message`
 - `pr_title`
-- `pr_body_file`
+- `pr_body_file` — path (relative to the project's own repo, or absolute) to
+  a file an agent step is expected to have written as this stage's PR
+  description. The engine itself never creates this file. If it's absent or
+  blank when the PR is opened, HivePilot logs a warning and falls back to a
+  redacted, size-capped body built from the stage's own output (then
+  `pr_title`/`commit_message`, then a generic message) instead of failing
+  the PR — see `hivepilot/services/pr_body.py`.
 - `branch_prefix` (default `"hivepilot"`)
 
 ```yaml
