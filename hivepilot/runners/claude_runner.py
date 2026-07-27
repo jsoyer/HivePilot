@@ -20,6 +20,7 @@ from hivepilot.runners.base import (
     RunnerPayload,
     UsageInfo,
     classify_signal_exit,
+    prompt_file_not_found_message,
     resolve_runner_effort,
     set_last_usage,
 )
@@ -282,7 +283,9 @@ class ClaudeRunner(BaseRunner):
             )
         prompt_path = self.settings.resolve_config_path(prompt_file)
         if not prompt_path.exists():
-            raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+            raise FileNotFoundError(
+                prompt_file_not_found_message(payload, self.settings, prompt_file, prompt_path)
+            )
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
         knowledge_context = self._build_knowledge_context(payload)
         return self._build_prompt(payload, prompt_text, knowledge_context)

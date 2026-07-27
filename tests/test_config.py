@@ -661,6 +661,41 @@ class TestConciergeConfig:
         assert s.chatops_concierge_model == "haiku"
 
 
+class TestConfigPathSearchDirs:
+    """`Settings.config_path_search_dirs()` -- every directory
+    `resolve_config_path()` actually consults, in priority order. Exists so
+    an error message / validation finding can say WHERE a reference was
+    searched (not just print the final, possibly nonsensical, resolved
+    path -- e.g. a `cwd=/` base_dir-tier guess) without reimplementing
+    `resolve_config_path`'s tier order. Consumed by the dangling
+    `prompt_file` validation check (config_validation.py) and the improved
+    `FileNotFoundError` raised by ClaudeRunner/PromptCliRunner.
+    """
+
+    def test_returns_xdg_and_base_dir_when_no_config_repo(self, tmp_path: Path) -> None:
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        s.config_repo = None
+        s.base_dir = tmp_path / "base"
+        dirs = s.config_path_search_dirs()
+        assert dirs == [s.xdg_config_home, s.base_dir]
+
+    def test_includes_config_repo_when_set_and_local(self, tmp_path: Path) -> None:
+        repo_dir = tmp_path / "config-repo"
+        repo_dir.mkdir()
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        s.config_repo = str(repo_dir)
+        s.base_dir = tmp_path / "base"
+        dirs = s.config_path_search_dirs()
+        assert dirs == [s.xdg_config_home, repo_dir, s.base_dir]
+
+    def test_omits_config_repo_when_not_a_local_directory(self, tmp_path: Path) -> None:
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        s.config_repo = "https://example.invalid/not-a-local-dir.git"
+        s.base_dir = tmp_path / "base"
+        dirs = s.config_path_search_dirs()
+        assert dirs == [s.xdg_config_home, s.base_dir]
+
+
 class TestInstructionFileSizeCaps:
     """Bounds on how much a project's repository instruction/context files
     (`ProjectConfig.claude_md` / `.instruction_files`) can inject into a

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 from hivepilot.config import Settings
@@ -161,6 +162,36 @@ def resolve_runner_effort(definition: RunnerDefinition, step: TaskStep) -> str |
     raises and never invents a value.
     """
     return definition.effort if definition.effort is not None else step.effort
+
+
+def prompt_file_not_found_message(
+    payload: RunnerPayload, settings_obj: Settings, prompt_file: str, prompt_path: Path
+) -> str:
+    """Build the ``FileNotFoundError`` message for a step's unresolved
+    ``prompt_file`` -- names the referencing task/step and lists every
+    directory ``Settings.resolve_config_path`` searched, instead of only
+    printing the final (possibly nonsensical) resolved path.
+
+    Real incident: an operator's ``tasks.yaml`` referenced a
+    ``prompt_file`` that did not exist anywhere on the box. The service
+    ran with ``cwd=/``, so resolution fell through to the base_dir tier
+    and the ORIGINAL message read ``Prompt file not found:
+    /security_review.md`` -- it named neither the failing task/step nor
+    any of the other directories that were also checked, so the operator
+    had nothing actionable beyond a nonsense absolute path.
+
+    Shared by ``ClaudeRunner._assemble_prompt`` and ``PromptCliRunner.
+    _load_prompt`` so both runners raise an identically actionable error
+    instead of drifting into two different wordings. Uses ``Settings.
+    config_path_search_dirs()`` (the exact tier list ``resolve_config_path``
+    consults) rather than reimplementing the search order.
+    """
+    searched = ", ".join(str(d) for d in settings_obj.config_path_search_dirs())
+    return (
+        f"Prompt file not found for task '{payload.task_name}' step "
+        f"'{payload.step.name}' (prompt_file={prompt_file!r}); resolved to "
+        f"{prompt_path} -- searched: {searched}"
+    )
 
 
 def validate_runner_mode(kind: str, supported_modes: frozenset[str], mode: str) -> None:

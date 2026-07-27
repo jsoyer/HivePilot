@@ -40,6 +40,10 @@ EXPECTED_TOP_LEVEL_FOLDERS = [
     "01 - Journal",
     "01 - Knowledge",
     "02 - Architecture",
+    # NOTE: "02 - Artifacts" is deliberately NOT in this fixture list even though
+    # it IS in the service's EXPECTED_TOP_LEVEL_FOLDERS — several write_artifact
+    # tests build a vault from this list and then assert the folder is absent to
+    # prove dry_run created nothing. Keep it out.
     "02 - Design",
     "03 - Decisions",
     "03 - Research",
@@ -437,6 +441,32 @@ class TestAudit:
 
         # Some folders must be missing (we only created 7 of 22)
         assert len(report["missing"]) > 0
+
+    def test_audit_expects_every_folder_hivepilot_writes_to(self, tmp_path: Path) -> None:
+        """`audit()` must know about every folder the engine itself writes into.
+
+        The three write targets (`02 - Artifacts/`, `03 - Decisions/`,
+        `12 - HivePilot/`) are part of the vault layout HivePilot depends on, so
+        an audit that omitted one would report a complete-looking vault while
+        the engine was writing somewhere the operator was never told about.
+        Regression guard: `02 - Artifacts` was missing from the expected list
+        for several releases after `write_artifact()` shipped.
+        """
+        from hivepilot.services import obsidian_service as svc_mod
+
+        write_targets = {
+            svc_mod.ARTIFACT_TARGET_FOLDER,
+            svc_mod.ADR_TARGET_FOLDER,
+            svc_mod.HIVEPILOT_SUBTREE,
+        }
+        missing = write_targets - set(svc_mod.EXPECTED_TOP_LEVEL_FOLDERS)
+        assert not missing, f"write targets absent from audit expected layout: {sorted(missing)}"
+
+        # And they must surface in a real audit report of an empty vault.
+        vault = tmp_path / "EmptyVault"
+        vault.mkdir()
+        report = ObsidianService(vault_path=vault, dry_run=True).audit()
+        assert write_targets <= set(report["missing"])
 
     def test_audit_flags_frozen_folders(self, tmp_path: Path) -> None:
         vault = _make_full_vault(tmp_path)

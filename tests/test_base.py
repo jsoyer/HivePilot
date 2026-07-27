@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from hivepilot.config import Settings
 from hivepilot.models import EffectiveLessonsConfig, ProjectConfig, TaskStep
 from hivepilot.runners.base import (
     RunnerExecutionError,
@@ -17,6 +18,7 @@ from hivepilot.runners.base import (
     classify_signal_exit,
     detect_noop_permission_response,
     pop_last_usage,
+    prompt_file_not_found_message,
     set_last_usage,
 )
 
@@ -245,3 +247,48 @@ class TestDetectNoopPermissionResponse:
         reason_b = detect_noop_permission_response("Should I proceed with this change?")
         assert reason_a is not None
         assert reason_b is not None
+
+
+class TestPromptFileNotFoundMessage:
+    """`prompt_file_not_found_message()` -- the shared error-message builder
+    for a step's unresolved `prompt_file`, used by both `ClaudeRunner.
+    _assemble_prompt` and `PromptCliRunner._load_prompt` so the two runners
+    never drift into different wording. Real incident: the raw message used
+    to be just ``f"Prompt file not found: {prompt_path}"`` -- e.g. ``Prompt
+    file not found: /security_review.md`` -- which names neither the
+    offending task/step nor any of the OTHER directories that were also
+    searched (a service running with ``cwd=/`` makes the base_dir-tier
+    guess look like the only place ever checked)."""
+
+    def _payload(self, tmp_path: Path) -> RunnerPayload:
+        return RunnerPayload(
+            project_name="demo",
+            project=ProjectConfig(path=tmp_path),
+            task_name="pentest",
+            step=TaskStep(name="security review", runner="claude"),
+            metadata={},
+        )
+
+    def test_names_task_and_step(self, tmp_path: Path) -> None:
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        s.config_repo = None
+        s.base_dir = tmp_path
+        message = prompt_file_not_found_message(
+            self._payload(tmp_path), s, "security_review.md", tmp_path / "security_review.md"
+        )
+        assert "pentest" in message
+        assert "security review" in message
+        assert "security_review.md" in message
+
+    def test_lists_every_searched_directory(self, tmp_path: Path) -> None:
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        s.config_repo = None
+        s.base_dir = tmp_path / "base"
+        message = prompt_file_not_found_message(
+            self._payload(tmp_path),
+            s,
+            "security_review.md",
+            tmp_path / "base" / "security_review.md",
+        )
+        for search_dir in s.config_path_search_dirs():
+            assert str(search_dir) in message, f"{search_dir} missing from: {message}"

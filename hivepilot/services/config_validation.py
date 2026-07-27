@@ -240,17 +240,109 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
 
     # -----------------------------------------------------------------------
     # Check: every role's `prompt_file` resolves (file exists)
+    #
+    # Fail-closed (dangling-prompt_file sprint): a non-mapping role entry and
+    # an empty-or-whitespace-only `prompt_file` used to be silently skipped
+    # (`continue` / falsy-check) -- "I could not inspect this" must be a
+    # reported problem, never silence, mirroring the governing principle
+    # `hivepilot config doctor` already applies elsewhere in this codebase.
     # -----------------------------------------------------------------------
-    for role_def in roles_data.get("roles") or []:
+    for index, role_def in enumerate(roles_data.get("roles") or []):
         if not isinstance(role_def, dict):
+            problems.append(
+                f"Role entry at index {index} is not a mapping (got "
+                f"{type(role_def).__name__}) -- its prompt_file could not be checked"
+            )
+            continue
+        if "prompt_file" not in role_def:
             continue
         prompt_file = role_def.get("prompt_file")
-        if prompt_file:
-            resolved = prompts_dir / prompt_file
-            if not resolved.exists():
+        role_label = f"Role '{role_def.get('name', '?')}'"
+        if not isinstance(prompt_file, str):
+            problems.append(
+                f"{role_label} has an invalid prompt_file (must be a non-empty string, got "
+                f"{type(prompt_file).__name__})"
+            )
+            continue
+        if not prompt_file.strip():
+            problems.append(f"{role_label} has an empty-or-whitespace-only prompt_file")
+            continue
+        resolved = prompts_dir / prompt_file
+        if not resolved.exists():
+            problems.append(f"{role_label} prompt_file '{prompt_file}' not found at {resolved}")
+
+    # -----------------------------------------------------------------------
+    # Check: every task step's `prompt_file` resolves through the SAME chain
+    # the runtime uses to load it. Unlike a role's `prompt_file` (checked
+    # above -- resolved relative to `prompts/agents/`, via `prompts_dir`),
+    # a TaskStep's `prompt_file` is resolved VERBATIM by
+    # `Settings.resolve_config_path`, with NO `prompts/agents/` prefix --
+    # see `ClaudeRunner._assemble_prompt` / `PromptCliRunner._load_prompt`
+    # (hivepilot/runners/claude_runner.py, hivepilot/runners/
+    # prompt_cli_runner.py), both of which call
+    # `self.settings.resolve_config_path(step.prompt_file)` verbatim. This
+    # check calls that EXACT method (never reimplements the search order)
+    # so it can never disagree with what actually happens at run time.
+    #
+    # Real incident: an operator's tasks.yaml referenced
+    # `prompt_file: security_review.md` with no such file anywhere on the
+    # box. Both `hivepilot validate` and `hivepilot config doctor` reported
+    # zero findings; the failure only surfaced at RUNTIME
+    # (`FileNotFoundError: Prompt file not found: /security_review.md` --
+    # the service's cwd=/ base_dir tier), after the operator had already
+    # launched the pipeline and waited. This check closes that gap.
+    #
+    # Fail-closed (non-negotiable per this sprint): a non-mapping task/step
+    # entry, a non-list `steps`, and an empty-or-whitespace-only
+    # `prompt_file` are all reported as problems, never silently skipped --
+    # a config this check "could not inspect" must never look clean.
+    # -----------------------------------------------------------------------
+    for task_name, task_def in (tasks_data.get("tasks") or {}).items():
+        if not isinstance(task_def, dict):
+            problems.append(
+                f"Task '{task_name}' is not a mapping (got {type(task_def).__name__}) -- "
+                "its steps could not be checked for dangling prompt_file references"
+            )
+            continue
+        steps = task_def.get("steps")
+        if steps is None:
+            continue
+        if not isinstance(steps, list):
+            problems.append(
+                f"Task '{task_name}' key 'steps' is not a list (got {type(steps).__name__}) -- "
+                "its prompt_file references could not be checked"
+            )
+            continue
+        for step_index, step in enumerate(steps):
+            if not isinstance(step, dict):
                 problems.append(
-                    f"Role '{role_def.get('name', '?')}' prompt_file "
-                    f"'{prompt_file}' not found at {resolved}"
+                    f"Task '{task_name}' step index {step_index} is not a mapping (got "
+                    f"{type(step).__name__}) -- its prompt_file reference could not be checked"
+                )
+                continue
+            if "prompt_file" not in step:
+                continue
+            prompt_file = step.get("prompt_file")
+            step_label = f"Task '{task_name}' step '{step.get('name', '?')}'"
+            if not isinstance(prompt_file, str):
+                problems.append(
+                    f"{step_label} has an invalid prompt_file (must be a non-empty string, "
+                    f"got {type(prompt_file).__name__})"
+                )
+                continue
+            if not prompt_file.strip():
+                problems.append(f"{step_label} has an empty-or-whitespace-only prompt_file")
+                continue
+            if explicit_base_dir:
+                step_resolved = base_dir / prompt_file
+                step_searched = [str(base_dir)]
+            else:
+                step_resolved = settings.resolve_config_path(prompt_file)
+                step_searched = [str(d) for d in settings.config_path_search_dirs()]
+            if not step_resolved.exists():
+                problems.append(
+                    f"{step_label} prompt_file '{prompt_file}' not found "
+                    f"(resolved: {step_resolved}; searched: {', '.join(step_searched)})"
                 )
 
     # -----------------------------------------------------------------------
