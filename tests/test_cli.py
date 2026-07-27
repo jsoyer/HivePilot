@@ -346,18 +346,28 @@ class TestScheduleHealthCommand:
         assert result.exit_code == 0, result.output
         assert "task=docs" in result.output
 
-    def test_real_last_run_shows_formatted_date_not_literal_25(self) -> None:
+    def test_real_last_run_shows_formatted_date_not_literal_25(self, monkeypatch) -> None:
         """Regression: `last={last or 'never':<25}` applied the `<25`
         format spec directly to a `datetime` -- `datetime.__format__`
         interprets a spec with no `%` codes as an strftime pattern, so it
         rendered the literal string "<25" instead of left-padding a
         readable timestamp. `last` must be converted to a string FIRST,
         then padded.
+
+        Updated for the display-timestamps-local fix: `last` is now
+        rendered via `display_time.to_display` (local, marked) instead of
+        the raw UTC `strftime` string -- asserting the OLD literal
+        "2026-07-20 12:30:00" (raw UTC) would no longer hold by design,
+        since a human-facing CLI table must show local time, not UTC. This
+        test pins `display_timezone` explicitly so the conversion is
+        deterministic regardless of the host running the suite.
         """
         from datetime import datetime, timezone
 
+        from hivepilot.config import settings
         from hivepilot.services.schedule_service import ScheduleEntry
 
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
         entry = ScheduleEntry(name="docs-weekly", projects=["p"], task="docs", interval_minutes=60)
         last_run = datetime(2026, 7, 20, 12, 30, 0, tzinfo=timezone.utc)
         runner = CliRunner()
@@ -377,7 +387,9 @@ class TestScheduleHealthCommand:
             result = runner.invoke(app, ["schedule", "health"])
 
         assert result.exit_code == 0, result.output
-        assert "2026-07-20 12:30:00" in result.output
+        assert "12:30" not in result.output  # raw UTC clock time must not leak through
+        assert "14:30" in result.output  # 12:30 UTC == 14:30 CEST
+        assert "CEST" in result.output
         assert "<25" not in result.output
 
 

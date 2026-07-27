@@ -446,6 +446,7 @@ def _register_handlers(bolt_app) -> None:
             respond("Unauthorized channel.")
             return
         from hivepilot.services import state_service
+        from hivepilot.utils import display_time
 
         try:
             runs = state_service.list_recent_runs(limit=5)
@@ -455,7 +456,11 @@ def _register_handlers(bolt_app) -> None:
         if not runs:
             respond("No recent runs.")
             return
-        lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
+        lines = [
+            f"[{r['status']}] {r['project']} / {r['task']} — "
+            f"{display_time.to_display(r['started_at'])}"
+            for r in runs
+        ]
         respond("Recent runs:\n" + "\n".join(lines))
 
     # -- Approval button actions -----------------------------------------------

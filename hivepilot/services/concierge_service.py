@@ -359,15 +359,23 @@ def _known_projects() -> set[str] | None:
 
 def _grounding_snapshot() -> str:
     """Short read-only snapshot (recent runs + pending approvals) so the
-    classifier can ground ANSWER / approve / deny requests. Never raises."""
+    classifier can ground ANSWER / approve / deny requests. Never raises.
+
+    ``started_at`` is rendered via ``display_time.to_display`` (local,
+    marked) rather than interpolated raw — the classifier's NL answer often
+    echoes this snapshot back to the operator verbatim (e.g. "failed this
+    morning at 09:08"), so a raw UTC value here reproduces the exact
+    production incident this fixes at the LLM-prompt layer.
+    """
     from hivepilot.services import state_service
+    from hivepilot.utils import display_time
 
     lines: list[str] = []
     try:
         for r in state_service.list_recent_runs(limit=5):
             lines.append(
                 f"run: [{r.get('status')}] {r.get('project')}/{r.get('task')} "
-                f"@ {r.get('started_at')}"
+                f"@ {display_time.to_display(r.get('started_at'))}"
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("concierge.list_recent_runs_error", error=str(exc))

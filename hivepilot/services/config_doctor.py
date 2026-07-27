@@ -1539,6 +1539,72 @@ def check_vault_git_state() -> list[DoctorFinding]:
 
 
 # ---------------------------------------------------------------------------
+# Check: display-timestamps-local incident -- an operator was told a run
+# "failed this morning at 09:08" for an event that happened at 11:08 local
+# time, because every human-facing surface rendered the stored UTC value
+# with no conversion and no marker. `hivepilot.utils.display_time` is the
+# fix; this check catches the two ways that fix itself can be misconfigured
+# WITHOUT reproducing the noise-flood incident from
+# `check_enabled_plugins_loaded`'s docstring (17 false positives out of 19
+# findings) -- it only reports a REAL discrepancy:
+#   * an explicit `display_timezone` override that doesn't resolve to a
+#     real IANA zone (a typo) -- an ERROR, since every render call silently
+#     falls back to the system zone instead of what the operator asked for.
+#   * no override AND the host's system timezone couldn't be detected
+#     either -- a WARNING, since rendering then falls back to UTC while
+#     still looking like local time (the exact class of bug this fixes).
+# A correctly configured system (explicit valid override, OR no override
+# with a detectable system zone) is completely silent.
+# ---------------------------------------------------------------------------
+
+
+def check_display_timezone() -> list[DoctorFinding]:
+    from hivepilot.utils import display_time
+
+    override = settings.display_timezone
+    if override:
+        try:
+            display_time.ZoneInfo(override)
+        except (display_time.ZoneInfoNotFoundError, ValueError):
+            return [
+                _finding(
+                    "error",
+                    "invalid_display_timezone",
+                    f"HIVEPILOT_DISPLAY_TIMEZONE={override!r} is not a valid IANA timezone name",
+                    "every human-facing surface (Telegram/Slack/Discord/Signal chat "
+                    "replies, the NL concierge, CLI tables) silently falls back to the "
+                    "detected system timezone instead of the one you configured -- "
+                    "rendered times will be wrong by whatever offset separates the two, "
+                    "with no error visible anywhere except this check",
+                    "set HIVEPILOT_DISPLAY_TIMEZONE to a real IANA zone name, e.g. "
+                    "'Europe/Paris' (see the IANA tz database for the full list)",
+                )
+            ]
+        return []
+
+    if display_time.detect_system_zone_name() is not None:
+        return []
+
+    return [
+        _finding(
+            "warning",
+            "display_timezone_fallback_utc",
+            "No HIVEPILOT_DISPLAY_TIMEZONE is set, and this host's system timezone "
+            "could not be detected (no TZ env var, /etc/timezone, or resolvable "
+            "/etc/localtime symlink) -- every human-facing surface falls back to "
+            "rendering UTC",
+            "a UTC-fallback render still carries a 'UTC' marker, so it will not "
+            "silently be MISREAD as local time -- but every timestamp shown to the "
+            "operator will still be offset from local time until this is fixed, "
+            "exactly the incident this check exists to catch early",
+            "set HIVEPILOT_DISPLAY_TIMEZONE explicitly to the operator's IANA zone "
+            "name, e.g. 'Europe/Paris', or fix the host's system timezone "
+            "configuration (tzdata/setup-timezone)",
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1640,6 +1706,7 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
         )
     )
     findings.extend(_run_check("check_vault_git_state", check_vault_git_state))
+    findings.extend(_run_check("check_display_timezone", check_display_timezone))
     return _dedupe_findings(findings)
 
 

@@ -408,6 +408,32 @@ class TestCmdStatus:
         mock_runs.assert_not_called()
         followup.assert_not_called()
 
+    def test_started_at_uses_local_display_time_not_raw_utc(self, monkeypatch) -> None:
+        """Reproduces the production incident: a run stored at 09:08 UTC
+        (SQLite CURRENT_TIMESTAMP format) actually started 11:08 local time
+        in Europe/Paris (CEST) — `/status` must show the LOCAL, marked
+        time, not the raw UTC value."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        runs = [
+            {
+                "status": "failed",
+                "project": "groomer",
+                "task": "scan",
+                "started_at": "2026-07-27 09:08:32",
+            }
+        ]
+        with (
+            patch("hivepilot.services.state_service.list_recent_runs", return_value=runs),
+            patch.object(discord_bot, "_followup_message") as followup,
+        ):
+            discord_bot.handle_interaction(_command_body("status"), "sig", "ts")
+        content = followup.call_args.args[2]["content"]
+        assert "09:08" not in content
+        assert "11:08" in content
+        assert "CEST" in content
+
 
 # ---------------------------------------------------------------------------
 # MESSAGE_COMPONENT (button) — approve/deny — the security-sensitive path.

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import state_service, token_service
+from hivepilot.utils import display_time
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -50,7 +51,8 @@ def _format_approvals(pending: list[dict]) -> str:
     if not pending:
         return "No pending approvals."
     return "\n".join(
-        f"run_id={r['run_id']} project={r['project']} task={r['task']} requested={r['requested_at']}"
+        f"run_id={r['run_id']} project={r['project']} task={r['task']} "
+        f"requested={display_time.to_display(r['requested_at'])}"
         for r in pending
     )
 
@@ -228,7 +230,11 @@ def _dispatch(command: str, args: list[str], source: str) -> str:
         runs = state_service.list_recent_runs(limit=5)
         if not runs:
             return "No recent runs."
-        lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
+        lines = [
+            f"[{r['status']}] {r['project']} / {r['task']} — "
+            f"{display_time.to_display(r['started_at'])}"
+            for r in runs
+        ]
         return "Recent runs:\n" + "\n".join(lines)
 
     if settings.chatops_concierge_enabled:

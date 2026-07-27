@@ -156,6 +156,21 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_OTEL_SERVICE_NAME
     otel_service_name: str = "hivepilot"
     output_format: str = "json"
+    # IANA timezone name (e.g. "Europe/Paris") every HUMAN-facing surface
+    # (Telegram/Slack/Discord/Signal chat replies, the NL concierge, CLI
+    # tables) renders stored UTC timestamps in — see
+    # `hivepilot.utils.display_time`. This is deliberately a property of WHO
+    # IS READING, not of which host happens to run the scheduler: an
+    # operator running several pipelines on several machines wants ONE
+    # display timezone regardless of where a given pipeline's box lives.
+    # None (default) means "detect the HOST's system timezone" (TZ env var,
+    # then /etc/timezone, then /etc/localtime's symlink target); if none of
+    # those resolve, rendering falls back to UTC and `hivepilot config
+    # doctor` flags it so this never silently mis-renders again. Storage is
+    # NEVER affected by this setting — `state_service` always writes/reads
+    # UTC; only the rendered STRING shown to a human changes.
+    # env: HIVEPILOT_DISPLAY_TIMEZONE
+    display_timezone: str | None = None
     plugins_entry: str | None = None
     plugins_enabled: bool = True  # master on/off switch for local-file + entry-point plugin loading
     # Names of plugins to skip loading even when discovered (local-file stem

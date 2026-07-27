@@ -1095,3 +1095,33 @@ class TestMultiDispatch:
                 "give them the orders", default_role="developer", default_target="acme"
             )
         assert decision.kind == "answer"
+
+
+class TestGroundingSnapshotDisplaysLocalTime:
+    """Reproduces the production incident: `_grounding_snapshot` feeds the
+    classifier LLM raw stored timestamps, which it then echoes back to the
+    operator verbatim (e.g. "failed this morning at 09:08" for an event that
+    actually happened at 11:08 local time). The snapshot text itself must
+    already carry the LOCAL, marked time — not the raw UTC string — so any
+    NL answer built from it reads correctly."""
+
+    def test_run_line_uses_local_display_time_not_raw_utc(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        monkeypatch.setattr(
+            "hivepilot.services.state_service.list_recent_runs",
+            lambda limit=5: [
+                {
+                    "status": "failed",
+                    "project": "groomer",
+                    "task": "scan",
+                    "started_at": "2026-07-27 09:08:32",
+                }
+            ],
+        )
+        monkeypatch.setattr("hivepilot.services.state_service.get_pending_approvals", lambda: [])
+        snapshot = concierge_service._grounding_snapshot()
+        assert "09:08" not in snapshot
+        assert "11:08" in snapshot
+        assert "CEST" in snapshot

@@ -2510,3 +2510,42 @@ class TestSessionIncidentsNoiseFloor:
             f"a default config must yield zero ERROR findings from the new checks, "
             f"got: {[(f.check, f.message) for f in error_findings]}"
         )
+
+
+class TestDisplayTimezoneCheck:
+    """`check_display_timezone` — the doctor check for the display-timestamps
+    fix: an operator misconfigured display timezone must never silently
+    render UTC as if it were local (the original production incident)."""
+
+    def test_valid_override_is_silent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        findings = config_doctor.check_display_timezone()
+        assert findings == []
+
+    def test_no_override_with_detectable_system_zone_is_silent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "display_timezone", None, raising=False)
+        monkeypatch.setattr(
+            "hivepilot.utils.display_time.detect_system_zone_name",
+            lambda: "Europe/Paris",
+        )
+        findings = config_doctor.check_display_timezone()
+        assert findings == []
+
+    def test_invalid_override_is_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "display_timezone", "Not/AZone", raising=False)
+        findings = config_doctor.check_display_timezone()
+        assert len(findings) == 1
+        assert findings[0].severity == "error"
+        assert findings[0].check == "invalid_display_timezone"
+
+    def test_no_override_and_undetectable_system_zone_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "display_timezone", None, raising=False)
+        monkeypatch.setattr("hivepilot.utils.display_time.detect_system_zone_name", lambda: None)
+        findings = config_doctor.check_display_timezone()
+        assert len(findings) == 1
+        assert findings[0].severity == "warning"
+        assert findings[0].check == "display_timezone_fallback_utc"

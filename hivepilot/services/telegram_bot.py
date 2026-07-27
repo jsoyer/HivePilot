@@ -1317,6 +1317,7 @@ async def _cmd_status(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
     from hivepilot.services import state_service
+    from hivepilot.utils import display_time
 
     try:
         runs = state_service.list_recent_runs(limit=5)
@@ -1326,7 +1327,10 @@ async def _cmd_status(update, context) -> None:
     if not runs:
         await update.message.reply_text("No recent runs.")
         return
-    lines = [f"[{r['status']}] {r['project']} / {r['task']} — {r['started_at']}" for r in runs]
+    lines = [
+        f"[{r['status']}] {r['project']} / {r['task']} — {display_time.to_display(r['started_at'])}"
+        for r in runs
+    ]
     await update.message.reply_text("Recent runs:\n" + "\n".join(lines))
 
 
@@ -1806,6 +1810,7 @@ async def _cmd_steps(update, context) -> None:
         await update.message.reply_text("Usage: /steps <run_id>")
         return
     from hivepilot.services import state_service
+    from hivepilot.utils import display_time
 
     steps = state_service.get_steps_for_run(int(args[0]))
     if not steps:
@@ -1813,7 +1818,8 @@ async def _cmd_steps(update, context) -> None:
         return
     lines = []
     for s in steps:
-        line = f"[{s['status']}] {s['step']} \u2014 {s.get('timestamp', '')}"
+        rendered_ts = display_time.to_display(s.get("timestamp"))
+        line = f"[{s['status']}] {s['step']} \u2014 {rendered_ts}"
         if s.get("detail"):
             line += f"\n  {str(s['detail'])[:120]}"
         lines.append(line)
