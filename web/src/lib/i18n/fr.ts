@@ -5,7 +5,7 @@ import type { TranslationKey } from './en'
  * so a missing or extra key is a COMPILE error, not a silent runtime gap.
  * The operator is a native FR speaker (Mirador -> "Vigie" upgrade, P1a) —
  * natural French copy, not a literal word-for-word translation. Product/
- * technical proper nouns ("Mirador", "Mem0") are left untranslated.
+ * technical proper nouns ("Pollen", "Mem0") are left untranslated.
  */
 export const fr: Record<TranslationKey, string> = {
   // ---- common ----------------------------------------------------------
@@ -35,10 +35,10 @@ export const fr: Record<TranslationKey, string> = {
   'common.stopping': 'Arrêt en cours…',
   'common.requiresRunRankLead': 'Cette vue nécessite un jeton de rang',
   'common.requiresRunRankTail':
-    '(ou supérieur). Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule cette liste nécessite un rôle supérieur.',
+    '(ou supérieur). Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule cette liste nécessite un rôle supérieur.',
 
   // ---- header / shell ----------------------------------------------------
-  'header.subtitle': "console d'opérations cyber",
+  'header.subtitle': 'tableau de bord HivePilot',
   'header.search': 'Rechercher',
 
   // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
@@ -50,7 +50,7 @@ export const fr: Record<TranslationKey, string> = {
   'palette.toggleLanguage': 'Changer de langue (EN/FR)',
 
   // ---- nav -----------------------------------------------------------
-  'nav.commandCenter': 'Centre de commandement',
+  'nav.atAGlance': "En un coup d'œil",
   'nav.home': 'Accueil',
   'nav.overview': "Vue d'ensemble",
   'nav.operate': 'Opérations',
@@ -150,7 +150,7 @@ export const fr: Record<TranslationKey, string> = {
   'graph.requiresTokenLead': 'Cette source nécessite un rôle',
   'graph.requiresTokenTail': '.',
   'graph.requiresTokenNote':
-    'Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule cette source de graphe nécessite un rôle supérieur.',
+    'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule cette source de graphe nécessite un rôle supérieur.',
   'graph.higherPrivilege': 'à privilège supérieur',
   'graph.aParameter': 'un paramètre',
   'graph.parameters': 'des paramètres',
@@ -176,7 +176,7 @@ export const fr: Record<TranslationKey, string> = {
   'mem0.requiresTokenLead': 'Cette vue nécessite un rôle',
   'mem0.requiresTokenTail': '.',
   'mem0.requiresTokenNote':
-    'Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule la recherche Mem0 nécessite un rôle supérieur.',
+    'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule la recherche Mem0 nécessite un rôle supérieur.',
   'mem0.notConfigured': "mem0 n'est pas configuré.",
   'mem0.noResults': 'Aucune mémoire trouvée pour cette recherche.',
   'mem0.category': 'Catégorie',
@@ -218,7 +218,7 @@ export const fr: Record<TranslationKey, string> = {
   'runs.started': 'Démarrée',
   'runs.finished': 'Terminée',
 
-  // ---- Vue Run Board (section Opérations de Mirador — Kanban des exécutions) ----
+  // ---- Vue Run Board (section Opérations de Pollen — Kanban des exécutions) ----
   'board.description':
     'Statut en direct de chaque exécution, regroupé par étape — cliquez sur une carte pour le détail.',
   'board.descriptionReadOnly':
@@ -237,7 +237,7 @@ export const fr: Record<TranslationKey, string> = {
   'board.duration': 'a duré {duration}',
   'board.kanbanScrollLabel': 'Faire défiler les colonnes horizontalement',
 
-  // ---- Panneau de détail d'exécution (section Opérations de Mirador) ----
+  // ---- Panneau de détail d'exécution (section Opérations de Pollen) ----
   'runDetail.title': 'Exécution #{id}',
   'runDetail.closeAriaLabel': "Fermer le détail de l'exécution",
   'runDetail.stepsTitle': 'Étapes',
@@ -286,7 +286,7 @@ export const fr: Record<TranslationKey, string> = {
   'reality.requiresTokenLead': 'Cette section nécessite un rôle',
   'reality.requiresTokenTail': 'à privilège supérieur.',
   'reality.requiresTokenNote':
-    'Votre jeton actuel fonctionne toujours pour les autres onglets de Mirador — seule cette section nécessite un rôle supérieur.',
+    'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule cette section nécessite un rôle supérieur.',
 
   // ---- Memory view (onglets unifiés Qualité/Croissance/Recherche) ------
   'memory.tabQuality': 'Qualité',
@@ -304,9 +304,9 @@ export const fr: Record<TranslationKey, string> = {
     "Une répartition humain / agent n'est pas disponible — la vraie répartition par acteur est affichée à la place.",
   'memory.growthEmptyState': 'Aucune croissance de mémoire enregistrée sur cette période.',
 
-  // ---- Home view (centre de commandement, vue d'accueil par défaut) ----
+  // ---- Home view (vue d'accueil par défaut) -----------------------------
   'home.subtitle': "Votre flotte en un coup d'œil — cliquez sur un chiffre pour l'explorer.",
-  'home.kpiSectionTitle': 'Posture',
+  'home.kpiSectionTitle': 'Aperçu',
   'home.refreshingLabel': 'Actualisation',
   'home.kpiSpendToday': 'Dépense du jour',
   'home.kpiSpendSub': 'dernières 24h',
@@ -343,7 +343,7 @@ export const fr: Record<TranslationKey, string> = {
   'home.activityRunLabel': 'Run',
   'home.activityApprovalLabel': 'Approbation',
 
-  // ---- Models view (section Dépenses de Mirador) ------------------------
+  // ---- Models view (section Dépenses de Pollen) ------------------------
   'models.title': 'Modèles',
   'models.description': 'Coût, volume de tokens et taux de réussite par modèle',
   'models.noModels': "Aucune donnée de modèle pour l'instant.",
@@ -358,7 +358,7 @@ export const fr: Record<TranslationKey, string> = {
   'models.latencyNotAvailable':
     "Non disponible — la latence p50/p95 ne peut pas être calculée à partir des données actuelles.",
 
-  // ---- Efficiency view (section Dépenses de Mirador) ---------------------
+  // ---- Efficiency view (section Dépenses de Pollen) ---------------------
   'efficiency.title': 'Efficacité',
   'efficiency.description': 'Signaux d’économie de tokens de la compression Headroom et de la CLI rtk',
   'efficiency.headroomTitle': 'Headroom',

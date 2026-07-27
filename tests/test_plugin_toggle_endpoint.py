@@ -1,4 +1,4 @@
-"""Tests for `POST /v1/plugins/{name}/toggle` (Mirador actionable dashboard
+"""Tests for `POST /v1/plugins/{name}/toggle` (Pollen actionable dashboard
 PRD, Sprint 5).
 
 Mirrors the auth/fixture patterns established in `tests/test_cancel_run.py`

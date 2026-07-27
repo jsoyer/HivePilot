@@ -8,7 +8,7 @@ import type {
   EfficiencySummary,
   MemoryReality,
   RunSummary,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
 const {
@@ -31,8 +31,8 @@ const {
   useRoleMock: vi.fn(),
 }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return {
     ...actual,
     fetchAnalyticsCost,

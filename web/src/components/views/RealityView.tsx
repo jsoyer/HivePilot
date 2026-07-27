@@ -12,7 +12,7 @@ import {
   fetchMemoryJournal,
   fetchMemoryReality,
   type MemoryJournalEntry,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 import type { AsyncState } from '@/lib/use-async-data'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
@@ -101,7 +101,7 @@ function ForbiddenAwareSection<T>({
 }
 
 /**
- * Réalité tab — Mirador's memory-quality dashboard, consuming
+ * Réalité tab — Pollen's memory-quality dashboard, consuming
  * `/v1/memory/{reality,gaps,evaluations,journal}`. Answers "does the memory
  * substrate actually help", not just how much it holds: search
  * success/no-result rate, recall freshness, human-declared reliability,
@@ -124,7 +124,7 @@ function ForbiddenAwareSection<T>({
  *
  * **Security:** `namespace` / `query_or_key` / `note` / `actor` /
  * `top_queries` are all caller-influenced free text (untrusted — see
- * `mirador-api.ts`'s module note above the memory fetchers). Every one of
+ * `pollen-api.ts`'s module note above the memory fetchers). Every one of
  * them is rendered via plain JSX text interpolation only — this file never
  * bypasses React's auto-escaping with a raw-HTML injection prop.
  */

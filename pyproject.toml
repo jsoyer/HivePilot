@@ -136,7 +136,7 @@ containers = [
 pdf = [
   "fpdf2>=2.7,<3.0",
 ]
-# Mirador web UI (hivepilot/webui/) — serves the pre-built React/Vite bundle
+# Pollen web UI (hivepilot/webui/) — serves the pre-built React/Vite bundle
 # committed under hivepilot/webui/static/ (see [tool.setuptools.package-data]
 # below) at GET /ui, gated by HIVEPILOT_ENABLE_WEBUI. This is a thin/marker
 # extra: StaticFiles/FileResponse come from starlette, already pulled in by
@@ -278,7 +278,7 @@ include-package-data = true
 include = ["hivepilot*"]
 
 [tool.setuptools.package-data]
-# Ship the pre-built Mirador web UI bundle (committed, not generated at
+# Ship the pre-built Pollen web UI bundle (committed, not generated at
 # build time — see web/vite.config.ts's build.outDir) inside the wheel, so
 # `pip install hivepilot[webui]` needs zero Node. "**/*" covers the nested
 # assets/ subdirectory (JS/CSS/font chunks) as well as index.html/favicon.svg.

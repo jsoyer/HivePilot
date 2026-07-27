@@ -481,7 +481,7 @@ def drain_one(orchestrator: Any, *, tenant: str = "default") -> QueueItem | None
     Returns the `QueueItem` that was inspected (in whatever state it ended
     up in), or `None` if the drain is paused/stopped or nothing is
     dispatchable. On DENY, the row is left exactly as it was (never
-    silently advanced) and the reason is logged so Mirador/the CLI can
+    silently advanced) and the reason is logged so Pollen/the CLI can
     surface "awaiting human". On ALLOW, dispatches via
     `orchestrator.run_pipeline(...)` exactly once, then records the cost
     delta this run consumed and marks the row `done`; a raised exception

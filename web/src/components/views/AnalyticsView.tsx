@@ -11,7 +11,7 @@ import {
   fetchAnalyticsTrends,
   fetchApprovalLatency,
   fetchStepFailures,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 import { PercentileBars, TrendBarChart } from './charts'

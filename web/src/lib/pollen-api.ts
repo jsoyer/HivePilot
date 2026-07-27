@@ -1,5 +1,5 @@
 /**
- * Typed shapes + fetch wrappers for the Mirador web UI's data sources —
+ * Typed shapes + fetch wrappers for the Pollen web UI's data sources —
  * HivePilot's own `/v1/analytics/*`, `/v1/plugins/health`, and `/v1/memories`
  * endpoints. Field names/shapes are transcribed directly from
  * `hivepilot/services/analytics_service.py` and `hivepilot/services/
@@ -347,7 +347,7 @@ export function fetchMemories(query: string, limit = 20): Promise<MemoriesRespon
 }
 
 // ---------------------------------------------------------------------------
-// GET /v1/panels, GET /v1/panels/{name} — Mirador plugin `panel` type
+// GET /v1/panels, GET /v1/panels/{name} — Pollen plugin `panel` type
 // (Sprint 3 web surface). Shapes transcribed from `hivepilot/plugins.py`
 // `PanelSpec` / `PanelData` / `PanelStatSection` / `PanelTableSection` /
 // `PanelTextSection` — read that file before changing anything here.
@@ -445,7 +445,7 @@ export function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// GET /v1/approvals, POST /v1/approvals/{run_id} — Mirador actionable
+// GET /v1/approvals, POST /v1/approvals/{run_id} — Pollen actionable
 // dashboard PRD, Sprint 2. Shapes transcribed from `hivepilot/services/
 // state_service.py`'s `approvals` table (`CREATE TABLE ... approvals`,
 // columns: run_id/project/task/metadata/status/requested_at/approved_by/
@@ -771,7 +771,7 @@ export function fetchGraphNode(source: string, nodeId: string): Promise<GraphDet
 
 // ---------------------------------------------------------------------------
 // GET /v1/memory/reality, /v1/memory/gaps, /v1/memory/evaluations,
-// /v1/memory/journal — backs Mirador's "Réalité" memory-quality view. Shapes
+// /v1/memory/journal — backs Pollen's "Réalité" memory-quality view. Shapes
 // transcribed directly from `hivepilot/services/memory_service.py`'s
 // `reality_summary`/`gaps_by_namespace`/`recent_evaluations`/
 // `activity_journal` and `api_service.py`'s `memory_reality`/`memory_gaps`/

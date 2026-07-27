@@ -38,7 +38,7 @@ next, instead of a human hard-coding a fixed `task:` in `schedules.yaml`.
                                                   -> mark "done"/"blocked"
                                                -> DENY: row stays exactly
                                                   as-is, reason logged
-                                                  (Mirador can show
+                                                  (Pollen can show
                                                   "awaiting human")
 ```
 

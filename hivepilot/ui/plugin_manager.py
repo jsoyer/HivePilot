@@ -41,7 +41,7 @@ PLUGIN_COLUMNS = ("Name", "Source", "Status", "Type(s)", "Detail")
 _STATUS_COLUMN_INDEX = 2
 
 # Kept in the display order the Type/Detail columns render capabilities in.
-# `secrets` / `panels` were added when the secrets-backend and Mirador-panel
+# `secrets` / `panels` were added when the secrets-backend and panel
 # plugin types landed — this Textual screen originally only knew runners/
 # notifiers/hooks, so a secrets-backend plugin (infisical/onepassword) or a
 # panel-contributing plugin (sample) rendered as "unknown (see aggregate)".

@@ -19,7 +19,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { LanguageProvider, useT } from '@/lib/i18n'
-import { fetchPanels } from '@/lib/mirador-api'
+import { fetchPanels } from '@/lib/pollen-api'
 import { RoleProvider } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { CommandPalette } from './CommandPalette'
@@ -44,13 +44,13 @@ import { RunBoardView } from './views/RunBoardView'
 
 // FR/EN i18n (P1a): `labelKey` is a `TranslationKey` (see `@/lib/i18n`), NOT
 // display text — resolved to the current language via `t()` where
-// `navItems` is built below, in `MiradorShell` (which has `useT()` in
+// `navItems` is built below, in `PollenShell` (which has `useT()` in
 // scope, unlike this module-level constant).
 // Mirador Home command-center sprint: Home is the FIRST built-in tab and
 // the default landing view (`activeView` below). Its `Panel` here (`() =>
 // <HomeView onNavigate={...} />`) is a thin wrapper only used by the
 // generic `BUILTIN_TABS.map` render loop below — the wrapper is defined
-// inline per-render (see `MiradorShell`) so it can close over the real
+// inline per-render (see `PollenShell`) so it can close over the real
 // `setActiveView`, keeping `HomeView` itself a plain, directly-testable
 // component that takes `onNavigate` as an explicit prop rather than reading
 // shell state from context.
@@ -103,13 +103,13 @@ function panelTabValue(name: string): string {
 }
 
 /**
- * The Mirador app shell — dark, grouped-sidebar insight dashboard (P0b:
+ * The Pollen app shell — dark, grouped-sidebar insight dashboard (P0b:
  * sidebar nav + enriched header, upgrading the original flat top tab bar).
  * Eight built-in items (Home / Analytics / Cost / Health / Memory /
  * Approvals / Runs / Graph, wired to real HivePilot API data — `/v1/models`,
  * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`,
  * `/v1/memory/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`, see `./views/*`
- * and `@/lib/mirador-api`) — Memory itself merges the FORMER separate Mem0
+ * and `@/lib/pollen-api`) — Memory itself merges the FORMER separate Mem0
  * (search) and Réalité (quality) built-ins into one item with internal
  * Quality/Growth/Search tabs (see `MemoryView`'s own docstring) — grouped by
  * `./nav/nav-config`'s `buildNavGroups`, plus one DYNAMIC item per
@@ -127,8 +127,8 @@ function panelTabValue(name: string): string {
  * aside/drawer instead of a horizontal strip. See `SidebarNav`'s docstring
  * for why that's a single `TabsList`, not one per group.
  *
- * FR/EN i18n (P1a): the exported `Mirador` is just a `LanguageProvider`
- * wrap around the actual shell (`MiradorShell`) — `useT()` needs a provider
+ * FR/EN i18n (P1a): the exported `Pollen` is just a `LanguageProvider`
+ * wrap around the actual shell (`PollenShell`) — `useT()` needs a provider
  * ABOVE it in the tree, so it can't be called from the same component that
  * defines the provider.
  *
@@ -145,7 +145,7 @@ function panelTabValue(name: string): string {
  * (was `'analytics'`) — Home is the default landing view, first in both
  * `BUILTIN_TABS` and `nav-config.ts`'s `NAV_GROUP_ORDER`.
  */
-function MiradorShell() {
+function PollenShell() {
   const t = useT()
   const panelsState = useAsyncData(() => fetchPanels(), [])
   const pluginPanels = panelsState.status === 'success' ? panelsState.data.panels : []
@@ -174,7 +174,7 @@ function MiradorShell() {
     // app-wide via useRole() — see @/lib/role-context. Provider wrap only;
     // no other logic changes here.
     <RoleProvider>
-      {/* IA/Cyber identity: `bg-grid` paints the faint tech-grid + soft
+      {/* visual identity: `bg-grid` paints the faint tech-grid + soft
        * radial glow across the whole shell (see `src/index.css`) — a
        * background-image only, so it never affects layout/scroll behavior.
        * The header stays a "glass panel" (semi-transparent + backdrop-blur,
@@ -199,9 +199,9 @@ function MiradorShell() {
           >
             <Menu className="size-4" />
           </Button>
-          {/* IA/Cyber identity: the brand block (mirrors the reference
-           * mockup's `.brand` — a conic-gradient logo mark + "MIRADOR" +
-           * a lowercase eyebrow subtitle) instead of a plain wordmark. */}
+          {/* Brand block (mirrors the reference mockup's `.brand` layout —
+           * a conic-gradient logo mark + wordmark + a lowercase eyebrow
+           * subtitle, now reading "Pollen") instead of a plain wordmark. */}
           <div className="flex min-w-0 items-center gap-2.5">
             <span
               data-slot="brand-mark"
@@ -215,7 +215,7 @@ function MiradorShell() {
               <span className="absolute inset-[3px] rounded-[5px] bg-background" />
             </span>
             <div className="flex min-w-0 flex-col">
-              <h1 className="truncate text-base font-bold tracking-wide uppercase">Mirador</h1>
+              <h1 className="truncate text-base font-bold tracking-wide uppercase">Pollen</h1>
               <span className="eyebrow truncate">{t('header.subtitle')}</span>
             </div>
           </div>
@@ -279,10 +279,10 @@ function MiradorShell() {
   )
 }
 
-export function Mirador() {
+export function Pollen() {
   return (
     <LanguageProvider>
-      <MiradorShell />
+      <PollenShell />
     </LanguageProvider>
   )
 }

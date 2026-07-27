@@ -1,4 +1,4 @@
-"""Memory-quality instrumentation subsystem — backs Mirador's "Réalité" view.
+"""Memory-quality instrumentation subsystem — backs Pollen's "Réalité" view.
 
 Core HivePilot has RUN analytics (`analytics_service.py`) but no source of
 truth for how well the *memory* layer (e.g. the `mem0` plugin's `recall`/
@@ -408,12 +408,12 @@ def recent_evaluations(tenant: str | None = None, limit: int = 50) -> list[dict[
 
 
 # ---------------------------------------------------------------------------
-# growth_summary (Mirador data endpoints sprint) -- GET /v1/memory/growth.
+# growth_summary (Pollen data endpoints sprint) -- GET /v1/memory/growth.
 # ---------------------------------------------------------------------------
 
 
 def growth_summary(tenant: str | None = None, days: int | None = 30) -> dict[str, Any]:
-    """Memory growth aggregates for Mirador's growth panel, derived from
+    """Memory growth aggregates for Pollen's growth panel, derived from
     `memory_events` (`op='store'` rows only -- search/read events don't
     represent a memory being CREATED).
 

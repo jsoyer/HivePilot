@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { PanelData } from '@/lib/mirador-api'
+import type { PanelData } from '@/lib/pollen-api'
 import { PanelRenderer } from './PanelRenderer'
 
 let container: HTMLDivElement

@@ -31,7 +31,7 @@ import {
   fetchRuns,
   postApproval,
   type RunSummary,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import type { AsyncState } from '@/lib/use-async-data'
 import { useAsyncData } from '@/lib/use-async-data'
@@ -56,7 +56,7 @@ const MAX_ATTENTION_RUNS = 5
 const MAX_FEED_ITEMS = 10
 
 export interface HomeViewProps {
-  /** Switches Mirador's active view (the same `setActiveView` the sidebar/
+  /** Switches Pollen's active view (the same `setActiveView` the sidebar/
    * command palette drive) — every hero KPI card is a deep link into the
    * view that explains it. */
   onNavigate: (view: string) => void
@@ -139,7 +139,7 @@ const TONE_DOT: Record<VizTone, string> = {
 }
 
 /** `ActivityEntry.status`/`kind` -> the same tone family the rest of
- * Mirador's viz primitives use, for the activity feed's status dot. */
+ * Pollen's viz primitives use, for the activity feed's status dot. */
 function activityTone(status: string): VizTone {
   if (FAILURE_STATUSES.has(status)) return 'crit'
   if (status === 'running' || status === 'awaiting_approval' || status === 'approval' || status === 'pending') {
@@ -620,8 +620,8 @@ function ActivityFeedSection({ runsState, approvalsState }: ActivityFeedSectionP
 }
 
 /**
- * Mirador's Home / command-center — the default landing view (consumes
- * FE-1's viz primitives + the Mirador data endpoints sprint's
+ * Pollen's Home view — the default landing view (consumes
+ * FE-1's viz primitives + the Pollen data endpoints sprint's
  * `/v1/models`, `/v1/efficiency`, `/v1/memory/growth`, extended
  * `/v1/analytics/cost`, plus the already-shipped `/v1/analytics/summary`,
  * `/v1/memory/reality`, `/v1/approvals`, `/v1/runs`).

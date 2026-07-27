@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiForbiddenError } from '@/lib/api'
 import { useT } from '@/lib/i18n'
-import { fetchMemories, type MemoriesResponse } from '@/lib/mirador-api'
+import { fetchMemories, type MemoriesResponse } from '@/lib/pollen-api'
 import { type AsyncState, useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 

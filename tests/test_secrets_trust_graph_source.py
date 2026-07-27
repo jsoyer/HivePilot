@@ -1,4 +1,4 @@
-"""Tests for `plugins/secrets_trust_graph_source.py` (Mirador GraphSources
+"""Tests for `plugins/secrets_trust_graph_source.py` (Pollen GraphSources
 plugin sprint) -- the plugin-contributed `secrets-trust` graph source over
 the secrets registry (`hivepilot.registry.SECRETS_MAP`) and the declared
 secret NAME catalog (`ProjectConfig.secrets`, `hivepilot/models.py`).

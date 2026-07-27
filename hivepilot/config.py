@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     concurrency_limit: int = 4
     interactive_default_all: bool = False
     enable_textual_ui: bool = False
-    # Mirador web UI (hivepilot/webui/) — serves the pre-built React/Vite
+    # Pollen web UI (hivepilot/webui/) — serves the pre-built React/Vite
     # bundle committed under hivepilot/webui/static/ at GET /ui. Off by
     # default; mirrors enable_textual_ui's opt-in pattern above. Also
     # requires a real build to be present (hivepilot.webui.static_available())
@@ -537,7 +537,7 @@ class Settings(BaseSettings):
     # (every plugins/*.py stem must have a matching `<stem>_enabled` flag).
     # env: HIVEPILOT_EXAMPLE_GRAPH_SOURCE_ENABLED
     example_graph_source_enabled: bool = False
-    # Two more plugin-contributed `graph_sources` (Mirador GraphSources
+    # Two more plugin-contributed `graph_sources` (Pollen GraphSources
     # plugins sprint) -- opt-IN, dormant by default, same pattern as
     # example_graph_source_enabled above. `drift` renders the IaC drift-scan
     # history (plugins/drift_graph_source.py); `secrets-trust` renders which
@@ -566,7 +566,7 @@ class Settings(BaseSettings):
     headroom_panel_enabled: bool = False
     # Two more opt-in `skill`-type plugins -- dormant by default, same
     # pattern as sample_skill_enabled above. `shadcn` (plugins/shadcn.py)
-    # is a Mirador web accelerator (shadcn/ui + Tailwind conventions for
+    # is a Pollen web accelerator (shadcn/ui + Tailwind conventions for
     # web/); `improve` (plugins/improve.py) is a read-only auditor whose
     # findings feed the review/lessons loop. Both required by
     # tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag.

@@ -244,24 +244,26 @@ def _mem0_memory_rows(results: Any, limit: int = 20) -> list[tuple[str, str, str
 
 
 class RunDashboard(App):
-    """Mirador — HivePilot's tabbed Textual insight dashboard.
+    """Pollen — HivePilot's tabbed Textual insight dashboard.
 
-    "Mirador" is this dashboard's name (a lookout point — fitting for an
-    at-a-glance operator view); the launch command stays `hivepilot
-    dashboard` (see `hivepilot/cli.py`), gated behind
-    `HIVEPILOT_ENABLE_TEXTUAL_UI` exactly as before.
+    "Pollen" is this dashboard's name — identical in French and English, and
+    it's what foragers gather from everywhere and bring back to one place,
+    fitting for a dashboard that pulls together runs across every project
+    and machine; the launch command stays `hivepilot dashboard` (see
+    `hivepilot/cli.py`), gated behind `HIVEPILOT_ENABLE_TEXTUAL_UI` exactly
+    as before.
 
     Four built-in tabs: **Analytics** (runs, metrics, step-failure hotspots,
     recent interactions), **Cost** (per-provider/model cost & token
     breakdown), **Health** (plugin health via `PluginManager.check_all()`),
     and **Mem0** (recent memories when mem0 is configured+reachable, else a
     clear "not configured" placeholder — never crashes, never shows a
-    secret). Plus one additional tab per Mirador **panel** plugin
+    secret). Plus one additional tab per Pollen **panel** plugin
     (`hivepilot.plugins.PanelSpec` — see module docstring on `PanelData`),
     rendered generically from its `stat`/`table`/`text` sections (Sprint 2).
     """
 
-    TITLE = "Mirador"
+    TITLE = "Pollen"
 
     CSS = """
     #metrics {

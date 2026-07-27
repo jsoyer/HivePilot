@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
-import { fetchPanel } from '@/lib/mirador-api'
+import { fetchPanel } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { PanelRenderer } from './PanelRenderer'
 
@@ -12,7 +12,7 @@ interface PanelViewProps {
 }
 
 /**
- * Generic tab body for a single plugin-contributed Mirador panel (Sprint 3
+ * Generic tab body for a single plugin-contributed Pollen panel (Sprint 3
  * web surface) — `GET /v1/panels/{name}`, rendered via `PanelRenderer`.
  *
  * Mirrors `Mem0View`'s 403 handling: a panel's own `min_role` may be higher
@@ -21,7 +21,7 @@ interface PanelViewProps {
  * 403 here throws `ApiForbiddenError` and leaves the token untouched; this
  * view special-cases that one error type into a graceful "requires a
  * <minRole> token" message instead of the generic error card, so a valid
- * lower-role token keeps working for every other Mirador tab.
+ * lower-role token keeps working for every other Pollen tab.
  */
 export function PanelView({ name, title, minRole }: PanelViewProps) {
   const state = useAsyncData(() => fetchPanel(name), [name])
@@ -48,7 +48,7 @@ export function PanelView({ name, title, minRole }: PanelViewProps) {
               >
                 This panel requires a{' '}
                 <span className="font-medium text-foreground">{minRole}</span> token. Your
-                current token can still use the other Mirador tabs — only this panel needs a
+                current token can still use the other Pollen tabs — only this panel needs a
                 higher role.
               </div>
             ) : (

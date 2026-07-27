@@ -16,7 +16,7 @@ import {
   fetchAutopilot,
   pauseAutopilot,
   resumeAutopilot,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
@@ -135,7 +135,7 @@ function ControlButton({ paused, canControl, onChanged }: ControlButtonProps) {
 
 /**
  * Budget section — real-or-honest-null, field by field (see the module
- * comment in `mirador-api.ts` above `fetchAutopilot`). `budget_daily_usd
+ * comment in `pollen-api.ts` above `fetchAutopilot`). `budget_daily_usd
  * === null` means no daily budget is configured at all: an honest note, no
  * gauge (there is nothing to burn against). Otherwise, `budget_spent_today`/
  * `budget_remaining` render "unknown" whenever `null` (a spend-lookup
@@ -297,7 +297,7 @@ function AllowlistSection({ allowlist }: { allowlist: string[] }) {
 
 /**
  * Autopilot view — `GET /v1/autopilot` (tenant-locked, real-or-honest-empty
- * state, see `mirador-api.ts`'s module comment above `fetchAutopilot`),
+ * state, see `pollen-api.ts`'s module comment above `fetchAutopilot`),
  * polled every `POLL_INTERVAL_MS` so a pause/resume or a fresh dispatch
  * shows up without a manual refresh. Pause/Resume (`POST /v1/autopilot/
  * pause|resume`) is gated at `run` server-side; the control disables for a

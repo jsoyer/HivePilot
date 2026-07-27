@@ -118,7 +118,7 @@ def _normalize_health_result(result: Any) -> HealthStatus:
     return HealthStatus(status, str(detail) if detail is not None else "")
 
 
-# Mirador panel plugin type (Sprint 1 — routing + contracts only; TUI
+# Pollen panel plugin type (Sprint 1 — routing + contracts only; TUI
 # rendering is Sprint 2, web is Sprint 3). A plugin contributes renderer-agnostic
 # panels via `register()["panels"] = [PanelSpec, ...]`. `PanelSpec` is a PLAIN
 # DICT at runtime (TypedDict is a type-checking-only construct — no dataclass
@@ -345,7 +345,7 @@ class SkillInvalidMinRoleError(RuntimeError):
 
 
 # Graph-source plugin capability (Mirador Graph View PRD, Sprint 4). A
-# plugin contributes Mirador graph sources via `register()["graph_sources"]
+# plugin contributes Pollen graph sources via `register()["graph_sources"]
 # = [GraphSourceSpec, ...]`, EXACTLY the way `"panels"` -> `list[PanelSpec]`
 # works above. Unlike `PanelSpec`/`SkillSpec` (plain `TypedDict`s defined IN
 # this module), `GraphSourceSpec` is a real frozen dataclass defined in

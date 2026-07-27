@@ -1,5 +1,5 @@
-"""Efficiency data sources for the Mirador `/v1/efficiency` endpoint
-(Mirador data endpoints sprint).
+"""Efficiency data sources for the Pollen `/v1/efficiency` endpoint
+(Pollen data endpoints sprint).
 
 Composes two independent, best-effort "token/context savings" signals:
 

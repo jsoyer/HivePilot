@@ -1,6 +1,6 @@
-"""Tests for `hivepilot.services.efficiency_service` (Mirador data endpoints
+"""Tests for `hivepilot.services.efficiency_service` (Pollen data endpoints
 sprint) -- composes two independent, best-effort "savings" sources for the
-Mirador Efficiency panel:
+Pollen Efficiency panel:
 
 - **headroom**: a real, always-present, zero-safe delegate to
   `hivepilot.services.headroom_metrics.efficiency_summary` (a genuinely

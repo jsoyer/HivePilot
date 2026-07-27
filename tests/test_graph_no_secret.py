@@ -1,4 +1,4 @@
-"""No-secret-leak tests for the Mirador Graph View graph endpoints (Sprint
+"""No-secret-leak tests for the Pollen Graph View graph endpoints (Sprint
 1): a secret plugin's graph node/detail must expose NAME + status ONLY,
 never a resolved secret VALUE — mirrors the Phase 19 secrets-masking
 discipline already applied elsewhere in this repo (plugin health/detail,

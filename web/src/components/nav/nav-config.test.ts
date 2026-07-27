@@ -68,7 +68,7 @@ describe('buildNavGroups', () => {
     const items = [item('home'), item('cost'), item('analytics'), item('runs'), item('approvals')]
     const groups = buildNavGroups(items)
     const labels = groups.map((g) => g.label)
-    expect(labels.indexOf('nav.operate')).toBe(labels.indexOf('nav.commandCenter') + 1)
+    expect(labels.indexOf('nav.operate')).toBe(labels.indexOf('nav.atAGlance') + 1)
     expect(labels.indexOf('nav.operate')).toBeLessThan(labels.indexOf('nav.spend'))
     expect(labels.indexOf('nav.operate')).toBeLessThan(labels.indexOf('nav.overview'))
   })

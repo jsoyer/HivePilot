@@ -12,7 +12,7 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        // IA/Cyber identity: a "glass panel" gradient (mockup's
+        // visual identity: a "glass panel" gradient (mockup's
         // `.card`/`.kpi` — linear-gradient(180deg,panel,panel-2)) instead of
         // a flat fill, on every card in the app — `--color-card`/
         // `--color-popover` are exactly the mockup's `--panel`/`--panel-2`

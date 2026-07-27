@@ -1,5 +1,5 @@
 # ClusterIP Service fronting the API Deployment. Exposes /v1/* (control
-# API), /metrics (Prometheus), /ui (Mirador web UI, opt-in via
+# API), /metrics (Prometheus), /ui (Pollen web UI, opt-in via
 # HIVEPILOT_ENABLE_WEBUI), and the unauthenticated /healthz + /readyz probes.
 apiVersion: v1
 kind: Service

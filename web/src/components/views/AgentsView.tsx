@@ -17,7 +17,7 @@ import {
   fetchAgents,
   fetchLessons,
   fetchVerdicts,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
 import { AsyncSection } from './AsyncSection'
@@ -119,7 +119,7 @@ interface AgentCardProps {
 /**
  * One roster card. `attributed: false` -> an honest "no activity attributed
  * yet" state, never a fabricated `0%`/rollup (see `AgentsResponse`'s
- * docstring in `mirador-api.ts`). `display_name`/`title` are role config
+ * docstring in `pollen-api.ts`). `display_name`/`title` are role config
  * text, `name` is an identifier — none of it is ever HTML-rendered, only
  * plain JSX interpolation (React auto-escapes), so even a role name/display
  * name that happens to contain markup can never execute.
@@ -228,7 +228,7 @@ function UnknownBucketCard({ unknown }: { unknown: AgentUnknownBucket }) {
 
 /** A lesson's `text`/`category` are LLM-distilled free text — UNTRUSTED,
  * rendered via plain JSX interpolation only (see `Lesson`'s docstring in
- * `mirador-api.ts`). `validated` is a raw SQLite 0/1 int, treated as a
+ * `pollen-api.ts`). `validated` is a raw SQLite 0/1 int, treated as a
  * boolean via truthiness. */
 function LessonItem({ lesson }: { lesson: Lesson }) {
   const t = useT()

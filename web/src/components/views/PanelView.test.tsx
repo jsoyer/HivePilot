@@ -2,12 +2,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
-import type { PanelData } from '@/lib/mirador-api'
+import type { PanelData } from '@/lib/pollen-api'
 
 const { fetchPanel } = vi.hoisted(() => ({ fetchPanel: vi.fn() }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, fetchPanel }
 })
 

@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
-import { type Approval, fetchApprovals, postApproval } from '@/lib/mirador-api'
+import { type Approval, fetchApprovals, postApproval } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
@@ -125,7 +125,7 @@ function RowActions({ approval, onDone }: RowActionsProps) {
  * Approvals tab — `GET /v1/approvals` (pending, tenant-filtered), with
  * per-row Approve/Deny via `POST /v1/approvals/{run_id}`.
  *
- * Visible to any token (like every other built-in tab, see `Mirador.tsx`),
+ * Visible to any token (like every other built-in tab, see `Pollen.tsx`),
  * but:
  *  - `GET /v1/approvals` itself requires a `run`-rank token (stricter than
  *    the token gate's own `read` floor) — a `read` token 403s and sees a

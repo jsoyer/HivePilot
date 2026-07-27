@@ -1,4 +1,4 @@
-"""Tests for the Mirador panel web API (Sprint 3): `GET /v1/panels` and
+"""Tests for the Pollen panel web API (Sprint 3): `GET /v1/panels` and
 `GET /v1/panels/{name}` (plus their unversioned twins).
 
 Mirrors the auth patterns established for `GET /v1/plugins/health` and

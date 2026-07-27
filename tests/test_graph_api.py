@@ -1,4 +1,4 @@
-"""Tests for the Mirador Graph View web API (Sprint 1): `GET /v1/graph/sources`,
+"""Tests for the Pollen Graph View web API (Sprint 1): `GET /v1/graph/sources`,
 `GET /v1/graph/{source}`, `GET /v1/graph/{source}/node/{node_id}` (plus their
 unversioned twins). Mirrors `tests/test_panels_api.py`'s auth / DATA-DEPENDENT
 `min_role` gate patterns.

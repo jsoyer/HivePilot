@@ -1,12 +1,12 @@
 /**
- * Fail-closed RBAC role context for the Mirador web UI (Mirador actionable
+ * Fail-closed RBAC role context for the Pollen web UI (Pollen actionable
  * dashboard PRD, Sprint 1). `RoleProvider` resolves the calling token's own
- * role once — via `GET /v1/whoami` (`@/lib/mirador-api`) — and exposes it
+ * role once — via `GET /v1/whoami` (`@/lib/pollen-api`) — and exposes it
  * app-wide through `useRole()`, so later sprints (S2-S5: approve/deny,
  * run triggers, plugin toggles, ...) can show/hide action controls based on
  * the caller's actual privilege instead of guessing from what data loaded.
  *
- * `RoleProvider` is mounted inside `Mirador.tsx`, which itself only renders
+ * `RoleProvider` is mounted inside `Pollen.tsx`, which itself only renders
  * once `TokenGate` has already validated the stored token (see `App.tsx` /
  * `TokenGate.tsx`) — so the `whoami()` fetch below naturally happens
  * "once, right after the token validates", without `RoleProvider` needing
@@ -24,7 +24,7 @@
  * `false` for every required role until a real, recognized role is set.
  */
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react'
-import { type Role, whoami } from './mirador-api'
+import { type Role, whoami } from './pollen-api'
 
 export type { Role }
 

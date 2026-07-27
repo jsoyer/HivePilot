@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
 
-// Mirador wires seven real data views (Analytics/Cost/Health/Mem0/Approvals/
+// Pollen wires seven real data views (Analytics/Cost/Health/Mem0/Approvals/
 // Runs/Graph) — mock every endpoint they call so this test exercises the
 // shell (sidebar nav, header, default view, switching) without depending on
 // network behavior. Each view's own loading/error/empty/data states are
@@ -52,7 +52,7 @@ const mocks = vi.hoisted(() => ({
   fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
-  // Mirador now wraps its tree in RoleProvider (Sprint 1), which fetches
+  // Pollen now wraps its tree in RoleProvider (Sprint 1), which fetches
   // whoami() once on mount — mock it out like every other data source above
   // so this test exercises the shell only, not a real network call.
   whoami: vi.fn().mockResolvedValue({ role: 'admin', tenant: 'default' }),
@@ -87,7 +87,7 @@ const mocks = vi.hoisted(() => ({
     by_actor: [],
     source: 'mem0',
   }),
-  // Home command-center tab (default landing view): fetches its own
+  // Home tab (default landing view): fetches its own
   // approvals/runs/efficiency/today's-summary — mocked genuinely-empty so
   // this shell test exercises tab switching only, not HomeView's own
   // data/empty/error states (covered by HomeView.test.tsx).
@@ -143,18 +143,18 @@ const mocks = vi.hoisted(() => ({
   fetchVerdicts: vi.fn().mockResolvedValue({ verdicts: [], by_role: {} }),
 }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, ...mocks }
 })
 
 import { LANG_STORAGE_KEY } from '@/lib/i18n'
-import { Mirador } from './Mirador'
+import { Pollen } from './Pollen'
 
 // The sidebar's grouped nav order (P0b, + Home command-center sprint, +
 // Mirador Spend section sprint, + Mirador Operate section sprint, +
 // Mirador Memory unification sprint) — see `./nav/nav-config.ts`'s
-// `NAV_GROUP_ORDER`: Command Center (Home), Operate (Runs/Approvals —
+// `NAV_GROUP_ORDER`: At a glance (Home), Operate (Runs/Approvals —
 // renamed from "Agents", moved right after Home so the Run Board is the
 // primary "what's happening" destination), Spend (Cost/Models/Efficiency),
 // Overview (Analytics), Memory (ONE unified tab — see below), System
@@ -197,7 +197,7 @@ beforeEach(() => {
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => {
-    root.render(<Mirador />)
+    root.render(<Pollen />)
   })
 })
 
@@ -215,18 +215,18 @@ function click(el: Element) {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 }
 
-describe('Mirador', () => {
-  it('renders the Mirador title and subtitle, and every tab reachable via the sidebar', () => {
-    expect(container.textContent).toContain('Mirador')
-    expect(container.textContent).toContain('cyber ops console')
-    // IA/Cyber identity: the brand mark next to the wordmark.
+describe('Pollen', () => {
+  it('renders the Pollen title and subtitle, and every tab reachable via the sidebar', () => {
+    expect(container.textContent).toContain('Pollen')
+    expect(container.textContent).toContain('HivePilot dashboard')
+    // visual identity: the brand mark next to the wordmark.
     expect(container.querySelector('[data-slot="brand-mark"]')).not.toBeNull()
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
     expect(tabs).toEqual(GROUPED_TAB_ORDER)
   })
 
   it('groups the sidebar into labelled sections (English default)', () => {
-    expect(container.textContent).toContain('Command Center')
+    expect(container.textContent).toContain('At a glance')
     expect(container.textContent).toContain('Operate')
     expect(container.textContent).toContain('Spend')
     expect(container.textContent).toContain('Overview')
@@ -238,7 +238,7 @@ describe('Mirador', () => {
     const groupLabels = Array.from(container.querySelectorAll('[data-slot="sidebar-nav"] span.uppercase')).map(
       (el) => el.textContent,
     )
-    expect(groupLabels[0]).toBe('Command Center')
+    expect(groupLabels[0]).toBe('At a glance')
     expect(groupLabels[1]).toBe('Operate')
     expect(groupLabels[groupLabels.length - 1]).toBe('System')
 
@@ -430,7 +430,7 @@ describe('Mirador', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root.render(<Mirador />)
+      root.render(<Pollen />)
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -451,12 +451,12 @@ describe('Mirador', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root.render(<Mirador />)
+      root.render(<Pollen />)
       await Promise.resolve()
       await Promise.resolve()
     })
 
-    expect(container.textContent).toContain('Mirador')
+    expect(container.textContent).toContain('Pollen')
     expect(container.querySelector('[data-testid="status-pills"]')).toBeNull()
   })
 
@@ -496,14 +496,14 @@ describe('Mirador', () => {
     expect(container.textContent).toContain("Vue d'ensemble")
     expect(container.textContent).toContain('Système')
     expect(container.textContent).toContain('Mémoire')
-    expect(container.textContent).toContain("console d'opérations cyber")
+    expect(container.textContent).toContain('tableau de bord HivePilot')
     expect(window.localStorage.getItem(LANG_STORAGE_KEY)).toBe(JSON.stringify('fr'))
   })
 
   // Command palette (P1b): CommandPalette.test.tsx unit-tests the palette's
   // own filtering/keyboard/i18n/focus behavior in isolation — these two
   // tests only prove the SHELL wiring: the header affordance opens the real
-  // palette, and a real nav command actually flips `Mirador`'s (now
+  // palette, and a real nav command actually flips `Pollen`'s (now
   // controlled) `Tabs` state and renders the target view.
   it('opens the command palette from the header search button', async () => {
     expect(container.querySelector('[role="dialog"]')).toBeNull()
@@ -551,8 +551,8 @@ describe('Mirador', () => {
   })
 })
 
-describe('Mirador — dynamic plugin panel tabs', () => {
-  // The file-level `beforeEach` above already mounted a default Mirador
+describe('Pollen — dynamic plugin panel tabs', () => {
+  // The file-level `beforeEach` above already mounted a default Pollen
   // (all `fetchPanels`/`fetchPanel` mocks resolved to empty) into
   // `container`/`root` before this block's own `beforeEach` runs. Unmount
   // that default instance first so each test below can set its own
@@ -577,7 +577,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root.render(<Mirador />)
+      root.render(<Pollen />)
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -600,7 +600,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root.render(<Mirador />)
+      root.render(<Pollen />)
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -632,7 +632,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root.render(<Mirador />)
+      root.render(<Pollen />)
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -661,7 +661,7 @@ describe('Mirador — dynamic plugin panel tabs', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     await act(async () => {
-      root.render(<Mirador />)
+      root.render(<Pollen />)
       await Promise.resolve()
       await Promise.resolve()
     })

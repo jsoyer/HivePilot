@@ -1,4 +1,4 @@
-"""Tests for the Headroom efficiency metrics store + Mirador panel
+"""Tests for the Headroom efficiency metrics store + Pollen panel
 (Headroom Efficiency Panel sprint).
 
 Covers:

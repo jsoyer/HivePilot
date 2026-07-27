@@ -37,7 +37,7 @@ import {
   postJson,
   resumeAutopilot,
   whoami,
-} from './mirador-api'
+} from './pollen-api'
 
 beforeEach(() => {
   apiFetchMock.mockReset()
@@ -48,7 +48,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('mirador-api fetch wrappers', () => {
+describe('pollen-api fetch wrappers', () => {
   it('fetchAnalyticsSummary calls GET /v1/analytics/summary with a days window', async () => {
     await fetchAnalyticsSummary(30)
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/analytics/summary?days=30')
@@ -236,7 +236,7 @@ describe('mirador-api fetch wrappers', () => {
     })
   })
 
-  // ---- Mirador Agents view (GET /v1/agents, /v1/lessons, /v1/verdicts) ----
+  // ---- Pollen Agents view (GET /v1/agents, /v1/lessons, /v1/verdicts) ----
 
   it('fetchAgents calls GET /v1/agents with no query string when no args given, opts into on403: "forbidden"', async () => {
     await fetchAgents()

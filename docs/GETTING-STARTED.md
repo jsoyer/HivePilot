@@ -222,7 +222,7 @@ See `SECURITY.md` for the full approval and gating model.
 
 Every run is recorded to a SQLite state store, and each run also writes `runs/<timestamp>/summary.json` plus structured JSON logs.
 
-To watch runs live or review them after the fact, use the Mirador dashboard:
+To watch runs live or review them after the fact, use the Pollen dashboard:
 
 ```bash
 hivepilot dashboard
@@ -230,7 +230,7 @@ hivepilot dashboard
 
 The TUI dashboard requires `HIVEPILOT_ENABLE_TEXTUAL_UI=1`.
 
-For the web command center instead, start the API server:
+For the web dashboard instead, start the API server:
 
 ```bash
 hivepilot api serve

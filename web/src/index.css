@@ -47,7 +47,7 @@
     --color-warn: var(--warn);
     --color-crit: var(--crit);
     --color-idle: var(--idle);
-    /* IA/Cyber additive tokens — a secondary hairline border (node rings /
+    /* Additive design tokens — a secondary hairline border (node rings /
      * emphasis dividers) and a tertiary "violet" data-flow accent. Additive
      * only: no existing component consumed these before this remap. */
     --color-line-2: var(--line-2);
@@ -71,8 +71,8 @@
     letter-spacing: -0.01em;
 }
 
-/* IA/Cyber identity: uppercase, letter-spaced micro-label ("eyebrow") used
- * above section headings / card titles — e.g. "POSTURE", "FLOW MAP · SWARM
+/* Visual identity: uppercase, letter-spaced micro-label ("eyebrow") used
+ * above section headings / card titles — e.g. "SNAPSHOT", "FLOW MAP · SWARM
  * + FORGES". Mirrors the reference mockup's `.eyebrow` class. */
 @utility eyebrow {
     font-size: 0.6875rem;
@@ -82,7 +82,7 @@
     font-weight: 600;
 }
 
-/* IA/Cyber identity: faint tech grid + soft radial glow, for the app shell
+/* Visual identity: faint tech grid + soft radial glow, for the app shell
  * background and the graph canvas. Values keyed off `--grid-line`/
  * `--glow-a`/`--glow-b` (declared per-theme below) so light mode gets a
  * legible, much fainter version of the same texture instead of an inverted
@@ -102,7 +102,7 @@
     background-attachment: fixed;
 }
 
-/* IA/Cyber identity: the faint dot-grid used inside the graph canvas (a
+/* Visual identity: the faint dot-grid used inside the graph canvas (a
  * denser, radial-dot variant of `bg-grid` — matches the reference mockup's
  * `.canvas` background). */
 @utility bg-grid-dot {
@@ -111,7 +111,7 @@
     background-size: 22px 22px;
 }
 
-/* IA/Cyber identity: animated glowing "flow" edge stroke for the GraphView
+/* Visual identity: animated glowing "flow" edge stroke for the GraphView
  * canvas (react-flow custom edge) — a moving dash pattern reads as live
  * data flowing along the edge, matching the reference mockup's `.flow`
  * class. Reduced-motion-safe: the dash animation is disabled entirely under
@@ -163,7 +163,7 @@
 }
 
 :root {
-    /* IA/Cyber light palette — a legible daylight derivation of the SAME
+    /* Light palette — a legible daylight derivation of the SAME
      * phosphor/beacon/amber/crit hue family the dark palette below uses
      * (not a literal inversion): hues darkened/desaturated just enough to
      * clear AA contrast on a white surface. Token NAMES are unchanged from
@@ -211,7 +211,7 @@
     --sidebar-accent-foreground: #10141a;
     --sidebar-border: #d9e0e6;
     --sidebar-ring: #0e7490;
-    /* IA/Cyber additive tokens (no prior consumer — safe to introduce):
+    /* Additive design tokens (no prior consumer — safe to introduce):
      * tech-grid line color + two soft background glows, and a tertiary
      * "violet" accent for a third data-flow category (see the mockup's
      * gitlab/MR edge color) + a secondary hairline border for node rings. */
@@ -223,10 +223,10 @@
 }
 
 .dark {
-    /* IA/Cyber dark palette (primary theme — a SOC-grade cyber-ops console,
-     * dark-by-default) — verbatim from the reference mockup
-     * (mirador-cyber.html): void/panel/line neutrals + a two-accent data
-     * system (phosphor = live/agents/good, beacon = data/links/primary). */
+    /* Dark palette (primary theme, dark-by-default) — verbatim from the
+     * reference mockup (mirador-cyber.html): void/panel/line neutrals + a
+     * two-accent data system (phosphor = live/agents/good, beacon =
+     * data/links/primary). */
     --background: #08090c; /* void */
     --foreground: #e8edf2; /* text-1 */
     --card: #0e1116; /* panel */
@@ -266,7 +266,7 @@
     --sidebar-accent-foreground: #e8edf2;
     --sidebar-border: #1b2129; /* line */
     --sidebar-ring: #46b7ce;
-    /* IA/Cyber additive tokens — see `:root`'s comment above. */
+    /* Additive design tokens — see `:root`'s comment above. */
     --grid-line: rgba(70, 183, 206, 0.05);
     --glow-a: rgba(53, 231, 161, 0.06);
     --glow-b: rgba(70, 183, 206, 0.05);

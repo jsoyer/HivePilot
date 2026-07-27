@@ -1,4 +1,4 @@
-import type { DurationStats, TrendPoint } from '@/lib/mirador-api'
+import type { DurationStats, TrendPoint } from '@/lib/pollen-api'
 
 /**
  * Compact inline-SVG bar chart for a run-volume trend over time. No charting

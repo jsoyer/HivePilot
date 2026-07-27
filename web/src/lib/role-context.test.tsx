@@ -1,12 +1,12 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Role } from './mirador-api'
+import type { Role } from './pollen-api'
 
 const { whoamiMock } = vi.hoisted(() => ({ whoamiMock: vi.fn() }))
 
-vi.mock('./mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./mirador-api')>()
+vi.mock('./pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pollen-api')>()
   return { ...actual, whoami: whoamiMock }
 })
 

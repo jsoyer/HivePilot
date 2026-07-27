@@ -1044,7 +1044,7 @@ class TestOnError:
 # ---------------------------------------------------------------------------
 # `_dispatch_approval` -- now delegates entirely to the shared
 # `Orchestrator.approve_run` helper (also used by `api_service.handle_approval`
-# for Mirador's "Approve" button), instead of re-implementing the
+# for Pollen's "Approve" button), instead of re-implementing the
 # pipeline-checkpoint-vs-task discriminator itself. Regression: the Telegram
 # path's behavior must stay byte-identical (unit-tested directly on the
 # orchestrator in tests/test_pipeline_checkpoint.py::TestApproveRunRouting).

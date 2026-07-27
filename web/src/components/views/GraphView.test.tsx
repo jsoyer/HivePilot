@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
-import type { GraphData, GraphDetail, GraphSourcesResponse } from '@/lib/mirador-api'
+import type { GraphData, GraphDetail, GraphSourcesResponse } from '@/lib/pollen-api'
 // `?raw` — a Vite-native import (see `vite/client.d.ts`), not a Node `fs`
 // read, so this works identically under `vitest run` and the production
 // `vite build`. Loads this file's OWN source as a plain string for the
@@ -16,8 +16,8 @@ const { fetchGraphSources, fetchGraph, fetchGraphNode } = vi.hoisted(() => ({
   fetchGraphNode: vi.fn(),
 }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, fetchGraphSources, fetchGraph, fetchGraphNode }
 })
 
@@ -366,7 +366,7 @@ describe('GraphView', () => {
     expect(container.querySelector('[data-testid="graph-canvas-stub"]')).toBeNull()
   })
 
-  it('IA/Cyber identity: defaults to "status" color-by and toggles to "kind" without re-fetching the graph', async () => {
+  it('visual identity: defaults to "status" color-by and toggles to "kind" without re-fetching the graph', async () => {
     fetchGraphSources.mockResolvedValue(SOURCES)
     fetchGraph.mockResolvedValue(GRAPH)
 

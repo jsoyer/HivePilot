@@ -309,7 +309,7 @@ class StepApprovalPending(Exception):  # noqa: N818 — mirrors QuotaDeferredErr
 
 class RunCancelled(Exception):  # noqa: N818 — mirrors StepApprovalPending/QuotaDeferredError naming
     """Raised inside `_execute_task_body`'s step loop when cooperative
-    cancellation was requested for `run_id` (Mirador actionable dashboard
+    cancellation was requested for `run_id` (Pollen actionable dashboard
     PRD, Sprint 4 -- `POST /v1/runs/{run_id}/cancel` ->
     `async_run_service.request_cancel` -> checked via
     `async_run_service.is_cancel_requested` at the top of each step
@@ -3667,11 +3667,11 @@ class Orchestrator:
         A PIPELINE checkpoint (a stage with ``pause_before: true``) parks the
         run with ``approval["task"]`` set to the *pipeline* name, not a task
         name -- ``run_approved`` then does ``self.tasks.tasks[task_name]``
-        and raises a bare ``KeyError`` for it (the Mirador "Approve" button
+        and raises a bare ``KeyError`` for it (the Pollen "Approve" button
         500 -- live traceback was ``KeyError: 'noxys'``). This mirrors the
         discriminator Telegram's ``_dispatch_approval`` already used
         (``metadata["kind"] == "pipeline_checkpoint"``) -- moved here so
-        every caller that lets an operator approve/deny a run (Mirador's
+        every caller that lets an operator approve/deny a run (Pollen's
         ``POST /v1/approvals/{id}`` in ``api_service.py``, Telegram/Slack/
         Discord/ChatOps's approve/deny buttons and commands, and the CLI's
         ``hivepilot approvals approve/deny``) goes through ONE place and the

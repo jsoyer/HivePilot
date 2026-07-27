@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
-import { fetchPluginsHealth, togglePlugin, type PluginHealthStatus } from '@/lib/mirador-api'
+import { fetchPluginsHealth, togglePlugin, type PluginHealthStatus } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
@@ -19,7 +19,7 @@ const STATUS_VARIANT: Record<PluginHealthStatus, 'secondary' | 'outline' | 'dest
 /** Per-row toggle result, tracked locally so a just-toggled row can show a
  * "restart required" badge immediately without waiting for (or requiring) a
  * live-reloading `GET /v1/plugins/health` -- the backend never live-applies
- * a toggle (see `togglePlugin`'s docstring in `@/lib/mirador-api`), so this
+ * a toggle (see `togglePlugin`'s docstring in `@/lib/pollen-api`), so this
  * state is the ONLY way the UI reflects "you just changed this" this
  * session. Keyed by plugin name so one row's toggle can never affect
  * another's. */

@@ -926,7 +926,7 @@ class TestCostSummary:
 
 
 # ---------------------------------------------------------------------------
-# Mirador data endpoints sprint -- cost_summary by_project / by_role /
+# Pollen data endpoints sprint -- cost_summary by_project / by_role /
 # unpriced_models
 # ---------------------------------------------------------------------------
 
@@ -1050,7 +1050,7 @@ class TestCostSummaryByProjectAndRole:
 
 
 # ---------------------------------------------------------------------------
-# Mirador data endpoints sprint -- models_summary (GET /v1/models)
+# Pollen data endpoints sprint -- models_summary (GET /v1/models)
 # ---------------------------------------------------------------------------
 
 

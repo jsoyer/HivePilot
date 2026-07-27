@@ -1,4 +1,4 @@
-"""Unit tests for `hivepilot.services.async_run_service` (Mirador actionable
+"""Unit tests for `hivepilot.services.async_run_service` (Pollen actionable
 dashboard PRD, Sprint 3).
 
 NOTE: this file is not in the sprint's declared `files_to_create` list, but

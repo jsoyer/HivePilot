@@ -6,13 +6,13 @@ import { Button } from '@/components/ui/button'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { useT } from '@/lib/i18n'
-import { fetchAnalyticsCost } from '@/lib/mirador-api'
+import { fetchAnalyticsCost } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
 import { AsyncSection } from './AsyncSection'
 
 /** The 3 window options this view's selector cycles through — the sprint
- * calls these out explicitly (1/7/30 days), unlike every other Mirador view
+ * calls these out explicitly (1/7/30 days), unlike every other Pollen view
  * which uses a single fixed window. */
 const WINDOW_OPTIONS = [1, 7, 30] as const
 type WindowDays = (typeof WINDOW_OPTIONS)[number]
@@ -70,7 +70,7 @@ function WindowSelector({ value, onChange }: WindowSelectorProps) {
  * total spend, per-model and per-project breakdowns, and an unpriced-models
  * coverage banner. Rebuilt from the old "broken/monotone" version: no fake
  * daily-budget gauge (no such field exists anywhere in the API — see
- * `AnalyticsCost`'s docstring in `@/lib/mirador-api`), and no synthetic
+ * `AnalyticsCost`'s docstring in `@/lib/pollen-api`), and no synthetic
  * spend-over-time trend (`cost_summary` returns one total per window, not a
  * per-day series — `fetchAnalyticsTrends` tracks run counts, not cost; a
  * single-point Sparkline would fabricate a "trend" out of one number, so

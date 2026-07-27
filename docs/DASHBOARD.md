@@ -1,7 +1,7 @@
-# Mirador Dashboard
+# Pollen Dashboard
 
-Mirador is HivePilot's dashboard for observing and acting on runs. It comes in two
-forms — a Textual terminal UI (TUI) and a web command center — both reading the same
+Pollen is HivePilot's dashboard for observing and acting on runs. It comes in two
+forms — a Textual terminal UI (TUI) and a web dashboard — both reading the same
 SQLite state store, tenant-scoped.
 
 ## Terminal UI (TUI)
@@ -24,7 +24,7 @@ hivepilot plugins tui
 Tab layout and navigation are specific to the running version — check the TUI itself
 for the current set of views rather than relying on this doc for exact tab names.
 
-## Web command center
+## Web dashboard
 
 The web UI is served by the HTTP API process. Start the API server:
 
@@ -34,7 +34,7 @@ hivepilot api serve --host 0.0.0.0 --port 8000 --workers 1
 
 Then open the served web UI in a browser. It's a React/Vite/Tailwind single-page app
 bundled with the API — no separate frontend server to run. Unlike the TUI, the web
-command center is actionable, not just a viewer: you can approve gated actions,
+dashboard is actionable, not just a viewer: you can approve gated actions,
 launch runs, and toggle plugins directly from the UI.
 
 ## Breaking change: synchronous `POST /run` removed (Phase 14b)
@@ -114,7 +114,7 @@ API:
   an optional `layout_hint`).
 - `GET /v1/graph/{source}/node/{id}` — a single node's detail view, whose
   `sections` reuse the exact same closed `stat`/`table`/`text` shapes a
-  Mirador panel's `PanelData` uses (see [PLUGINS.md](PLUGINS.md#dashboard-panels-plugins)),
+  Pollen panel's `PanelData` uses (see [PLUGINS.md](PLUGINS.md#dashboard-panels-plugins)),
   so it renders through the same `PanelRenderer`.
 
 Built-in sources:
@@ -146,7 +146,7 @@ discipline as plugin health and panel data.
 
 ## Dashboard panels (plugins)
 
-The `panel` plugin type contributes renderer-agnostic tabs to Mirador. A plugin
+The `panel` plugin type contributes renderer-agnostic tabs to Pollen. A plugin
 registers a `PanelSpec` with a `fetch` function and an optional `min_role`; an
 invalid `min_role` is a fail-closed registration error (the panel won't load). This
 is how plugins — for example the mem0 memory plugin — surface their own tab inside

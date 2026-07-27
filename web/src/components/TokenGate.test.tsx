@@ -147,7 +147,7 @@ describe('TokenGate', () => {
     // itself only reacts to the thrown ApiAuthError.
   })
 
-  it('falls back to the token form when a background call (e.g. from Mirador) clears the token', async () => {
+  it('falls back to the token form when a background call (e.g. from Pollen) clears the token', async () => {
     setToken('good-token')
     apiFetchMock.mockResolvedValue({ plugins: [] })
 

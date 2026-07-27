@@ -25,7 +25,7 @@ Covers:
     neither runner exposes a `capture()` method — raw plan/preview output
     can echo secret var values, so it must never be captured, returned, or
     persisted via `RunResult.detail` (CLI/API/chat notifications). A safe
-    plan-SUMMARY capture is deferred to the Mirador panel sprint (A3).
+    plan-SUMMARY capture is deferred to the Pollen panel sprint (A3).
 (h) `-backend-config` is init-only: it must be present in `init` argv and
     absent from `plan`/`apply`/`destroy`/`drift` argv (passing it there is a
     Terraform/OpenTofu usage error).

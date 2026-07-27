@@ -4,7 +4,7 @@ import { Gauge } from '@/components/dashboard/Gauge'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { Sparkline } from '@/components/dashboard/Sparkline'
 import { useT } from '@/lib/i18n'
-import { fetchEfficiency, type HeadroomEfficiency, type RtkEfficiency } from '@/lib/mirador-api'
+import { fetchEfficiency, type HeadroomEfficiency, type RtkEfficiency } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 

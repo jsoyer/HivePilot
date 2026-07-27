@@ -55,7 +55,7 @@ clean: ## Remove caches/build artifacts (keeps .venv, .env, state.db)
 	find . -type d -name "__pycache__" -not -path "./.venv/*" -exec rm -rf {} +
 	rm -rf *.egg-info
 
-webui: ## Build the Mirador web UI and fail if committed static/ is stale (mirrors CI)
+webui: ## Build the Pollen web UI and fail if committed static/ is stale (mirrors CI)
 	cd web && npm ci && npm run build
 	git diff --exit-code hivepilot/webui/static
 

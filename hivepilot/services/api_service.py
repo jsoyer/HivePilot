@@ -367,7 +367,7 @@ def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> 
 
     Gated at the lowest rank (`read`, the floor every valid token
     satisfies), so any authenticated caller can always resolve its own
-    identity — this is what powers the Mirador web client's `useRole()`
+    identity — this is what powers the Pollen web client's `useRole()`
     (`web/src/lib/role-context.tsx`), which fail-closed gates action
     controls app-wide (unknown/null role -> `can()` false for everything).
 
@@ -759,7 +759,7 @@ def handle_approval(
     (also used by `telegram_bot`/`slack_bot`/`discord_bot`/`chatops_service`/
     the CLI) that discriminates a pipeline-checkpoint approval (dispatches to
     `resume_pipeline`) from a per-task approval (dispatches to `run_approved`),
-    so this endpoint no longer KeyErrors on a pipeline checkpoint (Mirador's
+    so this endpoint no longer KeyErrors on a pipeline checkpoint (Pollen's
     "Approve" 500 -- live traceback was `KeyError: 'noxys'`).
 
     Explicit-failure-logs sprint, Part A.2: logs the attempt (run_id, approve,
@@ -1225,7 +1225,7 @@ def analytics_cost(
 
 
 # ---------------------------------------------------------------------------
-# Mirador data endpoints sprint — GET /v1/models, GET /v1/efficiency.
+# Pollen data endpoints sprint — GET /v1/models, GET /v1/efficiency.
 # Same shape as the analytics endpoints above: Depends(require_role("read")),
 # tenant-filtered via `_analytics_tenant` for /v1/models (run/step data);
 # `/v1/efficiency`'s `headroom` half is tenant-scoped the same way, but its
@@ -1243,7 +1243,7 @@ def models_endpoint(
     task: str | None = None,
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> dict[str, Any]:
-    """Per-model rollup (Mirador data endpoints sprint): cost, tokens, step
+    """Per-model rollup (Pollen data endpoints sprint): cost, tokens, step
     count, success rate, share of spend, and an overall cost-per-successful
     -run figure — see `analytics_service.models_summary`'s docstring for the
     full contract (including why p50/p95 latency is honestly omitted rather
@@ -1260,7 +1260,7 @@ def efficiency_endpoint(
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> dict[str, Any]:
     """`{"headroom": <real dict, never null>, "rtk": <real dict or null>}`
-    (Mirador data endpoints sprint) — see
+    (Pollen data endpoints sprint) — see
     `hivepilot.services.efficiency_service`'s module docstring for the full
     investigation behind each source. Never 500s: `efficiency_summary`
     itself never raises (headroom is a zero-safe DB read, rtk is a
@@ -1288,7 +1288,7 @@ def agents_endpoint(
     task: str | None = None,
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> dict[str, Any]:
-    """Per-role agent activity roster (Mirador Agent Panels backend
+    """Per-role agent activity roster (Pollen Agent Panels backend
     sprint): the full role roster (`hivepilot.roles.list_roles()`)
     LEFT-JOINed with real per-role activity derived from `steps.role` — see
     `analytics_service.agents_summary`'s docstring for the full honesty
@@ -1336,7 +1336,7 @@ def verdicts_endpoint(
 
 # ---------------------------------------------------------------------------
 # Autopilot (guarded objective queue + fail-closed dispatch gate) — read +
-# control surface for Mirador. Backed by `hivepilot.services.autopilot_queue`
+# control surface for Pollen. Backed by `hivepilot.services.autopilot_queue`
 # (the same service the `autopilot` CLI command group wraps) and the
 # project-independent "default" block of `hivepilot.services.autopilot_policy`.
 #
@@ -1497,7 +1497,7 @@ def get_autopilot(
     tenant: str | None = None,
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> AutopilotStateResponse:
-    """Real-or-honest-empty Autopilot state for Mirador. See the module
+    """Real-or-honest-empty Autopilot state for Pollen. See the module
     comment block above for the tenant-lock and real-vs-null contract."""
     resolved_tenant = _resolve_autopilot_tenant(caller, tenant)
     return _autopilot_state(resolved_tenant)
@@ -1533,7 +1533,7 @@ def post_autopilot_resume(
 
 
 # ---------------------------------------------------------------------------
-# Memory-quality instrumentation subsystem — backs Mirador's "Réalité" view.
+# Memory-quality instrumentation subsystem — backs Pollen's "Réalité" view.
 # Sibling to the analytics endpoints above, same shape: every GET endpoint
 # Depends(require_role("read")), tenant-filtered from the caller's token via
 # `_memory_tenant` (mirrors `_analytics_tenant`: admin -> unscoped/`None`,
@@ -1612,7 +1612,7 @@ def memory_growth(
     days: int = 30,
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> dict[str, Any]:
-    """Memory growth aggregates (Mirador data endpoints sprint) — see
+    """Memory growth aggregates (Pollen data endpoints sprint) — see
     `memory_service.growth_summary`'s docstring for the full contract,
     including why `authorship` (human vs. agent) is always `None` rather
     than a fabricated split."""
@@ -1659,7 +1659,7 @@ def record_memory_evaluation(
 
 
 # ---------------------------------------------------------------------------
-# Mirador web UI surface (Sprint 1) — plugin health + mem0 memory search.
+# Pollen web UI surface (Sprint 1) — plugin health + mem0 memory search.
 # Both are read-only. Sibling to the analytics endpoints above, but NEITHER
 # is tenant-scoped: plugin health is process-global state (no per-tenant
 # concept applies), and mem0 memories have no tenant->project mapping to
@@ -1853,7 +1853,7 @@ def _extract_memory_items(results: Any) -> list[dict[str, Any]]:
     Tolerant of mem0's known response shapes (a bare list of dicts/strings,
     or `{"results": [...]}` / `{"memories": [...]}` — mirrors
     `plugins/mem0.py`'s `_extract_memory_texts`) but keeps the full item
-    (`id`/`metadata`/`score`) rather than just the text, since the Mirador
+    (`id`/`metadata`/`score`) rather than just the text, since the Pollen
     Mem0 view needs the structured PROVENANCE metadata (`project`/`task`/
     `role`/`category`/`ts` — see `plugins/mem0.py`'s `_provenance_metadata`)
     to render/filter, not just the memory string. Degrades to an empty list
@@ -1891,7 +1891,7 @@ def _extract_memory_items(results: Any) -> list[dict[str, Any]]:
 @v1.get("/memories", dependencies=[Depends(require_role("admin"))])
 @app.get("/memories", dependencies=[Depends(require_role("admin"))])
 def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
-    """Mirador Mem0 view — semantic search proxy over mem0.
+    """Pollen Mem0 view — semantic search proxy over mem0.
 
     **Scope/tenant safety (investigated, Sprint 1 — the key risk this
     endpoint carries).** mem0 memories carry `project`/`task`/`role`
@@ -1945,7 +1945,7 @@ def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Mirador web UI surface (Sprint 3) — plugin panels. Read-only, sibling to
+# Pollen web UI surface (Sprint 3) — plugin panels. Read-only, sibling to
 # the plugin-health/mem0 endpoints above.
 # ---------------------------------------------------------------------------
 
@@ -1953,7 +1953,7 @@ def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
 @v1.get("/panels", dependencies=[Depends(require_role("read"))])
 @app.get("/panels", dependencies=[Depends(require_role("read"))])
 def list_panels_endpoint() -> dict[str, Any]:
-    """Every registered Mirador panel (name/title/min_role), mirroring the
+    """Every registered Pollen panel (name/title/min_role), mirroring the
     TUI's own panel listing (Sprint 2, `hivepilot/ui/dashboard.py`). Panel
     name/title/`min_role` are plugin CONFIGURATION, not secret — every
     `read` token sees the full panel list regardless of its own role. A
@@ -2361,7 +2361,7 @@ def trigger_schedule(schedule_name: str, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Mirador web UI (Sprint 2) — serves the pre-built static bundle committed
+# Pollen web UI (Sprint 2) — serves the pre-built static bundle committed
 # under hivepilot/webui/static/ (see hivepilot/webui/__init__.py). Gated by
 # settings.enable_webui (env HIVEPILOT_ENABLE_WEBUI) AND a real build being
 # present, both read fresh on every request so a disabled/absent UI is a

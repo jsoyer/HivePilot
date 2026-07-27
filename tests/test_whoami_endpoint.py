@@ -1,4 +1,4 @@
-"""Tests for `GET /v1/whoami` (+ unversioned twin) — Mirador actionable
+"""Tests for `GET /v1/whoami` (+ unversioned twin) — Pollen actionable
 dashboard PRD, Sprint 1. Lets the calling token introspect its own RBAC
 role/tenant so the web client can fail-closed gate action controls
 (`useRole()` in `web/src/lib/role-context.tsx`).

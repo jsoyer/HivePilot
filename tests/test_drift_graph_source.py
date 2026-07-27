@@ -1,4 +1,4 @@
-"""Tests for `plugins/drift_graph_source.py` (Mirador GraphSources plugin
+"""Tests for `plugins/drift_graph_source.py` (Pollen GraphSources plugin
 sprint) -- the plugin-contributed `drift` graph source over the drift-scan
 history table (`state_service.record_drift_scan`/`get_recent_drift_scans`/
 `get_drift_baseline`).
