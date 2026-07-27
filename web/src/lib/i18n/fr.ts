@@ -451,15 +451,23 @@ export const fr: Record<TranslationKey, string> = {
   'autopilot.spentToday': "Dépensé aujourd'hui",
   'autopilot.remaining': 'Restant',
   'autopilot.unknown': 'inconnu',
-  'autopilot.noBudget': 'Aucun budget quotidien configuré.',
+  'autopilot.noBudgetTitle': 'Aucun plafond de dépense quotidien',
+  'autopilot.noBudgetBody':
+    'Renseignez budget_daily_usd dans policies.yaml pour plafonner ce que l’autopilote peut dépenser par jour. Sans ce plafond, les dispatches ne sont soumis à aucun garde-fou budgétaire.',
   'autopilot.budgetBurn': 'Consommation du budget',
   'autopilot.queueTitle': "File d'objectifs",
-  'autopilot.queueEmpty': 'File vide.',
+  'autopilot.queueEmptyTitle': 'Aucun objectif en file',
+  'autopilot.queueEmptyBody':
+    'Les objectifs arrivent ici lorsqu’un pipeline planifié ou une analyse de dérive en soulève un. L’autopilote en traite au plus un par cycle.',
   'autopilot.enqueuedAgo': 'ajoutée il y a {age}',
   'autopilot.dispatchesTitle': 'Dispatches récents',
-  'autopilot.dispatchesEmpty': 'Aucun dispatch pour le moment.',
+  'autopilot.dispatchesEmptyTitle': 'Aucun dispatch pour le moment',
+  'autopilot.dispatchesEmptyBody':
+    'Un dispatch est enregistré chaque fois que l’autopilote sort un objectif de la file — uniquement pour les pipelines autorisés ci-dessous.',
   'autopilot.allowlistTitle': 'Pipelines autorisés',
-  'autopilot.allowlistEmpty': "Rien n'est autorisé — l'autopilote est effectivement inactif.",
+  'autopilot.allowlistEmptyTitle': 'Aucun pipeline ne peut être lancé automatiquement',
+  'autopilot.allowlistEmptyBody':
+    'L’autopilote peut toujours mettre des objectifs en file, mais il n’en exécutera aucun. Ajoutez un pipeline à auto_dispatch dans policies.yaml pour l’autoriser à agir.',
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',

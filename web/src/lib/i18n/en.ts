@@ -446,15 +446,23 @@ export const en = {
   'autopilot.spentToday': 'Spent today',
   'autopilot.remaining': 'Remaining',
   'autopilot.unknown': 'unknown',
-  'autopilot.noBudget': 'No daily budget configured.',
+  'autopilot.noBudgetTitle': 'No daily spend ceiling',
+  'autopilot.noBudgetBody':
+    'Set budget_daily_usd in policies.yaml to cap what autopilot may spend in a day. Without it, dispatches are not budget-gated.',
   'autopilot.budgetBurn': 'Budget burn',
   'autopilot.queueTitle': 'Objective queue',
-  'autopilot.queueEmpty': 'Queue empty.',
+  'autopilot.queueEmptyTitle': 'Nothing queued',
+  'autopilot.queueEmptyBody':
+    'Objectives land here when a scheduled pipeline or a drift scan raises one. Autopilot drains at most one per tick.',
   'autopilot.enqueuedAgo': 'enqueued {age} ago',
   'autopilot.dispatchesTitle': 'Recent dispatches',
-  'autopilot.dispatchesEmpty': 'No dispatches yet.',
+  'autopilot.dispatchesEmptyTitle': 'Nothing dispatched yet',
+  'autopilot.dispatchesEmptyBody':
+    'A dispatch is recorded each time autopilot drains an objective from the queue — only for pipelines on the allowlist below.',
   'autopilot.allowlistTitle': 'Allowlisted pipelines',
-  'autopilot.allowlistEmpty': 'Nothing allowlisted — autopilot is effectively idle.',
+  'autopilot.allowlistEmptyTitle': 'No pipeline may auto-dispatch',
+  'autopilot.allowlistEmptyBody':
+    'Autopilot can still queue objectives, but it will never run one. Add a pipeline to auto_dispatch in policies.yaml to let it act.',
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',
