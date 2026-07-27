@@ -617,9 +617,7 @@ def check_retry_queue_backlog() -> list[DoctorFinding]:
 
     state_service.init_db()
     with db.connect() as conn:
-        rows = conn.execute(
-            db.ph("SELECT * FROM retry_queue WHERE status='pending'")
-        ).fetchall()
+        rows = conn.execute(db.ph("SELECT * FROM retry_queue WHERE status='pending'")).fetchall()
 
     if not rows:
         return []
@@ -662,9 +660,7 @@ def check_retry_queue_backlog() -> list[DoctorFinding]:
         oldest_overdue = max(now - _parse_stored(r["next_retry_at"]) for r in stuck)
         oldest_days, oldest_rem = divmod(int(oldest_overdue.total_seconds()), 86400)
         oldest_hours = oldest_rem // 3600
-        severity = (
-            "error" if len(stuck) >= settings.retry_queue_backlog_error_count else "warning"
-        )
+        severity = "error" if len(stuck) >= settings.retry_queue_backlog_error_count else "warning"
         findings.append(
             _finding(
                 severity,
@@ -1808,9 +1804,7 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     )
     findings.extend(_run_check("check_vault_git_state", check_vault_git_state))
     findings.extend(_run_check("check_display_timezone", check_display_timezone))
-    findings.extend(
-        _run_check("check_retry_queue_backlog", check_retry_queue_backlog)
-    )
+    findings.extend(_run_check("check_retry_queue_backlog", check_retry_queue_backlog))
     return _dedupe_findings(findings)
 
 

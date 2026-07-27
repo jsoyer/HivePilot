@@ -656,9 +656,7 @@ class TestRetryQueueBacklog:
         assert len(findings) == 1
         assert findings[0].severity == "error"
 
-    def test_unparseable_timestamp_is_its_own_finding_never_silent(
-        self, isolated_db: Path
-    ) -> None:
+    def test_unparseable_timestamp_is_its_own_finding_never_silent(self, isolated_db: Path) -> None:
         """'I could not inspect this' must be a finding, never silence."""
         self._insert(isolated_db, next_retry_at="not-a-timestamp")
 

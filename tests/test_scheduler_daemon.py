@@ -352,8 +352,16 @@ class TestSchedulerDaemonBackoffRetryDrain:
                 "INSERT INTO retry_queue "
                 "(schedule_name, task, projects, error, attempt, max_attempts, status, next_retry_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("naive-row", "groomer-scan", json.dumps(["repo-y"]), "err", 1, 3, "pending",
-                 "2020-01-01 00:00:00"),
+                (
+                    "naive-row",
+                    "groomer-scan",
+                    json.dumps(["repo-y"]),
+                    "err",
+                    1,
+                    3,
+                    "pending",
+                    "2020-01-01 00:00:00",
+                ),
             )
             conn.commit()
 

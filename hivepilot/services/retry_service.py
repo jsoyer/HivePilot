@@ -222,9 +222,7 @@ def mark_retry(row_id: int, *, attempt: int, next_retry_at: datetime) -> None:
     state_service.init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                "UPDATE retry_queue SET status='pending', attempt=?, next_retry_at=? WHERE id=?"
-            ),
+            db.ph("UPDATE retry_queue SET status='pending', attempt=?, next_retry_at=? WHERE id=?"),
             (attempt, next_retry_at.isoformat(), row_id),
         )
 

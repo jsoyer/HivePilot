@@ -349,8 +349,13 @@ class TestDueBackoffRows:
 class TestClaimRow:
     def test_claim_pending_row_succeeds(self, isolated_db: Path) -> None:
         row_id = retry_service.enqueue(
-            schedule_name="s", task="t", projects=[], error="e",
-            attempt=1, max_attempts=3, base_delay_minutes=1,
+            schedule_name="s",
+            task="t",
+            projects=[],
+            error="e",
+            attempt=1,
+            max_attempts=3,
+            base_delay_minutes=1,
         )
         assert retry_service.claim_row(row_id) is True
         rows = retry_service.list_queue()
@@ -358,8 +363,13 @@ class TestClaimRow:
 
     def test_claim_already_running_row_fails(self, isolated_db: Path) -> None:
         row_id = retry_service.enqueue(
-            schedule_name="s", task="t", projects=[], error="e",
-            attempt=1, max_attempts=3, base_delay_minutes=1,
+            schedule_name="s",
+            task="t",
+            projects=[],
+            error="e",
+            attempt=1,
+            max_attempts=3,
+            base_delay_minutes=1,
         )
         assert retry_service.claim_row(row_id) is True
         assert retry_service.claim_row(row_id) is False
@@ -368,16 +378,26 @@ class TestClaimRow:
 class TestMarkTransitions:
     def test_mark_done(self, isolated_db: Path) -> None:
         row_id = retry_service.enqueue(
-            schedule_name="s", task="t", projects=[], error="e",
-            attempt=1, max_attempts=3, base_delay_minutes=1,
+            schedule_name="s",
+            task="t",
+            projects=[],
+            error="e",
+            attempt=1,
+            max_attempts=3,
+            base_delay_minutes=1,
         )
         retry_service.mark_done(row_id)
         assert retry_service.list_queue()[0]["status"] == "done"
 
     def test_mark_retry_reschedules(self, isolated_db: Path) -> None:
         row_id = retry_service.enqueue(
-            schedule_name="s", task="t", projects=[], error="e",
-            attempt=1, max_attempts=3, base_delay_minutes=1,
+            schedule_name="s",
+            task="t",
+            projects=[],
+            error="e",
+            attempt=1,
+            max_attempts=3,
+            base_delay_minutes=1,
         )
         next_at = datetime.now(timezone.utc) + timedelta(minutes=10)
         retry_service.mark_retry(row_id, attempt=2, next_retry_at=next_at)
@@ -387,8 +407,13 @@ class TestMarkTransitions:
 
     def test_mark_dead(self, isolated_db: Path) -> None:
         row_id = retry_service.enqueue(
-            schedule_name="s", task="t", projects=[], error="e",
-            attempt=2, max_attempts=3, base_delay_minutes=1,
+            schedule_name="s",
+            task="t",
+            projects=[],
+            error="e",
+            attempt=2,
+            max_attempts=3,
+            base_delay_minutes=1,
         )
         retry_service.mark_dead(row_id, attempt=3)
         row = retry_service.list_queue()[0]
@@ -414,8 +439,13 @@ class TestExpireStale:
 
     def test_recent_pending_row_is_untouched(self, isolated_db: Path) -> None:
         row_id = retry_service.enqueue(
-            schedule_name="s", task="t", projects=[], error="e",
-            attempt=1, max_attempts=3, base_delay_minutes=1,
+            schedule_name="s",
+            task="t",
+            projects=[],
+            error="e",
+            attempt=1,
+            max_attempts=3,
+            base_delay_minutes=1,
         )
         expired = retry_service.expire_stale(3.0)
         assert expired == []
