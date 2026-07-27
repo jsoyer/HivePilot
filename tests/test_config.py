@@ -694,3 +694,35 @@ class TestConfigPathSearchDirs:
         s.base_dir = tmp_path / "base"
         dirs = s.config_path_search_dirs()
         assert dirs == [s.xdg_config_home, s.base_dir]
+
+
+class TestInstructionFileSizeCaps:
+    """Bounds on how much a project's repository instruction/context files
+    (`ProjectConfig.claude_md` / `.instruction_files`) can inject into a
+    prompt — see `hivepilot.services.repo_instructions`."""
+
+    def test_instruction_file_max_bytes_has_sane_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HIVEPILOT_INSTRUCTION_FILE_MAX_BYTES", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.instruction_file_max_bytes > 0
+
+    def test_instruction_file_max_bytes_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_INSTRUCTION_FILE_MAX_BYTES", "500")
+        s = Settings()
+        assert s.instruction_file_max_bytes == 500
+
+    def test_instruction_files_max_total_bytes_has_sane_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HIVEPILOT_INSTRUCTION_FILES_MAX_TOTAL_BYTES", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.instruction_files_max_total_bytes >= s.instruction_file_max_bytes
+
+    def test_instruction_files_max_total_bytes_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HIVEPILOT_INSTRUCTION_FILES_MAX_TOTAL_BYTES", "9000")
+        s = Settings()
+        assert s.instruction_files_max_total_bytes == 9000

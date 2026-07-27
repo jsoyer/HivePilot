@@ -25,7 +25,21 @@ Fields:
 
 - `path` (required) — filesystem path to the project checkout
 - `description`
-- `claude_md` — path to a project-specific CLAUDE.md-style prompt file
+- `claude_md` — path to a project-specific CLAUDE.md-style instructions file. Its
+  **content** (not just the path) is resolved and inlined into the agent prompt — see
+  `instruction_files` below for the full behavior, which `claude_md` shares.
+- `instruction_files: list[str]` — additional repository instruction/context files (e.g.
+  `AGENTS.md`, `.cursorrules`, `.windsurfrules`, `GEMINI.md`) whose content is inlined into
+  the prompt alongside `claude_md`'s, in declared order, each clearly delimited. Each entry
+  resolves relative to the project's `path` (an absolute entry, or one starting with `../`,
+  is honored as-is — HivePilot never walks parent directories on its own; you state the
+  relationship explicitly, which also covers the monorepo/umbrella pattern where shared
+  instructions live one level above the product repo). A declared file that can't be found
+  never fails silently: it logs a warning and injects a visible "NOT FOUND" notice naming the
+  file and the directory searched, so a broken reference is impossible to miss. Size is capped
+  per-file and in total (`HIVEPILOT_INSTRUCTION_FILE_MAX_BYTES` / `HIVEPILOT_INSTRUCTION_FILES_MAX_TOTAL_BYTES`,
+  default 20000 / 60000 bytes) with an explicit truncation notice when a cap is hit, and
+  content is redacted through the same secret-masking sink as every other runner output.
 - `default_branch` (default `"main"`)
 - `owner_repo` — `owner/repo` slug, used for PR/git-host operations
 - `env: dict[str, str]` — environment variables injected into runs for this project

@@ -368,3 +368,43 @@ def test_project_config_accepts_registered_forge(tmp_path) -> None:
         assert project.forge == "fake-vcs"
     finally:
         FORGE_MAP.pop("fake-vcs", None)
+
+
+# ---------------------------------------------------------------------------
+# ProjectConfig.instruction_files — inline-repo-instructions PRD. Generic
+# list of repository instruction/context files (unlike `claude_md`, not tied
+# to any one vendor's convention). Additive: defaults to None, `claude_md`
+# keeps meaning exactly what it always did.
+# ---------------------------------------------------------------------------
+
+
+def test_project_config_instruction_files_defaults_to_none(tmp_path) -> None:
+    project = ProjectConfig(path=tmp_path)
+    assert project.instruction_files is None
+    assert project.claude_md is None
+
+
+def test_project_config_accepts_instruction_files_list(tmp_path) -> None:
+    project = ProjectConfig(
+        path=tmp_path,
+        instruction_files=["AGENTS.md", "AGENT-GOVERNANCE.md", ".cursorrules"],
+    )
+    assert project.instruction_files == ["AGENTS.md", "AGENT-GOVERNANCE.md", ".cursorrules"]
+
+
+def test_project_config_dedups_instruction_files_preserving_order(tmp_path) -> None:
+    """Mirrors the existing `TaskStep.skills` dedup behavior (`_dedup_ordered`)
+    — a duplicate entry collapses to one, first occurrence wins."""
+    project = ProjectConfig(
+        path=tmp_path,
+        instruction_files=["AGENTS.md", "RULES.md", "AGENTS.md"],
+    )
+    assert project.instruction_files == ["AGENTS.md", "RULES.md"]
+
+
+def test_project_config_claude_md_unaffected_by_instruction_files(tmp_path) -> None:
+    """`claude_md` keeps meaning exactly what it did before this field
+    existed — both can be set independently, neither overrides the other."""
+    project = ProjectConfig(path=tmp_path, claude_md="CLAUDE.md", instruction_files=["AGENTS.md"])
+    assert project.claude_md == "CLAUDE.md"
+    assert project.instruction_files == ["AGENTS.md"]

@@ -26,6 +26,7 @@ from hivepilot.runners.base import (
 )
 from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.profile_service import load_claude_profiles
+from hivepilot.services.repo_instructions import build_repo_instructions_section
 from hivepilot.utils.env import gather_overrides, merge_environments
 from hivepilot.utils.logging import get_logger
 from hivepilot.utils.prompt_vars import render_prompt_vars
@@ -944,8 +945,14 @@ class ClaudeRunner(BaseRunner):
             sections.append(f"Repository path: {payload.project.path}")
             if payload.project.description:
                 sections.append(f"Project description: {payload.project.description}")
-            if payload.project.claude_md:
-                sections.append(f"Repository instructions file: {payload.project.claude_md}")
+            # inline-repo-instructions PRD: resolve + inline the CONTENT of
+            # every declared repository instructions file (`claude_md` +
+            # `instruction_files`) instead of only naming it -- see
+            # `repo_instructions.build_repo_instructions_section` for
+            # resolution/warn-on-missing/size-cap/redaction behavior.
+            instructions_section = build_repo_instructions_section(payload.project, self.settings)
+            if instructions_section:
+                sections.append(instructions_section)
         if knowledge_context:
             sections.append(f"Knowledge context:\n{knowledge_context}")
         lessons_context = self._build_lessons_context(payload)
