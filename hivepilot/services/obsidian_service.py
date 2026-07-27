@@ -8,6 +8,12 @@ Safety invariants:
 - Audit is always read-only regardless of dry_run.
 - dry_run=True (default) returns planned path + content WITHOUT writing.
 - Never renames or deletes folders.
+
+These three folders are the ONLY places HivePilot writes in a vault. The names are
+constants below (not configuration); only the vault root is configurable, via
+``HIVEPILOT_OBSIDIAN_VAULT``. The full layout — which writer targets which folder,
+and which folders are audit-only with no writer — is documented in
+``docs/INTEGRATIONS.md`` under "Obsidian → Vault layout".
 """
 
 from __future__ import annotations
@@ -60,11 +66,18 @@ FROZEN_FOLDERS: list[str] = [
     "01 - Journal",
 ]
 
+# Vault folders `audit()` reports present/missing. This is the EXPECTED LAYOUT of
+# the vault, NOT the set of folders HivePilot writes to — most entries here have
+# no writer anywhere in the engine (e.g. "02 - Architecture", "02 - Design").
+# The folders HivePilot actually writes are only: ARTIFACT_TARGET_FOLDER,
+# ADR_TARGET_FOLDER, and HIVEPILOT_SUBTREE (see docs/INTEGRATIONS.md → "Vault
+# layout"). Don't infer write behaviour from membership in this list.
 EXPECTED_TOP_LEVEL_FOLDERS: list[str] = [
     "00 - Inbox",
     "01 - Journal",
     "01 - Knowledge",
     "02 - Architecture",
+    ARTIFACT_TARGET_FOLDER,
     "02 - Design",
     "03 - Decisions",
     "03 - Research",
