@@ -821,7 +821,7 @@ export function fetchGraphNode(source: string, nodeId: string): Promise<GraphDet
 
 // ---------------------------------------------------------------------------
 // GET /v1/memory/reality, /v1/memory/gaps, /v1/memory/evaluations,
-// /v1/memory/journal — backs Pollen's "Réalité" memory-quality view. Shapes
+// /v1/memory/journal — backs Pollen's "Memory > Quality" memory-quality view. Shapes
 // transcribed directly from `hivepilot/services/memory_service.py`'s
 // `reality_summary`/`gaps_by_namespace`/`recent_evaluations`/
 // `activity_journal` and `api_service.py`'s `memory_reality`/`memory_gaps`/
@@ -834,13 +834,13 @@ export function fetchGraphNode(source: string, nodeId: string): Promise<GraphDet
 // (mirroring `fetchMemories`/`fetchPanel`/`fetchGraph` above) purely as
 // defense-in-depth: if a future tenant-scoping change ever raises this
 // floor, a 403 must not silently clear an otherwise-valid token out from
-// under every other tab — `RealityView` peels `ApiForbiddenError` off per
+// under every other tab — `MemoryQualityView` peels `ApiForbiddenError` off per
 // section, exactly like `GraphView`'s per-source handling.
 //
 // `namespace` / `query_or_key` / `note` / `actor` / `top_queries` are all
 // caller-influenced free text (whatever a plugin passed to
 // `memory_service.record_*`, e.g. `plugins/mem0.py`) — UNTRUSTED, same trust
-// class as `PanelData`/`GraphDetail` above. `RealityView` renders every one
+// class as `PanelData`/`GraphDetail` above. `MemoryQualityView` renders every one
 // of them via plain JSX interpolation only, never `dangerouslySetInnerHTML`.
 // ---------------------------------------------------------------------------
 

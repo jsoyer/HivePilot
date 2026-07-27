@@ -60,10 +60,10 @@ const mocks = vi.hoisted(() => ({
   // own source list on mount — mocked empty so this shell test never makes
   // a real network call, same as every other built-in tab above.
   fetchGraphSources: vi.fn().mockResolvedValue({ sources: [] }),
-  // Réalité tab: RealityView fetches all four `/v1/memory/*` endpoints on
+  // Memory > Quality tab: MemoryQualityView fetches all four `/v1/memory/*` endpoints on
   // mount — mocked to a genuinely-empty (but successful) response so this
-  // shell test exercises tab switching only, not RealityView's own
-  // data/empty/error states (covered by RealityView.test.tsx).
+  // shell test exercises tab switching only, not MemoryQualityView's own
+  // data/empty/error states (covered by MemoryQualityView.test.tsx).
   fetchMemoryReality: vi.fn().mockResolvedValue({
     search_success_rate: 0,
     total_searches: 0,
@@ -163,7 +163,7 @@ import { Pollen } from './Pollen'
 // still reachable, just reordered by group instead of the old flat
 // declaration order.
 //
-// Memory unification sprint: the formerly-separate "Mem0" and "Réalité"
+// Memory unification sprint: the formerly-separate "Mem0" and "Memory > Quality"
 // top-level tabs merged into ONE "Memory" tab, which itself has internal
 // Quality/Growth/Search tabs (see `MemoryView.test.tsx` for coverage of
 // that inner tab switching) — this shell-level list only asserts the ONE
@@ -381,7 +381,7 @@ describe('Pollen', () => {
     })
 
     expect(memoryTab.getAttribute('aria-selected')).toBe('true')
-    // Default inner tab is Quality (the moved-in RealityView content) — its
+    // Default inner tab is Quality (the moved-in MemoryQualityView content) — its
     // own Quality/Growth/Search switching behavior is unit-tested in
     // MemoryView.test.tsx, this only proves the shell wiring.
     const panel = container.querySelector('[role="tabpanel"]')

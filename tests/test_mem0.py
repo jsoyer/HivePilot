@@ -968,7 +968,7 @@ class TestStoreInternalErrorIsSwallowed:
 class TestRecallInstrumentsMemoryService:
     """`recall()` reports a `memory_service.record_search` event (memory-quality
     instrumentation subsystem) after every real `client.search()` call — the
-    signal Pollen's "Réalité" view is built on. Best-effort: a raising
+    signal Pollen's Memory > Quality view is built on. Best-effort: a raising
     `record_search` must never break `recall()` itself."""
 
     def test_recall_records_search_with_result_count_and_actor(

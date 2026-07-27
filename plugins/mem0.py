@@ -173,7 +173,7 @@ compress should rename files to control ``sorted()`` order (e.g.
 **Memory-quality instrumentation (single-tenant today).** ``recall``/
 ``store`` both report events to ``hivepilot.services.memory_service``
 (``record_search``/``record_store`` — see that module's own docstring) for
-Pollen's "Réalité" view. Neither hook has a real ``tenant`` signal
+Pollen's Memory > Quality view. Neither hook has a real ``tenant`` signal
 reachable in its kwargs (``RunnerPayload``/``TaskConfig`` carry no
 ``tenant`` field), so every event this plugin reports lands under
 ``tenant="default"`` — see the inline comment at each ``record_search``/
@@ -464,7 +464,7 @@ def recall(**kwargs: Any) -> None:
         # see the "instrumentation must never break recall" tests in
         # tests/test_mem0.py::TestRecallInstrumentsMemoryService). Reported
         # regardless of whether any memories were found: a no-result search
-        # is exactly the signal Pollen's "Réalité" gaps view surfaces.
+        # is exactly the signal Pollen's "Memory > Quality" gaps view surfaces.
         #
         # `tenant` is deliberately OMITTED here (defaults to
         # `memory_service.record_search`'s own `tenant="default"`): neither

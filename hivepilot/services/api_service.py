@@ -1533,7 +1533,7 @@ def post_autopilot_resume(
 
 
 # ---------------------------------------------------------------------------
-# Memory-quality instrumentation subsystem — backs Pollen's "Réalité" view.
+# Memory-quality instrumentation subsystem — backs Pollen's Memory > Quality view.
 # Sibling to the analytics endpoints above, same shape: every GET endpoint
 # Depends(require_role("read")), tenant-filtered from the caller's token via
 # `_memory_tenant` (mirrors `_analytics_tenant`: admin -> unscoped/`None`,
@@ -1557,7 +1557,7 @@ def post_autopilot_resume(
 # no `tenant` field; see `plugins/mem0.py`'s instrumentation call sites for
 # the full investigation) and so every event lands under `tenant="default"`.
 # In a multi-tenant deployment, a non-admin caller whose own tenant isn't
-# `"default"` will therefore see an empty Réalité view even once mem0 is
+# `"default"` will therefore see an empty Memory > Quality view even once mem0 is
 # active, until a real tenant signal is threaded down to the hook — that is
 # NOT a bug in the scoping here, it's a gap in what the writer can attribute
 # today.

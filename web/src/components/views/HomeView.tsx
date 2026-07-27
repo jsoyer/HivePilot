@@ -43,7 +43,7 @@ import { cn } from '@/lib/utils'
  * `home.kpiRunsSub`) rather than "today" for that reason — honest about
  * what the window actually covers. */
 const TODAY_DAYS = 1
-/** Matches `RealityView`'s own default window for memory-quality signals —
+/** Matches `MemoryQualityView`'s own default window for memory-quality signals —
  * a rolling 24h window is usually too narrow for search/evaluation volume
  * to be meaningful. */
 const MEMORY_DAYS = 30
@@ -89,7 +89,7 @@ function pct(rate: number): string {
 }
 
 /** Elapsed time from `iso` to now, as a short "2d"/"3h"/"12m"/"45s" string —
- * mirrors `RealityView`'s `formatFreshness` but computed from "now" rather
+ * mirrors `MemoryQualityView`'s `formatFreshness` but computed from "now" rather
  * than a duration already expressed in seconds. Unparseable/missing input
  * renders as "—", never a fabricated age. */
 function formatAge(iso: string | null | undefined): string {
@@ -631,7 +631,7 @@ function ActivityFeedSection({ runsState, approvalsState }: ActivityFeedSectionP
  * prioritized "Needs attention" list, "The Sweep" (a live-ish agent radar
  * fed by real run data), and a merged runs+approvals activity feed.
  *
- * **Honesty over completeness** (mirrors `RealityView`'s convention): every
+ * **Honesty over completeness** (mirrors `MemoryQualityView`'s convention): every
  * KPI/section falls back to an explicit "not available"/"no data"/"—"
  * state instead of a fabricated number when its underlying signal is
  * genuinely absent (no daily-budget field exists anywhere in the API, so

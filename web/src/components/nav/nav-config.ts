@@ -49,7 +49,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   { label: 'nav.spend', values: ['cost', 'models', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
-  // and Réalité (quality) built-ins merged into ONE `memory` item backed by
+  // and memory-quality built-ins merged into ONE `memory` item backed by
   // `MemoryView`'s internal Quality/Growth/Search tabs (see `Pollen.tsx`'s
   // `BUILTIN_TABS`) — a single-entry-with-tabs destination reads cleaner
   // than three separate top-level nav items for what is really one

@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Raw source text of the component under test (Vite's `?raw` import — see
 // `vite/client.d.ts`), used ONLY to assert it never opts out of React's
-// auto-escaping. Same convention as `RealityView.test.tsx`.
+// auto-escaping. Same convention as `MemoryQualityView.test.tsx`.
 import memoryViewSource from './MemoryView.tsx?raw'
 import { ApiForbiddenError } from '@/lib/api'
 import type {
@@ -141,7 +141,7 @@ describe('MemoryView — tabs', () => {
     expect(tabs).toEqual(['Quality', 'Growth', 'Search'])
   })
 
-  it('defaults to the Quality tab, rendering RealityView content', async () => {
+  it('defaults to the Quality tab, rendering MemoryQualityView content', async () => {
     mocks.fetchMemoryReality.mockResolvedValue(filledReality)
     await act(async () => {
       mount()

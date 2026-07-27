@@ -1,5 +1,5 @@
 """Tests for `hivepilot.services.memory_service` — the memory-quality
-instrumentation subsystem backing Pollen's "Réalité" view.
+instrumentation subsystem backing Pollen's Memory > Quality view.
 
 The `_isolate_state_db` fixture (autouse, defined in conftest.py) redirects
 `state_service.DB_PATH` to a per-test tmp file, which `memory_service` reuses

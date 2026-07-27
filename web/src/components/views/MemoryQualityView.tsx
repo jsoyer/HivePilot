@@ -65,7 +65,7 @@ function formatJournalResult(entry: MemoryJournalEntry): ReactNode {
  * off into a shared "requires a higher-privilege token" banner instead of
  * `AsyncSection`'s generic error card (mirrors `GraphView`/`PanelView`'s
  * per-section `ApiForbiddenError` handling). Keeps one section's role gate
- * from ever blanking the rest of the Réalité view. */
+ * from ever blanking the rest of the Memory > Quality view. */
 function ForbiddenAwareSection<T>({
   testId,
   state,
@@ -84,11 +84,11 @@ function ForbiddenAwareSection<T>({
   if (state.status === 'error' && state.error instanceof ApiForbiddenError) {
     return (
       <div
-        data-testid={`reality-forbidden-${testId}`}
+        data-testid={`memory-quality-forbidden-${testId}`}
         className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
       >
-        {t('reality.requiresTokenLead')} <span className="font-medium text-foreground">{t('reality.requiresTokenTail')}</span>{' '}
-        {t('reality.requiresTokenNote')}
+        {t('quality.requiresTokenLead')} <span className="font-medium text-foreground">{t('quality.requiresTokenTail')}</span>{' '}
+        {t('quality.requiresTokenNote')}
       </div>
     )
   }
@@ -101,7 +101,7 @@ function ForbiddenAwareSection<T>({
 }
 
 /**
- * Réalité tab — Pollen's memory-quality dashboard, consuming
+ * Memory > Quality tab — Pollen's memory-quality dashboard, consuming
  * `/v1/memory/{reality,gaps,evaluations,journal}`. Answers "does the memory
  * substrate actually help", not just how much it holds: search
  * success/no-result rate, recall freshness, human-declared reliability,
@@ -128,7 +128,7 @@ function ForbiddenAwareSection<T>({
  * them is rendered via plain JSX text interpolation only — this file never
  * bypasses React's auto-escaping with a raw-HTML injection prop.
  */
-export function RealityView() {
+export function MemoryQualityView() {
   const t = useT()
   const reality = useAsyncData(() => fetchMemoryReality(DAYS), [DAYS])
   const gaps = useAsyncData(() => fetchMemoryGaps(DAYS), [DAYS])
@@ -150,8 +150,8 @@ export function RealityView() {
     return (
       <Card>
         <CardContent>
-          <p data-testid="reality-empty-state" className="text-sm text-muted-foreground">
-            {t('reality.emptyState')}
+          <p data-testid="memory-quality-empty-state" className="text-sm text-muted-foreground">
+            {t('quality.emptyState')}
           </p>
         </CardContent>
       </Card>
@@ -162,7 +162,7 @@ export function RealityView() {
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
-          <CardTitle>{t('reality.kpiTitle')}</CardTitle>
+          <CardTitle>{t('quality.kpiTitle')}</CardTitle>
           <CardDescription>{t('common.lastDays', { days: DAYS })}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -170,34 +170,34 @@ export function RealityView() {
             testId="kpi"
             state={reality}
             isEmpty={(data) => data.total_searches === 0 && data.total_evaluations === 0}
-            emptyMessage={t('reality.noKpiData')}
+            emptyMessage={t('quality.noKpiData')}
           >
             {(data) => (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <StatCard
                   icon={<SearchX className="size-4" />}
-                  label={t('reality.searchSuccessRate')}
-                  value={data.total_searches > 0 ? pct(data.search_success_rate) : t('reality.noSamples')}
-                  sub={t('reality.onNSearches', { count: data.total_searches })}
+                  label={t('quality.searchSuccessRate')}
+                  value={data.total_searches > 0 ? pct(data.search_success_rate) : t('quality.noSamples')}
+                  sub={t('quality.onNSearches', { count: data.total_searches })}
                   tone={data.total_searches > 0 ? rateTone(data.search_success_rate) : 'default'}
                 />
                 <StatCard
                   icon={<SearchX className="size-4" />}
-                  label={t('reality.noResultSearches')}
+                  label={t('quality.noResultSearches')}
                   value={data.no_result_count}
-                  sub={t('reality.onNSearches', { count: data.total_searches })}
+                  sub={t('quality.onNSearches', { count: data.total_searches })}
                   tone={data.no_result_count > 0 ? 'warning' : 'positive'}
                 />
                 <StatCard
                   icon={<Clock className="size-4" />}
-                  label={t('reality.avgFreshness')}
+                  label={t('quality.avgFreshness')}
                   value={formatFreshness(data.avg_freshness_seconds)}
                 />
                 <StatCard
                   icon={<ShieldCheck className="size-4" />}
-                  label={t('reality.declaredReliability')}
-                  value={data.total_evaluations > 0 ? pct(data.declared_reliability) : t('reality.noSamples')}
-                  sub={t('reality.onNEvaluations', { count: data.total_evaluations })}
+                  label={t('quality.declaredReliability')}
+                  value={data.total_evaluations > 0 ? pct(data.declared_reliability) : t('quality.noSamples')}
+                  sub={t('quality.onNEvaluations', { count: data.total_evaluations })}
                   tone={data.total_evaluations > 0 ? rateTone(data.declared_reliability) : 'default'}
                 />
               </div>
@@ -208,15 +208,15 @@ export function RealityView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t('reality.gapsTitle')}</CardTitle>
-          <CardDescription>{t('reality.gapsDescription')}</CardDescription>
+          <CardTitle>{t('quality.gapsTitle')}</CardTitle>
+          <CardDescription>{t('quality.gapsDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <ForbiddenAwareSection
             testId="gaps"
             state={gaps}
             isEmpty={(data) => data.gaps.length === 0}
-            emptyMessage={t('reality.noGaps')}
+            emptyMessage={t('quality.noGaps')}
           >
             {(data) => (
               <div className="flex flex-col gap-4">
@@ -234,7 +234,7 @@ export function RealityView() {
                       {gap.top_queries.length > 0 && (
                         <>
                           {' — '}
-                          {t('reality.topQueriesLabel')}{' '}
+                          {t('quality.topQueriesLabel')}{' '}
                           {gap.top_queries.map((query, index) => (
                             <span key={`${gap.namespace}-${index}`}>
                               {index > 0 && ', '}
@@ -254,15 +254,15 @@ export function RealityView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t('reality.evaluationsTitle')}</CardTitle>
-          <CardDescription>{t('reality.evaluationsDescription')}</CardDescription>
+          <CardTitle>{t('quality.evaluationsTitle')}</CardTitle>
+          <CardDescription>{t('quality.evaluationsDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <ForbiddenAwareSection
             testId="evaluations"
             state={evaluations}
             isEmpty={(data) => data.evaluations.length === 0}
-            emptyMessage={t('reality.noEvaluations')}
+            emptyMessage={t('quality.noEvaluations')}
           >
             {(data) => (
               <ul className="flex flex-col gap-2">
@@ -275,11 +275,11 @@ export function RealityView() {
                       {evaluation.useful === true && (
                         <CheckCircle2
                           className="size-4 shrink-0 text-emerald-500"
-                          aria-label={t('reality.useful')}
+                          aria-label={t('quality.useful')}
                         />
                       )}
                       {evaluation.useful === false && (
-                        <XCircle className="size-4 shrink-0 text-destructive" aria-label={t('reality.notUseful')} />
+                        <XCircle className="size-4 shrink-0 text-destructive" aria-label={t('quality.notUseful')} />
                       )}
                       {evaluation.useful === null && <span className="text-muted-foreground">—</span>}
                       <span className="font-medium">{evaluation.namespace}</span>
@@ -297,27 +297,27 @@ export function RealityView() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t('reality.journalTitle')}</CardTitle>
-          <CardDescription>{t('reality.journalDescription')}</CardDescription>
+          <CardTitle>{t('quality.journalTitle')}</CardTitle>
+          <CardDescription>{t('quality.journalDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           <ForbiddenAwareSection
             testId="journal"
             state={journal}
             isEmpty={(data) => data.journal.length === 0}
-            emptyMessage={t('reality.noJournal')}
+            emptyMessage={t('quality.noJournal')}
           >
             {(data) => (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t('reality.colTs')}</TableHead>
-                    <TableHead>{t('reality.colOp')}</TableHead>
-                    <TableHead>{t('reality.colNamespace')}</TableHead>
-                    <TableHead>{t('reality.colQuery')}</TableHead>
-                    <TableHead>{t('reality.colResult')}</TableHead>
-                    <TableHead>{t('reality.colFreshness')}</TableHead>
-                    <TableHead>{t('reality.colActor')}</TableHead>
+                    <TableHead>{t('quality.colTs')}</TableHead>
+                    <TableHead>{t('quality.colOp')}</TableHead>
+                    <TableHead>{t('quality.colNamespace')}</TableHead>
+                    <TableHead>{t('quality.colQuery')}</TableHead>
+                    <TableHead>{t('quality.colResult')}</TableHead>
+                    <TableHead>{t('quality.colFreshness')}</TableHead>
+                    <TableHead>{t('quality.colActor')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

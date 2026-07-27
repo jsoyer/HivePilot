@@ -1,4 +1,4 @@
-"""Memory-quality instrumentation subsystem — backs Pollen's "Réalité" view.
+"""Memory-quality instrumentation subsystem — backs Pollen's Memory > Quality view.
 
 Core HivePilot has RUN analytics (`analytics_service.py`) but no source of
 truth for how well the *memory* layer (e.g. the `mem0` plugin's `recall`/
