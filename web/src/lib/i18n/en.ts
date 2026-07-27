@@ -72,6 +72,7 @@ export const en = {
   'nav.approvals': 'Approvals',
   'nav.runs': 'Runs',
   'nav.autopilot': 'Autopilot',
+  'nav.partitions': 'Partitions',
   'nav.agents': 'Agents',
   'nav.graph': 'Graph',
 
@@ -478,6 +479,100 @@ export const en = {
   'autopilot.allowlistEmptyTitle': 'No pipeline may auto-dispatch',
   'autopilot.allowlistEmptyBody':
     'Autopilot can still queue objectives, but it will never run one. Add a pipeline to auto_dispatch in policies.yaml to let it act.',
+
+  // ---- Partitions view (propose -> ratify -> dispatch PRD, Sprint 4) ----
+  // Register note: sober and literal. Nothing here dresses up what is, in
+  // substance, "you are about to start N agents and push code outward".
+  'partitions.description':
+    'A proposed partition splits one piece of work into budgeted tasks. Review the plan, edit it, then dispatch. Nothing runs until you ratify.',
+  'partitions.descriptionReadOnly':
+    'Read-only. Ratifying a partition — the single gate between a proposal and N running agents — needs an approve-rank token.',
+  'partitions.forbidden':
+    'This list needs a run-rank (or higher) token. Your token still works on every other Pollen tab.',
+  'partitions.emptyTitle': 'No partitions yet',
+  'partitions.emptyBody':
+    'A partition appears here once a proposer pipeline submits one (hivepilot partition submit --file plan.json --source text:docs/bug-1234.md). Who the proposer is, and what a task means for you, is your config — not the engine.',
+  'partitions.review': 'Review',
+  'partitions.reviewAriaLabel': 'Review partition {id}',
+  'partitions.sourceLabel': 'Source',
+  'partitions.proposedAgo': 'proposed {age} ago',
+  'partitions.notRatifiable': 'Only a proposed partition can be ratified. This one is {status}.',
+
+  // ---- ratification drawer --------------------------------------------
+  'partitions.drawerTitle': 'Ratify partition',
+  'partitions.drawerAriaLabel': 'Ratify partition {id}',
+  'partitions.closeAriaLabel': 'Close the ratification panel',
+  'partitions.planTitle': 'Plan',
+  'partitions.planLabel': 'Partition plan (JSON)',
+  'partitions.planHint':
+    'This is exactly what will run. Edit it directly, or use the task controls below — both write to the same document.',
+  'partitions.parseErrorLead': 'This is not valid JSON, so nothing can be dispatched:',
+  'partitions.checking': 'Checking the plan…',
+  'partitions.gateAccepted': 'The gate accepts this plan.',
+  'partitions.gateRefusedLead': 'The gate would refuse this plan:',
+  'partitions.previewUnavailable':
+    'The plan could not be checked against policy right now, so dispatch stays disabled.',
+
+  // ---- typed controls --------------------------------------------------
+  'partitions.tasksTitle': 'Tasks',
+  'partitions.noTasks': 'This plan declares no tasks',
+  'partitions.noTasksBody':
+    'A partition with no tasks dispatches nothing. Add a task to the JSON above, or reload the proposal.',
+  'partitions.dropTask': 'Drop',
+  'partitions.dropTaskAriaLabel': 'Drop task {id} from this plan',
+  'partitions.dependsOn': 'after {ids}',
+  'partitions.wallClockLabel': 'Killed after',
+  'partitions.wallClockAriaLabel': 'Wall-clock ceiling in seconds for task {id}',
+  'partitions.wallClockHelp':
+    'An enforcement ceiling, not an estimate: the task is killed at this point.',
+  'partitions.costLabel': 'Cost ceiling ($)',
+  'partitions.costAriaLabel': 'Cost ceiling in US dollars for task {id}',
+  'partitions.costHelp':
+    'Admission control: the sum is checked against the remaining daily budget. It is a pre-check, not a reservation — one wave can overshoot it.',
+  'partitions.planCostLabel': 'Plan cost ceiling',
+  'partitions.wavesLabel': 'Waves',
+  'partitions.waveNumber': 'Wave {index}',
+
+  // ---- outward consent -------------------------------------------------
+  'partitions.outwardTitle': 'Outward-visible action',
+  // The sentence the checkbox is asking about. `{actions}` is built from the
+  // action list the BACKEND computed for this exact plan — never a fixed
+  // string, and never the plan's own self-declared `outward` flags.
+  'partitions.outwardWarning': '{actions} — an action visible outside this machine.',
+  'partitions.outwardConsentLabel': 'I consent to these outward-visible actions',
+  'partitions.outwardNoneTitle': 'Nothing outward',
+  'partitions.outwardNoneBody':
+    'On live config, this plan pushes nothing and opens nothing. Work stays on this machine, so no outward consent is required.',
+  'partitions.outwardV1Gap':
+    'Consent is enforced at dispatch for git and forge actions only. notify, vault_write and external_api are named above but are not yet suppressed at runtime.',
+  'partitions.outwardHonesty':
+    'This governs what the engine does. An agent with shell access can still act outward on its own.',
+  'partitions.outwardAction.git_push': 'branches will be pushed',
+  'partitions.outwardAction.forge_pr': 'PRs opened',
+  'partitions.outwardAction.forge_merge': 'PRs merged',
+  'partitions.outwardAction.forge_issue': 'issues opened',
+  'partitions.outwardAction.forge_release': 'releases published',
+  'partitions.outwardAction.notify': 'notifications sent out',
+  'partitions.outwardAction.vault_write': 'notes written to your vault',
+  'partitions.outwardAction.external_api': 'external APIs called',
+
+  // ---- effective parallelism ------------------------------------------
+  'partitions.parallelismLabel': 'Effective parallelism',
+  'partitions.parallelismSub': '{requested} requested',
+  'partitions.parallelismTitle': 'What actually runs in parallel',
+
+  // ---- dispatch --------------------------------------------------------
+  'partitions.dispatch': 'Ratify and dispatch',
+  'partitions.dispatchAriaLabel': 'Ratify and dispatch partition {id}',
+  'partitions.dispatchConfirm':
+    'Dispatch {count} task(s) now? This starts real agents, at most {effective} at a time. A ratified partition cannot be edited afterwards.',
+  'partitions.dispatchBlocked': 'Dispatch stays disabled until the plan parses and the gate accepts it.',
+  'partitions.dispatched': 'Ratified. {count} task(s) queued — dispatch is running in the background.',
+  'partitions.idempotent': 'Already ratified. Nothing was dispatched a second time.',
+  'partitions.warningsTitle': 'Warnings',
+  'partitions.insufficientRole': 'Your token cannot ratify a partition — this needs an approve-rank token.',
+  'partitions.errorStale':
+    'This partition changed since you opened it. Reload it and review the new plan before ratifying.',
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',

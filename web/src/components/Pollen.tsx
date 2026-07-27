@@ -11,6 +11,7 @@ import {
   Menu,
   PlayCircle,
   Search,
+  Split,
   Users,
   Workflow,
   Zap,
@@ -40,6 +41,7 @@ import { HomeView } from './views/HomeView'
 import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
 import { PanelView } from './views/PanelView'
+import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
 
 // FR/EN i18n (P1a): `labelKey` is a `TranslationKey` (see `@/lib/i18n`), NOT
@@ -90,6 +92,12 @@ const BUILTIN_TABS = [
   // pause|resume — read-only for any token, the Pause/Resume control inside
   // gates itself on useRole().can('run') — see AutopilotView.
   { value: 'autopilot', labelKey: 'nav.autopilot', Panel: AutopilotView, Icon: Bot },
+  // Propose -> ratify -> dispatch PRD, Sprint 4: GET /v1/partitions (run
+  // floor) + the ratification gate (POST /v1/partitions/{id}/preview|ratify,
+  // approve floor) — read-only for any token that can see the list; the
+  // Review control and the whole ratification drawer inside gate themselves
+  // on useRole().can('approve') — see PartitionsView.
+  { value: 'partitions', labelKey: 'nav.partitions', Panel: PartitionsView, Icon: Split },
   // Mirador Graph View PRD, Sprint 3: read-only for any token; a graph
   // source's own min_role (data-dependent, GET /v1/graph/{source}) gates
   // itself inside GraphView, exactly like PanelView's per-panel min_role.
