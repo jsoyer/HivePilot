@@ -821,6 +821,12 @@ export interface GraphSourceSummary {
   title: string
   min_role: string
   params: string[]
+  /** Enumerable values for some of `params`, when the source can list them
+   * (see `GraphSourceSpec.param_options` server-side). A HINT for rendering
+   * a pick-list instead of a free-text box — never a constraint, and a param
+   * may legitimately be absent here. Optional on the wire so an older
+   * backend, or a hand-rolled fixture, still parses. */
+  param_options?: Record<string, string[]>
 }
 
 export interface GraphSourcesResponse {

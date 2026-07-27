@@ -143,7 +143,7 @@ export const fr: Record<TranslationKey, string> = {
   // ---- Graph view ------------------------------------------------------
   'graph.title': 'Graphe',
   'graph.description':
-    "Vues natives en graphe de l'état de HivePilot — déplacez/zoomez le canevas, cliquez sur un nœud pour le détail.",
+    "Vues natives en graphe de l'état de HivePilot. Déplacez et zoomez le canevas ; sélectionnez un nœud pour son détail.",
   'graph.loadingSources': 'Chargement des sources…',
   'graph.noSources': 'Aucune source de graphe enregistrée.',
   'graph.source': 'Source',
@@ -153,10 +153,12 @@ export const fr: Record<TranslationKey, string> = {
   'graph.requiresTokenNote':
     'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule cette source de graphe nécessite un rôle supérieur.',
   'graph.higherPrivilege': 'à privilège supérieur',
-  'graph.aParameter': 'un paramètre',
-  'graph.parameters': 'des paramètres',
-  'graph.missingParamHintLead': 'Cette source nécessite {countLabel} pour charger les données. Renseignez',
-  'graph.missingParamHintTail': 'ci-dessus puis cliquez sur',
+  'graph.chooseParam': 'Choisir un {param}…',
+  'graph.missingParamTitle': 'Choisissez un {params} à afficher',
+  'graph.missingParamBodySelect':
+    'Cette source en affiche un à la fois. Choisissez-en un dans le sélecteur ci-dessus et le graphe se charge aussitôt.',
+  'graph.missingParamBodyType':
+    'Cette source ne peut pas énumérer ses valeurs acceptées : saisissez-en une ci-dessus puis cliquez sur Charger.',
   'graph.failedToLoad': 'Échec du chargement de ce graphe ({label}). Réessayez ou choisissez une autre source.',
   'graph.noNodes': "Cette source n'a encore aucun nœud.",
   'graph.selectNodeForDetail': 'Sélectionnez un nœud pour voir le détail.',

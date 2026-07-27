@@ -144,7 +144,7 @@ export const en = {
   // ---- Graph view ------------------------------------------------------
   'graph.title': 'Graph',
   'graph.description':
-    "Graph-native views of HivePilot's own state — pan/zoom the canvas, click a node for detail.",
+    "Graph-native views of HivePilot's own state. Pan and zoom the canvas; select a node for its detail.",
   'graph.loadingSources': 'Loading sources…',
   'graph.noSources': 'No graph sources registered.',
   'graph.source': 'Source',
@@ -154,10 +154,12 @@ export const en = {
   'graph.requiresTokenNote':
     'Your current token can still use the other Pollen tabs — only this graph source needs a higher role.',
   'graph.higherPrivilege': 'higher-privilege',
-  'graph.aParameter': 'a parameter',
-  'graph.parameters': 'parameters',
-  'graph.missingParamHintLead': 'This source needs {countLabel} to load data. Enter',
-  'graph.missingParamHintTail': 'above and click',
+  'graph.chooseParam': 'Choose a {param}…',
+  'graph.missingParamTitle': 'Pick a {params} to draw',
+  'graph.missingParamBodySelect':
+    'This source draws one at a time. Choose one from the selector above and the graph loads immediately.',
+  'graph.missingParamBodyType':
+    'This source cannot list its accepted values, so type one above and click Load.',
   'graph.failedToLoad': 'Failed to load this graph ({label}). Try again or choose a different source.',
   'graph.noNodes': 'This source has no nodes yet.',
   'graph.selectNodeForDetail': 'Select a node for detail.',
