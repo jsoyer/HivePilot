@@ -25,6 +25,7 @@ from hivepilot.partition import (
     InvalidBudgetError,
     InvalidProjectTargetError,
     MalformedPartitionError,
+    PartitionError,
     PartitionPlan,
     UnknownTaskDependencyError,
     load_partition,
@@ -71,6 +72,42 @@ def test_valid_partition_parses() -> None:
     assert plan.tasks[0].id == "parse-guard"
     assert plan.tasks[0].budget.wall_clock_seconds == 1500
     assert plan.tasks[0].budget.cost_usd == 1.50
+
+
+def test_partition_version_constant_is_one() -> None:
+    """The only known partition_version is `1`, pinned as a literal so a
+    later version bump can't silently drift this constant without a test
+    failure forcing a conscious update. Merged from the deleted
+    `tests/test_partition.py` / `hivepilot/test_partition.py` TDD-hook
+    stubs (see docs/session-learnings.md 2026-07-27 PR #347 cleanup)."""
+    assert PARTITION_VERSION == 1
+
+
+def test_partition_error_is_not_a_pydantic_intercepted_type() -> None:
+    """`PartitionError` (and therefore every subclass) is deliberately NOT a
+    `ValueError`/`TypeError`/`AssertionError` subclass -- pydantic v2 only
+    auto-wraps those three exception types when raised inside a validator
+    into its own `pydantic.ValidationError`; anything else propagates
+    untouched. That's what lets a caller catch a specific PartitionError
+    subclass directly instead of parsing a nested pydantic error tree (see
+    `hivepilot/partition.py`'s own module docstring). Merged from the
+    deleted `hivepilot/test_partition.py` TDD-hook stub."""
+    assert issubclass(PartitionError, Exception)
+    assert not issubclass(PartitionError, ValueError)
+    assert not issubclass(PartitionError, TypeError)
+    assert not issubclass(PartitionError, AssertionError)
+
+
+def test_policy_defaults_to_serial_continue_when_omitted() -> None:
+    """A partition document with no `policy` key at all falls back to the
+    safe defaults (`max_parallel=1`, `on_task_failure='continue'`) rather
+    than erroring -- `policy` is optional. Merged from the deleted
+    `tests/test_partition.py` TDD-hook stub."""
+    doc = _valid_doc()
+    del doc["policy"]
+    plan = load_partition(json.dumps(doc))
+    assert plan.policy.max_parallel == 1
+    assert plan.policy.on_task_failure == "continue"
 
 
 def test_project_accepts_plain_project() -> None:
