@@ -385,8 +385,7 @@ class TestStepsCacheTokenMigration:
             conn.execute("ALTER TABLE steps DROP COLUMN cache_read_tokens")
             conn.execute("ALTER TABLE steps DROP COLUMN cache_creation_tokens")
             conn.execute(
-                "INSERT INTO steps (run_id, step, status, provider, model) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO steps (run_id, step, status, provider, model) VALUES (?, ?, ?, ?, ?)",
                 (1, "legacy-step", "success", "claude", "claude-sonnet-4-6"),
             )
         with db.connect() as conn:

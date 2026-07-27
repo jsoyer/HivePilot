@@ -1272,7 +1272,9 @@ class TestCheckCostAccounting:
         FALLBACK, so this must not be flagged as a gap."""
         run_id = _seed_cost_run()
         for i in range(20):
-            _seed_cost_step(run_id, f"s{i}", model="brand-new-model-with-self-reported-cost", cost_usd=0.02)
+            _seed_cost_step(
+                run_id, f"s{i}", model="brand-new-model-with-self-reported-cost", cost_usd=0.02
+            )
 
         assert config_doctor.check_cost_accounting() == []
 

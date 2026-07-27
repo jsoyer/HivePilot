@@ -326,7 +326,9 @@ class TestCostsBackfillCli:
         assert result.exit_code == 0, result.output
         assert "dry" in result.output.lower() or "would" in result.output.lower()
         with db.connect() as conn:
-            row = conn.execute(db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)).fetchone()
+            row = conn.execute(
+                db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)
+            ).fetchone()
         assert row["cost_usd"] is None
 
     def test_apply_flag_writes_the_recomputed_cost(self) -> None:
@@ -338,7 +340,9 @@ class TestCostsBackfillCli:
 
         assert result.exit_code == 0, result.output
         with db.connect() as conn:
-            row = conn.execute(db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)).fetchone()
+            row = conn.execute(
+                db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)
+            ).fetchone()
         assert row["cost_usd"] == 10.5
 
     def test_reports_still_unpriced_count(self) -> None:

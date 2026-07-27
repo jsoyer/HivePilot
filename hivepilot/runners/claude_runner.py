@@ -218,22 +218,22 @@ def _extract_model_usage(data: dict[str, Any]) -> UsageInfo | None:
     total_cost: float | None = 0.0
     any_entry = False
     dominant_model: str | None = None
-    dominant_weight = -1
+    dominant_weight: int = -1
 
     for key, entry in model_usage.items():
         if not isinstance(entry, dict):
             continue
         any_entry = True
 
-        entry_input = _num(entry.get("inputTokens")) or 0
-        entry_output = _num(entry.get("outputTokens")) or 0
-        entry_cache_read = _num(entry.get("cacheReadInputTokens")) or 0
-        entry_cache_creation = _num(entry.get("cacheCreationInputTokens")) or 0
+        entry_input = int(_num(entry.get("inputTokens")) or 0)
+        entry_output = int(_num(entry.get("outputTokens")) or 0)
+        entry_cache_read = int(_num(entry.get("cacheReadInputTokens")) or 0)
+        entry_cache_creation = int(_num(entry.get("cacheCreationInputTokens")) or 0)
 
-        total_input += int(entry_input)
-        total_output += int(entry_output)
-        total_cache_read += int(entry_cache_read)
-        total_cache_creation += int(entry_cache_creation)
+        total_input += entry_input
+        total_output += entry_output
+        total_cache_read += entry_cache_read
+        total_cache_creation += entry_cache_creation
 
         canonical = entry.get("canonicalModel")
         model_id = canonical if isinstance(canonical, str) and canonical else key
@@ -250,10 +250,10 @@ def _extract_model_usage(data: dict[str, Any]) -> UsageInfo | None:
             else:
                 estimated = pricing.estimate_cost(
                     model_id,
-                    int(entry_input),
-                    int(entry_output),
-                    cache_read_tokens=int(entry_cache_read),
-                    cache_creation_tokens=int(entry_cache_creation),
+                    entry_input,
+                    entry_output,
+                    cache_read_tokens=entry_cache_read,
+                    cache_creation_tokens=entry_cache_creation,
                 )
                 if estimated is None:
                     # Fail closed on the TOTAL, not this one entry: a partial

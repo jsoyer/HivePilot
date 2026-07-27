@@ -44,9 +44,7 @@ def _seed_step(
 
 def _get_cost(step_id: int) -> float | None:
     with db.connect() as conn:
-        row = conn.execute(
-            db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)
-        ).fetchone()
+        row = conn.execute(db.ph("SELECT cost_usd FROM steps WHERE id=?"), (step_id,)).fetchone()
     return row["cost_usd"]
 
 
