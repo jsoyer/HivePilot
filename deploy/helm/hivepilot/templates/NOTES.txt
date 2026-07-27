@@ -18,7 +18,7 @@ Components enabled:
 
 {{- if .Values.ingress.enabled }}
 
-2. The API (and, if HIVEPILOT_ENABLE_WEBUI is set, the Mirador web UI at /ui)
+2. The API (and, if HIVEPILOT_ENABLE_WEBUI is set, the Pollen web UI at /ui)
    is exposed via Ingress at:
 
    {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}

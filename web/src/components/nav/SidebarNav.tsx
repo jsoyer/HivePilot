@@ -10,7 +10,7 @@ const COLLAPSED_STORAGE_KEY = 'hivepilot.webui.sidebar-collapsed'
 export interface SidebarNavProps {
   groups: NavGroup[]
   /** Mobile off-canvas drawer open state — owned by the header's hamburger
-   * button (`Mirador.tsx`), not this component, since the trigger lives
+   * button (`Pollen.tsx`), not this component, since the trigger lives
    * outside the sidebar itself. */
   mobileOpen: boolean
   /** Called when the drawer should close: backdrop click, or any item click
@@ -21,7 +21,7 @@ export interface SidebarNavProps {
 /**
  * Left sidebar navigation (Mirador → "Vigie" dashboard upgrade, P0b) —
  * replaces the old flat top tab bar. Renders the SAME underlying
- * `Tabs`/`TabsList`/`TabsTrigger` primitives `Mirador.tsx` already used for
+ * `Tabs`/`TabsList`/`TabsTrigger` primitives `Pollen.tsx` already used for
  * the tab bar (just restyled + grouped), so the existing uncontrolled
  * `Tabs` value/routing state is completely unchanged — this component only
  * changes the nav UI that sets it. One `TabsList` instance (not one per
@@ -42,7 +42,7 @@ export interface SidebarNavProps {
  * called `onCloseMobile` and translated the whole sidebar off-screen with
  * no visible way back ("the whole menu disappears"). `md:` (768px) is a
  * much more realistic floor for "this is a desktop window, not a phone" —
- * Mirador is an ops console, not a page that's ever hand-held.
+ * Pollen is an ops console, not a page that's ever hand-held.
  *
  * Mobile (below `md:`): an off-canvas drawer (`fixed`, translated out of
  * view by default) plus a click-to-close backdrop, controlled entirely by
@@ -110,7 +110,7 @@ export function SidebarNav({ groups, mobileOpen, onCloseMobile }: SidebarNavProp
                   value={item.value}
                   onClick={onCloseMobile}
                   className={cn(
-                    // IA/Cyber identity: the active item gets a subtle
+                    // visual identity: the active item gets a subtle
                     // phosphor gradient tint + a left "on" stripe (mirrors
                     // the reference mockup's `.nav a.on`) — `group/navitem`
                     // lets the leading status dot below react to the SAME

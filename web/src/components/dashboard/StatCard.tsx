@@ -27,7 +27,7 @@ export interface StatCardProps {
 
 /**
  * A single dashboard stat: icon chip + uppercase label + big value + an
- * optional sub-metric line. Reusable building block for Mirador's
+ * optional sub-metric line. Reusable building block for Pollen's
  * "Vigie"-style dashboard (Analytics, Cost, Health, Runs).
  */
 export function StatCard({ icon, label, value, sub, tone = 'default', className }: StatCardProps) {
@@ -54,7 +54,7 @@ export function StatCard({ icon, label, value, sub, tone = 'default', className 
           >
             {label}
           </span>
-          {/* IA/Cyber identity: the shared `metric-mono` utility (mono +
+          {/* visual identity: the shared `metric-mono` utility (mono +
            * tabular-nums, see `src/index.css`) — same instrument-readout
            * numeral treatment `MetricReadout`/`Gauge` already use, so every
            * metric value across the dashboard reads consistently and never

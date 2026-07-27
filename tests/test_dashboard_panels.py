@@ -1,4 +1,4 @@
-"""Tests for Mirador panel-plugin TUI rendering (Sprint 2).
+"""Tests for Pollen panel-plugin TUI rendering (Sprint 2).
 
 Covers: dynamic per-panel tabs built from `PluginManager.list_panels()`,
 generic section rendering (stat/table/text), the never-raise + no-secret

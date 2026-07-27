@@ -21,7 +21,7 @@ afterEach(() => {
 })
 
 describe('App', () => {
-  it('shows the token gate (not the Mirador tabs) when no token is stored', () => {
+  it('shows the token gate (not the Pollen tabs) when no token is stored', () => {
     act(() => {
       root.render(<App />)
     })

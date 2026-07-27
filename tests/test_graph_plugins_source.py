@@ -4,7 +4,7 @@ Sprint 1) — `hivepilot/graph_sources/plugins_source.py`.
 Seeds a REAL `PluginManager` from a temp `plugins/` directory contributing
 one of each collision-checked contribution type (runner/notifier/secret/
 panel/skill) plus a lifecycle hook — mirrors
-`tests/test_mirador_contract.py`'s `seeded_panel_plugin_manager` fixture's
+`tests/test_pollen_contract.py`'s `seeded_panel_plugin_manager` fixture's
 seeding technique, extended to every contribution category this graph
 source renders. Function-scoped (rebuilt fresh per test): `tests/
 conftest.py`'s autouse `_isolate_runner_and_notifier_maps` fixture resets

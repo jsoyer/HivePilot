@@ -186,7 +186,7 @@ def test_resume_pipeline_auto_git_override() -> None:
 
 # ---------------------------------------------------------------------------
 # `Orchestrator.approve_run` -- the single shared routing entrypoint used by
-# both `api_service.handle_approval` (Mirador's "Approve" button) and
+# both `api_service.handle_approval` (Pollen's "Approve" button) and
 # `telegram_bot._dispatch_approval`. Regression coverage for the live bug:
 # the API called `run_approved` unconditionally, and `run_approved` does
 # `self.tasks.tasks[task_name]` -- for a pipeline checkpoint `task_name` is

@@ -18,7 +18,7 @@ interface AsyncSectionProps<T> {
 
 /**
  * Shared loading/error/empty/data renderer for one async section of a
- * Mirador view. Every tab is built from one or more of these so no panel
+ * Pollen view. Every tab is built from one or more of these so no panel
  * can ever render a blank screen or leave an unhandled promise rejection
  * silently on screen.
  */

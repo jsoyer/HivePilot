@@ -3,12 +3,12 @@ import type { LucideIcon } from 'lucide-react'
 /**
  * Grouped sidebar navigation (Mirador → "Vigie" dashboard upgrade, P0b).
  * Mirrors the operator's mockup section labels — VUE D'ENSEMBLE / AGENTS /
- * SYSTÈME / MÉMOIRE — mapped onto Mirador's actual built-in tabs (see
- * `Mirador.tsx`'s `BUILTIN_TABS`).
+ * SYSTÈME / MÉMOIRE — mapped onto Pollen's actual built-in tabs (see
+ * `Pollen.tsx`'s `BUILTIN_TABS`).
  *
  * FR/EN i18n (P1a): `label` here is a `TranslationKey` (see `@/lib/i18n`),
  * NOT display text — `buildNavGroups` stays language-agnostic, and the
- * caller (`Mirador.tsx`, which has `useT()` in scope) resolves each group's
+ * caller (`Pollen.tsx`, which has `useT()` in scope) resolves each group's
  * `label` to display text right before rendering. This keeps `SidebarNav`
  * itself free of any i18n dependency.
  *
@@ -29,7 +29,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // Mirador Home command-center sprint: Home is the new default landing
   // view, called out in its own leading group (not folded into "Overview")
   // so it always renders first, above every other section.
-  { label: 'nav.commandCenter', values: ['home'] },
+  { label: 'nav.atAGlance', values: ['home'] },
   // Mirador Operate section sprint: Runs (Kanban Run Board — the operator's
   // actionable "what's happening right now" view) + Approvals, right after
   // Home. Replaces the "Agents" group at this same top-adjacent slot -- the
@@ -50,7 +50,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   { label: 'nav.overview', values: ['analytics'] },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
   // and Réalité (quality) built-ins merged into ONE `memory` item backed by
-  // `MemoryView`'s internal Quality/Growth/Search tabs (see `Mirador.tsx`'s
+  // `MemoryView`'s internal Quality/Growth/Search tabs (see `Pollen.tsx`'s
   // `BUILTIN_TABS`) — a single-entry-with-tabs destination reads cleaner
   // than three separate top-level nav items for what is really one
   // subject (memory).

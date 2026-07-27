@@ -1,5 +1,5 @@
 """Tests for the `/v1/memory/*` endpoints (memory-quality instrumentation
-subsystem backing Mirador's "Réalité" view).
+subsystem backing Pollen's "Réalité" view).
 
 Mirrors the auth/tenant-isolation/empty-state patterns established for the
 `/v1/analytics/*` endpoints in `test_api_service.py` — every read endpoint
@@ -387,7 +387,7 @@ class TestMemoryUnversionedRoutes:
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/memory/growth (Mirador data endpoints sprint)
+# GET /v1/memory/growth (Pollen data endpoints sprint)
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Tests for the Mirador `panel` plugin type (Sprint 1: Python core).
+"""Tests for the Pollen `panel` plugin type (Sprint 1: Python core).
 
 Covers: registration/discovery, collision -> atomic rollback (consistent
 with the existing runner/notifier/secrets/health collision tests in

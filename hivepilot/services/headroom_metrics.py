@@ -7,7 +7,7 @@ sprint).
 aggregated or persisted, so there is no way to see cumulative savings across
 runs. This module is that source of truth: one additive SQLite table
 (``headroom_compressions``), written to by `plugins/headroom.py` after each
-successful compression, and read by `plugins/headroom_panel.py`'s Mirador
+successful compression, and read by `plugins/headroom_panel.py`'s Pollen
 panel.
 
 **Additive-only, own table.** Mirrors `hivepilot.services.memory_service`'s

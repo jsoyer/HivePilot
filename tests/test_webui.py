@@ -1,4 +1,4 @@
-"""Tests for hivepilot/webui/ — the Mirador web UI's FastAPI serving glue.
+"""Tests for hivepilot/webui/ — the Pollen web UI's FastAPI serving glue.
 
 Serves the pre-built static assets committed under hivepilot/webui/static/
 (built by web/, a separate Vite+React+TS app — see docs/DASHBOARD.md).
@@ -51,7 +51,7 @@ def fake_static_dir(tmp_path, monkeypatch):
     assets_dir = static_dir / "assets"
     assets_dir.mkdir(parents=True)
     (static_dir / "index.html").write_text(
-        "<!doctype html><html><head><title>Mirador</title></head>"
+        "<!doctype html><html><head><title>Pollen</title></head>"
         "<body><div id='root'></div></body></html>",
         encoding="utf-8",
     )

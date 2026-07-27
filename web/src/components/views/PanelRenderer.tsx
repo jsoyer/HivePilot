@@ -5,7 +5,7 @@ import type {
   PanelStatSection,
   PanelTableSection,
   PanelTextSection,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 
 const STAT_VARIANT: Record<'ok' | 'warn' | 'error', 'secondary' | 'outline' | 'destructive'> = {
   ok: 'secondary',

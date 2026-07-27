@@ -10,7 +10,7 @@ registered via ``${secret:}`` resolution, and TF_VAR_*/Pulumi stack config
 values never go through that registration path. ``run()`` always executes
 with ``capture_output=False`` so output streams live to the parent's stdout
 instead. A safe plan-SUMMARY capture (counts only, no diff body) is deferred
-to the Mirador panel sprint (A3).
+to the Pollen panel sprint (A3).
 """
 
 from __future__ import annotations

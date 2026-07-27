@@ -1,11 +1,11 @@
-"""Shadcn skill plugin — a Mirador web accelerator for the `skill` plugin
+"""Shadcn skill plugin — a Pollen web accelerator for the `skill` plugin
 type (see `plugins/sample_skill.py` for the canonical example this mirrors).
 
 Contributes one skill (`register()["skills"]`) whose `SKILL.md` gives a
-practical, concise cheat sheet for building the Mirador web UI
+practical, concise cheat sheet for building the Pollen web UI
 (`web/` — React + Vite + Tailwind v4 + shadcn/ui) faster: the stack, how to
 add a shadcn component, where things live, the panel/graph render
-conventions Mirador already uses, and the theme/dark-mode discipline. The
+conventions Pollen already uses, and the theme/dark-mode discipline. The
 content is grounded in the ACTUAL `web/` source tree (not invented
 components) so an agent using this skill reuses real primitives instead of
 guessing.
@@ -32,10 +32,10 @@ from __future__ import annotations
 
 from typing import Any
 
-_SKILL_MD = """# Shadcn — Mirador Web Accelerator
+_SKILL_MD = """# Shadcn — Pollen Web Accelerator
 
-Practical, concise guidance for building the Mirador web dashboard
-(`web/`) faster with shadcn/ui. Mirador is the insight dashboard shipped
+Practical, concise guidance for building the Pollen web dashboard
+(`web/`) faster with shadcn/ui. Pollen is the insight dashboard shipped
 with HivePilot -- a dark, tabbed React app.
 
 ## Stack
@@ -73,13 +73,13 @@ the `@/components/ui/<component>` alias (see `aliases` in
 
 ## Project conventions (mirror these, don't invent new patterns)
 
-- **Where things live:** app shell = `web/src/components/Mirador.tsx`
+- **Where things live:** app shell = `web/src/components/Pollen.tsx`
   (dark, tabbed layout); auth gate = `TokenGate.tsx`; tab bodies =
   `web/src/components/views/*View.tsx` (one file per tab, e.g.
   `RunsView.tsx`, `HealthView.tsx`, `AnalyticsView.tsx`, `CostView.tsx`,
   `GraphView.tsx`, `Mem0View.tsx`); shared UI primitives =
   `web/src/components/ui/`; data fetching + API clients =
-  `web/src/lib/api.ts` and `web/src/lib/mirador-api.ts`; the
+  `web/src/lib/api.ts` and `web/src/lib/pollen-api.ts`; the
   `useAsyncData` hook (`web/src/lib/use-async-data.ts`) standardizes
   loading/error/success state for every view.
 - **Panel render pattern:** a generic tab body composes
@@ -119,7 +119,7 @@ the `@/components/ui/<component>` alias (see `aliases` in
 
 ## Theme / dark-mode discipline
 
-Mirador is a dark-first dashboard. Dark mode is driven by the `.dark` class
+Pollen is a dark-first dashboard. Dark mode is driven by the `.dark` class
 on a root element (`@custom-variant dark (&:is(.dark *))` in `index.css`) --
 never write a component that assumes only the light palette, and never
 hardcode a color that bypasses the `--background`/`--foreground`/etc. CSS
@@ -129,14 +129,14 @@ semantic tokens are for.
 
 ## Where this skill helps
 
-Use it when asked to add a new Mirador tab/view, a new panel renderer for a
+Use it when asked to add a new Pollen tab/view, a new panel renderer for a
 plugin-contributed panel, or any UI element in `web/` -- it should save a
 round trip of re-discovering the stack, the component library, and the
 existing conventions before writing new UI code.
 """
 
 _SYSTEM_PROMPT = (
-    "When working in web/ (the Mirador dashboard), reuse existing shadcn/ui "
+    "When working in web/ (the Pollen dashboard), reuse existing shadcn/ui "
     "primitives from web/src/components/ui/ and the existing view/panel "
     "render patterns (see PanelView.tsx / PanelRenderer.tsx) instead of "
     "hand-rolling new UI scaffolding. Match the project's Tailwind v4 "
@@ -155,7 +155,7 @@ def register() -> dict[str, Any]:
             {
                 "name": "shadcn",
                 "description": (
-                    "Mirador web accelerator: shadcn/ui + Tailwind conventions for "
+                    "Pollen web accelerator: shadcn/ui + Tailwind conventions for "
                     "building the web/ dashboard faster."
                 ),
                 "provider": "shadcn",

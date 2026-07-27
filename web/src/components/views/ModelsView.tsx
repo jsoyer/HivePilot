@@ -4,12 +4,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { useT } from '@/lib/i18n'
-import { fetchModels, type SuccessRate } from '@/lib/mirador-api'
+import { fetchModels, type SuccessRate } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
 import { AsyncSection } from './AsyncSection'
 
-/** Fixed 30-day window — matches every other Mirador view's default
+/** Fixed 30-day window — matches every other Pollen view's default
  * (`AnalyticsView`/`HealthView`/`HomeView`'s efficiency fetch); the sprint
  * only calls out a window selector for the Cost view, not this one. */
 const DAYS = 30

@@ -1,5 +1,5 @@
 """Tests for `hivepilot.services.memory_service` — the memory-quality
-instrumentation subsystem backing Mirador's "Réalité" view.
+instrumentation subsystem backing Pollen's "Réalité" view.
 
 The `_isolate_state_db` fixture (autouse, defined in conftest.py) redirects
 `state_service.DB_PATH` to a per-test tmp file, which `memory_service` reuses
@@ -196,7 +196,7 @@ class TestTenantIsolation:
 
 
 # ---------------------------------------------------------------------------
-# growth_summary (Mirador data endpoints sprint) -- GET /v1/memory/growth.
+# growth_summary (Pollen data endpoints sprint) -- GET /v1/memory/growth.
 # Real data derived from `memory_events` (op='store'); `authorship` is
 # always None + documented (mem0 has no human-write path today -- see
 # module docstring).

@@ -16,7 +16,7 @@ import dagre from 'dagre'
 import { useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { GraphEdge, GraphNode } from '@/lib/mirador-api'
+import type { GraphEdge, GraphNode } from '@/lib/pollen-api'
 
 const CARD_WIDTH = 220
 const CARD_HEIGHT = 88
@@ -29,7 +29,7 @@ const GRID_COLUMNS = 4
  * full detail view (that's `GraphDetail`'s `PanelRenderer` pane). */
 const MAX_NODE_METRICS = 3
 
-/** IA/Cyber identity: node/edge coloring can be driven by either `status`
+/** visual identity: node/edge coloring can be driven by either `status`
  * (health-oriented) or `kind` (category-oriented) — a small control in
  * `GraphView` toggles this per source, matching the reference mockup's
  * "color by" HUD chip. */
@@ -37,7 +37,7 @@ export type GraphColorBy = 'status' | 'kind'
 
 /** `GraphNode.status` -> a `--chart-*` token (see `src/index.css`) for the
  * small status dot — deliberately reuses the SAME closed set of design
- * tokens every other Mirador view already draws from, no new palette. Any
+ * tokens every other Pollen view already draws from, no new palette. Any
  * unrecognized/absent status falls back to `--muted-foreground` (a neutral
  * dot, not an alarming color) rather than guessing. */
 function statusDotClass(status: string | null): string {
@@ -104,14 +104,14 @@ export interface CardNodeData {
 /**
  * Custom react-flow node — a small shadcn `Card` showing the node's label,
  * a `kind` badge, a status/kind dot (per `colorBy`), any declared badges,
- * and — the IA/Cyber "Service Map" identity upgrade — up to
+ * and — the "Service Map" visual identity upgrade — up to
  * `MAX_NODE_METRICS` real metrics lifted straight from `GraphNode.meta`, in
  * the shared mono/tabular-nums instrument-readout treatment (`metric-mono`,
- * see `src/index.css`) every other Mirador viz primitive uses. The
+ * see `src/index.css`) every other Pollen viz primitive uses. The
  * normalized `kind="error"` node (`run_graph_fetch`'s never-raise fallback,
  * `hivepilot/graph.py`) renders with a destructive ring instead of crashing
  * the canvas. All text content here is `GraphNode`-authored and UNTRUSTED
- * (see `mirador-api.ts`'s module note) — plain JSX interpolation only,
+ * (see `pollen-api.ts`'s module note) — plain JSX interpolation only,
  * exactly like `PanelRenderer`; this file must never inject raw markup via
  * React's escape-hatch innerHTML prop.
  */
@@ -168,7 +168,7 @@ export interface FlowEdgeData {
 }
 
 /**
- * IA/Cyber "Service Map" identity: an animated glowing flow edge — a
+ * "Service Map" visual identity: an animated glowing flow edge — a
  * bezier path in the edge's `colorVar` color with a moving-dash animation
  * (`.flow-edge-path`, see `src/index.css`) plus a soft `drop-shadow` glow,
  * reading as live data flowing along the edge (matches the reference
@@ -254,7 +254,7 @@ export interface GraphCanvasProps {
   layoutHint: string | null
   selectedNodeId: string | null
   onNodeClick: (nodeId: string) => void
-  /** IA/Cyber "Service Map" identity: drives BOTH the node status dot and
+  /** "Service Map" visual identity: drives BOTH the node status dot and
    * the edge glow color — `'status'` (default) is health-oriented (ok/warn/
    * error), `'kind'` is category-oriented (a stable color per node/edge
    * `kind`). See `GraphView`'s color-by toggle. */
@@ -282,7 +282,7 @@ function minimapNodeColor(node: Node, colorBy: GraphColorBy): string {
  * `onEdgesChange` wiring, so nodes never become draggable — pan/zoom/fit
  * (native react-flow viewport behavior) still work regardless.
  *
- * IA/Cyber "Service Map" restyle: a faint dot-grid canvas background
+ * "Service Map" visual restyle: a faint dot-grid canvas background
  * (`bg-grid-dot`, see `src/index.css`), animated glowing `flow` edges
  * (colored by `colorBy`, see `FlowEdge` above) instead of plain lines, node
  * cards that surface real `meta` metrics, and a restyled `MiniMap`

@@ -1,6 +1,6 @@
 """Graph-native backend contract for the Mirador Graph View PRD (Sprint 1).
 
-A `GraphSource` is a named contribution — like a Mirador `panel`
+A `GraphSource` is a named contribution — like a Pollen `panel`
 (`hivepilot/plugins.py`) — that renders some slice of HivePilot's own state
 (plugins, roles, runners, and later runs/pipelines) as a node/edge graph
 instead of a flat panel. This module defines the frozen dataclass shapes
@@ -14,7 +14,7 @@ Deliberately mirrors `hivepilot/plugins.py`'s `PanelSpec` /
 inventing a parallel design: `GraphDetail.sections` REUSES `PanelData`'s
 closed section-kind system (`stat`/`table`/`text`) via `normalize_panel_data`
 itself, so a graph node's detail view renders through the exact same
-renderer-agnostic contract a Mirador panel does.
+renderer-agnostic contract a Pollen panel does.
 
 No web/Textual optional dependency: this module only imports from
 `hivepilot.plugins` (itself dependency-light) and the standard library, so

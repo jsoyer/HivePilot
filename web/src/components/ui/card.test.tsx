@@ -37,7 +37,7 @@ describe('Card', () => {
     expect(container.textContent).toContain('Body')
   })
 
-  it('applies the IA/Cyber glass-panel gradient background (panel -> panel-2)', () => {
+  it('applies the glass-panel gradient background (panel -> panel-2)', () => {
     act(() => {
       root.render(<Card>content</Card>)
     })

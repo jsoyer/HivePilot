@@ -1,4 +1,4 @@
-"""Mirador web UI — FastAPI serving glue.
+"""Pollen web UI — FastAPI serving glue.
 
 Serves the pre-built static assets committed under `hivepilot/webui/static/`
 (built by `web/`, a separate Vite + React + TypeScript + Tailwind + shadcn/ui
@@ -32,7 +32,7 @@ INDEX_HTML = STATIC_DIR / "index.html"
 
 
 def static_available() -> bool:
-    """True if a real Mirador web UI build is present. Never raises — a
+    """True if a real Pollen web UI build is present. Never raises — a
     missing/partial `static/` directory (e.g. no build was ever run) just
     means "not available", not an error."""
     try:

@@ -580,7 +580,7 @@ class TestAnalyticsCostCsvExport:
 
 
 # ---------------------------------------------------------------------------
-# Mirador data endpoints sprint — /v1/analytics/cost by_project/by_role
+# Pollen data endpoints sprint — /v1/analytics/cost by_project/by_role
 # ---------------------------------------------------------------------------
 
 
@@ -635,7 +635,7 @@ class TestAnalyticsCostByProjectAndRole:
 
 
 # ---------------------------------------------------------------------------
-# Mirador data endpoints sprint — GET /v1/models
+# Pollen data endpoints sprint — GET /v1/models
 # ---------------------------------------------------------------------------
 
 
@@ -707,7 +707,7 @@ class TestModelsEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Mirador data endpoints sprint — GET /v1/efficiency
+# Pollen data endpoints sprint — GET /v1/efficiency
 # ---------------------------------------------------------------------------
 
 
@@ -1049,7 +1049,7 @@ class TestVerdictsEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Mirador web UI surface (Sprint 1): GET /v1/plugins/health, GET /v1/memories
+# Pollen web UI surface (Sprint 1): GET /v1/plugins/health, GET /v1/memories
 # ---------------------------------------------------------------------------
 
 
@@ -1132,7 +1132,7 @@ class TestPluginsHealthEndpoint:
     ):
         """`disabled` is a plain readback of `settings.plugins_disabled`,
         independent of `check_all()`'s (enabled-only) result -- proves the
-        Health tab's re-enable rows (Mirador PRD follow-up) get their data
+        Health tab's re-enable rows (Pollen PRD follow-up) get their data
         from the right source, not from whatever `check_all()` happens to
         return."""
         from types import SimpleNamespace
@@ -1991,7 +1991,7 @@ class TestAdminReloadEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# `POST /v1/approvals/{run_id}` (Mirador's "Approve" button) -- regression
+# `POST /v1/approvals/{run_id}` (Pollen's "Approve" button) -- regression
 # for the live bug: this endpoint called `Orchestrator.run_approved`
 # unconditionally, and `run_approved` does `self.tasks.tasks[task_name]` --
 # for a pipeline checkpoint `task_name` is actually the PIPELINE name

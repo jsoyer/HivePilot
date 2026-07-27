@@ -968,7 +968,7 @@ class TestStoreInternalErrorIsSwallowed:
 class TestRecallInstrumentsMemoryService:
     """`recall()` reports a `memory_service.record_search` event (memory-quality
     instrumentation subsystem) after every real `client.search()` call — the
-    signal Mirador's "Réalité" view is built on. Best-effort: a raising
+    signal Pollen's "Réalité" view is built on. Best-effort: a raising
     `record_search` must never break `recall()` itself."""
 
     def test_recall_records_search_with_result_count_and_actor(
@@ -995,7 +995,7 @@ class TestRecallInstrumentsMemoryService:
     def test_recall_records_zero_result_search(
         self, mem0_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No-result searches are exactly what Mirador's gaps view surfaces —
+        """No-result searches are exactly what Pollen's gaps view surfaces —
         `recall` must report them, not just successful ones."""
         import hivepilot.services.memory_service as memory_service_module
 

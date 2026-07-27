@@ -1,5 +1,5 @@
 """Tests for plugins/sample.py — the example plugin, including its demo
-Mirador panel contribution (Sprint 1: panel plugin type)."""
+Pollen panel contribution (Sprint 1: panel plugin type)."""
 
 from __future__ import annotations
 

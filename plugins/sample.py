@@ -6,7 +6,7 @@ logger = get_logger(__name__)
 
 
 def _sample_fetch():
-    """Demo Mirador panel `fetch()` — one section of each closed kind, so
+    """Demo Pollen panel `fetch()` — one section of each closed kind, so
     Sprint 2 (TUI) / Sprint 3 (web) have something real to render against.
     """
     return {

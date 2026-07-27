@@ -12,7 +12,7 @@ Registration is applied **atomically per plugin**: everything a single plugin st
 | Notifiers | `notifiers` | `{name: Callable[[str], None]}` → merged into `NOTIFIER_MAP` | Hard error |
 | Secrets | `secrets` | `{name: SecretsBackend}`, a Protocol with `resolve(ref, settings) -> str` → merged into `SECRETS_MAP` | Hard error |
 | Health | `health` | `{name: Callable -> HealthStatus}`; result is normalized and the check never raises past the framework | Hard error on name collision |
-| Panels | `panels` | `list[PanelSpec]`, each `{name, title, fetch, min_role?}`; contributes tabs to the Mirador dashboard | Invalid `min_role` (not in `ROLE_RANKS`) is a fail-closed registration error |
+| Panels | `panels` | `list[PanelSpec]`, each `{name, title, fetch, min_role?}`; contributes tabs to the Pollen dashboard | Invalid `min_role` (not in `ROLE_RANKS`) is a fail-closed registration error |
 | Skills | `skills` | `list[SkillSpec]`, each `{name, description, provider, files, system_prompt?, applies_to?, min_role?}` | See [SKILLS.md](./SKILLS.md) |
 | Graph sources | `graph_sources` | `list[GraphSourceSpec]`, each `{name, data, node_detail?, title?, min_role?, params?}` → registered into `hivepilot.graph`'s module-global source registry via `register_graph_source()` | Name collision with a built-in or another plugin → `GraphSourceNameCollisionError`, rolled back atomically |
 | Capabilities | `capabilities` | `list[str]` from the closed `hivepilot.plugin_capabilities.PLUGIN_CAPABILITIES` vocabulary — an advisory manifest of what the plugin intends to do | Unknown token → `PluginCapabilityInvalidError`; token not in `settings.plugins_capability_policy` → `PluginCapabilityDeniedError`, rolled back atomically. See "Capability manifest & policy gate" below. |
@@ -298,7 +298,7 @@ Notes:
 
 ## Graph sources
 
-A plugin can contribute a node/edge graph to Mirador's Graph tab (see
+A plugin can contribute a node/edge graph to Pollen's Graph tab (see
 [DASHBOARD.md](./DASHBOARD.md#graph-view)) the same way it contributes a
 panel — via `register()["graph_sources"] = [GraphSourceSpec, ...]`.
 `GraphSourceSpec` is a frozen dataclass defined once in `hivepilot/graph.py`

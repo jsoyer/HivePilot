@@ -29,8 +29,8 @@ def test_refresh_interactions_is_callable() -> None:
     assert callable(getattr(RunDashboard, "refresh_interactions"))
 
 
-def test_title_is_mirador() -> None:
-    assert RunDashboard.TITLE == "Mirador"
+def test_title_is_pollen() -> None:
+    assert RunDashboard.TITLE == "Pollen"
 
 
 @pytest.mark.asyncio
@@ -173,7 +173,7 @@ async def test_refresh_cost_with_no_steps_shows_zeroed_overall_row() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mirador tabbed layout — Sprint: Analytics / Cost / Health / Mem0 tabs
+# Pollen tabbed layout — Sprint: Analytics / Cost / Health / Mem0 tabs
 # ---------------------------------------------------------------------------
 
 

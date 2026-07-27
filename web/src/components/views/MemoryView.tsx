@@ -6,7 +6,7 @@ import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { Sparkline } from '@/components/dashboard/Sparkline'
 import { ApiForbiddenError } from '@/lib/api'
 import { useT } from '@/lib/i18n'
-import { fetchMemoryGrowth } from '@/lib/mirador-api'
+import { fetchMemoryGrowth } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 import { Mem0View } from './Mem0View'
@@ -27,7 +27,7 @@ const DAYS = 30
  * fired) renders ONE plain empty-state message via `AsyncSection`'s own
  * `isEmpty`, instead of a `MetricReadout` frozen at `0`. `authorship` is
  * ALWAYS `null` on the wire (no real human-vs-agent split is tracked — see
- * `mirador-api.ts`'s module note above `MemoryGrowth`) — rendered as an
+ * `pollen-api.ts`'s module note above `MemoryGrowth`) — rendered as an
  * explicit "not available" line, never fabricated from `by_actor` (a REAL,
  * different breakdown: distinct actor identities, not a human/agent
  * category).
@@ -144,11 +144,11 @@ function GrowthTab() {
  * components UNCHANGED, as full tab panels — their own loading/error/
  * empty/403 handling, and every one of their existing tests, keep working
  * exactly as before; only where they're mounted in the shell changed (they
- * used to be two sibling top-level `Mirador.tsx` tabs, now they're two
+ * used to be two sibling top-level `Pollen.tsx` tabs, now they're two
  * inner tabs of this one).
  *
  * This inner `Tabs` root is a SEPARATE, independent instance from the
- * outer shell `Tabs` in `Mirador.tsx` (nested Base UI `Tabs.Root`s don't
+ * outer shell `Tabs` in `Pollen.tsx` (nested Base UI `Tabs.Root`s don't
  * share state) — Base UI only mounts the ACTIVE panel's `Tabs.Panel` (the
  * same "one `[role=\"tabpanel\"]` at a time" behavior the outer shell
  * already relies on), so `RealityView`/`Mem0View`/`GrowthTab` each only

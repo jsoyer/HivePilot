@@ -15,7 +15,7 @@ export interface SectionHeaderProps {
 }
 
 /**
- * The IA/Cyber identity's numbered section header (mirrors the reference
+ * The visual identity's numbered section header (mirrors the reference
  * mockup's `.sec` — `01 Posture`, `02 Flow map`, ...): a phosphor-toned mono
  * index, the section title, and an optional right-aligned meta line. Purely
  * presentational — reused above any Home/Federation/Operate section that

@@ -2,12 +2,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
-import type { RunDetail } from '@/lib/mirador-api'
+import type { RunDetail } from '@/lib/pollen-api'
 
 const { fetchRun } = vi.hoisted(() => ({ fetchRun: vi.fn() }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, fetchRun }
 })
 

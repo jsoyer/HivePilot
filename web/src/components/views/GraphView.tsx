@@ -14,7 +14,7 @@ import {
   type GraphDetail,
   type GraphNode,
   type GraphSourceSummary,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { GraphCanvas, type GraphColorBy } from './GraphCanvas'
 import { PanelRenderer } from './PanelRenderer'
@@ -40,7 +40,7 @@ export function GraphView() {
   const [appliedParams, setAppliedParams] = useState<Record<string, string>>({})
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set())
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
-  // IA/Cyber "Service Map" identity: a color-by toggle (status vs. kind) —
+  // "Service Map" visual identity: a color-by toggle (status vs. kind) —
   // purely a client-side rendering choice over the SAME already-fetched
   // graph, so it never triggers a re-fetch (unlike selectedSourceName/
   // appliedParams above).
@@ -303,7 +303,7 @@ export function GraphView() {
 
                 {graphData.nodes.length > 0 && (
                   <>
-                    {/* IA/Cyber identity: color-by control — matches the
+                    {/* visual identity: color-by control — matches the
                      * reference mockup's canvas HUD "color by" chip. Purely
                      * a rendering toggle over the already-fetched graph. */}
                     <div className="flex items-center gap-2" data-testid="graph-color-by">

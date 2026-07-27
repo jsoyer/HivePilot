@@ -13,7 +13,7 @@ Start the API with:
 hivepilot api serve --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-This is a FastAPI application. It serves the Mirador web command center and
+This is a FastAPI application. It serves the Pollen web dashboard and
 the `/v1/*` endpoints (runs, approvals, analytics, plugins, graph).
 
 For a persistent deployment on a Linux host, generate a systemd unit instead
@@ -28,7 +28,7 @@ Authentication is token-based: create, list, rotate, and remove tokens with
 every request is resolved to a tenant and a role, and role determines which
 endpoints and admin operations are reachable.
 
-See [DASHBOARD.md](DASHBOARD.md) for the Mirador UI and [SECURITY.md](SECURITY.md)
+See [DASHBOARD.md](DASHBOARD.md) for the Pollen UI and [SECURITY.md](SECURITY.md)
 for the auth and token model.
 
 ## Scheduler daemon

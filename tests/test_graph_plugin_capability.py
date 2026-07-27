@@ -343,7 +343,7 @@ class TestHotReloadOwnership:
         self, tmp_path, monkeypatch, isolated_graph_sources
     ) -> None:
         """Fail-OPEN regression guard: enable a plugin's graph source, then
-        disable it via `HIVEPILOT_PLUGINS_DISABLED` (what the Mirador web
+        disable it via `HIVEPILOT_PLUGINS_DISABLED` (what the Pollen web
         toggle persists) and `reload()` — the source must be GONE from both
         `get_graph_source()` and `list_graph_sources()`, not still served."""
         from hivepilot import plugins as plugins_mod

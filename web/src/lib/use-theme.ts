@@ -23,7 +23,7 @@ export interface UseThemeResult {
 }
 
 /**
- * Light/dark theme state for the Mirador shell (P0b). Reuses the app's
+ * Light/dark theme state for the Pollen shell (P0b). Reuses the app's
  * EXISTING theming mechanism — the `.dark` class on `<html>` that
  * `src/index.css`'s `@custom-variant dark (&:is(.dark *))` already keys off
  * (see `index.html`, which hardcodes `class="dark"` as the default

@@ -208,7 +208,7 @@ describe('SidebarNav', () => {
     expect(nav.className).not.toMatch(/\blg:translate-x-0\b/)
   })
 
-  it('IA/Cyber identity: every item has a leading status dot, and the active item is tinted/striped', () => {
+  it('visual identity: every item has a leading status dot, and the active item is tinted/striped', () => {
     act(() => {
       root.render(<Harness />)
     })

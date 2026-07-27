@@ -2,7 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
-import type { AutopilotState } from '@/lib/mirador-api'
+import type { AutopilotState } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
 const { fetchAutopilot, pauseAutopilot, resumeAutopilot, useRoleMock } = vi.hoisted(() => ({
@@ -12,8 +12,8 @@ const { fetchAutopilot, pauseAutopilot, resumeAutopilot, useRoleMock } = vi.hois
   useRoleMock: vi.fn(),
 }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, fetchAutopilot, pauseAutopilot, resumeAutopilot }
 })
 

@@ -1,10 +1,10 @@
-import { Mirador } from '@/components/Mirador'
+import { Pollen } from '@/components/Pollen'
 import { TokenGate } from '@/components/TokenGate'
 
 function App() {
   return (
     <TokenGate>
-      <Mirador />
+      <Pollen />
     </TokenGate>
   )
 }

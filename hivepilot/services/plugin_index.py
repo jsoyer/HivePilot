@@ -273,7 +273,7 @@ def format_install_hint(install: dict[str, str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Local plugin taxonomy — graph-source contributions (Mirador Graph View
+# Local plugin taxonomy — graph-source contributions (Pollen Graph View
 # PRD, Sprint 4). Distinct concept from the REMOTE marketplace index above
 # (`PluginIndexEntry`/`fetch_index`/`search_index`): this helper enumerates
 # what a plugin ALREADY LOADED in THIS process contributed, exactly like

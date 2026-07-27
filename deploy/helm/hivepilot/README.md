@@ -194,7 +194,7 @@ rotation without a chart upgrade.
 
 ## Enabling components (bots, scheduler)
 
-- `api.enabled` (default `true`) — the control API + `/ui` Mirador frontend
+- `api.enabled` (default `true`) — the control API + `/ui` Pollen frontend
   (if `env.enableWebui: true`). Doesn't need a token to start.
 - `scheduler.enabled` (default `false`) — the schedule/retry daemon. Opt-in
   because it needs a run-role `HIVEPILOT_API_TOKEN` (see "Bootstrap the
@@ -223,7 +223,7 @@ ingress:
 ```
 
 Exposes the control API (`/v1/*`, `/metrics`, `/healthz`, `/readyz`) and, if
-`HIVEPILOT_ENABLE_WEBUI` is set, the Mirador web UI at `/ui`. `/run` and
+`HIVEPILOT_ENABLE_WEBUI` is set, the Pollen web UI at `/ui`. `/run` and
 other write endpoints still require a Bearer token (see bootstrap section
 above) — the Ingress does not add authentication of its own; put it behind a
 network policy / auth proxy if you need defense in depth beyond HivePilot's

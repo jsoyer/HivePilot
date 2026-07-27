@@ -58,7 +58,7 @@ rbac:
 # -----------------------------------------------------------------------------
 # HivePilot API server (`hivepilot api serve`) — single replica (SQLite state
 # is not multi-writer safe; see README "Single-replica & HA caveat"). Serves
-# /v1/* (control API), /metrics (Prometheus), /ui (Mirador web UI, opt-in),
+# /v1/* (control API), /metrics (Prometheus), /ui (Pollen web UI, opt-in),
 # and the unauthenticated /healthz + /readyz probe endpoints.
 # -----------------------------------------------------------------------------
 api:
@@ -183,7 +183,7 @@ service:
   annotations: {}
 
 # -----------------------------------------------------------------------------
-# Ingress — exposes the API (/v1/*, /metrics) and the Mirador web UI (/ui, if
+# Ingress — exposes the API (/v1/*, /metrics) and the Pollen web UI (/ui, if
 # HIVEPILOT_ENABLE_WEBUI is set via `env.enableWebui`). Off by default.
 # -----------------------------------------------------------------------------
 ingress:
@@ -272,7 +272,7 @@ secrets:
 # Application-level env toggles (non-secret).
 # -----------------------------------------------------------------------------
 env:
-  # HIVEPILOT_ENABLE_WEBUI — serves the pre-built Mirador React bundle at /ui.
+  # HIVEPILOT_ENABLE_WEBUI — serves the pre-built Pollen React bundle at /ui.
   enableWebui: false
   # HIVEPILOT_ENABLE_TEXTUAL_UI — irrelevant to server pods (TUI is a local,
   # interactive CLI feature); left here for parity/completeness, default off.

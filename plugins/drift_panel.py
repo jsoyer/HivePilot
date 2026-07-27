@@ -1,4 +1,4 @@
-"""`drift_panel` -- plugin-contributed Mirador `panel` capability
+"""`drift_panel` -- plugin-contributed Pollen `panel` capability
 contribution (Mirador Panels sprint).
 
 A counts-only summary of the SAME IaC drift-scan history the `state.db`

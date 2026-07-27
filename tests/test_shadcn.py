@@ -1,4 +1,4 @@
-"""Tests for `plugins/shadcn.py` (opt-in skill plugin — Mirador web
+"""Tests for `plugins/shadcn.py` (opt-in skill plugin — Pollen web
 accelerator).
 
 Mirrors `tests/test_sample_skill.py`'s structure exactly:

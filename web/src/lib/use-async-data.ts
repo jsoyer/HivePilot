@@ -6,7 +6,7 @@ export type AsyncState<T> =
   | { status: 'success'; data: T; isRefreshing?: boolean }
 
 /**
- * Minimal shared data-fetching hook for Mirador's tab views. Calls `fetcher`
+ * Minimal shared data-fetching hook for Pollen's tab views. Calls `fetcher`
  * on mount and whenever any value in `deps` changes, tracking a tri-state
  * (loading/error/success) result.
  *

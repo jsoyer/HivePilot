@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
-import { fetchRun, type RunDetail } from '@/lib/mirador-api'
+import { fetchRun, type RunDetail } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 
 /** `started_at`/`finished_at`/step `timestamp` are SQL `TIMESTAMP` strings

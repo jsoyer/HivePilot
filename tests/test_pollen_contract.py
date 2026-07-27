@@ -1,14 +1,14 @@
-"""TS<->Python response-shape contract for the Mirador web UI (Sprint 4).
+"""TS<->Python response-shape contract for the Pollen web UI (Sprint 4).
 
 If you change these response keys, update the TS types in
-`web/src/lib/mirador-api.ts`.
+`web/src/lib/pollen-api.ts`.
 
-`web/src/lib/mirador-api.ts` hand-transcribes every Mirador data-source
+`web/src/lib/pollen-api.ts` hand-transcribes every Pollen data-source
 response shape into TypeScript interfaces (see that file's own module
 docstring: "Field names/shapes are transcribed directly from
 `hivepilot/services/analytics_service.py` and `hivepilot/services/
 api_service.py`"). Nothing in the frontend build guards against a future
-backend field rename silently blanking a Mirador panel — Vitest tests mock
+backend field rename silently blanking a Pollen panel — Vitest tests mock
 the shapes, they don't call the real API.
 
 This module is that guard, from the Python side: it seeds real data through
@@ -18,7 +18,7 @@ shapes) of every response. A backend rename (e.g. `cost_usd` ->
 `cost_usd_total`) makes one of these assertions fail loudly in Python CI,
 instead of silently rendering `undefined`/blank fields in the browser.
 
-Endpoints covered (every one `web/src/lib/mirador-api.ts` calls):
+Endpoints covered (every one `web/src/lib/pollen-api.ts` calls):
     GET /v1/analytics/summary
     GET /v1/analytics/trends
     GET /v1/analytics/durations
@@ -31,10 +31,10 @@ Endpoints covered (every one `web/src/lib/mirador-api.ts` calls):
     GET /v1/panels
     GET /v1/panels/{name}
 
-The last two guard the `panel` plugin type (Mirador Sprint 4): their exact
+The last two guard the `panel` plugin type (Pollen Sprint 4): their exact
 response shapes are hand-transcribed as `PanelSummary`/`PanelsResponse` and
 `PanelData`/`PanelStatSection`/`PanelTableSection`/`PanelTextSection` in
-`web/src/lib/mirador-api.ts` — see that file's own comment block just above
+`web/src/lib/pollen-api.ts` — see that file's own comment block just above
 those interfaces.
 """
 
@@ -248,7 +248,7 @@ _COST_ACCUMULATION_KEYS = {
 
 class TestAnalyticsCostContract:
     def test_top_level_keys(self, api_client, read_token, seeded_run):
-        """Mirador data endpoints sprint: `by_project`/`by_role`/
+        """Pollen data endpoints sprint: `by_project`/`by_role`/
         `by_role_note`/`unpriced_models` are additive new keys — old keys
         (`overall`/`by_provider`/`by_model`) are unchanged, so this is a
         backward-compatible extension, not a rename. `by_role` is now a
@@ -345,7 +345,7 @@ class TestMemoriesContract:
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/panels, GET /v1/panels/{name} (Mirador Sprint 4 — panel plugin type)
+# GET /v1/panels, GET /v1/panels/{name} (Pollen Sprint 4 — panel plugin type)
 # ---------------------------------------------------------------------------
 
 
@@ -396,7 +396,7 @@ def _patch_orchestrator_panels(monkeypatch, plugin_manager) -> None:
 class TestPanelsListContract:
     def test_top_level_keys(self, api_client, read_token, seeded_panel_plugin_manager, monkeypatch):
         """Matches `PanelsResponse`/`PanelSummary` in
-        `web/src/lib/mirador-api.ts`: `{"panels": [{"name", "title",
+        `web/src/lib/pollen-api.ts`: `{"panels": [{"name", "title",
         "min_role"}, ...]}` — a rename of any of these three keys must fail
         this assertion."""
         _patch_orchestrator_panels(monkeypatch, seeded_panel_plugin_manager)
@@ -416,7 +416,7 @@ class TestPanelsListContract:
 class TestPanelFetchContract:
     def test_top_level_keys(self, api_client, read_token, seeded_panel_plugin_manager, monkeypatch):
         """Matches `PanelData`/`PanelStatSection`/`PanelTableSection`/
-        `PanelTextSection` in `web/src/lib/mirador-api.ts`: a top-level
+        `PanelTextSection` in `web/src/lib/pollen-api.ts`: a top-level
         `{"sections": [...]}` with one section of each closed kind, each
         carrying exactly its documented fields — a rename of any of these
         keys, or of the `kind` values themselves, must fail this

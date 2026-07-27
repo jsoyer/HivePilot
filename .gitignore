@@ -30,7 +30,7 @@ runs/
 # docs/session-learnings.md is a local symlink into the vault (see chore PR).
 docs/session-learnings.md
 
-# Mirador web frontend (web/) — build output is committed under
+# Pollen web frontend (web/) — build output is committed under
 # hivepilot/webui/static/ instead (so `pip install hivepilot[webui]` needs
 # zero Node at runtime); node_modules and any local dist/ are never committed.
 web/node_modules/

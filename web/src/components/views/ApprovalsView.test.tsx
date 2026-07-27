@@ -2,7 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
-import type { Approval } from '@/lib/mirador-api'
+import type { Approval } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
 const { fetchApprovals, postApproval, useRoleMock } = vi.hoisted(() => ({
@@ -11,8 +11,8 @@ const { fetchApprovals, postApproval, useRoleMock } = vi.hoisted(() => ({
   useRoleMock: vi.fn(),
 }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, fetchApprovals, postApproval }
 })
 

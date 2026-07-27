@@ -7,7 +7,7 @@ with `capture_output=True` so the plan summary counts can be read, and
 returns a structured `DriftResult` — never the raw plan stdout/stderr.
 
 This is a **service**, not a runner: it is invoked directly (e.g. by a future
-`hivepilot drift check` CLI command or the Mirador panel), never through
+`hivepilot drift check` CLI command or the Pollen panel), never through
 `Orchestrator`/`RunResult`.
 
 Real project config (`definition`)

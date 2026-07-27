@@ -1,4 +1,4 @@
-"""`autopilot_panel` -- plugin-contributed Mirador `panel` capability
+"""`autopilot_panel` -- plugin-contributed Pollen `panel` capability
 contribution (Mirador Panels sprint).
 
 A read-only composition over the autopilot queue/policy surface

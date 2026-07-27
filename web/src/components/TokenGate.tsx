@@ -11,7 +11,7 @@ interface TokenGateProps {
 }
 
 /**
- * Auth plumbing for the Mirador web UI: gates `children` behind a stored
+ * Auth plumbing for the Pollen web UI: gates `children` behind a stored
  * bearer token, validated against `GET /v1/plugins/health` (any `read`-role
  * token can call it — see hivepilot/services/api_service.py). Re-used
  * as-is by Sprint 3's real views; this sprint only wires the gate itself.
@@ -44,7 +44,7 @@ export function TokenGate({ children }: TokenGateProps) {
     }
   }, [])
 
-  // A signed-in view (Mirador's tabs) can hit a 401 on any of its own API
+  // A signed-in view (Pollen's tabs) can hit a 401 on any of its own API
   // calls well after the gate's own mount-time check — e.g. a token that
   // expired mid-session. `apiFetch` already clears the token in that case;
   // react to that here so the app falls back to the gate immediately
@@ -98,7 +98,7 @@ export function TokenGate({ children }: TokenGateProps) {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Mirador</CardTitle>
+          <CardTitle>Pollen</CardTitle>
           <CardDescription>Enter your HivePilot read token to continue.</CardDescription>
         </CardHeader>
         <CardContent>

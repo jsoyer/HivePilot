@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import type { NavGroup } from './nav/nav-config'
 
 export interface CommandPaletteProps {
-  /** Controlled open state — owned by the caller (`Mirador.tsx`) so both the
+  /** Controlled open state — owned by the caller (`Pollen.tsx`) so both the
    * header search button AND this component's own global `Cmd+K`/`Ctrl+K`
    * listener can open it. */
   open: boolean

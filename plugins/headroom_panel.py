@@ -1,4 +1,4 @@
-"""`headroom_panel` -- plugin-contributed Mirador `panel` capability
+"""`headroom_panel` -- plugin-contributed Pollen `panel` capability
 contribution (Headroom Efficiency Panel sprint).
 
 A stats-only summary of the cumulative headroom compression efficiency the

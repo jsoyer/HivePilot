@@ -676,7 +676,7 @@ def cost_summary(
     least one unpriced step, so a dashboard can point at exactly what's
     missing from the price map.
 
-    ``by_role`` groups the same steps by `steps.role` (Mirador Agent Panels
+    ``by_role`` groups the same steps by `steps.role` (Pollen Agent Panels
     backend sprint) -- see `_BY_ROLE_NOTE` (paired with ``by_role_note`` in
     the return value). A `NULL` role (every step recorded before that
     migration shipped, plus any non-role task's steps) groups under the
@@ -753,7 +753,7 @@ def cost_summary(
 
 
 # ---------------------------------------------------------------------------
-# models_summary (Mirador data endpoints sprint) — per-model rollup for
+# models_summary (Pollen data endpoints sprint) — per-model rollup for
 # GET /v1/models: cost, tokens, step count, success rate, share of spend,
 # and an overall cost-per-successful-run figure.
 # ---------------------------------------------------------------------------
@@ -887,7 +887,7 @@ def models_summary(
 # ---------------------------------------------------------------------------
 
 _AGENTS_ATTRIBUTION_NOTE = (
-    "Per-role attribution requires steps.role, added in the Mirador Agent "
+    "Per-role attribution requires steps.role, added in the Pollen Agent "
     "Panels backend sprint. Only steps recorded AFTER that migration ships "
     "carry a real role -- earlier steps (and any step from a non-role task) "
     "have role=NULL and are reported separately under the 'unknown' bucket, "
@@ -926,7 +926,7 @@ def agents_summary(
     project: str | None = None,
     task: str | None = None,
 ) -> dict[str, Any]:
-    """Per-role agent activity roster backing `GET /v1/agents` (Mirador
+    """Per-role agent activity roster backing `GET /v1/agents` (Pollen
     Agent Panels backend sprint): the full role roster from
     `hivepilot.roles.list_roles()` (name/display_name/title), LEFT-JOINed
     with real per-role activity derived from `steps.role`.

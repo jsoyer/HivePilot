@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { useT } from '@/lib/i18n'
-import { fetchPluginsHealth, type PluginHealthStatus } from '@/lib/mirador-api'
+import { fetchPluginsHealth, type PluginHealthStatus } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
 
@@ -14,7 +14,7 @@ const STATUS_VARIANT: Record<PluginHealthStatus, 'secondary' | 'outline' | 'dest
   error: 'destructive',
 }
 
-/** IA/Cyber identity: the small per-pill status dot's color — `ok` reads as
+/** visual identity: the small per-pill status dot's color — `ok` reads as
  * the phosphor "live" tone (matching the reference mockup's pulsing green
  * LIVE indicator), `degraded`/`error` fall back to warn/crit so a pill never
  * pulses green while unhealthy. */
@@ -27,7 +27,7 @@ const STATUS_DOT_CLASS: Record<PluginHealthStatus, string> = {
 /**
  * Header status pills — one per registered plugin/service, from the SAME
  * `/v1/plugins/health` data source `HealthView` already fetches (see
- * `@/lib/mirador-api`'s `fetchPluginsHealth`; no new endpoint). Deliberately
+ * `@/lib/pollen-api`'s `fetchPluginsHealth`; no new endpoint). Deliberately
  * independent fetch: the header must show pills regardless of which sidebar
  * view is currently active, and `HealthView` only mounts (and fetches) when
  * its own tab panel is rendered.
@@ -56,7 +56,7 @@ export function StatusPills() {
             title={plugin.detail || `${plugin.name}: ${statusText}`}
             className="gap-1.5"
           >
-            {/* IA/Cyber identity: a small per-plugin status dot — pulses
+            {/* visual identity: a small per-plugin status dot — pulses
              * (motion-safe only, see `--color-good`'s reduced-motion-safe
              * `animate-pulse`) for a healthy ("ok") plugin, matching the
              * reference mockup's signature pulsing-green LIVE indicator;

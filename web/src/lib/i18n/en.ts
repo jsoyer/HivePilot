@@ -35,13 +35,12 @@ export const en = {
   'common.stopping': 'Stopping…',
   'common.requiresRunRankLead': 'This view requires a',
   'common.requiresRunRankTail':
-    '(or higher) token. Your current token can still use the other Mirador tabs — only this list needs a higher role.',
+    '(or higher) token. Your current token can still use the other Pollen tabs — only this list needs a higher role.',
 
   // ---- header / shell ----------------------------------------------------
-  // IA/Cyber identity: the brand eyebrow under "Mirador" — mirrors the
-  // reference mockup's `.brand span` ("cyber ops console"), replacing the
-  // prior generic "HivePilot insight dashboard" subtitle.
-  'header.subtitle': 'cyber ops console',
+  // The eyebrow line under the "Pollen" wordmark — a short, plain
+  // description of what the product is, not a slogan.
+  'header.subtitle': 'HivePilot dashboard',
   'header.search': 'Search',
 
   // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
@@ -53,7 +52,7 @@ export const en = {
   'palette.toggleLanguage': 'Switch language (EN/FR)',
 
   // ---- nav -----------------------------------------------------------
-  'nav.commandCenter': 'Command Center',
+  'nav.atAGlance': 'At a glance',
   'nav.home': 'Home',
   'nav.overview': 'Overview',
   'nav.operate': 'Operate',
@@ -152,7 +151,7 @@ export const en = {
   'graph.requiresTokenLead': 'This source requires a',
   'graph.requiresTokenTail': 'token.',
   'graph.requiresTokenNote':
-    'Your current token can still use the other Mirador tabs — only this graph source needs a higher role.',
+    'Your current token can still use the other Pollen tabs — only this graph source needs a higher role.',
   'graph.higherPrivilege': 'higher-privilege',
   'graph.aParameter': 'a parameter',
   'graph.parameters': 'parameters',
@@ -178,7 +177,7 @@ export const en = {
   'mem0.requiresTokenLead': 'This view requires an',
   'mem0.requiresTokenTail': 'token.',
   'mem0.requiresTokenNote':
-    'Your current token can still use the other Mirador tabs — only Mem0 search needs a higher role.',
+    'Your current token can still use the other Pollen tabs — only Mem0 search needs a higher role.',
   'mem0.notConfigured': 'mem0 is not configured.',
   'mem0.noResults': 'No memories found for that query.',
   'mem0.category': 'Category',
@@ -285,7 +284,7 @@ export const en = {
   'reality.requiresTokenLead': 'This section requires a',
   'reality.requiresTokenTail': 'higher-privilege token.',
   'reality.requiresTokenNote':
-    'Your current token can still use the other Mirador tabs — only this section needs a higher role.',
+    'Your current token can still use the other Pollen tabs — only this section needs a higher role.',
 
   // ---- Memory view (unified Quality/Growth/Search tabs) -----------------
   'memory.tabQuality': 'Quality',
@@ -301,11 +300,11 @@ export const en = {
   'memory.authorshipNotAvailable': 'A human-vs-agent authorship split is not available — showing the real by-actor breakdown instead.',
   'memory.growthEmptyState': 'No memory growth recorded in this window.',
 
-  // ---- Home view (command center, default landing view) ----------------
+  // ---- Home view (default landing view) ---------------------------------
   'home.subtitle': 'Your fleet at a glance — click any figure to dig in.',
-  // IA/Cyber identity: the numbered "01 Posture" section header above the
-  // hero KPI grid (see `SectionHeader`).
-  'home.kpiSectionTitle': 'Posture',
+  // The numbered "01 Snapshot" section header above the hero KPI grid (see
+  // `SectionHeader`).
+  'home.kpiSectionTitle': 'Snapshot',
   'home.refreshingLabel': 'Refreshing',
   'home.kpiSpendToday': 'Spend today',
   'home.kpiSpendSub': 'last 24h',

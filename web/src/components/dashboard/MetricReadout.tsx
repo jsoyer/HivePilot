@@ -54,7 +54,7 @@ export interface MetricReadoutProps {
 }
 
 /**
- * The "digital readout" primitive — Mirador's instrument-identity evolution
+ * The "digital readout" primitive — Pollen's instrument-identity evolution
  * of `StatCard`: eyebrow label, a big monospace tabular-figure value, a 1px
  * baseline rule, and an optional trend sub-line (▲/▼, tinted good/crit).
  * Kept ALONGSIDE `StatCard` (not a replacement) so existing call sites can

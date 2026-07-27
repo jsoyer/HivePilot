@@ -8,7 +8,7 @@ import type {
   AnalyticsTrends,
   ApprovalLatency,
   StepFailuresResponse,
-} from '@/lib/mirador-api'
+} from '@/lib/pollen-api'
 
 const mocks = vi.hoisted(() => ({
   fetchAnalyticsSummary: vi.fn(),
@@ -18,8 +18,8 @@ const mocks = vi.hoisted(() => ({
   fetchApprovalLatency: vi.fn(),
 }))
 
-vi.mock('@/lib/mirador-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/mirador-api')>()
+vi.mock('@/lib/pollen-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, ...mocks }
 })
 
