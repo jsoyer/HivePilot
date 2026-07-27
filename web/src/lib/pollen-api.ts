@@ -1222,3 +1222,174 @@ export function fetchVerdicts(role?: string, limit = 50): Promise<VerdictsRespon
   return apiFetch<VerdictsResponse>(`/v1/verdicts?${params.toString()}`, { on403: 'forbidden' })
 }
 
+// ---------------------------------------------------------------------------
+// GET /v1/partitions, GET /v1/partitions/{id},
+// POST /v1/partitions/{id}/preview, POST /v1/partitions/{id}/ratify —
+// propose -> ratify -> dispatch PRD, Sprint 4 (the Pollen ratification view).
+//
+// Shapes transcribed from `hivepilot/services/api_service.py`'s
+// `PartitionSummary`/`PartitionDetail`/`PartitionPreviewResponse`/
+// `PartitionRatifyResponse`. Read the large module comment above
+// `PartitionSummary` there — the RBAC floors and the tenant-isolation rules
+// — before changing anything here.
+//
+// The one contract that matters on this side: **none of the ratification
+// rules live in the browser.** `previewPartition` is a dry run of the SAME
+// `validate_ratification` the real gate runs; `PartitionPreview.ok` is that
+// gate's own answer, and it is what the dispatch control gates on. The UI
+// re-derives no rule — not the outward footprint (`outward_actions` is
+// resolved from LIVE pipeline config, never from a task's self-declared
+// `outward` flag), not the cost ceiling, not the effective parallelism.
+//
+// RBAC: the two GETs need `run`, `preview`/`ratify` need `approve`. All of
+// them opt into `on403: 'forbidden'` so a role-specific refusal renders a
+// graceful message instead of clearing an otherwise-valid token out from
+// under every other tab (same posture as `fetchApprovals`).
+// ---------------------------------------------------------------------------
+
+export interface PartitionSummary {
+  id: string
+  tenant: string
+  /** `proposed | ratified | dispatching | completed | failed | vetoed | expired` */
+  status: string
+  source_kind: string | null
+  source_ref: string | null
+  proposed_digest: string | null
+  ratified_digest: string | null
+  outward_consent: boolean
+  ratified_by: string | null
+  ratified_at: string | null
+  created_ts: string | null
+  updated_ts: string | null
+}
+
+/** One journal row. `pr_url` is `null` when the forge did not report a URL —
+ * rendered as an em-dash, NEVER a fabricated link (see the `open_pr -> str |
+ * null` widening in `hivepilot/forges/provider.py`). */
+export interface PartitionTaskRow {
+  task_id: string
+  status: string
+  run_id: number | null
+  queue_id: number | null
+  attempt: number
+  claimed_by: string | null
+  claimed_at: string | null
+  pr_url: string | null
+  cost_usd: number | null
+  wall_clock_seconds: number | null
+}
+
+/**
+ * What "N parallel agents" actually means on THIS host.
+ *
+ * `runner_throttle` caps the `claude` runner kind at
+ * `settings.claude_max_concurrency`, whose default is **1** — so a plan
+ * asking for `max_parallel: 3` is one agent three times on a default
+ * install. `effective` is the computed truth and is what the view must
+ * show; showing `requested` alone would be a lie. `notes` explains WHY, in
+ * the backend's own words — rendered verbatim, never re-worded.
+ */
+export interface PartitionParallelism {
+  requested: number
+  effective: number
+  concurrency_limit: number
+  runner_cap: number
+  runner_kinds: string[]
+  notes: string[]
+}
+
+export interface PartitionDetail extends PartitionSummary {
+  proposed_json: string | null
+  ratified_json: string | null
+  ratified_diff: string | null
+  outward_actions: string[]
+  total_cost_usd: number | null
+  waves: string[][]
+  /** `null` when the stored plan could not be parsed — the view renders an
+   * em-dash, never a plausible-looking `1`. */
+  parallelism: PartitionParallelism | null
+  tasks: PartitionTaskRow[]
+}
+
+/**
+ * The gate's verdict for a plan the operator has NOT submitted yet.
+ *
+ * `ok` is `validate_ratification`'s own answer. A refusal arrives as HTTP
+ * 200 with `ok: false` deliberately (a 4xx would be indistinguishable from a
+ * network failure here, and would discard the footprint/waves/parallelism
+ * the operator needs precisely while being refused) — the gate's real
+ * `status_code` still travels, as data.
+ */
+export interface PartitionPreview {
+  ok: boolean
+  /** `malformed | referential | policy_denied | consent_required |
+   * digest_mismatch | not_found`, or `null` when `ok`. */
+  code: string | null
+  status_code: number | null
+  /** The refusal message, verbatim from the gate. UNTRUSTED only in the
+   * sense that it may quote operator-supplied plan content — rendered via
+   * plain JSX interpolation, never `dangerouslySetInnerHTML`. */
+  detail: string | null
+  outward_actions: string[]
+  total_cost_usd: number | null
+  waves: string[][]
+  task_ids: string[]
+  parallelism: PartitionParallelism | null
+}
+
+export interface PartitionRatifyResult {
+  partition_id: string
+  status: string
+  ratified_digest: string
+  outward_actions: string[]
+  outward_consent: boolean
+  task_ids: string[]
+  diff: string
+  warnings: string[]
+  idempotent: boolean
+  dispatching: boolean
+  parallelism: PartitionParallelism | null
+}
+
+export function fetchPartitions(statusFilter?: string, limit = 50): Promise<PartitionSummary[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (statusFilter) params.set('status_filter', statusFilter)
+  return apiFetch<PartitionSummary[]>(`/v1/partitions?${params.toString()}`, {
+    on403: 'forbidden',
+  })
+}
+
+export function fetchPartition(id: string): Promise<PartitionDetail> {
+  return apiFetch<PartitionDetail>(`/v1/partitions/${encodeURIComponent(id)}`, {
+    on403: 'forbidden',
+  })
+}
+
+/** Dry-run the gate over the plan currently in the editor. Changes nothing.
+ * `outwardConsent` mirrors the checkbox's live state so the verdict shown is
+ * the verdict the operator would actually get. */
+export function previewPartition(
+  id: string,
+  partitionJson: string,
+  outwardConsent: boolean,
+): Promise<PartitionPreview> {
+  return postJson<PartitionPreview>(`/v1/partitions/${encodeURIComponent(id)}/preview`, {
+    partition_json: partitionJson,
+    outward_consent: outwardConsent,
+  })
+}
+
+/** Ratify AND dispatch (the backend's `dispatch` defaults to `true` — spec
+ * §12.5: a ratified-but-undispatched partition is a dangling state). This is
+ * the authoritative, fail-closed gate; the preview above never substitutes
+ * for it. */
+export function ratifyPartition(
+  id: string,
+  body: {
+    partition_json: string
+    outward_consent: boolean
+    expected_digest: string | null
+  },
+): Promise<PartitionRatifyResult> {
+  return postJson<PartitionRatifyResult>(`/v1/partitions/${encodeURIComponent(id)}/ratify`, body)
+}

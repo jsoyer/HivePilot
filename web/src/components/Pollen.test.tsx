@@ -176,6 +176,9 @@ const GROUPED_TAB_ORDER = [
   'Home',
   'Runs',
   'Approvals',
+  // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions joins the Operate
+  // group, between Approvals and Autopilot (see nav-config.ts).
+  'Partitions',
   'Autopilot',
   'Cost',
   'Models',

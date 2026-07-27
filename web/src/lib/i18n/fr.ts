@@ -68,6 +68,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.approvals': 'Approbations',
   'nav.runs': 'Exécutions',
   'nav.autopilot': 'Autopilote',
+  'nav.partitions': 'Partitions',
   'nav.agents': 'Agents',
   'nav.graph': 'Graphe',
 
@@ -478,6 +479,103 @@ export const fr: Record<TranslationKey, string> = {
   'autopilot.allowlistEmptyTitle': 'Aucun pipeline ne peut être lancé automatiquement',
   'autopilot.allowlistEmptyBody':
     'L’autopilote peut toujours mettre des objectifs en file, mais il n’en exécutera aucun. Ajoutez un pipeline à auto_dispatch dans policies.yaml pour l’autoriser à agir.',
+
+  // ---- Partitions view (propose -> ratify -> dispatch PRD, Sprint 4) ----
+  // Registre sobre et littéral, comme en anglais : rien ici n'enjolive ce qui
+  // revient, au fond, à « vous allez lancer N agents et pousser du code vers
+  // l'extérieur ».
+  'partitions.description':
+    "Une partition découpe un même travail en tâches budgétées. Relisez le plan, modifiez-le, puis lancez. Rien ne démarre tant que vous n'avez pas ratifié.",
+  'partitions.descriptionReadOnly':
+    'Lecture seule. Ratifier une partition — le seul garde-fou entre une proposition et N agents lancés — demande un jeton de rang approve.',
+  'partitions.forbidden':
+    'Cette liste demande un jeton de rang run (ou supérieur). Votre jeton reste valable sur tous les autres onglets de Pollen.',
+  'partitions.emptyTitle': 'Aucune partition',
+  'partitions.emptyBody':
+    "Une partition apparaît ici dès qu'un pipeline proposeur en soumet une (hivepilot partition submit --file plan.json --source text:docs/bug-1234.md). Qui est ce proposeur, et ce qu'une tâche veut dire chez vous, relève de votre configuration — pas du moteur.",
+  'partitions.review': 'Relire',
+  'partitions.reviewAriaLabel': 'Relire la partition {id}',
+  'partitions.sourceLabel': 'Source',
+  'partitions.proposedAgo': 'proposée il y a {age}',
+  'partitions.notRatifiable':
+    'Seule une partition proposée peut être ratifiée. Celle-ci est {status}.',
+
+  // ---- panneau de ratification ----------------------------------------
+  'partitions.drawerTitle': 'Ratifier la partition',
+  'partitions.drawerAriaLabel': 'Ratifier la partition {id}',
+  'partitions.closeAriaLabel': 'Fermer le panneau de ratification',
+  'partitions.planTitle': 'Plan',
+  'partitions.planLabel': 'Plan de partition (JSON)',
+  'partitions.planHint':
+    "C'est exactement ce qui va s'exécuter. Modifiez-le directement, ou passez par les contrôles de tâches ci-dessous — les deux écrivent dans le même document.",
+  'partitions.parseErrorLead': 'Ce JSON est invalide, donc rien ne peut être lancé :',
+  'partitions.checking': 'Vérification du plan…',
+  'partitions.gateAccepted': 'Le garde-fou accepte ce plan.',
+  'partitions.gateRefusedLead': 'Le garde-fou refuserait ce plan :',
+  'partitions.previewUnavailable':
+    "Le plan n'a pas pu être confronté à la politique en vigueur : le lancement reste désactivé.",
+
+  // ---- contrôles typés -------------------------------------------------
+  'partitions.tasksTitle': 'Tâches',
+  'partitions.noTasks': 'Ce plan ne déclare aucune tâche',
+  'partitions.noTasksBody':
+    'Une partition sans tâche ne lance rien. Ajoutez une tâche dans le JSON ci-dessus, ou rechargez la proposition.',
+  'partitions.dropTask': 'Retirer',
+  'partitions.dropTaskAriaLabel': 'Retirer la tâche {id} de ce plan',
+  'partitions.dependsOn': 'après {ids}',
+  'partitions.wallClockLabel': 'Arrêt forcé au bout de',
+  'partitions.wallClockAriaLabel':
+    "Plafond de temps d'exécution en secondes pour la tâche {id}",
+  'partitions.wallClockHelp':
+    "Un plafond appliqué, pas une estimation : la tâche est arrêtée d'office à ce moment-là.",
+  'partitions.costLabel': 'Plafond de coût ($)',
+  'partitions.costAriaLabel': 'Plafond de coût en dollars pour la tâche {id}',
+  'partitions.costHelp':
+    "Contrôle d'admission : la somme est confrontée au budget quotidien restant. C'est une vérification préalable, pas une réservation — une vague peut la dépasser.",
+  'partitions.planCostLabel': 'Plafond de coût du plan',
+  'partitions.wavesLabel': 'Vagues',
+  'partitions.waveNumber': 'Vague {index}',
+
+  // ---- consentement vers l'extérieur -----------------------------------
+  'partitions.outwardTitle': "Action visible à l'extérieur",
+  'partitions.outwardWarning': '{actions} — une action visible en dehors de cette machine.',
+  'partitions.outwardConsentLabel': "Je consens à ces actions visibles à l'extérieur",
+  'partitions.outwardNoneTitle': "Rien vers l'extérieur",
+  'partitions.outwardNoneBody':
+    "Avec la configuration en vigueur, ce plan ne pousse rien et n'ouvre rien. Le travail reste sur cette machine : aucun consentement n'est requis.",
+  'partitions.outwardV1Gap':
+    "Le consentement n'est appliqué au lancement que pour les actions git et forge. notify, vault_write et external_api sont nommés ci-dessus mais ne sont pas encore bloqués à l'exécution.",
+  'partitions.outwardHonesty':
+    "Ceci régit ce que fait le moteur. Un agent ayant accès au shell peut toujours agir vers l'extérieur de son côté.",
+  'partitions.outwardAction.git_push': 'des branches seront poussées',
+  'partitions.outwardAction.forge_pr': 'des PR ouvertes',
+  'partitions.outwardAction.forge_merge': 'des PR fusionnées',
+  'partitions.outwardAction.forge_issue': 'des tickets ouverts',
+  'partitions.outwardAction.forge_release': 'des releases publiées',
+  'partitions.outwardAction.notify': 'des notifications envoyées',
+  'partitions.outwardAction.vault_write': 'des notes écrites dans votre vault',
+  'partitions.outwardAction.external_api': 'des API externes appelées',
+
+  // ---- parallélisme effectif -------------------------------------------
+  'partitions.parallelismLabel': 'Parallélisme effectif',
+  'partitions.parallelismSub': '{requested} demandés',
+  'partitions.parallelismTitle': 'Ce qui tourne réellement en parallèle',
+
+  // ---- lancement -------------------------------------------------------
+  'partitions.dispatch': 'Ratifier et lancer',
+  'partitions.dispatchAriaLabel': 'Ratifier et lancer la partition {id}',
+  'partitions.dispatchConfirm':
+    'Lancer {count} tâche(s) maintenant ? Cela démarre de vrais agents, au plus {effective} à la fois. Une partition ratifiée ne peut plus être modifiée.',
+  'partitions.dispatchBlocked':
+    "Le lancement reste désactivé tant que le plan n'est pas valide et accepté par le garde-fou.",
+  'partitions.dispatched':
+    'Ratifiée. {count} tâche(s) en file — le lancement se poursuit en arrière-plan.',
+  'partitions.idempotent': "Déjà ratifiée. Rien n'a été lancé une seconde fois.",
+  'partitions.warningsTitle': 'Avertissements',
+  'partitions.insufficientRole':
+    'Votre jeton ne permet pas de ratifier une partition : il faut un jeton de rang approve.',
+  'partitions.errorStale':
+    "Cette partition a changé depuis que vous l'avez ouverte. Rechargez-la et relisez le nouveau plan avant de ratifier.",
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
   'agents.title': 'Agents',

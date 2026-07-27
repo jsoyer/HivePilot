@@ -39,7 +39,11 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // guarded objective queue's control surface) joins the same group — it's
   // an "operate" concern (pause/resume, watch what's queued/dispatched),
   // not a Spend/Overview/System one.
-  { label: 'nav.operate', values: ['runs', 'approvals', 'autopilot'] },
+  // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions (GET
+  // /v1/partitions + the ratification gate) is an Operate concern — it is
+  // where an operator decides whether N agents start — so it sits next to
+  // Approvals rather than in Overview or System.
+  { label: 'nav.operate', values: ['runs', 'approvals', 'partitions', 'autopilot'] },
   // Mirador Spend section sprint: Cost moves out of "Overview" into its own
   // "Spend" group alongside the two new views (Models/Efficiency) — the
   // operator's complaint this sprint answers ("la conso marche pas, rien
