@@ -1097,9 +1097,7 @@ def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:
                 (tenant,),
             ).fetchall()
         else:
-            rows = conn.execute(
-                "SELECT * FROM runs ORDER BY started_at DESC, id DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM runs ORDER BY started_at DESC, id DESC").fetchall()
     return [dict(row) for row in rows]
 
 

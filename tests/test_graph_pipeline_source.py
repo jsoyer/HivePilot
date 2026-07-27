@@ -308,7 +308,9 @@ def _three_stage_config() -> tuple[PipelinesFile, TasksFile]:
     pipelines = PipelinesFile(pipelines={"demo": PipelineConfig(description="d", stages=stages)})
     tasks = TasksFile(
         tasks={
-            f"task-{n}": TaskConfig(description="d", steps=[TaskStep(name=f"step-{n}", runner="claude")])
+            f"task-{n}": TaskConfig(
+                description="d", steps=[TaskStep(name=f"step-{n}", runner="claude")]
+            )
             for n in ["A", "B", "C"]
         }
     )
@@ -388,10 +390,14 @@ class TestRunSelection:
     def test_explicit_run_id_overrides_last_run(self, patched_config):
         from hivepilot.services import state_service
 
-        old_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        old_run_id = state_service.record_run_start(
+            "demo", "demo", status="complete", tenant="default"
+        )
         state_service.record_step(old_run_id, "step-1", "success")
         state_service.record_run_start("demo", "demo", status="complete", tenant="default")
-        new_run_id_2 = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        new_run_id_2 = state_service.record_run_start(
+            "demo", "demo", status="complete", tenant="default"
+        )
         state_service.record_step(new_run_id_2, "step-1", "failed")
 
         ctx_explicit = graph_module.GraphContext(
@@ -403,9 +409,13 @@ class TestRunSelection:
     def test_default_without_run_id_param_is_last_run(self, ctx, patched_config):
         from hivepilot.services import state_service
 
-        old_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        old_run_id = state_service.record_run_start(
+            "demo", "demo", status="complete", tenant="default"
+        )
         state_service.record_step(old_run_id, "step-1", "success")
-        new_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="default")
+        new_run_id = state_service.record_run_start(
+            "demo", "demo", status="complete", tenant="default"
+        )
         state_service.record_step(new_run_id, "step-1", "failed")
 
         data = _build_graph(ctx)
@@ -417,16 +427,22 @@ class TestRunSelection:
         (or none) instead, exactly like an unknown id."""
         from hivepilot.services import state_service
 
-        acme_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="acme")
+        acme_run_id = state_service.record_run_start(
+            "demo", "demo", status="complete", tenant="acme"
+        )
         state_service.record_step(acme_run_id, "step-1", "success")
-        globex_run_id = state_service.record_run_start("demo", "demo", status="complete", tenant="globex")
+        globex_run_id = state_service.record_run_start(
+            "demo", "demo", status="complete", tenant="globex"
+        )
         state_service.record_step(globex_run_id, "step-1", "failed")
 
         ctx_globex = graph_module.GraphContext(
             tenant="globex", role="read", params={"pipeline": "demo", "run_id": str(acme_run_id)}
         )
         data = _build_graph(ctx_globex)
-        assert all(n.status == "error" for n in data.nodes), "must show globex's own run, never acme's"
+        assert all(n.status == "error" for n in data.nodes), (
+            "must show globex's own run, never acme's"
+        )
 
     def test_unknown_run_id_falls_back_to_last_run(self, ctx, patched_config):
         from hivepilot.services import state_service
