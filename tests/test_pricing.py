@@ -131,3 +131,90 @@ class TestDefaultPriceMap:
             assert "output" in rates, model
             assert isinstance(rates["input"], (int, float))
             assert isinstance(rates["output"], (int, float))
+
+    def test_default_price_map_covers_real_recorded_canonical_ids(self) -> None:
+        """Real operator boxes report canonical ids like `claude-haiku-4-5`
+        (from `modelUsage`'s `canonicalModel` field) -- not just the newest
+        `-4-6` generation already in the map. Locks in the usage-capture-
+        modelusage fix's price-map reconciliation."""
+        for model in ("claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"):
+            assert model in pricing.DEFAULT_PRICE_MAP, model
+
+    def test_default_price_map_covers_bare_cli_aliases(self) -> None:
+        """`--model sonnet/opus/haiku` (the bare alias form) is a real,
+        accepted CLI value (see `model_profiles.yaml`) and is exactly what
+        historical `steps.model` rows persisted before this fix (the CLI
+        never echoed a `model` field, so `_record_step_success` fell back
+        to the alias). Pricing these keeps `backfill_unpriced_costs` useful
+        for pre-fix rows."""
+        for alias in ("sonnet", "opus", "haiku"):
+            assert alias in pricing.DEFAULT_PRICE_MAP, alias
+
+
+class TestEstimateCostCacheTokens:
+    """Prompt-cache tokens (`cache_read_tokens`/`cache_creation_tokens`) are
+    billed at DIFFERENT rates than base input/output tokens -- must be priced
+    as distinct quantities, never folded into the base input rate."""
+
+    def test_cache_tokens_default_to_zero_backward_compatible(self) -> None:
+        """Existing 2-arg call sites (no cache kwargs) must be byte-identical
+        to pre-fix behaviour."""
+        cost = pricing.estimate_cost("claude-sonnet-4-6", 1_000_000, 500_000)
+        assert cost == 10.5
+
+    def test_cache_read_tokens_priced_at_their_own_rate(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "llm_price_map",
+            {"m": {"input": 1.0, "output": 1.0, "cache_read": 0.5, "cache_write": 2.0}},
+            raising=False,
+        )
+        cost = pricing.estimate_cost("m", 0, 0, cache_read_tokens=1_000_000)
+        assert cost == 0.5
+
+    def test_cache_creation_tokens_priced_at_their_own_rate(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "llm_price_map",
+            {"m": {"input": 1.0, "output": 1.0, "cache_read": 0.5, "cache_write": 2.0}},
+            raising=False,
+        )
+        cost = pricing.estimate_cost("m", 0, 0, cache_creation_tokens=1_000_000)
+        assert cost == 2.0
+
+    def test_nonzero_cache_tokens_without_a_cache_rate_is_unpriced(self, monkeypatch) -> None:
+        """A model whose price-map entry has no `cache_read`/`cache_write`
+        rate cannot honestly be priced once cache tokens are involved --
+        must return None (unpriced) rather than silently ignoring the cache
+        volume and under-reporting cost."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "llm_price_map",
+            {"m": {"input": 1.0, "output": 1.0}},
+            raising=False,
+        )
+        assert pricing.estimate_cost("m", 100, 100, cache_read_tokens=1_000_000) is None
+        assert pricing.estimate_cost("m", 100, 100, cache_creation_tokens=1_000_000) is None
+
+    def test_zero_cache_tokens_never_requires_a_cache_rate(self, monkeypatch) -> None:
+        """Zero cache tokens must not trigger the missing-rate guard --
+        a model with no cache rates configured still prices fine when this
+        particular call has no cache activity."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "llm_price_map",
+            {"m": {"input": 1.0, "output": 1.0}},
+            raising=False,
+        )
+        cost = pricing.estimate_cost(
+            "m", 1_000_000, 1_000_000, cache_read_tokens=0, cache_creation_tokens=0
+        )
+        assert cost == 2.0
