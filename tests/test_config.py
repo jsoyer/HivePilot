@@ -481,6 +481,33 @@ class TestConfigHotReloadFlag:
 
 
 # ---------------------------------------------------------------------------
+# fix/retry-queue-drain — retry-queue drain/TTL/backlog-threshold settings.
+# ---------------------------------------------------------------------------
+
+
+class TestRetryQueueDrainSettings:
+    def test_ttl_days_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_RETRY_QUEUE_TTL_DAYS", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.retry_queue_ttl_days == 3.0
+
+    def test_ttl_days_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_RETRY_QUEUE_TTL_DAYS", "0")
+        s = Settings()
+        assert s.retry_queue_ttl_days == 0.0
+
+    def test_stale_after_hours_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_RETRY_QUEUE_STALE_AFTER_HOURS", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.retry_queue_stale_after_hours == 24
+
+    def test_backlog_error_count_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_RETRY_QUEUE_BACKLOG_ERROR_COUNT", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.retry_queue_backlog_error_count == 20
+
+
+# ---------------------------------------------------------------------------
 # HIGH-severity fix — lenient CSV/JSON parsing for env `list[...]` fields.
 #
 # Root cause: pydantic-settings decodes a `list[...]` field's env value as

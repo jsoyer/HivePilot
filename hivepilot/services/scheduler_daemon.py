@@ -1,4 +1,16 @@
-"""SchedulerDaemon — polls schedules and re-runs quota-deferred retry rows."""
+"""SchedulerDaemon -- polls schedules and re-runs quota-deferred retry rows.
+
+fix/retry-queue-drain: this daemon's per-tick responsibilities also include
+expiring stale `retry_queue` rows (`_expire_stale_retries`) and draining
+plain exponential-backoff retry rows (`_process_backoff_retries`) -- the
+subtype `retry_service.enqueue()` writes on an ordinary schedule task
+failure (`schedule_service.run_entry`'s except branch), which
+`_process_deferred_rows` below deliberately never touches (it filters
+`context IS NOT NULL`, a guard written only for the quota-deferred
+subtype). Before this fix, nothing ever read a context-less row: 197
+`groomer-scan` retries sat `pending` and past-due for 7 days with zero
+operator-visible signal.
+"""
 
 from __future__ import annotations
 
@@ -161,7 +173,9 @@ class SchedulerDaemon:
         self._maybe_hot_reload_roles()
         self._run_due_schedules()
         self._run_drift_scans()
+        self._expire_stale_retries()
         self._process_deferred_rows()
+        self._process_backoff_retries()
 
     def _maybe_hot_reload_roles(self) -> None:
         """Phase 14c (#249) — opt-in AUTOMATIC per-tick roles.yaml reload,
@@ -410,3 +424,127 @@ class SchedulerDaemon:
                     (status, row_id),
                 )
             conn.commit()
+
+    # ------------------------------------------------------------------
+    # fix/retry-queue-drain -- expiry + the plain backoff-retry drain
+    # ------------------------------------------------------------------
+
+    def _expire_stale_retries(self) -> None:
+        """Mark PENDING `retry_queue` rows older than `settings.
+        retry_queue_ttl_days` as `expired` (never dispatched). Never
+        silent: every expired row is logged at WARNING with enough context
+        (id/schedule/task/error/age) for an operator to see exactly what
+        was dropped and why -- 'expiry must be visible, never silent'.
+        A failure here must never block the rest of the tick (schedule
+        dispatch, drift scans, the two retry-queue drains below all still
+        run) -- matches `_run_due_schedules`/`_run_drift_scans`'s existing
+        catch-and-log discipline.
+        """
+        from hivepilot.config import settings
+        from hivepilot.services import retry_service
+
+        try:
+            expired = retry_service.expire_stale(settings.retry_queue_ttl_days)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler_daemon.expire_stale_retries_error")
+            return
+
+        for row in expired:
+            logger.warning(
+                "scheduler_daemon.retry_expired",
+                extra={
+                    "row_id": row.get("id"),
+                    "schedule_name": row.get("schedule_name"),
+                    "task": row.get("task"),
+                    "created_at": row.get("created_at"),
+                    "error": (row.get("error") or "")[:200],
+                },
+            )
+
+    def _process_backoff_retries(self) -> None:
+        """Drain AT MOST ONE plain backoff-retry row per tick -- the rows
+        `retry_service.enqueue()` writes on an ordinary schedule task
+        failure (`schedule_service.run_entry`'s except branch). This is the
+        subtype `_process_deferred_rows` above deliberately never touches
+        (it filters `context IS NOT NULL`); before this method existed,
+        NOTHING ever drained it -- see the retry-queue-drain incident this
+        module's docstring describes.
+
+        Bounded to one row per tick for the same reason `autopilot_queue.
+        drain_one()` is bounded to one objective per tick: a backlog must
+        never fire N runs at once (the exact risk a 197-row backlog would
+        have posed had the drain simply been un-gated instead of fixed
+        properly).
+        """
+        from hivepilot.services import retry_service
+
+        try:
+            due = retry_service.due_backoff_rows(limit=1)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler_daemon.due_backoff_rows_error")
+            return
+        if not due:
+            return
+
+        row = due[0]
+        if not retry_service.claim_row(row["id"]):
+            # Lost the claim race (or another process already handled it) --
+            # simply try again next tick rather than forcing it.
+            return
+        self._rerun_backoff_row(row)
+
+    def _rerun_backoff_row(self, row: dict) -> None:
+        from hivepilot.services import retry_service
+
+        row_id: int = row["id"]
+        task_name: str | None = row.get("task")
+        project_names: list[str] = json.loads(row.get("projects") or "[]")
+        attempt: int = int(row.get("attempt", 0))
+        max_attempts: int = int(row.get("max_attempts", 3))
+
+        logger.info(
+            "scheduler_daemon.rerun_backoff",
+            extra={"row_id": row_id, "task": task_name, "projects": project_names},
+        )
+        try:
+            orch = Orchestrator(plugins=self._hot_reload_manager)
+            orch.run_task(
+                task_name=task_name,
+                project_names=project_names,
+                extra_prompt=None,
+                auto_git=False,
+            )
+        except Exception as exc:  # noqa: BLE001 -- never silently swallowed: the row's
+            # own status always reflects the outcome (pending/dead), and every branch
+            # below logs -- "a drain that silently does nothing is worse than no drain".
+            exc_str = str(exc).lower()
+            is_quota = any(phrase in exc_str for phrase in _QUOTA_PHRASES)
+            new_attempt = attempt + 1
+
+            if is_quota:
+                next_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+                retry_service.mark_retry(row_id, attempt=new_attempt, next_retry_at=next_at)
+                logger.warning(
+                    "scheduler_daemon.rerun_backoff_quota_again",
+                    extra={"row_id": row_id, "next_retry_at": next_at.isoformat()},
+                )
+            elif new_attempt >= max_attempts:
+                retry_service.mark_dead(row_id, attempt=new_attempt)
+                logger.error(
+                    "scheduler_daemon.rerun_backoff_dead",
+                    extra={"row_id": row_id, "error": str(exc)},
+                )
+            else:
+                # Same exponential-backoff shape as retry_service.enqueue()'s
+                # own formula (base_delay_minutes defaults to 2 there too).
+                next_at = datetime.now(timezone.utc) + timedelta(
+                    minutes=2 * (2 ** max(new_attempt - 1, 0))
+                )
+                retry_service.mark_retry(row_id, attempt=new_attempt, next_retry_at=next_at)
+                logger.warning(
+                    "scheduler_daemon.rerun_backoff_failed",
+                    extra={"row_id": row_id, "attempt": new_attempt, "error": str(exc)},
+                )
+        else:
+            retry_service.mark_done(row_id)
+            logger.info("scheduler_daemon.rerun_backoff_done", extra={"row_id": row_id})

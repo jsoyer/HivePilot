@@ -566,6 +566,139 @@ class TestPluginHealth:
 
 
 # ---------------------------------------------------------------------------
+# fix/retry-queue-drain: retry_queue abnormal-backlog check. Real incident:
+# 197 `groomer-scan` retries sat PENDING and past-due for 7 days -- nothing
+# drained them, and `hivepilot schedule health` printed the raw count but
+# never flagged it as abnormal. This check closes that gap in `config
+# doctor`, deliberately conservative (per the check_enabled_plugins_loaded
+# 17-false-positives lesson): a small, normal backlog waiting out its own
+# backoff window must produce NO finding.
+# ---------------------------------------------------------------------------
+
+
+class TestRetryQueueBacklog:
+    @pytest.fixture(autouse=True)
+    def isolated_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        from hivepilot.services import state_service
+
+        db_path = tmp_path / "doctor_retry.db"
+        monkeypatch.setattr(state_service, "DB_PATH", db_path)
+        return db_path
+
+    def _insert(self, db_path: Path, **kwargs: object) -> None:
+        import sqlite3
+
+        from hivepilot.services import state_service
+
+        state_service.init_db()
+        defaults = {
+            "schedule_name": "groomer",
+            "task": "groomer-scan",
+            "projects": "[]",
+            "error": "[Errno 2] No such file or directory: '/root/noxys'",
+            "attempt": 1,
+            "max_attempts": 3,
+            "status": "pending",
+            "next_retry_at": "2020-01-01T00:00:00+00:00",
+        }
+        defaults.update(kwargs)
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "INSERT INTO retry_queue "
+                "(schedule_name, task, projects, error, attempt, max_attempts, status, "
+                "next_retry_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(defaults.values()),
+            )
+            conn.commit()
+
+    def test_no_findings_when_queue_empty(self, isolated_db: Path) -> None:
+        assert config_doctor.check_retry_queue_backlog() == []
+
+    def test_no_finding_for_a_row_still_within_its_own_backoff_window(
+        self, isolated_db: Path
+    ) -> None:
+        """A row due only a few minutes ago (well under the stale-after
+        threshold) is NORMAL -- must produce no finding at all."""
+        from datetime import datetime, timedelta, timezone
+
+        recent = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        self._insert(isolated_db, next_retry_at=recent)
+
+        assert config_doctor.check_retry_queue_backlog() == []
+
+    def test_fires_warning_on_abnormal_backlog(self, isolated_db: Path) -> None:
+        """A handful of rows overdue by well over the stale-after threshold
+        (default 24h) IS the incident shape -- must fire."""
+        from datetime import datetime, timedelta, timezone
+
+        old = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        for i in range(3):
+            self._insert(isolated_db, schedule_name=f"groomer-{i}", next_retry_at=old)
+
+        findings = config_doctor.check_retry_queue_backlog()
+
+        assert len(findings) == 1
+        assert findings[0].check == "retry_queue_backlog"
+        assert findings[0].severity == "warning"
+        assert "3" in findings[0].message
+
+    def test_escalates_to_error_on_large_backlog(self, isolated_db: Path) -> None:
+        """The real incident had 197 rows -- well past the default
+        error-count threshold (20) -- must escalate to 'error'."""
+        from datetime import datetime, timedelta, timezone
+
+        old = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        for i in range(25):
+            self._insert(isolated_db, schedule_name=f"groomer-{i}", next_retry_at=old)
+
+        findings = config_doctor.check_retry_queue_backlog()
+
+        assert len(findings) == 1
+        assert findings[0].severity == "error"
+
+    def test_unparseable_timestamp_is_its_own_finding_never_silent(self, isolated_db: Path) -> None:
+        """'I could not inspect this' must be a finding, never silence."""
+        self._insert(isolated_db, next_retry_at="not-a-timestamp")
+
+        findings = config_doctor.check_retry_queue_backlog()
+
+        assert len(findings) == 1
+        assert findings[0].check == "retry_queue_unparseable_timestamp"
+        assert findings[0].severity == "error"
+
+    def test_running_and_dead_rows_never_counted(self, isolated_db: Path) -> None:
+        """Only PENDING rows count toward the backlog -- rows already
+        claimed ('running') or exhausted ('dead') are not 'stuck'."""
+        from datetime import datetime, timedelta, timezone
+
+        old = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        self._insert(isolated_db, status="running", next_retry_at=old)
+        self._insert(isolated_db, status="dead", next_retry_at=old)
+
+        assert config_doctor.check_retry_queue_backlog() == []
+
+    def test_wired_into_run_doctor(self, isolated_db: Path) -> None:
+        """A check that exists but is never registered in `run_doctor()` is
+        exactly as invisible as no check at all -- assert it's reachable
+        through the real entry point, not just directly callable."""
+        from datetime import datetime, timedelta, timezone
+
+        old = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        for i in range(3):
+            self._insert(isolated_db, schedule_name=f"groomer-{i}", next_retry_at=old)
+
+        fake_manager = SimpleNamespace(
+            loaded=[SimpleNamespace(name=stem) for stem in _currently_enabled_plugin_stems()],
+            check_all=lambda: {},
+        )
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("hivepilot.plugins.PluginManager", lambda: fake_manager, raising=False)
+            findings = config_doctor.run_doctor(config_dir=None)
+
+        assert any(f.check == "retry_queue_backlog" for f in findings)
+
+
+# ---------------------------------------------------------------------------
 # Dangling references (incident #7 + #6's alias variant)
 # ---------------------------------------------------------------------------
 

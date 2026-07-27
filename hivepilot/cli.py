@@ -690,10 +690,15 @@ def schedule_health(
     pending = retry_service.list_queue("pending")
     running = retry_service.list_queue("running")
     dlq = retry_service.list_dlq()
+    # fix/retry-queue-drain: also surface `expired` (TTL'd-out) rows --
+    # a backlog that ages out silently is exactly the invisible-degradation
+    # class this command exists to prevent.
+    expired = retry_service.list_queue("expired")
     typer.echo("\n=== Retry Queue ===")
     typer.echo(f"  Pending : {len(pending)}")
     typer.echo(f"  Running : {len(running)}")
     typer.echo(f"  Dead (DLQ): {len(dlq)}")
+    typer.echo(f"  Expired : {len(expired)}")
 
 
 @schedule_app.command("systemd-unit")
