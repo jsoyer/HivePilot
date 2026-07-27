@@ -466,3 +466,146 @@ class TestBuildAgentRegistryGeneralization:
                 assert "not configured" not in call.args[0]
         run_agent_order.assert_awaited_once()
         assert run_agent_order.call_args.args[1] == "pm"
+
+
+# ---------------------------------------------------------------------------
+# Chat-alias collision fix — real incident: five design roles' display_name
+# all started with "Margaux" ("Margaux", "Margaux (Console)", "Margaux
+# (Extension)", "Margaux (VS Code)", "Margaux (Agent)"). The old Phase 4
+# derived the alias from `display_name.split()[0]` ONLY, so all five
+# collapsed to "margaux" -- one role won it, the other four silently lost
+# their display-name-derived alias entirely (`telegram.agent_registry.
+# alias_collision` logged x4, unaddressable by name in chat).
+#
+# Fix: `_display_name_alias_claims` (consumed by both `_build_agent_registry`
+# Phase 4 and `config_doctor.check_role_display_name_collisions`) claims a
+# first-token alias only when that token is unique across all roles, PLUS
+# always attempts a full-display-name alias -- so a structured name always
+# gets a distinguishing alias, while a plain single-word name's alias is
+# byte-identical to before this fix.
+# ---------------------------------------------------------------------------
+
+_STRUCTURED_MARGAUX_ROLES = {
+    "designer_plain": _make_role(
+        "designer_plain", "Console (Plain)", display_name="Margaux", command_task="d0"
+    ),
+    "designer_console": _make_role(
+        "designer_console", "Console", display_name="Margaux (Console)", command_task="d1"
+    ),
+    "designer_extension": _make_role(
+        "designer_extension", "Extension", display_name="Margaux (Extension)", command_task="d2"
+    ),
+    "designer_vscode": _make_role(
+        "designer_vscode", "VS Code", display_name="Margaux (VS Code)", command_task="d3"
+    ),
+    "designer_agent": _make_role(
+        "designer_agent", "Agent", display_name="Margaux (Agent)", command_task="d4"
+    ),
+}
+
+
+class TestChatAliasCollisionFix:
+    def test_five_structured_display_names_produce_five_distinct_aliases(self):
+        """FAILS against unfixed origin/main: only ONE of these five roles
+        ends up with ANY display-name-derived alias (the other four lose the
+        Phase-4 collision and get nothing) -- this asserts all five get a
+        distinct one."""
+        with patch("hivepilot.roles.ROLES", _STRUCTURED_MARGAUX_ROLES):
+            registry = bot._build_agent_registry()
+
+        derived_aliases: dict[str, str] = {}
+        for role_key in _STRUCTURED_MARGAUX_ROLES:
+            entry = registry[role_key]
+            # Isolate the display-name-derived alias(es): exclude the role's
+            # own name / separator-free variant, which this fix never touches.
+            display_derived = [
+                a for a in entry["aliases"] if a not in (role_key, role_key.replace("_", ""))
+            ]
+            assert display_derived, f"{role_key} has no display-name-derived alias"
+            for alias in display_derived:
+                assert alias not in derived_aliases, (
+                    f"alias {alias!r} claimed by both {derived_aliases.get(alias)!r} "
+                    f"and {role_key!r}"
+                )
+                derived_aliases[alias] = role_key
+
+        assert len(derived_aliases) == 5
+
+    def test_plain_margaux_keeps_the_short_alias(self):
+        """The one role whose display_name IS exactly "Margaux" must still
+        get the short "margaux" alias -- the fix must not punish the
+        unqualified name for its siblings' collision."""
+        with patch("hivepilot.roles.ROLES", _STRUCTURED_MARGAUX_ROLES):
+            registry = bot._build_agent_registry()
+        assert "margaux" in registry["designer_plain"]["aliases"]
+
+    def test_qualified_variants_get_distinguishing_aliases(self):
+        with patch("hivepilot.roles.ROLES", _STRUCTURED_MARGAUX_ROLES):
+            registry = bot._build_agent_registry()
+        assert "margauxconsole" in registry["designer_console"]["aliases"]
+        assert "margauxextension" in registry["designer_extension"]["aliases"]
+        assert "margauxvscode" in registry["designer_vscode"]["aliases"]
+        assert "margauxagent" in registry["designer_agent"]["aliases"]
+
+    def test_single_word_display_name_alias_unchanged(self):
+        """Regression guard, NOT a bug reproduction: a role with a plain
+        single-word display_name must keep deriving the exact SAME alias as
+        before this fix, so an operator's existing /blaise or @gustave keeps
+        working unchanged. This already passes on unfixed origin/main (no
+        regression exists here) and must keep passing after the fix --
+        verified aliases: alienor (ceo), jules (chief_of_staff),
+        margaux (pm), henriette (cfo), paul (release_manager)."""
+        with patch("hivepilot.roles.ROLES", _FIXTURE_ROLES):
+            registry = bot._build_agent_registry()
+        assert "alienor" in registry["ceo"]["aliases"]
+        assert "jules" in registry["chief_of_staff"]["aliases"]
+        assert "margaux" in registry["pm"]["aliases"]
+        assert "henriette" in registry["cfo"]["aliases"]
+        assert "paul" in registry["release_manager"]["aliases"]
+
+    def test_two_identical_display_names_still_collide(self):
+        """Two roles sharing the exact SAME display_name must still collide
+        -- one wins the alias (deterministic sort order), the other loses it.
+        This behaviour must NOT change: already passes on unfixed
+        origin/main, and must keep passing after the fix."""
+        roles = {
+            "role_a": _make_role("role_a", "A", display_name="Same", command_task="ta"),
+            "role_b": _make_role("role_b", "B", display_name="Same", command_task="tb"),
+        }
+        with patch("hivepilot.roles.ROLES", roles):
+            registry = bot._build_agent_registry()
+        winners = [rk for rk in ("role_a", "role_b") if "same" in registry[rk]["aliases"]]
+        assert winners == ["role_a"]  # sorted role_key order -- deterministic
+        assert "same" not in registry["role_b"]["aliases"]
+
+
+class TestDisplayNameAliasClaims:
+    """Pure-function contract tests for the shared derivation helper
+    consumed by both `_build_agent_registry` (Phase 4) and
+    `config_doctor.check_role_display_name_collisions` -- the single source
+    of truth that keeps the two from disagreeing about what collides.
+    FAILS against unfixed origin/main: `_display_name_alias_claims` doesn't
+    exist yet."""
+
+    def test_function_exists(self):
+        assert hasattr(bot, "_display_name_alias_claims")
+
+    def test_ambiguous_first_token_dropped_full_name_kept(self):
+        claims = bot._display_name_alias_claims({"a": "Margaux", "b": "Margaux (Console)"})
+        by_role: dict[str, set[str]] = {}
+        for alias, role_key in claims:
+            by_role.setdefault(role_key, set()).add(alias)
+        assert by_role["a"] == {"margaux"}
+        assert by_role["b"] == {"margauxconsole"}
+
+    def test_unambiguous_first_token_and_full_name_both_point_to_same_role(self):
+        claims = bot._display_name_alias_claims({"a": "Blaise"})
+        aliases = {alias for alias, _ in claims}
+        assert aliases == {"blaise"}
+        assert all(role_key == "a" for _, role_key in claims)
+
+    def test_blank_and_whitespace_only_contribute_no_claims(self):
+        assert bot._display_name_alias_claims({"a": "", "b": "   "}) == []
+
+    def test_punctuation_only_sanitises_to_empty_contributes_no_claims(self):
+        assert bot._display_name_alias_claims({"a": "!!!"}) == []

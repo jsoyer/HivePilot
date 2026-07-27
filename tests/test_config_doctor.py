@@ -991,6 +991,105 @@ class TestRoleDisplayNameCollisions:
         invent a finding for it."""
         assert config_doctor.check_role_display_name_collisions(tmp_path) == []
 
+    # -----------------------------------------------------------------------
+    # The check must SHARE the registry's alias derivation, not reimplement
+    # it -- the real incident: the OLD check compared whole `display_name`
+    # strings, so "Margaux" and "Margaux (Console)" looked distinct to the
+    # doctor while the Telegram registry's real alias derivation (first
+    # token of display_name) collided them. A check that disagrees with the
+    # mechanism it guards is worse than no check.
+    # -----------------------------------------------------------------------
+
+    def test_doctor_shares_engine_derivation_function_not_a_reimplementation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Proven by patching `telegram_bot._display_name_alias_claims`
+        itself and asserting the doctor's finding is driven by what THAT
+        function reports -- not by any doctor-local string comparison.
+        FAILS against unfixed origin/main: `_display_name_alias_claims`
+        doesn't exist yet, so there is nothing to patch."""
+        from hivepilot.services import telegram_bot
+
+        roles = [
+            {"name": "role_a", "display_name": "Alpha"},
+            {"name": "role_b", "display_name": "Beta"},
+        ]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        def fake_claims(display_names: dict[str, str]) -> list[tuple[str, str]]:
+            assert display_names == {"role_a": "Alpha", "role_b": "Beta"}
+            # A made-up alias that bears no resemblance to a whole-string
+            # comparison of "Alpha"/"Beta" -- if the doctor's finding
+            # reflects THIS alias, it can only have come from calling this
+            # function, not from reimplementing its own normalisation.
+            return [("shared_fake_alias", "role_a"), ("shared_fake_alias", "role_b")]
+
+        monkeypatch.setattr(telegram_bot, "_display_name_alias_claims", fake_claims)
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert len(findings) == 1
+        assert findings[0].check == "duplicate_role_display_name"
+        assert "role_a" in findings[0].message
+        assert "role_b" in findings[0].message
+        assert "shared_fake_alias" in findings[0].message
+
+    def test_structured_display_names_engine_and_doctor_now_agree(self, tmp_path: Path) -> None:
+        """End-to-end with the REAL (unmocked) shared derivation, using the
+        exact real-incident display names: since the registry now derives a
+        distinct alias for each of the five, the doctor correctly reports
+        NO collision either -- registry and doctor agree, instead of the
+        doctor silently certifying a broken state."""
+        roles = [
+            {"name": "designer_plain", "display_name": "Margaux"},
+            {"name": "designer_console", "display_name": "Margaux (Console)"},
+            {"name": "designer_extension", "display_name": "Margaux (Extension)"},
+            {"name": "designer_vscode", "display_name": "Margaux (VS Code)"},
+            {"name": "designer_agent", "display_name": "Margaux (Agent)"},
+        ]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        assert config_doctor.check_role_display_name_collisions(tmp_path) == []
+
+    def test_display_name_sanitising_to_empty_is_reported_not_skipped(self, tmp_path: Path) -> None:
+        """A display_name made entirely of punctuation (e.g. "!!!")
+        sanitises to an empty alias -- the registry's `_claim` silently
+        no-ops on an empty alias (its early return), so this role gets NO
+        display-name-derived alias at all, with zero warning at startup.
+        Previously this fell through the check's `if not normalised:
+        continue` branch with NO finding whatsoever (fail-open on an empty
+        value -- the exact recurring bug class this repo tracks). FAILS
+        against unfixed origin/main: zero findings emitted for this
+        fixture."""
+        roles = [{"name": "ghost_named_role", "display_name": "!!!"}]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        assert len(findings) == 1
+        assert findings[0].severity == "error"
+        assert findings[0].check == "unusable_role_display_name"
+        assert "ghost_named_role" in findings[0].message
+
+    def test_display_name_sanitising_to_empty_is_not_confused_with_blank(
+        self, tmp_path: Path
+    ) -> None:
+        """A punctuation-only display_name is a DIFFERENT finding kind from
+        a blank one -- distinct operator-facing consequence (blank crashes
+        the registry outright; sanitises-to-empty just silently drops the
+        alias) and a distinct fix (blank must be non-empty; this one needs
+        at least one letter/digit)."""
+        roles = [
+            {"name": "blank_role", "display_name": "   "},
+            {"name": "unusable_role", "display_name": "###"},
+        ]
+        (tmp_path / "roles.yaml").write_text(yaml.dump({"roles": roles}))
+
+        findings = config_doctor.check_role_display_name_collisions(tmp_path)
+
+        checks = {f.check for f in findings}
+        assert checks == {"blank_role_display_name", "unusable_role_display_name"}
+
 
 class TestOnlyModulesDangling:
     def test_flags_module_not_defined_anywhere(self, tmp_path: Path) -> None:
