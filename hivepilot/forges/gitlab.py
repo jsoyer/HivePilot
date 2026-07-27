@@ -49,6 +49,7 @@ import httpx
 from hivepilot.config import Settings
 from hivepilot.forges.provider import (
     ForgeRegistry,
+    extract_pr_url_from_response,
     resolve_forge_base_url,
     resolve_forge_token,
 )
@@ -263,7 +264,14 @@ class GitLabForge:
 
     # ---- change-request (merge request) lifecycle ----
 
-    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None:
+    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> str | None:
+        """Open a merge request via the GitLab API.
+
+        Returns the ``web_url`` GitLab itself reported for the MR it just
+        created, or ``None`` when the response carries no usable one
+        (propose -> ratify -> dispatch PRD, spec §8). **Never a fabricated
+        URL** -- the partition journal shows "—" for ``None``.
+        """
         project_id = self._project_path(project)
         base = project.default_branch or "main"
         title = git.pr_title or f"HivePilot: {branch}"
@@ -279,14 +287,17 @@ class GitLabForge:
             "title": title,
             "description": description,
         }
-        self._request("POST", url, project=project, json_body=payload)
+        resp = self._request("POST", url, project=project, json_body=payload)
+        mr_url = extract_pr_url_from_response(resp, "web_url")
         logger.info(
             "gitlab.mr_created",
             project=project.path.name,
             branch=branch,
             base=base,
             draft=git.draft,
+            pr_url_captured=mr_url is not None,
         )
+        return mr_url
 
     def promote_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None:
         del git

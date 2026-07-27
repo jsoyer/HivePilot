@@ -42,6 +42,7 @@ import httpx
 from hivepilot.config import Settings
 from hivepilot.forges.provider import (
     ForgeRegistry,
+    extract_pr_url_from_response,
     resolve_forge_base_url,
     resolve_forge_token,
 )
@@ -243,7 +244,14 @@ class ForgejoForge:
 
     # ---- change-request (pull request) lifecycle ----
 
-    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None:
+    def open_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> str | None:
+        """Open a pull request via the Forgejo/Gitea API.
+
+        Returns the ``html_url`` the FORGE itself reported for the PR it just
+        created, or ``None`` when the response carries no usable one
+        (propose -> ratify -> dispatch PRD, spec §8). **Never a fabricated
+        URL** -- the partition journal shows "—" for ``None``.
+        """
         slug = project.owner_repo
         if not slug:
             raise ValueError("owner_repo missing for PR creation")
@@ -256,14 +264,17 @@ class ForgejoForge:
             body = Path(git.pr_body_file).read_text(encoding="utf-8")
         url = f"{self._api_base(project)}/repos/{slug}/pulls"
         payload = {"title": title, "head": branch, "base": base, "body": body}
-        self._request("POST", url, project=project, json_body=payload)
+        resp = self._request("POST", url, project=project, json_body=payload)
+        pr_url = extract_pr_url_from_response(resp, "html_url")
         logger.info(
             "forgejo.pr_created",
             project=project.path.name,
             branch=branch,
             base=base,
             draft=git.draft,
+            pr_url_captured=pr_url is not None,
         )
+        return pr_url
 
     def promote_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None:
         del git

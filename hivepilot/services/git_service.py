@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import math
 import subprocess
+import threading
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
@@ -356,10 +358,80 @@ def _publish_pr_ready_best_effort(project: ProjectConfig, branch: str, kind: str
         )
 
 
+# ---------------------------------------------------------------------------
+# PR-URL ledger (propose -> ratify -> dispatch PRD, spec §8)
+#
+# The partition journal wants the PR link for each dispatched task, but the
+# code that OPENS the PR (`create_pr` below, called from
+# `perform_git_actions` inside `Orchestrator._execute_task`) runs on a
+# `ThreadPoolExecutor` worker thread that `run_pipeline` spawns -- and
+# contextvars are NOT inherited across `ThreadPoolExecutor.submit` (the same
+# fact `orchestrator.py` documents where it hand-propagates its OTel
+# context). So the `runners.base._LAST_USAGE` contextvar idiom cannot reach
+# the partition dispatcher, and a process-global, explicitly locked ledger is
+# used instead.
+#
+# The ledger is deliberately DUMB and append-only: it records what a forge
+# reported, and the READER decides what it may honestly attribute. See
+# `pr_urls_since`, which returns every match and leaves the "exactly one, or
+# nothing" rule to `partition_service` -- so ambiguity degrades to "no URL",
+# never to a mis-attributed one.
+# ---------------------------------------------------------------------------
+
+_PR_LEDGER_MAX = 512
+_pr_ledger: deque[tuple[int, str, str, str]] = deque(maxlen=_PR_LEDGER_MAX)
+_pr_ledger_lock = threading.Lock()
+_pr_ledger_seq = 0
+
+
+def record_pr_opened(*, project: str, branch: str, url: str) -> int:
+    """Append ``(project, branch, url)`` to the ledger; return its sequence
+    number. Called only with a URL a FORGE reported (see
+    `hivepilot.forges.provider.extract_pr_url`) -- never a derived one."""
+    global _pr_ledger_seq  # noqa: PLW0603 - module-level monotonic sequence, lock-guarded
+    with _pr_ledger_lock:
+        _pr_ledger_seq += 1
+        seq = _pr_ledger_seq
+        _pr_ledger.append((seq, project, branch, url))
+    return seq
+
+
+def pr_ledger_mark() -> int:
+    """The current ledger high-water mark. Pass it to `pr_urls_since` to ask
+    "which PRs did this process open AFTER this point"."""
+    with _pr_ledger_lock:
+        return _pr_ledger_seq
+
+
+def pr_urls_since(mark: int, *, project: str | None = None) -> tuple[str, ...]:
+    """Every PR URL recorded after *mark*, optionally filtered to *project*.
+
+    Returns ALL matches, in order, including duplicates-by-project: the
+    caller is responsible for refusing to attribute an ambiguous result (see
+    `partition_service._capture_pr_url`, which records `NULL` unless exactly
+    one URL matched). A bounded `deque` means a very long-running process
+    eventually forgets old entries -- which loses a link, never invents one.
+    """
+    with _pr_ledger_lock:
+        entries = list(_pr_ledger)
+    return tuple(
+        url
+        for seq, entry_project, _branch, url in entries
+        if seq > mark and (project is None or entry_project == project)
+    )
+
+
 def create_pr(
     *, project: ProjectConfig, branch: str, git: GitActions, task_result: str | None = None
-) -> None:
+) -> str | None:
     """Open a pull request via the project's forge provider (developer-opens-PR flow).
+
+    Returns the PR's URL when the forge reported one, else ``None``
+    (propose -> ratify -> dispatch PRD, spec §8 -- `ForgeProvider.open_pr` is
+    widened to ``-> str | None``). A provider that cannot cheaply produce the
+    URL returns ``None`` and the partition journal shows "—";
+    **never a fabricated URL**. The return value is additive: every
+    pre-existing caller ignores it and is unaffected.
 
     Phase 1 (forge plugin type): thin wrapper around
     ``resolve_forge(project).open_pr`` -- for ``forge: "github"`` (every
@@ -399,8 +471,17 @@ def create_pr(
         effective_git = (
             git if body_path is None else git.model_copy(update={"pr_body_file": str(body_path)})
         )
-        resolve_forge(project).open_pr(project=project, branch=branch, git=effective_git)
+        raw_url = resolve_forge(project).open_pr(project=project, branch=branch, git=effective_git)
     _publish_pr_ready_best_effort(project, branch, "opened")
+    # A provider written against the PRE-widening `-> None` signature (an
+    # out-of-tree forge plugin, or a test double) returns `None`, and a
+    # `MagicMock` double returns a mock -- neither is a URL. Only a genuine
+    # string is ever ledgered, so the journal can never learn a fabricated
+    # link from a stale plugin.
+    pr_url = raw_url if isinstance(raw_url, str) and raw_url.strip() else None
+    if pr_url is not None:
+        record_pr_opened(project=project.path.name, branch=branch, url=pr_url)
+    return pr_url
 
 
 def promote_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
