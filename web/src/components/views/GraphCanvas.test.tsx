@@ -41,4 +41,53 @@ describe('GraphCanvas source', () => {
     expect(source).toMatch(/flow-edge-path/)
     expect(source).not.toContain('matchMedia')
   })
+
+  it('Pollen cascade rebuild: edges are orthogonal (getSmoothStepPath, borderRadius 0), never a bezier curve', () => {
+    expect(source).toMatch(/getSmoothStepPath/)
+    expect(source).toMatch(/borderRadius:\s*0/)
+    expect(source).not.toContain('getBezierPath')
+  })
+
+  it('Pollen cascade rebuild: particle motion + its static reduced-motion fallback are both PURELY CSS-class-gated, never a JS matchMedia check', () => {
+    expect(source).toMatch(/graph-particle-motion/)
+    expect(source).toMatch(/graph-particle-static/)
+    expect(source).not.toContain('matchMedia')
+  })
+
+  it('Pollen cascade rebuild: particles only render on active (currently-running) edges, and particle count is derived from real token data, never a fabricated throughput number', () => {
+    expect(source).toMatch(/active\s*&&/)
+    expect(source).toMatch(/particleCountFor/)
+  })
+
+  it('Pollen cascade rebuild: a dead (post-failure) edge renders muted/glow-less — the cascade dead end is the information', () => {
+    expect(source).toMatch(/dead/)
+    expect(source).toMatch(/color-muted-foreground/)
+  })
+
+  it('Pollen cascade rebuild: a skipped stage renders dimmed but present, never hidden', () => {
+    expect(source).toMatch(/isSkipped/)
+    expect(source).toMatch(/opacity-60/)
+    expect(source).not.toMatch(/status === 'skipped'\)\s*return null/)
+  })
+
+  it('Pollen cascade rebuild: monospace typography throughout the canvas (node names, kind label, legend, hint text)', () => {
+    expect(source.match(/font-mono/g)?.length ?? 0).toBeGreaterThanOrEqual(4)
+  })
+
+  it('Pollen cascade rebuild: color-by supports role in addition to status/kind', () => {
+    expect(source).toMatch(/'status' \| 'kind' \| 'role'/)
+  })
+
+  it('Pollen cascade rebuild: edge labels render via EdgeLabelRenderer (throughput/duration written on the edge itself)', () => {
+    expect(source).toMatch(/EdgeLabelRenderer/)
+  })
+
+  it('Pollen cascade rebuild: a status/legend + chrome hint text are rendered on the canvas', () => {
+    expect(source).toMatch(/graph-legend/)
+    expect(source).toMatch(/graph-canvas-hint/)
+  })
+
+  it('Pollen cascade rebuild: nodes are draggable (onNodesChange wired), matching the "drag nodes to arrange" hint', () => {
+    expect(source).toMatch(/onNodesChange/)
+  })
 })

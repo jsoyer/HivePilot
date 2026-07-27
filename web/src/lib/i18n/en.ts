@@ -166,6 +166,16 @@ export const en = {
   'graph.colorBy': 'Color by',
   'graph.colorByStatus': 'Status',
   'graph.colorByKind': 'Kind',
+  'graph.colorByRole': 'Role',
+  'graph.run': 'Run',
+  'graph.latestRun': 'Latest run',
+  'graph.live': 'Live',
+  'graph.reload': 'Reload',
+  'graph.canvasHint': 'drag nodes to arrange · scroll to zoom',
+  'graph.statusSuccess': 'success',
+  'graph.statusRunning': 'running',
+  'graph.statusSkipped': 'skipped',
+  'graph.statusFailed': 'failed',
 
   // ---- Mem0 view ---------------------------------------------------------
   'mem0.title': 'Mem0 memory search',

@@ -2078,6 +2078,7 @@ def _graph_data_to_dict(data: graph_module.GraphData) -> dict[str, Any]:
         "nodes": [_graph_node_to_dict(n) for n in data.nodes],
         "edges": [_graph_edge_to_dict(e) for e in data.edges],
         "layout_hint": data.layout_hint,
+        "meta": dict(data.meta),
     }
 
 

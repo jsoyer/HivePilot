@@ -85,6 +85,17 @@ class TestGraphData:
         assert data.nodes == ()
         assert data.edges == ()
         assert data.layout_hint is None
+        assert data.meta == {}
+
+    def test_meta_full(self):
+        # Pollen graph-cascade rebuild: `GraphData.meta` is a generic,
+        # arbitrary per-source extensibility hook (mirrors `GraphNode.meta`)
+        # — e.g. the `pipeline` source uses it to expose a run selector
+        # (`runs`/`selected_run_id`) and a `live` hint, WITHOUT hardcoding
+        # those concepts into this closed dataclass shape. Any source, or
+        # none, may populate it.
+        data = GraphData(source="s", meta={"runs": [{"id": 1}], "live": True})
+        assert data.meta == {"runs": [{"id": 1}], "live": True}
 
 
 class TestGraphDetail:
@@ -200,6 +211,22 @@ class TestNormalizeGraphData:
         result = normalize_graph_data(GraphData(source="s", layout_hint=None))
         assert result.layout_hint is None
 
+    def test_meta_passthrough(self):
+        result = normalize_graph_data(GraphData(source="s", meta={"live": True}))
+        assert result.meta == {"live": True}
+
+    def test_bad_meta_type_raises(self):
+        with pytest.raises(GraphDataError):
+            normalize_graph_data(GraphData(source="s", meta="not-a-mapping"))  # type: ignore[arg-type]
+
+    def test_non_json_serializable_meta_value_is_stringified(self):
+        class _Unserializable:
+            def __repr__(self) -> str:
+                return "<unserializable>"
+
+        result = normalize_graph_data(GraphData(source="s", meta={"bad": _Unserializable()}))
+        assert result.meta["bad"] == "<unserializable>"
+
 
 # ---------------------------------------------------------------------------
 # run_graph_fetch — never-raise discipline
@@ -245,6 +272,23 @@ class TestRunGraphFetch:
         ctx = GraphContext(tenant="default", role="read")
         result = run_graph_fetch(spec, ctx)
         assert result.source == "alpha"
+
+    def test_meta_passthrough_on_happy_path(self):
+        spec = GraphSourceSpec(
+            name="alpha", data=lambda ctx: GraphData(source="alpha", meta={"live": True})
+        )
+        ctx = GraphContext(tenant="default", role="read")
+        result = run_graph_fetch(spec, ctx)
+        assert result.meta == {"live": True}
+
+    def test_meta_empty_on_error_path(self):
+        def _boom(ctx: GraphContext) -> GraphData:
+            raise RuntimeError("boom")
+
+        spec = GraphSourceSpec(name="broken", data=_boom)
+        ctx = GraphContext(tenant="default", role="read")
+        result = run_graph_fetch(spec, ctx)
+        assert result.meta == {}
 
     def test_non_json_serializable_meta_value_never_raises_downstream(self):
         """Regression: `GraphNode.meta` passed shape validation (a Mapping)

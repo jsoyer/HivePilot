@@ -1,7 +1,8 @@
 import {
   BaseEdge,
   Controls,
-  getBezierPath,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
   Handle,
   MiniMap,
   Position,
@@ -9,67 +10,104 @@ import {
   type Edge,
   type EdgeProps,
   type Node,
+  type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
-import { useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useT } from '@/lib/i18n'
 import type { GraphEdge, GraphNode } from '@/lib/pollen-api'
 
 const CARD_WIDTH = 220
-const CARD_HEIGHT = 88
+const CARD_HEIGHT = 104
 const GRID_GAP_X = 48
 const GRID_GAP_Y = 32
 const GRID_COLUMNS = 4
 /** Cap on how many `GraphNode.meta` entries render as on-card metrics — a
  * source can put arbitrary keys in `meta` (e.g. a `pipeline` source might
  * stash a dozen fields there); the card is a compact 220px readout, not a
- * full detail view (that's `GraphDetail`'s `PanelRenderer` pane). */
-const MAX_NODE_METRICS = 3
+ * full detail view (that's `GraphDetail`'s `PanelRenderer` pane). Bumped
+ * from 3 to 4 (Pollen graph-cascade rebuild) to fit the `pipeline` source's
+ * `model`/`tokens`/`cost`/`duration` quartet — the Pollen translation of the
+ * reference mockup's 4-column `REQ/S ERR% AVG PODS` card table. */
+const MAX_NODE_METRICS = 4
+/** `task`/`role` are real `GraphNode.meta` entries the `pipeline` source
+ * also sets, but they're rendered elsewhere on the card (role -> a badge
+ * chip, task -> only in the full `GraphDetail` pane) — excluded here so
+ * they never crowd out the 4-column metrics table on a source that has
+ * more to say than fits. Generic: harmless for any OTHER source that
+ * happens not to use these exact key names. */
+const CARD_METRIC_BLOCKLIST = new Set(['task', 'role'])
 
-/** visual identity: node/edge coloring can be driven by either `status`
- * (health-oriented) or `kind` (category-oriented) — a small control in
- * `GraphView` toggles this per source, matching the reference mockup's
- * "color by" HUD chip. */
-export type GraphColorBy = 'status' | 'kind'
+/** visual identity: node/edge coloring can be driven by `status` (health-
+ * oriented), `kind` (category-oriented), or `role` (which agent/task role
+ * executed this stage) — a small control in `GraphView` toggles this per
+ * source, matching the reference mockup's "COLOR BY: Service" HUD chip.
+ * `role` reads `GraphNode.meta.role` (set by the `pipeline` source); a node
+ * with no role falls back to the same neutral treatment as an absent
+ * status/kind. */
+export type GraphColorBy = 'status' | 'kind' | 'role'
 
-/** `GraphNode.status` -> a `--chart-*` token (see `src/index.css`) for the
- * small status dot — deliberately reuses the SAME closed set of design
- * tokens every other Pollen view already draws from, no new palette. Any
- * unrecognized/absent status falls back to `--muted-foreground` (a neutral
- * dot, not an alarming color) rather than guessing. */
-function statusDotClass(status: string | null): string {
-  if (status === 'ok' || status === 'success' || status === 'healthy') return 'bg-(--chart-1)'
-  if (status === 'warn' || status === 'degraded' || status === 'pending') return 'bg-(--chart-3)'
-  if (status === 'error' || status === 'failed') return 'bg-destructive'
-  return 'bg-muted-foreground'
+/** `GraphNode.status` -> a `--color-*` design token for the status dot —
+ * reuses the SAME good/warn/crit/idle status-semantics palette every other
+ * Pollen viz primitive (Sparkline/Gauge/BurnRibbon/RunBoardView) already
+ * draws from, rather than the generic chart-N categorical palette (this
+ * file's pre-"Service Map" version used `--chart-1..5` for status, which
+ * was inconsistent with the rest of the dashboard). `running` — a status
+ * that didn't exist before this rebuild — uses `--color-primary` (an
+ * active/live accent, distinct from the four closed good/warn/crit/idle
+ * slots); `skipped`/`pending`/`warn` all read as neutral `idle`. Any
+ * unrecognized/absent status falls back to `--color-muted-foreground` (a
+ * neutral dot, not an alarming color) rather than guessing. */
+function statusColorVar(status: string | null): string {
+  if (status === 'ok' || status === 'success' || status === 'healthy') return '--color-good'
+  if (status === 'running') return '--color-primary'
+  if (status === 'error' || status === 'failed') return '--color-crit'
+  if (status === 'skipped' || status === 'pending' || status === 'warn' || status === 'degraded') {
+    return '--color-idle'
+  }
+  return '--color-muted-foreground'
 }
 
-/** `GraphNode.kind` -> a deterministic `--chart-*` slot, cycling the SAME
+/** A stable, deterministic string -> `--chart-*` slot, cycling the SAME
  * 5-color palette `DistributionBar`/`BurnRibbon` already cycle by index —
- * a stable string hash (not array index, which would shift every color
- * whenever the node list re-orders) so the SAME kind always draws the SAME
- * color across renders/sources. */
-const KIND_DOT_CLASSES = ['bg-(--chart-1)', 'bg-(--chart-2)', 'bg-(--chart-3)', 'bg-(--chart-4)', 'bg-(--chart-5)']
-const KIND_COLOR_VARS = [
+ * a hash (not array index, which would shift every color whenever the node
+ * list re-orders) so the SAME kind/role always draws the SAME color across
+ * renders/sources. Shared by both `kind` and `role` color-by modes. */
+const CATEGORY_COLOR_VARS = [
   '--color-chart-1',
   '--color-chart-2',
   '--color-chart-3',
   '--color-chart-4',
   '--color-chart-5',
 ]
-function hashKind(kind: string): number {
+function hashString(value: string): number {
   let hash = 0
-  for (let i = 0; i < kind.length; i++) hash = (hash * 31 + kind.charCodeAt(i)) >>> 0
+  for (let i = 0; i < value.length; i++) hash = (hash * 31 + value.charCodeAt(i)) >>> 0
   return hash
 }
-function kindDotClass(kind: string): string {
-  return KIND_DOT_CLASSES[hashKind(kind) % KIND_DOT_CLASSES.length]
+function categoryColorVar(value: string): string {
+  return CATEGORY_COLOR_VARS[hashString(value) % CATEGORY_COLOR_VARS.length]
 }
-function kindColorVar(kind: string): string {
-  return KIND_COLOR_VARS[hashKind(kind) % KIND_COLOR_VARS.length]
+
+/** Resolves the `--color-*` CSS variable name driving BOTH a node's status
+ * dot and its outgoing edges' glow color, for the given `colorBy` mode.
+ * `role` reads `GraphNode.meta.role` (a plain string the `pipeline` source
+ * sets); an absent/non-string role falls back to the neutral muted color,
+ * same posture as an absent status. */
+function nodeColorVar(
+  node: { status: string | null; kind: string; meta: Record<string, unknown> },
+  colorBy: GraphColorBy,
+): string {
+  if (colorBy === 'kind') return categoryColorVar(node.kind)
+  if (colorBy === 'role') {
+    const role = typeof node.meta.role === 'string' ? node.meta.role : ''
+    return role ? categoryColorVar(role) : '--color-muted-foreground'
+  }
+  return statusColorVar(node.status)
 }
 
 /** A single on-card metric readout — `[label, formattedValue]`. Only
@@ -81,6 +119,7 @@ function kindColorVar(kind: string): string {
 function nodeMetrics(meta: Record<string, unknown>): [string, string][] {
   const entries: [string, string][] = []
   for (const [key, value] of Object.entries(meta)) {
+    if (CARD_METRIC_BLOCKLIST.has(key)) continue
     if (entries.length >= MAX_NODE_METRICS) break
     if (typeof value === 'string' && value.length > 0) entries.push([key, value])
     else if (typeof value === 'number') entries.push([key, value.toLocaleString('en-US')])
@@ -102,55 +141,81 @@ export interface CardNodeData {
 }
 
 /**
- * Custom react-flow node — a small shadcn `Card` showing the node's label,
- * a `kind` badge, a status/kind dot (per `colorBy`), any declared badges,
- * and — the "Service Map" visual identity upgrade — up to
- * `MAX_NODE_METRICS` real metrics lifted straight from `GraphNode.meta`, in
- * the shared mono/tabular-nums instrument-readout treatment (`metric-mono`,
- * see `src/index.css`) every other Pollen viz primitive uses. The
- * normalized `kind="error"` node (`run_graph_fetch`'s never-raise fallback,
- * `hivepilot/graph.py`) renders with a destructive ring instead of crashing
- * the canvas. All text content here is `GraphNode`-authored and UNTRUSTED
- * (see `pollen-api.ts`'s module note) — plain JSX interpolation only,
- * exactly like `PanelRenderer`; this file must never inject raw markup via
- * React's escape-hatch innerHTML prop.
+ * Custom react-flow node — a small shadcn `Card` in the "Service Map"
+ * layout: a header row (status/kind/role dot + monospace name, right-
+ * aligned monospace `kind` type label) and a body metrics TABLE (a shared
+ * header row of up to `MAX_NODE_METRICS` metric labels, then a shared value
+ * row beneath — a real 2-row grid, matching the reference mockup's
+ * `REQ/S ERR% AVG PODS` card table, not N independent mini stat blocks).
+ * All text content here is `GraphNode`-authored and UNTRUSTED (see
+ * `pollen-api.ts`'s module note) — plain JSX interpolation only, exactly
+ * like `PanelRenderer`; this file must never inject raw markup via React's
+ * escape-hatch innerHTML prop. A `status === "skipped"` node renders
+ * visibly DIMMED (`opacity-60` + a "skipped" badge) rather than hidden —
+ * the operator needs to see a stage was considered and explicitly skipped,
+ * not wonder why it's missing.
  */
 function CardNode({ data }: NodeProps & { data: CardNodeData }) {
-  const dotClass = data.colorBy === 'kind' ? kindDotClass(data.kind) : statusDotClass(data.status)
+  const t = useT()
+  const colorVar = nodeColorVar(data, data.colorBy)
   const metrics = nodeMetrics(data.meta)
+  const isSkipped = data.status === 'skipped'
+  const isPending = data.status === 'pending'
 
   return (
     <Card
       size="sm"
       className={`cursor-pointer bg-card/90 backdrop-blur-sm transition-shadow ${
         data.isError ? 'ring-2 ring-destructive' : data.selected ? 'ring-2 ring-ring' : 'ring-1 ring-(--color-line-2)'
-      }`}
+      } ${isSkipped || isPending ? 'opacity-60' : ''}`}
       style={{ width: CARD_WIDTH }}
       data-testid="graph-card-node"
+      data-status={data.status ?? undefined}
     >
       <Handle type="target" position={Position.Top} className="opacity-0" />
       <CardHeader className="gap-1 px-3 pt-2">
-        <div className="flex items-center gap-1.5">
-          <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${dotClass}`} />
-          <CardTitle className="truncate text-xs">{data.label}</CardTitle>
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="size-2 shrink-0 rounded-full"
+              style={{ backgroundColor: `var(${colorVar})` }}
+            />
+            <CardTitle className="truncate font-mono text-xs">{data.label}</CardTitle>
+          </div>
+          <span className="eyebrow shrink-0 font-mono">{data.kind}</span>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 px-3 pb-2">
-        <div className="flex flex-wrap gap-1">
-          <Badge variant={data.isError ? 'destructive' : 'outline'}>{data.kind}</Badge>
-          {data.badges.map((badge) => (
-            <Badge key={badge} variant="secondary">
-              {badge}
-            </Badge>
-          ))}
-        </div>
+        {(data.badges.length > 0 || isSkipped) && (
+          <div className="flex flex-wrap gap-1">
+            {isSkipped && (
+              <Badge variant="outline" data-testid="graph-card-skipped-badge">
+                {t('graph.statusSkipped')}
+              </Badge>
+            )}
+            {data.badges.map((badge) => (
+              <Badge key={badge} variant="secondary">
+                {badge}
+              </Badge>
+            ))}
+          </div>
+        )}
         {metrics.length > 0 && (
-          <div data-testid="graph-card-node-metrics" className="flex gap-3">
+          <div
+            data-testid="graph-card-node-metrics"
+            className="grid gap-x-2 gap-y-0.5"
+            style={{ gridTemplateColumns: `repeat(${metrics.length}, minmax(0,1fr))` }}
+          >
+            {metrics.map(([label]) => (
+              <span key={`${label}:h`} className="eyebrow truncate font-mono">
+                {label}
+              </span>
+            ))}
             {metrics.map(([label, value]) => (
-              <div key={label} className="flex min-w-0 flex-col gap-0.5">
-                <span className="eyebrow truncate">{label}</span>
-                <span className="metric-mono truncate text-sm">{value}</span>
-              </div>
+              <span key={`${label}:v`} className="metric-mono truncate text-xs">
+                {value}
+              </span>
             ))}
           </div>
         )}
@@ -164,20 +229,57 @@ const nodeTypes = { card: CardNode }
 
 export interface FlowEdgeData {
   colorVar: string
-  [key: string]: unknown
+  /** Whether this edge represents flow currently in transit — see
+   * `FlowEdge`'s docstring. `false` for a completed, skipped, dead
+   * (downstream of a failure), or not-yet-reached edge — a completed run
+   * is a static record, never animated. */
+  active: boolean
+  /** Cascade requirement: "a failed stage must visibly stop the particle
+   * flow — the dead end is the information." Set when this edge's SOURCE
+   * node status is `error`/`failed`; rendered with a muted, non-glowing
+   * stroke instead of the normal colored glow, regardless of `colorVar`. */
+  dead: boolean
+  /** Reasoned density choice (documented constraint: the reference's real
+   * particle density semantics are unknown from still frames) — the
+   * number of particles traveling this edge, derived from REAL token-count
+   * data when available (more tokens moved -> more particles), never a
+   * fabricated throughput number. Always >= 1 for an active edge. */
+  particleCount: number
 }
 
+/** Reasoned motion choices for the "Service Map" cascade — documented here
+ * since the reference gave no motion-speed/density spec (still frames
+ * only): a CONSTANT lap duration for every particle (no data on the
+ * reference's real speed, so no per-edge speed variation is invented), and
+ * particle COUNT (not speed) scales with real per-edge token volume when
+ * known (`FlowEdgeData.particleCount`) — density proportional to activity,
+ * never to a throughput number we don't actually have. */
+const PARTICLE_LAP_SECONDS = 1.6
+
 /**
- * "Service Map" visual identity: an animated glowing flow edge — a
- * bezier path in the edge's `colorVar` color with a moving-dash animation
- * (`.flow-edge-path`, see `src/index.css`) plus a soft `drop-shadow` glow,
- * reading as live data flowing along the edge (matches the reference
- * mockup's `.flow`/glow-underlay treatment). The dash animation is
- * disabled entirely under `prefers-reduced-motion: reduce` (see that CSS
- * rule) — the edge itself, and its color, remain fully visible either way,
- * so reduced-motion never loses information, only movement.
+ * "Service Map" visual identity: an orthogonal (circuit-trace-style),
+ * glowing flow edge — `getSmoothStepPath` with `borderRadius: 0` renders
+ * strict horizontal/vertical segments with 90° corners (the reference
+ * mockup's strongest visual signature), NOT a bezier curve. The path has a
+ * bright core (`flow-edge-path` dash animation, reduced-motion-safe via
+ * the shared CSS rule in `src/index.css` — this file must never duplicate
+ * that with a JS media-query check of its own) plus a soft `colorVar`-tinted
+ * glow.
+ *
+ * Animated particles travel along the path via SVG `<animateMotion>`
+ * referencing the path by id (`mpath`) — rendered ONLY on `data.active`
+ * edges (a completed run is a static record: no motion at all once
+ * finished, per this feature's documented motion policy). Reduced-motion
+ * is handled PURELY in CSS (`.graph-particle-motion` / `.graph-particle-static`,
+ * see `src/index.css`) — never a JS media-query check in this file, same
+ * discipline as the existing `.flow-edge-path` dash animation.
+ *
+ * A `data.dead` edge (downstream of a failed stage) renders muted/glow-less
+ * — the cascade's dead end is the information the operator needs, not a
+ * cosmetic detail to smooth over.
  */
 function FlowEdge({
+  id,
   sourceX,
   sourceY,
   sourcePosition,
@@ -185,21 +287,81 @@ function FlowEdge({
   targetY,
   targetPosition,
   markerEnd,
+  label,
   data,
 }: EdgeProps) {
-  const [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
-  const colorVar = (data as FlowEdgeData | undefined)?.colorVar ?? '--color-primary'
+  const [path, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    borderRadius: 0,
+  })
+  const edgeData = data as FlowEdgeData | undefined
+  const colorVar = edgeData?.colorVar ?? '--color-primary'
+  const dead = edgeData?.dead ?? false
+  const active = edgeData?.active ?? false
+  const particleCount = Math.max(1, edgeData?.particleCount ?? 1)
+  const pathId = `graph-edge-path-${id}`
+
   return (
-    <BaseEdge
-      path={path}
-      markerEnd={markerEnd}
-      className="flow-edge-path"
-      style={{
-        stroke: `var(${colorVar})`,
-        strokeWidth: 1.5,
-        filter: `drop-shadow(0 0 4px var(${colorVar}))`,
-      }}
-    />
+    <>
+      <BaseEdge
+        id={pathId}
+        path={path}
+        markerEnd={markerEnd}
+        className={dead ? '' : 'flow-edge-path'}
+        style={{
+          stroke: dead ? 'var(--color-muted-foreground)' : `var(${colorVar})`,
+          strokeWidth: 1.5,
+          strokeDasharray: dead ? '2 4' : undefined,
+          filter: dead ? undefined : `drop-shadow(0 0 4px var(${colorVar}))`,
+        }}
+      />
+      {active &&
+        Array.from({ length: particleCount }).map((_, index) => (
+          <circle
+            key={index}
+            r={2.5}
+            fill={`var(${colorVar})`}
+            className="graph-particle-motion"
+            data-testid="graph-edge-particle"
+          >
+            <animateMotion
+              dur={`${PARTICLE_LAP_SECONDS}s`}
+              begin={`${(index * PARTICLE_LAP_SECONDS) / particleCount}s`}
+              repeatCount="indefinite"
+            >
+              <mpath href={`#${pathId}`} />
+            </animateMotion>
+          </circle>
+        ))}
+      {active && (
+        <circle
+          cx={labelX}
+          cy={labelY}
+          r={2.5}
+          fill={`var(${colorVar})`}
+          className="graph-particle-static"
+          data-testid="graph-edge-particle-static"
+        />
+      )}
+      {label != null && (
+        <EdgeLabelRenderer>
+          <div
+            className="metric-mono pointer-events-none absolute rounded bg-card/80 px-1 text-[10px] text-muted-foreground"
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY - 12}px)`,
+            }}
+            data-testid="graph-edge-label"
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
   )
 }
 
@@ -248,47 +410,55 @@ function dagLayout(nodes: GraphNode[], edges: GraphEdge[]): Map<string, { x: num
   return positions
 }
 
+/** Real per-edge particle density (see `FlowEdgeData.particleCount`'s
+ * docstring for the honesty constraint this satisfies) — parses the
+ * TARGET node's own real `meta.tokens` value (`"<in>/<out>"`, set by the
+ * `pipeline` source) rather than inventing a throughput number. Absent/
+ * unparseable token data -> the constant baseline of 1 particle. */
+function particleCountFor(targetMeta: Record<string, unknown> | undefined): number {
+  const tokens = targetMeta?.tokens
+  if (typeof tokens !== 'string') return 1
+  const match = /^(\d+)\/(\d+)$/.exec(tokens)
+  if (!match) return 1
+  const total = Number(match[1]) + Number(match[2])
+  if (total > 5000) return 3
+  if (total > 500) return 2
+  return 1
+}
+
 export interface GraphCanvasProps {
   nodes: GraphNode[]
   edges: GraphEdge[]
   layoutHint: string | null
   selectedNodeId: string | null
   onNodeClick: (nodeId: string) => void
-  /** "Service Map" visual identity: drives BOTH the node status dot and
-   * the edge glow color — `'status'` (default) is health-oriented (ok/warn/
-   * error), `'kind'` is category-oriented (a stable color per node/edge
-   * `kind`). See `GraphView`'s color-by toggle. */
+  /** "Service Map" visual identity: drives the node status/role dot and
+   * the edge glow color — `'status'` (default) is health-oriented (ok/
+   * running/skipped/error), `'kind'`/`'role'` are category-oriented (a
+   * stable color per node `kind`/`meta.role`). See `GraphView`'s color-by
+   * toggle. */
   colorBy?: GraphColorBy
 }
 
 /** MiniMap node fill — real CSS custom-property VALUES (not Tailwind
  * classes), since `@xyflow/react`'s `<MiniMap>` renders plain SVG `<rect>`
  * elements via inline styles, not through Tailwind's class scanner. Mirrors
- * `statusDotClass`/`kindDotClass` above exactly, just as literal `var(...)`
- * strings instead of `bg-*` class names. */
+ * `nodeColorVar` above exactly, just as a literal `var(...)` string. */
 function minimapNodeColor(node: Node, colorBy: GraphColorBy): string {
   const data = node.data as CardNodeData
-  if (colorBy === 'kind') return `var(${kindColorVar(data.kind)})`
-  if (data.status === 'ok' || data.status === 'success' || data.status === 'healthy') return 'var(--color-chart-1)'
-  if (data.status === 'warn' || data.status === 'degraded' || data.status === 'pending') return 'var(--color-chart-3)'
-  if (data.status === 'error' || data.status === 'failed') return 'var(--color-destructive)'
-  return 'var(--color-muted-foreground)'
+  return `var(${nodeColorVar(data, colorBy)})`
 }
 
 /**
  * Pannable/zoomable card-node canvas (`@xyflow/react`) — `GraphView`'s
  * rendering layer, kept in its own file so layout math stays testable in
- * isolation from data-fetch/filter state. Read-only: no `onNodesChange` /
- * `onEdgesChange` wiring, so nodes never become draggable — pan/zoom/fit
- * (native react-flow viewport behavior) still work regardless.
+ * isolation from data-fetch/filter state.
  *
- * "Service Map" visual restyle: a faint dot-grid canvas background
- * (`bg-grid-dot`, see `src/index.css`), animated glowing `flow` edges
- * (colored by `colorBy`, see `FlowEdge` above) instead of plain lines, node
- * cards that surface real `meta` metrics, and a restyled `MiniMap`
- * (glass panel + status/kind-colored node dots) — all built entirely from
- * the EXISTING `/v1/graph/*` data this component already consumed; no new
- * data source.
+ * Nodes are draggable (`onNodesChange` wired to a local drag-override map,
+ * merged over the computed dagre/grid layout) — matches the reference
+ * mockup's "drag nodes to arrange" hint text; a fresh data fetch keeps any
+ * still-relevant drag positions rather than snapping everything back, since
+ * they're keyed by node id, not by array index.
  */
 export function GraphCanvas({
   nodes,
@@ -298,17 +468,34 @@ export function GraphCanvas({
   onNodeClick,
   colorBy = 'status',
 }: GraphCanvasProps) {
+  const t = useT()
   const positions = useMemo(
     () => (layoutHint === 'dag' ? dagLayout(nodes, edges) : gridLayout(nodes)),
     [nodes, edges, layoutHint],
   )
+
+  const [dragOverrides, setDragOverrides] = useState<Map<string, { x: number; y: number }>>(new Map())
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    setDragOverrides((prev) => {
+      let next = prev
+      for (const change of changes) {
+        if (change.type === 'position' && change.position) {
+          if (next === prev) next = new Map(prev)
+          next.set(change.id, change.position)
+        }
+      }
+      return next
+    })
+  }, [])
+
+  const nodesById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
 
   const flowNodes = useMemo<Node[]>(
     () =>
       nodes.map((node) => ({
         id: node.id,
         type: 'card',
-        position: positions.get(node.id) ?? { x: 0, y: 0 },
+        position: dragOverrides.get(node.id) ?? positions.get(node.id) ?? { x: 0, y: 0 },
         data: {
           label: node.label,
           kind: node.kind,
@@ -320,39 +507,45 @@ export function GraphCanvas({
           colorBy,
         } satisfies CardNodeData,
       })),
-    [nodes, positions, selectedNodeId, colorBy],
+    [nodes, positions, dragOverrides, selectedNodeId, colorBy],
   )
 
   const flowEdges = useMemo<Edge[]>(
     () =>
-      edges.map((edge, index) => ({
-        id: `${edge.source}->${edge.target}-${index}`,
-        source: edge.source,
-        target: edge.target,
-        label: edge.label ?? undefined,
-        type: 'flow',
-        data: {
-          colorVar: colorBy === 'kind' && edge.kind ? kindColorVar(edge.kind) : '--color-primary',
-        } satisfies FlowEdgeData,
-      })),
-    [edges, colorBy],
+      edges.map((edge, index) => {
+        const sourceNode = nodesById.get(edge.source)
+        const targetNode = nodesById.get(edge.target)
+        const dead = sourceNode?.status === 'error' || sourceNode?.status === 'failed'
+        const active = !dead && targetNode?.status === 'running'
+        return {
+          id: `${edge.source}->${edge.target}-${index}`,
+          source: edge.source,
+          target: edge.target,
+          label: edge.label ?? undefined,
+          type: 'flow',
+          data: {
+            colorVar: nodeColorVar(targetNode ?? { status: null, kind: '', meta: {} }, colorBy),
+            active,
+            dead,
+            particleCount: particleCountFor(targetNode?.meta),
+          } satisfies FlowEdgeData,
+        }
+      }),
+    [edges, colorBy, nodesById],
   )
 
   return (
-    // Mobile-first: `@xyflow/react` needs an explicit height on its own
-    // wrapper — it can't infer one from a grid/flex sibling (`GraphView`'s
-    // detail pane) the way ordinary block content can. Below `lg:` this
-    // uses a viewport-relative height (a fixed px height would be way too
-    // tall on a short phone screen, or too short on a tall one); at `lg:`
-    // it's pinned back to the original `600px` desktop height so desktop
-    // stays pixel-identical to before.
-    <div className="bg-grid-dot h-[60vh] w-full overflow-hidden rounded-lg border border-border lg:h-[600px]">
+    <div
+      className="bg-grid-dot relative h-[60vh] w-full overflow-hidden rounded-lg border border-border lg:h-[600px]"
+      data-testid="graph-canvas-wrapper"
+    >
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={(_event, node) => onNodeClick(node.id)}
+        onNodesChange={onNodesChange}
         fitView
         proOptions={{ hideAttribution: true }}
       >
@@ -369,6 +562,35 @@ export function GraphCanvas({
           className="rounded-md! border border-border bg-card/80!"
         />
       </ReactFlow>
+      <p
+        className="eyebrow pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 font-mono"
+        data-testid="graph-canvas-hint"
+      >
+        {t('graph.canvasHint')}
+      </p>
+      <div
+        className="pointer-events-none absolute top-2 left-2 flex flex-wrap gap-x-3 gap-y-1 rounded-md bg-card/70 px-2 py-1 font-mono text-[10px] backdrop-blur-sm"
+        data-testid="graph-legend"
+      >
+        {(['ok', 'running', 'skipped', 'error'] as const).map((status) => (
+          <span key={status} className="flex items-center gap-1">
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full"
+              style={{ backgroundColor: `var(${statusColorVar(status)})` }}
+            />
+            {t(
+              status === 'ok'
+                ? 'graph.statusSuccess'
+                : status === 'running'
+                  ? 'graph.statusRunning'
+                  : status === 'skipped'
+                    ? 'graph.statusSkipped'
+                    : 'graph.statusFailed',
+            )}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }

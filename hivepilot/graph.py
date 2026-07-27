@@ -85,12 +85,25 @@ class GraphData:
     plus an optional rendering hint. `source` is always the emitting
     source's own registered `name` — `run_graph_fetch` sets it
     unconditionally (see below), so a source's own `data` callable never
-    needs to (and can't spoof) a different value."""
+    needs to (and can't spoof) a different value.
+
+    `meta` (Pollen graph-cascade rebuild) is a generic, arbitrary,
+    JSON-safe per-source extensibility hook — the SOURCE-level analogue of
+    `GraphNode.meta` — for chrome a consumer (the web renderer) may want to
+    render OUTSIDE the node/edge graph itself without inventing a new
+    hardcoded concept in this closed dataclass every time a new source needs
+    one. The built-in `pipeline` source, for example, uses it to expose a
+    run selector (`runs`: a list of recent run summaries for this pipeline)
+    plus `selected_run_id`/`live` (whether the selected run is still
+    in-flight) — see `hivepilot/graph_sources/pipeline_source.py`. A source
+    that has nothing extra to say simply leaves this at its default `{}`,
+    exactly like every source before this field existed."""
 
     source: str
     nodes: tuple[GraphNode, ...] = ()
     edges: tuple[GraphEdge, ...] = ()
     layout_hint: str | None = None
+    meta: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,7 +322,12 @@ def normalize_graph_data(raw: Any) -> GraphData:
     edges = tuple(_coerce_edge(e) for e in raw.edges)
     if raw.layout_hint is not None and raw.layout_hint not in GRAPH_LAYOUT_HINTS:
         raise GraphDataError(f"invalid layout_hint: {raw.layout_hint!r}")
-    return GraphData(source=raw.source, nodes=nodes, edges=edges, layout_hint=raw.layout_hint)
+    if not isinstance(raw.meta, Mapping):
+        raise GraphDataError("GraphData.meta must be a mapping")
+    safe_meta = _json_safe_meta(raw.meta)
+    return GraphData(
+        source=raw.source, nodes=nodes, edges=edges, layout_hint=raw.layout_hint, meta=safe_meta
+    )
 
 
 def run_graph_fetch(spec: GraphSourceSpec, ctx: GraphContext) -> GraphData:
@@ -331,6 +349,7 @@ def run_graph_fetch(spec: GraphSourceSpec, ctx: GraphContext) -> GraphData:
             nodes=normalized.nodes,
             edges=normalized.edges,
             layout_hint=normalized.layout_hint,
+            meta=normalized.meta,
         )
     except Exception as exc:  # noqa: BLE001 — a graph source fetch must never crash
         logger.warning("graph.fetch_failed", source=spec.name, error=str(exc))
