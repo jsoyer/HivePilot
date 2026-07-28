@@ -709,7 +709,19 @@ class _PendingOffer:
     already `_clamp`-validated and destructive, so answering "yes" hands it
     straight to the caller's ordinary destructive-confirmation path (the
     operator sees exactly WHAT will run before it runs) — an affirmative
-    resolves the offer, it does not bypass any gate."""
+    resolves the offer, it does not bypass any gate.
+
+    NOT migrated onto `hivepilot.services.pending_confirmation.
+    PendingConfirmationStore` (extracted later, closing the THIRD instance of
+    this exact owner+TTL bug class in the bot modules' `_pending_concierge`,
+    and the FOURTH/FIFTH in `telegram_bot._pending_challenges` /
+    `chatops_service._pending_concierge_text`): this implementation is
+    correct, shipped, and has its own comprehensive test coverage — the
+    churn/regression risk of rewriting a working owner+TTL primitive
+    outweighs the DRY benefit. If you are about to add ANOTHER hand-rolled
+    owner+TTL pending-confirmation dict anywhere in this codebase, STOP: use
+    `PendingConfirmationStore` instead of copying the shape below.
+    """
 
     conversation_id: str
     owner_id: str

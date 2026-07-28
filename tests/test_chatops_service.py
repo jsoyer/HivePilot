@@ -153,6 +153,8 @@ class TestDispatchConciergeOn:
     """`chatops_concierge_enabled=True` — free text that doesn't match a known
     command is classified via `concierge_service.route`."""
 
+    _REQUESTER = "user-1"
+
     def test_answer_kind_returned_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
         from hivepilot.services.concierge_service import ConciergeDecision
@@ -181,11 +183,13 @@ class TestDispatchConciergeOn:
         )
         with patch("hivepilot.services.concierge_service.route", return_value=decision):
             result = chatops_service._dispatch(
-                "ask", ["gustave", "to", "fix", "it"], source="signal"
+                "ask", ["gustave", "to", "fix", "it"], source="signal", requester_id=self._REQUESTER
             )
         assert "yes" in result.lower() and "no" in result.lower()
         assert "signal" in chatops_service._pending_concierge_text
-        token, pending_decision = chatops_service._pending_concierge_text["signal"]
+        resolved = chatops_service._pending_concierge_text.resolve("signal", self._REQUESTER)
+        assert resolved is not None
+        token, pending_decision = resolved
         assert pending_decision == decision
         assert token in result
 
@@ -200,14 +204,18 @@ class TestDispatchConciergeOn:
             order="fix it",
             destructive=True,
         )
-        chatops_service._pending_concierge_text["signal"] = ("tok123", decision)
+        chatops_service._pending_concierge_text.store(
+            "signal", self._REQUESTER, ("tok123", decision)
+        )
         orch = MagicMock()
         with (
             patch.object(chatops_service, "_get_orchestrator", return_value=orch),
             patch("hivepilot.roles.get_role") as mock_get_role,
         ):
             mock_get_role.return_value = MagicMock(command_task="developer")
-            result = chatops_service._dispatch("yes", ["tok123"], source="signal")
+            result = chatops_service._dispatch(
+                "yes", ["tok123"], source="signal", requester_id=self._REQUESTER
+            )
         orch.run_task.assert_called_once()
         assert orch.run_task.call_args.kwargs["project_names"] == ["acme"]
         assert orch.run_task.call_args.kwargs["task_name"] == "developer"
@@ -219,10 +227,14 @@ class TestDispatchConciergeOn:
         from hivepilot.services.concierge_service import ConciergeDecision
 
         decision = ConciergeDecision(kind="action", action="run", destructive=True)
-        chatops_service._pending_concierge_text["signal"] = ("realtoken", decision)
+        chatops_service._pending_concierge_text.store(
+            "signal", self._REQUESTER, ("realtoken", decision)
+        )
         orch = MagicMock()
         with patch.object(chatops_service, "_get_orchestrator", return_value=orch):
-            chatops_service._dispatch("yes", ["wrongtoken"], source="signal")
+            chatops_service._dispatch(
+                "yes", ["wrongtoken"], source="signal", requester_id=self._REQUESTER
+            )
         orch.run_task.assert_not_called()
         orch.run_pipeline.assert_not_called()
         assert "signal" in chatops_service._pending_concierge_text  # left untouched
@@ -232,8 +244,8 @@ class TestDispatchConciergeOn:
         from hivepilot.services.concierge_service import ConciergeDecision
 
         decision = ConciergeDecision(kind="action", action="run", destructive=True)
-        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
-        result = chatops_service._dispatch("no", [], source="signal")
+        chatops_service._pending_concierge_text.store("signal", self._REQUESTER, ("tok", decision))
+        result = chatops_service._dispatch("no", [], source="signal", requester_id=self._REQUESTER)
         assert "signal" not in chatops_service._pending_concierge_text
         assert result
 
@@ -246,12 +258,12 @@ class TestDispatchConciergeOn:
         decision = ConciergeDecision(
             kind="action", action="approve", params={"run_id": 42}, destructive=True
         )
-        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
+        chatops_service._pending_concierge_text.store("signal", self._REQUESTER, ("tok", decision))
         calls: list[str] = []
         monkeypatch.setattr(chatops_service, "_verify", lambda required: calls.append(required))
         orch = MagicMock()
         with patch.object(chatops_service, "_get_orchestrator", return_value=orch):
-            chatops_service._dispatch("yes", ["tok"], source="signal")
+            chatops_service._dispatch("yes", ["tok"], source="signal", requester_id=self._REQUESTER)
         assert "approve" in calls
         orch.approve_run.assert_called_once_with(
             run_id=42, approve=True, approver="signal", reason=None
@@ -259,6 +271,206 @@ class TestDispatchConciergeOn:
 
     def teardown_method(self, method) -> None:
         chatops_service._pending_concierge_text.clear()
+
+
+class TestPendingConciergeTextOwnerBinding:
+    """Bug class #5 (`chatops_service._pending_concierge_text`): the shared
+    `_dispatch` signature used to have NO per-sender identity at all, so a
+    pending confirmation was keyed by SOURCE ONLY — any Slack user hitting
+    `/chatops/slack` could resolve/cancel ANY other Slack user's pending
+    destructive decision on that same endpoint. `PendingConfirmationStore`
+    now binds every entry to a per-source `requester_id`, threaded in by
+    each `handle_*` entry point."""
+
+    _OWNER = "owner-1"
+    _STRANGER = "stranger-2"
+
+    def _decision(self):
+        from hivepilot.services.concierge_service import ConciergeDecision
+
+        return ConciergeDecision(kind="action", action="run", destructive=True)
+
+    def _executable_decision(self):
+        """A decision that, once confirmed, actually calls `orch.run_task`
+        (unlike `_decision()`'s bare `action="run"` with no `params`, which
+        stops early on a "Missing task name" guard) — needed to prove the
+        real owner's confirmation REACHES execution, not merely that a
+        stranger's doesn't."""
+        from hivepilot.services.concierge_service import ConciergeDecision
+
+        return ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix it", destructive=True
+        )
+
+    def test_different_requester_yes_does_not_execute_and_entry_survives(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The core F5 regression this migration closes: a DIFFERENT
+        requester on the SAME source answering "yes <token>" must never
+        execute someone else's pending decision, and the real owner must
+        still be able to confirm it afterward."""
+        monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
+        decision = self._executable_decision()
+        chatops_service._pending_concierge_text.store("slack", self._OWNER, ("tok", decision))
+        orch = MagicMock()
+        with (
+            patch.object(chatops_service, "_get_orchestrator", return_value=orch),
+            patch("hivepilot.roles.get_role", return_value=MagicMock(command_task="developer")),
+        ):
+            chatops_service._dispatch("yes", ["tok"], source="slack", requester_id=self._STRANGER)
+            orch.run_task.assert_not_called()
+            assert "slack" in chatops_service._pending_concierge_text
+
+            # The real owner can still confirm it afterward (regression guard).
+            chatops_service._dispatch("yes", ["tok"], source="slack", requester_id=self._OWNER)
+        orch.run_task.assert_called_once()
+        assert "slack" not in chatops_service._pending_concierge_text
+
+    def test_different_requester_no_does_not_cancel(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A stranger's "no" must not be able to CANCEL someone else's
+        pending decision either — that's a denial-of-service against the
+        real owner, not just an authorization bypass."""
+        monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
+        decision = self._decision()
+        chatops_service._pending_concierge_text.store("slack", self._OWNER, ("tok", decision))
+        chatops_service._dispatch("no", [], source="slack", requester_id=self._STRANGER)
+        assert "slack" in chatops_service._pending_concierge_text
+
+    def test_missing_requester_id_stores_nothing_fail_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A source that cannot supply a requester id (e.g. a caller that
+        never threaded one through) must never fall back to the old
+        "one shared pending decision per source" behaviour — `store()`
+        records nothing at all."""
+        monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
+        from hivepilot.services.concierge_service import ConciergeDecision
+
+        decision = ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix it", destructive=True
+        )
+        with patch("hivepilot.services.concierge_service.route", return_value=decision):
+            chatops_service._dispatch("ask", ["gustave"], source="slack", requester_id=None)
+        assert "slack" not in chatops_service._pending_concierge_text
+
+    def test_expired_pending_falls_through_to_concierge_classification(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An abandoned confirmation must not remain resolvable forever —
+        once expired, "yes"/"no" text falls through and is classified as
+        ordinary text (never executed) instead of dangling indefinitely."""
+        monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
+        decision = self._decision()
+        chatops_service._pending_concierge_text.store("slack", self._OWNER, ("tok", decision))
+        # White-box: force expiry (mirrors test_pending_confirmation.py's
+        # own approach to testing TTL expiry deterministically).
+        existing = chatops_service._pending_concierge_text._pending["slack"]
+        chatops_service._pending_concierge_text._pending["slack"] = existing.__class__(
+            owner_id=existing.owner_id, payload=existing.payload, expires_at=0.0
+        )
+        orch = MagicMock()
+        from hivepilot.services.concierge_service import ConciergeDecision
+
+        fallthrough_decision = ConciergeDecision(kind="answer", answer_text="not an answer to that")
+        with (
+            patch.object(chatops_service, "_get_orchestrator", return_value=orch),
+            patch(
+                "hivepilot.services.concierge_service.route",
+                return_value=fallthrough_decision,
+            ) as mock_route,
+        ):
+            result = chatops_service._dispatch(
+                "yes", ["tok"], source="slack", requester_id=self._OWNER
+            )
+        orch.run_task.assert_not_called()
+        orch.run_pipeline.assert_not_called()
+        mock_route.assert_called_once()  # fell through to ordinary classification
+        assert result == "not an answer to that"
+        # Dropped as a side effect of the expired resolve().
+        assert "slack" not in chatops_service._pending_concierge_text
+
+    def teardown_method(self, method) -> None:
+        chatops_service._pending_concierge_text.clear()
+
+
+class TestPerSourceRequesterIdExtraction:
+    """`_slack_requester_id`/`_discord_requester_id`/`_telegram_requester_id`/
+    `_signal_requester_id` — must never raise on a malformed/missing payload
+    (the `/chatops/*` endpoints are internet-facing webhooks), and must
+    return the SAME sender identity `_pending_concierge_text` binds owner
+    to."""
+
+    def test_slack_requester_id_reads_user_id(self) -> None:
+        assert chatops_service._slack_requester_id({"user_id": "U123"}) == "U123"
+
+    def test_slack_requester_id_missing_returns_none(self) -> None:
+        assert chatops_service._slack_requester_id({}) is None
+        assert chatops_service._slack_requester_id({"user_id": ""}) is None
+
+    def test_discord_requester_id_reads_author_id(self) -> None:
+        assert chatops_service._discord_requester_id({"author": {"id": "D456"}}) == "D456"
+
+    def test_discord_requester_id_missing_or_malformed_returns_none(self) -> None:
+        assert chatops_service._discord_requester_id({}) is None
+        assert chatops_service._discord_requester_id({"author": "not-a-dict"}) is None
+        assert chatops_service._discord_requester_id({"author": {}}) is None
+
+    def test_telegram_requester_id_reads_from_id(self) -> None:
+        assert chatops_service._telegram_requester_id({"from": {"id": 789}}) == "789"
+
+    def test_telegram_requester_id_missing_or_malformed_returns_none(self) -> None:
+        assert chatops_service._telegram_requester_id({}) is None
+        assert chatops_service._telegram_requester_id({"from": "not-a-dict"}) is None
+
+    def test_signal_requester_id_reads_sender(self) -> None:
+        assert chatops_service._signal_requester_id({"sender": "+15551234567"}) == "+15551234567"
+
+    def test_signal_requester_id_missing_returns_none(self) -> None:
+        assert chatops_service._signal_requester_id({"text": "hello"}) is None
+
+
+class TestHandlersThreadRequesterIdIntoDispatch:
+    """Each webhook entry point must extract its own platform's sender id
+    and thread it into `_dispatch` — this is the wiring that makes
+    `_pending_concierge_text`'s owner binding actually bind to the RIGHT
+    person end-to-end, not just work in isolation at the store/resolve
+    layer."""
+
+    def test_handle_slack_threads_user_id(self) -> None:
+        with patch.object(chatops_service, "_dispatch", return_value="ok") as mock_dispatch:
+            chatops_service.handle_slack(
+                {"command": "/hivepilot-run", "text": "acme deploy", "user_id": "U1"}
+            )
+        assert mock_dispatch.call_args.kwargs["requester_id"] == "U1"
+
+    def test_handle_discord_threads_author_id(self) -> None:
+        with patch.object(chatops_service, "_dispatch", return_value="ok") as mock_dispatch:
+            chatops_service.handle_discord(
+                {"content": "!hp run acme deploy", "author": {"id": "D1"}}
+            )
+        assert mock_dispatch.call_args.kwargs["requester_id"] == "D1"
+
+    def test_handle_telegram_threads_from_id(self) -> None:
+        with patch.object(chatops_service, "_dispatch", return_value="ok") as mock_dispatch:
+            chatops_service.handle_telegram(
+                {"message": {"text": "/hp_run acme deploy", "from": {"id": 42}}}
+            )
+        assert mock_dispatch.call_args.kwargs["requester_id"] == "42"
+
+    def test_handle_signal_threads_sender(self) -> None:
+        with patch.object(chatops_service, "_dispatch", return_value="ok") as mock_dispatch:
+            chatops_service.handle_signal({"text": "run acme deploy", "sender": "+15551234567"})
+        assert mock_dispatch.call_args.kwargs["requester_id"] == "+15551234567"
+
+    def test_handle_signal_without_sender_passes_none(self) -> None:
+        """Every pre-existing `TestHandleSignal` test in this file calls
+        `handle_signal({"text": ...})` with no `sender` key — must still
+        thread through as an EXPLICIT `requester_id=None`, not silently
+        omitted (fail closed, never "whoever answers first")."""
+        with patch.object(chatops_service, "_dispatch", return_value="ok") as mock_dispatch:
+            chatops_service.handle_signal({"text": "run acme deploy"})
+        assert "requester_id" in mock_dispatch.call_args.kwargs
+        assert mock_dispatch.call_args.kwargs["requester_id"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +609,7 @@ class TestConciergeApproveDenyRoutingThroughSharedHelper:
     ) -> None:
         monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
         decision = self._pipeline_checkpoint_decision("approve")
-        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
+        chatops_service._pending_concierge_text.store("signal", "user-1", ("tok", decision))
         fake_orch = _FakeApprovalOrchestrator()
         with (
             patch(
@@ -406,7 +618,7 @@ class TestConciergeApproveDenyRoutingThroughSharedHelper:
             ),
             patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
         ):
-            chatops_service._dispatch("yes", ["tok"], source="signal")
+            chatops_service._dispatch("yes", ["tok"], source="signal", requester_id="user-1")
         assert len(fake_orch.resume_pipeline_calls) == 1
         assert fake_orch.run_approved_calls == []
 
@@ -415,7 +627,7 @@ class TestConciergeApproveDenyRoutingThroughSharedHelper:
     ) -> None:
         monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
         decision = self._pipeline_checkpoint_decision("approve")
-        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
+        chatops_service._pending_concierge_text.store("signal", "user-1", ("tok", decision))
         fake_orch = _FakeApprovalOrchestrator()
         with (
             patch(
@@ -424,7 +636,7 @@ class TestConciergeApproveDenyRoutingThroughSharedHelper:
             ),
             patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
         ):
-            chatops_service._dispatch("yes", ["tok"], source="signal")
+            chatops_service._dispatch("yes", ["tok"], source="signal", requester_id="user-1")
         assert len(fake_orch.run_approved_calls) == 1
         assert fake_orch.resume_pipeline_calls == []
 
@@ -433,7 +645,7 @@ class TestConciergeApproveDenyRoutingThroughSharedHelper:
     ) -> None:
         monkeypatch.setattr(chatops_service.settings, "chatops_concierge_enabled", True)
         decision = self._pipeline_checkpoint_decision("deny")
-        chatops_service._pending_concierge_text["signal"] = ("tok", decision)
+        chatops_service._pending_concierge_text.store("signal", "user-1", ("tok", decision))
         fake_orch = _FakeApprovalOrchestrator()
         with (
             patch(
@@ -442,7 +654,7 @@ class TestConciergeApproveDenyRoutingThroughSharedHelper:
             ),
             patch.object(chatops_service, "_get_orchestrator", return_value=fake_orch),
         ):
-            chatops_service._dispatch("yes", ["tok"], source="signal")
+            chatops_service._dispatch("yes", ["tok"], source="signal", requester_id="user-1")
         assert len(fake_orch.resume_pipeline_calls) == 1
         assert fake_orch.resume_pipeline_calls[0]["approve"] is False
         assert fake_orch.run_approved_calls == []

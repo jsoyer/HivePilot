@@ -57,6 +57,7 @@ async def test_challenge_tap_sets_pending_state():
     mock_query.message.message_thread_id = None
     mock_query.message.reply_text = AsyncMock()
     mock_query.from_user.username = "testuser"
+    mock_query.from_user.id = "12345"
 
     mock_update = MagicMock()
     mock_update.callback_query = mock_query
@@ -66,7 +67,11 @@ async def test_challenge_tap_sets_pending_state():
         await telegram_bot._callback_approval(mock_update, MagicMock())
 
     assert chat_id in telegram_bot._pending_challenges
-    stored_run_id, stored_approver = telegram_bot._pending_challenges[chat_id]
+    # Owner-bound (PendingConfirmationStore): only the presser's id ("12345")
+    # may resolve it.
+    resolved = telegram_bot._pending_challenges.resolve(chat_id, "12345")
+    assert resolved is not None
+    stored_run_id, stored_approver = resolved
     assert stored_run_id == run_id
     mock_query.message.reply_text.assert_called_once()
     reply_text = mock_query.message.reply_text.call_args[0][0]
