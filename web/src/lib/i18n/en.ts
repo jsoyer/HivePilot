@@ -606,7 +606,7 @@ export const en = {
     'Recorded verbatim: this value is not an http(s) URL, so it is shown as text and not turned into a link.',
   'partitions.prAriaLabel': 'Open the pull request recorded for task {id}',
   'partitions.journalPrNote':
-    'A task with no PR link shows —. The engine attributes a URL only when exactly one pull request was opened inside that task’s window, so two tasks running against the same project at once are both recorded as —. A missing link is a gap; a wrong link would be a lie.',
+    "A task with no PR link shows —. The engine attributes each pull request to the task that actually opened it, by that task's own run identity — so tasks running against the same project at once each get their own link, and a PR opened by an unrelated run is never claimed. — is reserved for the cases where there genuinely is no single answer: the forge reported no URL, outward consent was withheld, or one task's run opened more than one PR. A missing link is a gap; a wrong link would be a lie.",
   'partitions.journalSkippedNote':
     'skipped means the task never ran because a prerequisite failed — deliberately recorded as skipped and not as failed.',
 
