@@ -973,6 +973,13 @@ def run_gateway() -> None:
 
         from hivepilot.services import concierge_service
 
+        # `conversation_id` + `user_id` enable pending follow-up offers (see
+        # concierge_service's "Pending follow-up offers" section) so a bare
+        # "yes"/"oui" answering an offer the concierge just made is honoured
+        # — bound to this channel AND to the person who was asked, so a
+        # colleague's unrelated "yes" can never fire it. A missing channel or
+        # author disables offers for this message (fail closed).
+        author_id = getattr(getattr(message, "author", None), "id", None)
         loop = asyncio.get_event_loop()
         decision = await loop.run_in_executor(
             None,
@@ -980,6 +987,8 @@ def run_gateway() -> None:
                 content,
                 default_role=settings.chatops_default_role,
                 default_target=settings.default_target,
+                conversation_id=f"discord:{channel_id}" if channel_id is not None else None,
+                user_id=str(author_id) if author_id is not None else None,
             ),
         )
         await _handle_concierge_decision_discord(decision, channel_id, message)

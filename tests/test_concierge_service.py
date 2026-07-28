@@ -10,8 +10,10 @@ is the primary thing under test — see CLAUDE.md's Anti-Goodhart guidance.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import pathlib
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -1125,3 +1127,322 @@ class TestGroundingSnapshotDisplaysLocalTime:
         assert "09:08" not in snapshot
         assert "11:08" in snapshot
         assert "CEST" in snapshot
+
+
+# ---------------------------------------------------------------------------
+# Pending follow-up offers — the concierge asks "want me to investigate?" and
+# must be able to honour a bare "yes"/"oui" answering it.
+#
+# Production defect this covers: the classifier's `answer_text` was free-form
+# prose, so the model could INVITE a reply the router had no way to execute.
+# The operator answered "yes" and got the generic `_FALLBACK_ANSWER`.
+#
+# Fail-closed properties under test: an offer is bound to the conversation AND
+# to the person who was asked, expires, is never honoured on an ambiguous
+# reply, and is never even *rendered* unless it clamps to something the router
+# can actually execute.
+# ---------------------------------------------------------------------------
+
+
+_OFFER_ROUTE = {
+    "kind": "route",
+    "role_key": "developer",
+    "target": "acme",
+    "order": "investigate the groomer-scan failure",
+}
+
+
+_UNSET = object()
+
+
+def _answer_with_offer(
+    answer_text: str = "groomer-scan failed this morning.",
+    follow_up=_UNSET,
+) -> str:
+    return json.dumps(
+        {
+            "kind": "answer",
+            "answer_text": answer_text,
+            "follow_up": dict(_OFFER_ROUTE) if follow_up is _UNSET else follow_up,
+        }
+    )
+
+
+def _exploding_orch() -> MagicMock:
+    """An orchestrator whose classifier call fails the test if invoked — proves
+    a resolved yes/no answer never costs an LLM round-trip and never depends on
+    the model to interpret the affirmative."""
+    return _orch_with_capture(
+        side_effect=AssertionError("classifier must not be called for a resolved offer reply")
+    )
+
+
+def _make_offer(
+    conversation_id: str = "telegram:1",
+    user_id: str = "operator-1",
+    raw: str | None = None,
+) -> concierge_service.ConciergeDecision:
+    orch = _orch_with_capture(return_value=raw if raw is not None else _answer_with_offer())
+    with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+        return concierge_service.route(
+            "tout va bien ?",
+            default_role="developer",
+            default_target="acme",
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+
+def _reply(
+    text: str,
+    conversation_id: str = "telegram:1",
+    user_id: str = "operator-1",
+    orch: MagicMock | None = None,
+) -> concierge_service.ConciergeDecision:
+    with patch.object(
+        concierge_service, "_get_orchestrator", return_value=orch or _exploding_orch()
+    ):
+        return concierge_service.route(
+            text,
+            default_role="developer",
+            default_target="acme",
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+
+class TestPendingOffer:
+    def teardown_method(self, method) -> None:
+        concierge_service.clear_pending_offers()
+        concierge_service.clear_history()
+
+    # -- the offer itself ---------------------------------------------------
+
+    def test_offer_is_rendered_by_code_not_by_the_model(self) -> None:
+        """The invitation the operator reads must be OURS, so the set of
+        offers the bot can make is exactly the set the router can execute."""
+        decision = _make_offer()
+
+        assert decision.kind == "answer"
+        assert decision.answer_text is not None
+        assert decision.answer_text.startswith("groomer-scan failed this morning.")
+        assert '"yes"' in decision.answer_text
+        assert "developer" in decision.answer_text
+
+    def test_affirmative_answers_the_offer_and_yields_the_executable_action(self) -> None:
+        _make_offer()
+
+        decision = _reply("yes")
+
+        assert decision.kind == "route"
+        assert decision.role_key == "developer"
+        assert decision.target == "acme"
+        assert decision.order == "investigate the groomer-scan failure"
+        # Still gated by the existing destructive-confirmation path.
+        assert decision.destructive is True
+
+    def test_offer_is_single_use(self) -> None:
+        _make_offer()
+        _reply("yes")
+
+        orch = _orch_with_capture(return_value=json.dumps({"kind": "answer", "answer_text": "?"}))
+        again = _reply("yes", orch=orch)
+
+        assert again.kind == "answer"
+        assert orch.registry.capture_definition.called
+
+    # -- vocabulary, both languages ----------------------------------------
+
+    @pytest.mark.parametrize(
+        "text",
+        ["yes", "Yes!", "ok", "OK.", "sure", "go", "go ahead", "do it", "yep", "confirm"],
+    )
+    def test_english_affirmatives(self, text: str) -> None:
+        _make_offer()
+        assert _reply(text).kind == "route"
+
+    @pytest.mark.parametrize(
+        "text",
+        ["oui", "OUI !", "ouais", "vas-y", "vas y", "allez-y", "fais-le", "d'accord", "c'est bon"],
+    )
+    def test_french_affirmatives(self, text: str) -> None:
+        _make_offer()
+        assert _reply(text).kind == "route"
+
+    @pytest.mark.parametrize("text", ["no", "Nope", "cancel", "non", "non merci", "laisse tomber"])
+    def test_negatives_dismiss_cleanly(self, text: str) -> None:
+        _make_offer()
+
+        decision = _reply(text)
+
+        assert decision.kind == "answer"
+        assert decision.answer_text == concierge_service._OFFER_DECLINED_TEXT
+        assert concierge_service._pending_offers == {}
+
+    # -- fail-closed --------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "yes but check the logs first",
+            "peut-etre",
+            "peut-être",
+            "hmm",
+            "yes/no",
+            "oui mais pas maintenant",
+            "",
+            "   ",
+        ],
+    )
+    def test_ambiguous_reply_executes_nothing_and_leaves_the_offer_pending(self, text: str) -> None:
+        _make_offer()
+
+        orch = _orch_with_capture(
+            return_value=json.dumps({"kind": "answer", "answer_text": "not sure"})
+        )
+        decision = _reply(text, orch=orch)
+
+        assert decision.kind == "answer"
+        assert "telegram:1" in concierge_service._pending_offers
+        # …and the operator can still say yes afterwards.
+        assert _reply("oui").kind == "route"
+
+    def test_a_different_persons_affirmative_never_triggers_the_offer(self) -> None:
+        """A colleague's unrelated "yes" in a shared channel must not fire
+        someone else's pending action."""
+        _make_offer(conversation_id="slack:C1", user_id="operator-1")
+
+        orch = _orch_with_capture(
+            return_value=json.dumps({"kind": "answer", "answer_text": "hello colleague"})
+        )
+        decision = _reply("yes", conversation_id="slack:C1", user_id="colleague-2", orch=orch)
+
+        assert decision.kind == "answer"
+        assert orch.registry.capture_definition.called  # fell through to normal handling
+        # The real owner's offer survives untouched.
+        assert _reply("oui", conversation_id="slack:C1", user_id="operator-1").kind == "route"
+
+    def test_expired_offer_is_not_honoured_and_falls_through(self) -> None:
+        _make_offer()
+        stored = concierge_service._pending_offers["telegram:1"]
+        concierge_service._pending_offers["telegram:1"] = dataclasses.replace(
+            stored, expires_at=time.time() - 1
+        )
+
+        orch = _orch_with_capture(
+            return_value=json.dumps({"kind": "answer", "answer_text": "normal handling"})
+        )
+        decision = _reply("oui", orch=orch)
+
+        assert decision.kind == "answer"
+        assert decision.answer_text == "normal handling"
+        assert orch.registry.capture_definition.called
+        assert concierge_service._pending_offers == {}
+
+    def test_offer_is_conversation_scoped(self) -> None:
+        _make_offer(conversation_id="telegram:1", user_id="operator-1")
+
+        orch = _orch_with_capture(
+            return_value=json.dumps({"kind": "answer", "answer_text": "other chat"})
+        )
+        decision = _reply("oui", conversation_id="telegram:2", user_id="operator-1", orch=orch)
+
+        assert decision.kind == "answer"
+        assert "telegram:1" in concierge_service._pending_offers
+
+    @pytest.mark.parametrize(
+        ("conversation_id", "user_id"),
+        [(None, "operator-1"), ("telegram:1", None), (None, None), ("", "operator-1")],
+    )
+    def test_missing_conversation_or_owner_never_offers(
+        self, conversation_id: str | None, user_id: str | None
+    ) -> None:
+        """A missing id means "do not execute", never "execute anyway" — and
+        we must not even render an invitation we could not honour."""
+        orch = _orch_with_capture(return_value=_answer_with_offer())
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            decision = concierge_service.route(
+                "tout va bien ?",
+                default_role="developer",
+                default_target="acme",
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+
+        assert decision.answer_text == "groomer-scan failed this morning."
+        assert concierge_service._pending_offers == {}
+
+    def test_owner_less_stored_offer_is_never_honoured(self) -> None:
+        concierge_service._store_offer(
+            "telegram:1", "", concierge_service.ConciergeDecision("route")
+        )
+        assert concierge_service._pending_offers == {}
+
+    @pytest.mark.parametrize(
+        "follow_up",
+        [
+            {"kind": "route", "role_key": "ghost", "target": "acme", "order": "x"},
+            {"kind": "route", "role_key": "developer", "target": "unknown-project", "order": "x"},
+            {"kind": "answer", "answer_text": "not an offer"},
+            {"kind": "action", "action": "meditate"},
+            {"kind": "action", "action": "approve"},  # no run_id -> unexecutable
+            "not-an-object",
+            None,
+        ],
+    )
+    def test_unexecutable_follow_up_is_never_offered(self, follow_up) -> None:
+        """Never offer what cannot be honoured: a follow-up that does not clamp
+        to a real, executable route/action is dropped AND no invitation is
+        rendered."""
+        _make_offer(raw=_answer_with_offer(follow_up=follow_up))
+
+        assert concierge_service._pending_offers == {}
+        orch = _orch_with_capture(
+            return_value=json.dumps({"kind": "answer", "answer_text": "normal handling"})
+        )
+        assert _reply("oui", orch=orch).answer_text == "normal handling"
+
+    def test_action_offer_round_trips(self) -> None:
+        _make_offer(
+            raw=_answer_with_offer(
+                follow_up={"kind": "action", "action": "approve", "params": {"run_id": 42}}
+            )
+        )
+
+        decision = _reply("vas-y")
+
+        assert decision.kind == "action"
+        assert decision.action == "approve"
+        assert decision.params == {"run_id": 42}
+        assert decision.destructive is True
+
+
+class TestReplyVocabulary:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Oui", "yes"),
+            ("  OUI !!  ", "yes"),
+            ("vas-y", "yes"),
+            ("Vas-y…", "yes"),
+            ("d’accord", "yes"),  # typographic apostrophe
+            ("Bien sûr", "yes"),
+            ("yes", "yes"),
+            ("Go ahead.", "yes"),
+            ("non", "no"),
+            ("Non, merci", "no"),
+            ("arrête", "no"),
+            ("nope", "no"),
+            ("", None),
+            ("   ", None),
+            ("yes but wait", None),
+            ("oui si tu veux", None),
+            ("okay so what about the other run", None),
+            ("no idea", None),
+        ],
+    )
+    def test_classify_reply(self, text: str, expected: str | None) -> None:
+        assert concierge_service._classify_reply(text) == expected
+
+    def test_affirmative_and_negative_vocabularies_are_disjoint(self) -> None:
+        assert not (concierge_service._AFFIRMATIVE_REPLIES & concierge_service._NEGATIVE_REPLIES)

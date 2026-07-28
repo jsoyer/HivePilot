@@ -1503,3 +1503,61 @@ class TestCallbackApprovalNoMessage:
         call_args = update.callback_query.answer.call_args
         assert call_args.args and "no longer be used" in call_args.args[0].lower()
         assert call_args.kwargs.get("show_alert") is True
+
+
+class TestConciergeOfferScoping:
+    """A pending follow-up offer must be bound to the conversation AND to the
+    person who was asked (see concierge_service's "Pending follow-up offers").
+    Telegram supplies both — this is the wiring that makes a bare "oui"
+    answering the bot's own question work at all."""
+
+    def _route_kwargs(self, update: MagicMock) -> dict:
+        context = _make_mention_context()
+        telegram_bot._pending_challenges.clear()
+        decision = ConciergeDecision(kind="answer", answer_text="hi")
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch(
+                "hivepilot.services.concierge_service.route", return_value=decision
+            ) as mock_route,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(update, context))
+        mock_route.assert_called_once()
+        return dict(mock_route.call_args.kwargs)
+
+    def test_conversation_and_owner_threaded_into_route(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(chat_id=6006, text="oui")
+        update.message.message_thread_id = None
+        update.message.from_user.id = 4242
+
+        kwargs = self._route_kwargs(update)
+
+        assert kwargs.get("conversation_id") == "telegram:6006"
+        assert kwargs.get("user_id") == "4242"
+
+    def test_forum_topic_scopes_the_conversation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An offer made in one forum topic must not be answerable from
+        another — same composite scoping as `_challenge_key`."""
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(chat_id=6006, text="oui")
+        update.message.message_thread_id = 77
+        update.message.from_user.id = 4242
+
+        assert self._route_kwargs(update).get("conversation_id") == "telegram:6006:77"
+
+    def test_anonymous_sender_disables_offers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No sender identity means no owner to bind an offer to — fail
+        closed: `user_id=None` makes concierge_service refuse to store OR
+        honour an offer, rather than binding it to nobody."""
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(chat_id=6006, text="oui")
+        update.message.message_thread_id = None
+        update.message.from_user = None
+
+        kwargs = self._route_kwargs(update)
+
+        assert "user_id" in kwargs  # explicitly passed, not merely absent
+        assert kwargs["user_id"] is None
