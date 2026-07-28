@@ -225,6 +225,148 @@ async def test_refresh_hotspots_populates_from_step_failures() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Runs / Steps tables — fix/linear-sync-display-time sweep: `refresh_runs`
+# (Started/Finished columns) and `refresh_steps` (Timestamp column) were
+# found echoing the raw stored value verbatim, same bug class as the
+# pre-fix `schedule health`/`linear sync` CLI tables.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_display_timezone_override(monkeypatch):
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "display_timezone", None, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_refresh_runs_renders_local_time_with_marker_not_raw_utc(monkeypatch) -> None:
+    """The exact bug: a stored 09:08 UTC run must render as 11:08 CEST in
+    the Started column -- a bare, unmarked 09:08 is precisely how the
+    original bug hid from an operator reading their local clock."""
+    from hivepilot.config import settings
+    from hivepilot.services import state_service
+
+    monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+    fake_run = {
+        "id": 1,
+        "project": "acme-web",
+        "task": "deploy",
+        "status": "success",
+        "started_at": "2026-07-27 09:08:32",
+        "finished_at": "2026-07-27 09:10:00",
+    }
+    monkeypatch.setattr(state_service, "list_recent_runs", lambda *a, **k: [fake_run])
+    monkeypatch.setattr(state_service, "get_steps_for_run", lambda run_id: [])
+
+    app = RunDashboard()
+    async with app.run_test():
+        started = _cell_plain(app.runs_table.get_cell_at(Coordinate(0, 4)))
+        finished = _cell_plain(app.runs_table.get_cell_at(Coordinate(0, 5)))
+
+    assert "09:08" not in started
+    assert "11:08" in started
+    assert "CEST" in started
+    assert "09:10" not in finished
+    assert "11:10" in finished
+
+
+@pytest.mark.asyncio
+async def test_refresh_runs_dst_correctness_summer_vs_winter(monkeypatch) -> None:
+    """Same wall-clock UTC time renders differently in July (CEST) vs
+    January (CET) -- a fixed-offset shortcut fails this."""
+    from hivepilot.config import settings
+    from hivepilot.services import state_service
+
+    monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+    monkeypatch.setattr(state_service, "get_steps_for_run", lambda run_id: [])
+
+    async def _started_for(started_at: str) -> str:
+        fake_run = {
+            "id": 1,
+            "project": "acme-web",
+            "task": "deploy",
+            "status": "success",
+            "started_at": started_at,
+            "finished_at": None,
+        }
+        monkeypatch.setattr(state_service, "list_recent_runs", lambda *a, **k: [fake_run])
+        app = RunDashboard()
+        async with app.run_test():
+            return _cell_plain(app.runs_table.get_cell_at(Coordinate(0, 4)))
+
+    summer = await _started_for("2026-07-27 09:08:32")
+    winter = await _started_for("2026-01-27 09:08:32")
+
+    assert "11:08" in summer and "CEST" in summer
+    assert "10:08" in winter and "CET" in winter
+    assert summer != winter
+
+
+@pytest.mark.asyncio
+async def test_refresh_runs_missing_finished_at_renders_empty_not_fabricated(
+    monkeypatch,
+) -> None:
+    """A still-running row (no `finished_at`) must render an empty cell,
+    never a fabricated time -- distinct from `to_display`'s `(unknown)`
+    marker for a genuinely-unparseable value, matching the pre-existing
+    `run.get("finished_at") or ""` contract."""
+    from hivepilot.config import settings
+    from hivepilot.services import state_service
+
+    monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+    fake_run = {
+        "id": 1,
+        "project": "acme-web",
+        "task": "deploy",
+        "status": "running",
+        "started_at": "2026-07-27 09:08:32",
+        "finished_at": None,
+    }
+    monkeypatch.setattr(state_service, "list_recent_runs", lambda *a, **k: [fake_run])
+    monkeypatch.setattr(state_service, "get_steps_for_run", lambda run_id: [])
+
+    app = RunDashboard()
+    async with app.run_test():
+        finished = _cell_plain(app.runs_table.get_cell_at(Coordinate(0, 5)))
+
+    assert finished == ""
+
+
+@pytest.mark.asyncio
+async def test_refresh_steps_timestamp_renders_local_time_with_marker(monkeypatch) -> None:
+    from hivepilot.config import settings
+    from hivepilot.services import state_service
+
+    monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+    fake_run = {
+        "id": 1,
+        "project": "acme-web",
+        "task": "deploy",
+        "status": "success",
+        "started_at": "2026-07-27 09:08:32",
+        "finished_at": "2026-07-27 09:10:00",
+    }
+    fake_step = {
+        "run_id": 1,
+        "step": "build",
+        "status": "success",
+        "detail": "",
+        "timestamp": "2026-07-27 09:09:00",
+    }
+    monkeypatch.setattr(state_service, "list_recent_runs", lambda *a, **k: [fake_run])
+    monkeypatch.setattr(state_service, "get_steps_for_run", lambda run_id: [fake_step])
+
+    app = RunDashboard()
+    async with app.run_test():
+        ts = _cell_plain(app.steps_table.get_cell_at(Coordinate(0, 4)))
+
+    assert "09:09" not in ts
+    assert "11:09" in ts
+    assert "CEST" in ts
+
+
+# ---------------------------------------------------------------------------
 # Health tab
 # ---------------------------------------------------------------------------
 

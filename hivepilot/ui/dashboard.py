@@ -22,6 +22,7 @@ from hivepilot.plugins import (
 )
 from hivepilot.services import analytics_service, state_service
 from hivepilot.ui.formatting import INTERACTION_COLUMNS, interaction_rows
+from hivepilot.utils import display_time
 
 # Cost table columns (Phase 24 follow-up — TUI cost analytics). "Scope" is
 # either "overall", "provider:<name>", or "model:<name>" so tests/operators
@@ -438,13 +439,19 @@ class RunDashboard(App):
         runs = state_service.list_recent_runs(50)
         self.runs_table.clear()
         for run in runs:
+            # fix/linear-sync-display-time sweep: `started_at`/`finished_at`
+            # are stored as naive-UTC SQLite CURRENT_TIMESTAMP strings --
+            # the same bug class `display_time.to_display` exists to fix.
+            # A still-running row's absent `finished_at` renders empty
+            # (unchanged contract), not the "(unknown)" unparseable marker.
+            finished_at = run.get("finished_at")
             self.runs_table.add_row(
                 str(run["id"]),
                 run["project"],
                 run["task"],
                 run["status"],
-                run["started_at"],
-                run.get("finished_at") or "",
+                display_time.to_display(run["started_at"]),
+                display_time.to_display(finished_at) if finished_at else "",
             )
         self.refresh_metrics()
         if runs:
@@ -635,12 +642,14 @@ class RunDashboard(App):
         steps = state_service.get_steps_for_run(run_id)
         self.steps_table.clear()
         for step in steps:
+            # fix/linear-sync-display-time sweep: same naive-UTC bug class
+            # as refresh_runs above -- route through the shared helper.
             self.steps_table.add_row(
                 str(step["run_id"]),
                 step["step"],
                 step["status"],
                 (step.get("detail") or "")[:80],
-                step["timestamp"],
+                display_time.to_display(step["timestamp"]),
             )
 
     def refresh_interactions(self) -> None:

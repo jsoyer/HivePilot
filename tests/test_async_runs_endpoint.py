@@ -450,3 +450,30 @@ class TestGetRunEndpoint:
             assert secret not in body["steps"][0]["detail"]
         finally:
             clear_secret_values()
+
+    def test_started_at_stays_raw_utc_iso_even_with_display_timezone_configured(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """Regression guard (fix/linear-sync-display-time): this JSON
+        payload is MACHINE-facing -- another program parses `started_at`/
+        `finished_at` -- unlike the human-facing CLI/TUI surfaces
+        `display_time.to_display` converts. Configuring an explicit
+        `display_timezone` override must have NO effect here: the field
+        must stay byte-identical to the raw stored value, never gain a
+        local-time conversion or a timezone marker.
+        """
+        from hivepilot.config import settings
+        from hivepilot.services import state_service
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        run_id = state_service.record_run_start("acme-web", "deploy", status="success")
+        raw_row = state_service.get_run(run_id)
+
+        raw, _ = add_token("run")
+        resp = api_client.get(f"/v1/runs/{run_id}", headers=_auth(raw))
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["started_at"] == raw_row["started_at"]
+        assert "CEST" not in body["started_at"]
+        assert "+02:00" not in body["started_at"]

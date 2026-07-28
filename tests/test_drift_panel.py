@@ -163,3 +163,51 @@ class TestFetch:
         # No scans seeded -- must not raise, must not touch the writer.
         result = drift_panel._fetch()
         assert result["sections"] == [{"kind": "text", "content": "No drift scans recorded."}]
+
+    # -----------------------------------------------------------------
+    # checked_at display -- fix/linear-sync-display-time sweep: the table
+    # was found echoing the raw stored value verbatim, same bug class as
+    # the pre-fix `schedule health`/`linear sync` CLI tables.
+    # -----------------------------------------------------------------
+
+    def test_checked_at_renders_local_time_with_marker(self, monkeypatch) -> None:
+        from hivepilot.services import state_service
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        fake_scan = {
+            "project": "demo-project",
+            "checked_at": "2026-07-27 09:08:32",
+            "status": "drift",
+            "to_add": 1,
+            "to_change": 0,
+            "to_destroy": 0,
+            "runner": "opentofu",
+        }
+        monkeypatch.setattr(state_service, "get_recent_drift_scans", lambda *a, **k: [fake_scan])
+
+        result = drift_panel._fetch()
+        table = next(s for s in result["sections"] if s["kind"] == "table")
+        checked_cell = table["rows"][0][1]
+
+        assert "09:08" not in checked_cell
+        assert "11:08" in checked_cell
+        assert "CEST" in checked_cell
+
+    def test_checked_at_missing_renders_unknown_not_fabricated(self, monkeypatch) -> None:
+        from hivepilot.services import state_service
+        from hivepilot.utils import display_time
+
+        fake_scan = {
+            "project": "demo-project",
+            "checked_at": None,
+            "status": "drift",
+            "to_add": 1,
+            "to_change": 0,
+            "to_destroy": 0,
+            "runner": "opentofu",
+        }
+        monkeypatch.setattr(state_service, "get_recent_drift_scans", lambda *a, **k: [fake_scan])
+
+        result = drift_panel._fetch()
+        table = next(s for s in result["sections"] if s["kind"] == "table")
+        assert table["rows"][0][1] == display_time.UNKNOWN_DISPLAY

@@ -803,6 +803,7 @@ def schedule_retry_list(
     """List jobs in the retry queue."""
     _require_cli_role("read", token)
     from hivepilot.services import retry_service
+    from hivepilot.utils import display_time
 
     jobs = retry_service.list_queue(status)
     if not jobs:
@@ -812,10 +813,15 @@ def schedule_retry_list(
         import json as _json
 
         projects = _json.loads(job["projects"])
+        # fix/linear-sync-display-time sweep: `next_retry_at` is a naive-UTC
+        # (or aware-ISO) stored timestamp -- same bug class as the pre-fix
+        # `schedule health` table. Route through the shared helper (it
+        # already tolerates both formats -- see retry_service's own
+        # `_parse_ts` docstring).
         typer.echo(
             f"id={job['id']} schedule={job['schedule_name']} task={job['task']} "
             f"projects={projects} attempt={job['attempt']}/{job['max_attempts']} "
-            f"status={job['status']} next={job['next_retry_at']}"
+            f"status={job['status']} next={display_time.to_display(job['next_retry_at'])}"
         )
         if job.get("error"):
             typer.echo(f"  error: {job['error'][:120]}")
@@ -828,6 +834,7 @@ def schedule_dlq_list(
     """List dead-letter jobs (permanently failed)."""
     _require_cli_role("read", token)
     from hivepilot.services import retry_service
+    from hivepilot.utils import display_time
 
     jobs = retry_service.list_dlq()
     if not jobs:
@@ -835,9 +842,11 @@ def schedule_dlq_list(
         return
     typer.echo(f"{len(jobs)} dead job(s):")
     for job in jobs:
+        # fix/linear-sync-display-time sweep: same naive-UTC bug class as
+        # `retry-list`'s `next_retry_at` above.
         typer.echo(
             f"  id={job['id']} schedule={job['schedule_name']} task={job['task']} "
-            f"attempts={job['attempt']} created={job['created_at']}"
+            f"attempts={job['attempt']} created={display_time.to_display(job['created_at'])}"
         )
         if job.get("error"):
             typer.echo(f"    error: {job['error'][:120]}")
@@ -3105,6 +3114,7 @@ def linear_states(
 def linear_sync() -> None:
     """Show last 10 runs and their Linear issue status."""
     from hivepilot.services import state_service
+    from hivepilot.utils import display_time
 
     runs = state_service.list_recent_runs(limit=10)
     if not runs:
@@ -3117,9 +3127,16 @@ def linear_sync() -> None:
     typer.echo(f"{'ID':<6} {'Project':<20} {'Task':<20} {'Status':<10} {'Started'}")
     typer.echo("-" * 80)
     for run in runs:
+        # fix/linear-sync-display-time: `started_at` is stored as a naive-UTC
+        # SQLite CURRENT_TIMESTAMP string -- the exact class of bug
+        # `display_time.to_display` exists to fix (see its module docstring).
+        # Route through the one shared helper rather than echoing the raw
+        # value, so this table never again reads as local time while
+        # actually being UTC.
+        started_str = display_time.to_display(run.get("started_at"))
         typer.echo(
             f"{run['id']:<6} {run['project']:<20} {run['task']:<20} "
-            f"{run['status']:<10} {run.get('started_at', '?')}"
+            f"{run['status']:<10} {started_str}"
         )
 
 
@@ -3277,13 +3294,19 @@ def workers(
 ) -> None:
     """List remote HivePilot workers (referenced by role hosts) and their health."""
     from hivepilot.services import state_service, worker_registry
+    from hivepilot.utils import display_time
 
     rows = worker_registry.refresh() if check else state_service.list_workers()
     if not rows:
         typer.echo("No workers configured (set a role host to an http(s):// URL).")
         return
     for w in rows:
-        typer.echo(f"{w['status']:<11} {w['url']}  (seen {w.get('last_seen')})")
+        # fix/linear-sync-display-time sweep: `last_seen` is a naive-UTC
+        # SQLite CURRENT_TIMESTAMP-backed column -- same bug class as the
+        # pre-fix `schedule health` table.
+        typer.echo(
+            f"{w['status']:<11} {w['url']}  (seen {display_time.to_display(w.get('last_seen'))})"
+        )
 
 
 def _handle_mandatory_agent_verdict(report: agent_checks.MandatoryAgentReport) -> None:
@@ -4698,6 +4721,7 @@ def partition_show(
     """Show a partition: status, consent, the computed outward footprint, and
     the EFFECTIVE parallelism this host would actually give it."""
     from hivepilot.partition import PartitionError, load_partition
+    from hivepilot.utils import display_time
 
     service = _partition_service()
     row = service.get_partition(partition_id, tenant=tenant)
@@ -4712,7 +4736,11 @@ def partition_show(
     typer.echo(f"Digest:     {row.get('proposed_digest')}")
     typer.echo(f"Consent:    {bool(row.get('outward_consent'))}")
     if row.get("ratified_by"):
-        typer.echo(f"Ratified:   {row.get('ratified_by')} at {row.get('ratified_at')}")
+        # fix/linear-sync-display-time sweep: `ratified_at` is a naive-UTC
+        # SQLite CURRENT_TIMESTAMP-backed column -- same bug class as the
+        # pre-fix `schedule health` table.
+        ratified_at = display_time.to_display(row.get("ratified_at"))
+        typer.echo(f"Ratified:   {row.get('ratified_by')} at {ratified_at}")
 
     document = str(row.get("ratified_json") or row.get("proposed_json") or "")
     try:
