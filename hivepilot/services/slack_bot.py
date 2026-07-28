@@ -7,6 +7,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hivepilot.config import settings
+from hivepilot.services.pending_confirmation import PendingConfirmationStore
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -24,7 +25,33 @@ _app_lock = threading.Lock()
 # no stable per-DM-thread identity beyond that — mirrors chatops_service's
 # per-source coarseness). Value: (confirmation_token, decision) — same shape
 # as chatops_service._pending_concierge_text / telegram_bot._pending_concierge.
-_pending_concierge: dict[str, tuple[str, "ConciergeDecision"]] = {}
+#
+# Security fix (same bug class as `_PendingChallenge` below / F3, and as
+# `concierge_service._PendingOffer`): this used to be a plain
+# `dict[str, tuple[str, ConciergeDecision]]` with NO owner binding and NO
+# TTL — any channel member's Yes/No press resolved ANY pending decision,
+# regardless of who triggered it, and a pending confirmation never expired.
+# Now backed by `PendingConfirmationStore`, which binds each entry to the
+# requesting user's id and expires it after `_CONCIERGE_CONFIRM_TTL_SECONDS`
+# — see that module's docstring for the full fail-closed contract.
+_CONCIERGE_CONFIRM_TTL_SECONDS = 5 * 60
+"""TTL for a pending Yes/No concierge confirmation button.
+
+Chosen deliberately shorter than both existing precedents for this bug
+class: `_CHALLENGE_TTL_SECONDS` (15 min, below — a composed follow-up
+question) and `concierge_service._OFFER_TTL_SECONDS` (10 min — a one-word
+typed reply). Resolving a Yes/No button costs strictly LESS operator effort
+than either: the operator is already looking at the freshly-posted prompt
+and only has to tap once, versus composing a sentence or even typing a
+single word. It also gates a destructive action directly (unlike an offer,
+which only re-enters the ordinary destructive-confirmation path), so the
+window during which a stale, still-clickable button remains armed should be
+the shortest of the three, not the longest.
+"""
+
+_pending_concierge: PendingConfirmationStore[tuple[str, "ConciergeDecision"]] = (
+    PendingConfirmationStore(_CONCIERGE_CONFIRM_TTL_SECONDS)
+)
 
 
 # Challenge/Ask (parity with Telegram's Challenge / Ask button): pending
@@ -296,12 +323,21 @@ def _execute_concierge(decision: "ConciergeDecision", channel_id: str, respond: 
         respond(f"Error: {exc}")
 
 
-def _handle_concierge_message(decision: "ConciergeDecision", channel_id: str, say: Any) -> None:
+def _handle_concierge_message(
+    decision: "ConciergeDecision", channel_id: str, owner_user_id: str | None, say: Any
+) -> None:
     """Answer directly, execute a non-destructive decision, or mint a
     confirmation token and store the pending decision for a destructive one.
     Every currently-known route/action kind IS destructive (see
     `concierge_service`'s hardcoded table) — the non-destructive branch only
-    guards a future kind, never exercised today."""
+    guards a future kind, never exercised today.
+
+    *owner_user_id* is the Slack id of whoever sent the message that
+    produced *decision* — the ONLY id whose later Yes/No press may resolve
+    it (see `PendingConfirmationStore`). A missing id (fail closed) means
+    `_pending_concierge.store()` records nothing, so the button is rendered
+    but can never be pressed to execution by anyone — never "whoever clicks
+    first"."""
     if decision.kind == "answer":
         text = decision.answer_text or "I'm not sure how to help with that. Try /help."
         say(_slack_escape(text))
@@ -313,7 +349,7 @@ def _handle_concierge_message(decision: "ConciergeDecision", channel_id: str, sa
     from hivepilot.services.chatops_service import _summarize_concierge_decision
 
     token = uuid.uuid4().hex[:8]
-    _pending_concierge[channel_id] = (token, decision)
+    _pending_concierge.store(channel_id, owner_user_id, (token, decision))
     # `summary` is derived from decision fields ultimately traced back to the
     # LLM classifier's read of user-typed text (role/target/order) — escape
     # it before it reaches either the Block Kit section text or the
@@ -599,14 +635,15 @@ def _register_handlers(bolt_app) -> None:
         # thread-level: the offer itself is posted with a plain `say(...)`,
         # i.e. at channel level, so that is where the answer arrives.
         # A missing user id disables offers for this message (fail closed).
+        user_id = event.get("user") or None
         decision = concierge_service.route(
             text,
             default_role=settings.chatops_default_role,
             default_target=settings.default_target,
             conversation_id=f"slack:{channel_id}" if channel_id else None,
-            user_id=event.get("user") or None,
+            user_id=user_id,
         )
-        _handle_concierge_message(decision, channel_id, say)
+        _handle_concierge_message(decision, channel_id, user_id, say)
 
     @bolt_app.action("concierge_yes")
     def handle_concierge_yes(ack, action, body, respond):
@@ -622,7 +659,12 @@ def _register_handlers(bolt_app) -> None:
             respond("Unauthorized channel.")
             return
         supplied_token = action.get("value", "")
-        pending = _pending_concierge.get(channel_id)
+        # Owner binding: only the Slack id that triggered this decision may
+        # resolve it — a colleague pressing Yes in the same channel must
+        # never execute someone else's pending action. A missing presser id
+        # (fail closed) can never resolve anything either.
+        presser_id = ((body or {}).get("user") or {}).get("id") or None
+        pending = _pending_concierge.resolve(channel_id, presser_id)
         if pending is None:
             respond("This confirmation has expired.")
             return
@@ -633,7 +675,7 @@ def _register_handlers(bolt_app) -> None:
             # correctly afterwards.
             respond("⚠️ This confirmation has expired — please re-send your request.")
             return
-        _pending_concierge.pop(channel_id, None)
+        _pending_concierge.discard(channel_id)
         _execute_concierge(decision, channel_id, respond)
 
     @bolt_app.action("concierge_no")
@@ -645,7 +687,13 @@ def _register_handlers(bolt_app) -> None:
         if not _is_allowed(channel_id):
             respond("Unauthorized channel.")
             return
-        _pending_concierge.pop(channel_id, None)
+        # Same owner binding as Yes: a non-owner's No must never cancel
+        # someone else's pending decision — it's a silent no-op, leaving the
+        # real owner able to still confirm or cancel it themselves.
+        presser_id = ((body or {}).get("user") or {}).get("id") or None
+        if _pending_concierge.resolve(channel_id, presser_id) is None:
+            return
+        _pending_concierge.discard(channel_id)
         respond("Cancelled.")
 
 

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
 from hivepilot.services.config_provenance import mask_id
+from hivepilot.services.pending_confirmation import PendingConfirmationStore
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -53,7 +54,27 @@ def _challenge_key(chat_id: int, thread_id: int | None) -> int | tuple[int, int]
 # a SEPARATE dict from `_pending_challenges` / `state_service.approvals` —
 # the concierge confirm flow is its own namespace (`concierge:yes:<token>` /
 # `concierge:no:<token>` callback_data), not a pipeline-checkpoint approval.
-_pending_concierge: dict[int, tuple[str, "ConciergeDecision"]] = {}
+#
+# Security fix (same bug class as `slack_bot._PendingChallenge` / F3, and as
+# `concierge_service._PendingOffer`): this used to be a plain
+# `dict[int, tuple[str, ConciergeDecision]]` with NO owner binding and NO
+# TTL — any user pressing the inline-keyboard Yes/No resolved ANY pending
+# decision in that chat regardless of who triggered it, and it never
+# expired. Now backed by `PendingConfirmationStore`, which binds each entry
+# to the requesting Telegram user id and expires it after
+# `_CONCIERGE_CONFIRM_TTL_SECONDS` -- see that module's docstring for the
+# full fail-closed contract.
+_CONCIERGE_CONFIRM_TTL_SECONDS = 5 * 60
+"""TTL for a pending Yes/No concierge confirmation button -- see the
+identical constant/rationale in `slack_bot.py`: shorter than both
+`_CHALLENGE_TTL_SECONDS` (15 min, below) and
+`concierge_service._OFFER_TTL_SECONDS` (10 min), because resolving a button
+tap costs strictly less operator effort than composing a follow-up question
+or even typing a single word, and it gates a destructive action directly."""
+
+_pending_concierge: PendingConfirmationStore[tuple[str, "ConciergeDecision"]] = (
+    PendingConfirmationStore(_CONCIERGE_CONFIRM_TTL_SECONDS)
+)
 
 
 # ---------------------------------------------------------------------------
@@ -815,8 +836,14 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
     # keyboard (superseded by a newer destructive message before the user
     # presses a button) can never confirm the WRONG decision: `yes:<token>`
     # is only honoured if it matches what's CURRENTLY stored for this chat.
+    #
+    # `user_id` (the sender of the message that produced this decision) is
+    # bound as the owner -- only they may resolve it via the Yes/No
+    # keyboard. A missing id (fail closed) means `store()` records nothing,
+    # so the keyboard is rendered but can never be pressed to execution by
+    # anyone.
     token = uuid.uuid4().hex[:8]
-    _pending_concierge[chat_id] = (token, decision)
+    _pending_concierge.store(chat_id, user_id, (token, decision))
     await _send_concierge_keyboard_message(
         context.bot, chat_id=chat_id, token=token, decision=decision
     )
@@ -837,6 +864,10 @@ async def _concierge_callback(update: Any, context: Any) -> None:
     actually saw and approved. On a mismatch: do NOT pop or execute
     anything, and leave any currently-pending decision untouched — a wrong/
     stale token must never clear a still-valid pending confirmation.
+
+    Owner binding + TTL: only the Telegram user who triggered the decision
+    may resolve it (Yes OR No), and only within `_CONCIERGE_CONFIRM_TTL_SECONDS`
+    of being posted — see `PendingConfirmationStore`.
     """
     query = update.callback_query
     await query.answer()
@@ -851,13 +882,14 @@ async def _concierge_callback(update: Any, context: Any) -> None:
     action = parts[1] if len(parts) > 1 else ""
     supplied_token = parts[2] if len(parts) > 2 else ""
 
-    pending = _pending_concierge.get(chat_id)
+    presser_id = _concierge_user_id(query)
+    pending = _pending_concierge.resolve(chat_id, presser_id)
     if pending is None:
         await query.edit_message_text("This confirmation has expired.")
         return
 
     if action != "yes":
-        _pending_concierge.pop(chat_id, None)
+        _pending_concierge.discard(chat_id)
         await query.edit_message_text("Annulé.")
         return
 
@@ -871,7 +903,7 @@ async def _concierge_callback(update: Any, context: Any) -> None:
         )
         return
 
-    _pending_concierge.pop(chat_id, None)
+    _pending_concierge.discard(chat_id)
     await query.edit_message_text("⏳ Running…")
     # `_run_agent_order` (reused for kind="route") only needs `.message` —
     # wrap the callback's own message so it can `reply_text`/`delete` on it
