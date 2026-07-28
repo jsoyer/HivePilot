@@ -205,6 +205,15 @@ class TestSchema:
         assert partition_service.list_partitions() == []
 
 
+class TestStatusVocabularies:
+    def test_partition_and_task_status_vocabularies_are_closed(self) -> None:
+        assert "ratified" in partition_service.PARTITION_STATUSES
+        assert "skipped" in partition_service.TASK_STATUSES
+        # `skipped` must be a DISTINCT terminal state from `failed` -- a task
+        # whose prerequisite failed did not itself fail.
+        assert "failed" in partition_service.TASK_STATUSES
+
+
 class TestPartitionPersistence:
     def test_create_partition_persists_proposal_verbatim(self) -> None:
         plan_json = _json(_plan())
