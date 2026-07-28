@@ -731,9 +731,12 @@ function JournalPr({ task }: { task: PartitionTaskRow }) {
 
   if (task.pr_url === null) {
     // The em-dash is the honest rendering of a NULL the engine deliberately
-    // wrote: `_capture_pr_url` attributes a URL only when exactly one PR was
-    // opened in the task's window, so two concurrent tasks on one project
-    // both land here. A missing link is a gap; a wrong link would be a lie.
+    // wrote: each PR is attributed to the task that actually opened it, by
+    // that task's own run identity, so concurrent tasks on one project each
+    // get their own link and a PR from an unrelated run is never claimed.
+    // The em-dash remains for cases with no single answer (no URL reported,
+    // outward consent withheld, or a task's run opening more than one PR).
+    // A missing link is a gap; a wrong link would be a lie.
     return <span title={t('partitions.prNoneTitle')}>{EM_DASH}</span>
   }
 

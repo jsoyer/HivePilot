@@ -610,7 +610,7 @@ export const fr: Record<TranslationKey, string> = {
     "Reproduit tel quel : cette valeur n'est pas une URL http(s), elle est donc affichée comme du texte et non transformée en lien.",
   'partitions.prAriaLabel': 'Ouvrir la pull request enregistrée pour la tâche {id}',
   'partitions.journalPrNote':
-    "Une tâche sans lien de PR affiche —. Le moteur n'attribue une URL que lorsqu'une seule pull request a été ouverte pendant la fenêtre de la tâche : deux tâches lancées en même temps sur le même projet sont donc toutes deux enregistrées comme —. Un lien manquant est un trou ; un mauvais lien serait un mensonge.",
+    "Une tâche sans lien de PR affiche —. Le moteur attribue chaque pull request à la tâche qui l'a réellement ouverte, via l'identité d'exécution propre à cette tâche — les tâches lancées en même temps sur le même projet obtiennent donc chacune leur propre lien, et une PR ouverte par une exécution qui lui est étrangère n'est jamais revendiquée. — reste réservé aux cas où il n'existe vraiment pas de réponse unique : la forge n'a signalé aucune URL, le consentement à l'action visible à l'extérieur a été refusé, ou l'exécution d'une tâche a ouvert plusieurs PR. Un lien manquant est un trou ; un mauvais lien serait un mensonge.",
   'partitions.journalSkippedNote':
     "skipped signifie que la tâche n'a jamais démarré parce qu'un prérequis a échoué — enregistrée délibérément comme skipped et non comme failed.",
 
