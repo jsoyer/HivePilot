@@ -558,7 +558,7 @@ def _dispatch_one(*, project: str, consent: bool, orchestrator: Any, monkeypatch
     monkeypatch.setattr(partition_service, "mark_task_committed", lambda *a, **k: True)
     monkeypatch.setattr(partition_service, "mark_task_failed", lambda *a, **k: True)
     monkeypatch.setattr(partition_service, "_mark_queue_row", lambda *a, **k: None)
-    monkeypatch.setattr(partition_service, "_capture_pr_url", lambda mark, name: None)
+    monkeypatch.setattr(partition_service, "_capture_pr_url", lambda *a, **k: None)
     monkeypatch.setattr(partition_service, "_audit_suppressions", lambda *a, **k: None)
 
     task = json.loads(json.dumps(_task(project=project)))

@@ -71,7 +71,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from hivepilot import outward
+from hivepilot import outward, pr_attribution
 from hivepilot.config import settings
 from hivepilot.outward import OutwardPermission
 from hivepilot.partition import DependencyCycleError, PartitionError, PartitionPlan, load_partition
@@ -1307,20 +1307,51 @@ def _run_cost_usd(run_id: int) -> float | None:
     return sum(values) if values else None
 
 
-def _capture_pr_url(mark: int, project_name: str) -> str | None:
+def _pr_attribution_key(partition_id: str, task_id: str, run_id: int) -> str:
+    """The identity one dispatched task's pull requests are recorded under.
+
+    *run_id* is what actually disambiguates: it is the primary key of the
+    `runs` row this dispatch created for this task (see `_create_run_row`),
+    so it is unique across concurrent tasks, across retries of the SAME task
+    (a retry creates a new run), and across partitions. `partition_id` and
+    `task_id` add nothing to the uniqueness -- they are in the key so a
+    ledger entry, and any log line quoting it, reads as something an operator
+    can trace back to the journal row.
+    """
+    return f"partition:{partition_id}:task:{task_id}:run:{run_id}"
+
+
+def _capture_pr_url(mark: int, project_name: str, attribution: str | None) -> str | None:
     """The PR URL this task's run opened, or `None`.
 
-    Reads the `git_service` PR ledger for entries recorded after *mark* for
-    *project_name*. **Exactly one match is attributed; zero or several are
-    `None`.** Two concurrent tasks targeting the same project could each open
-    a PR inside the other's window, and there is no honest way to tell them
-    apart from here -- so both record `NULL` and the journal shows "—". A
-    missing link is a gap; a wrong link is a lie.
+    Reads the `git_service` PR ledger for entries recorded after *mark*, for
+    *project_name*, **under this task's own attribution key** (see
+    `_pr_attribution_key` and `hivepilot.pr_attribution`). Because the key is
+    per-dispatch, two concurrent tasks against the same project each see only
+    their own entry -- which is the whole point of the key, and what the
+    earlier time-window-only capture could not do.
+
+    Fail-closed at both ends:
+
+    - **No key -> no URL.** If the attribution never reached the ledger (an
+      orchestrator implementation that does not run the work inside the
+      dispatcher's scope, a thread boundary that lost it), this records
+      `NULL` rather than falling back to "whatever was opened around now" --
+      the fallback is precisely how a stray PR from an unrelated run got
+      claimed.
+    - **Still-ambiguous -> no URL.** If a single task's run opened more than
+      one pull request, there is no honest way to name "the" PR, so the
+      journal shows "—".
+
+    A missing link is a gap; a wrong link is a lie.
     """
+    if not attribution:
+        logger.warning("partition.pr_url_unattributed", project=project_name)
+        return None
     try:
         from hivepilot.services import git_service
 
-        urls = git_service.pr_urls_since(mark, project=project_name)
+        urls = git_service.pr_urls_since(mark, project=project_name, attribution=attribution)
     except Exception:  # noqa: BLE001 - never let link capture fail an otherwise-good run
         return None
     if len(urls) == 1:
@@ -1329,6 +1360,7 @@ def _capture_pr_url(mark: int, project_name: str) -> str | None:
         logger.warning(
             "partition.pr_url_ambiguous",
             project=project_name,
+            attribution=attribution,
             candidates=len(urls),
         )
     return None
@@ -1817,6 +1849,13 @@ def _make_task_work(
     permission = task_outward_permission(
         task, outward_consent=outward_consent, partition_id=partition_id
     )
+    # This task's PR-URL identity. Installed as the ambient scope around the
+    # `run_pipeline` call below, so every pull request opened anywhere inside
+    # that call's dynamic extent -- including on the orchestrator's pool
+    # workers, which re-adopt it (see `orchestrator.py`'s
+    # `pr_attribution_capture`/`adopt` pair) -- is ledgered under THIS task
+    # and no other.
+    attribution = _pr_attribution_key(partition_id, task.id, run_id)
 
     def _work() -> None:
         from hivepilot.services import git_service
@@ -1824,14 +1863,15 @@ def _make_task_work(
         mark = git_service.pr_ledger_mark()
         outward_mark = outward.ledger_mark()
         try:
-            results = orchestrator.run_pipeline(
-                project_names=[task.project],
-                pipeline_name=task.pipeline,
-                extra_prompt=task.prompt,
-                auto_git=outward_consent,
-                outward=permission,
-                concurrency=1,
-            )
+            with pr_attribution.scope(attribution):
+                results = orchestrator.run_pipeline(
+                    project_names=[task.project],
+                    pipeline_name=task.pipeline,
+                    extra_prompt=task.prompt,
+                    auto_git=outward_consent,
+                    outward=permission,
+                    concurrency=1,
+                )
         except Exception:  # noqa: BLE001 - never silently swallowed; the journal records it
             logger.exception(
                 "partition.task_dispatch_failed",
@@ -1849,7 +1889,7 @@ def _make_task_work(
 
         cost = _run_cost_usd(run_id)
         if _results_succeeded(results):
-            pr_url = _capture_pr_url(mark, project_name) if outward_consent else None
+            pr_url = _capture_pr_url(mark, project_name, attribution) if outward_consent else None
             mark_task_committed(
                 partition_id, task.id, claimed_by=owner, pr_url=pr_url, cost_usd=cost
             )

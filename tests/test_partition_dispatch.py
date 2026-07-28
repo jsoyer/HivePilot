@@ -783,6 +783,204 @@ class TestPrUrlJournalling:
         assert partition_service.list_partition_tasks(partition_id)[0]["pr_url"] is None
 
 
+class TestExactPrUrlAttribution:
+    """Exact per-task attribution (`hivepilot.pr_attribution`).
+
+    v1 could only INFER which task opened which pull request, from a ledger
+    time window, so two same-project tasks running at once both degraded to
+    `NULL`. Every test here fails against that version: the window cannot
+    tell two concurrent tasks apart, and it cannot tell a task's own PR from
+    a stray one opened by an unrelated run inside the same window.
+    """
+
+    def test_two_concurrent_same_project_tasks_each_record_their_own_pr_url(
+        self, live_config
+    ) -> None:
+        """The headline case. Both tasks take their ledger mark, then meet at
+        a barrier before either opens a PR — so BOTH windows contain BOTH
+        URLs, which is exactly the situation the window-only capture could
+        not resolve (it recorded `—` for both). With a per-dispatch identity
+        each task sees only its own entry."""
+        from hivepilot.services import git_service
+
+        partition_id = _ratified(
+            _plan(_task("a", pipeline="ship-it"), _task("b", pipeline="ship-it")),
+            consent=True,
+        )
+        both_marked = threading.Barrier(2)
+        urls = {
+            "do the a work": "https://github.com/acme/api/pull/101",
+            "do the b work": "https://github.com/acme/api/pull/102",
+        }
+
+        def _open_my_own_pr(kwargs: dict) -> None:
+            prompt = str(kwargs.get("extra_prompt"))
+            # Both marks are already taken by the time anyone is released, so
+            # every URL below lands inside every task's window.
+            both_marked.wait(timeout=10)
+            git_service.record_pr_opened(
+                project="acme-api", branch=f"hivepilot/{prompt}", url=urls[prompt]
+            )
+
+        partition_service.dispatch_partition(
+            partition_id, orchestrator=FakeOrchestrator(on_call=_open_my_own_pr)
+        )
+
+        recorded = {
+            str(row["task_id"]): row["pr_url"]
+            for row in partition_service.list_partition_tasks(partition_id)
+        }
+        assert recorded == {
+            "a": "https://github.com/acme/api/pull/101",
+            "b": "https://github.com/acme/api/pull/102",
+        }
+
+    def test_a_pr_opened_by_an_unrelated_run_is_never_claimed_by_a_task(self, live_config) -> None:
+        """A scheduled/API/manual run opening a PR for the same project while
+        a partition task happens to be running is NOT this task's PR. The
+        window-only capture saw exactly one entry and claimed it — a wrong
+        link, which is the one outcome the journal must never produce.
+
+        The unrelated PR is ledgered from a plain thread, which carries no
+        attribution scope — precisely how any run outside this dispatch
+        reaches the ledger.
+        """
+        from hivepilot.services import git_service
+
+        partition_id = _ratified(_plan(_task("a", pipeline="ship-it")), consent=True)
+
+        def _someone_else_opens_a_pr(kwargs: dict) -> None:
+            other = threading.Thread(
+                target=lambda: git_service.record_pr_opened(
+                    project="acme-api",
+                    branch="release/nightly",
+                    url="https://github.com/acme/api/pull/999",
+                )
+            )
+            other.start()
+            other.join(timeout=10)
+
+        partition_service.dispatch_partition(
+            partition_id, orchestrator=FakeOrchestrator(on_call=_someone_else_opens_a_pr)
+        )
+
+        rows = partition_service.list_partition_tasks(partition_id)
+        assert rows[0]["status"] == "committed"
+        assert rows[0]["pr_url"] is None
+
+    def test_a_missing_attribution_records_null_rather_than_a_stray_entry(
+        self, live_config
+    ) -> None:
+        """Fail-closed at the reader. If the identity never reached the
+        ledger, there is no fallback to "whatever was opened around now" —
+        that fallback IS the bug."""
+        from hivepilot.services import git_service
+
+        mark = git_service.pr_ledger_mark()
+        git_service.record_pr_opened(
+            project="acme-api", branch="x", url="https://github.com/acme/api/pull/7"
+        )
+
+        assert partition_service._capture_pr_url(mark, "acme-api", None) is None
+        assert partition_service._capture_pr_url(mark, "acme-api", "   ") is None
+
+    def test_the_attribution_key_is_unique_per_run_not_per_task(self) -> None:
+        """`run_id` is what disambiguates: a retry of the same task in the
+        same partition creates a NEW run, and must not inherit the previous
+        attempt's pull request."""
+        first = partition_service._pr_attribution_key("p1", "a", 11)
+        retry = partition_service._pr_attribution_key("p1", "a", 12)
+        sibling = partition_service._pr_attribution_key("p1", "b", 13)
+
+        assert first != retry != sibling
+        assert len({first, retry, sibling}) == 3
+
+    def test_a_forge_that_reports_no_url_ledgers_nothing_even_when_attributed(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Attribution labels links; it can never invent one. A forge that
+        cannot cheaply produce a URL still yields `None` and an empty
+        ledger — the journal shows `—`."""
+        from hivepilot import pr_attribution
+        from hivepilot.models import GitActions, ProjectConfig
+        from hivepilot.services import git_service
+
+        class _SilentForge:
+            def open_pr(self, *, project, branch, git) -> None:  # noqa: ANN001
+                return None
+
+        monkeypatch.setattr(git_service, "resolve_forge", lambda project: _SilentForge())
+        project = ProjectConfig(path=tmp_path / "acme-api")
+        key = "partition:p1:task:a:run:1"
+        mark = git_service.pr_ledger_mark()
+
+        with pr_attribution.scope(key):
+            assert (
+                git_service.create_pr(
+                    project=project, branch="hivepilot/x", git=GitActions(create_pr=True)
+                )
+                is None
+            )
+
+        assert git_service.pr_urls_since(mark, project="acme-api", attribution=key) == ()
+
+    def test_create_pr_ledgers_under_the_ambient_attribution_key(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from hivepilot import pr_attribution
+        from hivepilot.models import GitActions, ProjectConfig
+        from hivepilot.services import git_service
+
+        class _Forge:
+            def open_pr(self, *, project, branch, git):  # noqa: ANN001, ANN202
+                return "https://github.com/acme/api/pull/12"
+
+        monkeypatch.setattr(git_service, "resolve_forge", lambda project: _Forge())
+        project = ProjectConfig(path=tmp_path / "acme-api")
+        mark = git_service.pr_ledger_mark()
+
+        with pr_attribution.scope("partition:p1:task:a:run:1"):
+            git_service.create_pr(
+                project=project, branch="hivepilot/x", git=GitActions(create_pr=True)
+            )
+
+        assert git_service.pr_urls_since(
+            mark, project="acme-api", attribution="partition:p1:task:a:run:1"
+        ) == ("https://github.com/acme/api/pull/12",)
+        # A DIFFERENT key matches nothing — the filter is identity, not a hint.
+        assert git_service.pr_urls_since(mark, project="acme-api", attribution="other") == ()
+
+    def test_a_non_partition_run_ledgers_unattributed_and_is_never_claimed(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The regression guard for every ordinary run: no scope is ever
+        opened outside `partition_service`, so the entry is unattributed —
+        recorded and readable exactly as before, and invisible to any
+        attributed query."""
+        from hivepilot.models import GitActions, ProjectConfig
+        from hivepilot.services import git_service
+
+        class _Forge:
+            def open_pr(self, *, project, branch, git):  # noqa: ANN001, ANN202
+                return "https://github.com/acme/api/pull/13"
+
+        monkeypatch.setattr(git_service, "resolve_forge", lambda project: _Forge())
+        project = ProjectConfig(path=tmp_path / "acme-api")
+        mark = git_service.pr_ledger_mark()
+
+        url = git_service.create_pr(
+            project=project, branch="hivepilot/x", git=GitActions(create_pr=True)
+        )
+
+        assert url == "https://github.com/acme/api/pull/13"
+        # Unchanged for the unfiltered read every pre-existing caller does...
+        assert git_service.pr_urls_since(mark, project="acme-api") == (
+            "https://github.com/acme/api/pull/13",
+        )
+        # ...and unreachable from any partition task's attributed read.
+        assert git_service.pr_urls_since(mark, project="acme-api", attribution="anything") == ()
+
+
 # ---------------------------------------------------------------------------
 # Cancellation
 # ---------------------------------------------------------------------------

@@ -356,10 +356,15 @@ cost and the wall-clock ceiling. Statuses are `pending`, `claimed`,
 Pollen renders it under **Partitions → Journal**. Its contract is honesty:
 
 - The status shown is the token the engine stored, not a re-worded label.
-- **A missing PR link renders `—`, never a guessed URL.** The engine
-  attributes a URL only when *exactly one* pull request was opened inside a
-  task's window, so two tasks running against the same project at once are
-  both recorded as `—`. A missing link is a gap; a wrong link would be a lie.
+- **A missing PR link renders `—`, never a guessed URL.** Attribution is
+  exact: each dispatched task runs under its own identity (its run id), and
+  a pull request is recorded against the task that actually opened it — so
+  two tasks running against the same project at once each get their own
+  link, and a PR opened by an unrelated run is never claimed. `—` is
+  reserved for the cases where there genuinely is no single answer: the
+  forge reported no URL, outward consent was withheld, or one task's run
+  opened more than one PR. A missing link is a gap; a wrong link would be a
+  lie.
 - A cost that was never measured on a finished task reads **`unknown`**, not
   `$0.00`. `—` and `unknown` mean different things and are never
   interchanged: `—` is "not recorded", `unknown` is "recorded as

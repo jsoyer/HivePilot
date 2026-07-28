@@ -6,11 +6,13 @@ import threading
 import uuid
 from collections import deque
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
 from git import GitCommandError, Repo  # type: ignore
 
+from hivepilot import pr_attribution
 from hivepilot.config import settings
 from hivepilot.forges import resolve_forge
 from hivepilot.models import GitActions, ProjectConfig
@@ -367,32 +369,71 @@ def _publish_pr_ready_best_effort(project: ProjectConfig, branch: str, kind: str
 # `ThreadPoolExecutor` worker thread that `run_pipeline` spawns -- and
 # contextvars are NOT inherited across `ThreadPoolExecutor.submit` (the same
 # fact `orchestrator.py` documents where it hand-propagates its OTel
-# context). So the `runners.base._LAST_USAGE` contextvar idiom cannot reach
-# the partition dispatcher, and a process-global, explicitly locked ledger is
-# used instead.
+# context). So a process-global, explicitly locked ledger carries the URLs
+# themselves.
 #
-# The ledger is deliberately DUMB and append-only: it records what a forge
-# reported, and the READER decides what it may honestly attribute. See
-# `pr_urls_since`, which returns every match and leaves the "exactly one, or
-# nothing" rule to `partition_service` -- so ambiguity degrades to "no URL",
-# never to a mis-attributed one.
+# WHICH task opened a given entry used to be INFERRED from a time window
+# (`pr_ledger_mark` before the run, `pr_urls_since` after it), which meant
+# two same-project tasks running at once each saw both entries and both
+# honestly degraded to `NULL`. Every entry now also carries the ambient
+# `hivepilot.pr_attribution` key -- an identity the dispatcher installs and
+# `orchestrator.py` re-adopts across the pool boundary alongside the outward
+# permission -- so the reader can filter on identity instead of on timing.
+#
+# The ledger stays deliberately DUMB and append-only: it records what a forge
+# reported plus who was running when it did, and the READER decides what it
+# may honestly attribute. See `pr_urls_since`, which returns every match and
+# leaves the "exactly one, or nothing" rule to `partition_service` -- so any
+# residual ambiguity still degrades to "no URL", never to a mis-attributed
+# one.
 # ---------------------------------------------------------------------------
 
 _PR_LEDGER_MAX = 512
-_pr_ledger: deque[tuple[int, str, str, str]] = deque(maxlen=_PR_LEDGER_MAX)
+
+
+@dataclass(frozen=True)
+class PrLedgerEntry:
+    """One pull request a forge reported opening.
+
+    ``attribution`` is the `hivepilot.pr_attribution` key in force on the
+    thread that opened it, or ``None`` when nothing attributed it (every
+    non-partition run: an ordinary ``hivepilot run``, a scheduled run, an API
+    run). ``None`` is NOT a wildcard -- it never matches an attributed query.
+    """
+
+    seq: int
+    project: str
+    branch: str
+    url: str
+    attribution: str | None
+
+
+_pr_ledger: deque[PrLedgerEntry] = deque(maxlen=_PR_LEDGER_MAX)
 _pr_ledger_lock = threading.Lock()
 _pr_ledger_seq = 0
 
 
 def record_pr_opened(*, project: str, branch: str, url: str) -> int:
-    """Append ``(project, branch, url)`` to the ledger; return its sequence
-    number. Called only with a URL a FORGE reported (see
-    `hivepilot.forges.provider.extract_pr_url`) -- never a derived one."""
+    """Append one entry to the ledger; return its sequence number.
+
+    Called only with a URL a FORGE reported (see
+    `hivepilot.forges.provider.extract_pr_url`) -- never a derived one.
+
+    The attribution key is read from the AMBIENT scope rather than passed in,
+    deliberately: every write to this ledger -- from `create_pr` below, and
+    from anything that ledgers a PR in future -- is then labelled with
+    whoever was running, without each call site having to remember to. Outside
+    a scope the key is `None`, so a non-partition run records exactly what it
+    recorded before this field existed.
+    """
     global _pr_ledger_seq  # noqa: PLW0603 - module-level monotonic sequence, lock-guarded
+    attribution = pr_attribution.current()
     with _pr_ledger_lock:
         _pr_ledger_seq += 1
         seq = _pr_ledger_seq
-        _pr_ledger.append((seq, project, branch, url))
+        _pr_ledger.append(
+            PrLedgerEntry(seq=seq, project=project, branch=branch, url=url, attribution=attribution)
+        )
     return seq
 
 
@@ -403,21 +444,32 @@ def pr_ledger_mark() -> int:
         return _pr_ledger_seq
 
 
-def pr_urls_since(mark: int, *, project: str | None = None) -> tuple[str, ...]:
-    """Every PR URL recorded after *mark*, optionally filtered to *project*.
+def pr_urls_since(
+    mark: int, *, project: str | None = None, attribution: str | None = None
+) -> tuple[str, ...]:
+    """Every PR URL recorded after *mark*, narrowed by the given filters.
 
-    Returns ALL matches, in order, including duplicates-by-project: the
-    caller is responsible for refusing to attribute an ambiguous result (see
-    `partition_service._capture_pr_url`, which records `NULL` unless exactly
-    one URL matched). A bounded `deque` means a very long-running process
-    eventually forgets old entries -- which loses a link, never invents one.
+    *project* and *attribution* are independent NARROWING filters; `None`
+    means "do not narrow on this". Passing an *attribution* selects only
+    entries opened under exactly that key -- an unattributed entry
+    (``attribution is None``) never matches an attributed query, so a PR
+    opened by an unrelated concurrent run can never be claimed by a
+    partition task.
+
+    Returns ALL matches, in order: the caller is responsible for refusing to
+    attribute an ambiguous result (see `partition_service._capture_pr_url`,
+    which records `NULL` unless exactly one URL matched). A bounded `deque`
+    means a very long-running process eventually forgets old entries -- which
+    loses a link, never invents one.
     """
     with _pr_ledger_lock:
         entries = list(_pr_ledger)
     return tuple(
-        url
-        for seq, entry_project, _branch, url in entries
-        if seq > mark and (project is None or entry_project == project)
+        entry.url
+        for entry in entries
+        if entry.seq > mark
+        and (project is None or entry.project == project)
+        and (attribution is None or entry.attribution == attribution)
     )
 
 
