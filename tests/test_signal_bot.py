@@ -128,6 +128,28 @@ class TestDispatchText:
     def test_empty_text(self) -> None:
         assert signal_bot._dispatch_text("   ") == "Unknown command"
 
+    def test_sender_threaded_into_chatops_payload(self) -> None:
+        """Bug class #5 wiring: the E.164 sender `_handle_envelope` already
+        resolves per message must reach `chatops_service.handle_signal` as
+        the `sender` key -- that's the owner id
+        `_pending_concierge_text`'s `PendingConfirmationStore` binds a
+        pending destructive-decision confirmation to. Without this, Signal
+        could never bind ownership at all (fail closed -> the confirmation
+        flow would silently never store anything for Signal)."""
+        with patch("hivepilot.services.chatops_service.handle_signal", return_value="ok") as handle:
+            result = signal_bot._dispatch_text("/status", "+15551234567")
+        handle.assert_called_once_with({"text": "/status", "sender": "+15551234567"})
+        assert result == "ok"
+
+    def test_no_sender_omits_the_key_byte_identical_to_before(self) -> None:
+        """Every pre-existing direct caller of `_dispatch_text` (including
+        `test_delegates_to_chatops_service` above) calls it with no
+        `sender` arg -- must stay byte-identical: no `sender` key at all,
+        not an explicit `None`."""
+        with patch("hivepilot.services.chatops_service.handle_signal", return_value="ok") as handle:
+            signal_bot._dispatch_text("/status")
+        handle.assert_called_once_with({"text": "/status"})
+
 
 # ---------------------------------------------------------------------------
 # CLI transport — receive
@@ -279,6 +301,22 @@ class TestSignalBotPollOnce:
             bot._poll_once()
         dispatch.assert_not_called()
         send.assert_not_called()
+
+    def test_poll_once_threads_sender_into_dispatch_text(self) -> None:
+        """`_dispatch_text` must receive the ENVELOPE's sender, not be
+        called text-only -- this is what makes Signal's owner-bound
+        `_pending_concierge_text` confirmations resolvable at all."""
+        bot = signal_bot.SignalBot(mode="cli")
+        envelopes = [
+            {"envelope": {"sourceNumber": ALLOWED_NUMBER, "dataMessage": {"message": "/help"}}}
+        ]
+        with (
+            patch.object(signal_bot, "_receive_cli", return_value=envelopes),
+            patch.object(signal_bot, "_dispatch_text", return_value="ok") as dispatch,
+            patch.object(bot, "send"),
+        ):
+            bot._poll_once()
+        dispatch.assert_called_once_with("/help", ALLOWED_NUMBER)
 
     def test_rest_mode_uses_receive_rest(self) -> None:
         bot = signal_bot.SignalBot(mode="rest")

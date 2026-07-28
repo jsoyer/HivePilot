@@ -27,7 +27,32 @@ _app_instance = None
 # General (not the topic the operator was watching) because the reply
 # didn't carry `message_thread_id`, AND two different topics could clobber
 # each other's pending challenge because both were keyed by bare `chat_id`.
-_pending_challenges: dict[int | tuple[int, int], tuple[int, str]] = {}
+#
+# Security fix (SAME bug class as `slack_bot._PendingChallenge` / F3 -- the
+# precedent this TTL is copied from -- and as `concierge_service._PendingOffer`
+# and the `_pending_concierge` fix below): this used to be a plain
+# `dict[int | tuple[int, int], tuple[int, str]]` with NO owner binding and NO
+# TTL. Telegram's Challenge/Ask never got Slack's F3 fix, so ANY user's next
+# message in that chat/topic -- not just the button-presser -- got consumed
+# and dispatched to the Chief of Staff *with the ORIGINAL presser recorded as
+# the author* (attribution forgery in an authorization-bearing audit record),
+# and an abandoned challenge never expired. Now backed by
+# `PendingConfirmationStore`, bound to the Telegram user id that pressed
+# "🗣 Challenge / Ask" -- see that module's docstring for the full
+# fail-closed contract.
+_CHALLENGE_TTL_SECONDS = 15 * 60
+"""TTL for a pending Challenge/Ask follow-up reply -- identical constant and
+rationale to `slack_bot._CHALLENGE_TTL_SECONDS`: composing a follow-up
+question costs the operator more effort than a button tap
+(`_CONCIERGE_CONFIRM_TTL_SECONDS`, 5 min) or a short typed reply
+(`concierge_service._OFFER_TTL_SECONDS`, 10 min), so this is the longest
+window of the three in this bug class. An operator who presses Challenge and
+never replies must not leave a run's planning_context forever exposed to
+whatever the chat happens to say next."""
+
+_pending_challenges: PendingConfirmationStore[tuple[int, str]] = PendingConfirmationStore(
+    _CHALLENGE_TTL_SECONDS
+)
 
 
 def _challenge_key(chat_id: int, thread_id: int | None) -> int | tuple[int, int]:
@@ -961,64 +986,87 @@ async def _cmd_mention(update: Any, context: Any) -> None:
         pending_key = None
 
     if pending_key is not None and update.message.text:
-        run_id, approver = _pending_challenges.pop(pending_key)
-        challenge_text = update.message.text
-        logger.info(
-            "telegram.challenge.received",
-            run_id=run_id,
-            chat_id=mask_id(chat_id),
-            thread_id=thread_id,
-        )
-        try:
-            cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
-        except Exception as exc:
-            logger.error(
-                "telegram.challenge.failed",
+        # Owner binding: only the Telegram id that pressed "🗣 Challenge / Ask"
+        # may answer it (see `_pending_challenges`'s docstring / F3 fix). A
+        # missing sender id (e.g. an anonymous channel post) never resolves
+        # either -- `resolve()` is fail-closed on both counts.
+        requester_id = _concierge_user_id(update.message)
+        pending = _pending_challenges.resolve(pending_key, requester_id)
+        if pending is None:
+            if pending_key in _pending_challenges:
+                # Entry still present -- `resolve()` only leaves an entry
+                # untouched on an owner mismatch (or a missing requester id),
+                # never on expiry (which pops it as a side effect). A
+                # different user's message -- or one with no identity at all
+                # -- must NEVER consume/dispatch someone else's pending
+                # challenge (this used to forge attribution: the ORIGINAL
+                # presser's name was recorded as the author of someone
+                # else's text in an authorization-bearing audit log). Leave
+                # the pending entry untouched and ignore this message
+                # entirely -- do not fall through to concierge classification.
+                return
+            # Expired (already dropped by resolve()) -- fall through to
+            # normal handling below (concierge classification, if enabled).
+        else:
+            run_id, approver = pending
+            _pending_challenges.discard(pending_key)
+            challenge_text = update.message.text
+            logger.info(
+                "telegram.challenge.received",
                 run_id=run_id,
                 chat_id=mask_id(chat_id),
                 thread_id=thread_id,
-                error=str(exc),
             )
-            # The full exception (which may carry runner stderr -- RunResult.detail
-            # reaches this choke-point unredacted) stays in the server-side log
-            # above ONLY. Chat gets the exception TYPE name alone, matching the
-            # Slack/Discord Challenge handlers and repo-wide exception-disclosure
-            # discipline -- never the raw message, which could leak a token or a
-            # filesystem path into a shared chat.
-            await update.message.reply_text(
-                f"⚠️ Challenge error for run #{run_id}: {type(exc).__name__}"
-            )
-            return
-        logger.info(
-            "telegram.challenge.dispatched",
-            run_id=run_id,
-            chat_id=mask_id(chat_id),
-            thread_id=thread_id,
-        )
-        # Show CoS response
-        await update.message.reply_text(
-            f"🗣 Human → Jules\n{challenge_text}\n\n🛡️ Jules → Human\n{cos_response}"
-        )
-        # Re-send approval keyboard so user can approve/deny/challenge again
-        # — stays in the SAME topic the challenge conversation is happening
-        # in, for the same reason the challenge prompt itself does.
-        try:
-            from hivepilot.services import state_service as _ss
-
-            row = _ss.get_approval(run_id)
-            if row:
-                await _send_approval_keyboard_message(
-                    context.bot,
-                    chat_id=chat_id,
+            try:
+                cos_response = _get_orch().human_challenge(run_id, challenge_text, approver)
+            except Exception as exc:
+                logger.error(
+                    "telegram.challenge.failed",
                     run_id=run_id,
-                    project=row.get("project", ""),
-                    task=row.get("task", ""),
-                    details=cos_response[:500] if cos_response else None,
-                    message_thread_id=thread_id,
+                    chat_id=mask_id(chat_id),
+                    thread_id=thread_id,
+                    error=str(exc),
                 )
-        except Exception as exc:
-            logger.warning("telegram.challenge.resend_keyboard_error", error=str(exc))
-        return
+                # The full exception (which may carry runner stderr -- RunResult.detail
+                # reaches this choke-point unredacted) stays in the server-side log
+                # above ONLY. Chat gets the exception TYPE name alone, matching the
+                # Slack/Discord Challenge handlers and repo-wide exception-disclosure
+                # discipline -- never the raw message, which could leak a token or a
+                # filesystem path into a shared chat.
+                await update.message.reply_text(
+                    f"⚠️ Challenge error for run #{run_id}: {type(exc).__name__}"
+                )
+                return
+            logger.info(
+                "telegram.challenge.dispatched",
+                run_id=run_id,
+                chat_id=mask_id(chat_id),
+                thread_id=thread_id,
+            )
+            # Show CoS response
+            await update.message.reply_text(
+                f"🗣 Human → Jules\n{challenge_text}\n\n🛡️ Jules → Human\n{cos_response}"
+            )
+            # Re-send approval keyboard so user can approve/deny/challenge again
+            # — stays in the SAME topic the challenge conversation is happening
+            # in, for the same reason the challenge prompt itself does.
+            try:
+                from hivepilot.services import state_service as _ss
+
+                row = _ss.get_approval(run_id)
+                if row:
+                    await _send_approval_keyboard_message(
+                        context.bot,
+                        chat_id=chat_id,
+                        run_id=run_id,
+                        project=row.get("project", ""),
+                        task=row.get("task", ""),
+                        details=cos_response[:500] if cos_response else None,
+                        message_thread_id=thread_id,
+                    )
+            except Exception as exc:
+                logger.warning("telegram.challenge.resend_keyboard_error", error=str(exc))
+            return
 
     if not _require_allowed(update.effective_chat.id):
         return
@@ -1611,7 +1659,8 @@ async def _callback_approval(update, context) -> None:
         return
 
     if action == "challenge":
-        approver = query.from_user.username or str(query.from_user.id)
+        presser = getattr(query, "from_user", None)
+        approver = (presser.username or str(presser.id)) if presser is not None else "unknown"
         chat_id = query.message.chat.id
         # `message_thread_id` is the FORUM topic the button was pressed in
         # (None for a DM / non-forum group / General topic). Keying the
@@ -1619,9 +1668,18 @@ async def _callback_approval(update, context) -> None:
         # means a challenge started in one topic can never be clobbered or
         # answered by a message in a different topic of the same group.
         thread_id = getattr(query.message, "message_thread_id", None)
-        _pending_challenges[_challenge_key(chat_id, thread_id)] = (
-            run_id,
-            f"telegram:{approver}",
+        # Owner binding: only the Telegram id that pressed this button may
+        # answer it -- a missing id (fail closed) means `store()` records
+        # nothing, so the follow-up prompt below is sent but can never be
+        # resolved to execution by anyone. `query.from_user` is mandatory on
+        # a real Telegram CallbackQuery (unlike `message.from_user`, which
+        # can be None for an anonymous channel post), so this is a defensive
+        # guard, not an expected runtime path.
+        owner_user_id = _concierge_user_id(query)
+        _pending_challenges.store(
+            _challenge_key(chat_id, thread_id),
+            owner_user_id,
+            (run_id, f"telegram:{approver}"),
         )
         logger.info(
             "telegram.challenge.requested",

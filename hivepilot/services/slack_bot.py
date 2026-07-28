@@ -73,6 +73,17 @@ _pending_concierge: PendingConfirmationStore[tuple[str, "ConciergeDecision"]] = 
 # silently got consumed and permanently appended to a paused run's
 # `planning_context`. Each entry is now bound to the requesting user's Slack
 # id and carries an expiry -- see `_CHALLENGE_TTL_SECONDS`.
+#
+# NOT migrated onto `hivepilot.services.pending_confirmation.
+# PendingConfirmationStore` (extracted later, closing the THIRD instance of
+# this exact bug class in `_pending_concierge` below / telegram_bot.py /
+# discord_bot.py, and the FOURTH in `telegram_bot._pending_challenges`):
+# this implementation is correct, shipped, and has its own comprehensive
+# test coverage — the churn/regression risk of rewriting a working
+# owner+TTL primitive outweighs the DRY benefit. If you are about to add a
+# FIFTH/SIXTH hand-rolled owner+TTL pending-confirmation dict anywhere in
+# this codebase, STOP: use `PendingConfirmationStore` instead of copying the
+# shape below.
 class _PendingChallenge(NamedTuple):
     run_id: int
     approver: str

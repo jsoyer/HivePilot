@@ -1463,12 +1463,21 @@ class TestDispatchApprovalLogging:
 
 class TestChallengeButtonForumTopic:
     def _make_challenge_callback_update(
-        self, *, chat_id: int, thread_id: int | None, run_id: int = 42
+        self,
+        *,
+        chat_id: int,
+        thread_id: int | None,
+        run_id: int = 42,
+        presser_id: str | None = _CONCIERGE_OWNER_ID,
     ) -> MagicMock:
         update = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.data = f"challenge:{run_id}"
         update.callback_query.from_user.username = "alice"
+        if presser_id is None:
+            update.callback_query.from_user = None
+        else:
+            update.callback_query.from_user.id = presser_id
         update.callback_query.message.chat.id = chat_id
         update.callback_query.message.message_thread_id = thread_id
         update.callback_query.message.reply_text = AsyncMock()
@@ -1556,7 +1565,7 @@ class TestChallengeButtonForumTopic:
         """An entry stored under the bare chat_id (pre-fix state) must still
         be consumed even when the follow-up message happens to carry a
         thread_id — defensive fallback, never a hard requirement."""
-        telegram_bot._pending_challenges[500] = (13, "telegram:bob")
+        telegram_bot._pending_challenges.store(500, _CONCIERGE_OWNER_ID, (13, "telegram:bob"))
 
         mention_update = _make_mention_update(chat_id=500, text="my answer")
         mention_update.message.message_thread_id = 999
@@ -1588,7 +1597,9 @@ class TestChallengeButtonForumTopic:
         assert "telegram.challenge.prompt_sent" in events
 
     def test_challenge_receive_and_dispatch_events_logged(self) -> None:
-        telegram_bot._pending_challenges[(700, 3)] = (30, "telegram:carol")
+        telegram_bot._pending_challenges.store(
+            (700, 3), _CONCIERGE_OWNER_ID, (30, "telegram:carol")
+        )
         mention_update = _make_mention_update(chat_id=700, text="my question")
         mention_update.message.message_thread_id = 3
         mention_context = _make_mention_context()
@@ -1608,7 +1619,7 @@ class TestChallengeButtonForumTopic:
         assert "telegram.challenge.dispatched" in events
 
     def test_challenge_dispatch_failure_logs_failed_event(self) -> None:
-        telegram_bot._pending_challenges[(750, 4)] = (31, "telegram:dave")
+        telegram_bot._pending_challenges.store((750, 4), _CONCIERGE_OWNER_ID, (31, "telegram:dave"))
         mention_update = _make_mention_update(chat_id=750, text="my question")
         mention_update.message.message_thread_id = 4
         mention_context = _make_mention_context()
@@ -1632,7 +1643,7 @@ class TestChallengeButtonForumTopic:
         unredacted), so echoing `str(exc)` into a shared Telegram chat can
         leak a token or a filesystem path. The full exception stays in the
         server-side `telegram.challenge.failed` log."""
-        telegram_bot._pending_challenges[(760, 4)] = (32, "telegram:dave")
+        telegram_bot._pending_challenges.store((760, 4), _CONCIERGE_OWNER_ID, (32, "telegram:dave"))
         mention_update = _make_mention_update(chat_id=760, text="my question")
         mention_update.message.message_thread_id = 4
         mention_context = _make_mention_context()
@@ -1670,6 +1681,123 @@ class TestChallengeButtonForumTopic:
 
         error_events = [call.args[0] for call in mock_logger.error.call_args_list]
         assert "telegram.challenge.prompt_failed" in error_events
+
+    # -------------------------------------------------------------------
+    # F4 fix: `_pending_challenges` is now owner+TTL bound via
+    # `PendingConfirmationStore`, closing the SAME bug class Slack's F3 fix
+    # closed for `_PendingChallenge` -- Telegram never got that fix until now.
+    # -------------------------------------------------------------------
+
+    def test_challenge_store_is_bound_to_the_pressers_id(self) -> None:
+        update = self._make_challenge_callback_update(
+            chat_id=900, thread_id=None, run_id=50, presser_id="alice-id"
+        )
+        context = MagicMock()
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(update, context))
+
+        # Only "alice-id" (the presser) may resolve it -- a different id must not.
+        assert telegram_bot._pending_challenges.resolve(900, "someone-else") is None
+        assert telegram_bot._pending_challenges.resolve(900, "alice-id") == (
+            50,
+            "telegram:alice",
+        )
+
+    def test_missing_pressers_id_stores_nothing_fail_closed(self) -> None:
+        """Fail closed: `CallbackQuery.from_user` is mandatory on a real
+        Telegram callback, but a defensive guard still applies -- with no
+        presser identity, `store()` must record NOTHING. The keyboard
+        prompt may still be sent (mirrors `_pending_concierge`'s identical
+        precedent), but nobody can ever be verified as its owner, so
+        nobody may ever resolve it."""
+        update = self._make_challenge_callback_update(
+            chat_id=950, thread_id=None, run_id=70, presser_id=None
+        )
+        context = MagicMock()
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(update, context))
+
+        assert 950 not in telegram_bot._pending_challenges
+        update.callback_query.message.reply_text.assert_awaited_once()
+
+    def test_different_replier_does_not_consume_and_entry_survives_for_the_real_owner(
+        self,
+    ) -> None:
+        """The core F4 regression this migration closes: Telegram's
+        Challenge/Ask never got Slack's F3 owner-binding fix -- ANY chat
+        member's next message used to be dispatched and logged AS IF the
+        ORIGINAL button-presser wrote it (attribution forgery in an
+        authorization-bearing audit record). A different replier must
+        never consume/dispatch it, the entry must survive untouched, and
+        the real presser must still be able to answer afterward."""
+        callback_update = self._make_challenge_callback_update(
+            chat_id=850, thread_id=6, run_id=60, presser_id=_CONCIERGE_OWNER_ID
+        )
+        callback_context = MagicMock()
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._callback_approval(callback_update, callback_context))
+        assert (850, 6) in telegram_bot._pending_challenges
+
+        # A DIFFERENT chat member replies first -- must not be consumed.
+        stranger_update = _make_mention_update(
+            chat_id=850, text="I'll answer for them", from_user_id="stranger-999"
+        )
+        stranger_update.message.message_thread_id = 6
+        stranger_context = _make_mention_context()
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch") as mock_get_orch,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(stranger_update, stranger_context))
+        mock_get_orch.assert_not_called()
+        # Untouched -- the real presser can still answer afterward.
+        assert (850, 6) in telegram_bot._pending_challenges
+
+        # The ACTUAL presser answers afterward -- still works (regression
+        # guard: the legitimate path still reaches `human_challenge`).
+        owner_update = _make_mention_update(
+            chat_id=850, text="the real answer", from_user_id=_CONCIERGE_OWNER_ID
+        )
+        owner_update.message.message_thread_id = 6
+        owner_context = _make_mention_context()
+        orch = MagicMock()
+        orch.human_challenge.return_value = "CoS response"
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+            patch("hivepilot.services.state_service.get_approval", return_value=None),
+        ):
+            asyncio.run(telegram_bot._cmd_mention(owner_update, owner_context))
+        orch.human_challenge.assert_called_once_with(60, "the real answer", "telegram:alice")
+        assert (850, 6) not in telegram_bot._pending_challenges
+
+    def test_expired_challenge_is_dropped_and_never_dispatched(self) -> None:
+        pending_key = telegram_bot._challenge_key(960, 7)
+        telegram_bot._pending_challenges.store(
+            pending_key, _CONCIERGE_OWNER_ID, (80, "telegram:eve")
+        )
+        # White-box: force expiry (mirrors test_pending_confirmation.py's
+        # own approach to testing TTL expiry deterministically).
+        existing = telegram_bot._pending_challenges._pending[pending_key]
+        telegram_bot._pending_challenges._pending[pending_key] = existing.__class__(
+            owner_id=existing.owner_id, payload=existing.payload, expires_at=0.0
+        )
+        assert pending_key in telegram_bot._pending_challenges
+
+        mention_update = _make_mention_update(chat_id=960, text="too late now")
+        mention_update.message.message_thread_id = 7
+        mention_context = _make_mention_context()
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch") as mock_get_orch,
+        ):
+            asyncio.run(telegram_bot._cmd_mention(mention_update, mention_context))
+
+        mock_get_orch.assert_not_called()
+        # Dropped as a side effect of the expired resolve() -- never left
+        # dangling for some later, unrelated message to consume.
+        assert pending_key not in telegram_bot._pending_challenges
 
 
 class TestCallbackApprovalNoMessage:

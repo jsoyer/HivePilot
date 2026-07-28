@@ -125,12 +125,22 @@ def _notification_number() -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_text(text: str) -> str:
+def _dispatch_text(text: str, sender: str | None = None) -> str:
     """Route an inbound Signal message body to a reply string. `help` is
     handled locally (pure UI text, not a chatops_service concern); everything
     else — including the bare `approve <run_id>`/`deny <run_id>` reply form —
     delegates to `chatops_service.handle_signal`, never reimplementing the
-    orchestrator/state_service calls the other bots duplicate locally."""
+    orchestrator/state_service calls the other bots duplicate locally.
+
+    *sender* (the E.164 number `_handle_envelope` already resolved for this
+    message) is threaded into the payload as `sender` — the owner id
+    `chatops_service._pending_concierge_text`'s `PendingConfirmationStore`
+    binds a pending destructive-decision confirmation to, so a "yes <token>"
+    from a DIFFERENT Signal number can never resolve someone else's pending
+    decision. Omitted entirely (rather than sent as `None`) when not given,
+    so `_dispatch_text("/help")` (no sender, as every pre-existing direct
+    caller/test calls it) stays byte-identical to before this parameter
+    existed."""
     text = text.strip()
     if not text:
         return "Unknown command"
@@ -140,8 +150,12 @@ def _dispatch_text(text: str) -> str:
 
     from hivepilot.services.chatops_service import handle_signal
 
+    payload: dict[str, str] = {"text": text}
+    if sender is not None:
+        payload["sender"] = sender
+
     try:
-        return handle_signal({"text": text})
+        return handle_signal(payload)
     except Exception as exc:  # noqa: BLE001 — never let a bad command crash the receive loop
         logger.error("signal_bot.dispatch.error", error=str(exc))
         return f"Error: {exc}"
@@ -324,7 +338,7 @@ class SignalBot:
         if not _is_allowed(sender):
             logger.warning("signal_bot.unauthorized", sender=sender)
             return
-        reply = _dispatch_text(text)
+        reply = _dispatch_text(text, sender)
         if reply:
             self.send(sender, reply)
 
