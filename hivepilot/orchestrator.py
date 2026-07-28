@@ -54,6 +54,8 @@ from hivepilot.outward import permits as outward_permits
 from hivepilot.outward import scope as outward_scope
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager, SkillSpec
+from hivepilot.pr_attribution import adopt as pr_attribution_adopt
+from hivepilot.pr_attribution import capture as pr_attribution_capture
 from hivepilot.registry import RunnerRegistry
 from hivepilot.runners.base import (
     RunnerExecutionError,
@@ -1793,8 +1795,24 @@ class Orchestrator:
         # that capture/adopt carries it.
         _outward = outward_capture()
 
+        # Same fact, third consumer: the run-scoped PR-URL ATTRIBUTION key
+        # (`hivepilot.pr_attribution`) is a contextvar too, and the code that
+        # actually opens a pull request — `perform_git_actions` -> `create_pr`
+        # -> `git_service.record_pr_opened`, below in `_execute_task_body` —
+        # runs on the pool worker. Without this capture/adopt the ledger entry
+        # would be written unattributed, and the partition journal would have
+        # to fall back to guessing from a time window (which is exactly the
+        # ambiguity this key removes). Losing it degrades to `NULL`, never to a
+        # wrong link; `tests/test_pr_attribution.py::TestThreadBoundary` pins
+        # both halves.
+        _pr_attribution = pr_attribution_capture()
+
         def _execute_task_traced(**kwargs):
-            with outward_adopt(_outward), use_context(_otel_ctx):
+            with (
+                outward_adopt(_outward),
+                pr_attribution_adopt(_pr_attribution),
+                use_context(_otel_ctx),
+            ):
                 return self._execute_task(**kwargs)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=limit) as executor:
