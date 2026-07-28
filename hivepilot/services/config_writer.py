@@ -143,6 +143,19 @@ def _validate_prospective(file: str, mutated_text: str, containing_dir: Path) ->
         plugins_src = containing_dir / "plugins"
         if plugins_src.exists():
             shutil.copytree(plugins_src, tmp_dir / "plugins")
+        # Same reason, for the OTHER skill source: `skills/<name>/SKILL.md`
+        # directories (`hivepilot/skill_dirs.py`). A config dir that ships its
+        # skills as directories (the config-repo case) would otherwise have
+        # every one of its `skills:` references false-positive as "unknown
+        # skill" in the scratch copy, blocking every `config set`/`config
+        # edit` write against that directory. `symlinks=True`: copying links
+        # AS links keeps a directory-escaping symlink escaping, so
+        # `skill_dirs`' containment check still rejects it here instead of
+        # `copytree` dereferencing it into a real in-scratch file and
+        # silently validating something the live tree would refuse.
+        skills_src = containing_dir / "skills"
+        if skills_src.exists():
+            shutil.copytree(skills_src, tmp_dir / "skills", symlinks=True)
 
         (tmp_dir / file).write_text(mutated_text, encoding="utf-8")
 

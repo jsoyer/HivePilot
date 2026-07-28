@@ -3626,6 +3626,15 @@ def validate(
         typer.echo("Plugin dirs scanned:")
         for plugin_dir in report.plugin_dirs:
             typer.echo(f"  {plugin_dir}")
+    # The OTHER skill source -- `<root>/skills/<name>/SKILL.md` directories
+    # (hivepilot/skill_dirs.py). Printed separately from the plugin dirs so
+    # the header names every root that was really consulted; a config repo
+    # shipping `skills/` was silently ignored for exactly as long as this
+    # output pretended plugin dirs were the whole story.
+    if report.skill_dirs:
+        typer.echo("Skill dirs scanned:")
+        for skill_dir in report.skill_dirs:
+            typer.echo(f"  {skill_dir}")
 
     if not report.problems:
         typer.echo("OK")
