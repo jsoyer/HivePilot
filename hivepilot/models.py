@@ -245,6 +245,27 @@ class ProjectConfig(BaseModel):
     # pure metadata for callers (e.g. a future "which modules have a UI"
     # filter); not consumed anywhere in this sprint.
     ui_surfaces: list[str] = Field(default_factory=list)
+    # ---- Per-project Obsidian vault (per-project-vault PRD) ----
+    # Where THIS project's HivePilot artifacts are written (and read back
+    # from by the `obsidian` plugin's `recall`). `None` (the default, and an
+    # explicit `obsidian_vault: null`) means "inherit the global
+    # `Settings.obsidian_vault`" -- byte-identical to before this field
+    # existed, so every pre-existing deployment is unaffected until someone
+    # opts in.
+    #
+    # Exists because HivePilot is a generic engine whose unit of
+    # configuration is a PIPELINE, and several pipelines routinely coexist on
+    # one host (the operator's own HivePilot work vs. a product pipeline). A
+    # single global vault cannot express that.
+    #
+    # Fail-closed semantics, enforced by `validate_obsidian_vault` below and
+    # documented in full in `hivepilot.services.obsidian_vault_resolver`:
+    # an EMPTY/whitespace-only value and a RELATIVE path are both REJECTED at
+    # load time. Empty must never silently mean "use the global" (that would
+    # route artifacts back into the very vault the operator was moving away
+    # from), and a relative path is the cwd-silo bug class that produced
+    # three divergent `state.db` files on the operator's box.
+    obsidian_vault: Path | None = None
 
     @field_validator("forge")
     @classmethod
@@ -273,6 +294,52 @@ class ProjectConfig(BaseModel):
         if v not in FORGE_MAP:
             raise ValueError(f"Unknown forge {v!r}; available: {sorted(FORGE_MAP)}")
         return v
+
+    @field_validator("obsidian_vault", mode="before")
+    @classmethod
+    def validate_obsidian_vault(cls, v: Any) -> Any:
+        """Fail closed on the two ways a per-project vault override silently
+        sends artifacts to the wrong place.
+
+        `mode="before"` so the RAW value is inspected: pydantic coerces `""`
+        to `Path(".")`, which would otherwise be indistinguishable from a
+        deliberate (still wrong) relative path and produce a misleading error.
+
+        1. EMPTY / whitespace-only -> reject. Never "fall back to the global
+           vault": an empty value on a routing decision is always a config
+           mistake (a typo, or an unexpanded `${VAULT}` template), and
+           treating it as "no constraint" would silently route this project's
+           artifacts back into the shared vault the operator was explicitly
+           moving away from. This is the documented recurring bug class in
+           this codebase (an empty value read as "no constraint" -> the gate
+           fails OPEN); on a destination, empty means reject.
+        2. RELATIVE -> reject. A relative vault path resolves against
+           whatever cwd the daemon happens to have -- the same cwd-silo bug
+           class that produced three divergent `state.db` files on the
+           operator's box. `~` is expanded first, so `~/vault` is accepted.
+
+        `None` (absent, or an explicit `obsidian_vault: null`) passes through
+        untouched and means "inherit the global setting".
+        """
+        if v is None:
+            return None
+        text = str(v).strip()
+        if not text:
+            raise ValueError(
+                "ProjectConfig.obsidian_vault must not be empty -- an empty override "
+                "is never interpreted as 'use the global vault'. Remove the key "
+                "entirely to inherit HIVEPILOT_OBSIDIAN_VAULT, or set a real path."
+            )
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError(
+                f"ProjectConfig.obsidian_vault = {text!r} must be an absolute path "
+                "(or start with '~/'). A relative vault path resolves against the "
+                "daemon's current working directory, so the same config would write "
+                "artifacts to a different place depending on how HivePilot was "
+                "started."
+            )
+        return path.resolve()
 
     @field_validator("instruction_files")
     @classmethod

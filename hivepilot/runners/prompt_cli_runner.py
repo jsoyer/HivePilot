@@ -50,15 +50,12 @@ class PromptCliRunner(BaseRunner):
                 prompt_file_not_found_message(payload, self.settings, prompt_file, prompt_path)
             )
         from hivepilot.config import settings
+        from hivepilot.services.obsidian_vault_resolver import resolve_prompt_vault
         from hivepilot.utils.prompt_vars import render_prompt_vars
 
         raw = prompt_path.read_text(encoding="utf-8").strip()
         target_repo = str(payload.project.path) if payload.project.path else "."
-        obsidian_vault = (
-            str(self.settings.obsidian_vault)
-            if getattr(self.settings, "obsidian_vault", None)
-            else ""
-        )
+        obsidian_vault = resolve_prompt_vault(self.settings, payload.project)
         return render_prompt_vars(
             raw,
             target_repo=target_repo,

@@ -1540,12 +1540,32 @@ def check_dangling_instruction_files(config_dir: Path | None) -> list[DoctorFind
 
 
 # ---------------------------------------------------------------------------
-# Check: `Settings.obsidian_vault` is a single GLOBAL setting while several
-# projects/pipelines commonly coexist on one machine (incident #2). This is a
-# known ENGINE LIMITATION, not a misconfiguration -- informational only, so
-# an operator learns it from the tool instead of a surprise the first time
-# they want a personal vault separate from a product vault.
+# Check: every project falls back to the single GLOBAL `Settings.
+# obsidian_vault` while several projects/pipelines commonly coexist on one
+# machine (incident #2).
+#
+# This USED to be reported as a permanent engine limitation with "no config
+# fix today". The per-project-vault PRD added `ProjectConfig.obsidian_vault`,
+# so there IS a fix now -- and a doctor that keeps reporting a solved
+# limitation is noise (this module has already been through a
+# 17-false-positives episode). Two changes:
+#   * the finding now names the actual fix (`obsidian_vault:` in
+#     projects.yaml), and
+#   * it STOPS FIRING entirely once any project declares an override -- the
+#     operator has demonstrably taken control of the routing.
+# It also reports an override value that would refuse to load (empty or
+# relative), which would otherwise surface only as a projects.yaml load
+# failure with no pointer to the vault key.
 # ---------------------------------------------------------------------------
+
+
+def _raw_vault_override(entry: object) -> object | None:
+    """The raw `obsidian_vault` value from a projects.yaml entry, if present."""
+    if not isinstance(entry, dict):
+        return None
+    if "obsidian_vault" not in entry:
+        return None
+    return entry["obsidian_vault"]
 
 
 def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
@@ -1558,6 +1578,50 @@ def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
     )
     findings.extend(section_findings)
 
+    # An override that `ProjectConfig.validate_obsidian_vault` rejects makes
+    # the WHOLE projects.yaml fail to load, so name the offending key here.
+    # Deterministic: mirrors the validator's two rejection rules exactly, so
+    # it can never be a false positive.
+    overrides: dict[str, object] = {}
+    for project_name, entry in projects_section.items():
+        raw = _raw_vault_override(entry)
+        if raw is None:
+            continue
+        overrides[str(project_name)] = raw
+        text = str(raw).strip()
+        if not text:
+            findings.append(
+                _finding(
+                    "error",
+                    "project_vault_override_invalid",
+                    f"project '{project_name}' declares an EMPTY `obsidian_vault:` override",
+                    "an empty override is never interpreted as 'use the global vault' -- "
+                    "that would silently route this project's artifacts back into the very "
+                    "vault you were moving away from. projects.yaml will refuse to load",
+                    "remove the `obsidian_vault:` key entirely to inherit "
+                    "HIVEPILOT_OBSIDIAN_VAULT, or set a real absolute path",
+                )
+            )
+        elif not Path(text).expanduser().is_absolute():
+            findings.append(
+                _finding(
+                    "error",
+                    "project_vault_override_invalid",
+                    f"project '{project_name}' declares a RELATIVE `obsidian_vault:` "
+                    f"override ({text!r})",
+                    "a relative vault path resolves against whatever working directory the "
+                    "daemon happens to have, so the same config writes artifacts to a "
+                    "different place depending on how HivePilot was started. projects.yaml "
+                    "will refuse to load",
+                    f"use an absolute path (or one starting with '~/') instead of {text!r}",
+                )
+            )
+
+    if overrides:
+        # The operator is routing vaults per project -- the shared-vault
+        # limitation no longer applies to this deployment. Stay quiet.
+        return findings
+
     project_count = len(projects_section)
     if project_count < 2:
         return findings
@@ -1566,17 +1630,18 @@ def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
         _finding(
             "info",
             "shared_obsidian_vault",
-            f"{project_count} projects are configured, but Settings.obsidian_vault is a "
-            "single GLOBAL path -- every project's HivePilot artifacts land in the SAME "
-            "vault",
-            "the Obsidian vault destination is a machine-wide setting, not a per-project "
-            "or per-pipeline one. Several pipelines on the same host (e.g. your own "
-            "HivePilot work vs. a product pipeline) cannot be routed to different vaults "
-            "today -- this is a known engine limitation, not something you misconfigured",
-            "no config fix today (per-project/per-pipeline vault destination is a "
-            "separate, larger change) -- if this matters for your setup, run pipelines "
-            "that need a different vault on their own HivePilot host/instance, each with "
-            "its own HIVEPILOT_OBSIDIAN_VAULT",
+            f"{project_count} projects are configured and none declares an "
+            "`obsidian_vault:` override -- every project's HivePilot artifacts land in "
+            "the SAME vault (the global Settings.obsidian_vault)",
+            "the global vault is a machine-wide default. Several pipelines on the same "
+            "host (e.g. your own HivePilot work vs. a product pipeline) normally want "
+            "different vaults; sharing one is fine if that is what you intended, but it "
+            "is a default rather than a decision",
+            "set `obsidian_vault: /absolute/path/to/vault` on the projects that need "
+            "their own destination in projects.yaml (must be absolute, must already "
+            "exist -- HivePilot never creates it). Projects without the key keep using "
+            "HIVEPILOT_OBSIDIAN_VAULT. This finding stops appearing once any project "
+            "declares an override",
         )
     )
     return findings

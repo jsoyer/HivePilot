@@ -253,6 +253,30 @@ Configure the vault path via `HIVEPILOT_OBSIDIAN_VAULT`. Vault content written b
 is secrets-masked. See [PLUGINS.md](PLUGINS.md) for how the Obsidian plugin registers its
 notifier and hooks.
 
+### Which vault? (per-project destination)
+
+`HIVEPILOT_OBSIDIAN_VAULT` is the machine-wide **default**. A project can route its own
+artifacts elsewhere with `obsidian_vault:` in projects.yaml — HivePilot's own work to a
+personal vault, a product pipeline's work to the project vault:
+
+```yaml
+projects:
+  hivepilot:
+    path: /home/jerome/code/hivepilot
+    obsidian_vault: /home/jerome/vaults/personal
+  noxys:
+    path: /home/jerome/code/noxys
+    obsidian_vault: /home/jerome/vaults/noxys
+```
+
+Every writer in the table below, plus the plugin's `recall` read path and the
+`{OBSIDIAN_VAULT}` prompt variable, resolves through the same function
+(`hivepilot/services/obsidian_vault_resolver.py`), so reads and writes can never target
+different vaults. A project with no `obsidian_vault:` key keeps using the global setting
+unchanged. The override must be absolute and must already exist — HivePilot never creates
+a vault directory. Full rules (including why an empty or relative value refuses to load):
+[CONFIGURATION.md → Per-project Obsidian vault](CONFIGURATION.md#per-project-obsidian-vault--obsidian_vault).
+
 ### Vault layout (where HivePilot writes)
 
 HivePilot writes into a small, fixed set of folders below the vault root. Every write goes
