@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -578,13 +579,23 @@ def test_fetch_recent_chats_dedupes(monkeypatch) -> None:
 
 from hivepilot.services.concierge_service import ConciergeDecision  # noqa: E402
 
+# Default sender id every helper-seeded mention/callback update below binds
+# to, unless a test explicitly wants a mismatch/missing-owner scenario.
+_CONCIERGE_OWNER_ID = "100"
 
-def _make_mention_update(chat_id: int = 555, text: str = "hello there") -> MagicMock:
+
+def _make_mention_update(
+    chat_id: int = 555, text: str = "hello there", *, from_user_id: str | None = _CONCIERGE_OWNER_ID
+) -> MagicMock:
     update = MagicMock()
     update.effective_chat.id = chat_id
     update.message.chat.id = chat_id
     update.message.text = text
     update.message.reply_text = AsyncMock()
+    if from_user_id is None:
+        update.message.from_user = None
+    else:
+        update.message.from_user = MagicMock(id=from_user_id)
     return update
 
 
@@ -662,7 +673,11 @@ class TestConciergeOnDestructive:
             asyncio.run(telegram_bot._cmd_mention(update, context))
 
         assert 777 in telegram_bot._pending_concierge
-        stored_token, stored_decision = telegram_bot._pending_concierge[777]
+        # Bound to the message sender (_CONCIERGE_OWNER_ID) -- only they may
+        # resolve it via the Yes/No keyboard.
+        resolved = telegram_bot._pending_concierge.resolve(777, _CONCIERGE_OWNER_ID)
+        assert resolved is not None
+        stored_token, stored_decision = resolved
         assert stored_decision == decision
         assert stored_token  # non-empty
         context.bot.send_message.assert_awaited_once()
@@ -706,6 +721,30 @@ class TestConciergeOnDestructive:
         assert call_kwargs.get("parse_mode") is None
         assert malicious_order in call_kwargs["text"]
 
+    def test_missing_sender_id_stores_nothing_fail_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail closed: if Telegram gives us no sender (e.g. an anonymous
+        channel post), the keyboard may still be rendered but the pending
+        entry must never be stored -- nobody could ever be verified as its
+        owner, so nobody may ever be allowed to resolve it."""
+        monkeypatch.setattr(telegram_bot.settings, "chatops_concierge_enabled", True)
+        update = _make_mention_update(chat_id=779, text="ask gustave to fix it", from_user_id=None)
+        context = _make_mention_context()
+        telegram_bot._pending_challenges.clear()
+        telegram_bot._pending_concierge.clear()
+        decision = ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix it", destructive=True
+        )
+
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch("hivepilot.services.concierge_service.route", return_value=decision),
+        ):
+            asyncio.run(telegram_bot._cmd_mention(update, context))
+
+        assert 779 not in telegram_bot._pending_concierge
+
     def teardown_method(self, method) -> None:
         telegram_bot._pending_concierge.clear()
 
@@ -713,7 +752,9 @@ class TestConciergeOnDestructive:
 class TestConciergeCallback:
     """`concierge:yes:<token>` / `concierge:no:<token>` inline-keyboard callback."""
 
-    def _make_callback_update(self, chat_id: int, data: str) -> MagicMock:
+    def _make_callback_update(
+        self, chat_id: int, data: str, *, from_user_id: str | None = _CONCIERGE_OWNER_ID
+    ) -> MagicMock:
         update = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -721,6 +762,10 @@ class TestConciergeCallback:
         update.callback_query.message.reply_text = AsyncMock()
         update.callback_query.message.delete = AsyncMock()
         update.callback_query.data = data
+        if from_user_id is None:
+            update.callback_query.from_user = None
+        else:
+            update.callback_query.from_user = MagicMock(id=from_user_id)
         return update
 
     def _make_callback_context(self) -> MagicMock:
@@ -730,9 +775,10 @@ class TestConciergeCallback:
         return ctx
 
     def test_no_cancels_and_drops_pending(self) -> None:
-        telegram_bot._pending_concierge[888] = (
-            "tok123",
-            ConciergeDecision(kind="action", action="run", destructive=True),
+        telegram_bot._pending_concierge.store(
+            888,
+            _CONCIERGE_OWNER_ID,
+            ("tok123", ConciergeDecision(kind="action", action="run", destructive=True)),
         )
         update = self._make_callback_update(888, "concierge:no:tok123")
         context = self._make_callback_context()
@@ -747,7 +793,7 @@ class TestConciergeCallback:
         decision = ConciergeDecision(
             kind="route", role_key="developer", target="acme", order="do it", destructive=True
         )
-        telegram_bot._pending_concierge[999] = ("realtoken", decision)
+        telegram_bot._pending_concierge.store(999, _CONCIERGE_OWNER_ID, ("realtoken", decision))
         update = self._make_callback_update(999, "concierge:yes:realtoken")
         context = self._make_callback_context()
 
@@ -764,7 +810,7 @@ class TestConciergeCallback:
         assert orch.run_task.call_args.kwargs["project_names"] == ["acme"]
 
     def test_yes_with_no_pending_reports_expired(self) -> None:
-        telegram_bot._pending_concierge.pop(111, None)
+        telegram_bot._pending_concierge.discard(111)
         update = self._make_callback_update(111, "concierge:yes:tok123")
         context = self._make_callback_context()
 
@@ -782,7 +828,9 @@ class TestConciergeCallback:
         current_decision = ConciergeDecision(
             kind="route", role_key="developer", target="acme", order="current", destructive=True
         )
-        telegram_bot._pending_concierge[333] = ("currenttoken", current_decision)
+        telegram_bot._pending_concierge.store(
+            333, _CONCIERGE_OWNER_ID, ("currenttoken", current_decision)
+        )
         update = self._make_callback_update(333, "concierge:yes:staletoken")
         context = self._make_callback_context()
 
@@ -796,7 +844,10 @@ class TestConciergeCallback:
         orch.run_task.assert_not_called()
         orch.run_pipeline.assert_not_called()
         # Current pending decision is untouched by the stale-token attempt.
-        assert telegram_bot._pending_concierge[333] == ("currenttoken", current_decision)
+        assert telegram_bot._pending_concierge.resolve(333, _CONCIERGE_OWNER_ID) == (
+            "currenttoken",
+            current_decision,
+        )
         update.callback_query.edit_message_text.assert_awaited_once()
         text = update.callback_query.edit_message_text.call_args.args[0]
         assert "expired" in text.lower()
@@ -816,10 +867,10 @@ class TestConciergeCallback:
             params={"pipeline": "company"},
             destructive=True,
         )
-        telegram_bot._pending_concierge[444] = ("token_a", decision_a)
+        telegram_bot._pending_concierge.store(444, _CONCIERGE_OWNER_ID, ("token_a", decision_a))
         # A newer destructive message overwrites the pending entry before
         # the user acts on A's keyboard.
-        telegram_bot._pending_concierge[444] = ("token_b", decision_b)
+        telegram_bot._pending_concierge.store(444, _CONCIERGE_OWNER_ID, ("token_b", decision_b))
 
         update = self._make_callback_update(444, "concierge:yes:token_a")  # A's stale button
         context = self._make_callback_context()
@@ -835,11 +886,14 @@ class TestConciergeCallback:
         orch.run_pipeline.assert_not_called()
         orch.run_approved.assert_not_called()
         # B is still pending, untouched, and can still be confirmed correctly later.
-        assert telegram_bot._pending_concierge[444] == ("token_b", decision_b)
+        assert telegram_bot._pending_concierge.resolve(444, _CONCIERGE_OWNER_ID) == (
+            "token_b",
+            decision_b,
+        )
 
     def test_unauthorized_chat_never_executes(self) -> None:
         decision = ConciergeDecision(kind="action", action="run", destructive=True)
-        telegram_bot._pending_concierge[222] = ("tok123", decision)
+        telegram_bot._pending_concierge.store(222, _CONCIERGE_OWNER_ID, ("tok123", decision))
         update = self._make_callback_update(222, "concierge:yes:tok123")
         context = self._make_callback_context()
 
@@ -852,6 +906,132 @@ class TestConciergeCallback:
         mock_get_orch.assert_not_called()
         # Pending entry is untouched by an unauthorized attempt.
         assert 222 in telegram_bot._pending_concierge
+
+    def teardown_method(self, method) -> None:
+        telegram_bot._pending_concierge.clear()
+
+
+# ---------------------------------------------------------------------------
+# Owner binding + TTL for `_pending_concierge` (this fix — same bug class as
+# `slack_bot._PendingChallenge` / `concierge_service._PendingOffer`). Before
+# this fix, `_pending_concierge` was keyed by chat_id ONLY: any user's
+# Yes/No press on the inline keyboard resolved ANY pending decision in that
+# chat regardless of who triggered it, and an entry never expired.
+# ---------------------------------------------------------------------------
+
+
+class TestConciergeCallbackOwnerBindingAndTTL:
+    def test_different_user_yes_press_does_not_execute_and_leaves_pending(self) -> None:
+        """Alice's destructive decision is pending; Mallory presses ✅ in the
+        same chat. Must NOT execute, and Alice must still be able to confirm
+        it herself afterwards."""
+        decision = ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="do it", destructive=True
+        )
+        telegram_bot._pending_concierge.store(555, _CONCIERGE_OWNER_ID, ("tok123", decision))
+        update = self._make_update_for_owner_test(555, "concierge:yes:tok123", "U-MALLORY")
+        context = self._make_context_for_owner_test()
+
+        orch = MagicMock()
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        orch.run_task.assert_not_called()
+        update.callback_query.edit_message_text.assert_awaited_once_with(
+            "This confirmation has expired."
+        )
+        # Untouched -- the real owner can still confirm it herself.
+        assert telegram_bot._pending_concierge.resolve(555, _CONCIERGE_OWNER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_different_user_no_press_does_not_cancel_owners_pending_decision(self) -> None:
+        """A colleague pressing ❌ must not cancel someone else's pending
+        decision either -- resolution (Yes OR No) is owner-bound."""
+        decision = ConciergeDecision(kind="action", action="run", destructive=True)
+        telegram_bot._pending_concierge.store(556, _CONCIERGE_OWNER_ID, ("tok123", decision))
+        update = self._make_update_for_owner_test(556, "concierge:no:tok123", "U-MALLORY")
+        context = self._make_context_for_owner_test()
+
+        with patch.object(telegram_bot, "_require_allowed", return_value=True):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        assert telegram_bot._pending_concierge.resolve(556, _CONCIERGE_OWNER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_missing_presser_id_does_not_execute(self) -> None:
+        """Fail closed: a callback with no resolvable Telegram user id must
+        never execute the pending decision."""
+        decision = ConciergeDecision(kind="action", action="run", destructive=True)
+        telegram_bot._pending_concierge.store(557, _CONCIERGE_OWNER_ID, ("tok123", decision))
+        update = self._make_update_for_owner_test(557, "concierge:yes:tok123", None)
+        context = self._make_context_for_owner_test()
+
+        orch = MagicMock()
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        orch.run_task.assert_not_called()
+        assert telegram_bot._pending_concierge.resolve(557, _CONCIERGE_OWNER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_expired_pending_not_honoured_yes_reports_expired_and_does_not_execute(self) -> None:
+        """An expired entry must be dropped and never executed, even by the
+        rightful owner pressing the (now-stale) keyboard within the token."""
+        from hivepilot.services.pending_confirmation import _Pending
+
+        decision = ConciergeDecision(kind="action", action="run", destructive=True)
+        telegram_bot._pending_concierge._pending[558] = _Pending(
+            owner_id=_CONCIERGE_OWNER_ID,
+            payload=("tok123", decision),
+            expires_at=time.time() - 1,
+        )
+        update = self._make_update_for_owner_test(558, "concierge:yes:tok123", _CONCIERGE_OWNER_ID)
+        context = self._make_context_for_owner_test()
+
+        orch = MagicMock()
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "_get_orch", return_value=orch),
+        ):
+            asyncio.run(telegram_bot._concierge_callback(update, context))
+
+        orch.run_task.assert_not_called()
+        update.callback_query.edit_message_text.assert_awaited_once_with(
+            "This confirmation has expired."
+        )
+        # Dropped, not just left pending.
+        assert 558 not in telegram_bot._pending_concierge
+
+    @staticmethod
+    def _make_update_for_owner_test(chat_id: int, data: str, from_user_id: str | None) -> MagicMock:
+        update = MagicMock()
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message.chat.id = chat_id
+        update.callback_query.data = data
+        update.callback_query.from_user = (
+            None if from_user_id is None else MagicMock(id=from_user_id)
+        )
+        return update
+
+    @staticmethod
+    def _make_context_for_owner_test() -> MagicMock:
+        ctx = MagicMock()
+        ctx.bot = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        return ctx
 
     def teardown_method(self, method) -> None:
         telegram_bot._pending_concierge.clear()
@@ -905,7 +1085,9 @@ class TestConciergeMultiDispatch:
             asyncio.run(telegram_bot._cmd_mention(update, context))
 
         assert 1001 in telegram_bot._pending_concierge
-        stored_token, stored_decision = telegram_bot._pending_concierge[1001]
+        resolved = telegram_bot._pending_concierge.resolve(1001, _CONCIERGE_OWNER_ID)
+        assert resolved is not None
+        stored_token, stored_decision = resolved
         assert stored_decision == decision
         context.bot.send_message.assert_awaited_once()
         call_kwargs = context.bot.send_message.call_args.kwargs
@@ -921,7 +1103,7 @@ class TestConciergeMultiDispatch:
 
     def test_confirm_yes_dispatches_all_three_orders(self) -> None:
         decision = self._multi_decision()
-        telegram_bot._pending_concierge[2002] = ("tok-multi", decision)
+        telegram_bot._pending_concierge.store(2002, _CONCIERGE_OWNER_ID, ("tok-multi", decision))
         update = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -929,6 +1111,7 @@ class TestConciergeMultiDispatch:
         update.callback_query.message.reply_text = AsyncMock()
         update.callback_query.message.delete = AsyncMock()
         update.callback_query.data = "concierge:yes:tok-multi"
+        update.callback_query.from_user = MagicMock(id=_CONCIERGE_OWNER_ID)
         context = MagicMock()
 
         orch = MagicMock()
@@ -950,12 +1133,13 @@ class TestConciergeMultiDispatch:
 
     def test_confirm_no_dispatches_nothing(self) -> None:
         decision = self._multi_decision()
-        telegram_bot._pending_concierge[3003] = ("tok-multi-2", decision)
+        telegram_bot._pending_concierge.store(3003, _CONCIERGE_OWNER_ID, ("tok-multi-2", decision))
         update = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
         update.callback_query.message.chat.id = 3003
         update.callback_query.data = "concierge:no:tok-multi-2"
+        update.callback_query.from_user = MagicMock(id=_CONCIERGE_OWNER_ID)
         context = MagicMock()
 
         orch = MagicMock()
@@ -981,7 +1165,7 @@ class TestConciergeMultiDispatch:
             ],
             destructive=True,
         )
-        telegram_bot._pending_concierge[4004] = ("tok-multi-3", decision)
+        telegram_bot._pending_concierge.store(4004, _CONCIERGE_OWNER_ID, ("tok-multi-3", decision))
         update = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -989,6 +1173,7 @@ class TestConciergeMultiDispatch:
         update.callback_query.message.reply_text = AsyncMock()
         update.callback_query.message.delete = AsyncMock()
         update.callback_query.data = "concierge:yes:tok-multi-3"
+        update.callback_query.from_user = MagicMock(id=_CONCIERGE_OWNER_ID)
         context = MagicMock()
 
         orch = MagicMock()
@@ -1003,7 +1188,7 @@ class TestConciergeMultiDispatch:
 
     def test_empty_dispatches_replies_nothing_to_do(self) -> None:
         decision = ConciergeDecision(kind="multi_route", dispatches=[], destructive=True)
-        telegram_bot._pending_concierge[5005] = ("tok-multi-4", decision)
+        telegram_bot._pending_concierge.store(5005, _CONCIERGE_OWNER_ID, ("tok-multi-4", decision))
         update = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -1011,6 +1196,7 @@ class TestConciergeMultiDispatch:
         update.callback_query.message.reply_text = AsyncMock()
         update.callback_query.message.delete = AsyncMock()
         update.callback_query.data = "concierge:yes:tok-multi-4"
+        update.callback_query.from_user = MagicMock(id=_CONCIERGE_OWNER_ID)
         context = MagicMock()
 
         orch = MagicMock()

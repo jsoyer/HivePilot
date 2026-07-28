@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import requests
 
 from hivepilot.config import settings
+from hivepilot.services.pending_confirmation import PendingConfirmationStore
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -24,7 +25,28 @@ _DISCORD_API = "https://discord.com/api/v10"
 # "no" confirmation reply, keyed by channel_id. Value: (confirmation_token,
 # decision) — same shape as chatops_service._pending_concierge_text /
 # slack_bot._pending_concierge / telegram_bot._pending_concierge.
-_pending_concierge: dict[int, tuple[str, "ConciergeDecision"]] = {}
+#
+# Security fix (same bug class as `slack_bot._PendingChallenge` / F3, and as
+# `concierge_service._PendingOffer`): this used to be a plain
+# `dict[int, tuple[str, ConciergeDecision]]` with NO owner binding and NO
+# TTL — ANY channel member typing "yes <token>" (or "no") resolved the
+# pending decision regardless of who triggered it, and it never expired.
+# Now backed by `PendingConfirmationStore`, which binds each entry to the
+# requesting Discord user id and expires it after
+# `_CONCIERGE_CONFIRM_TTL_SECONDS` -- see that module's docstring for the
+# full fail-closed contract.
+_CONCIERGE_CONFIRM_TTL_SECONDS = 5 * 60
+"""TTL for a pending Yes/No concierge confirmation reply -- identical
+constant/rationale to `slack_bot.py` / `telegram_bot.py`: shorter than both
+`concierge_service._OFFER_TTL_SECONDS` (10 min, a one-word typed reply) and
+Slack's `_CHALLENGE_TTL_SECONDS` (15 min, a composed follow-up question),
+because resolving this prompt costs the operator no more than a short
+"yes <token>"/"no" reply to a message they just received, and it gates a
+destructive action directly."""
+
+_pending_concierge: PendingConfirmationStore[tuple[str, "ConciergeDecision"]] = (
+    PendingConfirmationStore(_CONCIERGE_CONFIRM_TTL_SECONDS)
+)
 
 # Discord's hard per-message character cap -- mirrors
 # hivepilot.streaming.discord_channel._DISCORD_MAX_LEN. Used to split a long
@@ -283,13 +305,19 @@ async def _execute_concierge_discord(
 
 
 async def _handle_concierge_decision_discord(
-    decision: "ConciergeDecision", channel_id: int, message: Any
+    decision: "ConciergeDecision", channel_id: int, owner_user_id: str | None, message: Any
 ) -> None:
     """Answer directly, execute a non-destructive decision, or mint a
     confirmation token and store the pending decision for a destructive one.
     Every currently-known route/action kind IS destructive (see
     `concierge_service`'s hardcoded table) — the non-destructive branch only
-    guards a future kind, never exercised today."""
+    guards a future kind, never exercised today.
+
+    *owner_user_id* is the Discord id of whoever sent the message that
+    produced *decision* — the ONLY id whose later "yes <token>"/"no" reply
+    may resolve it (see `PendingConfirmationStore`). A missing id (fail
+    closed) means `store()` records nothing, so the prompt is sent but can
+    never be resolved to execution by anyone."""
     if decision.kind == "answer":
         await message.channel.send(
             decision.answer_text or "I'm not sure how to help with that. Try /help.",
@@ -303,7 +331,7 @@ async def _handle_concierge_decision_discord(
     from hivepilot.services.chatops_service import _summarize_concierge_decision
 
     token = uuid.uuid4().hex[:8]
-    _pending_concierge[channel_id] = (token, decision)
+    _pending_concierge.store(channel_id, owner_user_id, (token, decision))
     summary = _summarize_concierge_decision(decision)
     await message.channel.send(
         f"⚠️ This will {summary}. Reply 'yes {token}' to confirm or 'no' to cancel.",
@@ -317,12 +345,27 @@ async def _handle_concierge_confirmation_discord(
     """Handle a "yes <token>" / "no" reply to a pending destructive concierge
     decision. A wrong/stale token is rejected WITHOUT executing or clearing
     the still-valid pending entry — mirrors `chatops_service._dispatch`'s
-    `yes <token>` / `no` handling exactly."""
-    pending = _pending_concierge.get(channel_id)
+    `yes <token>` / `no` handling exactly.
+
+    Owner binding + TTL: only the Discord user who triggered the decision
+    may resolve it (Yes OR No), and only within
+    `_CONCIERGE_CONFIRM_TTL_SECONDS` of it being posted — see
+    `PendingConfirmationStore`. A missing/unresolvable author id can never
+    resolve anything either (fail closed). The caller only reaches this
+    function when `channel_id in _pending_concierge`, so a `None` result
+    here means either the entry just expired or this reply came from
+    someone other than the owner -- both get the SAME generic response as
+    Slack/Telegram, never a hint about which case it was."""
+    author_id = getattr(getattr(message, "author", None), "id", None)
+    requester_id = str(author_id) if author_id is not None else None
+    pending = _pending_concierge.resolve(channel_id, requester_id)
     if pending is None:
+        await message.channel.send(
+            "This confirmation has expired.", allowed_mentions=_no_mentions()
+        )
         return
     if content.strip().lower() == "no":
-        _pending_concierge.pop(channel_id, None)
+        _pending_concierge.discard(channel_id)
         await message.channel.send("Cancelled.", allowed_mentions=_no_mentions())
         return
     supplied_token = content.split(None, 1)[1].strip() if " " in content else ""
@@ -333,7 +376,7 @@ async def _handle_concierge_confirmation_discord(
             allowed_mentions=_no_mentions(),
         )
         return
-    _pending_concierge.pop(channel_id, None)
+    _pending_concierge.discard(channel_id)
     await _execute_concierge_discord(decision, channel_id, message)
 
 
@@ -980,6 +1023,7 @@ def run_gateway() -> None:
         # colleague's unrelated "yes" can never fire it. A missing channel or
         # author disables offers for this message (fail closed).
         author_id = getattr(getattr(message, "author", None), "id", None)
+        owner_user_id = str(author_id) if author_id is not None else None
         loop = asyncio.get_event_loop()
         decision = await loop.run_in_executor(
             None,
@@ -988,10 +1032,10 @@ def run_gateway() -> None:
                 default_role=settings.chatops_default_role,
                 default_target=settings.default_target,
                 conversation_id=f"discord:{channel_id}" if channel_id is not None else None,
-                user_id=str(author_id) if author_id is not None else None,
+                user_id=owner_user_id,
             ),
         )
-        await _handle_concierge_decision_discord(decision, channel_id, message)
+        await _handle_concierge_decision_discord(decision, channel_id, owner_user_id, message)
 
     logger.info("discord.gateway.start")
     client.run(token)

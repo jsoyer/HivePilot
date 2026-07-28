@@ -1050,7 +1050,11 @@ class TestConciergeMessageDestructive:
         assert action_ids == {"concierge_yes", "concierge_no"}
 
         assert ALLOWED_CHANNEL in slack_bot._pending_concierge
-        token, stored_decision = slack_bot._pending_concierge[ALLOWED_CHANNEL]
+        # `_message_event`'s default sender (U-ALICE) must be recorded as
+        # the owner -- only she may resolve this via Yes/No.
+        resolved = slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID)
+        assert resolved is not None
+        token, stored_decision = resolved
         assert stored_decision is decision
         values = {
             el["value"]
@@ -1100,10 +1104,10 @@ class TestConciergeYesNo:
     ) -> None:
         monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
         app = _register()
         respond = _respond()
-        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
         with patch(
             "hivepilot.services.chatops_service._execute_concierge_decision",
             return_value="Triggered task on acme",
@@ -1127,10 +1131,10 @@ class TestConciergeYesNo:
     ) -> None:
         monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
         app = _register()
         respond = _respond()
-        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
         with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
             _call(
                 app.actions["concierge_yes"],
@@ -1143,7 +1147,10 @@ class TestConciergeYesNo:
         assert "expired" in respond.call_args.args[0].lower()
         # Pending entry must remain untouched — the real confirmation can
         # still be answered correctly afterwards.
-        assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
+        assert slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID) == (
+            "tok123",
+            decision,
+        )
 
     def test_overwrite_scenario_stale_button_never_executes_new_decision(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1161,14 +1168,14 @@ class TestConciergeYesNo:
             params={"pipeline": "company"},
             destructive=True,
         )
-        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_a", decision_a)
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("token_a", decision_a))
         # A newer destructive message overwrites the pending entry before the
         # user acts on A's button.
-        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_b", decision_b)
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("token_b", decision_b))
 
         app = _register()
         respond = _respond()
-        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
         with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
             _call(
                 app.actions["concierge_yes"],
@@ -1180,15 +1187,18 @@ class TestConciergeYesNo:
         execute.assert_not_called()
         assert "expired" in respond.call_args.args[0].lower()
         # B is still pending, untouched, and can still be confirmed correctly later.
-        assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("token_b", decision_b)
+        assert slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID) == (
+            "token_b",
+            decision_b,
+        )
 
     def test_yes_denied_channel_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        slack_bot._pending_concierge[DENIED_CHANNEL] = ("tok123", decision)
+        slack_bot._pending_concierge.store(DENIED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
         app = _register()
         respond = _respond()
-        body = {"channel": {"id": DENIED_CHANNEL}}
+        body = {"channel": {"id": DENIED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
         with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
             _call(
                 app.actions["concierge_yes"],
@@ -1204,10 +1214,10 @@ class TestConciergeYesNo:
     def test_no_cancels_and_pops(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
         app = _register()
         respond = _respond()
-        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
         _call(
             app.actions["concierge_no"],
             ack=_ack(),
@@ -1231,10 +1241,10 @@ class TestConciergeYesNoFlagOff:
 
     def test_yes_does_not_execute_when_flag_off(self) -> None:
         decision = self._pending_route_decision()
-        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
         app = _register()
         respond = _respond()
-        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
         with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
             _call(
                 app.actions["concierge_yes"],
@@ -1246,14 +1256,17 @@ class TestConciergeYesNoFlagOff:
         execute.assert_not_called()
         respond.assert_not_called()
         # Pending entry untouched — flag off is a no-op, not a silent cancel.
-        assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
+        assert slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID) == (
+            "tok123",
+            decision,
+        )
 
     def test_no_does_not_pop_when_flag_off(self) -> None:
         decision = self._pending_route_decision()
-        slack_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
         app = _register()
         respond = _respond()
-        body = {"channel": {"id": ALLOWED_CHANNEL}}
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
         _call(
             app.actions["concierge_no"],
             ack=_ack(),
@@ -1262,7 +1275,132 @@ class TestConciergeYesNoFlagOff:
             respond=respond,
         )
         respond.assert_not_called()
-        assert slack_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
+        assert slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID) == (
+            "tok123",
+            decision,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Owner binding + TTL for `_pending_concierge` (this fix — same bug class as
+# `TestChallengeOwnerBindingAndTTL` above and `concierge_service`'s
+# `_PendingOffer`). Before this fix, `_pending_concierge` was keyed by
+# channel ONLY: any channel member's Yes/No press resolved ANY pending
+# decision regardless of who triggered it, and an entry never expired.
+# ---------------------------------------------------------------------------
+
+
+class TestConciergeYesNoOwnerBindingAndTTL:
+    def _pending_route_decision(self) -> ConciergeDecision:
+        return ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix bug", destructive=True
+        )
+
+    def test_different_user_yes_press_does_not_execute_and_leaves_pending(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Alice's destructive decision is pending; Mallory presses Yes in
+        the same shared channel. Must NOT execute, and Alice must still be
+        able to confirm it herself afterwards."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": "U-MALLORY"}}
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            _call(
+                app.actions["concierge_yes"],
+                ack=_ack(),
+                action={"action_id": "concierge_yes", "value": "tok123"},
+                body=body,
+                respond=respond,
+            )
+        execute.assert_not_called()
+        respond.assert_called_once_with("This confirmation has expired.")
+        # Untouched -- Alice, the real owner, can still confirm it herself.
+        assert slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_different_user_no_press_does_not_cancel_owners_pending_decision(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A colleague pressing No must not cancel someone else's pending
+        decision either -- resolution (Yes OR No) is owner-bound."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": "U-MALLORY"}}
+        _call(
+            app.actions["concierge_no"],
+            ack=_ack(),
+            action={"action_id": "concierge_no", "value": "tok123"},
+            body=body,
+            respond=respond,
+        )
+        respond.assert_not_called()
+        assert slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_missing_presser_id_does_not_execute(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Fail closed: a button press with no resolvable Slack user id must
+        never execute the pending decision."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        slack_bot._pending_concierge.store(ALLOWED_CHANNEL, _OWNER_USER_ID, ("tok123", decision))
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {}}
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            _call(
+                app.actions["concierge_yes"],
+                ack=_ack(),
+                action={"action_id": "concierge_yes", "value": "tok123"},
+                body=body,
+                respond=respond,
+            )
+        execute.assert_not_called()
+        assert slack_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _OWNER_USER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_expired_pending_not_honoured_yes_reports_expired_and_does_not_execute(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An expired entry must be dropped and never executed, even by the
+        rightful owner pressing the (now-stale) button within the token."""
+        from hivepilot.services.pending_confirmation import _Pending
+
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        slack_bot._pending_concierge._pending[ALLOWED_CHANNEL] = _Pending(
+            owner_id=_OWNER_USER_ID,
+            payload=("tok123", decision),
+            expires_at=time.time() - 1,
+        )
+        app = _register()
+        respond = _respond()
+        body = {"channel": {"id": ALLOWED_CHANNEL}, "user": {"id": _OWNER_USER_ID}}
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            _call(
+                app.actions["concierge_yes"],
+                ack=_ack(),
+                action={"action_id": "concierge_yes", "value": "tok123"},
+                body=body,
+                respond=respond,
+            )
+        execute.assert_not_called()
+        respond.assert_called_once_with("This confirmation has expired.")
+        # Dropped, not just left pending -- an owner's next legitimate
+        # destructive request must start from a clean slate.
+        assert ALLOWED_CHANNEL not in slack_bot._pending_concierge
 
 
 # ---------------------------------------------------------------------------

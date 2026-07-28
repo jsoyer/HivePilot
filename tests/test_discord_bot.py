@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 import types
 from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1417,17 +1418,25 @@ class _FakeChannel:
         self.send = AsyncMock()
 
 
+# Default sender every `_FakeMessage` below binds to unless a test
+# explicitly overrides `author` -- mirrors a real `discord.Member`/`User`
+# object (has an `.id`), unlike the old bare-string stand-in, which used to
+# be enough because nothing ever read `.author.id`. Owner binding (this fix)
+# needs a real id to bind `_pending_concierge` entries to.
+_CONCIERGE_OWNER_ID = "U-OTHERUSER"
+
+
 class _FakeMessage:
     def __init__(
         self,
         content: str,
         *,
-        author: Any = "OtherUser",
+        author: Any = None,
         guild_id: int | None = ALLOWED_GUILD,
         channel_id: int | None = ALLOWED_CHANNEL,
     ) -> None:
         self.content = content
-        self.author = author
+        self.author = types.SimpleNamespace(id=_CONCIERGE_OWNER_ID) if author is None else author
         self.guild = _FakeGuild(guild_id) if guild_id is not None else None
         self.channel = _FakeChannel(channel_id)
 
@@ -1534,7 +1543,11 @@ class TestOnMessageConciergeDestructive:
         )
 
         assert ALLOWED_CHANNEL in discord_bot._pending_concierge
-        token, stored_decision = discord_bot._pending_concierge[ALLOWED_CHANNEL]
+        # Bound to the message author's id (_CONCIERGE_OWNER_ID, the
+        # `_FakeMessage` default) -- only they may resolve it.
+        resolved = discord_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID)
+        assert resolved is not None
+        token, stored_decision = resolved
         assert stored_decision is decision
         assert token in sent_text
 
@@ -1550,7 +1563,9 @@ class TestOnMessageConciergeYesNo:
     ) -> None:
         monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("tok123", decision)
+        )
         discord_bot.run_gateway()
         client = _FakeClient.instances[0]
         message = _FakeMessage("yes tok123")
@@ -1573,7 +1588,9 @@ class TestOnMessageConciergeYesNo:
     ) -> None:
         monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("tok123", decision)
+        )
         discord_bot.run_gateway()
         client = _FakeClient.instances[0]
         message = _FakeMessage("yes stale-token")
@@ -1585,7 +1602,10 @@ class TestOnMessageConciergeYesNo:
         assert (
             message.channel.send.call_args.kwargs["allowed_mentions"] == discord_bot._no_mentions()
         )
-        assert discord_bot._pending_concierge[ALLOWED_CHANNEL] == ("tok123", decision)
+        assert discord_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID) == (
+            "tok123",
+            decision,
+        )
 
     def test_overwrite_scenario_stale_token_never_executes_new_decision(
         self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
@@ -1603,10 +1623,14 @@ class TestOnMessageConciergeYesNo:
             params={"pipeline": "company"},
             destructive=True,
         )
-        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_a", decision_a)
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("token_a", decision_a)
+        )
         # A newer destructive message overwrites the pending entry before the
         # user replies to A's confirmation prompt.
-        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("token_b", decision_b)
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("token_b", decision_b)
+        )
 
         discord_bot.run_gateway()
         client = _FakeClient.instances[0]
@@ -1617,7 +1641,10 @@ class TestOnMessageConciergeYesNo:
         message.channel.send.assert_awaited_once()
         assert "expired" in message.channel.send.call_args.args[0].lower()
         # B is still pending, untouched, and can still be confirmed correctly later.
-        assert discord_bot._pending_concierge[ALLOWED_CHANNEL] == ("token_b", decision_b)
+        assert discord_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID) == (
+            "token_b",
+            decision_b,
+        )
 
     def test_yes_denied_channel_falls_through_no_pending_for_that_channel(
         self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
@@ -1626,7 +1653,9 @@ class TestOnMessageConciergeYesNo:
         all — the whitelist gate runs before pending lookup."""
         monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        discord_bot._pending_concierge[DENIED_CHANNEL] = ("tok123", decision)
+        discord_bot._pending_concierge.store(
+            DENIED_CHANNEL, _CONCIERGE_OWNER_ID, ("tok123", decision)
+        )
         discord_bot.run_gateway()
         client = _FakeClient.instances[0]
         message = _FakeMessage("yes tok123", guild_id=DENIED_GUILD, channel_id=DENIED_CHANNEL)
@@ -1639,7 +1668,9 @@ class TestOnMessageConciergeYesNo:
     def test_no_cancels_and_pops(self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
         decision = self._pending_route_decision()
-        discord_bot._pending_concierge[ALLOWED_CHANNEL] = ("tok123", decision)
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("tok123", decision)
+        )
         discord_bot.run_gateway()
         client = _FakeClient.instances[0]
         message = _FakeMessage("no")
@@ -1647,6 +1678,118 @@ class TestOnMessageConciergeYesNo:
         message.channel.send.assert_awaited_once_with(
             "Cancelled.", allowed_mentions=discord_bot._no_mentions()
         )
+        assert ALLOWED_CHANNEL not in discord_bot._pending_concierge
+
+
+# ---------------------------------------------------------------------------
+# Owner binding + TTL for `_pending_concierge` (this fix — same bug class as
+# `slack_bot._PendingChallenge` / `concierge_service._PendingOffer`). Before
+# this fix, `_pending_concierge` was keyed by channel_id ONLY: ANY channel
+# member typing "yes <token>"/"no" resolved ANY pending decision regardless
+# of who triggered it, and an entry never expired.
+# ---------------------------------------------------------------------------
+
+
+class TestOnMessageConciergeOwnerBindingAndTTL:
+    def _pending_route_decision(self) -> ConciergeDecision:
+        return ConciergeDecision(
+            kind="route", role_key="developer", target="acme", order="fix bug", destructive=True
+        )
+
+    def test_different_user_yes_reply_does_not_execute_and_leaves_pending(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The default owner's destructive decision is pending; a different
+        Discord user replies "yes <token>" in the same channel. Must NOT
+        execute, and the real owner must still be able to confirm it
+        afterwards."""
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("tok123", decision)
+        )
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes tok123", author=types.SimpleNamespace(id="U-MALLORY"))
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_not_called()
+        message.channel.send.assert_awaited_once_with(
+            "This confirmation has expired.", allowed_mentions=discord_bot._no_mentions()
+        )
+        # Untouched -- the real owner can still confirm it themselves.
+        assert discord_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_different_user_no_reply_does_not_cancel_owners_pending_decision(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A colleague replying "no" must not cancel someone else's pending
+        decision either -- resolution (yes OR no) is owner-bound."""
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("tok123", decision)
+        )
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("no", author=types.SimpleNamespace(id="U-MALLORY"))
+        asyncio.run(client.events["on_message"](message))
+        message.channel.send.assert_awaited_once_with(
+            "This confirmation has expired.", allowed_mentions=discord_bot._no_mentions()
+        )
+        assert discord_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_missing_author_id_does_not_execute(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail closed: a reply from an author with no resolvable Discord id
+        must never execute the pending decision."""
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge.store(
+            ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID, ("tok123", decision)
+        )
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes tok123", author=types.SimpleNamespace())
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_not_called()
+        assert discord_bot._pending_concierge.resolve(ALLOWED_CHANNEL, _CONCIERGE_OWNER_ID) == (
+            "tok123",
+            decision,
+        )
+
+    def test_expired_pending_not_honoured_and_does_not_execute(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An expired entry must be dropped and never executed, even by the
+        rightful owner replying with the (now-stale) token."""
+        from hivepilot.services.pending_confirmation import _Pending
+
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        decision = self._pending_route_decision()
+        discord_bot._pending_concierge._pending[ALLOWED_CHANNEL] = _Pending(
+            owner_id=_CONCIERGE_OWNER_ID,
+            payload=("tok123", decision),
+            expires_at=time.time() - 1,
+        )
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        message = _FakeMessage("yes tok123")
+        with patch("hivepilot.services.chatops_service._execute_concierge_decision") as execute:
+            asyncio.run(client.events["on_message"](message))
+        execute.assert_not_called()
+        message.channel.send.assert_awaited_once_with(
+            "This confirmation has expired.", allowed_mentions=discord_bot._no_mentions()
+        )
+        # Dropped, not just left pending.
         assert ALLOWED_CHANNEL not in discord_bot._pending_concierge
 
 
