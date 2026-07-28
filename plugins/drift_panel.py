@@ -52,6 +52,7 @@ def _count(value: Any) -> int:
 
 def _fetch() -> dict[str, Any]:
     from hivepilot.services import state_service
+    from hivepilot.utils import display_time
 
     scans = state_service.get_recent_drift_scans(limit=_SCAN_FETCH_LIMIT, tenant=_TENANT)
 
@@ -79,7 +80,10 @@ def _fetch() -> dict[str, Any]:
         "rows": [
             [
                 str(scan.get("project") or ""),
-                str(scan.get("checked_at") or ""),
+                # fix/linear-sync-display-time sweep: `checked_at` is a
+                # naive-UTC SQLite CURRENT_TIMESTAMP-backed column -- same
+                # bug class as the pre-fix `schedule health` table.
+                display_time.to_display(scan.get("checked_at")),
                 str(scan.get("status") or ""),
                 str(_count(scan.get("to_add"))),
                 str(_count(scan.get("to_change"))),

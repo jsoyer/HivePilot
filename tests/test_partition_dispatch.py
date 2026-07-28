@@ -904,6 +904,39 @@ class TestCli:
         assert "forge_pr" in result.output
         assert "effective=1" in result.output
 
+    def test_show_renders_ratified_at_local_time_with_marker(
+        self, live_config, cli_runner, monkeypatch
+    ) -> None:
+        """fix/linear-sync-display-time sweep: `Ratified: ... at
+        {ratified_at}` was found echoing the raw stored value verbatim --
+        same bug class as the pre-fix `schedule health` table.
+        `ratified_at` is written via `CURRENT_TIMESTAMP` (SQLite-engine
+        clock, not mockable from Python), so this pins a known value
+        directly on the row after a real ratify, matching how the rest of
+        the dispatch journal is exercised in this file."""
+        from hivepilot.cli import app
+        from hivepilot.config import settings
+        from hivepilot.services import db
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        partition_id = partition_service.create_partition(plan_json=json.dumps(_plan(_task("a"))))
+        orch = FakeOrchestrator()
+        monkeypatch.setattr("hivepilot.cli.Orchestrator", lambda *a, **k: orch)
+        cli_runner.invoke(app, ["partition", "ratify", partition_id, "--approver", "operator"])
+
+        with db.connect() as conn:
+            conn.execute(
+                db.ph("UPDATE partitions SET ratified_at=? WHERE id=?"),
+                ("2026-07-27 09:08:32", partition_id),
+            )
+
+        result = cli_runner.invoke(app, ["partition", "show", partition_id])
+
+        assert result.exit_code == 0, result.output
+        assert "09:08" not in result.output
+        assert "11:08" in result.output
+        assert "CEST" in result.output
+
     def test_ratify_dispatches_by_default(self, live_config, cli_runner, monkeypatch) -> None:
         from hivepilot.cli import app
 

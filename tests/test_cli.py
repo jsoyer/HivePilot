@@ -577,3 +577,200 @@ class TestScheduleListCommand:
 
         assert result.exit_code == 0, result.output
         assert "task=docs" in result.output
+
+
+# ---------------------------------------------------------------------------
+# schedule retry-list / dlq-list -- fix/linear-sync-display-time sweep:
+# `next_retry_at`/`created_at` were found echoing the raw stored value
+# verbatim, same bug class as the pre-fix `schedule health` table.
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleRetryListCommand:
+    def test_next_retry_at_renders_local_time_with_marker(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        job = {
+            "id": 1,
+            "schedule_name": "docs-weekly",
+            "task": "docs",
+            "projects": '["p"]',
+            "attempt": 1,
+            "max_attempts": 3,
+            "status": "pending",
+            "next_retry_at": "2026-07-27 09:08:32",
+        }
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch("hivepilot.services.retry_service.list_queue", return_value=[job]),
+        ):
+            result = runner.invoke(app, ["schedule", "retry-list"])
+
+        assert result.exit_code == 0, result.output
+        assert "09:08" not in result.output
+        assert "11:08" in result.output
+        assert "CEST" in result.output
+
+
+class TestScheduleDlqListCommand:
+    def test_created_at_renders_local_time_with_marker(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        job = {
+            "id": 1,
+            "schedule_name": "docs-weekly",
+            "task": "docs",
+            "attempt": 3,
+            "created_at": "2026-07-27 09:08:32",
+        }
+        runner = CliRunner()
+        with (
+            patch("hivepilot.cli._require_cli_role", return_value=MagicMock()),
+            patch("hivepilot.services.retry_service.list_dlq", return_value=[job]),
+        ):
+            result = runner.invoke(app, ["schedule", "dlq-list"])
+
+        assert result.exit_code == 0, result.output
+        assert "09:08" not in result.output
+        assert "11:08" in result.output
+        assert "CEST" in result.output
+
+
+# ---------------------------------------------------------------------------
+# workers -- fix/linear-sync-display-time sweep: `last_seen` was found
+# echoing the raw stored value verbatim, same bug class as the pre-fix
+# `schedule health` table.
+# ---------------------------------------------------------------------------
+
+
+class TestWorkersCommand:
+    def test_last_seen_renders_local_time_with_marker(self, monkeypatch) -> None:
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        worker = {
+            "name": "worker-1",
+            "url": "https://worker-1.example.com",
+            "status": "up",
+            "detail": None,
+            "last_seen": "2026-07-27 09:08:32",
+        }
+        runner = CliRunner()
+        with patch("hivepilot.services.state_service.list_workers", return_value=[worker]):
+            result = runner.invoke(app, ["workers", "--no-check"])
+
+        assert result.exit_code == 0, result.output
+        assert "09:08" not in result.output
+        assert "11:08" in result.output
+        assert "CEST" in result.output
+
+    def test_no_last_seen_renders_unknown_not_fabricated(self) -> None:
+        worker = {
+            "name": "worker-1",
+            "url": "https://worker-1.example.com",
+            "status": "unknown",
+            "detail": None,
+            "last_seen": None,
+        }
+        runner = CliRunner()
+        with patch("hivepilot.services.state_service.list_workers", return_value=[worker]):
+            result = runner.invoke(app, ["workers", "--no-check"])
+
+        from hivepilot.utils import display_time
+
+        assert result.exit_code == 0, result.output
+        assert display_time.UNKNOWN_DISPLAY in result.output
+
+
+# ---------------------------------------------------------------------------
+# linear sync -- fix/linear-sync-display-time: the `started_at` column was
+# the one sink PR #349 explicitly left unconverted (raw naive-UTC string,
+# same bug class as the pre-fix `schedule health`/`drift status` tables).
+# ---------------------------------------------------------------------------
+
+
+class TestLinearSyncCommand:
+    def _run(self, runs: list[dict]):
+        runner = CliRunner()
+        with (
+            patch("hivepilot.services.state_service.list_recent_runs", return_value=runs),
+        ):
+            return runner.invoke(app, ["linear", "sync"])
+
+    def test_started_at_renders_local_time_with_marker_not_raw_utc(self, monkeypatch) -> None:
+        """The exact bug: a stored `09:08` UTC run must render as `11:08`
+        CEST in the table -- a bare, unmarked `09:08` is precisely how the
+        original bug hid from an operator reading their local clock."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        run = {
+            "id": 1,
+            "project": "acme-web",
+            "task": "deploy",
+            "status": "success",
+            "started_at": "2026-07-27 09:08:32",
+        }
+        result = self._run([run])
+
+        assert result.exit_code == 0, result.output
+        assert "09:08" not in result.output
+        assert "11:08" in result.output
+        assert "CEST" in result.output
+
+    def test_dst_correctness_summer_vs_winter(self, monkeypatch) -> None:
+        """Same wall-clock UTC time, rendered in a July row and a January
+        row, must produce DIFFERENT local times/markers -- a fixed-offset
+        shortcut (always +2h, or always +1h) would fail this."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        summer_run = {
+            "id": 1,
+            "project": "acme-web",
+            "task": "deploy",
+            "status": "success",
+            "started_at": "2026-07-27 09:08:32",
+        }
+        winter_run = {
+            "id": 2,
+            "project": "acme-web",
+            "task": "deploy",
+            "status": "success",
+            "started_at": "2026-01-27 09:08:32",
+        }
+
+        summer_result = self._run([summer_run])
+        winter_result = self._run([winter_run])
+
+        assert "11:08" in summer_result.output and "CEST" in summer_result.output
+        assert "10:08" in winter_result.output and "CET" in winter_result.output
+        assert summer_result.output != winter_result.output
+
+    def test_missing_started_at_renders_unknown_not_fabricated(self, monkeypatch) -> None:
+        """Fail-closed: a row with no `started_at` (or an unparseable one)
+        must render an explicit unknown marker, never a fabricated or
+        silently-wrong local time."""
+        from hivepilot.config import settings
+        from hivepilot.utils import display_time
+
+        monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+        run = {
+            "id": 3,
+            "project": "acme-web",
+            "task": "deploy",
+            "status": "pending",
+            # no started_at key at all
+        }
+        result = self._run([run])
+
+        assert result.exit_code == 0, result.output
+        assert display_time.UNKNOWN_DISPLAY in result.output
+
+    def test_no_runs_still_reports_nothing_recorded(self) -> None:
+        result = self._run([])
+        assert result.exit_code == 0, result.output
+        assert "No runs recorded." in result.output

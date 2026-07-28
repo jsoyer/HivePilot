@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+import pytest
+
 from hivepilot.ui.formatting import INTERACTION_COLUMNS, interaction_rows
+
+
+@pytest.fixture(autouse=True)
+def _reset_display_timezone_override(monkeypatch):
+    """Every test starts with no explicit override configured, matching
+    tests/test_display_time.py's fixture -- keeps the module's
+    fallback-to-system-timezone path from making assertions flaky across
+    hosts unless a test pins an explicit override."""
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "display_timezone", None, raising=False)
 
 
 def test_interaction_columns_length() -> None:
@@ -13,7 +26,17 @@ def test_empty_list_returns_empty() -> None:
     assert interaction_rows([]) == []
 
 
-def test_normal_row_values_and_order() -> None:
+def test_normal_row_values_and_order(monkeypatch) -> None:
+    """fix/linear-sync-display-time sweep: the Timestamp column was found
+    rendering the raw stored value verbatim -- same bug class as the
+    pre-fix `schedule health`/`linear sync` CLI tables (a naive-looking
+    string that reads as local time while actually being UTC). Now routed
+    through `display_time.to_display` like every other human-facing sink,
+    so this test pins the CONVERTED, timezone-marked value rather than the
+    old raw passthrough."""
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
     interactions = [
         {
             "id": 1,
@@ -23,7 +46,9 @@ def test_normal_row_values_and_order() -> None:
             "target": "cto",
             "summary": "Hello there",
             "metadata": {},
-            "timestamp": "2026-06-19T10:00:00",
+            # Naive-UTC (no offset) -- exactly what state_service's
+            # CURRENT_TIMESTAMP-backed writers store.
+            "timestamp": "2026-07-27 09:08:32",
         }
     ]
     rows = interaction_rows(interactions)
@@ -37,7 +62,53 @@ def test_normal_row_values_and_order() -> None:
     assert row[2] == "send_message"
     assert row[3] == "cto"
     assert row[4] == "Hello there"
-    assert row[5] == "2026-06-19T10:00:00"
+    assert "09:08" not in row[5]
+    assert "11:08" in row[5]
+    assert "CEST" in row[5]
+
+
+def test_timestamp_dst_correctness_summer_vs_winter(monkeypatch) -> None:
+    """Same wall-clock UTC time must render differently in July (CEST) vs
+    January (CET) -- a fixed-offset shortcut fails this."""
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "display_timezone", "Europe/Paris", raising=False)
+    base = {
+        "id": 1,
+        "run_id": 1,
+        "actor": "ceo",
+        "action": "send_message",
+        "target": "cto",
+        "summary": "hi",
+        "metadata": {},
+    }
+    summer_row = interaction_rows([{**base, "timestamp": "2026-07-27 09:08:32"}])[0]
+    winter_row = interaction_rows([{**base, "timestamp": "2026-01-27 09:08:32"}])[0]
+
+    assert "11:08" in summer_row[5] and "CEST" in summer_row[5]
+    assert "10:08" in winter_row[5] and "CET" in winter_row[5]
+    assert summer_row[5] != winter_row[5]
+
+
+def test_timestamp_missing_or_unparseable_renders_unknown_not_fabricated() -> None:
+    """Fail-closed: an absent/garbage timestamp must render an explicit
+    unknown marker, never a fabricated or silently-wrong local time."""
+    from hivepilot.utils import display_time
+
+    interactions = [
+        {
+            "id": 2,
+            "run_id": 2,
+            "actor": "ceo",
+            "action": "send_message",
+            "target": "cto",
+            "summary": "hi",
+            "metadata": {},
+            "timestamp": "",
+        }
+    ]
+    rows = interaction_rows(interactions)
+    assert rows[0][5] == display_time.UNKNOWN_DISPLAY
 
 
 def test_run_id_none_becomes_dash() -> None:
