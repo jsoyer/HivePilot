@@ -64,6 +64,46 @@ PLUGIN_CAPABILITIES: tuple[str, ...] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Which LIVE contributions come from a plugin that declared `network`.
+#
+# The manifest above is a LOAD-time admission gate; this is the small amount
+# of state a RUN-time gate needs (propose -> ratify -> dispatch PRD, spec §6
+# `external_api`): a partition dispatched without outward consent must not
+# reach a plugin that told us it does network I/O.
+#
+# Replaced WHOLESALE by `PluginManager._commit` from its staged state --
+# never mutated incrementally -- so a disabled/hot-reloaded plugin cannot
+# leave a stale entry behind. That is the `_owned_*`/`_commit` teardown
+# model this repo learned the hard way (a process-global registry mutated
+# incrementally fails OPEN on disable+reload).
+#
+# Honesty clause, identical to this module's: a plugin that declares no
+# capabilities, or lies, still runs with full host privileges. This gate
+# governs what the ENGINE routes to a plugin that told the truth.
+# ---------------------------------------------------------------------------
+
+_NETWORK_CAPABLE_RUNNER_KINDS: frozenset[str] = frozenset()
+_NETWORK_CAPABLE_PLUGIN_NAMES: frozenset[str] = frozenset()
+
+
+def set_network_capable(*, runner_kinds: frozenset[str], plugin_names: frozenset[str]) -> None:
+    """Replace the live network-capable contribution sets (commit-time only)."""
+    global _NETWORK_CAPABLE_RUNNER_KINDS, _NETWORK_CAPABLE_PLUGIN_NAMES  # noqa: PLW0603
+    _NETWORK_CAPABLE_RUNNER_KINDS = frozenset(runner_kinds)
+    _NETWORK_CAPABLE_PLUGIN_NAMES = frozenset(plugin_names)
+
+
+def network_capable_runner_kinds() -> frozenset[str]:
+    """Runner kinds contributed by a plugin that declared `network`."""
+    return _NETWORK_CAPABLE_RUNNER_KINDS
+
+
+def network_capable_plugin_names() -> frozenset[str]:
+    """Names of currently-loaded plugins that declared `network`."""
+    return _NETWORK_CAPABLE_PLUGIN_NAMES
+
+
 class PluginCapabilityInvalidError(RuntimeError):
     """Raised when a plugin declares a `capabilities` manifest that is
     structurally invalid: not a list/tuple/set of strings, or containing a

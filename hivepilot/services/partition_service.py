@@ -71,7 +71,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from hivepilot import outward
 from hivepilot.config import settings
+from hivepilot.outward import OutwardPermission
 from hivepilot.partition import DependencyCycleError, PartitionError, PartitionPlan, load_partition
 from hivepilot.partition_sources import compute_digest
 from hivepilot.services import autopilot_queue, db, project_service, state_service
@@ -1745,6 +1747,44 @@ def _dispatch_chunk(
     return latches
 
 
+def task_outward_permission(
+    task: Any, *, outward_consent: bool, partition_id: str
+) -> OutwardPermission:
+    """The run-scoped outward permission one dispatched task runs under.
+
+    Resolved from LIVE policy at DISPATCH time, never from the proposal --
+    the same principle the ratify gate's `_check_policy` follows, for the
+    same reason: the JSON box an operator edits must not be able to widen
+    what policy allows.
+
+    - No consent  -> `restricted_to([])`: nothing outward, at all.
+    - Consent     -> the project's `outward_actions` allowlist, minus
+      `forge_merge`. The allowlist is the ceiling a ticked checkbox is
+      measured against (spec §6 "Policy floor"), so consent grants exactly
+      it and never more. `forge_merge` is stripped unconditionally, giving
+      the never-auto-merge invariant a runtime backstop as well as an
+      admission-time one.
+    - Unresolvable policy -> `restricted_to([])`. "I cannot tell what this
+      project may do" must never resolve to "it may do anything", exactly
+      as `pipeline_outward_actions` fails closed the other way at admission.
+    """
+    label = f"partition {partition_id} task {task.id}"
+    if not outward_consent:
+        return OutwardPermission.restricted_to((), label=label)
+    try:
+        policy = get_autopilot_policy(_policy_project_key(task.project))
+        allowed = frozenset(policy.outward_actions) & autopilot_queue.OUTWARD_ACTIONS
+    except Exception:  # noqa: BLE001 - unresolvable policy denies, never allows
+        logger.exception(
+            "partition.outward_policy_unresolvable",
+            partition_id=partition_id,
+            task_id=task.id,
+            project=task.project,
+        )
+        allowed = frozenset()
+    return OutwardPermission.restricted_to(allowed - {"forge_merge"}, label=label)
+
+
 def _make_task_work(
     partition_id: str,
     *,
@@ -1759,22 +1799,37 @@ def _make_task_work(
 ) -> Callable[[], None]:
     """Build the background callable one partition task runs as.
 
-    `auto_git=outward_consent` reuses the EXISTING, proven runtime
-    suppressor (`orchestrator`'s `auto_git` plumbing) rather than adding a
-    second one: a partition ratified without outward consent runs with git
-    actions suppressed, so nothing is pushed and no PR is opened.
+    Two runtime suppressors, both derived from the SAME consent decision:
+
+    - `auto_git=outward_consent` reuses the EXISTING, proven git/forge
+      suppressor (`orchestrator`'s `auto_git` plumbing) rather than adding a
+      second one: nothing is pushed and no PR is opened without consent.
+    - `outward=` carries the run-scoped `OutwardPermission` past `auto_git`
+      to the three tokens it never covered -- `notify`, `vault_write` and
+      `external_api` (spec §6, open question 4). One carrier for all four
+      token families, because the vocabulary is a SET, not four booleans.
+
+    Whatever the permission suppresses is read back off the ledger below and
+    written into the durable, already-redacted `interactions` audit -- the
+    same sink the ratify decision itself lands in. A suppressed side effect
+    that nobody can see is indistinguishable from a broken subsystem.
     """
+    permission = task_outward_permission(
+        task, outward_consent=outward_consent, partition_id=partition_id
+    )
 
     def _work() -> None:
         from hivepilot.services import git_service
 
         mark = git_service.pr_ledger_mark()
+        outward_mark = outward.ledger_mark()
         try:
             results = orchestrator.run_pipeline(
                 project_names=[task.project],
                 pipeline_name=task.pipeline,
                 extra_prompt=task.prompt,
                 auto_git=outward_consent,
+                outward=permission,
                 concurrency=1,
             )
         except Exception:  # noqa: BLE001 - never silently swallowed; the journal records it
@@ -1788,6 +1843,7 @@ def _make_task_work(
                 partition_id, task.id, claimed_by=owner, cost_usd=_run_cost_usd(run_id)
             )
             _mark_queue_row(queue_id, "blocked")
+            _audit_suppressions(partition_id, task_id=task.id, run_id=run_id, since=outward_mark)
             done.set()
             return
 
@@ -1801,9 +1857,46 @@ def _make_task_work(
         else:
             mark_task_failed(partition_id, task.id, claimed_by=owner, cost_usd=cost)
             _mark_queue_row(queue_id, "blocked")
+        _audit_suppressions(partition_id, task_id=task.id, run_id=run_id, since=outward_mark)
         done.set()
 
     return _work
+
+
+def _audit_suppressions(partition_id: str, *, task_id: str, run_id: int, since: int) -> None:
+    """Persist what outward consent suppressed during one task's run.
+
+    Written to `interactions` -- the same durable, already-redacted audit
+    sink the ratify decision itself lands in (spec §5 "Audit") -- so the
+    operator can answer "why did I get no Telegram message" without reading
+    process logs. Best-effort: an audit failure never fails a task, but it
+    is logged rather than swallowed.
+    """
+    counts = outward.summarise_suppressions(since)
+    if not counts:
+        return
+    summary = ", ".join(f"{action}x{count}" for action, count in sorted(counts.items()))
+    logger.warning(
+        "partition.outward_suppressed",
+        partition_id=partition_id,
+        task_id=task_id,
+        run_id=run_id,
+        suppressed=summary,
+    )
+    try:
+        state_service.record_interaction(
+            actor="engine",
+            action="partition.outward_suppressed",
+            target=partition_id,
+            summary=(
+                f"task {task_id}: outward consent suppressed {summary} "
+                "(the run completed; these side effects did not happen)"
+            ),
+            run_id=run_id,
+            metadata={"task_id": task_id, "suppressed": counts},
+        )
+    except Exception:  # noqa: BLE001 - audit bookkeeping never fails a dispatch
+        logger.warning("partition.outward_audit_failed", partition_id=partition_id, task_id=task_id)
 
 
 def _mark_queue_row(queue_id: int, state: str, *, cost_usd: float | None = None) -> None:

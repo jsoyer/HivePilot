@@ -755,6 +755,15 @@ class _StagedPluginState:
     # field annotation is evaluated by tooling in a way `TYPE_CHECKING`-only
     # names don't reliably resolve against.
     graph_source_map: dict[str, Any] = field(default_factory=dict)
+    # Contributions from plugins that declared the `network` capability
+    # (propose -> ratify -> dispatch PRD, spec §6 `external_api`). Staged
+    # alongside everything else so `_commit` can replace the live sets
+    # wholesale -- a plugin that is disabled or hot-reloaded must not leave
+    # a stale "this is network-capable" entry behind, and must equally not
+    # leave a stale ABSENCE behind.
+    network_plugin_names: set[str] = field(default_factory=set)
+    network_runner_kinds: set[str] = field(default_factory=set)
+    network_hooks: list[Any] = field(default_factory=list)
 
 
 def _same_local_plugin_origin(current: Any, obj: Any) -> bool:
@@ -1007,6 +1016,18 @@ class PluginManager:
         for graph_name, graph_spec in staged.graph_source_map.items():
             graph_module.register_graph_source(graph_spec)
         self._owned_graph_source_names: frozenset[str] = frozenset(staged.graph_source_map)
+
+        # Network-capable contributions (propose -> ratify -> dispatch PRD,
+        # spec §6 `external_api`). Replaced WHOLESALE from `staged`, exactly
+        # like `self.hooks` below: a plugin disabled between two loads
+        # leaves neither a stale entry (fail-open) nor a stale absence.
+        from hivepilot.plugin_capabilities import set_network_capable
+
+        set_network_capable(
+            runner_kinds=frozenset(staged.network_runner_kinds),
+            plugin_names=frozenset(staged.network_plugin_names),
+        )
+        self._network_hooks: tuple[Any, ...] = tuple(staged.network_hooks)
 
         self.loaded: list[PluginRecord] = staged.loaded
         self.hooks: dict[str, list[Any]] = staged.hooks
@@ -1366,6 +1387,17 @@ class PluginManager:
             for hook_name, hook_callable in hooks.items():
                 staged.hooks.setdefault(hook_name, []).append(hook_callable)
 
+            # Runtime `external_api` gate (propose -> ratify -> dispatch PRD,
+            # spec §6): remember which of THIS plugin's surviving
+            # contributions belong to a plugin that declared `network`, so a
+            # partition dispatched without outward consent can refuse to
+            # route into them. Staged, never committed directly — see
+            # `_StagedPluginState.network_*`.
+            if "network" in applied_capabilities:
+                staged.network_plugin_names.add(record.name)
+                staged.network_runner_kinds.update(applied_runners)
+                staged.network_hooks.extend(hooks.values())
+
             # Per-plugin attribution (Phase 26a): record, on THIS plugin's
             # own PluginRecord, exactly which names it contributed per
             # contribution type. Only entries that survived the atomic
@@ -1400,8 +1432,26 @@ class PluginManager:
         return staged
 
     def run_hook(self, hook_name: str, **kwargs: Any) -> None:
+        from hivepilot import outward
+
         for hook in self.hooks.get(hook_name, []):
+            # Outward consent (`external_api`): a lifecycle hook contributed
+            # by a plugin that DECLARED `network` is the engine routing
+            # execution into something that told us it calls out. A
+            # partition dispatched without that consent skips it — logged by
+            # `permits`, never dropped silently.
+            if self._is_network_hook(hook) and not outward.permits(
+                "external_api",
+                surface="plugins.PluginManager.run_hook",
+                detail=hook_name,
+            ):
+                continue
             hook(**kwargs)
+
+    def _is_network_hook(self, hook: Any) -> bool:
+        """Is *hook* one of the callables contributed by a `network`-declaring
+        plugin? Identity comparison — the same object `_commit` staged."""
+        return any(hook is known for known in getattr(self, "_network_hooks", ()))
 
     def run_health_check(self, name: str) -> HealthStatus:
         """Run a single named health check. Never raises: an exception

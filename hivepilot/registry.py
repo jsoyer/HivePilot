@@ -122,6 +122,19 @@ def resolve_runner_class(kind: str) -> Type[BaseRunner]:
                 f"currently registered."
             )
         raise KeyError(f"Unknown runner kind {kind!r}; available: {sorted(RUNNER_MAP)}")
+
+    # Outward consent (`external_api`, propose -> ratify -> dispatch PRD
+    # spec §6): a runner contributed by a plugin that DECLARED the `network`
+    # capability is refused inside a partition dispatched without that
+    # consent. `enforce`, not `permits`: there is no half-runner, so
+    # silently "skipping" it would leave a step that looks like it ran and
+    # produced nothing. Failing loudly is the honest outcome, and the
+    # journal records why.
+    from hivepilot import outward
+    from hivepilot.plugin_capabilities import network_capable_runner_kinds
+
+    if kind in network_capable_runner_kinds():
+        outward.enforce("external_api", surface="registry.resolve_runner_class", detail=kind)
     return runner_cls
 
 

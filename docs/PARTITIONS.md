@@ -273,14 +273,52 @@ plan's own `outward` flags — the JSON box an operator edits must not be a
 privilege-escalation surface. The consent checkbox defaults to unticked and
 names the exact actions it is asking about.
 
-**Two honest gaps, stated rather than implied away:**
+### How consent is enforced
 
-1. Consent is enforced at dispatch for **git and forge actions only** (it is
-   threaded through the existing `auto_git` suppressor). `notify`,
-   `vault_write` and `external_api` are named in the warning but are not yet
-   suppressed at runtime.
-2. An agent with shell access can `git push` regardless of any flag. This
-   gate governs what the *engine* does.
+Two layers, both fail-closed.
+
+**Admission**, at ratify: the computed footprint must be a subset of the
+project's `outward_actions` allowlist, `merge_pr` is refused
+unconditionally, and a non-empty footprint without consent is denied by
+name.
+
+**Runtime**, at dispatch: each task's run is given a *run-scoped outward
+permission* — the set of tokens it may act on — alongside the existing
+`auto_git` flag. Every token in the table above now has runtime teeth:
+
+| Token | Where it is enforced at runtime |
+|---|---|
+| `git_push` / `forge_*` | the existing `auto_git` suppressor |
+| `notify` | `notification_service` outbound: plain notifications, the event webhook, agent live-streams, and approval keyboards |
+| `vault_write` | every `ObsidianService` write, plus the `commits_vault` stage branch |
+| `external_api` | resolving a runner, or running a lifecycle hook, contributed by a plugin that declared the `network` capability |
+
+The permission granted by a ticked checkbox is **exactly the project's
+`outward_actions` allowlist**, minus `forge_merge`. The allowlist is the
+ceiling consent is measured against, not a starting point — so a project
+that allowlists only `git_push` and `forge_pr` will still have its
+partition-dispatched notifications and vault writes suppressed even with
+consent ticked. Add the tokens you want to the allowlist.
+
+An unresolvable policy grants **nothing**: "I cannot tell what this project
+may do" never resolves to "it may do anything".
+
+**Suppression is never silent.** Every suppressed action is logged
+(`outward.suppressed`, naming the action and the engine surface), and a
+per-task summary is written to the `interactions` audit
+(`partition.outward_suppressed`). If a partition run sends you no Telegram
+message, that is recorded as a decision, not lost as a failure.
+
+**Only partition-dispatched runs are constrained.** An ordinary
+`hivepilot run`, a scheduled run and an API run open no permission scope at
+all, so every gate short-circuits to "permitted" and their behaviour is
+unchanged.
+
+**The remaining honest gap:** an agent with shell access can `git push`,
+`curl` an API or write to your vault regardless of any flag. This gate
+governs what the *engine* does — the same honesty the plugin capability
+manifest states about itself. Suppression also stops at the process
+boundary: a runner subprocess that opens its own socket is not intercepted.
 
 ## Dispatch
 

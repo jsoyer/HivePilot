@@ -43,6 +43,15 @@ second survives a refactor.
 - **Verify:** `python3 -m pytest -q tests/test_partition_ratify_validation.py::TestStep3OutwardAllowlist`
 - **Fix:** in `_check_policy`, treat a missing/empty allowlist as the empty set and deny every token against it.
 
+## Partition dispatch — outward consent is enforced at RUNTIME, not only at admission
+
+- **Owner:** `hivepilot/outward.py`, installed by `Orchestrator.run_pipeline(outward=…)`
+- **Preconditions:** a task is dispatched from a ratified partition.
+- **Postconditions:** every outward token the permission does not list is suppressed at its engine choke point — `notify` (`notification_service` outbound), `vault_write` (`obsidian_service` writes + the `commits_vault` stage branch), `external_api` (a runner or lifecycle hook from a `network`-declaring plugin) — and git/forge keep the pre-existing `auto_git` suppressor.
+- **Invariants:** an unset or unresolvable permission SUPPRESSES; an unknown token is never allowed; a nested scope may only shrink, never widen; a suppression is always logged and audited, never silent. Runs that are NOT partition-dispatched open no scope and are unaffected.
+- **Verify:** `python3 -m pytest -q tests/test_outward.py tests/test_outward_runtime_enforcement.py`
+- **Fix:** ask via `outward.permits()`/`outward.enforce()` at the choke point — never read the permission and branch by hand, and never let a new thread inherit by assumption (capture/adopt at every thread boundary).
+
 ## Partition dispatch — never auto-merges
 
 - **Owner:** `hivepilot/services/partition_service.py`

@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 import requests
 
+from hivepilot import outward
 from hivepilot.config import settings
 from hivepilot.services.config_provenance import mask_id
 from hivepilot.utils.logging import get_logger
@@ -99,6 +100,18 @@ def send_notification(message: str, channels: Iterable[str] | None = None) -> No
 
     message = redact_text(message)
     channels = list(channels) if channels else ["slack", "discord", "telegram"]
+    # Outward consent (`notify`): a partition dispatched WITHOUT outward
+    # consent must not reach Telegram/Slack/Discord/Signal. Checked here --
+    # the one fan-out choke point every plain notification passes through --
+    # rather than at each of the 30+ call sites. `permits` logs the
+    # suppression; a silently dropped notification would be
+    # indistinguishable from a broken notifier.
+    if not outward.permits(
+        "notify",
+        surface="notification_service.send_notification",
+        detail=",".join(str(channel) for channel in channels),
+    ):
+        return
     for channel in channels:
         channel = channel.lower()
         fn = NOTIFIER_MAP.get(channel)
@@ -119,6 +132,10 @@ def emit_event(event: str, **fields: Any) -> None:
     — it must never break a run. Payload: ``{"event": <event>, **fields}``."""
     url = settings.event_webhook_url
     if not url:
+        return
+    # Outward consent (`notify`): an event webhook is an outbound POST to a
+    # third party. Same axis, same gate.
+    if not outward.permits("notify", surface="notification_service.emit_event", detail=event):
         return
     payload: dict[str, Any] = {"event": event, **fields}
     headers = {}
@@ -1162,6 +1179,15 @@ def stream_agent_turn(
     """
     from hivepilot.services.config_provenance import redact_text
 
+    # Outward consent (`notify`): every `stream_*` helper below funnels
+    # through this function, so one gate covers the whole live-stream
+    # surface (Telegram's dedicated path AND the generic StreamChannel
+    # fan-out).
+    if not outward.permits(
+        "notify", surface="notification_service.stream_agent_turn", detail=actor
+    ):
+        return
+
     summary = redact_text(summary) if summary is not None else summary
 
     try:
@@ -1265,6 +1291,19 @@ def send_approval_keyboard(
     # Orchestrator._build_checkpoint_details, so it can echo a resolved
     # ${secret:NAME} value. Redact before it reaches the Telegram DM.
     from hivepilot.services.config_provenance import redact_text
+
+    # Outward consent (`notify`): an approval keyboard is an outbound
+    # Telegram/Slack/Discord/Signal message like any other. Suppressing it
+    # does NOT strand the approval -- the run still pauses and the request
+    # is still visible in `hivepilot approvals`, the API and Pollen, which
+    # are in-machine surfaces. The WARNING `permits` logs is what tells the
+    # operator to look there instead of at their phone.
+    if not outward.permits(
+        "notify",
+        surface="notification_service.send_approval_keyboard",
+        detail=f"run {run_id}",
+    ):
+        return
 
     details = redact_text(details) if details is not None else details
     try:

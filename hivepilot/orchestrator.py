@@ -47,6 +47,11 @@ from hivepilot.observability.tracing import (
     record_exception_on_span,
     use_context,
 )
+from hivepilot.outward import OutwardPermission
+from hivepilot.outward import adopt as outward_adopt
+from hivepilot.outward import capture as outward_capture
+from hivepilot.outward import permits as outward_permits
+from hivepilot.outward import scope as outward_scope
 from hivepilot.pipelines import write_stage_artifact
 from hivepilot.plugins import PluginManager, SkillSpec
 from hivepilot.registry import RunnerRegistry
@@ -1777,8 +1782,19 @@ class Orchestrator:
         # when OTel isn't installed (`current_context()` returns `None`).
         _otel_ctx = current_context()
 
+        # Same fact, second consumer: the run-scoped OUTWARD permission is a
+        # contextvar too, so it must be captured HERE (on the submitting
+        # thread, inside the scope `run_pipeline` opened) and re-adopted
+        # inside the worker. Without this the notification/vault/plugin
+        # gates below would read the ambient default — i.e. "permitted" —
+        # on every pool worker, which is precisely the absent-value
+        # fail-open this gate exists to prevent. `tests/test_outward.py`
+        # pins both halves: that a thread WITHOUT adopt loses the scope, and
+        # that capture/adopt carries it.
+        _outward = outward_capture()
+
         def _execute_task_traced(**kwargs):
-            with use_context(_otel_ctx):
+            with outward_adopt(_outward), use_context(_otel_ctx):
                 return self._execute_task(**kwargs)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=limit) as executor:
@@ -3017,12 +3033,29 @@ class Orchestrator:
         components: list[str] | None = None,
         seed_context: str | None = None,
         group: Group | None = None,
+        outward: OutwardPermission | None = None,
     ) -> list[RunResult]:
         """Public entry point. Delegates to `_run_pipeline_body` inside a
         run-scope (see `_enter_run_scope`/`_exit_run_scope`) so the resolved-
         secrets masking registry is cleared once the WHOLE pipeline run —
         including every nested `run_task` call it makes per stage — is fully
         complete and every sink has already redacted against it.
+
+        ``outward`` is the run-scoped OUTWARD-ACTION permission (propose ->
+        ratify -> dispatch PRD, spec §6). It travels here exactly the way
+        ``auto_git`` does — an explicit keyword argument set by the partition
+        dispatcher — and is then installed as the ambient scope for the
+        dynamic extent of this run (see ``hivepilot.outward``), because the
+        actual choke points (``notification_service`` outbound,
+        ``obsidian_service`` writes, a ``network``-capable plugin) are far
+        below this frame.
+
+        ``None`` — every caller other than the partition dispatcher —
+        INHERITS the ambient scope rather than resetting it, so a normal
+        ``hivepilot run``, a scheduled run and an API run are byte-identical
+        (no scope is ever open, so every gate short-circuits to "permitted"),
+        while a nested ``run_pipeline`` inside a partition-dispatched run
+        cannot escape that partition's restriction.
 
         Also opens the root `pipeline.run` OTel span for the whole run —
         every `task.run`/`step.run` span opened by nested `run_task`/
@@ -3033,15 +3066,22 @@ class Orchestrator:
         _project_names = list(project_names)
         _tracer = get_tracer()
         try:
-            with _tracer.start_as_current_span(
-                "pipeline.run",
-                attributes={
-                    "hivepilot.pipeline.name": pipeline_name,
-                    "hivepilot.pipeline.projects": ",".join(_project_names),
-                },
-                record_exception=False,
-                set_status_on_exception=False,
-            ) as _pipeline_span:
+            # The outward scope wraps the ENTIRE body (including the OTel
+            # span and every nested `run_task`), so no stage, hook or
+            # notification inside this run can be reached without passing
+            # the gate. `outward_scope(None)` inherits — see its docstring.
+            with (
+                outward_scope(outward),
+                _tracer.start_as_current_span(
+                    "pipeline.run",
+                    attributes={
+                        "hivepilot.pipeline.name": pipeline_name,
+                        "hivepilot.pipeline.projects": ",".join(_project_names),
+                    },
+                    record_exception=False,
+                    set_status_on_exception=False,
+                ) as _pipeline_span,
+            ):
                 try:
                     result = self._run_pipeline_body(
                         project_names=_project_names,
@@ -3605,7 +3645,23 @@ class Orchestrator:
                 )
 
             # Documentation vault changelog note (2.6c)
-            if stage.commits_vault and vault_path is not None:
+            #
+            # Outward consent (`vault_write`): `PipelineStage.commits_vault`
+            # is the STATIC surface `pipeline_outward_actions` derives the
+            # `vault_write` token from, so it is gated here as well as at
+            # `ObsidianService._emit`. Two gates, deliberately: this one
+            # states the stage was skipped (the operator can see WHICH stage
+            # produced no note), the one at `_emit` is the backstop that
+            # covers every other vault writer.
+            if (
+                stage.commits_vault
+                and vault_path is not None
+                and outward_permits(
+                    "vault_write",
+                    surface="orchestrator.stage.commits_vault",
+                    detail=stage.name,
+                )
+            ):
                 doc_svc = ObsidianService(vault_path, dry_run=dry_run)
                 doc_svc.write_note(
                     subpath=f"Docs/changelog-run-{run_id}.md",
