@@ -591,10 +591,20 @@ def _register_handlers(bolt_app) -> None:
 
         from hivepilot.services import concierge_service
 
+        # `conversation_id` + `user_id` enable pending follow-up offers (see
+        # concierge_service's "Pending follow-up offers" section) so a bare
+        # "yes"/"oui" answering an offer the concierge just made is honoured
+        # — bound to this channel AND to the person who was asked, exactly
+        # like the Challenge/Ask owner binding above. Channel-level, not
+        # thread-level: the offer itself is posted with a plain `say(...)`,
+        # i.e. at channel level, so that is where the answer arrives.
+        # A missing user id disables offers for this message (fail closed).
         decision = concierge_service.route(
             text,
             default_role=settings.chatops_default_role,
             default_target=settings.default_target,
+            conversation_id=f"slack:{channel_id}" if channel_id else None,
+            user_id=event.get("user") or None,
         )
         _handle_concierge_message(decision, channel_id, say)
 

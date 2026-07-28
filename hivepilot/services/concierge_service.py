@@ -40,8 +40,10 @@ import json
 import os
 import tempfile
 import threading
+import time
+import unicodedata
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -202,6 +204,15 @@ class ConciergeDecision:
     # telegram_bot._send_concierge_keyboard_message /
     # _execute_concierge_decision) — no partial auto-run.
     dispatches: list[DispatchOrder] | None = None
+    # Only meaningful for `kind="answer"`: a STRUCTURED, executable next step
+    # the classifier proposes alongside its prose answer ("groomer-scan
+    # failed. Want me to investigate?"). See the "Pending follow-up offers"
+    # section below — `route()` consumes this field, validates it through the
+    # same `_clamp` as any other decision, and either turns it into a pending
+    # offer (rendering its OWN invitation line) or drops it silently. It is
+    # never returned to a caller: callers only ever see the answer, or, once
+    # the operator affirms, the executable decision itself.
+    follow_up: ConciergeDecision | None = None
 
 
 def _get_orchestrator() -> Any:
@@ -541,7 +552,11 @@ def _parse_raw(raw: str) -> ConciergeDecision | None:
     `action` that DOES carry real `answer_text` degrades to a genuine
     `kind="answer"` decision using that text instead (see
     `_salvageable_answer_text`) — reserving the generic fallback for
-    genuinely empty/unparseable model output."""
+    genuinely empty/unparseable model output.
+
+    An `answer` may additionally carry a `follow_up` object (see
+    `_parse_follow_up`) — the structured form of "want me to investigate?".
+    """
     if not raw or not raw.strip():
         return None
     try:
@@ -551,6 +566,34 @@ def _parse_raw(raw: str) -> ConciergeDecision | None:
     if not isinstance(data, dict):
         return None
 
+    decision = _parse_decision_obj(data)
+    if decision is None or decision.kind != "answer":
+        return decision
+    follow_up = _parse_follow_up(data)
+    return decision if follow_up is None else replace(decision, follow_up=follow_up)
+
+
+def _parse_follow_up(data: dict[str, Any]) -> ConciergeDecision | None:
+    """Parse `data["follow_up"]` — the classifier's proposed next step — into
+    an EXECUTABLE decision, or None.
+
+    Fail-closed by construction: anything that is not a well-formed
+    route/action/multi_route object is dropped (a missing, non-object, or
+    `answer`-shaped follow-up is not an offer at all). A follow-up nested
+    inside a follow-up is ignored — `_parse_decision_obj` never reads the
+    field, so offers can never chain."""
+    raw_follow_up = data.get("follow_up")
+    if not isinstance(raw_follow_up, dict):
+        return None
+    parsed = _parse_decision_obj(raw_follow_up)
+    if parsed is None or parsed.kind == "answer":
+        return None
+    return parsed
+
+
+def _parse_decision_obj(data: dict[str, Any]) -> ConciergeDecision | None:
+    """Parse one already-decoded decision object (the top-level classifier
+    response, or a nested `follow_up`) — see `_parse_raw` for the contract."""
     kind = data.get("kind")
     if kind not in _KNOWN_KINDS:
         salvaged = _salvageable_answer_text(data)
@@ -615,6 +658,283 @@ def _parse_raw(raw: str) -> ConciergeDecision | None:
         target=target if isinstance(target, str) else None,
         params=params,
     )
+
+
+# ---------------------------------------------------------------------------
+# Pending follow-up offers
+#
+# THE DEFECT THIS FIXES: the classifier's `answer_text` is free-form prose, so
+# the model could end an answer with "Want me to investigate?" — an invitation
+# the dispatcher had no record of and no way to honour. The operator replied
+# "yes" and got `_FALLBACK_ANSWER` ("I didn't quite get that"). Inviting a
+# reply and then not understanding it is worse than never offering.
+#
+# The fix is structural, not prose-level: the model may no longer INVITE
+# anything in `answer_text` (see `hivepilot/prompts/concierge.md`). It declares
+# its proposed next step in the STRUCTURED `follow_up` field instead; `route()`
+# validates that through the same `_clamp` as any other decision, and only if
+# it survives — i.e. only if the router can actually execute it — do we store
+# it and render our OWN invitation line. The set of offers the bot can make is
+# therefore exactly the set the router can execute, by construction.
+#
+# Scoping mirrors `slack_bot._PendingChallenge` (the F3 fix): an offer is bound
+# to the conversation AND to the person who was asked, and it expires. Without
+# owner binding, a colleague's unrelated "yes" in a shared channel fires
+# someone else's action; without a TTL, an hours-old offer does the same in
+# slow motion.
+#
+# FAIL-CLOSED: a missing conversation id, a missing owner, or an unusable
+# expiry each mean "do not execute" — never "execute anyway". An offer is not
+# even *rendered* when it could not be honoured.
+#
+# In-process only (a plain dict), like `_history` above: nothing about
+# correctness depends on an offer surviving a restart — a lost offer simply
+# falls through to normal handling, which is the safe direction.
+# ---------------------------------------------------------------------------
+
+# An offer answers a question the operator is looking at RIGHT NOW; a one-word
+# reply needs far less time than composing a Challenge follow-up (Slack's
+# `_CHALLENGE_TTL_SECONDS`, 15 min). Ten minutes is short enough that an
+# unrelated "yes" later in the day can never fire it — the exact production
+# failure mode — and long enough for an operator who gets pulled away
+# mid-conversation and comes back to answer.
+_OFFER_TTL_SECONDS = 10 * 60
+
+_OFFER_DECLINED_TEXT = "Okay, dropped it. Tell me if you change your mind."
+
+
+@dataclass(frozen=True)
+class _PendingOffer:
+    """One follow-up the concierge offered and can honour. *decision* is
+    already `_clamp`-validated and destructive, so answering "yes" hands it
+    straight to the caller's ordinary destructive-confirmation path (the
+    operator sees exactly WHAT will run before it runs) — an affirmative
+    resolves the offer, it does not bypass any gate."""
+
+    conversation_id: str
+    owner_id: str
+    decision: ConciergeDecision
+    expires_at: float
+
+
+_pending_offers: dict[str, _PendingOffer] = {}
+_offers_lock = threading.Lock()
+
+
+# Whole-message affirmatives/negatives, normalised by `_normalise_reply`
+# (lowercased, accent-stripped, apostrophes dropped, punctuation flattened to
+# spaces). Deliberately matched against the ENTIRE message and never a
+# substring: "yes but check the logs first" / "oui mais pas maintenant" are
+# NOT affirmatives, and must fall through to normal handling rather than
+# execute anything on a maybe.
+_AFFIRMATIVE_REPLIES = frozenset(
+    {
+        # English
+        "yes",
+        "y",
+        "yes please",
+        "yeah",
+        "yep",
+        "yup",
+        "ok",
+        "okay",
+        "sure",
+        "go",
+        "go ahead",
+        "go for it",
+        "do it",
+        "please do",
+        "proceed",
+        "confirm",
+        "confirmed",
+        "affirmative",
+        "lets go",
+        "sounds good",
+        "absolutely",
+        # French
+        "oui",
+        "ouais",
+        "ouaip",
+        "oui vas y",
+        "oui merci",
+        "vas y",
+        "vasy",
+        "allez",
+        "allez y",
+        "on y va",
+        "fais le",
+        "faites le",
+        "daccord",
+        "cest bon",
+        "confirme",
+        "je confirme",
+        "bien sur",
+        "carrement",
+    }
+)
+
+_NEGATIVE_REPLIES = frozenset(
+    {
+        # English
+        "no",
+        "n",
+        "nope",
+        "nah",
+        "no thanks",
+        "no thank you",
+        "not now",
+        "never mind",
+        "nevermind",
+        "cancel",
+        "stop",
+        "abort",
+        "forget it",
+        "leave it",
+        "negative",
+        "later",
+        # French
+        "non",
+        "non merci",
+        "annule",
+        "annuler",
+        "laisse tomber",
+        "pas maintenant",
+        "non pas maintenant",
+        "arrete",
+        "arretes",
+        "surtout pas",
+        "pas la peine",
+        "plus tard",
+    }
+)
+
+# Apostrophe variants dropped outright so "d'accord"/"d’accord" -> "daccord"
+# and "let's go" -> "lets go" — one spelling per entry in the tables above.
+_APOSTROPHES = "'’‘`´"
+
+
+def _normalise_reply(text: str) -> str:
+    """Fold *text* to the canonical form the reply tables are written in:
+    accent-free, lowercase, apostrophe-free, single-spaced. Never raises."""
+    decomposed = unicodedata.normalize("NFKD", text or "")
+    chars: list[str] = []
+    for char in decomposed:
+        if unicodedata.combining(char):
+            continue
+        if char in _APOSTROPHES:
+            continue
+        lowered = char.lower()
+        chars.append(lowered if lowered.isalnum() else " ")
+    return " ".join("".join(chars).split())
+
+
+def _classify_reply(text: str) -> str | None:
+    """Return "yes"/"no" if *text* is UNAMBIGUOUSLY a whole-message
+    affirmative/negative in English or French, else None.
+
+    None is the fail-closed answer and covers everything interesting: empty
+    messages, hedges ("peut-être", "maybe"), and qualified agreement ("yes
+    but check the logs first"). Callers must treat None as "not an answer to
+    the pending offer" and fall through to normal handling."""
+    normalised = _normalise_reply(text)
+    if not normalised:
+        return None
+    if normalised in _AFFIRMATIVE_REPLIES:
+        return "yes"
+    if normalised in _NEGATIVE_REPLIES:
+        return "no"
+    return None
+
+
+def _store_offer(
+    conversation_id: str | None, owner_id: str | None, decision: "ConciergeDecision"
+) -> None:
+    """Record *decision* as the pending offer for *conversation_id*, owned by
+    *owner_id*. A missing conversation id or owner stores NOTHING — an offer
+    nobody can be matched against must never become an offer anybody can
+    trigger."""
+    if not conversation_id or not owner_id:
+        return
+    with _offers_lock:
+        _pending_offers[conversation_id] = _PendingOffer(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            decision=decision,
+            expires_at=time.time() + _OFFER_TTL_SECONDS,
+        )
+
+
+def _resolve_pending_offer(
+    reply: str, conversation_id: str | None, user_id: str | None
+) -> ConciergeDecision | None:
+    """Resolve a yes/no *reply* against the pending offer for
+    *conversation_id*, or return None to mean "fall through to normal
+    handling" (which never executes anything by itself).
+
+    Returns None — leaving the offer untouched — when the replier is not the
+    person who was asked. Returns None after dropping the entry when the
+    offer has expired or carries no usable owner/expiry."""
+    if not conversation_id or not user_id:
+        return None  # fail closed: no conversation or no identity, no execution
+
+    with _offers_lock:
+        offer = _pending_offers.get(conversation_id)
+        if offer is None:
+            return None
+        try:
+            expired = time.time() > float(offer.expires_at)
+        except (TypeError, ValueError):
+            expired = True  # unusable expiry means expired, never "never expires"
+        if not offer.owner_id or expired:
+            _pending_offers.pop(conversation_id, None)
+            return None
+        if offer.owner_id != user_id:
+            # Someone else's "yes". Never consume, never execute — and leave
+            # the entry pending so the person who WAS asked can still answer.
+            return None
+        _pending_offers.pop(conversation_id, None)
+
+    if reply == "no":
+        return ConciergeDecision(kind="answer", answer_text=_OFFER_DECLINED_TEXT)
+    return offer.decision
+
+
+def clear_pending_offers(conversation_id: str | None = None) -> None:
+    """Ops/test helper: drop the pending offer for one conversation, or every
+    conversation when *conversation_id* is None."""
+    with _offers_lock:
+        if conversation_id is None:
+            _pending_offers.clear()
+        else:
+            _pending_offers.pop(conversation_id, None)
+
+
+def _summarize_offer(decision: ConciergeDecision) -> str:
+    """Plain-language description of what saying "yes" would set in motion —
+    read by the operator BEFORE they answer, so an affirmative is informed."""
+    if decision.kind == "route":
+        target = decision.target or "the default project"
+        order = f": {decision.order}" if decision.order else ""
+        return f"ask {decision.role_key} to work on {target}{order}"
+    if decision.kind == "multi_route":
+        parts = [
+            f"{d.role_key} on {d.target or 'the default project'}"
+            for d in (decision.dispatches or [])
+        ]
+        if parts:
+            return "dispatch " + ", ".join(parts)
+        return "do that"
+    if decision.kind == "action":
+        if decision.action in ("approve", "deny"):
+            return f"{decision.action} run {(decision.params or {}).get('run_id')}"
+        target = decision.target or "the default project"
+        return f"{decision.action} on {target}"
+    return "do that"
+
+
+def _render_offer_line(summary: str) -> str:
+    """The invitation is OURS, not the model's — see this section's header."""
+    return f'\n\nReply "yes" and I will {summary}. Reply "no" to drop it.'
 
 
 def _unknown_role_answer(known_roles: set[str]) -> str:
@@ -764,6 +1084,57 @@ def _clamp(
     )
 
 
+def _attach_offer(
+    decision: ConciergeDecision,
+    *,
+    default_role: str,
+    default_target: str | None,
+    history_text: str,
+    conversation_id: str | None,
+    user_id: str | None,
+) -> ConciergeDecision:
+    """Turn a classifier-proposed `follow_up` into a live pending offer, and
+    append OUR invitation line to the answer the operator will read.
+
+    Returns *decision* unchanged — invitation and all, i.e. nothing — unless
+    ALL of these hold: it is an `answer`, it carries a `follow_up`, that
+    follow-up survives `_clamp` as an executable route/action/multi_route,
+    and we have both a conversation to scope the offer to and an owner to
+    bind it to. That conjunction is the enforcement point for "never offer
+    what cannot be honoured": there is no path that renders the invitation
+    without also storing an offer the router can execute."""
+    if decision.kind != "answer" or decision.follow_up is None:
+        return _without_follow_up(decision)
+    if not conversation_id or not user_id:
+        return _without_follow_up(decision)
+
+    offer = _clamp(
+        decision.follow_up,
+        default_role=default_role,
+        default_target=default_target,
+        history_text=history_text,
+    )
+    if offer.kind == "answer":
+        # `_clamp` degraded it (unknown role/project, missing run id, an
+        # ungrounded multi_route…) — not executable, so not an offer.
+        logger.info("concierge.follow_up_not_executable_dropped")
+        return _without_follow_up(decision)
+
+    _store_offer(conversation_id, user_id, offer)
+    return ConciergeDecision(
+        kind="answer",
+        answer_text=(decision.answer_text or "") + _render_offer_line(_summarize_offer(offer)),
+    )
+
+
+def _without_follow_up(decision: ConciergeDecision) -> ConciergeDecision:
+    """Strip the internal `follow_up` field before returning to a caller — it
+    is a classifier-to-`route()` channel, never part of the public result."""
+    if decision.follow_up is None:
+        return decision
+    return replace(decision, follow_up=None)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -775,6 +1146,8 @@ def route(
     default_role: str,
     default_target: str | None,
     chat_id: int | None = None,
+    conversation_id: str | None = None,
+    user_id: str | None = None,
 ) -> ConciergeDecision:
     """Classify *text* into an ANSWER / ROUTE / ACTION / MULTI_ROUTE decision.
 
@@ -791,7 +1164,29 @@ def route(
     recorded afterwards. Omitting *chat_id* (the default) disables memory
     entirely for this call — byte-identical to the pre-memory behaviour,
     and every call site that doesn't pass it keeps working unchanged.
+
+    *conversation_id* + *user_id*, when BOTH supplied, enable pending
+    follow-up offers (see the "Pending follow-up offers" section above): a
+    bare "yes"/"oui" answering an offer this concierge just made resolves to
+    the offered decision without an LLM round-trip, and an offer is only ever
+    made in the first place when it can be honoured. Omitting either disables
+    offers entirely for this call — no offer is stored AND none is rendered,
+    so the bot never invites a reply it cannot understand.
     """
+    # A yes/no answering a live offer is resolved deterministically, in code,
+    # BEFORE any classification — an affirmative must never depend on the
+    # model re-deriving what "yes" referred to. Anything that isn't an
+    # unambiguous whole-message yes/no, and any yes/no with no honourable
+    # offer behind it (expired, someone else's, another conversation's),
+    # falls through to normal handling below and executes nothing.
+    reply = _classify_reply(text)
+    if reply is not None:
+        resolved = _resolve_pending_offer(reply, conversation_id, user_id)
+        if resolved is not None:
+            if chat_id is not None:
+                _record_turn(chat_id, text, _history_summary(resolved))
+            return resolved
+
     roster = _build_roster()
     snapshot = _grounding_snapshot()
     history = _get_history(chat_id)
@@ -849,6 +1244,14 @@ def route(
         default_role=default_role,
         default_target=default_target,
         history_text=history_text,
+    )
+    decision = _attach_offer(
+        decision,
+        default_role=default_role,
+        default_target=default_target,
+        history_text=history_text,
+        conversation_id=conversation_id,
+        user_id=user_id,
     )
     if chat_id is not None:
         _record_turn(chat_id, text, _history_summary(decision))

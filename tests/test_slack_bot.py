@@ -1515,3 +1515,37 @@ class TestSlackApprovalRoutingThroughSharedHelper:
         assert ".run_approved(" not in source
         assert ".resume_pipeline(" not in source
         assert ".approve_run(" in source
+
+
+class TestConciergeOfferScoping:
+    """A pending follow-up offer must be bound to the conversation AND to the
+    person who was asked (see concierge_service's "Pending follow-up offers")
+    — the same owner-binding discipline as `_PendingChallenge` above, so a
+    colleague's unrelated "yes" in a shared channel can never fire it."""
+
+    def _route_kwargs(self, event: dict[str, Any]) -> dict[str, Any]:
+        app = _register()
+        decision = ConciergeDecision(kind="answer", answer_text="ok")
+        with patch(
+            "hivepilot.services.concierge_service.route", return_value=decision
+        ) as mock_route:
+            _call(app.events["message"], event=event, say=MagicMock())
+        mock_route.assert_called_once()
+        return dict(mock_route.call_args.kwargs)
+
+    def test_channel_and_owner_threaded_into_route(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+
+        kwargs = self._route_kwargs(_message_event("oui"))
+
+        assert kwargs.get("conversation_id") == f"slack:{ALLOWED_CHANNEL}"
+        assert kwargs.get("user_id") == "U-ALICE"
+
+    def test_missing_slack_user_disables_offers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No sender id means no owner to bind an offer to — fail closed."""
+        monkeypatch.setattr(slack_bot.settings, "chatops_concierge_enabled", True)
+
+        kwargs = self._route_kwargs(_message_event("oui", user=""))
+
+        assert "user_id" in kwargs  # explicitly passed, not merely absent
+        assert kwargs["user_id"] is None

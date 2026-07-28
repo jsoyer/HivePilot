@@ -741,17 +741,48 @@ async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDeci
     await update_like.message.reply_text("Nothing to do.")
 
 
+def _concierge_conversation_id(chat_id: Any, thread_id: Any) -> str | None:
+    """Stable per-conversation key for `concierge_service`'s pending follow-up
+    offers. Scoped per forum topic, like `_challenge_key` — an offer made in
+    one topic must never be answerable from another. Returns None when there
+    is no chat id at all, which disables offers for that message (fail
+    closed)."""
+    if chat_id is None:
+        return None
+    if thread_id is None:
+        return f"telegram:{chat_id}"
+    return f"telegram:{chat_id}:{thread_id}"
+
+
+def _concierge_user_id(message: Any) -> str | None:
+    """Telegram id of the person who sent *message*, as the owner an offer is
+    bound to. None (no owner → no offer, and no offer honoured) when Telegram
+    gave us no sender — e.g. an anonymous channel post."""
+    from_user = getattr(message, "from_user", None)
+    user_id = getattr(from_user, "id", None) if from_user is not None else None
+    return str(user_id) if user_id is not None else None
+
+
 async def _handle_concierge_mention(update: Any, context: Any, text: str) -> None:
     """Classify a plain (non-@) chat message and answer / route / confirm.
 
     Threads `chat_id` into `concierge_service.route` so its per-chat
     conversation memory (see that module's "Conversation memory" section)
     can resolve a follow-up like "give them the orders" against what was
-    just said in THIS chat — never another chat's history."""
+    just said in THIS chat — never another chat's history.
+
+    Also threads `conversation_id` + `user_id` so a bare "yes"/"oui"
+    answering an offer the concierge just made is honoured — bound to this
+    topic AND to the person who was asked (see that module's "Pending
+    follow-up offers" section)."""
     from hivepilot.services import concierge_service
 
     chat_id = update.message.chat.id
     default_target = settings.default_target
+    conversation_id = _concierge_conversation_id(
+        chat_id, getattr(update.message, "message_thread_id", None)
+    )
+    user_id = _concierge_user_id(update.message)
 
     loop = asyncio.get_event_loop()
     decision = await loop.run_in_executor(
@@ -761,6 +792,8 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
             default_role=settings.chatops_default_role,
             default_target=default_target,
             chat_id=chat_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
         ),
     )
 

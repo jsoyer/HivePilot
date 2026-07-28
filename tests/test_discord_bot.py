@@ -1757,3 +1757,43 @@ class TestDiscordApprovalRoutingThroughSharedHelper:
         assert ".run_approved(" not in source
         assert ".resume_pipeline(" not in source
         assert ".approve_run(" in source
+
+
+class TestOnMessageConciergeOfferScoping:
+    """A pending follow-up offer must be bound to the conversation AND to the
+    person who was asked (see concierge_service's "Pending follow-up offers"),
+    so a colleague's unrelated "yes" in a shared channel can never fire it."""
+
+    def _route_kwargs(self, message: Any) -> dict[str, Any]:
+        discord_bot.run_gateway()
+        client = _FakeClient.instances[0]
+        decision = ConciergeDecision(kind="answer", answer_text="ok")
+        with patch(
+            "hivepilot.services.concierge_service.route", return_value=decision
+        ) as mock_route:
+            asyncio.run(client.events["on_message"](message))
+        mock_route.assert_called_once()
+        return dict(mock_route.call_args.kwargs)
+
+    def test_channel_and_author_threaded_into_route(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        message = _FakeMessage("oui", author=types.SimpleNamespace(id=9001))
+
+        kwargs = self._route_kwargs(message)
+
+        assert kwargs.get("conversation_id") == f"discord:{ALLOWED_CHANNEL}"
+        assert kwargs.get("user_id") == "9001"
+
+    def test_author_without_id_disables_offers(
+        self, fake_discord: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No author id means no owner to bind an offer to — fail closed."""
+        monkeypatch.setattr(discord_bot.settings, "chatops_concierge_enabled", True)
+        message = _FakeMessage("oui", author=types.SimpleNamespace())
+
+        kwargs = self._route_kwargs(message)
+
+        assert "user_id" in kwargs  # explicitly passed, not merely absent
+        assert kwargs["user_id"] is None
