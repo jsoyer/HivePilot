@@ -52,6 +52,7 @@ from typing import Any
 import yaml
 
 from hivepilot.config import settings
+from hivepilot.outward import OUTWARD_ACTIONS as _OUTWARD_ACTIONS
 from hivepilot.services import db, state_service
 from hivepilot.services.autopilot_policy import AutopilotPolicy, get_autopilot_policy
 from hivepilot.utils.logging import get_logger
@@ -76,22 +77,17 @@ _VALID_KINDS = {KIND_OBJECTIVE, KIND_PARTITION_TASK}
 # `gh pr create` is outward and not destructive. Two independent booleans,
 # both of which must be satisfied.
 #
-# v1 enforcement scope is git/forge only: `notify`/`vault_write`/
-# `external_api` are declared here and surfaced in the consent warning, but
-# a run-scoped `outward_allowed` flag is NOT threaded to those subsystems in
-# v1 -- a stated gap, not a silent one (see spec §6 and §11.4).
-OUTWARD_ACTIONS: frozenset[str] = frozenset(
-    {
-        "git_push",  # GitActions.push
-        "forge_pr",  # GitActions.create_pr / promote_pr -> ForgeProvider.open_pr
-        "forge_merge",  # GitActions.merge_pr -- ALWAYS refused in a partition dispatch
-        "forge_issue",  # ForgeProvider.create_issue
-        "forge_release",  # ForgeProvider.create_release
-        "notify",  # notification_service outbound
-        "vault_write",  # obsidian_service / PipelineStage.commits_vault
-        "external_api",  # plugins declaring the `network` capability
-    }
-)
+# Enforcement now has TWO layers for every token in this set: ADMISSION at
+# ratify (`partition_service._check_policy` -- the computed footprint must be
+# a subset of the project's `outward_actions` allowlist) and RUNTIME, via the
+# run-scoped `hivepilot.outward.OutwardPermission` the dispatcher installs
+# around each task's `run_pipeline` call. git/forge additionally keep the
+# pre-existing `auto_git` suppressor.
+#
+# The vocabulary itself is defined ONCE, in `hivepilot.outward`, and
+# re-exported here: the admission gate and the runtime gate ask about the
+# same object, so they can never drift apart.
+OUTWARD_ACTIONS: frozenset[str] = _OUTWARD_ACTIONS
 
 
 # ---------------------------------------------------------------------------

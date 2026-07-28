@@ -457,11 +457,36 @@ class ObsidianService:
         at each individual call site (idempotent — a no-op if already
         redacted upstream, e.g. by pipelines.write_stage_artifact).
         """
+        from hivepilot import outward
         from hivepilot.services.config_provenance import redact_text
 
         content = redact_text(content)
         if self._dry_run:
             return {"path": str(target), "content": content, "dry_run": True}
+
+        # Outward consent (`vault_write`): a partition dispatched WITHOUT
+        # outward consent must not write into the operator's vault -- a
+        # vault is typically a synced git repo, i.e. visible outside this
+        # machine. Gated at the ONE choke point every vault write already
+        # funnels through (write_note / append_daily / write_adr /
+        # write_artifact and any direct caller), for the same reason the
+        # redaction above lives here.
+        #
+        # The suppressed write returns the SAME shape a `dry_run` write
+        # returns, plus an explicit `suppressed` marker, so a caller that
+        # reads `["path"]` keeps working and a caller that wants to know can
+        # ask. `permits` logs it; nothing is dropped silently.
+        if not outward.permits(
+            "vault_write",
+            surface="obsidian_service.ObsidianService._emit",
+            detail=str(target),
+        ):
+            return {
+                "path": str(target),
+                "content": content,
+                "dry_run": True,
+                "suppressed": "outward_consent",
+            }
 
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
