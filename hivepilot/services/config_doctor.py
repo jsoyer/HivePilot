@@ -92,6 +92,7 @@ import platform
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -619,7 +620,6 @@ def check_plugin_health(plugin_manager: Any) -> list[DoctorFinding]:
 
 
 def check_retry_queue_backlog() -> list[DoctorFinding]:
-    from datetime import datetime, timedelta, timezone
 
     from hivepilot.services import db, state_service
     from hivepilot.utils.display_time import _parse_stored
@@ -1778,28 +1778,175 @@ def check_display_timezone() -> list[DoctorFinding]:
 #     `cost_usd` on every step is NOT flagged by trigger 2 -- the price map
 #     is only a fallback, so an absent entry is harmless as long as nothing
 #     ever needs it.
+#
+# Window scoping (cost-check-window fix, 2026-07-28): this check's own
+# introduction (the block above) hard-coded the SYMPTOM this fix addresses
+# without accounting for its own history -- the fix itself only landed on
+# 2026-07-27 (PR #352, commit 5c2f5324). Before it, `steps.model` persisted
+# a bare CLI alias and NO tokens (base or cache) were ever captured at all
+# (see `claude_runner._parse_usage_envelope`'s history) -- those rows can
+# NEVER be priced (`cost_backfill.py` requires at least one of input/output
+# tokens to recompute anything). Counting them toward the unpriced-share
+# ratio measures "did the old, already-fixed bug exist" (permanently true,
+# forever) instead of "is the CURRENT instrumentation healthy" -- on a real
+# production box this reported 36/48 (75%) unpriced and would have stayed
+# wrong for a full 30 days after the fix landed.
+#
+# Both triggers below are therefore scoped to steps recorded AT OR AFTER
+# `_resolve_cost_instrumentation_boundary()` -- see `_MODELUSAGE_FIX_
+# LANDED_AT`'s own comment for why that boundary is a FIXED instant, never
+# derived from a step's own shape. Steps before it are reported separately,
+# as an `info` line stating the real excluded count (never hidden) --
+# see `cost_accounting_pre_instrumentation_steps` below.
 # ---------------------------------------------------------------------------
 
 _COST_ACCOUNTING_MIN_TOTAL_SAMPLE = 10
 _COST_ACCOUNTING_UNPRICED_SHARE_THRESHOLD = 0.15
 _COST_ACCOUNTING_MIN_MODEL_SAMPLE = 5
 
+# `analytics_service._TS_FORMAT` -- the exact lexical shape `steps.timestamp`
+# is stored/compared in (sqlite `CURRENT_TIMESTAMP`, naive UTC). Duplicated
+# as a literal (not imported) because this module already mirrors other
+# modules' private helpers/constants locally rather than depending on their
+# underscored names across files (see `_walk_xdg_rank`'s docstring for the
+# same rationale) -- this format has been stable since Phase 24b and is
+# exercised by both modules' own test suites, so drift would be caught fast.
+_COST_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# The usage-capture-modelusage fix (PR #352, commit 5c2f5324, merged
+# 2026-07-27) is the ONLY thing that makes a step's cost signal possible at
+# all -- before it, `steps.model` persisted a bare CLI alias and NO tokens
+# were ever captured (see the module comment above `check_cost_accounting`).
+# Every step recorded before this fix reached a box is, by construction,
+# unpriceable forever -- `cost_backfill.py` cannot recover a row that never
+# had any tokens at all.
+#
+# This is a FIXED, code-owned instant -- deliberately NEVER derived from the
+# SHAPE of the rows it grades (e.g. "the earliest row with a canonical model
+# id" or "the earliest row with non-null cache tokens"). A shape-derived
+# boundary is recomputed every run: a FUTURE regression that reintroduces
+# the exact same symptom (bare alias, zero tokens) would, by that same
+# shape-based rule, look indistinguishable from "instrumentation hasn't
+# started yet" -- silently sliding the boundary forward and hiding the very
+# regression this check exists to catch. A fixed historical instant cannot
+# be moved by anything a runner writes after the fact -- a regression next
+# month produces POST-boundary rows, which this check will still measure
+# and flag (see `TestCheckCostAccountingBoundary::
+# test_regression_after_boundary_is_still_caught`).
+#
+# Rejected alternatives:
+#   * "the earliest step with a canonical model id / non-null cache-token
+#     columns" -- exactly the shape-derived rule above; rejected for the
+#     reason above.
+#   * "a recorded schema-migration timestamp" -- this fix's own migration
+#     (the `cache_read_tokens`/`cache_creation_tokens` columns added in
+#     `state_service.init_db`) is genuinely the right EVENT to anchor on,
+#     but this codebase has no migration-applied-at ledger: every migration
+#     here is a bare idempotent `ALTER TABLE ... ADD COLUMN` with no record
+#     of WHEN it first ran. Retrofitting one now could only be backfilled,
+#     on a box that already upgraded before the ledger existed (this
+#     operator's box included), from the data's own shape -- reintroducing
+#     exactly the gaming risk being avoided. Not worth the new schema
+#     surface for a boundary the code already knows by construction.
+#   * an ALWAYS-required operator-set config value with no built-in default
+#     -- correct in principle (purely human-supplied, never inferred), but
+#     it would mean this check reports nothing useful on ANY box until an
+#     operator manually configures it -- the opposite of "fixes the
+#     operator's box automatically". Used below as an ESCAPE HATCH instead
+#     (`cost_instrumentation_since`) for an operator who deployed this fix
+#     (or a LATER fix for a similar regression) at a materially different
+#     time -- but nobody has to touch it for the common case.
+_MODELUSAGE_FIX_LANDED_AT = "2026-07-27 00:00:00"  # UTC; PR #352 / 5c2f5324
+
+
+def _parse_cost_boundary_ts(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _resolve_cost_instrumentation_boundary() -> tuple[datetime | None, list[DoctorFinding]]:
+    """Return ``(boundary, findings)``. ``boundary`` is the tz-aware UTC
+    instant before which cost signal is never expected to exist. ``None``
+    only when an EXPLICIT ``cost_instrumentation_since`` override could not
+    be parsed -- paired with an `error` finding: this module's fail-closed
+    rule is "I could not inspect this" must be a finding, never silence, and
+    silently falling back to the built-in default here would mask an
+    operator's deliberate re-pin (e.g. after a later fix) behind a value
+    they no longer control. The built-in default always parses, so absence
+    of an override can never reach this failure path.
+    """
+    override = getattr(settings, "cost_instrumentation_since", None)
+    if not override:
+        return _parse_cost_boundary_ts(_MODELUSAGE_FIX_LANDED_AT), []
+
+    parsed = _parse_cost_boundary_ts(override)
+    if parsed is None:
+        return None, [
+            _finding(
+                "error",
+                "cost_instrumentation_boundary_unparseable",
+                f"Setting 'cost_instrumentation_since' ({override!r}) could not be parsed "
+                "as a timestamp -- the cost-accounting unpriced-share check could not run",
+                "this setting is the boundary before which cost signal is never expected; "
+                "an unparseable override must never be silently ignored in favour of the "
+                "built-in default, which the operator has explicitly chosen to override",
+                "set HIVEPILOT_COST_INSTRUMENTATION_SINCE to an ISO-8601 timestamp (e.g. "
+                "'2026-07-27T00:00:00+00:00'), or unset it to use the built-in default",
+            )
+        ]
+    return parsed, []
+
 
 def check_cost_accounting() -> list[DoctorFinding]:
     """Flag an abnormal share of unpriced steps, or a recorded model id that
     has never once been priced -- see the module-level comment block above
-    for the full trigger/anti-noise rationale. Reads the same 30-day window
-    the cost dashboard shows (`analytics_service.cost_summary`'s default).
+    for the full trigger/anti-noise rationale. Both triggers are scoped to
+    steps recorded AT OR AFTER `_resolve_cost_instrumentation_boundary()`,
+    intersected with the same 30-day window the cost dashboard shows
+    (`analytics_service.cost_summary`'s default) -- steps excluded by the
+    boundary are reported separately via an `info` line, never hidden.
     """
     from hivepilot.services import analytics_service
     from hivepilot.services.pricing import _effective_price_map
 
-    summary = analytics_service.cost_summary(days=30)
+    boundary, findings = _resolve_cost_instrumentation_boundary()
+    if boundary is None:
+        return findings  # fail-closed: cannot scope the ratio without a boundary
+
+    window_start = datetime.now(timezone.utc) - timedelta(days=30)
+    effective_since = max(window_start, boundary).strftime(_COST_TS_FORMAT)
+
+    summary_30d = analytics_service.cost_summary(days=30)
+    known_30d = [row for row in summary_30d["by_model"] if row["model"] != "unknown"]
+    total_30d = sum(row["total_steps"] for row in known_30d)
+
+    summary = analytics_service.cost_summary(days=None, since=effective_since)
     known_models = [row for row in summary["by_model"] if row["model"] != "unknown"]
-
-    findings: list[DoctorFinding] = []
-
     total_known_steps = sum(row["total_steps"] for row in known_models)
+
+    excluded = total_30d - total_known_steps
+    if excluded > 0:
+        findings.append(
+            _finding(
+                "info",
+                "cost_accounting_pre_instrumentation_steps",
+                f"{excluded} step(s) with a recorded model in the last 30 days predate the "
+                "cost-instrumentation fix and are excluded from the unpriced-share ratio "
+                "below -- they have no tokens captured at all and can never be priced",
+                "these rows permanently understate any historical cost total that includes "
+                "them (dashboard, budget_daily_usd, autopilot admission) for a known, "
+                "already-fixed reason -- surfaced here so that is explained rather than "
+                "left looking like an ongoing accounting problem",
+                "no action needed for these specific rows -- `hivepilot costs backfill "
+                "--dry-run` confirms they have no tokens to recompute from",
+            )
+        )
+
     total_unpriced = sum(row["unpriced_steps"] for row in known_models)
     if total_known_steps >= _COST_ACCOUNTING_MIN_TOTAL_SAMPLE:
         share = total_unpriced / total_known_steps
@@ -1812,9 +1959,9 @@ def check_cost_accounting() -> list[DoctorFinding]:
                     "warning",
                     "cost_accounting_unpriced_share",
                     f"{total_unpriced}/{total_known_steps} ({share:.0%}) of steps with a "
-                    "recorded model in the last 30 days have NO cost signal at all (no "
-                    f"self-reported cost, no price-map match) -- affected model(s): "
-                    f"{', '.join(unpriced_models)}",
+                    "recorded model since the cost-instrumentation fix landed have NO cost "
+                    f"signal at all (no self-reported cost, no price-map match) -- affected "
+                    f"model(s): {', '.join(unpriced_models)}",
                     "`budget_daily_usd`, the autopilot admission check, and the "
                     "partition-dispatch cost gate all read this same total (`analytics_"
                     "service.cost_summary` via `autopilot_queue.spent_today_usd`) -- a "
@@ -1840,7 +1987,8 @@ def check_cost_accounting() -> list[DoctorFinding]:
                 "warning",
                 "cost_accounting_model_missing_from_price_map",
                 f"model id(s) {', '.join(never_priced)} have never had a single priced step "
-                "in the last 30 days and are absent from the effective price map",
+                "since the cost-instrumentation fix landed and are absent from the "
+                "effective price map",
                 "every step for these models silently contributes $0.0 to every cost total "
                 "(dashboard, budget_daily_usd, autopilot admission, partition-dispatch cost "
                 "gate) -- indistinguishable from 'genuinely free' unless you already know to "

@@ -43,11 +43,20 @@ class BackfillResult:
     remainder -- rows this backfill genuinely could not price (model absent
     from the effective price map even after the expansion) -- reported
     honestly rather than silently dropped from the total.
+
+    ``unrecoverable`` is a DIFFERENT population from all of the above: steps
+    that have a model and no usable cost, but ALSO have neither input nor
+    output tokens -- the honesty boundary documented in the module docstring
+    means these were never candidates at all (`scanned` cannot count them),
+    yet a bare ``scanned=0`` cannot tell an operator "the system is healthy"
+    from "this silently found nothing and I don't know why". Reported
+    separately so a caller (the CLI) can say which one it is.
     """
 
     scanned: int
     updated: int
     still_unpriced: int
+    unrecoverable: int = 0
     updated_ids: list[int] = field(default_factory=list)
 
 
@@ -59,6 +68,21 @@ class BackfillResult:
 _CANDIDATE_WHERE = (
     "model IS NOT NULL "
     "AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL) "
+    "AND (cost_usd IS NULL OR cost_usd = 0)"
+)
+
+# The complement of `_CANDIDATE_WHERE`'s token clause, for the SAME
+# "has a model, currently unpriced" population: a step with a model, no
+# usable cost, and NEITHER input NOR output tokens ever captured. These
+# rows were recorded before the usage-capture-modelusage fix existed at
+# all -- there is nothing on the row to recompute from (see the module
+# docstring's honesty boundary) -- so they can never become a `scanned`
+# candidate, no matter how the price map is extended. Counted separately so
+# `scanned=0` can be explained (`hivepilot costs backfill`'s CLI output)
+# instead of looking identical to "the system is already healthy".
+_UNRECOVERABLE_WHERE = (
+    "model IS NOT NULL "
+    "AND input_tokens IS NULL AND output_tokens IS NULL "
     "AND (cost_usd IS NULL OR cost_usd = 0)"
 )
 
@@ -86,6 +110,10 @@ def backfill_unpriced_costs(*, apply: bool = False) -> BackfillResult:
                 )
             ).fetchall()
         ]
+        unrecoverable_row = conn.execute(
+            db.ph(f"SELECT COUNT(*) AS n FROM steps WHERE {_UNRECOVERABLE_WHERE}")
+        ).fetchone()
+        unrecoverable = dict(unrecoverable_row)["n"] if unrecoverable_row is not None else 0
 
     updates: list[tuple[float, int]] = []
     still_unpriced = 0
@@ -111,6 +139,7 @@ def backfill_unpriced_costs(*, apply: bool = False) -> BackfillResult:
         scanned=len(rows),
         updated=len(updates),
         still_unpriced=still_unpriced,
+        unrecoverable=unrecoverable,
         updated_ids=[step_id for _, step_id in updates],
     )
 

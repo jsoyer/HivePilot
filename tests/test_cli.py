@@ -370,6 +370,47 @@ class TestCostsBackfillCli:
         assert result.exit_code == 0, result.output
         assert "1" in result.output
 
+    def test_zero_candidates_says_nothing_to_backfill_when_db_is_empty(self) -> None:
+        """`scanned 0` alone is ambiguous -- an operator can't tell 'the
+        system is healthy' from 'this silently found nothing and I don't
+        know why'. An empty database is the healthy case."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["costs", "backfill"])
+
+        assert result.exit_code == 0, result.output
+        assert "0" in result.output
+        assert "predate" not in result.output.lower()
+
+    def test_zero_candidates_explains_unrecoverable_rows(self) -> None:
+        """The operator's real box: rows with a model but NO tokens
+        captured at all (pre-dating the usage-capture fix) -- `scanned 0`
+        must say WHY, not just print a bare 0."""
+        from hivepilot.services import db, state_service
+
+        state_service.init_db()
+        with db.connect() as conn:
+            run_id = db.insert_returning_id(
+                conn,
+                "INSERT INTO runs (project, task, status, tenant) VALUES (?, ?, ?, ?)",
+                ("proj", "task", "success", "default"),
+            )
+            for i in range(3):
+                conn.execute(
+                    db.ph(
+                        "INSERT INTO steps (run_id, step, status, provider, model, "
+                        "input_tokens, output_tokens, cost_usd) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    (run_id, f"s{i}", "success", "claude", "opus", None, None, None),
+                )
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["costs", "backfill"])
+
+        assert result.exit_code == 0, result.output
+        assert "3" in result.output
+        assert "predate" in result.output.lower() or "no tokens" in result.output.lower()
+
 
 # ---------------------------------------------------------------------------
 # schedule health / schedule list -- source: autopilot entries (task=None)

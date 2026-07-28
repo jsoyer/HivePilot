@@ -162,3 +162,67 @@ class TestBackfillUnpricedCosts:
         assert result.scanned == 2
         assert result.updated == 1
         assert result.still_unpriced == 1
+
+
+class TestBackfillUnrecoverableCount:
+    """`scanned=0` is ambiguous on its own -- it means either "nothing to
+    do" (system healthy) or "found rows but none of them had any tokens to
+    recompute from" (a real, historical gap this backfill can never close).
+    `unrecoverable` distinguishes the two so the CLI can say which one it
+    is instead of printing a bare `0`."""
+
+    def test_zero_when_no_unpriced_rows_at_all(self) -> None:
+        result = cost_backfill.backfill_unpriced_costs(apply=False)
+
+        assert result.scanned == 0
+        assert result.unrecoverable == 0
+
+    def test_counts_rows_with_a_model_but_no_tokens_at_all(self) -> None:
+        """The real production symptom pre-dating the usage-capture fix:
+        model recorded, but NEITHER input_tokens NOR output_tokens was ever
+        captured -- nothing for this backfill to recompute from, ever."""
+        run_id = _seed_run()
+        _seed_step(run_id, "s1", model="opus", input_tokens=None, output_tokens=None)
+        _seed_step(run_id, "s2", model="sonnet", input_tokens=None, output_tokens=None)
+
+        result = cost_backfill.backfill_unpriced_costs(apply=False)
+
+        assert result.scanned == 0, "rows with no tokens are never a backfill CANDIDATE"
+        assert result.unrecoverable == 2
+
+    def test_does_not_double_count_recoverable_rows_as_unrecoverable(self) -> None:
+        """A row that DOES have tokens (a genuine backfill candidate) must
+        never also be counted as unrecoverable -- the two counts are a
+        strict partition of 'has a model, currently unpriced'."""
+        run_id = _seed_run()
+        _seed_step(
+            run_id, "s1", model="claude-sonnet-4-6", input_tokens=1_000_000, output_tokens=500_000
+        )
+        _seed_step(run_id, "s2", model="opus", input_tokens=None, output_tokens=None)
+
+        result = cost_backfill.backfill_unpriced_costs(apply=False)
+
+        assert result.scanned == 1
+        assert result.unrecoverable == 1
+
+    def test_a_row_with_only_one_of_input_or_output_tokens_is_not_unrecoverable(self) -> None:
+        """A candidate row needs only ONE of input/output tokens present
+        (see `_CANDIDATE_WHERE`) -- it must not be double-counted as
+        unrecoverable just because the OTHER field is None."""
+        run_id = _seed_run()
+        _seed_step(
+            run_id, "s1", model="claude-sonnet-4-6", input_tokens=1_000_000, output_tokens=None
+        )
+
+        result = cost_backfill.backfill_unpriced_costs(apply=False)
+
+        assert result.scanned == 1
+        assert result.unrecoverable == 0
+
+    def test_does_not_count_already_priced_rows(self) -> None:
+        run_id = _seed_run()
+        _seed_step(run_id, "s1", model="opus", input_tokens=None, output_tokens=None, cost_usd=1.5)
+
+        result = cost_backfill.backfill_unpriced_costs(apply=False)
+
+        assert result.unrecoverable == 0
