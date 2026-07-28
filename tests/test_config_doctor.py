@@ -1523,6 +1523,222 @@ class TestCheckCostAccounting:
 
 
 # ---------------------------------------------------------------------------
+# check_cost_accounting -- boundary scoping (fix/cost-check-window)
+#
+# The unpriced-share ratio must be scoped to steps recorded AT OR AFTER a
+# cost-instrumentation boundary -- steps from before it have no tokens at
+# all and can never be priced, so counting them measures "did an old,
+# already-fixed bug exist" (permanently true) rather than "is the CURRENT
+# instrumentation healthy".
+#
+# The boundary itself (`config_doctor._MODELUSAGE_FIX_LANDED_AT`) is
+# monkeypatched to a "N days ago" instant computed at test time -- NOT the
+# real hardcoded release date -- so these tests exercise the SCOPING LOGIC
+# and stay correct regardless of how much real wall-clock time has passed
+# since the fix actually landed (the real constant only needs to be
+# "sometime in the last 30 days" for the check to matter at all, which
+# stops being true a few weeks after this sprint).
+#
+# Every test below must FAIL against the unscoped check on `origin/main`.
+# ---------------------------------------------------------------------------
+
+_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _days_ago(days: float) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime(_TS_FORMAT)
+
+
+def _seed_cost_step_at(
+    run_id: int,
+    step: str,
+    *,
+    model: str | None,
+    timestamp: str,
+    cost_usd: float | None = None,
+    input_tokens: int | None = 100,
+    output_tokens: int | None = 100,
+) -> None:
+    from hivepilot.services import db, state_service
+
+    state_service.init_db()
+    with db.connect() as conn:
+        conn.execute(
+            db.ph(
+                "INSERT INTO steps (run_id, step, status, provider, model, "
+                "input_tokens, output_tokens, cost_usd, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                run_id,
+                step,
+                "success",
+                "claude",
+                model,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                timestamp,
+            ),
+        )
+
+
+class TestCheckCostAccountingBoundary:
+    def test_pre_boundary_unpriced_steps_produce_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-fix rows with zero tokens/no cost signal, recorded WITHIN the
+        30-day dashboard window but BEFORE the cost-instrumentation
+        boundary, must never fire the unpriced-share warning -- they can
+        never be priced (see `hivepilot costs backfill`) and are a known,
+        already-explained gap, not a live anomaly."""
+        monkeypatch.setattr(config_doctor, "_MODELUSAGE_FIX_LANDED_AT", _days_ago(5))
+        run_id = _seed_cost_run()
+        for i in range(30):
+            _seed_cost_step_at(
+                run_id,
+                f"s{i}",
+                model="opus",
+                timestamp=_days_ago(10),  # before the boundary, inside the 30-day window
+                cost_usd=None,
+                input_tokens=None,
+                output_tokens=None,
+            )
+
+        findings = config_doctor.check_cost_accounting()
+        assert not any(f.check == "cost_accounting_unpriced_share" for f in findings), [
+            f.message for f in findings
+        ]
+
+    def test_post_boundary_unpriced_steps_still_fire(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The exact same unpriced shape, recorded AFTER the boundary, is a
+        live anomaly and must still fire."""
+        monkeypatch.setattr(config_doctor, "_MODELUSAGE_FIX_LANDED_AT", _days_ago(5))
+        run_id = _seed_cost_run()
+        for i in range(20):
+            _seed_cost_step_at(
+                run_id,
+                f"s{i}",
+                model="totally-unlisted-model",
+                timestamp=_days_ago(1),  # after the boundary
+                cost_usd=None,
+                input_tokens=None,
+                output_tokens=None,
+            )
+
+        findings = config_doctor.check_cost_accounting()
+        assert any(f.check == "cost_accounting_unpriced_share" for f in findings), [
+            f.message for f in findings
+        ]
+
+    def test_regression_after_boundary_is_still_caught(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A FUTURE regression reintroducing the exact pre-fix symptom
+        (bare alias, zero tokens) AFTER the boundary must still be caught --
+        proves the boundary is a fixed instant, never re-derived from the
+        shape of the rows it grades (which would let a future regression
+        reproducing that same shape push the boundary forward and hide
+        itself forever)."""
+        monkeypatch.setattr(config_doctor, "_MODELUSAGE_FIX_LANDED_AT", _days_ago(10))
+        run_id = _seed_cost_run()
+        # A healthy stretch right after the fix landed...
+        for i in range(20):
+            _seed_cost_step_at(
+                run_id,
+                f"healthy-{i}",
+                model="claude-opus-5",
+                timestamp=_days_ago(8),
+                cost_usd=0.01,
+            )
+        # ...then a NEW regression reintroducing the old bare-alias/zero-token
+        # shape, recorded well AFTER the boundary (i.e. "now").
+        for i in range(20):
+            _seed_cost_step_at(
+                run_id,
+                f"regressed-{i}",
+                model="opus",
+                timestamp=_days_ago(0),
+                cost_usd=None,
+                input_tokens=None,
+                output_tokens=None,
+            )
+
+        findings = config_doctor.check_cost_accounting()
+        assert any(f.check == "cost_accounting_unpriced_share" for f in findings), [
+            f.message for f in findings
+        ]
+
+    def test_unparseable_boundary_override_yields_finding_not_silence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            settings, "cost_instrumentation_since", "not-a-timestamp", raising=False
+        )
+        run_id = _seed_cost_run()
+        for i in range(20):
+            _seed_cost_step(run_id, f"s{i}", model="totally-unlisted-model", cost_usd=None)
+
+        findings = config_doctor.check_cost_accounting()
+        assert any(f.check == "cost_instrumentation_boundary_unparseable" for f in findings), [
+            f.check for f in findings
+        ]
+
+    def test_healthy_post_boundary_window_is_silent_despite_pre_boundary_junk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config_doctor, "_MODELUSAGE_FIX_LANDED_AT", _days_ago(5))
+        run_id = _seed_cost_run()
+        for i in range(50):
+            _seed_cost_step_at(
+                run_id,
+                f"old-{i}",
+                model="opus",
+                timestamp=_days_ago(10),
+                cost_usd=None,
+                input_tokens=None,
+                output_tokens=None,
+            )
+        for i in range(20):
+            _seed_cost_step_at(
+                run_id, f"new-{i}", model="claude-opus-5", timestamp=_days_ago(1), cost_usd=0.01
+            )
+
+        findings = config_doctor.check_cost_accounting()
+        assert not any(f.severity == "warning" for f in findings), [f.message for f in findings]
+        assert not any(f.severity == "error" for f in findings), [f.message for f in findings]
+
+    def test_excluded_rows_info_line_states_real_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config_doctor, "_MODELUSAGE_FIX_LANDED_AT", _days_ago(5))
+        run_id = _seed_cost_run()
+        for i in range(7):
+            _seed_cost_step_at(
+                run_id,
+                f"old-{i}",
+                model="opus",
+                timestamp=_days_ago(10),
+                cost_usd=None,
+                input_tokens=None,
+                output_tokens=None,
+            )
+        for i in range(20):
+            _seed_cost_step_at(
+                run_id, f"new-{i}", model="claude-opus-5", timestamp=_days_ago(1), cost_usd=0.01
+            )
+
+        findings = config_doctor.check_cost_accounting()
+        info_findings = [
+            f for f in findings if f.check == "cost_accounting_pre_instrumentation_steps"
+        ]
+        assert info_findings, [f.message for f in findings]
+        assert "7" in info_findings[0].message
+
+
+# ---------------------------------------------------------------------------
 # run_doctor / CLI integration
 # ---------------------------------------------------------------------------
 

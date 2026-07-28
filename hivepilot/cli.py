@@ -117,9 +117,27 @@ def costs_backfill_cmd(
 
     result = backfill_unpriced_costs(apply=apply)
     mode = "Applied" if apply else "Dry run (would apply)"
+    if result.scanned == 0:
+        # `scanned 0` alone is ambiguous: it means either "nothing to do"
+        # (system healthy) or "found rows but none of them ever had any
+        # tokens to recompute from" (a real, permanent gap) -- say which.
+        if result.unrecoverable:
+            typer.echo(
+                f"{mode}: scanned 0 candidate step(s) -- nothing recoverable. "
+                f"{result.unrecoverable} step(s) have a model but no tokens at all "
+                "(they predate cost instrumentation) and can never be priced."
+            )
+        else:
+            typer.echo(f"{mode}: scanned 0 candidate step(s) -- nothing to backfill.")
+        return
     typer.echo(f"{mode}: scanned {result.scanned} candidate step(s).")
     typer.echo(f"  priced now: {result.updated}")
     typer.echo(f"  still unpriced (model not in price map): {result.still_unpriced}")
+    if result.unrecoverable:
+        typer.echo(
+            f"  predate cost instrumentation (no tokens captured, unrecoverable): "
+            f"{result.unrecoverable}"
+        )
     if not apply and result.updated:
         typer.echo("Re-run with --apply to write these values.")
 

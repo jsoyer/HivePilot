@@ -719,6 +719,20 @@ class Settings(BaseSettings):
     # estimate only when a step has no self-reported `cost_usd`.
     # env: HIVEPILOT_LLM_PRICE_MAP (JSON string)
     llm_price_map: dict[str, Any] | None = None
+    # fix/cost-check-window — explicit override for the boundary
+    # `config_doctor.check_cost_accounting` uses to scope its unpriced-share
+    # ratio (steps recorded before this instant have no tokens captured at
+    # all and can never be priced — see `config_doctor._MODELUSAGE_FIX_
+    # LANDED_AT`'s comment for why this is a FIXED instant, never derived
+    # from a step's own shape). Unset (None, the default) uses the built-in
+    # constant, which matches when the usage-capture-modelusage fix (PR
+    # #352) landed upstream. Only needed if this box deployed that fix (or a
+    # LATER fix addressing a similar regression) at a materially different
+    # time — e.g. a backport, or a from-source build merged before/after
+    # upstream. ISO-8601 string; an unparseable value is a fail-closed
+    # `error` finding, never a silent fallback to the built-in default.
+    # env: HIVEPILOT_COST_INSTRUMENTATION_SINCE
+    cost_instrumentation_since: str | None = None
     stage_cache_enabled: bool = False  # opt-in SQLite stage memoization (L3)
     cache_backend: str = "sqlite"  # sqlite | redis (L3)
     redis_url: str | None = None  # required when cache_backend=redis (L3)
