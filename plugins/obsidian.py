@@ -28,9 +28,12 @@ Reuses `hivepilot.services.obsidian_service.ObsidianService` for ALL vault
 WRITES (path guard + frontmatter) — never a raw `open().write()`. `recall`
 reads notes directly (`Path.read_text`) since `ObsidianService` exposes no
 generic read API and read access isn't subject to the write-path safety
-guard. The vault comes from `settings.obsidian_vault`, resolved lazily
-inside each function so a config change picked up between calls is honored
-and importing this module has no side effects.
+guard. The vault is resolved lazily inside each function (so a config change
+picked up between calls is honored and importing this module has no side
+effects) through `_resolve_vault`, which honors a project's
+`obsidian_vault:` override before falling back to the global
+`settings.obsidian_vault` — see that function for the precedence order and
+for why `recall` (read) and `store` (write) deliberately share it.
 
 Contract:
 - Notifier: raises `NotConfigured` (the standard "skip silently" signal, see
@@ -83,8 +86,8 @@ from hivepilot.config import Settings  # noqa: E402
 _DEFAULT_OBSIDIAN_VAULT = Settings.model_fields["obsidian_vault"].default
 
 
-def _resolve_vault() -> Path | None:
-    """Return the configured vault path if set and present on disk, else None."""
+def _global_vault() -> Path | None:
+    """Return the GLOBAL configured vault path if set and present on disk, else None."""
     from hivepilot.config import settings
 
     vault = settings.obsidian_vault
@@ -94,6 +97,47 @@ def _resolve_vault() -> Path | None:
     if not path.exists():
         return None
     return path.resolve()
+
+
+def _resolve_vault(payload: Any = None, vault_path: Any = None) -> Path | None:
+    """Return the vault this hook should read from / write to.
+
+    Per-project-vault PRD, in precedence order:
+
+    1. *vault_path* — the destination the orchestrator ALREADY resolved for
+       this run and threads into run-scoped hooks (`on_pipeline_end` /
+       `on_error`), which carry no project of their own.
+    2. `payload.project` — a `ProjectConfig`, which may declare an
+       `obsidian_vault:` override in projects.yaml (`recall` / `store`).
+    3. the global `settings.obsidian_vault`, byte-identical to before this PRD.
+
+    Used by BOTH directions on purpose. `recall` (read) and `store` (write)
+    call this same function with the same payload, so a project can never end
+    up recalling from one vault while its outcomes are written to another --
+    that split-brain is the failure mode a per-project vault would otherwise
+    introduce.
+
+    Returns `None` (a silent no-op for every caller here) rather than raising
+    when the destination is unusable: a lifecycle hook must never crash a run.
+    The loud failure for the same misconfiguration is raised up front by
+    `Orchestrator._run_pipeline_body`. The unusable case is logged, never
+    swallowed silently.
+    """
+    from hivepilot.services.obsidian_vault_resolver import (
+        VaultResolutionError,
+        resolve_vault_path,
+    )
+
+    if vault_path:
+        candidate = Path(str(vault_path)).expanduser()
+        return candidate.resolve() if candidate.exists() else None
+
+    project = getattr(payload, "project", None) if payload is not None else None
+    try:
+        return resolve_vault_path(project, _global_vault())
+    except VaultResolutionError as exc:
+        logger.warning("plugin.obsidian.vault_unresolvable", error=str(exc))
+        return None
 
 
 def _timestamp() -> str:
@@ -149,7 +193,7 @@ def on_pipeline_end(**kwargs: Any) -> None:
     the vault isn't configured or doesn't exist.
     """
     try:
-        vault = _resolve_vault()
+        vault = _resolve_vault(vault_path=kwargs.get("vault_path"))
         if vault is None:
             return
         entry = (
@@ -174,7 +218,7 @@ def on_error(**kwargs: Any) -> None:
     the vault isn't configured or doesn't exist.
     """
     try:
-        vault = _resolve_vault()
+        vault = _resolve_vault(vault_path=kwargs.get("vault_path"))
         if vault is None:
             return
         entry = (
@@ -345,7 +389,7 @@ def recall(**kwargs: Any) -> None:
             # later step) — skip to avoid re-scanning / re-appending.
             return
 
-        vault = _resolve_vault()
+        vault = _resolve_vault(payload)
         if vault is None:
             return
 
@@ -411,7 +455,7 @@ def store(**kwargs: Any) -> None:
         if payload is None:
             return
 
-        vault = _resolve_vault()
+        vault = _resolve_vault(payload)
         if vault is None:
             return
 

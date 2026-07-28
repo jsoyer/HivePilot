@@ -10,10 +10,12 @@ Safety invariants:
 - Never renames or deletes folders.
 
 These three folders are the ONLY places HivePilot writes in a vault. The names are
-constants below (not configuration); only the vault root is configurable, via
-``HIVEPILOT_OBSIDIAN_VAULT``. The full layout — which writer targets which folder,
-and which folders are audit-only with no writer — is documented in
-``docs/INTEGRATIONS.md`` under "Obsidian → Vault layout".
+constants below (not configuration); only the vault root is configurable — globally
+via ``HIVEPILOT_OBSIDIAN_VAULT``, or per project via ``obsidian_vault:`` in
+projects.yaml (see ``hivepilot.services.obsidian_vault_resolver``). This class itself
+is vault-agnostic: callers pass the already-resolved root as ``vault_path``. The full
+layout — which writer targets which folder, and which folders are audit-only with no
+writer — is documented in ``docs/INTEGRATIONS.md`` under "Obsidian → Vault layout".
 """
 
 from __future__ import annotations

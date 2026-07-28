@@ -79,6 +79,10 @@ from hivepilot.services.interaction_service import (
     log_request_interaction,
 )
 from hivepilot.services.obsidian_service import ObsidianService
+from hivepilot.services.obsidian_vault_resolver import (
+    resolve_vault_for_projects,
+    resolve_vault_path,
+)
 from hivepilot.services.pipeline_service import validate_pipeline
 from hivepilot.services.project_service import (
     ensure_checkout,
@@ -3137,8 +3141,22 @@ class Orchestrator:
             icon="🚀",
         )
 
-        # Resolve vault path — None means artifact writes are silent no-ops
-        vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
+        # Resolve vault path — None means artifact writes are silent no-ops.
+        #
+        # Per-project-vault PRD: a target project may override the destination
+        # via `obsidian_vault:` in projects.yaml (HivePilot's own work -> a
+        # personal vault, a product pipeline's work -> the project vault). The
+        # global `settings.obsidian_vault` expression below is passed in as the
+        # FALLBACK, unchanged, so a run whose projects declare no override
+        # resolves byte-identically to before this PRD. Resolved here, up
+        # front, before any stage executes: an unusable or divergent
+        # destination must fail loudly rather than silently write a project's
+        # work into the wrong vault (see
+        # `hivepilot.services.obsidian_vault_resolver`).
+        vault_path = resolve_vault_for_projects(
+            [p for p in (self.projects.projects.get(n) for n in project_names) if p is not None],
+            settings.obsidian_vault if settings.obsidian_vault.exists() else None,
+        )
 
         # Open (or resume) a state-service run record (RUNNING)
         if run_id is None:
@@ -3637,6 +3655,11 @@ class Orchestrator:
                         pipeline=pipeline_name,
                         stage=stage.name,
                         dry_run=dry_run,
+                        # Per-project-vault PRD: run-scoped hooks carry no
+                        # project, so hand them the destination this run
+                        # already resolved. `run_hook` fans out via **kwargs,
+                        # so hooks that don't care simply ignore it.
+                        vault_path=str(vault_path) if vault_path else None,
                     )
                 except Exception as exc:  # noqa: BLE001 — a broken plugin hook must not kill a run
                     logger.warning(
@@ -3655,6 +3678,9 @@ class Orchestrator:
                 pipeline=pipeline_name,
                 status=final_status.value,
                 dry_run=dry_run,
+                # See the `on_error` call above — the run's already-resolved
+                # per-project vault destination, for hooks with no project.
+                vault_path=str(vault_path) if vault_path else None,
             )
         except Exception as exc:  # noqa: BLE001 — a broken plugin hook must not kill a run
             logger.warning(
@@ -4567,7 +4593,13 @@ class Orchestrator:
             role_name, policy
         )  # also enforces allowed_runners
         debate_host = resolve_host(role_name, policy)
-        vault_path = settings.obsidian_vault if settings.obsidian_vault.exists() else None
+        # Per-project-vault PRD: this debate's ADR belongs in the vault of the
+        # project it is about, not in whichever vault the host happens to have
+        # configured globally. The global expression is the unchanged fallback.
+        vault_path = resolve_vault_path(
+            project,
+            settings.obsidian_vault if settings.obsidian_vault.exists() else None,
+        )
 
         positions: list[Position] = []
         for entry in models:

@@ -46,6 +46,9 @@ Fields:
 - `secrets: dict[str, dict]` — maps `NAME` to a secret spec (`{source, ...}`); referenced
   in `env` values as `${secret:NAME}` and resolved at run time (see
   [SECURITY.md](SECURITY.md))
+- `obsidian_vault` — where **this project's** HivePilot artifacts are written (and read
+  back from). Overrides the global `HIVEPILOT_OBSIDIAN_VAULT`. See
+  [Per-project Obsidian vault](#per-project-obsidian-vault--obsidian_vault) below.
 
 ```yaml
 projects:
@@ -78,6 +81,56 @@ Secrets-related environment settings (`HIVEPILOT_` prefix): `KMS_PROVIDER` /
 (1Password direct mode), and `SECRETS_CACHE_TTL_SECONDS` — the opt-in in-memory
 secret cache TTL (default `0` = disabled; flush with `hivepilot secrets
 cache-clear`). See [SECURITY.md](SECURITY.md).
+
+### Per-project Obsidian vault — `obsidian_vault:`
+
+`HIVEPILOT_OBSIDIAN_VAULT` is a single machine-wide path, so by default every project's
+artifacts land in the same vault. But HivePilot's unit of configuration is a *pipeline*,
+and several pipelines routinely coexist on one host — your own HivePilot work and a
+product pipeline want different vaults. `obsidian_vault:` on a project makes the
+destination a per-project decision:
+
+```yaml
+projects:
+  hivepilot:
+    path: /home/jerome/code/hivepilot
+    # HivePilot's own work -> the personal vault
+    obsidian_vault: /home/jerome/vaults/personal
+
+  noxys:
+    path: /home/jerome/code/noxys
+    # the product pipeline's work -> the project vault
+    obsidian_vault: /home/jerome/vaults/noxys
+
+  legacy:
+    path: /home/jerome/code/legacy
+    # no key -> inherits HIVEPILOT_OBSIDIAN_VAULT, exactly as before
+```
+
+It applies to **every** vault destination for that project: per-stage run artifacts and
+canonical `02 - Artifacts/<role>/` deliverables, the Obsidian plugin's daily journal and
+step outcomes, debate ADRs, auditor notes, interaction logs, and the `{OBSIDIAN_VAULT}`
+prompt variable the agent itself sees. The plugin's `recall` (read) resolves through the
+same function as its `store` (write), so a project never recalls context from a vault it
+does not write to.
+
+Rules — all deliberate, all fail-closed:
+
+| Value | Behaviour |
+| --- | --- |
+| key absent (or `obsidian_vault: null`) | inherit the global `HIVEPILOT_OBSIDIAN_VAULT` — byte-identical to a deployment that predates this field |
+| absolute path (`~` is expanded) | used for this project |
+| **empty / whitespace-only** | **projects.yaml refuses to load.** Empty is never read as "use the global": an empty value is always a mistake (a typo, or an unexpanded `${VAULT}`), and silently falling back would route this project's artifacts into the very vault you were moving away from |
+| **relative path** | **projects.yaml refuses to load.** A relative vault path resolves against whatever working directory the daemon has, so the same config would write to different places depending on how HivePilot was started |
+| absolute path, directory does not exist | the run fails loudly, before any stage executes. HivePilot **never creates a vault directory** — a silently created vault is how artifacts end up somewhere nobody looks. Create it yourself (`mkdir -p`), ideally as a git repo |
+
+One more fail-closed rule: a single run over **several** projects whose vaults differ is
+rejected up front. A run writes one aggregated artifact per stage, so there is exactly one
+destination; picking one project's vault would file another project's work in it. Give
+every project in the run the same `obsidian_vault:`, or run them as separate pipelines.
+
+`hivepilot config doctor` reports projects that share the global vault and, once any
+project declares an override, stops reporting it.
 
 ### Monorepo modules — `modules:` / `ui_surfaces:` and `project/module` targeting
 

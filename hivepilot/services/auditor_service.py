@@ -100,7 +100,26 @@ def _run_henri(project: ProjectConfig, context: str, registry, *, label: str) ->
 def _write(
     project: ProjectConfig, subpath: str, title: str, body: str, dry_run: bool, fm: dict
 ) -> None:
-    vault = settings.obsidian_vault if settings.obsidian_vault.exists() else None
+    # Per-project-vault PRD: the auditor's observations are ABOUT this
+    # project, so they belong in this project's vault. `resolve_vault_path`
+    # falls back to the unchanged global expression when the project declares
+    # no `obsidian_vault:` override. A broken override must never take down an
+    # auditor pass (best-effort, like every other write here) -- it is logged
+    # and skipped; the loud failure for the same misconfiguration is raised up
+    # front by `Orchestrator._run_pipeline_body`.
+    from hivepilot.services.obsidian_vault_resolver import (
+        VaultResolutionError,
+        resolve_vault_path,
+    )
+
+    try:
+        vault = resolve_vault_path(
+            project,
+            settings.obsidian_vault if settings.obsidian_vault.exists() else None,
+        )
+    except VaultResolutionError as exc:
+        logger.warning("auditor.vault_unresolvable", project=project.path.name, error=str(exc))
+        return
     if vault is None:
         return
     ObsidianService(vault, dry_run=dry_run).write_note(

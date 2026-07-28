@@ -25,6 +25,7 @@ from hivepilot.runners.base import (
     set_last_usage,
 )
 from hivepilot.services.config_provenance import redact_text, register_secret_value
+from hivepilot.services.obsidian_vault_resolver import resolve_prompt_vault
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.services.repo_instructions import build_repo_instructions_section
 from hivepilot.utils.env import gather_overrides, merge_environments
@@ -1105,11 +1106,7 @@ class ClaudeRunner(BaseRunner):
         if prior:
             sections.append(f"Outputs from previous agents:\n{prior}")
         target_repo = str(payload.project.path) if payload.project and payload.project.path else "."
-        obsidian_vault = (
-            str(self.settings.obsidian_vault)
-            if getattr(self.settings, "obsidian_vault", None)
-            else ""
-        )
+        obsidian_vault = resolve_prompt_vault(self.settings, payload.project)
         instructions = render_prompt_vars(
             instructions,
             target_repo=target_repo,

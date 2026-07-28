@@ -62,7 +62,10 @@ def write_stage_artifact(
     agents (CEO/PM/CTO/designers) skip writing their own deliverable via the
     agent's Write tool — which is blocked in headless ``--print`` mode and
     the vault dir isn't in the agent's accessible dirs. HivePilot persists it
-    itself, using its OWN file access against `settings.obsidian_vault`.
+    itself, using its OWN file access against the vault the CALLER resolved
+    (`hivepilot.services.obsidian_vault_resolver.resolve_vault_for_projects`
+    — a project's `obsidian_vault:` override, else the global
+    `settings.obsidian_vault`).
 
     Parameters
     ----------
