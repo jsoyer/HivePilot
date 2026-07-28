@@ -34,18 +34,27 @@ class ValidationReport:
     """Full result of `validate_config_report()` -- `problems` is the exact
     pre-existing `list[str]` contract `validate_config()` has always
     returned (kept as a thin wrapper around this for backward
-    compatibility with every existing caller/test). `config_dir` and
-    `plugin_dirs` are ADDITIONAL, resolved-to-absolute context so
-    `hivepilot validate` can print, at the top of its output, exactly what
-    it read and where it looked for plugins/skills -- the fix for the
-    "validate silently follows the process cwd instead of --dir" bug: an
-    operator seeing this header can never again mistake a cwd-dependent
-    verdict for flakiness.
+    compatibility with every existing caller/test). `config_dir`,
+    `plugin_dirs` and `skill_dirs` are ADDITIONAL, resolved-to-absolute
+    context so `hivepilot validate` can print, at the top of its output,
+    exactly what it read and where it looked for plugins/skills -- the fix
+    for the "validate silently follows the process cwd instead of --dir"
+    bug: an operator seeing this header can never again mistake a
+    cwd-dependent verdict for flakiness.
+
+    `skill_dirs` is the SECOND skill source (`<root>/skills/<name>/SKILL.md`
+    directories -- see `hivepilot/skill_dirs.py`), listed separately from
+    `plugin_dirs` because the two are genuinely different roots. Both lists
+    are named in an unknown-skill problem's "searched: ..." suffix: naming
+    only a subset of the roots actually consulted is precisely what made the
+    original "config repo skills are silently ignored" bug so hard to
+    diagnose on a live box.
     """
 
     problems: list[str] = field(default_factory=list)
     config_dir: Path = field(default_factory=Path.cwd)
     plugin_dirs: list[Path] = field(default_factory=list)
+    skill_dirs: list[Path] = field(default_factory=list)
 
 
 def validate_config(base_dir: Path | None = None) -> list[str]:
@@ -111,7 +120,10 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
         `skills:` reference exists anywhere in this config, since computing
         it is pure path arithmetic with no filesystem scanning or
         `PluginManager` construction (see the dormancy-gate note on the
-        `skills:` check below).
+        `skills:` check below). `skill_dirs`: the same, for the OTHER skill
+        source -- `<root>/skills/<name>/SKILL.md` directories (see
+        `hivepilot.skill_dirs.skill_scan_dirs`). Both lists are named in an
+        unknown-skill problem's "searched: ..." suffix.
     """
     explicit_base_dir = base_dir is not None
     if base_dir is None:
@@ -161,6 +173,16 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
 
     plugin_dirs = [
         d.resolve() for d in plugin_scan_dirs(base_dir=base_dir if explicit_base_dir else None)
+    ]
+
+    # Same, for the OTHER skill source: `<root>/skills/<name>/SKILL.md`
+    # directories (`hivepilot/skill_dirs.py`). Also pure path arithmetic, so
+    # it is computed unconditionally alongside `plugin_dirs` and stays
+    # accurate for a config with no `skills:` reference at all.
+    from hivepilot.skill_dirs import skill_scan_dirs
+
+    skill_dirs = [
+        d.resolve() for d in skill_scan_dirs(base_dir=base_dir if explicit_base_dir else None)
     ]
 
     # -----------------------------------------------------------------------
@@ -575,7 +597,18 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
         # process-global `settings.base_dir` chain. See this function's own
         # docstring and `plugin_scan_dirs` for the full semantics.
         plugin_manager = PluginManager(base_dir=base_dir if explicit_base_dir else None)
-        searched_dirs = ", ".join(str(d) for d in plugin_dirs) or "(no plugin directories)"
+        # EVERY root actually consulted, plugin roots and skill roots alike,
+        # de-duplicated but order-preserving. An operator debugging an
+        # unknown-skill error follows this list literally, so a root that is
+        # searched but not named here sends them down a false trail (the
+        # confirmed "config repo skills silently ignored" incident: the
+        # message named only `<cwd>/plugins` and the installed-plugins dir).
+        searched_roots: list[str] = []
+        for directory in [*plugin_dirs, *skill_dirs]:
+            text = str(directory)
+            if text not in searched_roots:
+                searched_roots.append(text)
+        searched_dirs = ", ".join(searched_roots) or "(no plugin or skill directories)"
         for owner_label, skill_names, resolved_role in skill_refs:
             for skill_name in skill_names:
                 skill = plugin_manager.get_skill(skill_name)
@@ -599,4 +632,9 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
                         f"{resolved_role!r} does not satisfy it"
                     )
 
-    return ValidationReport(problems=problems, config_dir=config_dir, plugin_dirs=plugin_dirs)
+    return ValidationReport(
+        problems=problems,
+        config_dir=config_dir,
+        plugin_dirs=plugin_dirs,
+        skill_dirs=skill_dirs,
+    )

@@ -1429,6 +1429,34 @@ class PluginManager:
 
             staged.loaded.append(record)
 
+        # Directory-sourced skills (`<root>/skills/<name>/SKILL.md`) -- the
+        # second skill SOURCE, staged LAST and never overwriting a plugin's
+        # contribution. See `hivepilot/skill_dirs.py` for the roots (a
+        # one-for-one mirror of `plugin_scan_dirs`, gated by the same
+        # `plugins_enabled`/`config_repo`/`config_repo_load_plugins`
+        # switches) and the fail-closed rejection rules.
+        #
+        # Plugins win on a name clash, deliberately: a directory skill is
+        # plain config a config repo can ship, so letting it REPLACE an
+        # installed plugin's skill would be a privilege escalation, and
+        # letting it raise `SkillNameCollisionError` here would let a config
+        # repo abort the entire plugin load (that exception propagates
+        # uncaught out of `_load_into`). Skipping + logging is the same
+        # first-wins precedence `_scan_plugin_dir` already applies to two
+        # plugin files sharing a stem.
+        from hivepilot.skill_dirs import discover_directory_skills
+
+        for dir_skill in discover_directory_skills(base_dir=self._base_dir):
+            dir_skill_name = dir_skill["name"]
+            if dir_skill_name in staged.skills:
+                logger.warning(
+                    "plugins.directory_skill_shadowed_by_plugin",
+                    skill=dir_skill_name,
+                    ignored=dir_skill["provider"],
+                )
+                continue
+            staged.skills[dir_skill_name] = dir_skill
+
         return staged
 
     def run_hook(self, hook_name: str, **kwargs: Any) -> None:
