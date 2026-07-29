@@ -33,6 +33,16 @@ test in this area. Scanning it would force that list to be obfuscated, making
 the guard weaker to make the scanner pass. The exclusion is printed on every
 successful run so it can never become an invisible hole.
 
+Only what the repo publishes
+----------------------------
+The default scan is intersected with ``git ls-files``: "public" means "tracked".
+A root glob like ``*.yaml`` otherwise also matches gitignored LOCAL files — on
+the machine this was written, ``api_tokens.yaml``, a runtime secrets file. That
+is wrong twice over: the file count stops being reproducible between a
+developer's machine and CI, and a denylist hit inside a secrets file would
+print the matching text straight into a build log. Explicit CLI globs are NOT
+filtered, so an ad-hoc audit can still point anywhere.
+
 Fail-closed
 -----------
 The failure mode this repository keeps re-shipping is an empty/absent value
@@ -60,6 +70,7 @@ from __future__ import annotations
 import glob
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -294,6 +305,31 @@ def scan_file(path: Path, patterns: list[ScopedPattern]) -> list[Finding]:
     return findings
 
 
+def tracked_files() -> set[Path] | None:
+    """Every file git tracks in this repo, resolved. ``None`` if git can't say.
+
+    "What this public repo publishes" is exactly "what git tracks", so the
+    default scan is intersected with this set. Without it, a root glob like
+    ``*.yaml`` also picks up gitignored LOCAL files — on the machine this was
+    written, ``api_tokens.yaml``, a runtime secrets file. Scanning those is
+    wrong twice over: the file count stops being reproducible between machines
+    and CI, and a denylist hit inside a secrets file would print the matching
+    text straight into a build log.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    names = result.stdout.decode("utf-8", errors="replace").split("\0")
+    return {(REPO_ROOT / name).resolve() for name in names if name}
+
+
 def expand_glob(pattern: str) -> list[Path]:
     """Expand ONE glob (relative to REPO_ROOT, or absolute) into existing files."""
     target = pattern if os.path.isabs(pattern) else str(REPO_ROOT / pattern)
@@ -327,7 +363,8 @@ def expand_globs(globs: list[str]) -> tuple[list[Path], list[str]]:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    globs = args if args else list(DEFAULT_GLOBS)
+    use_defaults = not args
+    globs = list(DEFAULT_GLOBS) if use_defaults else args
 
     try:
         patterns = load_all_patterns(DEFAULT_DENYLIST_PATH)
@@ -345,6 +382,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     files, empty_globs = expand_globs(globs)
+
+    # Restrict the DEFAULT scan to what this repo actually publishes. Explicit
+    # CLI globs are left alone so an ad-hoc audit can point anywhere.
+    untracked_note = ""
+    if use_defaults:
+        tracked = tracked_files()
+        if tracked is None:
+            # Git could not answer. Scan the raw glob set rather than guessing:
+            # a superset can only ever produce MORE findings, never fewer, so
+            # the uncertainty resolves toward the guard, not away from it.
+            untracked_note = " (git unavailable: gitignored files NOT excluded)"
+        else:
+            files = [f for f in files if f.resolve() in tracked]
 
     if empty_globs:
         print("Public-safe check ERROR — these globs matched no files:")
@@ -372,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"Public-safe check passed ({len(files)} files scanned, "
-        f"{len(patterns)} patterns). {NOT_SCANNED_NOTE}."
+        f"{len(patterns)} patterns){untracked_note}. {NOT_SCANNED_NOTE}."
     )
     return 0
 

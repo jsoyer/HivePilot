@@ -397,6 +397,49 @@ def test_main_errors_on_an_unusable_denylist(
     assert "unusable denylist" in out
 
 
+def test_default_scan_covers_only_git_tracked_files(
+    denylist_with_marker: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The default scan must cover what the repo PUBLISHES, i.e. tracked files.
+
+    A root glob such as `*.yaml` otherwise also matches gitignored LOCAL files
+    — on the machine this was written, `api_tokens.yaml`, a runtime secrets
+    file. Scanning those makes the file count irreproducible between machines
+    and CI, and a denylist hit inside a secrets file would print the matching
+    text straight into a build log.
+    """
+    tracked = check_public_safe.tracked_files()
+    assert tracked, "expected to be running inside a git checkout"
+
+    globbed, _ = check_public_safe.expand_globs(check_public_safe.DEFAULT_GLOBS)
+    untracked = [f for f in globbed if f.resolve() not in tracked]
+
+    # Run the real default scan and confirm it reports the tracked-only count.
+    assert check_public_safe.main([]) == 0
+    reported = int(capsys.readouterr().out.split("(")[1].split(" ")[0])
+
+    assert reported == len(globbed) - len(untracked)
+    assert reported <= len(tracked)
+
+
+def test_untracked_file_in_the_tree_is_not_scanned(
+    denylist_with_marker: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Planting an untracked leaky YAML at the repo root must not fail the
+    default scan — it is not published, and reading it into CI logs is the
+    very thing to avoid."""
+    planted = REPO_ROOT / "zz-untracked-public-safe-fixture.yaml"
+    planted.write_text(f"token: {MARKER}\n", encoding="utf-8")
+    try:
+        exit_code = check_public_safe.main([])
+        out = capsys.readouterr().out
+    finally:
+        planted.unlink()
+
+    assert exit_code == 0, out
+    assert MARKER not in out
+
+
 def test_denylist_never_scans_itself(denylist_with_marker: Path) -> None:
     """The committed denylist enumerates forbidden strings by definition, so
     scanning it would always "find" every one of them."""
