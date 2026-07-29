@@ -412,8 +412,10 @@ def test_denylist_never_scans_itself(denylist_with_marker: Path) -> None:
 def test_repository_is_public_safe_under_the_widened_scan() -> None:
     """End-to-end: the shipped denylist against the shipped glob set.
 
-    This is the assertion that fails on unfixed `main` once the parser bug is
-    fixed — `hivepilot/agent_rules.py` still carried a customer's document
-    filename.
+    NOT a "fails on unfixed main" test, deliberately — on unfixed `main` this
+    passes vacuously, because the guard there scanned 9 prompt files with its
+    most important pattern silently dead. That is precisely the state this
+    change ends: from here on, a customer-specific string committed anywhere in
+    the engine turns this green assertion red.
     """
     assert check_public_safe.main([]) == 0
