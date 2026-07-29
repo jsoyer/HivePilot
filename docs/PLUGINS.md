@@ -117,7 +117,7 @@ What IS shipped: a plugin MAY declare `register()["capabilities"] = [...]` from 
 
 ## Shipped plugins (inventory)
 
-24 plugins ship under `plugins/*.py`.
+33 modules ship under `plugins/*.py`. The tables below group the main ones by what they contribute.
 
 **Agent runners** (PATH-gated: flag AND binary must both be present):
 
@@ -159,6 +159,14 @@ What IS shipped: a plugin MAY declare `register()["capabilities"] = [...]` from 
 |---|---|---|
 | `obsidian` | notifier + `before_step`/`after_step`/`on_pipeline_end`/`on_error` hooks | ON |
 
+**Detection only (health, no runner):**
+
+| Plugin | Contributes | Default |
+|---|---|---|
+| `pinokio` | health `pinokio` | ON, presence-gated |
+
+See [Pinokio detection](#pinokio-detection) below for why this one contributes no runner.
+
 **Opt-in / default OFF:**
 
 | Plugin | Contributes | Default |
@@ -169,7 +177,29 @@ What IS shipped: a plugin MAY declare `register()["capabilities"] = [...]` from 
 | `sample_skill` | skill demo | OFF |
 | `example_graph_source` | graph source `run-lineage` (demo) | `example_graph_source_enabled`, OFF (opt-in) |
 
-`gh`, `hugo`, and the seven agent-runner kinds are PATH-gated — they only activate when their flag is on **and** the corresponding binary is found on `PATH`. Everything else in the table is flag-gated only.
+`gh`, `hugo`, and the seven agent-runner kinds are PATH-gated — they only activate when their flag is on **and** the corresponding binary is found on `PATH`. `pinokio` is *presence*-gated on a filesystem layout rather than on `PATH` (see below). Everything else in the table is flag-gated only.
+
+### Pinokio detection
+
+[Pinokio](https://pinokio.co) is a launcher/manager for local AI applications: it downloads app repositories and runs them behind local web UIs. `plugins/pinokio.py` answers **"is Pinokio installed on this host, and what has it installed?"** — nothing more.
+
+**It contributes no runner, on purpose.** Unlike `ollama`, Pinokio ships no headless prompt-in/text-out CLI, and on Linux there is no `pinokio` binary on `PATH` to gate on at all: it installs as a `.deb` / `.rpm` / `.AppImage` Electron app, and its only CLI (`pterm`) is an optional on-demand install placed *inside* the Pinokio home (`PINOKIO_HOME/bin/npm/bin/pterm`). There is nothing to route a task to, so the plugin registers a `health` check and stops there.
+
+**Home resolution** mirrors Pinokio's own precedence (`pinokiod`'s `kernel/index.js`: `this.store.get("home") || process.env.PINOKIO_HOME`), then adds the documented default:
+
+1. Electron-store settings file `$XDG_CONFIG_HOME/Pinokio/config.json` (or `$HOME/.config/Pinokio/config.json`), key `home`
+2. `$PINOKIO_HOME`
+3. `$HOME/pinokio`
+
+`$XDG_DATA_HOME` is deliberately **not** consulted: Pinokio rewrites `XDG_DATA_HOME`/`XDG_CONFIG_HOME` to `PINOKIO_HOME/cache/...` for the apps it launches, so inside any Pinokio-spawned process it points at a cache, not an install.
+
+**Fail-closed.** A candidate only counts when it is a readable directory containing both files `pinokiod` writes unconditionally on every init: `ENVIRONMENT` and `key.json`. `api/` is *not* required — it is created lazily on the first app download, so a fresh home legitimately has none. A missing marker, a non-directory, an unreadable path, a malformed or `home`-less `config.json`, or a blank env value all report `degraded` naming exactly what was checked; the check never reports `ok` on partial evidence.
+
+**Side-effect free.** `register()` runs on every process start, so detection is `stat`/`listdir` only — no network, no port probing, no process spawning — and nothing discovered is ever executed. Enumerating installed apps is a directory listing of `PINOKIO_HOME/api`.
+
+`HIVEPILOT_PINOKIO_ENABLED` defaults `true` as a *permission* gate ("report Pinokio if you find it"), never as an assertion that the operator installed it. Set it `false` to suppress detection entirely.
+
+HivePilot never installs Pinokio; there is no `hivepilot agents install pinokio` recipe.
 
 ## Plugin CLI
 
