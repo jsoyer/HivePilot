@@ -523,7 +523,9 @@ def _installed_plugins_dir() -> Path | None:
     return candidate if candidate.exists() else None
 
 
-def plugin_scan_dirs(base_dir: Path | None = None) -> list[Path]:
+def plugin_scan_dirs(
+    base_dir: Path | None = None, *, respect_enabled_gate: bool = True
+) -> list[Path]:
     """Return, in scan order, every directory `_scan_local_plugins` scans
     for local-file plugins -- the exact (NOT `.resolve()`d) `Path` objects
     it passes to `_scan_plugin_dir`, so `_scan_local_plugins` can (and does)
@@ -555,8 +557,25 @@ def plugin_scan_dirs(base_dir: Path | None = None) -> list[Path]:
       cwd-relative — resolving it against cwd or against `base_dir` would
       each reintroduce a different flavor of the exact cwd-dependence this
       parameter exists to remove, so it is skipped instead).
+
+    `respect_enabled_gate` (keyword-only, default `True` — byte-identical to
+    the pre-existing behavior for every caller that doesn't pass it): when
+    `True`, `settings.plugins_enabled = False` (the master kill switch)
+    short-circuits to `[]`, because a caller asking "where does the LOADER
+    look?" must be told "nowhere" — that is the truth about loading.
+
+    Pass `False` only for a caller asking the different question "where does
+    plugin SOURCE live on this host?", i.e. `hivepilot plugins audit`
+    (`cli._plugin_audit_roots`). The auditor never imports, `exec()`s or
+    `register()`s anything — it only `read_text`s — so the kill switch is
+    not a safety boundary for it, and honoring it would make the security
+    scanner report "nothing to audit" on a host whose disk is full of
+    un-vetted plugin source. That is the same fail-open reasoning that
+    already makes the auditor ignore the per-plugin `plugins_disabled` deny
+    list: a plugin that is switched off today is still a legitimate audit
+    target, because auditing is what you do BEFORE switching it on.
     """
-    if not settings.plugins_enabled:
+    if respect_enabled_gate and not settings.plugins_enabled:
         return []
 
     explicit_base_dir = base_dir is not None
