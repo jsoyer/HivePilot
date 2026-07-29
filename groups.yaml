@@ -13,7 +13,7 @@ groups:
     components:
       - acme-web
       - acme-worker
-    # Illustrative only — real tag names/members are owned by PRD B / Noxys config.
+    # Illustrative only — real tag names/members are owned by your config repo.
     # Every listed component must also appear under `components:` above.
     tags:
       ui: [acme-web]
