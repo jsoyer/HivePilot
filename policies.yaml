@@ -5,7 +5,7 @@
 #     <project>:
 #       allowed_runners: [opencode, claude]      # whitelist; resolved runner must be in it
 #       role_overrides:
-#         cto:  { model: glm }                    # keep runner, force EU-hosted model
+#         cto:  { model: glm }                    # keep the resolved runner, force a model
 #         qa:   { runner: opencode, model: qwen } # change runner + model
 #
 # Pipeline CVE gate (Phase 21 Sprint 2) — opt-in, off by default:

@@ -371,6 +371,53 @@ not merge with it, so you can retire that statement too.
 A role that is not present in the rules registry at all still inherits the resolved
 floor rather than an empty manifest.
 
+### `vault_rule_documents` — canonical rule documents in your vault
+
+Another optional **top-level** key of `roles.yaml`. It maps a generic *slot* to the
+*filename* your Obsidian vault uses for that document. Each resolved document is
+injected by path into the rule manifest of the roles that need it:
+
+```yaml
+vault_rule_documents:
+  security_rules: "AGENT-SECURITY-RULES.md"
+  git_branch_rules: "AGENT-GIT-BRANCH-RULES.md"
+```
+
+| Slot               | Roles that receive it                             |
+| ------------------ | ------------------------------------------------- |
+| `security_rules`   | `ciso`, `developer`, `reviewer`, `qa`, `documentation` |
+| `git_branch_rules` | `cto` and every coding role                       |
+
+Paths are built as `<obsidian_vault>/08 - Security/<filename>`, so this key does
+nothing unless `HIVEPILOT_OBSIDIAN_VAULT` points at an **absolute** path. Filenames
+must be **bare names** — a value containing `/`, `\`, `.` or `..` is rejected with a
+warning, because config here names a document *inside* the vault and must not become
+an arbitrary-path read for every agent.
+
+**The engine ships no document names at all.** It cannot know what your vault calls
+its security document, and a guessed filename resolves to a nonexistent absolute path
+that an agent is then instructed to read — it either errors or invents the contents.
+This is the opposite default from `cross_cutting_rules` above, on purpose: a rule
+*statement* is self-contained text that is safe to ship, while a rule *document path*
+is only meaningful if the file is really there.
+
+| `roles.yaml` contains            | Resolved documents | Why |
+| -------------------------------- | ------------------ | --- |
+| no file / no key / bare null key | *(none)*           | The engine has no correct filename to guess. If `obsidian_vault` **is** configured, this logs `vault_rule_documents_absent` — silence with a vault set is the one case an operator can get wrong. |
+| an unknown slot name             | that entry ignored + warning | A typo'd slot silently yielding "no document" is the empty-means-no-constraint failure, so it is named in the log. |
+| a blank or whitespace-only value | that slot dropped + warning | Never a path ending in `/`. |
+| a value with a path separator or `..` | that slot dropped + warning | Config names a document in the vault, not anywhere on disk. |
+| anything not a mapping of strings | *(none)* + warning | |
+
+Resolution is **per slot**: an omitted slot resolves to `""` and drops out of the
+manifest. Because every engine default is empty there is nothing to merge with, so
+declaring this key *adds* documents rather than replacing a shipped set — unlike
+`cross_cutting_rules`, which **replaces** a non-empty default.
+
+For backward compatibility the module-level constants `VAULT_SECURITY_RULES`,
+`VAULT_GIT_BRANCH_RULES` and the deprecated alias `VAULT_DETECTION_FABRIC` remain
+plain strings bound at import time; only the *source* of the filename moved to config.
+
 ## pipelines.yaml — `PipelineConfig`
 
 Defines multi-stage pipelines that chain tasks/roles together.

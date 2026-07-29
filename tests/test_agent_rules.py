@@ -6,8 +6,11 @@ Covers:
 - Unknown role raises KeyError (documented design choice).
 - When governance_repo is configured, the 6 governance file paths appear in the
   manifest and exist on disk; when not configured, the manifest omits file paths.
-- Vault AGENT-DETECTION-FABRIC.md and AGENT-GIT-BRANCH-RULES.md are present
-  in the manifest for the roles that require them when obsidian_vault is set.
+- The deployment's configured vault rule documents are present in the manifest
+  for the roles that require them when obsidian_vault is set. The FILENAMES are
+  config-owned (`vault_rule_documents:` in roles.yaml), so these tests derive
+  them from the resolved config instead of hardcoding one customer's document
+  names -- see tests/test_agent_rules_config.py for the resolver semantics.
 - CROSS_CUTTING_RULES is inherited by every role, and is whatever the
   deployment's config resolved to (see tests/test_agent_rules_config.py for
   the resolution + absent-vs-empty semantics).
@@ -20,6 +23,7 @@ import os
 
 import pytest
 
+from hivepilot import agent_rules
 from hivepilot.config import settings
 
 ALL_ROLE_NAMES = {
@@ -54,14 +58,13 @@ _VAULT_SECURITY = (
     if _OBSIDIAN_VAULT and os.path.isabs(_OBSIDIAN_VAULT)
     else ""
 )
-_VAULT_RULE_FILES = (
-    [
-        f"{_VAULT_SECURITY}/AGENT-DETECTION-FABRIC.md",
-        f"{_VAULT_SECURITY}/AGENT-GIT-BRANCH-RULES.md",
-    ]
-    if _VAULT_SECURITY
-    else []
-)
+_VAULT_RULE_FILES = [
+    path
+    for path in (
+        agent_rules.vault_rule_document_path(slot) for slot in agent_rules.VAULT_RULE_DOCUMENT_SLOTS
+    )
+    if path
+]
 
 
 def _deployment_configures_cross_cutting_rules() -> bool:
@@ -196,32 +199,37 @@ class TestGovernanceRootRulePaths:
 class TestVaultRulePathsInManifest:
     """Vault AGENT-*.md paths must be in the manifest for the roles that need them."""
 
-    def test_detection_fabric_marker_in_ciso_manifest(self):
-        from hivepilot.agent_rules import get_rules_for_role
+    def test_security_rules_document_in_ciso_manifest(self):
+        """CISO inherits the security-rules slot -- whatever THIS deployment
+        named it. Asserting the configured path rather than a literal filename
+        is the point: the engine no longer knows any document's name."""
+        from hivepilot.agent_rules import SLOT_SECURITY_RULES, get_rules_for_role
 
-        rules = get_rules_for_role("ciso")
-        if not _VAULT_SECURITY:
-            # No vault configured — detection fabric path should not be in manifest.
-            assert not any("AGENT-DETECTION-FABRIC.md" in r for r in rules), (
-                "CISO manifest must not reference AGENT-DETECTION-FABRIC.md when vault is not configured"
-            )
+        self._assert_slot_membership("ciso", SLOT_SECURITY_RULES, get_rules_for_role("ciso"))
+
+    def test_git_branch_rules_document_in_developer_manifest(self):
+        from hivepilot.agent_rules import SLOT_GIT_BRANCH_RULES, get_rules_for_role
+
+        self._assert_slot_membership(
+            "developer", SLOT_GIT_BRANCH_RULES, get_rules_for_role("developer")
+        )
+
+    @staticmethod
+    def _assert_slot_membership(role: str, slot: str, rules: list[str]) -> None:
+        expected = agent_rules.vault_rule_document_path(slot)
+        if not expected:
+            # No vault, or the slot is not configured -> nothing from the vault
+            # security directory may appear for this slot. Critically, no
+            # directory-only or "None.md" path may be constructed either.
+            for entry in rules:
+                assert not entry.endswith("/"), (
+                    f"{role} manifest contains a directory-only path: {entry!r}"
+                )
+                assert "None.md" not in entry, (
+                    f"{role} manifest contains a path built from an absent filename: {entry!r}"
+                )
         else:
-            assert any("AGENT-DETECTION-FABRIC.md" in r for r in rules), (
-                "CISO manifest must reference AGENT-DETECTION-FABRIC.md"
-            )
-
-    def test_git_branch_rules_marker_in_developer_manifest(self):
-        from hivepilot.agent_rules import get_rules_for_role
-
-        rules = get_rules_for_role("developer")
-        if not _VAULT_SECURITY:
-            assert not any("AGENT-GIT-BRANCH-RULES.md" in r for r in rules), (
-                "Developer manifest must not reference AGENT-GIT-BRANCH-RULES.md when vault is not configured"
-            )
-        else:
-            assert any("AGENT-GIT-BRANCH-RULES.md" in r for r in rules), (
-                "Developer manifest must reference AGENT-GIT-BRANCH-RULES.md"
-            )
+            assert expected in rules, f"{role} manifest must reference the {slot} document"
 
     @pytest.mark.skipif(
         not _VAULT_SECURITY,

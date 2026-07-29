@@ -52,6 +52,34 @@
 #   - "All artifacts must be written in English (no other language)."
 #   - "Never merge to main without a passing review."
 #   - "Prefer infrastructure hosted in our own jurisdiction."
+#
+# ---------------------------------------------------------------------------
+# vault_rule_documents — canonical rule documents in your Obsidian vault (optional)
+# ---------------------------------------------------------------------------
+# Another top-level key. Maps a generic SLOT to the FILENAME your vault uses
+# for that document. Each resolved file is injected (by path) into the rule
+# manifest of the roles that need it:
+#
+#   security_rules    -> ciso, developer, reviewer, qa, documentation
+#   git_branch_rules  -> cto, and every coding role
+#
+# Filenames must be BARE names — no `/`, no `..`. They are joined onto
+# "<obsidian_vault>/08 - Security/", so this key does nothing unless
+# HIVEPILOT_OBSIDIAN_VAULT is set to an ABSOLUTE path.
+#
+# The engine ships NO document names. It cannot: it has no way to know what
+# your vault calls its security document, and a guessed filename resolves to a
+# nonexistent absolute path that an agent is then told to read. If you set a
+# vault but declare no documents you get a startup WARNING, not silence.
+#
+# Read per slot: an omitted slot resolves to "" and simply drops out of the
+# manifest — it is never joined into a directory-only path. There is no
+# non-empty default to merge with, so declaring this key adds documents rather
+# than replacing any.
+#
+# vault_rule_documents:
+#   security_rules: "AGENT-SECURITY-RULES.md"
+#   git_branch_rules: "AGENT-GIT-BRANCH-RULES.md"
 
 roles:
   - name: ceo

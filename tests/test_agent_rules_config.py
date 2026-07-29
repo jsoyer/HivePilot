@@ -305,6 +305,266 @@ class TestEngineDefaultIsTenantFree:
         assert len(agent_rules.ENGINE_DEFAULT_CROSS_CUTTING_RULES) > 0
 
 
+# ---------------------------------------------------------------------------
+# Vault rule documents: filenames are config-owned, engine ships none
+# ---------------------------------------------------------------------------
+# The vault DIRECTORY was already config-derived; the FILENAMES joined onto it
+# were two of one customer's internal document names hardcoded in a generic
+# engine — and they were what blocked scripts/check_public_safe.py from ever
+# scanning engine code.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def vault_roles_yaml(tmp_path: Path):
+    """`roles_yaml`, plus an absolute `obsidian_vault` so paths are buildable.
+
+    ``_VAULT_SECURITY`` is a module-level constant resolved at import, so it is
+    patched directly rather than via ``settings.obsidian_vault``.
+    """
+    path = tmp_path / "roles.yaml"
+    vault_security = str(tmp_path / "vault" / "08 - Security")
+
+    def write(content: str) -> Path:
+        path.write_text(textwrap.dedent(content), encoding="utf-8")
+        return path
+
+    with (
+        patch.object(settings, "roles_file", path),
+        patch.object(settings, "config_repo", None),
+        patch.object(agent_rules, "_VAULT_SECURITY", vault_security),
+    ):
+        yield write, vault_security
+
+
+class TestLoadVaultRuleDocuments:
+    """Document filenames must come from config, not from engine code."""
+
+    def test_configured_document_names_are_used(self, vault_roles_yaml):
+        write, _ = vault_roles_yaml
+        write("""
+            vault_rule_documents:
+              security_rules: "OUR-SECURITY-RULES.md"
+              git_branch_rules: "OUR-BRANCH-RULES.md"
+            roles: []
+        """)
+        assert agent_rules.load_vault_rule_documents() == {
+            "security_rules": "OUR-SECURITY-RULES.md",
+            "git_branch_rules": "OUR-BRANCH-RULES.md",
+        }
+
+    def test_configured_names_build_the_absolute_vault_path(self, vault_roles_yaml):
+        """End-to-end: config filename -> path handed to an agent."""
+        write, vault_security = vault_roles_yaml
+        write("""
+            vault_rule_documents:
+              security_rules: "OUR-SECURITY-RULES.md"
+        """)
+        with patch.object(
+            agent_rules, "VAULT_RULE_DOCUMENTS", agent_rules.load_vault_rule_documents()
+        ):
+            resolved = agent_rules.vault_rule_document_path(agent_rules.SLOT_SECURITY_RULES)
+
+        assert resolved == f"{vault_security}/OUR-SECURITY-RULES.md"
+
+    def test_only_one_slot_configured_leaves_the_other_empty(self, vault_roles_yaml):
+        """Per-slot resolution: an omitted slot yields "", never a partial path."""
+        write, _ = vault_roles_yaml
+        write("""
+            vault_rule_documents:
+              security_rules: "OUR-SECURITY-RULES.md"
+        """)
+        with patch.object(
+            agent_rules, "VAULT_RULE_DOCUMENTS", agent_rules.load_vault_rule_documents()
+        ):
+            assert agent_rules.vault_rule_document_path(agent_rules.SLOT_GIT_BRANCH_RULES) == ""
+
+    def test_returns_a_fresh_dict_callers_cannot_mutate_shared_state(self, vault_roles_yaml):
+        write, _ = vault_roles_yaml
+        write("vault_rule_documents:\n  security_rules: 'A.md'\n")
+        first = agent_rules.load_vault_rule_documents()
+        first["security_rules"] = "mutated"
+        assert agent_rules.load_vault_rule_documents() == {"security_rules": "A.md"}
+
+
+class TestVaultRuleDocumentsEngineDefault:
+    """No config -> no documents, and never a half-built path."""
+
+    def test_missing_roles_file_yields_no_documents(self, vault_roles_yaml):
+        # Fixture applied but never written -> the file does not exist.
+        assert agent_rules.load_vault_rule_documents() == {}
+
+    def test_roles_file_without_the_key_yields_no_documents(self, vault_roles_yaml):
+        write, _ = vault_roles_yaml
+        write("roles:\n  - name: developer\n")
+        assert agent_rules.load_vault_rule_documents() == {}
+
+    def test_bare_null_key_yields_no_documents(self, vault_roles_yaml):
+        write, _ = vault_roles_yaml
+        write("vault_rule_documents:\nroles: []\n")
+        assert agent_rules.load_vault_rule_documents() == {}
+
+    def test_unconfigured_slot_never_builds_a_directory_path(self, vault_roles_yaml):
+        """THE trap: an absent filename must not produce `<vault>/08 - Security/`
+        or `.../None.md` and hand it to an agent as a file to read."""
+        write, vault_security = vault_roles_yaml
+        write("roles: []\n")
+        with patch.object(
+            agent_rules, "VAULT_RULE_DOCUMENTS", agent_rules.load_vault_rule_documents()
+        ):
+            for slot in agent_rules.VAULT_RULE_DOCUMENT_SLOTS:
+                resolved = agent_rules.vault_rule_document_path(slot)
+                assert resolved == ""
+                assert not resolved.endswith("/")
+                assert vault_security not in resolved
+                assert "None" not in resolved
+
+    def test_engine_default_is_an_immutable_empty_mapping(self):
+        assert dict(agent_rules.ENGINE_DEFAULT_VAULT_RULE_DOCUMENTS) == {}
+        with pytest.raises(TypeError):
+            agent_rules.ENGINE_DEFAULT_VAULT_RULE_DOCUMENTS["security_rules"] = "x"  # type: ignore[index]
+
+    def test_warns_when_a_vault_is_configured_but_no_documents_declared(
+        self, vault_roles_yaml, caplog
+    ):
+        """Silence with a vault configured is the one case an operator can get
+        wrong, so it is LOUD rather than an empty result nobody sees."""
+        write, _ = vault_roles_yaml
+        write("roles: []\n")
+        with caplog.at_level("WARNING"):
+            assert agent_rules.load_vault_rule_documents() == {}
+        assert "vault_rule_documents_absent" in caplog.text
+
+    def test_does_not_warn_when_no_vault_is_configured_at_all(self, roles_yaml, caplog):
+        """A deployment with no vault never asked for vault documents."""
+        roles_yaml("roles: []\n")
+        with patch.object(agent_rules, "_VAULT_SECURITY", ""), caplog.at_level("WARNING"):
+            assert agent_rules.load_vault_rule_documents() == {}
+        assert "vault_rule_documents_absent" not in caplog.text
+
+
+class TestVaultRuleDocumentsRejectsBadInput:
+    """A typo must be loud, and must never widen what an agent is told to read."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "vault_rule_documents: 'a string, not a mapping'\n",
+            "vault_rule_documents:\n  - security_rules\n",
+            "vault_rule_documents:\n  security_rules: 42\n",
+            "vault_rule_documents:\n  security_rules: true\n",
+        ],
+    )
+    def test_malformed_value_yields_no_documents_and_warns(self, vault_roles_yaml, body, caplog):
+        write, _ = vault_roles_yaml
+        write(body)
+        with caplog.at_level("WARNING"):
+            assert agent_rules.load_vault_rule_documents() == {}
+        assert "vault_rule_documents_malformed" in caplog.text
+
+    def test_unknown_slot_is_ignored_and_warns(self, vault_roles_yaml, caplog):
+        """A typo'd slot silently yielding "no document" is exactly the
+        empty-means-no-constraint failure — so it warns by name."""
+        write, _ = vault_roles_yaml
+        write("""
+            vault_rule_documents:
+              secuirty_rules: "TYPO.md"
+              git_branch_rules: "OK.md"
+        """)
+        with caplog.at_level("WARNING"):
+            resolved = agent_rules.load_vault_rule_documents()
+        assert resolved == {"git_branch_rules": "OK.md"}
+        assert "vault_rule_documents_unknown_slot" in caplog.text
+
+    @pytest.mark.parametrize("blank", ['""', '"   "'])
+    def test_blank_filename_is_dropped_and_warns(self, vault_roles_yaml, blank, caplog):
+        write, _ = vault_roles_yaml
+        write(f"vault_rule_documents:\n  security_rules: {blank}\n")
+        with caplog.at_level("WARNING"):
+            assert agent_rules.load_vault_rule_documents() == {}
+        assert "vault_rule_documents_blank" in caplog.text
+
+    @pytest.mark.parametrize(
+        "value",
+        ["../../etc/passwd", "/etc/passwd", "sub/dir/DOC.md", ".", "..", "windows\\DOC.md"],
+    )
+    def test_unsafe_filename_is_rejected_and_warns(self, vault_roles_yaml, value, caplog):
+        """Config names a document INSIDE the vault directory. Letting the
+        value escape it would turn a config file into an arbitrary-path read
+        for every agent that inherits the rule."""
+        write, _ = vault_roles_yaml
+        # Single-quoted YAML: a backslash is literal, not an escape.
+        write(f"vault_rule_documents:\n  security_rules: '{value}'\n")
+        with caplog.at_level("WARNING"):
+            assert agent_rules.load_vault_rule_documents() == {}
+        assert "vault_rule_documents_unsafe" in caplog.text
+
+    def test_whitespace_around_a_valid_filename_is_stripped(self, vault_roles_yaml):
+        write, _ = vault_roles_yaml
+        write('vault_rule_documents:\n  security_rules: "  DOC.md  "\n')
+        assert agent_rules.load_vault_rule_documents() == {"security_rules": "DOC.md"}
+
+
+class TestVaultRuleDocumentsContainNoCustomerNames:
+    """Regression guard: this is what the whole change exists to protect."""
+
+    def test_no_customer_document_name_survives_in_engine_code(self):
+        """The two hardcoded filenames were one customer's internal document
+        names. If either comes back into the module, this fails."""
+        source = Path(agent_rules.__file__).read_text(encoding="utf-8")
+        for marker in ("DETECTION-FABRIC.md", "GIT-BRANCH-RULES.md"):
+            assert marker not in source, (
+                f"{marker!r} is back in agent_rules.py. Vault document names are "
+                f"config-owned (`vault_rule_documents:` in roles.yaml) — HivePilot is "
+                f"a generic orchestrator and cannot know what a deployment's vault "
+                f"calls its documents."
+            )
+
+    def test_engine_default_declares_no_document_names(self):
+        assert dict(agent_rules.ENGINE_DEFAULT_VAULT_RULE_DOCUMENTS) == {}
+
+    def test_slot_names_are_generic_not_organisation_specific(self):
+        combined = " ".join(agent_rules.VAULT_RULE_DOCUMENT_SLOTS).lower()
+        for marker in ("detection", "fabric", "acme"):
+            assert marker not in combined
+
+
+class TestVaultConstantsBackwardCompat:
+    """The module-level contract existing importers rely on must be unchanged."""
+
+    @pytest.mark.parametrize(
+        "name", ["VAULT_SECURITY_RULES", "VAULT_GIT_BRANCH_RULES", "VAULT_DETECTION_FABRIC"]
+    )
+    def test_constant_is_a_plain_string_bound_at_import(self, name):
+        """Not a lazy object: consumers do `from ... import X` and hold the
+        value, exactly as documented for `_GOVERNANCE_ROOT`."""
+        assert isinstance(getattr(agent_rules, name), str)
+
+    def test_deprecated_alias_matches_the_generic_name(self):
+        """`VAULT_DETECTION_FABRIC` is retained for out-of-tree importers (the
+        old name was public); it is the same string as the generic slot."""
+        assert agent_rules.VAULT_DETECTION_FABRIC == agent_rules.VAULT_SECURITY_RULES
+
+    def test_unresolvable_slot_still_uses_the_empty_string_sentinel(self):
+        """Every consumer already filters on "" — the sentinel is unchanged, so
+        an unconfigured document simply drops out of the manifest."""
+        with patch.object(agent_rules, "_VAULT_SECURITY", ""):
+            assert agent_rules.vault_rule_document_path(agent_rules.SLOT_SECURITY_RULES) == ""
+
+    def test_module_level_documents_match_the_loader(self):
+        """The import-time constant is exactly what the loader resolves — no
+        second, drifting source of truth."""
+        assert agent_rules.VAULT_RULE_DOCUMENTS == agent_rules.load_vault_rule_documents()
+
+    def test_no_empty_path_reaches_any_role_manifest(self):
+        """Whatever this deployment resolved, no role gets a blank or
+        directory-only entry."""
+        for role_name in agent_rules.ROLE_RULES:
+            for entry in agent_rules.get_rules_for_role(role_name):
+                assert entry, f"empty entry in {role_name} manifest"
+                assert not entry.endswith("/"), f"directory-only entry in {role_name}: {entry!r}"
+
+
 class TestUnknownRoleFloorFollowsConfig:
     """The unknown-role floor must be the DEPLOYMENT's rules, not hardcoded ones."""
 

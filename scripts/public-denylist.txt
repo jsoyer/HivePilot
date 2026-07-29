@@ -1,9 +1,21 @@
 # Public-safe denylist
 #
 # Structural (non-sensitive) regex patterns that indicate un-genericized
-# internal/org-specific content leaking into this PUBLIC repo's shipped
-# example/default prompts. One pattern per line, `#` starts a comment,
-# blank lines are ignored. Patterns are compiled case-insensitively.
+# internal/org-specific content leaking into this PUBLIC repo. One pattern per
+# line, `#` starts a comment (whole-line, or trailing after whitespace), blank
+# lines are ignored. Patterns are compiled case-SENSITIVELY.
+#
+# SCOPES
+# ------
+# A `[scope]` header sets the scope for every pattern below it, until the next
+# header. Unscoped lines default to `[any]`.
+#
+#   [any]      forbidden in every scanned file (engine code, prompts, docs,
+#              config examples, web UI).
+#   [prompts]  forbidden only in `prompts/` — text handed to an agent verbatim.
+#              Use this for patterns that describe an INSTRUCTION to an agent
+#              rather than a leaked identifier: the same string may legitimately
+#              appear in engine code that IMPLEMENTS the integration.
 #
 # IMPORTANT: do NOT add real personal names here — this file is committed
 # to a public repo, and enumerating names would re-leak them. Personal-name
@@ -14,11 +26,19 @@
 #   PUBLIC_DENYLIST_EXTRA=~/.hivepilot-private/denylist.txt \
 #     python scripts/check_public_safe.py
 #
-# That file is never committed to this repo.
+# That file is never committed to this repo. Every pattern in it is treated as
+# `[any]` regardless of headers — a private pattern is private because the
+# string must not appear ANYWHERE.
+
+[any]
 
 # Internal AGENT-* doc/process names (AGENT-DETECTION-FABRIC, AGENT-GOVERNANCE, ...)
 # (removed over-broad AGENT-* rule: it flagged the generic {TARGET_REPO}/AGENT-GOVERNANCE.md, a governance file like AGENTS.md)
-AGENT-DETECTION-FABRIC          # internal detection-fabric system name
+# NOTE: this entry carried a trailing inline comment that the parser did not
+# strip, so for its whole life it compiled to a regex demanding the comment
+# text too and matched NOTHING. Fixed in the same change that widened the scan
+# to engine code — which is what it was supposed to be guarding all along.
+AGENT-DETECTION-FABRIC
 
 # Internal MCP code-navigation tool name
 code-review-graph
@@ -26,12 +46,17 @@ code-review-graph
 # Internal tooling reference (Obsidian vault CLI wrapper)
 obsidian CLI
 
-# Internal CLI wrapper used to proxy other tools
-rtk proxy
-
 # Org-codename segment in vault paths, e.g. {OBSIDIAN_VAULT}/Acme/...
 \{OBSIDIAN_VAULT\}/[A-Z][A-Za-z]+/
 
 # Internal policy stance references
 European-sovereign
 EU-hosted infrastructure
+
+[prompts]
+
+# Internal CLI wrapper used to proxy other tools. Scoped to prompts: telling
+# somebody else's agent to run `rtk proxy` is a leak, but `plugins/rtk.py` and
+# its `plugins install` entry are the first-party, PATH-gated, opt-in runner
+# that implements the integration — a documented public feature, not a leak.
+rtk proxy
