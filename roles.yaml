@@ -1,6 +1,10 @@
 # HivePilot agent role definitions.
 # Loaded at startup by hivepilot/roles.py; falls back to built-in _DEFAULT_ROLES on error.
 # prompt_file paths are relative to prompts/agents/.
+#
+# An optional top-level `cross_cutting_rules:` key (sibling of `roles:`) declares the
+# policy statements every role inherits. Not set here, so this deployment gets the
+# tenant-free engine default. See docs/CONFIGURATION.md and examples/roles.yaml.
 
 roles:
   - name: ceo

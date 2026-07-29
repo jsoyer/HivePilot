@@ -331,6 +331,46 @@ A `policies.yaml` `role_overrides` entry beats a pipeline stage's explicit setti
 beats the role's own `runner`/`model`/`effort`, which beats the runner definition's default.
 See [PIPELINES-AND-ROLES.md](PIPELINES-AND-ROLES.md) for the full resolution walkthrough.
 
+### `cross_cutting_rules` — the policy floor every role inherits
+
+An optional **top-level** key of `roles.yaml` (a sibling of `roles:`, not a field of a
+role). It holds short natural-language policy statements that every role inherits, on top
+of its own rule-source file paths:
+
+```yaml
+cross_cutting_rules:
+  - "All artifacts must be written in English (no other language)."
+  - "Never merge to main without a passing review."
+
+roles:
+  - name: developer
+    # ...
+```
+
+HivePilot is a generic orchestrator, so the **engine default carries no
+organisation-, jurisdiction-, language- or tooling-specific statement** — a deployment
+that is not EU-based, works in another language, or runs a different toolchain must not
+have to opt *out* of someone else's policy. Only one statement ships by default:
+
+```
+Privacy-by-design: never log or surface raw prompt content.
+```
+
+Anything beyond that is yours to declare. Configuration **replaces** the default, it does
+not merge with it, so you can retire that statement too.
+
+**Absent and empty do not mean the same thing** — this is deliberate:
+
+| `roles.yaml` contains          | Resolved rules      | Why |
+| ------------------------------ | ------------------- | --- |
+| no file / no key               | engine default      | Silence means "no opinion expressed". A missing file must never silently delete a policy floor you believed was in force. |
+| `cross_cutting_rules:` (empty) | engine default + warning | A bare key with nothing under it parses as `null` — far more likely a half-finished edit than a decision. Write `[]` if you mean it. |
+| `cross_cutting_rules: []`      | *(none)*            | An organisation with genuinely no cross-cutting rules is legitimate, and this is a deliberate, reviewable, diffable statement rather than a silence. |
+| anything not a list of strings | engine default + warning | A typo must never leave you with *fewer* rules than the engine ships. |
+
+A role that is not present in the rules registry at all still inherits the resolved
+floor rather than an empty manifest.
+
 ## pipelines.yaml — `PipelineConfig`
 
 Defines multi-stage pipelines that chain tasks/roles together.

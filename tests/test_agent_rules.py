@@ -8,8 +8,9 @@ Covers:
   manifest and exist on disk; when not configured, the manifest omits file paths.
 - Vault AGENT-DETECTION-FABRIC.md and AGENT-GIT-BRANCH-RULES.md are present
   in the manifest for the roles that require them when obsidian_vault is set.
-- CROSS_CUTTING_RULES is non-empty and includes 'English' and 'detection-fabric'
-  markers.
+- CROSS_CUTTING_RULES is inherited by every role, and is whatever the
+  deployment's config resolved to (see tests/test_agent_rules_config.py for
+  the resolution + absent-vs-empty semantics).
 - All 8 role names from roles.ROLES are covered by the agent_rules manifest.
 """
 
@@ -63,6 +64,28 @@ _VAULT_RULE_FILES = (
 )
 
 
+def _deployment_configures_cross_cutting_rules() -> bool:
+    """True if the resolved roles.yaml actually declares `cross_cutting_rules:`.
+
+    Lets the "unconfigured deployment gets the engine default" check skip
+    itself on a deployment that legitimately overrides the rules, the same
+    way the governance/vault checks above skip when their settings are unset.
+    """
+    import yaml
+
+    path = settings.resolve_config_path(settings.roles_file)
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — absent/broken config means "not configured"
+        return False
+    from hivepilot.agent_rules import CROSS_CUTTING_RULES_KEY
+
+    return isinstance(raw, dict) and raw.get(CROSS_CUTTING_RULES_KEY) is not None
+
+
+_CROSS_CUTTING_RULES_CONFIGURED = _deployment_configures_cross_cutting_rules()
+
+
 class TestGetRulesForRole:
     """get_rules_for_role() must return a non-empty list for every known role."""
 
@@ -81,13 +104,19 @@ class TestGetRulesForRole:
         defaults) must never crash a caller that only wants its rule
         manifest. A security review of the first Sprint 2 cut correctly
         flagged returning `[]` as fail-OPEN: it silently dropped the
-        CROSS_CUTTING_RULES enforced policy floor (privacy-by-design,
-        detection-fabric, EU-sovereign, no-raw-prompt-logging) that every
-        known role already inherits. Corrected expectation:
+        CROSS_CUTTING_RULES enforced policy floor that every known role
+        already inherits. Corrected expectation:
         `get_rules_for_role(...) == list(CROSS_CUTTING_RULES)` -- fail-safe
         means inheriting the enforced minimum, not returning a policy-free
         empty list. `roles.get_role` (a different function) still raises
-        KeyError for a genuinely unknown role."""
+        KeyError for a genuinely unknown role.
+
+        The floor is now the DEPLOYMENT's resolved rules rather than a
+        hardcoded list. This assertion is unchanged because it always
+        compared against CROSS_CUTTING_RULES itself, never against literal
+        statements; only the enumeration of that customer's policy names was
+        removed from this docstring. See tests/test_agent_rules_config.py::
+        TestUnknownRoleFloorFollowsConfig for the config-driven cases."""
         from hivepilot.agent_rules import CROSS_CUTTING_RULES, get_rules_for_role
 
         assert get_rules_for_role("nonexistent_role") == list(CROSS_CUTTING_RULES)
@@ -222,27 +251,53 @@ class TestVaultRulePathsInManifest:
 
 
 class TestCrossCuttingRules:
-    """CROSS_CUTTING_RULES must be non-empty and include required markers."""
+    """CROSS_CUTTING_RULES is config-owned; assert the MECHANISM, not content.
 
-    def test_cross_cutting_rules_is_non_empty(self):
+    These previously asserted the literal statements the engine shipped
+    ('English', 'detection-fabric'). That coupled the generic engine to one
+    customer's policy: the assertions could only pass while HivePilot
+    hardcoded an English-only mandate and a detection-fabric mandate for
+    every deployment on earth. They are converted, not deleted — each one's
+    real intent (the rules exist, are strings, and reach every role) is
+    preserved without pinning WHICH rules a deployment must hold.
+    """
+
+    def test_cross_cutting_rules_is_a_list_of_strings(self):
+        """Was: 'must not be empty'. A deployment may legitimately declare
+        `cross_cutting_rules: []`, so emptiness is no longer a defect of the
+        module — what must hold is the shape. That the ENGINE DEFAULT is
+        non-empty (so silence never empties the floor) is asserted in
+        tests/test_agent_rules_config.py::TestEngineDefaultIsTenantFree."""
         from hivepilot.agent_rules import CROSS_CUTTING_RULES
 
         assert isinstance(CROSS_CUTTING_RULES, list)
-        assert len(CROSS_CUTTING_RULES) > 0, "CROSS_CUTTING_RULES must not be empty"
+        assert all(isinstance(rule, str) for rule in CROSS_CUTTING_RULES)
 
-    def test_cross_cutting_rules_contains_english_marker(self):
-        from hivepilot.agent_rules import CROSS_CUTTING_RULES
+    def test_cross_cutting_rules_come_from_config(self):
+        """Was: two tests pinning the literal 'English' and 'detection-fabric'
+        statements. Replaced by the property that actually matters — the
+        statements are resolved from configuration, exactly like the
+        config-derived source roots in the same module."""
+        from hivepilot.agent_rules import CROSS_CUTTING_RULES, load_cross_cutting_rules
 
-        combined = " ".join(CROSS_CUTTING_RULES).lower()
-        assert "english" in combined, "CROSS_CUTTING_RULES must include an 'English' artifacts rule"
+        assert CROSS_CUTTING_RULES == load_cross_cutting_rules()
 
-    def test_cross_cutting_rules_contains_detection_fabric_marker(self):
-        from hivepilot.agent_rules import CROSS_CUTTING_RULES
-
-        combined = " ".join(CROSS_CUTTING_RULES).lower()
-        assert "detection-fabric" in combined, (
-            "CROSS_CUTTING_RULES must include a 'detection-fabric' rule"
+    @pytest.mark.skipif(
+        _CROSS_CUTTING_RULES_CONFIGURED,
+        reason="deployment configures cross_cutting_rules; the engine-default check does not apply",
+    )
+    def test_cross_cutting_rules_are_the_engine_default_when_unconfigured(self):
+        """The other half of the two converted content tests: with nothing
+        configured (this repo ships no `cross_cutting_rules:` key), the rules
+        must be the tenant-free engine default rather than one customer's
+        policy. The default's tenant-freedom itself is asserted in
+        tests/test_agent_rules_config.py::TestEngineDefaultIsTenantFree."""
+        from hivepilot.agent_rules import (
+            CROSS_CUTTING_RULES,
+            ENGINE_DEFAULT_CROSS_CUTTING_RULES,
         )
+
+        assert CROSS_CUTTING_RULES == list(ENGINE_DEFAULT_CROSS_CUTTING_RULES)
 
     def test_every_role_includes_cross_cutting_rules(self):
         """Every role's manifest must contain all CROSS_CUTTING_RULES entries."""
