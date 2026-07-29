@@ -3877,16 +3877,67 @@ def plugins_verify() -> None:
         raise typer.Exit(1)
 
 
+def _plugin_audit_roots() -> list[Path]:
+    """The directories `plugins audit` scans — DERIVED from, never a copy of,
+    the loader's own root list (`hivepilot.plugins.plugin_scan_dirs`, which
+    `_scan_local_plugins` iterates verbatim).
+
+    This delegation is the whole point, and is regression-guarded in
+    `tests/test_cli_plugins_audit.py::TestAuditRootsCannotDivergeFromLoader`.
+    A previous version hand-rolled its own list
+    (`settings.base_dir / "plugins"`, then `settings.plugins_extra_dirs`)
+    while its docstring claimed to mirror the loader. The two lists drifted:
+    `plugin_scan_dirs` had since grown the config repo clone's `plugins/`
+    dir and the managed `plugins install` destination
+    (`xdg_data_home/plugins`), so a host with six installed plugins printed
+    "No plugin source files found to audit" — HivePilot's own auditor could
+    not vet a plugin HivePilot's own installer had put there. Do not
+    reintroduce a second list that merely happens to agree today.
+
+    Two DELIBERATE, tested asymmetries with the loader, both of the same
+    "auditing is what you do BEFORE enabling" shape:
+
+    - `respect_enabled_gate=False`: the master `plugins_enabled=False` kill
+      switch blanks the LOADER's roots, but must not blank the AUDITOR's —
+      see `plugin_scan_dirs`'s docstring.
+    - `base_dir` is deliberately NOT parameterized. `plugin_scan_dirs`'s
+      explicit-`base_dir` mode is ISOLATED-directory mode: it drops the
+      config-repo clone and the managed installed-plugins dir. That is
+      correct for `hivepilot validate --dir <path>` (a question about one
+      candidate directory, where ambient host state would contaminate the
+      verdict) and WRONG for a security scanner (a question about this
+      host's actual attack surface). A hypothetical `plugins audit --dir .`
+      would silently re-narrow the scan to a subset of what the host loads —
+      reintroducing the exact bug above behind a flag instead of a typo.
+    """
+    from hivepilot.plugins import plugin_scan_dirs
+
+    return plugin_scan_dirs(respect_enabled_gate=False)
+
+
 def _collect_plugin_source_files() -> list[tuple[str, Path]]:
-    """Enumerate local-file plugin source paths for `plugins audit` — mirrors
-    `_scan_local_plugins`'s (`hivepilot/plugins.py`) directory scan order and
-    stem-dedup (`base_dir/plugins` first, then `plugins_extra_dirs` in
-    order), WITHOUT importing/`exec()`ing any file and WITHOUT honoring
-    `plugins_disabled` — a disabled plugin's source is still a legitimate
-    audit target (it's still on disk, and could be re-enabled)."""
+    """Enumerate local-file plugin source paths for `plugins audit`, one
+    `(stem, path)` per plugin.
+
+    Walks `_plugin_audit_roots()` (see above) in order and applies the same
+    per-directory file filter as the loader's `_scan_plugin_dir`
+    (`hivepilot/plugins.py`): `*.py` sorted by name, `_`-prefixed stems
+    skipped, dedup by stem with FIRST directory winning, and a non-existent
+    directory silently skipped.
+
+    Two deliberate departures from `_scan_plugin_dir`, both widening
+    coverage rather than narrowing it:
+
+    - a file is never imported, `exec()`d or `register()`-ed — the caller
+      only ever `read_text`s it (`hivepilot.plugin_capabilities` is pure
+      `ast`); and
+    - `settings.plugins_disabled` is NOT honored — a disabled plugin's
+      source is still a legitimate audit target (it's still on disk, and
+      could be re-enabled).
+    """
     seen: set[str] = set()
     out: list[tuple[str, Path]] = []
-    for plugin_dir in (settings.base_dir / "plugins", *settings.plugins_extra_dirs):
+    for plugin_dir in _plugin_audit_roots():
         if not plugin_dir.exists():
             continue
         for file in sorted(plugin_dir.glob("*.py")):
@@ -3916,6 +3967,18 @@ def plugins_audit(
     flag UNDER-declaration. Advisory, not exhaustive — see docs/PLUGINS.md
     "Capability manifest & policy gate". Exits 0 by default (an advisory
     report); pass `--strict` to fail CI on any under-declaration.
+
+    Scans every directory the LOADER can load from (`_plugin_audit_roots`),
+    including the config repo clone's `plugins/` and the managed
+    `plugins install` destination — there is deliberately no `--dir` flag,
+    see `_plugin_audit_roots`.
+
+    Finding ZERO source files always names the directories searched, so an
+    empty report is auditable rather than mysterious. Under `--strict` it is
+    additionally an ERROR (exit 1): `--strict`'s contract is "fail CI on any
+    under-declaration", and a scan that examined zero files has not
+    established that there are none — it has established nothing. A green CI
+    job whose scanner looked in the wrong place is worse than a red one.
     """
     from rich.console import Console
     from rich.markup import escape as rich_escape
@@ -3927,7 +3990,23 @@ def plugins_audit(
     files = _collect_plugin_source_files()
 
     if not files:
-        console.print("[yellow]No plugin source files found to audit.[/yellow]")
+        # An empty result set is NOT a clean bill of health — it is an
+        # unsubstantiated one. Always name the roots that were searched so
+        # "nothing found" can be told apart from "looked in the wrong
+        # place" (the bug this command shipped with for months). Roots come
+        # from operator config rather than plugin source, but a path can
+        # still contain `[`, so escape it like every other cell below.
+        searched = ", ".join(str(d) for d in _plugin_audit_roots()) or "(no directories)"
+        console.print(
+            f"[yellow]No plugin source files found to audit. "
+            f"Searched: {rich_escape(searched)}[/yellow]"
+        )
+        if strict:
+            console.print(
+                "[red]--strict: scanned zero files, so 'no under-declaration' "
+                "is unproven, not proven.[/red]"
+            )
+            raise typer.Exit(1)
         raise typer.Exit(0)
 
     table = Table(title="Plugin Capability Audit")

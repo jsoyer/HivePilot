@@ -115,6 +115,10 @@ What IS shipped: a plugin MAY declare `register()["capabilities"] = [...]` from 
 
 `hivepilot plugins audit` is a companion **read-only static scanner**: it `ast`-parses every local plugin's source TEXT (never imports/execs it, never calls `register()`) to flag risky imports/calls — `subprocess`, network sockets, `os.system`, `eval`/`exec`, write-mode `open`, `ctypes`, and similar — and cross-references them against that plugin's own declared `capabilities` manifest (itself extracted statically, best-effort, from a literal `"capabilities": [...]` entry in its `register()` source) to surface **under-declaration**: code that appears to use a capability the plugin didn't declare. This is advisory, not exhaustive — a dynamically constructed capabilities list, or a risky call the scanner doesn't recognize, won't be caught. Pass `--strict` to exit non-zero (CI-friendly) when any under-declaration is found; the default is a 0-exit report.
 
+The scanner covers **every directory the loader can load from** — it derives its root list from the same `plugin_scan_dirs` helper `PluginManager` itself iterates, so `base_dir/plugins`, the config repo clone's `plugins/`, the managed `plugins install` destination (`$XDG_DATA_HOME/hivepilot/plugins`) and every `HIVEPILOT_PLUGINS_EXTRA_DIRS` entry are all audited, with the same first-directory-wins stem dedup. Two deliberate differences from the loader, both widening coverage: a plugin disabled via `plugins_disabled`, or on a host with the master `plugins_enabled=false` kill switch, is **still audited** — auditing is what you do *before* deciding to enable something.
+
+Finding **zero** source files always prints the directories that were searched, so an empty report can be told apart from a mis-aimed scan. Under `--strict` an empty scan is an **error (exit 1)**: `--strict`'s contract is "fail CI on any under-declaration", and a scan that examined no files has not established there are none. If you run `plugins audit --strict` in CI on a host that legitimately has no local-file plugins, drop `--strict` (or point `HIVEPILOT_PLUGINS_EXTRA_DIRS` at the sources you meant to scan) — a gate over zero files was only ever providing false assurance.
+
 ## Shipped plugins (inventory)
 
 33 modules ship under `plugins/*.py`. The tables below group the main ones by what they contribute.
@@ -219,7 +223,7 @@ Runs every registered health check and prints a table. Exits non-zero if any che
 hivepilot plugins audit [--strict]
 ```
 
-Read-only static scan of every local plugin's source (see "Capability manifest & policy gate" above). Prints a per-plugin table of risky findings, declared capabilities, and under-declared capabilities. Exits 0 by default (advisory report); `--strict` exits 1 if any plugin under-declares a capability it appears to use — safe to wire into CI.
+Read-only static scan of every local plugin's source, across every directory the loader can load from (see "Capability manifest & policy gate" above). Prints a per-plugin table of risky findings, declared capabilities, and under-declared capabilities. Exits 0 by default (advisory report); `--strict` exits 1 if any plugin under-declares a capability it appears to use, **or if the scan found no files at all** — safe to wire into CI. There is deliberately no `--dir` flag: narrowing a security scan to one directory is how a host's installed plugins go un-vetted.
 
 ```bash
 hivepilot plugins tui
