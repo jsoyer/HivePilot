@@ -18,15 +18,30 @@ Design:
   source roots below — HivePilot is a generic orchestrator, so the engine
   default carries no organisation-, jurisdiction-, language- or
   tooling-specific statement.
+- VAULT_RULE_DOCUMENTS: slot → vault document FILENAME. Also CONFIG-OWNED
+  (``vault_rule_documents:`` in roles.yaml). The vault DIRECTORY was already
+  derived from ``settings.obsidian_vault``; the filenames joined onto it were
+  two of one customer's internal document names hardcoded in a generic engine.
+  See ``load_vault_rule_documents`` for the absent/blank/unsafe semantics and
+  ``ENGINE_DEFAULT_VAULT_RULE_DOCUMENTS`` for why the engine ships none.
 - ROLE_RULES: role-name → ordered list of absolute file paths to read.
   Per-repo CLAUDE.md (e.g. your-service-a, your-service-b, your-service-c) is loaded
   on demand at runtime when an agent works in that repo; it is NOT baked in here.
+
+Backward-compat: ``_GOVERNANCE_ROOT``, ``VAULT_SECURITY_RULES``,
+``VAULT_GIT_BRANCH_RULES`` and the deprecated ``VAULT_DETECTION_FABRIC`` alias
+are module-level ``str`` bound AT IMPORT — consumers import them directly and
+hold the value, so they must not become lazily-resolved objects. Only the
+SOURCE of each value moved to config; type, binding time and the
+``""``-when-unresolvable sentinel are unchanged.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import yaml
 
@@ -87,11 +102,222 @@ GOVERNANCE_GEMINI_MD = f"{_GOVERNANCE_ROOT}/GEMINI.md" if _GOVERNANCE_ROOT else 
 GOVERNANCE_AGENT_GOVERNANCE = f"{_GOVERNANCE_ROOT}/AGENT-GOVERNANCE.md" if _GOVERNANCE_ROOT else ""
 
 # ---------------------------------------------------------------------------
-# Vault canonical security / git rules
+# Vault rule documents (CONFIG-OWNED filenames)
+# ---------------------------------------------------------------------------
+# ``_VAULT_SECURITY`` above was already config-derived. The FILENAMES joined
+# onto it were not: two of one customer's internal document names, hardcoded
+# in a generic engine. Any other deployment got an absolute path to a file
+# that does not exist on its disk, handed to an agent as "read this first".
+#
+# The names now live where every other piece of role policy lives — the
+# ``vault_rule_documents:`` top-level key of ``roles.yaml`` — resolved through
+# the same ``settings.resolve_config_path`` chain as ``cross_cutting_rules:``.
 # ---------------------------------------------------------------------------
 
-VAULT_DETECTION_FABRIC = f"{_VAULT_SECURITY}/AGENT-DETECTION-FABRIC.md" if _VAULT_SECURITY else ""
-VAULT_GIT_BRANCH_RULES = f"{_VAULT_SECURITY}/AGENT-GIT-BRANCH-RULES.md" if _VAULT_SECURITY else ""
+#: Top-level key read from ``roles.yaml`` (see ``load_vault_rule_documents``).
+VAULT_RULE_DOCUMENTS_KEY = "vault_rule_documents"
+
+#: The rule-document SLOTS the engine wires into role manifests. These are
+#: generic descriptions of the ROLE the document plays, not any organisation's
+#: document names — that is the whole point. A deployment maps each slot to
+#: whatever its own vault calls that document.
+SLOT_SECURITY_RULES = "security_rules"
+SLOT_GIT_BRANCH_RULES = "git_branch_rules"
+VAULT_RULE_DOCUMENT_SLOTS: tuple[str, ...] = (SLOT_SECURITY_RULES, SLOT_GIT_BRANCH_RULES)
+
+#: What the engine ships when a deployment configures nothing: NO documents.
+#:
+#: Unlike ``ENGINE_DEFAULT_CROSS_CUTTING_RULES`` (deliberately non-empty, so
+#: silence can never delete a policy floor), the safe direction here is the
+#: opposite, because the two defaults protect against opposite failures:
+#:
+#: - A cross-cutting RULE is self-contained text. Shipping a generic one costs
+#:   nothing and dropping it silently weakens every deployment, so absence must
+#:   fall back to the floor.
+#: - A rule-document PATH is only meaningful if the file is actually there. The
+#:   engine cannot know what any given vault calls its security document, so
+#:   there is no correct non-empty default: the previous "default" was one
+#:   customer's filename, which for every other deployment resolved to a
+#:   nonexistent absolute path injected into agent prompts. An agent told to
+#:   read a file that is not there either errors or invents its contents.
+#:
+#: Empty is therefore the honest default, NOT a fail-open: a deployment that
+#: configures nothing loses a path that already pointed nowhere for it. The
+#: fail-open shape would be constructing ``"<vault>/08 - Security/"`` or
+#: ``"<vault>/08 - Security/None.md"`` from an absent name — explicitly guarded
+#: against in ``vault_rule_document_path`` — so an operator who DID configure a
+#: vault but declared no documents gets a warning rather than silence.
+ENGINE_DEFAULT_VAULT_RULE_DOCUMENTS: Mapping[str, str] = MappingProxyType({})
+
+
+def load_vault_rule_documents() -> dict[str, str]:
+    """Resolve slot -> vault document FILENAME from configuration.
+
+    Read from the ``vault_rule_documents:`` top-level key of ``roles.yaml``,
+    resolved through ``settings.resolve_config_path`` — the same owner and the
+    same chain as ``cross_cutting_rules:`` (``hivepilot.roles`` only ever reads
+    ``raw["roles"]``, so extra top-level keys are invisible to it).
+
+    Values are BARE FILENAMES, joined onto the config-derived vault security
+    directory by ``vault_rule_document_path``. A value containing a path
+    separator, or ``.``/``..``, is rejected: config here names a document
+    inside the vault, and letting it escape that directory would turn a config
+    file into an arbitrary-path read for every agent.
+
+    Resolution semantics (mirroring ``load_cross_cutting_rules``, with the
+    engine default being ``{}`` — see
+    ``ENGINE_DEFAULT_VAULT_RULE_DOCUMENTS`` for why the safe direction is the
+    opposite one here):
+
+    - **Absent** (no ``roles.yaml``, no key, or a bare/``null`` value) → ``{}``.
+    - **Malformed** (not a mapping, or non-string keys/values) → warning + ``{}``.
+    - **Unknown slot name** → warning + ignored. A typo'd slot must be LOUD:
+      silently yielding "no document for the real slot" is exactly the
+      empty-means-no-constraint failure this repo keeps re-shipping.
+    - **Blank / whitespace-only value** → warning + slot dropped, never a path
+      ending in ``/``.
+    - **Unsafe value** (path separator, ``.``, ``..``) → warning + slot dropped.
+
+    Always returns a fresh dict, so callers cannot mutate shared state.
+    """
+    path = settings.resolve_config_path(settings.roles_file)
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # Absent config is the normal zero-config case, not an error.
+        return _warn_if_vault_has_no_documents({})
+    except Exception as exc:  # noqa: BLE001 — unreadable/unparseable must not crash import
+        log.warning(
+            "agent_rules.vault_rule_documents_unreadable — using engine default: %s",
+            type(exc).__name__,
+        )
+        return _warn_if_vault_has_no_documents({})
+
+    if not isinstance(raw, dict) or VAULT_RULE_DOCUMENTS_KEY not in raw:
+        return _warn_if_vault_has_no_documents({})
+
+    configured = raw[VAULT_RULE_DOCUMENTS_KEY]
+    if configured is None:
+        return _warn_if_vault_has_no_documents({})
+
+    if not isinstance(configured, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in configured.items()
+    ):
+        log.warning(
+            "agent_rules.vault_rule_documents_malformed — %r in %s must be a mapping of "
+            "slot name to document filename; using the engine default (no documents).",
+            VAULT_RULE_DOCUMENTS_KEY,
+            path,
+        )
+        return _warn_if_vault_has_no_documents({})
+
+    resolved: dict[str, str] = {}
+    for slot, filename in configured.items():
+        if slot not in VAULT_RULE_DOCUMENT_SLOTS:
+            log.warning(
+                "agent_rules.vault_rule_documents_unknown_slot — %r in %s is not a known "
+                "slot and is IGNORED; known slots are %s.",
+                slot,
+                path,
+                ", ".join(VAULT_RULE_DOCUMENT_SLOTS),
+            )
+            continue
+
+        candidate = filename.strip()
+        if not candidate:
+            log.warning(
+                "agent_rules.vault_rule_documents_blank — slot %r in %s has a blank "
+                "filename and is IGNORED; no document will be injected for it.",
+                slot,
+                path,
+            )
+            continue
+
+        if _is_unsafe_document_name(candidate):
+            log.warning(
+                "agent_rules.vault_rule_documents_unsafe — slot %r in %s must be a bare "
+                "filename inside the vault security directory (no path separators, no "
+                "'.'/'..'); IGNORED.",
+                slot,
+                path,
+            )
+            continue
+
+        resolved[slot] = candidate
+
+    return _warn_if_vault_has_no_documents(resolved)
+
+
+def _is_unsafe_document_name(name: str) -> bool:
+    """True if *name* is not a bare filename safe to join onto the vault dir."""
+    if name in {".", ".."}:
+        return True
+    return "/" in name or "\\" in name or Path(name).name != name
+
+
+def _warn_if_vault_has_no_documents(resolved: dict[str, str]) -> dict[str, str]:
+    """Warn when a vault IS configured but no rule documents were declared.
+
+    Without this, a deployment that sets ``obsidian_vault`` and expects its
+    security documents to reach agents gets exactly nothing, silently — the
+    absent-value-reads-as-no-constraint failure, one layer up. Nothing is
+    warned about when no vault is configured at all: that deployment never
+    asked for vault documents.
+    """
+    if not resolved and _VAULT_SECURITY:
+        log.warning(
+            "agent_rules.vault_rule_documents_absent — obsidian_vault is configured (%s) "
+            "but no %r are declared in %s, so NO vault rule documents will be injected "
+            "into any role. Declare e.g. `%s: {%s: YOUR-SECURITY-DOC.md}`.",
+            _VAULT_SECURITY,
+            VAULT_RULE_DOCUMENTS_KEY,
+            settings.roles_file,
+            VAULT_RULE_DOCUMENTS_KEY,
+            SLOT_SECURITY_RULES,
+        )
+    return resolved
+
+
+#: Live, deployment-resolved slot -> filename map. Resolved once at import,
+#: like every other config-derived constant in this module.
+VAULT_RULE_DOCUMENTS: dict[str, str] = load_vault_rule_documents()
+
+
+def vault_rule_document_path(slot: str) -> str:
+    """Absolute path for a vault rule-document *slot*, or ``""``.
+
+    Returns ``""`` — never a partial path — when the vault is not configured
+    as an absolute path, or the slot has no configured filename. This is the
+    guard that stops an absent config from producing ``"<vault>/08 - Security/"``
+    or ``"<vault>/08 - Security/None.md"`` and handing it to an agent as a file
+    to read. ``""`` is the sentinel every consumer in this module already
+    filters on, so an unconfigured slot simply drops out of the manifest.
+    """
+    if not _VAULT_SECURITY:
+        return ""
+    filename = VAULT_RULE_DOCUMENTS.get(slot, "")
+    if not filename:
+        return ""
+    return f"{_VAULT_SECURITY}/{filename}"
+
+
+#: Module-level ``str`` constants, resolved AT IMPORT — deliberately not lazy.
+#: Same backward-compat contract as ``_GOVERNANCE_ROOT``: consumers may do
+#: ``from hivepilot.agent_rules import VAULT_GIT_BRANCH_RULES`` and hold the
+#: value, so these must stay plain strings bound once at import time. Only the
+#: SOURCE of the filename changed (config instead of a literal); the type, the
+#: import-time binding and the ``""``-when-unresolvable sentinel are unchanged.
+VAULT_SECURITY_RULES: str = vault_rule_document_path(SLOT_SECURITY_RULES)
+VAULT_GIT_BRANCH_RULES: str = vault_rule_document_path(SLOT_GIT_BRANCH_RULES)
+
+#: Deprecated alias kept for out-of-tree importers.
+#:
+#: Nothing inside this repository imports it any more (the in-repo wiring below
+#: uses ``VAULT_SECURITY_RULES``), but this package is installed into
+#: deployments whose private config repos and plugins are not visible from
+#: here, and the old name was public. It is the same string, resolved the same
+#: way; the customer-specific part — the FILENAME — is what moved to config.
+VAULT_DETECTION_FABRIC: str = VAULT_SECURITY_RULES
 
 # ---------------------------------------------------------------------------
 # Cross-cutting enforced rules (policy statements, not file paths)
@@ -303,24 +529,24 @@ ROLE_RULES: dict[str, list[str]] = {
     ],
     "ciso": [
         *_STRATEGY_ROLES_PATHS,
-        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
+        *([VAULT_SECURITY_RULES] if VAULT_SECURITY_RULES else []),
         *([VAULT_GIT_BRANCH_RULES] if VAULT_GIT_BRANCH_RULES else []),
         *CROSS_CUTTING_RULES,
     ],
     # --- coding tier (sonnet) -----------------------------------------------
     "developer": [
         *_CODING_ROLES_PATHS,
-        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
+        *([VAULT_SECURITY_RULES] if VAULT_SECURITY_RULES else []),
         *CROSS_CUTTING_RULES,
     ],
     "reviewer": [
         *_CODING_ROLES_PATHS,
-        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
+        *([VAULT_SECURITY_RULES] if VAULT_SECURITY_RULES else []),
         *CROSS_CUTTING_RULES,
     ],
     "qa": [
         *_CODING_ROLES_PATHS,
-        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
+        *([VAULT_SECURITY_RULES] if VAULT_SECURITY_RULES else []),
         *CROSS_CUTTING_RULES,
     ],
     # --- automation tier (haiku) --------------------------------------------
@@ -330,7 +556,7 @@ ROLE_RULES: dict[str, list[str]] = {
     ],
     "documentation": [
         *_AUTOMATION_ROLES_PATHS,
-        *([VAULT_DETECTION_FABRIC] if VAULT_DETECTION_FABRIC else []),
+        *([VAULT_SECURITY_RULES] if VAULT_SECURITY_RULES else []),
         *CROSS_CUTTING_RULES,
     ],
 }
