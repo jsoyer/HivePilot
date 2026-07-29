@@ -228,11 +228,16 @@ class TestFailClosedRoleValidation:
 class TestAgentRulesSafeForAbsentRole:
     def test_unknown_role_returns_cross_cutting_floor_not_keyerror(self):
         """An unknown role must never raise KeyError, but it also must never
-        drop the enforced CROSS_CUTTING_RULES policy floor (privacy-by-design,
-        detection-fabric, EU-sovereign, no-raw-prompt-logging). Returning []
+        drop the enforced CROSS_CUTTING_RULES policy floor. Returning []
         for an unknown role would be fail-open (security regression); the
         correct fail-safe behavior is to inherit the same floor every known
-        role already gets."""
+        role already gets.
+
+        The parenthetical that used to enumerate one customer's policy
+        statements here was removed when CROSS_CUTTING_RULES became
+        config-owned: the floor is now whatever THIS deployment resolved from
+        roles.yaml. The assertion itself is untouched — it always compared
+        against CROSS_CUTTING_RULES rather than literal statements."""
         from hivepilot.agent_rules import CROSS_CUTTING_RULES, get_rules_for_role
 
         rules = get_rules_for_role("this_role_does_not_exist")

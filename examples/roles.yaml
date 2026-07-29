@@ -24,6 +24,34 @@
 #   - developer -> claude (always a built-in runner)
 #
 # prompt_file paths are relative to prompts/agents/.
+#
+# ---------------------------------------------------------------------------
+# cross_cutting_rules — the policy floor EVERY role inherits (optional)
+# ---------------------------------------------------------------------------
+# A top-level key (sibling of `roles:`, not a field of a role). Short
+# natural-language policy statements injected on top of each role's own rule
+# sources. HivePilot is a generic orchestrator, so the engine default holds no
+# organisation-, jurisdiction-, language- or tooling-specific statement — just
+# "Privacy-by-design: never log or surface raw prompt content." Everything
+# beyond that is your deployment's to declare.
+#
+# Configuration REPLACES the default (no merge), so you can retire that
+# statement too. Absent and empty differ on purpose:
+#   - key absent          -> engine default (silence must never delete a floor
+#                            you believed was in force)
+#   - `cross_cutting_rules:` with nothing under it -> parses as null, treated
+#                            as absent + a warning (write `[]` if you mean it)
+#   - `cross_cutting_rules: []` -> genuinely no rules (a legitimate, explicit,
+#                            reviewable choice)
+#   - not a list of strings -> engine default + a warning (a typo must never
+#                            leave you with FEWER rules than the engine ships)
+#
+# Uncomment and adapt — these are illustrative, not recommended:
+#
+# cross_cutting_rules:
+#   - "All artifacts must be written in English (no other language)."
+#   - "Never merge to main without a passing review."
+#   - "Prefer infrastructure hosted in our own jurisdiction."
 
 roles:
   - name: ceo
