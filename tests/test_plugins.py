@@ -547,7 +547,6 @@ def register():
         self, tmp_path, monkeypatch
     ) -> None:
         from hivepilot import plugins as plugins_mod
-        from hivepilot.plugin_capabilities import PluginCapabilityDeniedError
         from hivepilot.registry import RUNNER_MAP
         from hivepilot.services.notification_service import NOTIFIER_MAP
 
@@ -579,8 +578,19 @@ def register():
         monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
         monkeypatch.setattr(plugins_mod.settings, "plugins_capability_policy", [], raising=False)
 
-        with pytest.raises(PluginCapabilityDeniedError):
-            plugins_mod.PluginManager()
+        # CONVERTED (not deleted): this used to assert
+        # `pytest.raises(PluginCapabilityDeniedError)` around the
+        # constructor. That propagation was the DEFECT, not the contract — it
+        # escalated a verdict about one plugin into the loss of the entire
+        # plugin subsystem (see
+        # tests/test_plugin_capability_denial_is_survivable.py). The test's
+        # real subject, asserted below unchanged, is the ATOMIC ROLLBACK.
+        pm = plugins_mod.PluginManager()
+
+        # The verdict itself is unchanged: still denied, still contributes
+        # nothing. Only the blast radius moved.
+        assert "greedy" not in {record.name for record in pm.loaded}
+        assert "greedy" in {record.name for record, _ in pm.denied}
 
         # Atomic rollback: the runner/notifier this plugin also staged must
         # never leak into the live maps even though they registered cleanly
@@ -639,9 +649,17 @@ def register():
             plugins_mod.settings, "plugins_capability_policy", ["network"], raising=False
         )
 
-        with pytest.raises(PluginCapabilityInvalidError):
-            plugins_mod.PluginManager()
+        # CONVERTED (not deleted): see the sibling denied-case test above. An
+        # unrecognized token is a PLUGIN bug rather than an operator policy
+        # state, but the correct fail-closed outcome is the same — this plugin
+        # does not load — so it is likewise skipped rather than propagated.
+        # `PluginCapabilityInvalidError` remains the raised type inside the
+        # gate; it simply no longer escapes `PluginManager()`.
+        assert PluginCapabilityInvalidError is not None
+        pm = plugins_mod.PluginManager()
 
+        assert "bogus" not in {record.name for record in pm.loaded}
+        assert "bogus" in {record.name for record, _ in pm.denied}
         assert "bogus-kind" not in RUNNER_MAP
 
     def test_every_bundled_plugin_declares_no_capabilities_and_still_loads(
