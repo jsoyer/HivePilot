@@ -190,12 +190,21 @@ class TestDeniedUnderDefaultPolicy:
         monkeypatch.setattr(plugins_mod.settings, "plugins_capability_policy", [], raising=False)
         RUNNER_MAP.pop(name, None)  # clean baseline (fixture restores after)
 
-        with pytest.raises(PluginCapabilityDeniedError) as excinfo:
-            plugins_mod.PluginManager()
+        # UPDATED for #377: the denial is now logged and SKIPPED per plugin
+        # rather than raised out of `PluginManager()` construction. The verdict
+        # is unchanged — this plugin is still denied and still contributes
+        # nothing — so every assertion about the VERDICT below is the original
+        # one. Only the delivery mechanism moved.
+        pm = plugins_mod.PluginManager()
+
+        reasons = {record.name: reason for record, reason in pm.denied}
+        assert name in reasons, f"{name} was not recorded as denied"
 
         # The denial names the plugin and the offending token, and nothing else.
-        assert name in str(excinfo.value)
-        assert "subprocess" in str(excinfo.value)
+        assert name in reasons[name]
+        assert "subprocess" in reasons[name]
+
+        assert name not in {record.name for record in pm.loaded}
 
         # Atomic rollback: the runner kind staged BEFORE the capability gate
         # ran must not leak into the live map.
@@ -222,9 +231,10 @@ class TestDeniedUnderDefaultPolicy:
         )
         RUNNER_MAP.pop(name, None)
 
-        with pytest.raises(PluginCapabilityDeniedError):
-            plugins_mod.PluginManager()
+        # UPDATED for #377 — see the sibling test above.
+        pm = plugins_mod.PluginManager()
 
+        assert name in {record.name for record, _ in pm.denied}
         assert name not in RUNNER_MAP
 
 
@@ -374,7 +384,12 @@ class TestMalformedPolicyFailsClosed:
         )
         RUNNER_MAP.pop(name, None)
 
-        with pytest.raises(PluginCapabilityDeniedError):
-            plugins_mod.PluginManager()
+        # UPDATED for #377: skipped, not raised. The two direct
+        # `validate_capabilities` tests above still assert `pytest.raises` —
+        # the GATE still raises; what changed is that `_load_into` no longer
+        # lets that escape `PluginManager()`.
+        pm = plugins_mod.PluginManager()
+
+        assert name in {record.name for record, _ in pm.denied}
 
         assert name not in RUNNER_MAP
