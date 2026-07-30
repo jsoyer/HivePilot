@@ -46,6 +46,7 @@ from types import MappingProxyType
 import yaml
 
 from hivepilot.config import settings
+from hivepilot.services import vault_layout
 
 log = logging.getLogger(__name__)
 
@@ -58,11 +59,35 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _GOVERNANCE_ROOT: str = settings.governance_repo or ""
-_VAULT_SECURITY: str = (
-    str(Path(str(settings.obsidian_vault)) / "08 - Security")
-    if settings.obsidian_vault and Path(str(settings.obsidian_vault)).is_absolute()
-    else ""
-)
+
+
+def _resolve_vault_security() -> str:
+    """The vault's security DIRECTORY, or ``""``.
+
+    Both halves are config-owned and both must be present:
+
+    - the vault ROOT (``settings.obsidian_vault``), which must be absolute — a
+      relative vault path resolves against whatever cwd the process happens to
+      have, so it is refused rather than guessed;
+    - the FOLDER NAME, from the ``security`` slot of ``vault.yaml``. This used to
+      be one organisation's ``NN - Something`` literal, which every other
+      deployment got regardless of how its vault is filed.
+
+    Returns ``""`` — never a partial path — when either half is missing. That is
+    the sentinel every consumer in this module already filters on, and it is
+    what stops an unconfigured slot from producing ``"<vault>/"`` and then
+    ``"<vault>/SOME-DOC.md"`` at the vault root.
+    """
+    vault = settings.obsidian_vault
+    if not vault or not Path(str(vault)).is_absolute():
+        return ""
+    folder = vault_layout.current_layout().folder(vault_layout.SLOT_SECURITY)
+    if not folder:
+        return ""
+    return str(Path(str(vault)) / folder)
+
+
+_VAULT_SECURITY: str = _resolve_vault_security()
 
 # ---------------------------------------------------------------------------
 # Config-derived helper functions
@@ -80,14 +105,16 @@ def governance_file_paths() -> list[str]:
 
 
 def vault_security_path() -> str | None:
-    """Return the security vault directory path from settings.obsidian_vault.
+    """Return the security vault directory path, or ``None``.
 
-    Returns None if obsidian_vault is not configured to an absolute path.
+    ``None`` when ``obsidian_vault`` is not configured to an absolute path, OR
+    when the ``security`` folder slot is undeclared in ``vault.yaml`` — see
+    ``_resolve_vault_security``. Unlike ``_VAULT_SECURITY`` (bound at import for
+    backward-compat), this re-resolves on each call, which is why it is the
+    right thing for a caller that may have changed configuration.
     """
-    vault = settings.obsidian_vault
-    if vault and Path(str(vault)).is_absolute():
-        return str(Path(str(vault)) / "08 - Security")
-    return None
+    resolved = _resolve_vault_security()
+    return resolved or None
 
 
 # ---------------------------------------------------------------------------
@@ -143,8 +170,8 @@ VAULT_RULE_DOCUMENT_SLOTS: tuple[str, ...] = (SLOT_SECURITY_RULES, SLOT_GIT_BRAN
 #:
 #: Empty is therefore the honest default, NOT a fail-open: a deployment that
 #: configures nothing loses a path that already pointed nowhere for it. The
-#: fail-open shape would be constructing ``"<vault>/08 - Security/"`` or
-#: ``"<vault>/08 - Security/None.md"`` from an absent name — explicitly guarded
+#: fail-open shape would be constructing ``"<vault>/<security folder>/"`` or
+#: ``"<vault>/<security folder>/None.md"`` from an absent name — explicitly guarded
 #: against in ``vault_rule_document_path`` — so an operator who DID configure a
 #: vault but declared no documents gets a warning rather than silence.
 ENGINE_DEFAULT_VAULT_RULE_DOCUMENTS: Mapping[str, str] = MappingProxyType({})
@@ -288,8 +315,8 @@ def vault_rule_document_path(slot: str) -> str:
 
     Returns ``""`` — never a partial path — when the vault is not configured
     as an absolute path, or the slot has no configured filename. This is the
-    guard that stops an absent config from producing ``"<vault>/08 - Security/"``
-    or ``"<vault>/08 - Security/None.md"`` and handing it to an agent as a file
+    guard that stops an absent config from producing ``"<vault>/<security folder>/"``
+    or ``"<vault>/<security folder>/None.md"`` and handing it to an agent as a file
     to read. ``""`` is the sentinel every consumer in this module already
     filters on, so an unconfigured slot simply drops out of the manifest.
     """

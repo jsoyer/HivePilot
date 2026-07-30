@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
+import conftest
+
 # hivepilot.orchestrator is imported at module level so it is in sys.modules
 # before any patch("hivepilot.orchestrator.*") context managers are entered.
 # conftest.py has already stubbed langchain/boto3 before this import runs.
@@ -357,7 +359,7 @@ class TestPerStageArtifact:
 
     def test_artifact_real_write_creates_file(self, tmp_path: Path) -> None:
         """With dry_run=False and a real vault, the artifact file is created."""
-        runs_dir = tmp_path / "12 - HivePilot" / "Runs"
+        runs_dir = tmp_path / conftest.TEST_VAULT_HIVEPILOT_FOLDER / "Runs"
         runs_dir.mkdir(parents=True)
 
         result = write_stage_artifact(
@@ -376,7 +378,7 @@ class TestPerStageArtifact:
 
     def test_dry_run_true_no_file_written(self, tmp_path: Path) -> None:
         """With dry_run=True, no file is physically written to the vault."""
-        runs_dir = tmp_path / "12 - HivePilot" / "Runs"
+        runs_dir = tmp_path / conftest.TEST_VAULT_HIVEPILOT_FOLDER / "Runs"
         runs_dir.mkdir(parents=True)
 
         result = write_stage_artifact(

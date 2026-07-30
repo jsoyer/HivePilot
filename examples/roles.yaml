@@ -64,8 +64,11 @@
 #   git_branch_rules  -> cto, and every coding role
 #
 # Filenames must be BARE names — no `/`, no `..`. They are joined onto
-# "<obsidian_vault>/08 - Security/", so this key does nothing unless
-# HIVEPILOT_OBSIDIAN_VAULT is set to an ABSOLUTE path.
+# "<obsidian_vault>/<security folder>/", where the security folder is itself the
+# `security` slot of vault.yaml (see examples/vault.yaml). BOTH halves must be
+# configured: this key does nothing unless HIVEPILOT_OBSIDIAN_VAULT is set to an
+# ABSOLUTE path AND the `security` folder slot is declared. If either is missing
+# the resolved path is "", never a partial "<obsidian_vault>/" prefix.
 #
 # The engine ships NO document names. It cannot: it has no way to know what
 # your vault calls its security document, and a guessed filename resolves to a

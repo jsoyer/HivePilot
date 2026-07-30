@@ -50,6 +50,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 
 import hivepilot.config as config_mod
@@ -62,7 +63,7 @@ MARKER = "LESSONS-S1-SECRET-MARKER-7e2f4a91-DO-NOT-LEAK"
 REPO_ROOT = Path(__file__).parent.parent
 MEM0_PLUGIN_PATH = REPO_ROOT / "plugins" / "mem0.py"
 OBSIDIAN_PLUGIN_PATH = REPO_ROOT / "plugins" / "obsidian.py"
-_HIVEPILOT_SUBTREE = "12 - HivePilot"
+_HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
 
 
 @pytest.fixture(autouse=True)

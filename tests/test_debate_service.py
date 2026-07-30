@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import conftest
 import pytest
 
 from hivepilot.services.debate_service import DebateResult, DebateService, Position
@@ -16,11 +17,11 @@ from hivepilot.services.debate_service import DebateResult, DebateService, Posit
 # Helpers
 # ---------------------------------------------------------------------------
 
-_ADR_FOLDER = "03 - Decisions"
+_ADR_FOLDER = conftest.TEST_VAULT_DECISIONS_FOLDER
 
 
 def _make_adr_vault(tmp_path: Path) -> Path:
-    """Create a minimal fake vault with the 03 - Decisions folder."""
+    """Create a minimal fake vault with the configured decisions folder."""
     vault = tmp_path / "FakeVault"
     vault.mkdir()
     (vault / _ADR_FOLDER).mkdir()
@@ -262,7 +263,7 @@ class TestRun:
         )
         assert result is not None
         assert result.get("dry_run") is False
-        # A file must exist under 03 - Decisions
+        # A file must exist under the configured decisions folder
         decisions_dir = vault / _ADR_FOLDER
         files = list(decisions_dir.iterdir())
         assert len(files) == 1

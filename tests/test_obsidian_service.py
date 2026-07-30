@@ -2,6 +2,11 @@
 Tests for hivepilot.services.obsidian_service.
 
 All tests use tmp_path (pytest) — NEVER write to the real vault.
+
+Vault folder names are CONFIG-OWNED (`folders:` in vault.yaml); the autouse
+`_pin_vault_layout` fixture in conftest.py installs a generic test taxonomy and
+the constants below mirror it. No test in this module asserts a folder name the
+engine could have hardcoded.
 """
 
 from __future__ import annotations
@@ -9,10 +14,19 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+import conftest
 import pytest
 
-from hivepilot.services import config_provenance
+from hivepilot.services import config_provenance, vault_layout
 from hivepilot.services.obsidian_service import ObsidianService, ObsidianWriteError
+from hivepilot.services.vault_layout import (
+    SLOT_ARTIFACTS,
+    SLOT_DECISIONS,
+    SLOT_HIVEPILOT,
+    SLOT_SECURITY,
+    VAULT_FOLDER_SLOTS,
+    VaultLayout,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -26,43 +40,27 @@ def _clean_secret_registry() -> Iterator[None]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_HIVEPILOT_SUBTREE = "12 - HivePilot"
-_SUBTREE_FOLDERS = ["Agents", "Tasks", "Reports", "Runs", "Interactions"]
-_FROZEN_FOLDERS = [
-    "08 - Security",
-    "03 - Decisions",
-    "02 - Architecture",
-    "01 - Journal",
-]
+# Folder names are CONFIG-OWNED (`folders:` in vault.yaml). These mirror the
+# generic taxonomy the autouse `_pin_vault_layout` fixture in conftest.py
+# installs — deliberately NOT any organisation's numbered filing scheme and NOT
+# the engine's own default, so a name hardcoded back into the engine would fail
+# against these values instead of quietly agreeing with them.
+_HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
+_ARTIFACTS_FOLDER = conftest.TEST_VAULT_ARTIFACTS_FOLDER
+_DECISIONS_FOLDER = conftest.TEST_VAULT_DECISIONS_FOLDER
+_SECURITY_FOLDER = conftest.TEST_VAULT_SECURITY_FOLDER
 
-EXPECTED_TOP_LEVEL_FOLDERS = [
-    "00 - Inbox",
-    "01 - Journal",
-    "01 - Knowledge",
-    "02 - Architecture",
-    # NOTE: "02 - Artifacts" is deliberately NOT in this fixture list even though
-    # it IS in the service's EXPECTED_TOP_LEVEL_FOLDERS — several write_artifact
-    # tests build a vault from this list and then assert the folder is absent to
-    # prove dry_run created nothing. Keep it out.
-    "02 - Design",
-    "03 - Decisions",
-    "03 - Research",
-    "04 - Engineering",
-    "04 - Integrations",
-    "04 - PRDs",
-    "04 - Roadmap",
-    "05 - Competitive Intel",
-    "05 - GTM",
-    "06 - GTM",
-    "07 - Infrastructure",
-    "08 - Security",
-    "09 - People",
-    "10 - Legal & Compliance",
-    "10 - Templates",
-    "11 - Projects",
-    "12 - HivePilot",
-    "99 - Archive",
-]
+# Engine-owned subfolders inside the engine's own subtree — not config.
+_SUBTREE_FOLDERS = ["Agents", "Tasks", "Reports", "Runs", "Interactions"]
+_FROZEN_FOLDERS = list(conftest.TEST_VAULT_FROZEN_FOLDERS)
+
+# NOTE: the artifacts folder is deliberately NOT in this list even though the
+# engine writes into it — several write_artifact tests build a vault from this
+# list and then assert the folder is absent to prove dry_run created nothing.
+# Keep it out. This is also the point of the two lists being independent: the
+# expected LAYOUT need not mention a write target, and `audit()` reports write
+# targets separately so it can still never be blind to one.
+EXPECTED_TOP_LEVEL_FOLDERS = list(conftest.TEST_VAULT_EXPECTED_FOLDERS)
 
 
 def _make_fake_vault(tmp_path: Path) -> Path:
@@ -71,13 +69,13 @@ def _make_fake_vault(tmp_path: Path) -> Path:
     vault.mkdir()
     # Create a subset of expected top-level folders (simulate partial vault)
     present = [
-        "00 - Inbox",
-        "01 - Journal",
-        "03 - Decisions",
-        "08 - Security",
-        "02 - Architecture",
-        "12 - HivePilot",
-        "99 - Archive",
+        "Inbox",
+        "Journal",
+        _DECISIONS_FOLDER,
+        _SECURITY_FOLDER,
+        "Architecture",
+        _HIVEPILOT_SUBTREE,
+        "Archive",
     ]
     for folder in present:
         (vault / folder).mkdir()
@@ -143,7 +141,7 @@ class TestDryRun:
         )
 
         assert result.get("dry_run") is True
-        decisions_dir = vault / "03 - Decisions"
+        decisions_dir = vault / _DECISIONS_FOLDER
         created = list(decisions_dir.iterdir())
         assert created == [], "dry_run must not write ADR files"
 
@@ -390,8 +388,8 @@ class TestWriteAdr:
 
         written_path = Path(result["path"])
         assert written_path.exists()
-        # Must be under 03 - Decisions
-        assert "03 - Decisions" in str(written_path)
+        # Must be under the configured decisions folder
+        assert _DECISIONS_FOLDER in str(written_path)
         content = written_path.read_text(encoding="utf-8")
         assert "ruff" in content
         assert "Consequences:" in content
@@ -439,34 +437,108 @@ class TestAudit:
         for folder in report["missing"]:
             assert not (vault / folder).exists(), f"{folder} should not exist"
 
-        # Some folders must be missing (we only created 7 of 22)
+        # Some folders must be missing (we only created 7 of the declared list)
         assert len(report["missing"]) > 0
 
-    def test_audit_expects_every_folder_hivepilot_writes_to(self, tmp_path: Path) -> None:
-        """`audit()` must know about every folder the engine itself writes into.
+    def test_audit_reflects_the_configured_expected_folders(self, tmp_path: Path) -> None:
+        """The expected layout comes from config, not from engine code."""
+        vault = tmp_path / "CustomVault"
+        (vault / "OnlyThisOne").mkdir(parents=True)
+        layout = VaultLayout(
+            folders={SLOT_HIVEPILOT: _HIVEPILOT_SUBTREE},
+            expected_folders=("OnlyThisOne", "NotThere"),
+            frozen_folders=(),
+        )
+        report = ObsidianService(vault_path=vault, dry_run=True, layout=layout).audit()
 
-        The three write targets (`02 - Artifacts/`, `03 - Decisions/`,
-        `12 - HivePilot/`) are part of the vault layout HivePilot depends on, so
-        an audit that omitted one would report a complete-looking vault while
-        the engine was writing somewhere the operator was never told about.
-        Regression guard: `02 - Artifacts` was missing from the expected list
-        for several releases after `write_artifact()` shipped.
+        assert report["present"] == ["OnlyThisOne"]
+        assert report["missing"] == ["NotThere"]
+        assert report["expected_examined"] == 2
+
+    def test_audit_examining_nothing_is_never_reported_as_clean(self, tmp_path: Path) -> None:
+        """THE trap: an operator who declared no expected layout must not get an
+        audit that silently checks zero folders and looks like a pass.
+
+        `expected_examined` is the load-bearing field — `present`/`missing` are
+        both empty here, which on their own read as "nothing wrong".
         """
-        from hivepilot.services import obsidian_service as svc_mod
-
-        write_targets = {
-            svc_mod.ARTIFACT_TARGET_FOLDER,
-            svc_mod.ADR_TARGET_FOLDER,
-            svc_mod.HIVEPILOT_SUBTREE,
-        }
-        missing = write_targets - set(svc_mod.EXPECTED_TOP_LEVEL_FOLDERS)
-        assert not missing, f"write targets absent from audit expected layout: {sorted(missing)}"
-
-        # And they must surface in a real audit report of an empty vault.
         vault = tmp_path / "EmptyVault"
         vault.mkdir()
+        layout = VaultLayout(folders={}, expected_folders=(), frozen_folders=())
+        report = ObsidianService(vault_path=vault, dry_run=True, layout=layout).audit()
+
+        assert report["present"] == []
+        assert report["missing"] == []
+        assert report["expected_examined"] == 0
+
+    def test_audit_reports_engine_folders_independently_of_the_expected_list(
+        self, tmp_path: Path
+    ) -> None:
+        """`audit()` must never be blind to a folder the engine itself writes.
+
+        Regression guard for the conflation bug: the artifacts folder — the one
+        folder the engine writes deliverables into — was absent from the
+        expected-layout list for several releases, so the audit reported a
+        complete-looking vault while the engine wrote somewhere the operator was
+        never told about.
+
+        The fix is NOT to union the two lists. `engine_folders` is derived from
+        the slot vocabulary itself, so every write target is reported even when
+        the operator's `expected_folders:` mentions none of them — which is the
+        case constructed here.
+        """
+        vault = tmp_path / "Vault"
+        vault.mkdir()
+        layout = VaultLayout(
+            folders={
+                SLOT_HIVEPILOT: _HIVEPILOT_SUBTREE,
+                SLOT_ARTIFACTS: _ARTIFACTS_FOLDER,
+                SLOT_DECISIONS: _DECISIONS_FOLDER,
+                SLOT_SECURITY: _SECURITY_FOLDER,
+            },
+            # Deliberately mentions NOT ONE engine folder.
+            expected_folders=("SomethingElse",),
+            frozen_folders=(),
+        )
+        report = ObsidianService(vault_path=vault, dry_run=True, layout=layout).audit()
+
+        assert set(report["engine_folders"]) == set(VAULT_FOLDER_SLOTS)
+        for slot in VAULT_FOLDER_SLOTS:
+            info = report["engine_folders"][slot]
+            assert info["configured"] is True
+            assert info["exists"] is False  # nothing was created in this vault
+        assert report["engine_folders"][SLOT_ARTIFACTS]["folder"] == _ARTIFACTS_FOLDER
+        # ...and the operator's declared layout is untouched by any of it.
+        assert report["present"] == []
+        assert report["missing"] == ["SomethingElse"]
+
+    def test_audit_distinguishes_write_slots_from_the_read_slot(self, tmp_path: Path) -> None:
+        """The old single list flattened away which folders HivePilot WRITES."""
+        vault = tmp_path / "Vault"
+        vault.mkdir()
         report = ObsidianService(vault_path=vault, dry_run=True).audit()
-        assert write_targets <= set(report["missing"])
+        access = {slot: info["access"] for slot, info in report["engine_folders"].items()}
+
+        assert access[SLOT_ARTIFACTS] == vault_layout.ACCESS_WRITE
+        assert access[SLOT_DECISIONS] == vault_layout.ACCESS_WRITE
+        assert access[SLOT_HIVEPILOT] == vault_layout.ACCESS_WRITE
+        assert access[SLOT_SECURITY] == vault_layout.ACCESS_READ
+
+    def test_audit_marks_an_unconfigured_slot_as_unconfigured_not_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """`exists: False` on an unconfigured slot must not be readable as "the
+        folder is not there" — there is no folder to look for."""
+        vault = tmp_path / "Vault"
+        vault.mkdir()
+        layout = VaultLayout(folders={}, expected_folders=(), frozen_folders=())
+        report = ObsidianService(vault_path=vault, dry_run=True, layout=layout).audit()
+
+        for slot in VAULT_FOLDER_SLOTS:
+            info = report["engine_folders"][slot]
+            assert info["configured"] is False
+            assert info["exists"] is False
+            assert info["folder"] == ""
 
     def test_audit_flags_frozen_folders(self, tmp_path: Path) -> None:
         vault = _make_full_vault(tmp_path)
@@ -492,9 +564,9 @@ class TestAudit:
     def test_audit_detects_missing_hivepilot_subtree_folders(self, tmp_path: Path) -> None:
         vault = tmp_path / "MinimalVault"
         vault.mkdir()
-        (vault / "12 - HivePilot").mkdir()
+        (vault / _HIVEPILOT_SUBTREE).mkdir()
         # Only create Agents, not the rest
-        (vault / "12 - HivePilot" / "Agents").mkdir()
+        (vault / _HIVEPILOT_SUBTREE / "Agents").mkdir()
 
         svc = ObsidianService(vault_path=vault, dry_run=True)
         report = svc.audit()
@@ -610,7 +682,7 @@ class TestWriteArtifact:
             },
         )
 
-        expected_path = vault / "02 - Artifacts" / "cto" / f"{today}-run43-cto-technical-spec.md"
+        expected_path = vault / _ARTIFACTS_FOLDER / "cto" / f"{today}-run43-cto-technical-spec.md"
         assert expected_path.exists()
         assert result["path"] == str(expected_path)
         assert result.get("dry_run") is False
@@ -632,7 +704,7 @@ class TestWriteArtifact:
         )
 
         assert result.get("dry_run") is True
-        assert not (vault / "02 - Artifacts").exists()
+        assert not (vault / _ARTIFACTS_FOLDER).exists()
 
     def test_write_artifact_redacts_secret(self, tmp_path: Path) -> None:
         vault = _make_full_vault(tmp_path)
@@ -654,7 +726,7 @@ class TestWriteArtifact:
 
     def test_write_artifact_role_traversal_is_contained(self, tmp_path: Path) -> None:
         """A role string with path-traversal characters must not escape
-        `02 - Artifacts/` — the role is slugified defensively."""
+        the artifacts folder — the role is slugified defensively."""
         vault = _make_full_vault(tmp_path)
         svc = ObsidianService(vault_path=vault, dry_run=False)
 
@@ -667,7 +739,7 @@ class TestWriteArtifact:
         )
 
         written_path = Path(result["path"])
-        artifacts_root = (vault / "02 - Artifacts").resolve()
+        artifacts_root = (vault / _ARTIFACTS_FOLDER).resolve()
         written_path.relative_to(artifacts_root)  # raises ValueError if escaped
 
 
@@ -678,7 +750,7 @@ class TestGuard:
 
         with pytest.raises(ObsidianWriteError, match="outside allowed"):
             svc.write_note(
-                subpath="../00 - Inbox/evil.md",
+                subpath="../Inbox/evil.md",
                 title="Evil",
                 body="Bad",
                 frontmatter_fields={
@@ -724,15 +796,15 @@ class TestGuard:
             )
 
     def test_write_adr_to_non_decisions_path_raises(self, tmp_path: Path) -> None:
-        """ADR internal guard: the service always targets 03 - Decisions; test the guard by
+        """ADR internal guard: the service always targets the decisions folder; test the guard by
         verifying write_note rejects targeting that folder directly."""
         vault = _make_full_vault(tmp_path)
         svc = ObsidianService(vault_path=vault, dry_run=False)
 
-        # Attempting write_note (not write_adr) into 03 - Decisions must fail
+        # Attempting write_note (not write_adr) into the decisions folder must fail
         with pytest.raises(ObsidianWriteError, match="outside allowed"):
             svc.write_note(
-                subpath="../03 - Decisions/adr-test.md",
+                subpath=f"../{_DECISIONS_FOLDER}/adr-test.md",
                 title="ADR",
                 body="body",
                 frontmatter_fields={
@@ -742,3 +814,210 @@ class TestGuard:
                     "agent": "attacker",
                 },
             )
+
+
+# ---------------------------------------------------------------------------
+# Write targets come from config, and an unconfigured slot REFUSES
+# ---------------------------------------------------------------------------
+
+
+class TestWriteTargetsAreConfigOwned:
+    """Every write path must build its root from the configured folder name."""
+
+    @staticmethod
+    def _layout(**folders: str) -> VaultLayout:
+        return VaultLayout(folders=folders, expected_folders=(), frozen_folders=())
+
+    def test_write_note_uses_the_configured_hivepilot_folder(self, tmp_path: Path) -> None:
+        vault = tmp_path / "V"
+        vault.mkdir()
+        layout = self._layout(hivepilot="Custom Engine Home")
+        svc = ObsidianService(vault_path=vault, dry_run=False, layout=layout)
+
+        result = svc.write_note(
+            subpath="Tasks/note.md",
+            title="T",
+            body="b",
+            frontmatter_fields={"type": "task"},
+        )
+
+        assert result["path"] == str(vault / "Custom Engine Home" / "Tasks" / "note.md")
+        assert (vault / "Custom Engine Home" / "Tasks" / "note.md").is_file()
+
+    def test_write_adr_uses_the_configured_decisions_folder(self, tmp_path: Path) -> None:
+        vault = tmp_path / "V"
+        vault.mkdir()
+        layout = self._layout(decisions="Choices")
+        svc = ObsidianService(vault_path=vault, dry_run=False, layout=layout)
+
+        result = svc.write_adr(
+            title="Pick a thing",
+            context="c",
+            options=["a"],
+            decision="a",
+            consequences="k",
+            security_impact="none",
+            review_date="2027-01-01",
+        )
+
+        assert str(vault / "Choices") in result["path"]
+        assert list((vault / "Choices").iterdir())
+
+    def test_write_artifact_uses_the_configured_artifacts_folder(self, tmp_path: Path) -> None:
+        vault = tmp_path / "V"
+        vault.mkdir()
+        layout = self._layout(artifacts="Outputs")
+        svc = ObsidianService(vault_path=vault, dry_run=False, layout=layout)
+
+        result = svc.write_artifact(
+            role="cto",
+            slug="spec",
+            title="Spec",
+            body="body",
+            frontmatter_fields={"type": "artifact"},
+        )
+
+        assert str(vault / "Outputs" / "cto") in result["path"]
+
+    def test_append_daily_uses_the_configured_hivepilot_folder(self, tmp_path: Path) -> None:
+        vault = tmp_path / "V"
+        vault.mkdir()
+        layout = self._layout(hivepilot="Custom Engine Home")
+        svc = ObsidianService(vault_path=vault, dry_run=False, layout=layout)
+
+        result = svc.append_daily("- entry")
+
+        assert str(vault / "Custom Engine Home" / "Runs") in result["path"]
+
+
+class TestUnconfiguredSlotRefusesInsteadOfWritingToTheVaultRoot:
+    """THE trap, at the write path.
+
+    An absent folder name must not degrade into `<vault>/`, `<vault>/None`, or a
+    folder the engine invented. `_emit` calls `mkdir(parents=True)`, so a guess
+    would not be a harmless miss — it would create a new top-level folder in what
+    is typically a synced git repo.
+    """
+
+    EMPTY = VaultLayout(folders={}, expected_folders=(), frozen_folders=())
+
+    def _svc(self, tmp_path: Path) -> ObsidianService:
+        vault = tmp_path / "V"
+        vault.mkdir()
+        return ObsidianService(vault_path=vault, dry_run=False, layout=self.EMPTY)
+
+    def test_write_note_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ObsidianWriteError, match="not configured"):
+            self._svc(tmp_path).write_note(
+                subpath="Tasks/n.md", title="T", body="b", frontmatter_fields={}
+            )
+
+    def test_write_adr_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ObsidianWriteError, match="not configured"):
+            self._svc(tmp_path).write_adr(
+                title="T",
+                context="c",
+                options=[],
+                decision="d",
+                consequences="k",
+                security_impact="s",
+                review_date="2027-01-01",
+            )
+
+    def test_write_artifact_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ObsidianWriteError, match="not configured"):
+            self._svc(tmp_path).write_artifact(
+                role="cto", slug="s", title="T", body="b", frontmatter_fields={}
+            )
+
+    def test_append_daily_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ObsidianWriteError, match="not configured"):
+            self._svc(tmp_path).append_daily("- entry")
+
+    def test_refusal_names_the_slot_and_the_config_key(self, tmp_path: Path) -> None:
+        """A refusal an operator cannot act on is only half a guard."""
+        with pytest.raises(ObsidianWriteError) as exc:
+            self._svc(tmp_path).write_artifact(
+                role="cto", slug="s", title="T", body="b", frontmatter_fields={}
+            )
+        message = str(exc.value)
+        assert SLOT_ARTIFACTS in message
+        assert vault_layout.VAULT_FOLDERS_KEY in message
+
+    def test_nothing_is_created_anywhere_in_the_vault(self, tmp_path: Path) -> None:
+        vault = tmp_path / "V"
+        vault.mkdir()
+        svc = ObsidianService(vault_path=vault, dry_run=False, layout=self.EMPTY)
+        before = set(vault.rglob("*"))
+
+        for call in (
+            lambda: svc.write_note(subpath="a.md", title="T", body="b", frontmatter_fields={}),
+            lambda: svc.write_artifact(
+                role="cto", slug="s", title="T", body="b", frontmatter_fields={}
+            ),
+            lambda: svc.append_daily("- e"),
+        ):
+            with pytest.raises(ObsidianWriteError):
+                call()
+
+        assert set(vault.rglob("*")) == before
+        assert list(vault.iterdir()) == []
+
+    def test_a_dry_run_also_refuses_rather_than_previewing_a_root_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A dry-run preview of `<vault>/Tasks/n.md` would be a lie an operator
+        could act on — the refusal must not depend on dry_run."""
+        vault = tmp_path / "V"
+        vault.mkdir()
+        svc = ObsidianService(vault_path=vault, dry_run=True, layout=self.EMPTY)
+        with pytest.raises(ObsidianWriteError, match="not configured"):
+            svc.write_note(subpath="Tasks/n.md", title="T", body="b", frontmatter_fields={})
+
+
+class TestMalformedSlotValuesNeverReachAWrite:
+    """A blank or escaping folder name must never become a writable root.
+
+    The loader already drops such values, but `VaultLayout` is public and
+    injectable, and the downstream `_resolve_safe` guard is NOT enough on its
+    own: it checks containment relative to the ALLOWED ROOT, so a layout
+    carrying ".." makes the vault's PARENT the allowed root and every write
+    "safely" lands outside the vault. Hence validation at construction.
+    """
+
+    @pytest.mark.parametrize("bad", ["", "   ", "..", ".", "sub/dir", "../escape", "back\\slash"])
+    def test_constructing_a_layout_with_a_bad_name_is_refused(self, bad: str) -> None:
+        with pytest.raises(vault_layout.VaultLayoutError):
+            VaultLayout(folders={SLOT_ARTIFACTS: bad}, expected_folders=(), frozen_folders=())
+
+    @pytest.mark.parametrize("bad", ["..", "../escape", "sub/dir", ""])
+    def test_a_bad_audit_list_entry_is_refused(self, bad: str) -> None:
+        """`(vault / "..").is_dir()` is always True — an escaping expected-layout
+        entry would report a folder "present" that is not even in the vault."""
+        with pytest.raises(vault_layout.VaultLayoutError):
+            VaultLayout(folders={}, expected_folders=(bad,), frozen_folders=())
+        with pytest.raises(vault_layout.VaultLayoutError):
+            VaultLayout(folders={}, expected_folders=(), frozen_folders=(bad,))
+
+    def test_an_unknown_slot_key_is_refused(self) -> None:
+        with pytest.raises(vault_layout.VaultLayoutError, match="unknown vault folder slot"):
+            VaultLayout(folders={"artefacts": "Typo"}, expected_folders=(), frozen_folders=())
+
+    def test_no_escaping_layout_can_ever_reach_the_filesystem(self, tmp_path: Path) -> None:
+        """End-to-end: because construction is refused, there is no way to get an
+        ObsidianService whose allowed root is outside the vault."""
+        vault = tmp_path / "V"
+        vault.mkdir()
+        sibling = tmp_path / "escape"
+        sibling.mkdir()
+
+        with pytest.raises(vault_layout.VaultLayoutError):
+            layout = VaultLayout(
+                folders={SLOT_ARTIFACTS: "../escape"}, expected_folders=(), frozen_folders=()
+            )
+            ObsidianService(vault_path=vault, dry_run=False, layout=layout).write_artifact(
+                role="cto", slug="s", title="T", body="b", frontmatter_fields={}
+            )
+
+        assert list(sibling.iterdir()) == []
+        assert list(vault.iterdir()) == []

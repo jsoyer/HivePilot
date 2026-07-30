@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     policies_file: Path = Path("policies.yaml")
     groups_file: Path = Path("groups.yaml")
     schedules_file: Path = Path("schedules.yaml")
+    # Obsidian vault folder taxonomy (folders / expected_folders / frozen_folders).
+    # A vault's folder NAMES are the organisation's filing convention, so they are
+    # config-owned -- see hivepilot/services/vault_layout.py. Its own file rather
+    # than a key in roles.yaml because its consumers (ObsidianService, `obsidian
+    # audit`) are role-agnostic and its lifecycle follows the vault, not the roster.
+    vault_file: Path = Path("vault.yaml")
     prompts_dir: Path = Path("prompts")
     runs_dir: Path = Path("runs")
     logs_dir: Path = Path("runs/logs")

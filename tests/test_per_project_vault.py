@@ -21,6 +21,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 import yaml
 
@@ -36,8 +37,8 @@ from hivepilot.services.obsidian_vault_resolver import (
 
 REPO_ROOT = Path(__file__).parent.parent
 OBSIDIAN_PLUGIN_PATH = REPO_ROOT / "plugins" / "obsidian.py"
-_HIVEPILOT_SUBTREE = "12 - HivePilot"
-_ARTIFACTS = "02 - Artifacts"
+_HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
+_ARTIFACTS = conftest.TEST_VAULT_ARTIFACTS_FOLDER
 
 
 def _load_obsidian_module() -> ModuleType:

@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -72,18 +73,21 @@ def fake_vault(tmp_path: Path) -> Path:
     """Create a minimal fake Obsidian vault for CLI tests."""
     vault = tmp_path / "TestVault"
     vault.mkdir()
+    # Folder names come from the pinned test layout (conftest `_pin_vault_layout`),
+    # never from engine code. A deliberate SUBSET of the declared expected layout,
+    # so the audit has both present and missing folders to report.
     for folder in [
-        "00 - Inbox",
-        "01 - Journal",
-        "03 - Decisions",
-        "08 - Security",
-        "02 - Architecture",
-        "12 - HivePilot",
-        "99 - Archive",
+        "Inbox",
+        "Journal",
+        conftest.TEST_VAULT_DECISIONS_FOLDER,
+        conftest.TEST_VAULT_SECURITY_FOLDER,
+        "Architecture",
+        conftest.TEST_VAULT_HIVEPILOT_FOLDER,
+        "Archive",
     ]:
         (vault / folder).mkdir()
     for sub in ["Agents", "Tasks", "Reports", "Runs", "Interactions"]:
-        (vault / "12 - HivePilot" / sub).mkdir(parents=True, exist_ok=True)
+        (vault / conftest.TEST_VAULT_HIVEPILOT_FOLDER / sub).mkdir(parents=True, exist_ok=True)
     return vault
 
 
@@ -280,7 +284,8 @@ class TestObsidianCli:
         """Audit output mentions present folders."""
         runner = CliRunner()
         result = runner.invoke(app, ["obsidian", "audit", "--vault", str(fake_vault)])
-        assert "present" in result.output.lower() or "12 - HivePilot" in result.output
+        assert "present" in result.output.lower()
+        assert conftest.TEST_VAULT_HIVEPILOT_FOLDER in result.output
 
     def test_obsidian_audit_shows_missing_folders(self, fake_vault: Path) -> None:
         """Audit output reports missing expected folders."""
@@ -288,7 +293,92 @@ class TestObsidianCli:
         result = runner.invoke(app, ["obsidian", "audit", "--vault", str(fake_vault)])
         assert result.exit_code == 0
         # We have a partial vault so some folders should be missing
-        assert "missing" in result.output.lower() or "04 - Engineering" in result.output
+        assert "missing" in result.output.lower()
+        assert "Engineering" in result.output
+
+    def test_obsidian_audit_reports_how_many_folders_it_examined(self, fake_vault: Path) -> None:
+        runner = CliRunner()
+        result = runner.invoke(app, ["obsidian", "audit", "--vault", str(fake_vault)])
+        assert "examined" in result.output.lower()
+
+    def test_obsidian_audit_of_zero_folders_is_not_reported_as_a_pass(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """THE trap. An operator who declared no expected layout must not get an
+        audit whose output reads as a clean bill of health.
+
+        The exact fail-open shape found twice in one day elsewhere: `plugins
+        audit` printing "No plugin source files found" on a host with seven, and
+        `check_public_safe.py` printing "passed (0 files scanned)".
+        """
+        from hivepilot.services import vault_layout
+        from hivepilot.services.vault_layout import SLOT_HIVEPILOT, VaultLayout
+
+        vault = tmp_path / "Undeclared"
+        vault.mkdir()
+        monkeypatch.setattr(
+            vault_layout,
+            "VAULT_LAYOUT",
+            VaultLayout(
+                folders={SLOT_HIVEPILOT: "HivePilot"},
+                expected_folders=(),
+                frozen_folders=(),
+            ),
+        )
+
+        result = CliRunner().invoke(app, ["obsidian", "audit", "--vault", str(vault)])
+
+        assert "NOT CHECKED" in result.output
+        assert "not a pass" in result.output.lower()
+        # And it must not print a zero-count "present/missing" pair that reads clean.
+        assert "Present folders (0)" not in result.output
+
+    def test_obsidian_audit_strict_exits_nonzero_when_it_examined_nothing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from hivepilot.services import vault_layout
+        from hivepilot.services.vault_layout import VaultLayout
+
+        vault = tmp_path / "Undeclared"
+        vault.mkdir()
+        monkeypatch.setattr(
+            vault_layout,
+            "VAULT_LAYOUT",
+            VaultLayout(folders={}, expected_folders=(), frozen_folders=()),
+        )
+
+        result = CliRunner().invoke(app, ["obsidian", "audit", "--vault", str(vault), "--strict"])
+        assert result.exit_code == 1, result.output
+
+    def test_obsidian_audit_strict_passes_on_a_fully_declared_vault(self, fake_vault: Path) -> None:
+        """--strict must not fire merely because some declared folder is absent;
+        it fires when the audit could not ESTABLISH anything."""
+        result = CliRunner().invoke(
+            app, ["obsidian", "audit", "--vault", str(fake_vault), "--strict"]
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_obsidian_audit_names_unconfigured_engine_slots(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The engine's own folders are reported independently of the declared
+        layout, so the audit can never be blind to a write target."""
+        from hivepilot.services import vault_layout
+        from hivepilot.services.vault_layout import VaultLayout
+
+        vault = tmp_path / "V"
+        vault.mkdir()
+        monkeypatch.setattr(
+            vault_layout,
+            "VAULT_LAYOUT",
+            VaultLayout(folders={}, expected_folders=("Somewhere",), frozen_folders=()),
+        )
+
+        result = CliRunner().invoke(app, ["obsidian", "audit", "--vault", str(vault)])
+
+        assert "NOT CONFIGURED" in result.output
+        for slot in ("artifacts", "decisions", "security", "hivepilot"):
+            assert slot in result.output
 
 
 class TestCostsBackfillCli:

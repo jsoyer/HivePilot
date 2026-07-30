@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 
 import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch resolution
@@ -460,7 +461,7 @@ class TestVerdictPersistedAndRedacted:
 
         vault = tmp_path / "FakeVault"
         vault.mkdir()
-        (vault / "03 - Decisions").mkdir()
+        (vault / conftest.TEST_VAULT_DECISIONS_FOLDER).mkdir()
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
         orch.registry = MagicMock()
