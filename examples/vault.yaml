@@ -1,0 +1,117 @@
+# Example HivePilot vault.yaml — your Obsidian vault's folder taxonomy.
+#
+# NOT auto-loaded. Copy (or symlink) this file to your config directory as
+# `vault.yaml` (resolution chain: $XDG_CONFIG_HOME/hivepilot/vault.yaml, then
+# config_repo/vault.yaml, then base_dir/vault.yaml — see
+# hivepilot/config.py Settings.resolve_config_path).
+#
+# A vault's folder NAMES are your organisation's filing convention, not the
+# engine's. HivePilot used to hardcode one customer's numbered scheme, which for
+# a vault filed any other way meant the engine creating top-level folders nobody
+# asked for and `hivepilot obsidian audit` reporting a "complete" vault that had
+# none of them. Every name below is now yours to choose.
+#
+# The values here are ILLUSTRATIVE. Use whatever your vault actually calls these
+# folders — flat names, numbered prefixes, another language, anything that is a
+# bare folder name directly inside the vault root.
+#
+# Nothing in this file does anything unless HIVEPILOT_OBSIDIAN_VAULT (or a
+# project's `obsidian_vault:` override in projects.yaml) points at an ABSOLUTE
+# path. HivePilot never creates a vault; `hivepilot config doctor` reports vault
+# problems.
+
+# ---------------------------------------------------------------------------
+# folders — the folders the ENGINE itself reads and writes
+# ---------------------------------------------------------------------------
+# Maps a generic SLOT (what the folder is FOR) to the folder name YOUR vault
+# uses. The slot names are fixed and generic on purpose: the engine understands
+# the slot, you own the name.
+#
+#   hivepilot  (write)  the engine's own subtree: run logs, interaction logs,
+#                       auditor notes, changelogs. Subfolders inside it (Runs,
+#                       Interactions, Agents, Tasks, Reports) are engine-owned
+#                       and not configurable.
+#   artifacts  (write)  canonical per-stage deliverables, filed by role:
+#                       <artifacts>/<role>/<date>-<slug>.md
+#   decisions  (write)  architecture decision records from `write_adr`
+#   security   (read)   the directory `vault_rule_documents:` filenames (in
+#                       roles.yaml) are joined onto
+#
+# MERGE SEMANTICS: per slot. Declaring one slot never affects another.
+#
+# ENGINE DEFAULTS: only `hivepilot`, which defaults to "HivePilot" — that
+# subtree is the engine's OWN workspace, so it may name it, and without a
+# default a deployment that set a vault and nothing else would silently stop
+# writing run logs. Declaring `hivepilot` here REPLACES that default.
+#
+# The other three ship NO default, because they name folders in YOUR
+# pre-existing taxonomy and the engine has no correct guess. An undeclared
+# `artifacts` or `decisions` slot makes the corresponding write REFUSE loudly
+# (nothing is written to the vault root and no folder is invented); an
+# undeclared `security` slot simply yields no rule-document path. If a vault IS
+# configured and a slot is not, you get a `vault_folders_absent` warning at
+# startup rather than silence.
+#
+# Values must be BARE folder names — a value containing `/`, `\`, `.` or `..` is
+# rejected with a `vault_folders_unsafe` warning, because this file names a
+# folder INSIDE the vault and must not become an arbitrary-path write. A blank
+# value is rejected too (`vault_folders_blank`): it would make the vault ROOT
+# the write target. An unknown slot name is ignored with a
+# `vault_folders_unknown_slot` warning — a typo must be loud, never a silent
+# "no folder for the real slot".
+
+folders:
+  hivepilot: "HivePilot"
+  artifacts: "Artifacts"
+  decisions: "Decisions"
+  security: "Security"
+
+# ---------------------------------------------------------------------------
+# expected_folders — YOUR declaration of what this vault should contain
+# ---------------------------------------------------------------------------
+# `hivepilot obsidian audit` reports each of these present or missing. This is
+# the EXPECTED LAYOUT of your vault, NOT the set of folders HivePilot writes to
+# — most entries here will have no writer anywhere in the engine, and that is
+# the point. The two lists are deliberately independent and neither is derived
+# from the other: the audit reports the engine's own folders in a separate
+# section, so it can never be blind to a write target regardless of what you
+# declare here.
+#
+# The engine ships NO default. That is not a fail-open: an audit that examined
+# zero folders is never reported as clean — `obsidian audit` prints
+# "Declared layout: NOT CHECKED ... this is not a pass", and
+# `obsidian audit --strict` exits 1.
+
+expected_folders:
+  - "Inbox"
+  - "Journal"
+  - "Knowledge"
+  - "Architecture"
+  - "Artifacts"
+  - "Design"
+  - "Decisions"
+  - "Research"
+  - "Engineering"
+  - "Integrations"
+  - "PRDs"
+  - "Roadmap"
+  - "Infrastructure"
+  - "Security"
+  - "People"
+  - "Templates"
+  - "Projects"
+  - "HivePilot"
+  - "Archive"
+
+# ---------------------------------------------------------------------------
+# frozen_folders — folders that must never be renamed or deleted
+# ---------------------------------------------------------------------------
+# Reported by `obsidian audit` as policy, always, whether or not they exist.
+# HivePilot never renames or deletes folders anyway; this list is a statement to
+# the humans and agents reading the audit report. Engine default: none.
+
+frozen_folders:
+  - "Security"
+  - "Decisions"
+  - "Architecture"
+  - "Journal"

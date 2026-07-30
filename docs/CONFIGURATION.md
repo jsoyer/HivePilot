@@ -108,7 +108,7 @@ projects:
 ```
 
 It applies to **every** vault destination for that project: per-stage run artifacts and
-canonical `02 - Artifacts/<role>/` deliverables, the Obsidian plugin's daily journal and
+canonical `<artifacts>/<role>/` deliverables, the Obsidian plugin's daily journal and
 step outcomes, debate ADRs, auditor notes, interaction logs, and the `{OBSIDIAN_VAULT}`
 prompt variable the agent itself sees. The plugin's `recall` (read) resolves through the
 same function as its `store` (write), so a project never recalls context from a vault it
@@ -388,8 +388,12 @@ vault_rule_documents:
 | `security_rules`   | `ciso`, `developer`, `reviewer`, `qa`, `documentation` |
 | `git_branch_rules` | `cto` and every coding role                       |
 
-Paths are built as `<obsidian_vault>/08 - Security/<filename>`, so this key does
-nothing unless `HIVEPILOT_OBSIDIAN_VAULT` points at an **absolute** path. Filenames
+Paths are built as `<obsidian_vault>/<security folder>/<filename>`, where the security
+folder itself is the `security` slot of [`vault.yaml`](#vaultyaml--your-vaults-folder-taxonomy).
+**Both** halves must be configured: this key does nothing unless
+`HIVEPILOT_OBSIDIAN_VAULT` points at an **absolute** path *and* the `security` slot is
+declared. If either is missing the resolved path is `""`, never a partial
+`<obsidian_vault>/` prefix. Filenames
 must be **bare names** — a value containing `/`, `\`, `.` or `..` is rejected with a
 warning, because config here names a document *inside* the vault and must not become
 an arbitrary-path read for every agent.
@@ -417,6 +421,107 @@ declaring this key *adds* documents rather than replacing a shipped set — unli
 For backward compatibility the module-level constants `VAULT_SECURITY_RULES`,
 `VAULT_GIT_BRANCH_RULES` and the deprecated alias `VAULT_DETECTION_FABRIC` remain
 plain strings bound at import time; only the *source* of the filename moved to config.
+
+## vault.yaml — your vault's folder taxonomy
+
+An Obsidian vault's folder **names** are your organisation's filing convention, not the
+engine's. They live in their own config file, resolved through the same chain as every
+other (`$XDG_CONFIG_HOME/hivepilot/` → `config_repo/` → `base_dir/`). Nothing in it does
+anything unless a vault is configured. A full annotated example: `examples/vault.yaml`.
+
+Its own file rather than a key in `roles.yaml` beside `cross_cutting_rules` and
+`vault_rule_documents`, because those two are **role policy** — text and document paths
+injected into a role's rule manifest, which is why they sit next to the roster that
+inherits them. A folder taxonomy is not role policy: its consumers (`ObsidianService`,
+`hivepilot obsidian audit`) are role-agnostic, and its lifecycle follows the vault, not
+the roster.
+
+Three **independent** top-level keys. None is derived from another.
+
+### `folders` — where the engine reads and writes
+
+```yaml
+folders:
+  hivepilot: "HivePilot" # write — the engine's own subtree (run logs, etc.)
+  artifacts: "Artifacts" # write — canonical per-stage deliverables, by role
+  decisions: "Decisions" # write — architecture decision records
+  security: "Security" # read  — dir that vault_rule_documents names join onto
+```
+
+The **slot** names are fixed and generic — the engine understands the slot, you own the
+name. Values must be **bare folder names** directly inside the vault root.
+
+Resolution is **per slot**, and this key **MERGES** onto the engine defaults slot by
+slot: declaring `artifacts` never affects `hivepilot`.
+
+| Slot        | Engine default | Unconfigured behaviour |
+| ----------- | -------------- | ---------------------- |
+| `hivepilot` | `"HivePilot"`  | n/a — declaring it **replaces** the default |
+| `artifacts` | *(none)*       | `write_artifact()` raises `ObsidianWriteError` |
+| `decisions` | *(none)*       | `write_adr()` raises `ObsidianWriteError` |
+| `security`  | *(none)*       | `vault_rule_documents` paths resolve to `""` |
+
+**Why only `hivepilot` has a default.** That subtree is the *engine's own* workspace: it
+holds run logs, corresponds to no pre-existing folder of yours, and every deployment that
+writes to a vault needs it. `"HivePilot"` is bare and self-describing — it encodes no
+filing scheme. Without a default, a deployment that set a vault and nothing else would
+silently stop writing run logs, which is exactly the "silence deletes a working feature"
+failure `cross_cutting_rules` guards against.
+
+**Why the other three do not.** They name folders in *your* pre-existing taxonomy and the
+engine has no correct guess. This is the same reasoning that makes `vault_rule_documents`
+default to nothing, and it is stronger here: a guessed *filename* merely pointed at a file
+that was not there, whereas `ObsidianService._emit` calls `mkdir(parents=True)`, so a
+guessed *folder* name would silently create a brand-new top-level folder in a vault that
+files things differently — and a vault is typically a synced git repo. Refusing loudly is
+the only safe answer; the write is never redirected to the vault root.
+
+| `vault.yaml` contains                 | Result | Why |
+| ------------------------------------- | ------ | --- |
+| no file / no key / bare null key      | engine defaults | The engine has no folder name to guess. If `obsidian_vault` **is** configured, undeclared slots log `vault_folders_absent`. |
+| an unknown slot name                  | that entry ignored + warning | A typo'd slot silently yielding "no folder for the real slot" is the empty-means-no-constraint failure, so it is named in the log (`vault_folders_unknown_slot`). |
+| a blank or whitespace-only value      | slot dropped + warning | A blank name would make the vault **root** the write target (`vault_folders_blank`). |
+| a value with a path separator or `..` | slot dropped + warning | This file names a folder *inside* the vault, not anywhere on disk (`vault_folders_unsafe`). |
+| anything not a mapping of strings     | engine defaults + warning | A typo must never disable the engine's own subtree (`vault_folders_malformed`). |
+
+### `expected_folders` — your declared layout, for the audit
+
+```yaml
+expected_folders:
+  - "Inbox"
+  - "Journal"
+  - "Archive"
+```
+
+What `hivepilot obsidian audit` reports present or missing. This is the expected **layout**
+of your vault, **not** the set of folders HivePilot writes to — most entries will have no
+writer anywhere in the engine, which is the point.
+
+Engine default: **none**. HivePilot has no opinion on how you file your vault. That is not
+a fail-open, because an audit that examined zero folders is never reported as clean:
+`obsidian audit` prints `Declared layout: NOT CHECKED … this is not a pass`, and
+`obsidian audit --strict` exits 1. (Same rule as `plugins audit --strict`.)
+
+Entries are validated like `folders` values: blank or escaping entries are dropped with a
+warning. An entry of `..` would otherwise report a folder "present" that is not even in
+the vault, since `(vault / "..").is_dir()` is always true.
+
+### `frozen_folders` — folders that must never be renamed or deleted
+
+Reported by the audit as policy, always, whether or not they exist. HivePilot never
+renames or deletes folders regardless; this is a statement to the humans and agents reading
+the report. Engine default: none.
+
+### Write targets and the audit list stay independent
+
+`expected_folders` is not computed from `folders`, or vice versa. The audit reports the
+engine's own folders in a **separate** `engine_folders` section derived from the slot
+vocabulary itself, so it cannot omit a write target no matter what you declared. This is
+the structural fix for a real past bug: the artifacts folder — the one folder the engine
+writes deliverables into — was missing from the audit's expected list for several releases,
+so the audit reported a complete-looking vault while the engine wrote somewhere the
+operator was never told about. Merging the two lists would have hidden the distinction
+instead of fixing it.
 
 ## pipelines.yaml — `PipelineConfig`
 

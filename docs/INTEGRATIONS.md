@@ -281,22 +281,36 @@ a vault directory. Full rules (including why an empty or relative value refuses 
 
 HivePilot writes into a small, fixed set of folders below the vault root. Every write goes
 through `ObsidianService`, which confines each writer to one folder and rejects any path that
-would escape it. The folder names are **constants in the engine**, not configuration — only
-the vault *root* is configurable.
+would escape it. Both the vault *root* **and the folder names** are configurable: the names
+come from the `folders:` key of `vault.yaml` (see
+[CONFIGURATION.md → `vault.yaml`](CONFIGURATION.md#vaultyaml--your-vaults-folder-taxonomy)),
+because a vault's filing convention belongs to the organisation that owns the vault. Below,
+`<slot>` denotes the folder name you declared for that slot.
 
-| Vault path | Written by | Constant / builder |
+| Vault path | Written by | Folder slot / builder |
 | --- | --- | --- |
-| `02 - Artifacts/<role>/<date>-<slug>.md` | `ObsidianService.write_artifact()` — the canonical, human-facing copy of a stage deliverable, filed by the producing role | `ARTIFACT_TARGET_FOLDER` (`hivepilot/services/obsidian_service.py`) |
-| `03 - Decisions/<date>-<slug>.md` | `ObsidianService.write_adr()` — architecture decision records | `ADR_TARGET_FOLDER` (`hivepilot/services/obsidian_service.py`) |
-| `12 - HivePilot/Runs/<date>-run<id>-<stage>.md` | `pipelines.write_stage_artifact()` — the internal per-stage run log | `HIVEPILOT_SUBTREE` + `_RUNS_SUBFOLDER` (`hivepilot/pipelines.py`) |
-| `12 - HivePilot/Runs/<date>.md` | Obsidian plugin daily journal (`append_daily`) | `HIVEPILOT_SUBTREE` (`hivepilot/services/obsidian_service.py`) |
-| `12 - HivePilot/Interactions/` | Per-stage interaction log | `hivepilot/services/interaction_service.py` |
-| `12 - HivePilot/Audit/` | Auditor observations and proposals | `hivepilot/services/auditor_service.py` |
-| `12 - HivePilot/Docs/changelog-run-<id>.md` | Stages with `commits_vault: true` | `hivepilot/orchestrator.py` |
+| `<artifacts>/<role>/<date>-<slug>.md` | `ObsidianService.write_artifact()` — the canonical, human-facing copy of a stage deliverable, filed by the producing role | `artifacts` slot |
+| `<decisions>/<date>-<slug>.md` | `ObsidianService.write_adr()` — architecture decision records | `decisions` slot |
+| `<hivepilot>/Runs/<date>-run<id>-<stage>.md` | `pipelines.write_stage_artifact()` — the internal per-stage run log | `hivepilot` slot + `_RUNS_SUBFOLDER` (`hivepilot/pipelines.py`) |
+| `<hivepilot>/Runs/<date>.md` | Obsidian plugin daily journal (`append_daily`) | `hivepilot` slot |
+| `<hivepilot>/Interactions/` | Per-stage interaction log | `hivepilot/services/interaction_service.py` |
+| `<hivepilot>/Audit/` | Auditor observations and proposals | `hivepilot/services/auditor_service.py` |
+| `<hivepilot>/Docs/changelog-run-<id>.md` | Stages with `commits_vault: true` | `hivepilot/orchestrator.py` |
 
-**Stage deliverables (`02 - Artifacts/`).** For each pipeline stage, HivePilot writes *two*
-copies: the internal run log under `12 - HivePilot/Runs/`, and — when the stage's task
-declares a `role` — a canonical deliverable under `02 - Artifacts/<role>/`. The chain is
+The subfolders *inside* the `hivepilot` subtree (`Runs`, `Interactions`, `Agents`, `Tasks`,
+`Reports`, `Audit`, `Docs`) are engine-owned and not configurable — they are HivePilot's own
+workspace structure, not part of any organisation's taxonomy.
+
+**Unconfigured slots refuse.** An undeclared `artifacts` or `decisions` slot makes the
+corresponding write raise `ObsidianWriteError`. It is never redirected to the vault root and no
+folder name is invented — `_emit` calls `mkdir(parents=True)`, so a guessed name would not be a
+harmless miss but a brand-new top-level folder in what is typically a synced git repo. The
+`hivepilot` slot is the one with an engine default (`HivePilot`), so run logs keep working in a
+deployment that configures nothing else.
+
+**Stage deliverables (`<artifacts>/`).** For each pipeline stage, HivePilot writes *two*
+copies: the internal run log under `<hivepilot>/Runs/`, and — when the stage's task
+declares a `role` — a canonical deliverable under `<artifacts>/<role>/`. The chain is
 `Orchestrator.run_pipeline` → `pipelines.write_stage_artifact(..., role=...)` →
 `ObsidianService.write_artifact()`. The `role` subfolder is the task's role string, slugified
 so an unexpected value cannot introduce path separators.
@@ -309,17 +323,33 @@ Two cases are skipped deliberately: the `developer` role (its deliverable is a c
 belongs in the project's git repo, not the vault) and blank stage output (no empty artifact
 files). A stage whose task declares no role gets the run-log copy only. The artifact copy is
 best-effort — a vault write failure is logged (`obsidian.artifact_write_failed`) and never
-fails or pauses the run.
+fails or pauses the run. An undeclared `artifacts` slot is one such failure: the run continues
+and the miss is logged.
 
 **Audit-only folders.** `hivepilot obsidian audit` also reports on folders HivePilot never
-writes to (`02 - Architecture`, `02 - Design`, `04 - PRDs`, …). Their presence in the audit
-report means "expected in this vault layout", **not** "HivePilot writes here". Only the folders
-in the table above receive engine writes.
+writes to — whatever you list under `expected_folders:` in `vault.yaml`. Their presence in that
+part of the audit report means "expected in this vault layout", **not** "HivePilot writes here".
+Only the folders in the table above receive engine writes.
 
-**Other vault layouts.** The folder names above follow one numbered-folder Obsidian convention.
-An organisation using a different vault layout should point `HIVEPILOT_OBSIDIAN_VAULT` at a
-vault that adopts these folder names, or leave the vault integration disabled
-(`HIVEPILOT_OBSIDIAN_ENABLED=false`) — the subfolder names are not currently configurable.
+**The two lists are independent, on purpose.** `expected_folders:` (your declared layout) is not
+derived from `folders:` (where the engine writes), and vice versa. They answer different
+questions, and most `expected_folders:` entries have no writer at all. The audit reports the
+engine's own folders in a *separate* `engine_folders` section, derived from the slot vocabulary
+itself, so it is structurally incapable of omitting a write target no matter what you declared.
+That matters because of a real past bug: the artifacts folder — the one folder the engine writes
+deliverables into — was absent from the audit's expected list for several releases, so the audit
+reported a complete-looking vault while the engine wrote somewhere the operator was never told
+about. Unioning the two lists would have papered over the distinction rather than fixing it.
+
+**An audit that checks nothing is not a pass.** `expected_folders:` has no engine default —
+HivePilot has no opinion on how an organisation files its vault. A deployment that declared none
+is told so explicitly (`Declared layout: NOT CHECKED …`), and `hivepilot obsidian audit --strict`
+exits 1 when it examined zero folders or found an unconfigured engine slot. Same rule
+`hivepilot plugins audit --strict` follows.
+
+**Other vault layouts.** Nothing above assumes a particular naming convention. Declare your own
+names in `vault.yaml` (`examples/vault.yaml` is a starting point), or leave the vault integration
+disabled entirely (`HIVEPILOT_OBSIDIAN_ENABLED=false`).
 
 ## Caddy (reverse proxy for the API)
 
