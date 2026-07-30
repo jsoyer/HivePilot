@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -72,18 +73,21 @@ def fake_vault(tmp_path: Path) -> Path:
     """Create a minimal fake Obsidian vault for CLI tests."""
     vault = tmp_path / "TestVault"
     vault.mkdir()
+    # Folder names come from the pinned test layout (conftest `_pin_vault_layout`),
+    # never from engine code. A deliberate SUBSET of the declared expected layout,
+    # so the audit has both present and missing folders to report.
     for folder in [
-        "00 - Inbox",
-        "01 - Journal",
-        "03 - Decisions",
-        "08 - Security",
-        "02 - Architecture",
-        "12 - HivePilot",
-        "99 - Archive",
+        "Inbox",
+        "Journal",
+        conftest.TEST_VAULT_DECISIONS_FOLDER,
+        conftest.TEST_VAULT_SECURITY_FOLDER,
+        "Architecture",
+        conftest.TEST_VAULT_HIVEPILOT_FOLDER,
+        "Archive",
     ]:
         (vault / folder).mkdir()
     for sub in ["Agents", "Tasks", "Reports", "Runs", "Interactions"]:
-        (vault / "12 - HivePilot" / sub).mkdir(parents=True, exist_ok=True)
+        (vault / conftest.TEST_VAULT_HIVEPILOT_FOLDER / sub).mkdir(parents=True, exist_ok=True)
     return vault
 
 
@@ -280,7 +284,8 @@ class TestObsidianCli:
         """Audit output mentions present folders."""
         runner = CliRunner()
         result = runner.invoke(app, ["obsidian", "audit", "--vault", str(fake_vault)])
-        assert "present" in result.output.lower() or "12 - HivePilot" in result.output
+        assert "present" in result.output.lower()
+        assert conftest.TEST_VAULT_HIVEPILOT_FOLDER in result.output
 
     def test_obsidian_audit_shows_missing_folders(self, fake_vault: Path) -> None:
         """Audit output reports missing expected folders."""
@@ -288,7 +293,8 @@ class TestObsidianCli:
         result = runner.invoke(app, ["obsidian", "audit", "--vault", str(fake_vault)])
         assert result.exit_code == 0
         # We have a partial vault so some folders should be missing
-        assert "missing" in result.output.lower() or "04 - Engineering" in result.output
+        assert "missing" in result.output.lower()
+        assert "Engineering" in result.output
 
 
 class TestCostsBackfillCli:

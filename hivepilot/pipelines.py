@@ -33,7 +33,7 @@ _RUNS_SUBFOLDER = "Runs"
 # own git repo, not the vault (mirrors the `task.role == "developer"`
 # special-casing hivepilot.orchestrator already uses for the same
 # distinction, e.g. dev-fallback-runner selection). Excluded from the
-# canonical `02 - Artifacts/<role>/` copy below.
+# canonical `<artifacts>/<role>/` copy below.
 _DEVELOPER_ROLE = "developer"
 
 
@@ -55,9 +55,9 @@ def write_stage_artifact(
 ) -> dict[str, Any] | None:
     """Write a per-stage run artifact to the Obsidian vault.
 
-    In addition to the internal ``12 - HivePilot/Runs/`` run-log copy this
+    In addition to the internal ``<hivepilot>/Runs/`` run-log copy this
     has always written, also writes the stage's DELIVERABLE to the canonical
-    ``02 - Artifacts/<role>/<date>-<slug>.md`` location when *role* is given
+    ``<artifacts>/<role>/<date>-<slug>.md`` location when *role* is given
     (vault-canonical-artifacts PRD). This is the mechanism that lets planning
     agents (CEO/PM/CTO/designers) skip writing their own deliverable via the
     agent's Write tool — which is blocked in headless ``--print`` mode and
@@ -135,11 +135,14 @@ def write_stage_artifact(
         },
     )
 
-    # Canonical stage-deliverable artifact (02 - Artifacts/<role>/...).
+    # Canonical stage-deliverable artifact (<artifacts>/<role>/...).
     # Scope: only stages with a resolvable role, excluding the developer/code
     # stage (its diff goes to the repo, not the vault) and blank output (no
     # empty artifact files). Best-effort — a vault-write error here must
-    # NEVER fail or pause the run, same posture as the run-copy above.
+    # NEVER fail or pause the run, same posture as the run-copy above. That
+    # now includes an undeclared `artifacts` folder slot, which raises
+    # ObsidianWriteError: the run continues and the miss is logged below,
+    # rather than the engine inventing a folder name in the operator's vault.
     if role and role != _DEVELOPER_ROLE and output.strip():
         try:
             svc.write_artifact(

@@ -6,7 +6,7 @@ logs pipeline runs into the Obsidian vault, both as a notifier (live log,
 one line per `send_notification(...)` call) and as lifecycle hooks
 (`on_pipeline_end` / `on_error`, a structured run-report block). Both
 surfaces append to the SAME daily journal note:
-    12 - HivePilot/Runs/YYYY-MM-DD.md
+    <hivepilot>/Runs/YYYY-MM-DD.md
 
 Covers, per the sprint spec:
 (a) `register()` exposes notifier `obsidian` + the two hooks, and `obsidian`
@@ -29,6 +29,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 
 import hivepilot.config as config_mod
@@ -40,7 +41,7 @@ from hivepilot.services.notification_service import (
 
 REPO_ROOT = Path(__file__).parent.parent
 OBSIDIAN_PLUGIN_PATH = REPO_ROOT / "plugins" / "obsidian.py"
-_HIVEPILOT_SUBTREE = "12 - HivePilot"
+_HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
 
 
 def _load_obsidian_module() -> ModuleType:

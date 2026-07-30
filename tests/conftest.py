@@ -130,6 +130,91 @@ def _isolate_config_resolution(tmp_path_factory):
     mp.undo()
 
 
+# ---------------------------------------------------------------------------
+# Vault folder taxonomy
+# ---------------------------------------------------------------------------
+# The engine no longer hardcodes any vault folder names — they come from the
+# `folders:` key of vault.yaml (hivepilot/services/vault_layout.py). Tests that
+# exercise a vault write therefore need a layout, and the suite deliberately
+# pins a GENERIC one whose names match no engine default and no organisation's
+# filing scheme. That is the point: if a folder name were ever hardcoded again,
+# these tests would keep passing against the hardcoded value and FAIL against
+# this fixture's value, which is exactly the signal wanted.
+#
+# `TEST_VAULT_FOLDERS` is exported so individual test modules can build the same
+# vault on disk. Tests covering the UNCONFIGURED case override this fixture with
+# their own empty layout.
+TEST_VAULT_HIVEPILOT_FOLDER = "Robot Workspace"
+TEST_VAULT_ARTIFACTS_FOLDER = "Deliverables"
+TEST_VAULT_DECISIONS_FOLDER = "ADRs"
+TEST_VAULT_SECURITY_FOLDER = "InfoSec"
+
+#: An arbitrary expected-layout declaration. Most entries have no writer
+#: anywhere in the engine — that is what `expected_folders:` is for.
+TEST_VAULT_EXPECTED_FOLDERS = (
+    "Inbox",
+    "Journal",
+    "Knowledge",
+    "Architecture",
+    "Design",
+    TEST_VAULT_DECISIONS_FOLDER,
+    "Research",
+    "Engineering",
+    "Roadmap",
+    "Infrastructure",
+    TEST_VAULT_SECURITY_FOLDER,
+    "People",
+    "Templates",
+    "Projects",
+    TEST_VAULT_HIVEPILOT_FOLDER,
+    "Archive",
+)
+
+TEST_VAULT_FROZEN_FOLDERS = (
+    TEST_VAULT_SECURITY_FOLDER,
+    TEST_VAULT_DECISIONS_FOLDER,
+    "Architecture",
+    "Journal",
+)
+
+
+def _make_test_vault_layout():
+    from hivepilot.services.vault_layout import (
+        SLOT_ARTIFACTS,
+        SLOT_DECISIONS,
+        SLOT_HIVEPILOT,
+        SLOT_SECURITY,
+        VaultLayout,
+    )
+
+    return VaultLayout(
+        folders={
+            SLOT_HIVEPILOT: TEST_VAULT_HIVEPILOT_FOLDER,
+            SLOT_ARTIFACTS: TEST_VAULT_ARTIFACTS_FOLDER,
+            SLOT_DECISIONS: TEST_VAULT_DECISIONS_FOLDER,
+            SLOT_SECURITY: TEST_VAULT_SECURITY_FOLDER,
+        },
+        expected_folders=TEST_VAULT_EXPECTED_FOLDERS,
+        frozen_folders=TEST_VAULT_FROZEN_FOLDERS,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _pin_vault_layout(monkeypatch):
+    """Pin the deployment-resolved vault taxonomy to the generic test one.
+
+    `VAULT_LAYOUT` is a module-level singleton resolved at import (like every
+    other config-derived constant in `agent_rules`), so it is patched directly.
+    `ObsidianService` reads it through `current_layout()` at call time, so this
+    reaches every service instance a test constructs without the test having to
+    thread a `layout=` argument through.
+    """
+    from hivepilot.services import vault_layout
+
+    monkeypatch.setattr(vault_layout, "VAULT_LAYOUT", _make_test_vault_layout())
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _isolate_state_db(tmp_path, monkeypatch):
     """Redirect the SQLite state DB to a per-test tmp file so tests never

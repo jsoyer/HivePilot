@@ -3153,10 +3153,31 @@ def obsidian_audit(
         "-v",
         help="Path to Obsidian vault root (defaults to HIVEPILOT_OBSIDIAN_VAULT setting)",
     ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit 1 when the audit could not actually check anything "
+        "(no expected_folders declared, or an unconfigured engine folder slot).",
+    ),
 ) -> None:
-    """Scan the Obsidian vault and report present/missing folders and HivePilot subtree status."""
+    """Scan the Obsidian vault and report present/missing folders and HivePilot subtree status.
+
+    Reports TWO independent things, because they answer different questions
+    (see `ObsidianService.audit`): whether the vault matches the layout the
+    OPERATOR declared in `expected_folders:`, and whether the folders the ENGINE
+    itself reads/writes are configured and present. Neither list is derived from
+    the other.
+
+    An audit that examined ZERO folders is never reported as clean — same rule
+    `hivepilot plugins audit` follows. `expected_folders:` has no engine default
+    (HivePilot has no opinion on how an organisation files its vault), so a
+    deployment that declared none is told so explicitly, and `--strict` exits 1:
+    a scan of nothing has not established "the layout is fine", it has
+    established nothing.
+    """
 
     from hivepilot.services.obsidian_service import ObsidianService
+    from hivepilot.services.vault_layout import EXPECTED_FOLDERS_KEY, VAULT_FOLDERS_KEY
 
     vault_path = vault or str(settings.obsidian_vault)
     svc = ObsidianService(vault_path=vault_path, dry_run=True)
@@ -3169,26 +3190,69 @@ def obsidian_audit(
 
     typer.echo(f"Vault: {vault_path}\n")
 
-    typer.echo(f"Present folders ({len(report['present'])}):")
-    for folder in report["present"]:
-        typer.echo(f"  [x] {folder}")
+    # --- the operator's declared layout -----------------------------------
+    examined = report["expected_examined"]
+    if examined == 0:
+        typer.echo(
+            f"Declared layout: NOT CHECKED — no `{EXPECTED_FOLDERS_KEY}:` declared in "
+            f"{settings.vault_file}, so ZERO folders were examined. This is not a pass: "
+            f"the expected-layout check established nothing. Declare the folders your "
+            f"vault should contain to make this meaningful."
+        )
+    else:
+        typer.echo(f"Declared layout: {examined} folder(s) examined.")
+        typer.echo(f"\nPresent folders ({len(report['present'])}):")
+        for folder in report["present"]:
+            typer.echo(f"  [x] {folder}")
 
-    typer.echo(f"\nMissing folders ({len(report['missing'])}):")
-    for folder in report["missing"]:
-        typer.echo(f"  [ ] {folder}")
+        typer.echo(f"\nMissing folders ({len(report['missing'])}):")
+        for folder in report["missing"]:
+            typer.echo(f"  [ ] {folder}")
 
     typer.echo("\nFrozen folders (must not be renamed or deleted):")
-    for folder in report["frozen"]:
-        typer.echo(f"  {folder}")
+    if report["frozen"]:
+        for folder in report["frozen"]:
+            typer.echo(f"  {folder}")
+    else:
+        typer.echo("  (none declared)")
+
+    # --- the engine's own folders, independent of the list above ----------
+    engine_folders = report["engine_folders"]
+    unconfigured = [slot for slot, info in engine_folders.items() if not info["configured"]]
+    typer.echo("\nHivePilot's own folders (from `folders:`, NOT the declared layout):")
+    for slot, info in engine_folders.items():
+        if not info["configured"]:
+            typer.echo(f"  [!] {slot} ({info['access']}): NOT CONFIGURED")
+            continue
+        status = "[x]" if info["exists"] else "[ ]"
+        typer.echo(f"  {status} {slot} ({info['access']}): {info['folder']}")
+    if unconfigured:
+        typer.echo(
+            f"\n  {len(unconfigured)} slot(s) unconfigured: {', '.join(unconfigured)}. "
+            f"Writes to a `write` slot are REFUSED rather than guessed; a `read` slot "
+            f"simply yields no path. Declare them under `{VAULT_FOLDERS_KEY}:` in "
+            f"{settings.vault_file}."
+        )
 
     subtree = report["hivepilot_subtree"]
-    exists = subtree.get("exists", False)
-    typer.echo(f"\n12 - HivePilot subtree: {'exists' if exists else 'MISSING'}")
-    for key, val in subtree.items():
-        if key == "exists":
-            continue
-        status = "[x]" if val else "[ ]"
-        typer.echo(f"  {status} {key}")
+    if not subtree.get("configured", False):
+        typer.echo("\nHivePilot subtree: NOT CONFIGURED (no `hivepilot` folder slot)")
+    else:
+        exists = subtree.get("exists", False)
+        typer.echo(f"\nHivePilot subtree: {'exists' if exists else 'MISSING'}")
+        for key, val in subtree.items():
+            if key in {"exists", "configured"}:
+                continue
+            status = "[x]" if val else "[ ]"
+            typer.echo(f"  {status} {key}")
+
+    if strict and (examined == 0 or unconfigured):
+        typer.echo(
+            "\n--strict: the audit could not establish the vault layout "
+            "(nothing examined and/or an unconfigured engine folder slot).",
+            err=True,
+        )
+        raise typer.Exit(1)
 
 
 @app.command("debate")

@@ -38,6 +38,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 
 import hivepilot.orchestrator  # noqa: F401 -- side-effect import for patch resolution
@@ -371,7 +372,7 @@ class TestSecretNeverLeaksThroughLoop:
         )
 
         vault = tmp_path / "Vault"
-        (vault / "12 - HivePilot" / "Runs").mkdir(parents=True)
+        (vault / conftest.TEST_VAULT_HIVEPILOT_FOLDER / "Runs").mkdir(parents=True)
 
         payload = RunnerPayload(
             project_name="p",

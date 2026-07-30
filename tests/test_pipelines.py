@@ -1,6 +1,6 @@
 """Tests for hivepilot.pipelines — write_stage_artifact redacts registered
 secret values from the vault note body before it is written (or returned in
-the dry_run preview dict); also covers the canonical `02 - Artifacts/<role>/`
+the dry_run preview dict); also covers the canonical `<artifacts>/<role>/`
 copy (vault-canonical-artifacts PRD)."""
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
+import conftest
 import pytest
 
 from hivepilot.pipelines import write_stage_artifact
@@ -67,7 +68,7 @@ def test_plain_output_unaffected(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Canonical `02 - Artifacts/<role>/` copy (vault-canonical-artifacts PRD)
+# Canonical `<artifacts>/<role>/` copy (vault-canonical-artifacts PRD)
 # ---------------------------------------------------------------------------
 
 
@@ -83,7 +84,9 @@ class TestCanonicalArtifactCopy:
         )
         assert result is not None  # run-copy return value untouched
 
-        artifact_files = list((tmp_path / "02 - Artifacts" / "cto").glob("*.md"))
+        artifact_files = list(
+            (tmp_path / conftest.TEST_VAULT_ARTIFACTS_FOLDER / "cto").glob("*.md")
+        )
         assert len(artifact_files) == 1, f"Expected 1 artifact file, found: {artifact_files}"
         content = artifact_files[0].read_text(encoding="utf-8")
         assert "the technical spec deliverable" in content
@@ -101,7 +104,7 @@ class TestCanonicalArtifactCopy:
             dry_run=False,
             role=None,
         )
-        assert not (tmp_path / "02 - Artifacts").exists()
+        assert not (tmp_path / conftest.TEST_VAULT_ARTIFACTS_FOLDER).exists()
 
     def test_developer_role_skips_artifact_copy(self, tmp_path: Path) -> None:
         """The developer stage's deliverable is a code diff for the repo, not
@@ -114,7 +117,7 @@ class TestCanonicalArtifactCopy:
             dry_run=False,
             role="developer",
         )
-        assert not (tmp_path / "02 - Artifacts").exists()
+        assert not (tmp_path / conftest.TEST_VAULT_ARTIFACTS_FOLDER).exists()
 
     def test_blank_output_skips_artifact_copy(self, tmp_path: Path) -> None:
         """Whitespace-only output must not produce an empty artifact file."""
@@ -126,7 +129,7 @@ class TestCanonicalArtifactCopy:
             dry_run=False,
             role="pm",
         )
-        assert not (tmp_path / "02 - Artifacts").exists()
+        assert not (tmp_path / conftest.TEST_VAULT_ARTIFACTS_FOLDER).exists()
 
     def test_artifact_copy_redacts_secret(self, tmp_path: Path) -> None:
         marker = "ARTIFACT-MARKER-do-not-leak"
@@ -139,7 +142,7 @@ class TestCanonicalArtifactCopy:
             dry_run=False,
             role="pm",
         )
-        artifact_files = list((tmp_path / "02 - Artifacts" / "pm").glob("*.md"))
+        artifact_files = list((tmp_path / conftest.TEST_VAULT_ARTIFACTS_FOLDER / "pm").glob("*.md"))
         assert len(artifact_files) == 1
         content = artifact_files[0].read_text(encoding="utf-8")
         assert marker not in content
@@ -173,4 +176,4 @@ class TestCanonicalArtifactCopy:
             dry_run=True,
             role="cto",
         )
-        assert not (tmp_path / "02 - Artifacts").exists()
+        assert not (tmp_path / conftest.TEST_VAULT_ARTIFACTS_FOLDER).exists()

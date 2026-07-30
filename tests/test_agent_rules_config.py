@@ -17,10 +17,13 @@ import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
+import conftest
 import pytest
 
 from hivepilot import agent_rules
 from hivepilot.config import settings
+from hivepilot.services import vault_layout
+from hivepilot.services.vault_layout import VaultLayout
 
 
 class TestGovernanceFilePaths:
@@ -63,15 +66,33 @@ class TestGovernanceFilePaths:
 
 
 class TestVaultSecurityPath:
-    """vault_security_path() must derive path from settings.obsidian_vault."""
+    """vault_security_path() must derive BOTH halves of the path from config.
 
-    def test_returns_path_when_vault_is_absolute(self):
-        # obsidian_vault is the product vault root; vault_security_path() appends
-        # "08 - Security" directly (no extra product-name subdirectory — the vault
-        # path is already scoped to the product, e.g. .../obsidian-vault/MyProduct).
+    Converted from asserting a hardcoded ``NN - Something`` folder literal: the
+    folder NAME is now config-owned (the ``security`` slot of ``vault.yaml``), so
+    these assert the CONFIGURED name is used and that either half being absent
+    yields ``None`` rather than a partial path. The engine no longer has a folder
+    name to hardcode, which is exactly what the old assertion encoded.
+    """
+
+    def test_joins_the_configured_security_folder_onto_the_vault_root(self):
+        # obsidian_vault is the product vault root; the security FOLDER comes
+        # from config, appended directly (no extra product-name subdirectory —
+        # the vault path is already scoped to the product).
         with patch.object(settings, "obsidian_vault", Path("/abs/vault")):
             result = agent_rules.vault_security_path()
-        assert result == "/abs/vault/08 - Security"
+        assert result == f"/abs/vault/{conftest.TEST_VAULT_SECURITY_FOLDER}"
+
+    def test_returns_none_when_the_security_slot_is_unconfigured(self):
+        """Half a path is worse than none: `<vault>/` would put the rule
+        documents at the vault root."""
+        empty = VaultLayout(folders={}, expected_folders=(), frozen_folders=())
+        with (
+            patch.object(settings, "obsidian_vault", Path("/abs/vault")),
+            patch.object(vault_layout, "VAULT_LAYOUT", empty),
+        ):
+            result = agent_rules.vault_security_path()
+        assert result is None
 
     def test_returns_none_when_vault_is_relative(self):
         with patch.object(settings, "obsidian_vault", Path("relative/vault")):
@@ -87,6 +108,26 @@ class TestVaultSecurityPath:
         with patch.object(settings, "obsidian_vault", Path("/abs/vault")):
             result = agent_rules.vault_security_path()
         assert isinstance(result, str)
+
+    def test_never_returns_a_directory_only_or_none_bearing_path(self):
+        """THE trap at this layer."""
+        empty = VaultLayout(folders={}, expected_folders=(), frozen_folders=())
+        for vault, layout in (
+            (Path("/abs/vault"), empty),
+            (None, empty),
+            (Path("relative/vault"), None),
+        ):
+            with patch.object(settings, "obsidian_vault", vault):
+                ctx = (
+                    patch.object(vault_layout, "VAULT_LAYOUT", layout)
+                    if layout is not None
+                    else patch.object(settings, "config_repo", None)
+                )
+                with ctx:
+                    result = agent_rules.vault_security_path()
+            assert result is None or (
+                not result.endswith("/") and "None" not in result and result != "/abs/vault"
+            )
 
 
 class TestGovernanceRootBackwardCompat:

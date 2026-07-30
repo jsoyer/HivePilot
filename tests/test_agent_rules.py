@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 
+import conftest
 import pytest
 
 from hivepilot import agent_rules
@@ -54,7 +55,7 @@ _GOVERNANCE_ROOT_RULE_FILES = (
 
 _OBSIDIAN_VAULT = str(settings.obsidian_vault) if settings.obsidian_vault else ""
 _VAULT_SECURITY = (
-    os.path.join(_OBSIDIAN_VAULT, "08 - Security")
+    os.path.join(_OBSIDIAN_VAULT, conftest.TEST_VAULT_SECURITY_FOLDER)
     if _OBSIDIAN_VAULT and os.path.isabs(_OBSIDIAN_VAULT)
     else ""
 )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import conftest
 import pytest
 
 from hivepilot.services import state_service
@@ -17,7 +18,7 @@ from hivepilot.services.interaction_service import Interaction, InteractionServi
 # Helpers
 # ---------------------------------------------------------------------------
 
-_HIVEPILOT_SUBTREE = "12 - HivePilot"
+_HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
 _INTERACTIONS_FOLDER = "Interactions"
 
 FIXED_TIMESTAMP = "2026-06-19T10:00:00"
@@ -154,7 +155,7 @@ class TestInteractionServiceRealWrite:
         assert result["dry_run"] is False
         note_path = Path(result["path"])
         assert note_path.exists()
-        # Must be under 12 - HivePilot/Interactions/
+        # Must be under <hivepilot>/Interactions/
         assert _HIVEPILOT_SUBTREE in str(note_path)
         assert _INTERACTIONS_FOLDER in str(note_path)
 

@@ -6,13 +6,14 @@ Covers:
 - Each stage maps to an existing task in tasks.yaml
 - Each task references a real prompts/agents/<role>.md file
 - The pipeline-step artifact write is dry-run safe (no real files written)
-- Artifact write calls ObsidianService.write_note targeting 12 - HivePilot/Runs/
+- Artifact write calls ObsidianService.write_note targeting <hivepilot>/Runs/
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import conftest
 import pytest
 import yaml
 
@@ -208,7 +209,7 @@ class TestArtifactWriteDryRun:
         assert written == [], f"Dry-run should not write files, found: {written}"
 
     def test_write_stage_artifact_targets_runs_folder(self, tmp_path: Path) -> None:
-        """The planned path must be inside 12 - HivePilot/Runs/."""
+        """The planned path must be inside the configured <hivepilot>/Runs/."""
         from hivepilot.pipelines import write_stage_artifact
 
         result = write_stage_artifact(
@@ -219,8 +220,8 @@ class TestArtifactWriteDryRun:
             dry_run=True,
         )
         planned_path = result["path"]
-        assert "12 - HivePilot" in planned_path, (
-            f"Expected path inside '12 - HivePilot/', got: {planned_path}"
+        assert conftest.TEST_VAULT_HIVEPILOT_FOLDER in planned_path, (
+            f"Expected path inside the configured hivepilot folder, got: {planned_path}"
         )
         assert "Runs" in planned_path, f"Expected path inside 'Runs/', got: {planned_path}"
 
@@ -242,7 +243,7 @@ class TestArtifactWriteDryRun:
         from hivepilot.pipelines import write_stage_artifact
 
         # Ensure the subtree exists so write_note can target it
-        runs_dir = tmp_path / "12 - HivePilot" / "Runs"
+        runs_dir = tmp_path / conftest.TEST_VAULT_HIVEPILOT_FOLDER / "Runs"
         runs_dir.mkdir(parents=True)
 
         result = write_stage_artifact(

@@ -21,6 +21,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import conftest
 import pytest
 
 import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch resolution
@@ -341,7 +342,7 @@ class TestDebateResultConfidence:
 
         vault = tmp_path / "FakeVault"
         vault.mkdir()
-        (vault / "03 - Decisions").mkdir()
+        (vault / conftest.TEST_VAULT_DECISIONS_FOLDER).mkdir()
         svc = DebateService(vault_path=vault, dry_run=True)
         positions = [Position(role="ceo", stance="adopt", rationale="fast")]
         emit = svc.run(topic="t", positions=positions, decision="adopt", confidence=0.75)
