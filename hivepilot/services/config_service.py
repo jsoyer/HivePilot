@@ -22,6 +22,19 @@ CONFIG_FILES = {
     "roles.yaml",
     "groups.yaml",
     "model_profiles.yaml",
+    # Added after a live miss: a config repo shipped `vault.yaml` (the folder
+    # taxonomy, #376) and `config sync` reported `updated: []` because this set
+    # did not name it. The engine silently fell back to its own defaults --
+    # `folders: {'hivepilot': 'HivePilot'}` instead of the operator's
+    # `12 - HivePilot` -- so a deployment that had declared its taxonomy was
+    # running without it. The fail-closed warnings in `vault_layout` are what
+    # surfaced it; nothing here did.
+    #
+    # A NEW config file MUST be added to this set. Being resolvable by
+    # `settings.resolve_config_path` is not sufficient: sync is what puts the
+    # file where a deployment's config dir expects it, and a file absent from
+    # this set is never copied, never reported as updated, and never noticed.
+    "vault.yaml",
 }
 CONFIG_DIRS = {"prompts"}
 

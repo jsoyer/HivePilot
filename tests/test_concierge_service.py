@@ -225,7 +225,12 @@ class TestConciergeModeResolution:
         orch = _orch_with_capture(return_value=json.dumps({"kind": "answer", "answer_text": "ok"}))
         decision = self._route(orch)
         assert decision.kind == "answer"
-        assert decision.answer_text == concierge_service._FALLBACK_ANSWER
+        # CONVERTED: was `_FALLBACK_ANSWER` ("I didn't quite get that. Try
+        # rephrasing"). We refused to spawn the session at all, so the message
+        # was never classified — blaming the operator's wording named the wrong
+        # cause. The test's real subject, still asserted, is that it fails
+        # CLOSED and never reaches the runner.
+        assert decision.answer_text == concierge_service._INFRASTRUCTURE_FALLBACK_ANSWER
         orch.registry.capture_definition.assert_not_called()
 
     def test_cli_mode_classification_success_returns_real_decision(
@@ -251,7 +256,12 @@ class TestConciergeModeResolution:
         orch = _orch_with_capture(side_effect=TimeoutError("claude cli timed out"))
         decision = self._route(orch, "do something")
         assert decision.kind == "answer"
-        assert decision.answer_text == concierge_service._FALLBACK_ANSWER
+        # CONVERTED: this test asserted `_FALLBACK_ANSWER` on a TIMEOUT, i.e. it
+        # codified "tell the operator to rephrase" as the intended answer to an
+        # infrastructure failure — which is exactly what happened to a real
+        # operator on Telegram. Still fails closed (the subject of the test);
+        # the message now names the real cause.
+        assert decision.answer_text == concierge_service._INFRASTRUCTURE_FALLBACK_ANSWER
 
     def test_classifier_sets_a_sane_capture_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A per-call timeout on the classifier's RunnerDefinition means a

@@ -152,21 +152,72 @@ _API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 # ordinary default permission-mode resolution (i.e. don't touch it here).
 _CLASSIFIER_NO_TOOLS = ""  # claude --tools "": "Use \"\" to disable all tools" (claude --help)
 
+
 # Per-call ceiling so a hung/slow `claude` CLI (or a slow API response)
 # degrades to the fail-closed answer instead of blocking the chat bot
 # process indefinitely — this is a per-message classification, not a
 # multi-minute agent task.
-_CLASSIFIER_TIMEOUT_SECONDS = 30
+#
+# RAISED from 30s to 90s, and made configurable, after a live miss: a real
+# operator question timed out at exactly 30s and the operator was told to
+# rephrase. The reasoning above is sound, but 30s was calibrated against a
+# much smaller prompt. The classifier prompt now carries the full role roster
+# (20 roles with multi-line descriptions), a recent-run context snapshot, the
+# recent conversation, AND the whole of `prompts/concierge.md` — several
+# thousand words. A cold `claude` CLI start on top of that exceeds 30s
+# routinely, so the ceiling was firing on healthy calls, not hung ones.
+#
+# Override with HIVEPILOT_CHATOPS_CONCIERGE_TIMEOUT_SECONDS when a host is
+# slower (or when tightening it for a latency-sensitive channel).
+_CLASSIFIER_TIMEOUT_DEFAULT_SECONDS = 90
 
-# Reserved for genuinely empty/unparseable model output ONLY (LLM error,
-# timeout, malformed JSON, or a malformed kind/action with no salvageable
-# `answer_text` alongside it — see `_salvageable_answer_text`). A substantive
-# question the model DID understand must get a genuine LLM answer instead of
-# this generic filler — see `hivepilot/prompts/concierge.md`'s "Deciding the
-# kind" section for the classifier-side half of this contract.
+
+def _classifier_timeout_seconds() -> int:
+    """Resolve the per-call ceiling, fail-safe.
+
+    A non-numeric or non-positive override falls back to the default rather
+    than to "no timeout": an unbounded classify call would hang the chat bot
+    process, which is the failure this ceiling exists to prevent. Read at call
+    time, not import, so an operator does not have to restart to retune it.
+    """
+    raw = settings.chatops_concierge_timeout_seconds
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _CLASSIFIER_TIMEOUT_DEFAULT_SECONDS
+    return value if value > 0 else _CLASSIFIER_TIMEOUT_DEFAULT_SECONDS
+
+
+# Reserved for genuinely empty/unparseable model output ONLY (malformed JSON,
+# or a malformed kind/action with no salvageable `answer_text` alongside it —
+# see `_salvageable_answer_text`). A substantive question the model DID
+# understand must get a genuine LLM answer instead of this generic filler —
+# see `hivepilot/prompts/concierge.md`'s "Deciding the kind" section for the
+# classifier-side half of this contract.
 _FALLBACK_ANSWER = (
     "I didn't quite get that. Try rephrasing your request, "
     "or use /help to see the available commands."
+)
+
+# A DISTINCT message for "the classifier never answered" (timeout, CLI
+# failure, transport error) — deliberately NOT `_FALLBACK_ANSWER`.
+#
+# THE DEFECT THIS FIXES: a real operator question hit the 30s ceiling and was
+# answered with "I didn't quite get that. Try rephrasing your request." That
+# told the operator THEIR MESSAGE was the problem. Rephrasing would have
+# changed nothing — the same timeout would fire again, because the classifier
+# had not yet read a single word. The message named the wrong cause and sent
+# the operator to fix the one thing that was fine.
+#
+# `prompts/concierge.md` even instructs the model: "NEVER reply with a generic
+# 'I didn't understand' filler when you DID understand the question". The
+# instruction was right; the model never got the chance to follow it, and the
+# transport substituted the very filler the prompt forbids.
+_INFRASTRUCTURE_FALLBACK_ANSWER = (
+    "I couldn't reach my classifier just now, so I haven't read your message "
+    "yet — this is on my side, not yours. Send it again as-is; rewording won't "
+    "help. If it keeps happening, the operator should check the concierge logs "
+    "(event: concierge.classify_error)."
 )
 
 _KNOWN_KINDS = {"answer", "route", "action", "multi_route"}
@@ -1220,14 +1271,16 @@ def route(
     # concierge input.
     if mode == "cli" and options.get("tools") != _CLASSIFIER_NO_TOOLS:
         logger.error("concierge.cli_no_tools_invariant_violated_refusing")
-        return ConciergeDecision(kind="answer", answer_text=_FALLBACK_ANSWER)
+        # Also infrastructure, not comprehension: we refused to spawn the
+        # session at all, so the message was never classified.
+        return ConciergeDecision(kind="answer", answer_text=_INFRASTRUCTURE_FALLBACK_ANSWER)
 
     runner_def = RunnerDefinition(
         name="concierge",
         kind=cast(RunnerKind, "claude"),
         model=model,
         options=options,
-        timeout_seconds=_CLASSIFIER_TIMEOUT_SECONDS,
+        timeout_seconds=_classifier_timeout_seconds(),
     )
     prompt_file = _resolve_prompt_file()
     step = TaskStep(name="concierge", runner="claude", prompt_file=prompt_file)
@@ -1244,8 +1297,11 @@ def route(
         orch = _get_orchestrator()
         raw = orch.registry.capture_definition(runner_def, payload)
     except Exception as exc:  # noqa: BLE001 — fail closed, never raise to the caller
+        # The classifier never returned — timeout, CLI failure, transport
+        # error. It has not read the operator's message, so telling them to
+        # rephrase names the wrong cause and wastes their next attempt.
         logger.warning("concierge.classify_error", error=str(exc))
-        return ConciergeDecision(kind="answer", answer_text=_FALLBACK_ANSWER)
+        return ConciergeDecision(kind="answer", answer_text=_INFRASTRUCTURE_FALLBACK_ANSWER)
 
     parsed = _parse_raw(raw)
     if parsed is None:

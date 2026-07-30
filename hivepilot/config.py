@@ -974,6 +974,17 @@ class Settings(BaseSettings):
     # of the box even with this left at the default. See docs/INTEGRATIONS.md
     # "Natural-language concierge (opt-in)".
     chatops_concierge_mode: str = "api"
+    # Per-message ceiling on the classifier call, in seconds. Raised from a
+    # hardcoded 30 after a live miss: a real operator question timed out at
+    # exactly 30s and the bot answered "I didn't quite get that. Try
+    # rephrasing" — blaming the message for an infrastructure failure. The
+    # classifier prompt carries the full role roster, a context snapshot, the
+    # recent conversation AND the whole concierge instruction file, so a cold
+    # `claude` CLI start exceeds 30s routinely; the ceiling was firing on
+    # healthy calls. Non-numeric or non-positive values fall back to the
+    # default rather than to "unbounded" — an unbounded classify would hang
+    # the chat bot process, which is what the ceiling exists to prevent.
+    chatops_concierge_timeout_seconds: int = 90
     linear_api_key: str | None = None
     linear_team_id: str | None = None  # default team for issue creation
     linear_default_project_id: str | None = None  # default project
