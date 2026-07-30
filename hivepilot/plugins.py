@@ -755,6 +755,13 @@ class _StagedPluginState:
     """
 
     loaded: list[PluginRecord] = field(default_factory=list)
+    # Plugins the capability gate REFUSED, as (record, reason) pairs. Kept
+    # alongside `loaded` so a refused plugin is visible as REFUSED rather
+    # than merely absent: a contribution that silently vanishes is the
+    # failure mode this repo keeps rediscovering (`plugins audit` reporting
+    # "no plugin source files" on a host with seven; `check_public_safe.py`
+    # printing "passed (0 files scanned)").
+    denied: list[tuple[PluginRecord, str]] = field(default_factory=list)
     hooks: dict[str, list[Any]] = field(
         default_factory=lambda: {"before_step": [], "after_step": []}
     )
@@ -1049,6 +1056,11 @@ class PluginManager:
         self._network_hooks: tuple[Any, ...] = tuple(staged.network_hooks)
 
         self.loaded: list[PluginRecord] = staged.loaded
+        # (record, reason) for every plugin the capability gate refused. A
+        # refused plugin contributes NOTHING (fail-closed is unchanged) — this
+        # only makes the refusal legible instead of leaving the plugin
+        # silently missing from `loaded`.
+        self.denied: list[tuple[PluginRecord, str]] = staged.denied
         self.hooks: dict[str, list[Any]] = staged.hooks
         self.declared_notifiers: dict[str, Callable[[str], None]] = staged.declared_notifiers
         self.health: dict[str, Callable[..., Any]] = staged.health
@@ -1170,6 +1182,7 @@ class PluginManager:
             ):
                 from hivepilot import graph as graph_module
                 from hivepilot.plugin_capabilities import (
+                    PLUGIN_CAPABILITIES,
                     PluginCapabilityDeniedError,
                     PluginCapabilityInvalidError,
                     validate_capabilities,
@@ -1194,6 +1207,38 @@ class PluginManager:
                 # `secrets_map`/`health`/`panels`/`skills`) before re-raising, so
                 # an aborted plugin never leaves orphaned, untracked staged
                 # entries behind for the rest of this pass.
+                def _rollback_staged(
+                    *,
+                    _runners: list[str] = applied_runners,
+                    _notifiers: list[str] = applied_notifiers,
+                    _secrets: list[str] = applied_secrets,
+                    _health: list[str] = applied_health,
+                    _panels: list[str] = applied_panels,
+                    _skills: list[str] = applied_skills,
+                    _graph_sources: list[str] = applied_graph_sources,
+                ) -> None:
+                    """Un-stage everything THIS plugin contributed in this pass.
+
+                    Bound as default arguments rather than closed over so the
+                    next loop iteration's rebinding of `applied_*` can never
+                    make an earlier plugin's rollback un-stage a LATER
+                    plugin's entries (`_load_into`'s loop reuses the names).
+                    """
+                    for _kind in _runners:
+                        staged.runner_map.pop(_kind, None)
+                    for _notifier_name in _notifiers:
+                        staged.notifier_map.pop(_notifier_name, None)
+                    for _secret_name in _secrets:
+                        staged.secrets_map.pop(_secret_name, None)
+                    for _health_name in _health:
+                        staged.health.pop(_health_name, None)
+                    for _panel_name in _panels:
+                        staged.panels.pop(_panel_name, None)
+                    for _skill_name in _skills:
+                        staged.skills.pop(_skill_name, None)
+                    for _graph_name in _graph_sources:
+                        staged.graph_source_map.pop(_graph_name, None)
+
                 try:
                     for kind, cls in (runners or {}).items():
                         was_present = kind in staged.runner_map
@@ -1343,15 +1388,15 @@ class PluginManager:
 
                     # Phase 26b — capability manifest admission gate. Runs
                     # LAST in this try block (after every other contribution
-                    # type has staged successfully) but is still covered by
-                    # the SAME except below: a denied/invalid capability
-                    # rolls back everything this plugin already staged above
-                    # (runners/notifiers/secrets/health/panels/skills/graph_
-                    # sources), atomic with every other validation error
-                    # here. Nothing is staged into a shared live map for
-                    # capabilities themselves — `validate_capabilities`
-                    # either returns cleanly or raises; there is nothing to
-                    # unwind for THIS check beyond the rollback below.
+                    # type has staged successfully). A denied/invalid
+                    # capability rolls back everything this plugin already
+                    # staged above (runners/notifiers/secrets/health/panels/
+                    # skills/graph_sources), atomic with every other
+                    # validation error here. Nothing is staged into a shared
+                    # live map for capabilities themselves —
+                    # `validate_capabilities` either returns cleanly or
+                    # raises; there is nothing to unwind for THIS check
+                    # beyond `_rollback_staged()`.
                     validated_caps = validate_capabilities(
                         record.name,
                         declared_capabilities,
@@ -1359,6 +1404,70 @@ class PluginManager:
                     )
                     if validated_caps:
                         applied_capabilities = sorted(validated_caps)
+                # A CAPABILITY verdict is scoped to ONE plugin, so it is
+                # logged and skipped rather than propagated — the same
+                # treatment an isolated broken plugin already gets at
+                # discovery time (`plugins.load_failed` /
+                # `plugins.entry_point_load_failed`).
+                #
+                # Why this differs from a kind/name collision below: a
+                # collision means two plugins claim the same runner kind or
+                # notifier name, so the resulting system state is AMBIGUOUS
+                # and no local rollback makes it coherent — a hard stop is
+                # the only honest outcome. A capability verdict is not
+                # ambiguous: either the operator has not allowed what this
+                # plugin declared, or this plugin declared a token outside
+                # the closed vocabulary. In both cases the correct
+                # fail-closed outcome is exactly "this plugin does not
+                # load", which `_rollback_staged()` already achieves.
+                # Re-raising escalated a well-defined per-plugin verdict
+                # into a total outage: because `gh`/`rtk` are enabled by
+                # DEFAULT (opt-OUT flags), a deployment that had not
+                # allowlisted `subprocess` lost its ENTIRE plugin subsystem
+                # to an unhandled traceback out of `PluginManager()` — a
+                # fresh install of a generic orchestrator could not run
+                # `hivepilot plugins list` at all.
+                #
+                # Fail-closed is preserved: the plugin is still denied. Only
+                # the blast radius changed, never the verdict. The two cases
+                # get DISTINCT log events because they need different
+                # operator actions — allow the capability, vs. fix the
+                # plugin.
+                except PluginCapabilityDeniedError as exc:
+                    _rollback_staged()
+                    staged.denied.append((record, str(exc)))
+                    logger.warning(
+                        "plugins.capability_denied",
+                        name=record.name,
+                        source=record.source,
+                        declared=sorted(str(c) for c in (declared_capabilities or [])),
+                        policy=sorted(settings.plugins_capability_policy),
+                        error=str(exc),
+                        remediation=(
+                            "add the declared capability to "
+                            "HIVEPILOT_PLUGINS_CAPABILITY_POLICY (plain or CSV form, "
+                            "e.g. HIVEPILOT_PLUGINS_CAPABILITY_POLICY=subprocess) "
+                            "to load this plugin"
+                        ),
+                    )
+                    continue
+                except PluginCapabilityInvalidError as exc:
+                    _rollback_staged()
+                    staged.denied.append((record, str(exc)))
+                    logger.warning(
+                        "plugins.capability_invalid",
+                        name=record.name,
+                        source=record.source,
+                        declared=sorted(str(c) for c in (declared_capabilities or [])),
+                        allowed_vocabulary=sorted(PLUGIN_CAPABILITIES),
+                        error=str(exc),
+                        remediation=(
+                            "this is a PLUGIN bug, not a policy setting: its "
+                            "register() declared a capability outside the closed "
+                            "vocabulary. Fix the plugin's manifest."
+                        ),
+                    )
+                    continue
                 except (
                     RunnerKindCollisionError,
                     NotifierKindCollisionError,
@@ -1369,23 +1478,8 @@ class PluginManager:
                     SkillNameCollisionError,
                     SkillInvalidMinRoleError,
                     graph_module.GraphSourceNameCollisionError,
-                    PluginCapabilityInvalidError,
-                    PluginCapabilityDeniedError,
                 ):
-                    for kind in applied_runners:
-                        staged.runner_map.pop(kind, None)
-                    for notifier_name in applied_notifiers:
-                        staged.notifier_map.pop(notifier_name, None)
-                    for secret_name in applied_secrets:
-                        staged.secrets_map.pop(secret_name, None)
-                    for health_name in applied_health:
-                        staged.health.pop(health_name, None)
-                    for panel_name in applied_panels:
-                        staged.panels.pop(panel_name, None)
-                    for skill_name in applied_skills:
-                        staged.skills.pop(skill_name, None)
-                    for graph_name in applied_graph_sources:
-                        staged.graph_source_map.pop(graph_name, None)
+                    _rollback_staged()
                     # `applied_capabilities` needs no rollback here: nothing
                     # is staged into a shared live map for capabilities (see
                     # the comment above `validate_capabilities(...)`), and

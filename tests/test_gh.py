@@ -257,6 +257,15 @@ class TestPluginManagerDiscoversGh:
 
         monkeypatch.setattr(plugins_mod.settings, "base_dir", REPO_ROOT, raising=False)
         monkeypatch.setattr(plugins_mod.settings, "gh_enabled", True, raising=False)
+        # `gh` now declares `capabilities: ["subprocess"]`, so loading it at
+        # all requires the operator to have allowlisted that token. Set it
+        # explicitly rather than leaning on the session-wide default in
+        # tests/conftest.py, so this test states the precondition it depends
+        # on. The denial path is asserted in
+        # tests/test_plugin_subprocess_capability.py.
+        monkeypatch.setattr(
+            plugins_mod.settings, "plugins_capability_policy", ["subprocess"], raising=False
+        )
 
         import shutil
 
