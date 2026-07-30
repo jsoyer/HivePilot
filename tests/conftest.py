@@ -130,6 +130,66 @@ def _isolate_config_resolution(tmp_path_factory):
     mp.undo()
 
 
+# Capability tokens the repo's OWN bundled plugins declare, and which an
+# operator must therefore allowlist. Deliberately a hardcoded literal rather
+# than something derived by scanning `plugins/`: a plugin newly declaring a
+# capability is a deployment-affecting change (every operator must add the
+# token or lose that plugin at load), so it must break this list and force a
+# deliberate update. `tests/test_plugins.py::TestPluginCapabilityManifest`
+# guards which plugins declare what.
+_BUNDLED_PLUGIN_CAPABILITIES = ["subprocess"]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _allow_bundled_plugin_capabilities():
+    """Give the suite the capability policy a real deployment must now set.
+
+    `plugins/gh.py` and `plugins/rtk.py` declare `capabilities:
+    ["subprocess"]` because they genuinely `subprocess.run()`. Both are
+    enabled by DEFAULT (`gh_enabled`/`rtk_enabled` are opt-OUT in
+    `hivepilot/config.py`), and `_isolate_config_resolution` above points
+    `base_dir` at the repo root — so every test that constructs a real
+    `PluginManager()` scans the repo's actual `plugins/` directory and reaches
+    those two declarations.
+
+    `plugins_capability_policy` defaults to `[]` = deny every declared
+    capability, and a denial does not merely drop the offending plugin: it
+    propagates out of `PluginManager()` construction entirely (see
+    `hivepilot/plugins.py` `_load_into` — the capability gate's `except`
+    rolls back that plugin's staged contributions and then RE-RAISES, unlike
+    the `register()`-failure path above it, which logs and continues). So
+    without this fixture, 133 tests across ~30 modules fail — the scheduler,
+    the Slack bot, graph sources, the API — none of which are about plugin
+    capabilities at all. They are incidental casualties of an unconfigured
+    policy, not assertions about it.
+
+    This fixture is therefore the SINGLE conversion point for the old
+    "bundled plugins declare nothing, so policy never matters" assumption
+    that was previously implicit in the whole suite: it makes the test
+    environment mirror a CORRECTLY CONFIGURED deployment, exactly as it
+    already fabricates `base_dir` and `XDG_CONFIG_HOME`.
+
+    It deliberately does NOT weaken the gate. The gate's behaviour is pinned
+    explicitly and independently in
+    `tests/test_plugin_subprocess_capability.py`, which monkeypatches the
+    policy back to `[]` (and to malformed values) at function scope to assert
+    that `gh`/`rtk` really are denied and rolled back — so the fail-closed
+    default is tested by intent rather than by accidentally bricking
+    unrelated tests.
+    """
+    mp = pytest.MonkeyPatch()
+
+    from hivepilot.config import settings
+
+    mp.setattr(
+        settings, "plugins_capability_policy", list(_BUNDLED_PLUGIN_CAPABILITIES), raising=False
+    )
+
+    yield
+
+    mp.undo()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_state_db(tmp_path, monkeypatch):
     """Redirect the SQLite state DB to a per-test tmp file so tests never

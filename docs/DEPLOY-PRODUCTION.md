@@ -551,6 +551,23 @@ hivepilot plugins list
 hivepilot plugins health   # non-zero exit if any plugin health check fails — CI/deploy-gate friendly
 ```
 
+> **If this fails with `PluginCapabilityDeniedError`**, you have hit the
+> capability policy gate rather than a broken plugin. The `gh` and `rtk`
+> plugins are enabled by default and both declare the `subprocess` capability
+> (they spawn child processes), while `plugins_capability_policy` defaults to
+> empty = deny everything declared. Add the allow-list entry to your `.env`:
+>
+> ```bash
+> HIVEPILOT_PLUGINS_CAPABILITY_POLICY=subprocess
+> ```
+>
+> Use that plain form, **not** `=["subprocess"]` — both shell sourcing and
+> systemd's `EnvironmentFile=` strip the quotes and leave the nonsense token
+> `[subprocess]`, which silently denies everything. Alternatively disable the
+> plugins (`HIVEPILOT_GH_ENABLED=false`, `HIVEPILOT_RTK_ENABLED=false`). See
+> "Capability manifest & policy gate" in [PLUGINS.md](PLUGINS.md), and note
+> this is a daemon-restart-level change (see step 10).
+
 Finally, confirm the config/validate loop and a dry pipeline preview work
 end-to-end (this needs the `run`-role token from step 7 — export
 `HIVEPILOT_API_TOKEN` as shown there, or pass `--token <RUN_TOKEN>`):

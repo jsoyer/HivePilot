@@ -182,10 +182,50 @@ def health(**kwargs: Any) -> HealthStatus:
 
 
 def register() -> dict[str, Any]:
+    """Declares the `subprocess` capability (`hivepilot.plugin_capabilities.
+    PLUGIN_CAPABILITIES`), because `GhRunner.run` spawns a child process via
+    `subprocess.run(["gh", ...])`.
+
+    OPERATOR IMPACT — this is a load-time admission gate, not advice:
+    `settings.plugins_capability_policy` defaults to `[]` (deny every declared
+    capability), so a deployment that enables this plugin MUST allowlist
+    `subprocess` (`HIVEPILOT_PLUGINS_CAPABILITY_POLICY=subprocess`) or this
+    plugin is DENIED at load, taking its runner kind and health check with it
+    (atomic per-plugin rollback in `hivepilot.plugins._load_into`). Use the
+    plain/CSV form, not the JSON form — see `docs/PLUGINS.md`.
+
+    Only `subprocess` is declared. Deliberately NOT declared, and why:
+
+    - `env` / `secrets_access`: `run` passes `merge_environments(...)` (which
+      copies `os.environ`) and the engine-resolved `payload.secrets` into the
+      child's environment. It never reads a specific variable or resolves a
+      secret in its own code — it forwards what the engine handed it through
+      the same shared choke point every built-in runner uses. Declaring `env`
+      here would make it an automatic co-requisite of `subprocess` for every
+      command runner, costing every operator an extra allowlist entry while
+      discriminating nothing.
+    - `filesystem`: no file I/O in this module. `shutil.which("gh")` stats
+      PATH entries and `cwd=` sets the child's directory — both inherent to
+      spawning the process `subprocess` already declares.
+    - `network`: `gh` unquestionably talks to api.github.com, but it does so
+      IN THE CHILD PROCESS; this module opens no socket. Declaring `network`
+      would additionally enrol the `gh` runner kind in the runtime outward-
+      consent gate at `hivepilot.registry.resolve_runner_class`
+      (`outward.enforce("external_api", ...)`), which refuses the runner
+      inside any partition dispatched without outward consent. That is a
+      defensible and arguably desirable change — `gh pr merge` is the
+      canonical outward-irreversible action — but it alters runtime dispatch,
+      not just load admission, so it belongs to its own decision rather than
+      riding along here.
+    """
     from hivepilot.config import settings
 
     if not settings.gh_enabled:
         return {}
     if shutil.which("gh") is None:
         return {}
-    return {"runners": {"gh": GhRunner}, "health": {"gh": health}}
+    return {
+        "runners": {"gh": GhRunner},
+        "health": {"gh": health},
+        "capabilities": ["subprocess"],
+    }

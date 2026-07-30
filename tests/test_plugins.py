@@ -662,21 +662,76 @@ def register():
         assert "bogus" in {record.name for record, _ in pm.denied}
         assert "bogus-kind" not in RUNNER_MAP
 
-    def test_every_bundled_plugin_declares_no_capabilities_and_still_loads(
+    def test_bundled_plugins_without_a_manifest_are_still_exempt_from_policy(
         self, monkeypatch
     ) -> None:
-        """Backward-compat regression guard: none of the ~24 shipped plugins
-        declare a `capabilities` manifest, so a default (empty) policy must
-        never deny any of them — the whole plugin set loads exactly as it
-        did before this manifest existed."""
+        """Backward-compat regression guard, narrowed.
+
+        CONVERTED from `test_every_bundled_plugin_declares_no_capabilities_
+        and_still_loads`, which asserted that NO bundled plugin declares a
+        manifest and therefore an empty policy denies none of them. That is no
+        longer true: `plugins/gh.py` and `plugins/rtk.py` now declare
+        `subprocess` (they genuinely `subprocess.run()`; previously they shelled
+        out while sitting entirely outside the admission gate). The old
+        assertion was pinning that exemption, so it could not be kept as-is.
+
+        What survives, and is still worth guarding, is the exemption for every
+        OTHER bundled plugin: a plugin that declares nothing must remain
+        completely unaffected by policy, so an operator on the fail-closed
+        default still gets the whole rest of the plugin set. `gh`/`rtk` are
+        disabled here via their own flags (rather than by relaxing the policy)
+        so the empty policy stays genuinely in force for everything else.
+
+        `gh`/`rtk`'s own declarations are asserted in the sibling test below
+        and, end to end, in `tests/test_plugin_subprocess_capability.py`.
+        """
         from hivepilot import plugins as plugins_mod
 
         monkeypatch.setattr(plugins_mod.settings, "plugins_capability_policy", [], raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "gh_enabled", False, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "rtk_enabled", False, raising=False)
 
         pm = plugins_mod.PluginManager()
 
+        assert pm.loaded, "expected the bundled plugin set to load under an empty policy"
         for record in pm.loaded:
             assert "capabilities" not in record.contributions
+
+    def test_only_gh_and_rtk_declare_capabilities_and_only_subprocess(self, monkeypatch) -> None:
+        """The bundled plugin set's declared-capability surface, pinned.
+
+        Keeps the converted guard above honest: rather than asserting "nobody
+        declares anything", assert exactly WHO declares WHAT. A new
+        declaration by any bundled plugin is a deployment-affecting change
+        (every operator must allowlist the token or lose that plugin at load),
+        so it must fail here and be made deliberately — including updating
+        `_BUNDLED_PLUGIN_CAPABILITIES` in `tests/conftest.py`.
+        """
+        import shutil
+
+        from hivepilot import plugins as plugins_mod
+
+        monkeypatch.setattr(
+            plugins_mod.settings, "plugins_capability_policy", ["subprocess"], raising=False
+        )
+        monkeypatch.setattr(plugins_mod.settings, "gh_enabled", True, raising=False)
+        monkeypatch.setattr(plugins_mod.settings, "rtk_enabled", True, raising=False)
+
+        pm = plugins_mod.PluginManager()
+
+        declaring = {
+            record.name: record.contributions["capabilities"]
+            for record in pm.loaded
+            if "capabilities" in record.contributions
+        }
+
+        # `gh` is PATH-gated: its `register()` returns `{}` (contributing
+        # nothing, not even a manifest) when the `gh` binary is absent.
+        expected = {"rtk": ["subprocess"]}
+        if shutil.which("gh") is not None:
+            expected["gh"] = ["subprocess"]
+
+        assert declaring == expected
 
 
 class TestConfigRepoPluginsAutoLoad:

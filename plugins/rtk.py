@@ -112,8 +112,47 @@ def health(**kwargs: Any) -> HealthStatus:
 
 
 def register() -> dict[str, Any]:
+    """Declares the `subprocess` capability (`hivepilot.plugin_capabilities.
+    PLUGIN_CAPABILITIES`), because `RtkRunner.run` spawns a child process via
+    `subprocess.run(["rtk", "proxy", "bash", "-lc", ...])` — and, on the
+    fallback path when `rtk` is absent from PATH, `bash -lc` directly. This
+    plugin runs an operator-authored shell command, so `subprocess` is the
+    most load-bearing thing it could possibly declare.
+
+    OPERATOR IMPACT — this is a load-time admission gate, not advice:
+    `settings.plugins_capability_policy` defaults to `[]` (deny every declared
+    capability), so a deployment that enables this plugin MUST allowlist
+    `subprocess` (`HIVEPILOT_PLUGINS_CAPABILITY_POLICY=subprocess`) or this
+    plugin is DENIED at load, taking its runner kind and health check with it
+    (atomic per-plugin rollback in `hivepilot.plugins._load_into`). Note
+    `rtk_enabled` defaults to True (opt-OUT), so this plugin is enabled by
+    default and a policy-less deployment WILL hit the denial. Use the
+    plain/CSV form, not the JSON form — see `docs/PLUGINS.md`.
+
+    Only `subprocess` is declared. Deliberately NOT declared, and why:
+
+    - `env` / `secrets_access`: `run` passes `merge_environments(...)` (which
+      copies `os.environ`) and the engine-resolved `payload.secrets` into the
+      child's environment. It never reads a specific variable or resolves a
+      secret in its own code — it forwards what the engine handed it through
+      the same shared choke point every built-in runner uses. Declaring `env`
+      here would make it an automatic co-requisite of `subprocess` for every
+      command runner, costing every operator an extra allowlist entry while
+      discriminating nothing.
+    - `filesystem` / `network`: no file or socket I/O in this module. The
+      `bash -lc` command it runs may of course do both, but that is the
+      unbounded authority of spawning a shell, which is exactly what
+      `subprocess` declares — an honest single token beats enumerating every
+      capability a shell could theoretically reach (see this module's
+      "Trust model" note in `docs/PLUGINS.md`: declarations are advisory
+      about intent, and no in-process manifest can constrain a child).
+    """
     from hivepilot.config import settings
 
     if not settings.rtk_enabled:
         return {}
-    return {"runners": {"rtk": RtkRunner}, "health": {"rtk": health}}
+    return {
+        "runners": {"rtk": RtkRunner},
+        "health": {"rtk": health},
+        "capabilities": ["subprocess"],
+    }
