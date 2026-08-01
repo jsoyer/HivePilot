@@ -450,10 +450,16 @@ def _find_gating_step(
             # exists) — resolves identically to `resolve_runner` (stage_model/
             # stage_effort default None).
             runner_kind, role_model, _role_effort = resolve_stage_dispatch(task.role, policy)
-            role_options: dict[str, str] = {}
-            role_perm = get_role(task.role).permission_mode
+            role_options: dict[str, Any] = {}
+            _role = get_role(task.role)
+            role_perm = _role.permission_mode
             if role_perm:
                 role_options["permission_mode"] = role_perm
+            # Named-tool pre-approval: lets a role reach exactly the plugins it
+            # needs without `bypassPermissions` granting it Bash and Edit
+            # wholesale. Absent by default — omitted entirely when unset.
+            if _role.allowed_tools:
+                role_options["allowed_tools"] = list(_role.allowed_tools)
             _role_runner_def = RunnerDefinition(
                 name=f"role:{task.role}",
                 kind=cast(RunnerKind, runner_kind),
@@ -2374,9 +2380,14 @@ class Orchestrator:
                     target_role_key, policy
                 )
                 role_perm = target_role.permission_mode
-                role_options: dict[str, str] = {}
+                role_options: dict[str, Any] = {}
                 if role_perm:
                     role_options["permission_mode"] = role_perm
+                # Same grant as the task path above — an agent answering a
+                # cross-agent request needs its tools too, or it replies asking
+                # for approval and the step is failed as "produced no work".
+                if target_role.allowed_tools:
+                    role_options["allowed_tools"] = list(target_role.allowed_tools)
                 req_runner_def = RunnerDefinition(
                     name=f"request:{target_role_key}",
                     kind=cast(RunnerKind, runner_kind),

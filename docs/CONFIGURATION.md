@@ -296,8 +296,35 @@ dict.
 - `display_name`
 - `host`
 - `permission_mode`
+- `allowed_tools`
 - `command_task`
 - `effort`
+
+### Letting a role use the plugins (`allowed_tools`)
+
+A role that needs `rtk`, `gh`, or any other tool has two bad options and one
+good one. With **no** `permission_mode`, headless `claude --print` cannot show
+a permission prompt, so every tool call is declined — the agent replies asking
+for approval and the step is failed as "produced no work". With
+`permission_mode: bypassPermissions`, the role gets Bash and Edit wholesale,
+which is an unacceptable prompt-injection surface for any role that reads
+untrusted code.
+
+`allowed_tools` pre-approves tools by name and grants nothing else:
+
+```yaml
+roles:
+  - name: ciso
+    title: CISO
+    allowed_tools:
+      - Bash(rtk:*)
+      - Bash(gh:*)
+```
+
+Absent by default, so an existing `roles.yaml` behaves exactly as before. It
+composes with `permission_mode` when a role genuinely needs both (the
+developer writes code autonomously). An allow-list on purpose — a deny-list
+fails open for every tool name it does not enumerate.
 
 If `roles.yaml` is missing or fails validation, HivePilot falls back to a single generic
 `developer → claude` role. The full multi-role "company" roster (ceo, cto, ciso, developer,

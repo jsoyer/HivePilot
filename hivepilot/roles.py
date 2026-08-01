@@ -71,6 +71,21 @@ class Role(BaseModel):
     # write code AND run tests autonomously). Without it, `claude --print` blocks
     # on an interactive permission prompt it cannot show and the run hangs.
     permission_mode: str | None = None
+    # Tools this role may use WITHOUT an elevated `permission_mode`. Each entry
+    # is pre-approved by name, so a role can reach exactly the plugins it needs
+    # — e.g. `["Bash(rtk:*)", "Bash(gh:*)"]` — and nothing more.
+    #
+    # This exists because the two states available before it were both wrong:
+    # with no permission_mode, headless `claude --print` cannot show a
+    # permission prompt, so EVERY tool call is declined, the agent answers by
+    # asking for approval, and the false-green guard fails the step ("produced
+    # no work"). With `bypassPermissions`, the role gets Bash and Edit
+    # wholesale — an unacceptable prompt-injection surface for any role that
+    # reads untrusted code, which is precisely the reviewing roles.
+    #
+    # An allow-list on purpose: a deny-list fails OPEN for every tool name it
+    # does not enumerate.
+    allowed_tools: list[str] | None = None
     # Task name that direct-agent commands (/ask <agent>, /dev, etc.) run for
     # this role. None means the role has no direct-command task (e.g. auditor).
     command_task: str | None = None

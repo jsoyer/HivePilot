@@ -1448,7 +1448,7 @@ def task_set_role(
 
 _ROLE_INT_FIELDS = frozenset({"order"})
 _ROLE_BOOL_FIELDS = frozenset({"can_block"})
-_ROLE_LIST_FIELDS = frozenset({"models", "inputs", "outputs", "optional_inputs"})
+_ROLE_LIST_FIELDS = frozenset({"models", "inputs", "outputs", "optional_inputs", "allowed_tools"})
 _ROLE_PERMISSION_MODES = frozenset({"acceptEdits", "bypassPermissions", "plan", "default"})
 
 
