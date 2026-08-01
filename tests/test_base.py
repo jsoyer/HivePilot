@@ -234,7 +234,7 @@ class TestDetectNoopPermissionResponse:
         positives = [
             "I NEED YOUR APPROVAL before touching the filesystem.",
             "I would need permission to modify these files.",
-            "This action requires approval before I can continue.",
+            "This action requires your approval before I can continue.",
             "That command cannot be used with root privileges here.",
             "Should I proceed with deleting the branch?",
             "The tool call needs a permission grant from the operator.",
@@ -309,3 +309,43 @@ class TestPromptFileNotFoundMessage:
         )
         for search_dir in s.config_path_search_dirs():
             assert str(search_dir) in message, f"{search_dir} missing from: {message}"
+
+
+class TestNoopGuardKeepsTheEvidence:
+    """The guard replaces the agent's response with its own verdict.
+
+    Without the matched context in the reason, a failed step leaves nothing to
+    adjudicate: an operator cannot tell whether the agent really asked for
+    permission or merely wrote the words. Observed on a real CTO review, whose
+    output was discarded with no way to recover it.
+    """
+
+    def test_the_reason_quotes_what_matched(self) -> None:
+        from hivepilot.runners.base import detect_noop_permission_response
+
+        reason = detect_noop_permission_response(
+            "I have reviewed the diff. I need your approval to run the test suite."
+        )
+        assert reason is not None
+        assert "I have reviewed the diff" in reason, "the surrounding words must survive"
+        assert "i need your approval" in reason
+
+    def test_governance_prose_is_not_a_permission_request(self) -> None:
+        """The exact false positive that failed completed CTO and groomer reviews."""
+        from hivepilot.runners.base import detect_noop_permission_response
+
+        assert (
+            detect_noop_permission_response(
+                "## VERDICT\n\nThe architecture is sound. Merging this PR requires "
+                "approval from the release manager, per governance."
+            )
+            is None
+        )
+
+    def test_a_first_person_request_still_trips(self) -> None:
+        from hivepilot.runners.base import detect_noop_permission_response
+
+        assert (
+            detect_noop_permission_response("This change requires your approval to proceed.")
+            is not None
+        )
