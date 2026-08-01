@@ -96,6 +96,41 @@ _COMPRESSIBLE_METADATA_KEYS = ("prior_context", "extra_prompt")
 _SENTINEL_KEY = "_headroom_compressed"
 
 
+def _compress_text(original: str, model_hint: str | None) -> str | None:
+    """Compress one text blob, tolerating headroom's message-shaped API.
+
+    `headroom.compress` takes CHAT MESSAGES (`list[dict]`), not a bare
+    string — passing a string makes it fail internally with
+    ``'str' object has no attribute 'get'`` and, because it swallows that
+    and "returns the original messages", the caller sees no error at all.
+    Observed in production: `headroom_compressions` sat at 0 for weeks while
+    the plugin reported healthy, because every call was silently a no-op.
+
+    Wraps the text in a single user message and unwraps the result. Falls
+    back to the older string-in/string-out signature so a deployment pinned
+    to an earlier headroom keeps working. Returns None when nothing usable
+    came back — the caller then leaves the original untouched.
+    """
+    try:
+        result = compress([{"role": "user", "content": original}], model=model_hint)
+    except (AttributeError, TypeError):
+        # Pre-message-API headroom: string in, string out.
+        try:
+            legacy = compress(original, model=model_hint)
+        except Exception:  # noqa: BLE001
+            return None
+        return legacy if isinstance(legacy, str) else None
+
+    messages = getattr(result, "messages", None)
+    if isinstance(result, str):
+        return result
+    if not isinstance(messages, list) or not messages:
+        return None
+    first = messages[0]
+    content = first.get("content") if isinstance(first, dict) else None
+    return content if isinstance(content, str) else None
+
+
 def before_step(**kwargs: Any) -> None:
     """Compress the reachable prompt/context field(s) on ``payload`` in place.
 
@@ -135,7 +170,7 @@ def before_step(**kwargs: Any) -> None:
             original = metadata.get(key)
             if not original or not isinstance(original, str):
                 continue
-            compressed = compress(original, model=model_hint)
+            compressed = _compress_text(original, model_hint)
             if not compressed or not isinstance(compressed, str):
                 continue
             attempted_any = True

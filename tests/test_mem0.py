@@ -660,6 +660,19 @@ class TestStorePersistsRealOutput:
         assert "output:" not in stored_text
 
 
+def _scoped_key(call_args) -> str:
+    """The entity key a mem0 call was scoped to, whichever API shape was used.
+
+    mem0 2.x takes `filters={"user_id": ...}`; 1.x took `user_id=...`. These
+    tests care about the KEY (does it carry the role?), not the shape, so they
+    read it through this rather than pinning one client generation.
+    """
+    kwargs = call_args.kwargs
+    if "filters" in kwargs:
+        return kwargs["filters"]["user_id"]
+    return kwargs["user_id"]
+
+
 class TestMemoryKeyIncludesRole:
     """`_memory_key` (and therefore `recall`/`store`) include `role` in the
     mem0 `user_id` key when the caller supplies it (threaded in by
@@ -687,7 +700,7 @@ class TestMemoryKeyIncludesRole:
         with patch.object(mem0_module, "_get_client", return_value=mock_client):
             mem0_module.recall(payload=payload, role="developer")
 
-        assert mock_client.search.call_args.kwargs["user_id"] == "proj:t:developer"
+        assert _scoped_key(mock_client.search.call_args) == "proj:t:developer"
 
     def test_store_uses_role_in_add_user_id(self, mem0_module: ModuleType, tmp_path: Path) -> None:
         payload = _payload(tmp_path, extra_prompt="ask")
@@ -696,7 +709,7 @@ class TestMemoryKeyIncludesRole:
         with patch.object(mem0_module, "_get_client", return_value=mock_client):
             mem0_module.store(payload=payload, role="developer")
 
-        assert mock_client.add.call_args.kwargs["user_id"] == "proj:t:developer"
+        assert _scoped_key(mock_client.add.call_args) == "proj:t:developer"
 
     def test_recall_and_store_use_matching_key_when_role_supplied(
         self, mem0_module: ModuleType, tmp_path: Path
@@ -714,9 +727,8 @@ class TestMemoryKeyIncludesRole:
         with patch.object(mem0_module, "_get_client", return_value=store_client):
             mem0_module.store(payload=payload, role="developer")
 
-        assert (
-            recall_client.search.call_args.kwargs["user_id"]
-            == store_client.add.call_args.kwargs["user_id"]
+        assert _scoped_key(recall_client.search.call_args) == _scoped_key(
+            store_client.add.call_args
         )
 
     def test_recall_without_role_kwarg_falls_back_as_before(
@@ -729,7 +741,7 @@ class TestMemoryKeyIncludesRole:
         with patch.object(mem0_module, "_get_client", return_value=mock_client):
             mem0_module.recall(payload=payload)
 
-        assert mock_client.search.call_args.kwargs["user_id"] == "proj:t"
+        assert _scoped_key(mock_client.search.call_args) == "proj:t"
 
 
 class TestStoreProvenanceMetadata:
