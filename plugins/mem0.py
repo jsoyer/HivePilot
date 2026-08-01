@@ -264,6 +264,28 @@ def _get_client() -> Any | None:
         return None
 
 
+def _call_scoped(method: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+    """Call a mem0 client method scoped to *key*, across API generations.
+
+    mem0 2.x moved entity scoping out of top-level parameters:
+    ``search(query, user_id=...)`` now raises *Top-level entity parameters
+    frozenset({'user_id'}) are not supported in search(). Use
+    filters={'user_id': '...'} instead*. Because recall catches and logs
+    that, the failure was invisible in normal operation — production ran
+    with `mem0ai 2.0.14` and EVERY recall failed while the plugin reported
+    healthy and `memory_events` held a single row.
+
+    Tries the 2.x ``filters=`` shape first, then falls back to the 1.x
+    ``user_id=`` keyword so a deployment pinned to the older client keeps
+    working. Only the scoping shape is retried — any other error propagates
+    to the caller's own handler unchanged.
+    """
+    try:
+        return method(*args, filters={"user_id": key}, **kwargs)
+    except TypeError:
+        return method(*args, user_id=key, **kwargs)
+
+
 def _memory_key(payload: Any, role: str | None = None) -> str:
     """Best-effort identity key for this task, used as mem0's `user_id`.
 
@@ -456,7 +478,7 @@ def recall(**kwargs: Any) -> None:
         step_name = getattr(step, "name", None) or ""
         query = f"{payload.task_name} {step_name}".strip() or key
 
-        results = client.search(query, user_id=key)
+        results = _call_scoped(client.search, key, query)
         memories = _extract_memory_texts(results)[:_MAX_MEMORIES]
 
         # Memory-quality instrumentation (best-effort, own try/except so a
@@ -598,7 +620,7 @@ def store(**kwargs: Any) -> None:
         run_id = kwargs.get("run_id")
         confidence = kwargs.get("confidence")
         provenance = _provenance_metadata(payload, role, run_id=run_id, confidence=confidence)
-        client.add(content, user_id=key, metadata=provenance)
+        _call_scoped(client.add, key, content, metadata=provenance)
         logger.info("plugin.mem0.stored", key=key, step=step_name, category=provenance["category"])
 
         # Memory-quality instrumentation (best-effort, own try/except so a
