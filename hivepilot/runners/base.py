@@ -285,7 +285,14 @@ def pop_last_usage() -> UsageInfo | None:
 _NOOP_PERMISSION_PATTERNS: tuple[str, ...] = (
     "i need your approval",
     "need permission to",
-    "requires approval",
+    # "requires your approval" (first person), NOT "requires approval":
+    # the bare third-person form is ordinary governance prose that a
+    # reviewing role writes legitimately ("this PR requires approval from
+    # the release manager"), and matching it failed real, completed CTO and
+    # groomer reviews. Every other phrase here is unambiguously the agent
+    # speaking about itself; this one was not, which broke the conservative
+    # contract stated above.
+    "requires your approval",
     "cannot be used with root",
     "should i proceed",
     "permission grant",
@@ -314,10 +321,20 @@ def detect_noop_permission_response(text: str | None) -> str | None:
         return None
     lowered = text.lower()
     for pattern in _NOOP_PERMISSION_PATTERNS:
-        if pattern in lowered:
+        index = lowered.find(pattern)
+        if index != -1:
+            # Quote what actually matched. Without this the guard REPLACES the
+            # agent's response with its own verdict, so nothing downstream can
+            # tell a true positive from a false one -- an operator debugging a
+            # failed step has literally no evidence to look at. Observed on a
+            # real CTO review: the step was failed and the output discarded,
+            # leaving no way to know whether the agent had asked for
+            # permission or simply written the words in a report.
+            start = max(0, index - 80)
+            excerpt = text[start : index + len(pattern) + 80].strip().replace("\n", " ")
             return (
                 "agent response reads like a permission/approval request, not "
-                f"completed work (matched phrase: {pattern!r})"
+                f"completed work (matched phrase: {pattern!r}; context: ...{excerpt}...)"
             )
     return None
 
