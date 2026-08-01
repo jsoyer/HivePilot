@@ -2012,6 +2012,16 @@ class Orchestrator:
         write_summary(run_dir, summary)
         artifact_manager = ArtifactManager(run_dir)
         artifact_manager.write_json("results.json", summary)
+        # Make a successful run traceable to the output it produced: the run
+        # row is completed above WITHOUT a detail, and results.json is only
+        # written here, so without this the agent's work exists on disk with
+        # nothing in the database pointing at it. Best-effort — a bookkeeping
+        # pointer must never turn a completed run into a failed one.
+        for _run_id in run_ids.values():
+            try:
+                state_service.attach_run_artifacts(_run_id, str(run_dir))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("state.attach_run_artifacts_failed", run_id=_run_id, error=str(exc))
         self._collect_artifacts(
             manager=artifact_manager,
             task=task,
