@@ -25,6 +25,33 @@ runners:
 Fields: `name`, `kind`, `command`, `model`, `effort`, `agent`, `append_prompt`,
 `timeout_seconds`, `host`, `env`, `options`.
 
+### MCP servers (`claude` kind)
+
+By default a run reaches **no** MCP server: an agent asked to consult one answers
+from plain file reads instead. Two `options` wire them up, and you almost always
+need both:
+
+```yaml
+    options:
+      mcp_config: mcp.json          # path, or a list; relative resolves against the project
+      strict_mcp_config: true       # ignore every MCP config other than the ones above
+      allowed_tools:                # pre-approve exactly these tools
+        - mcp__myserver__query
+```
+
+`mcp_config` alone is not enough. In headless `--print` mode a tool that is
+available but not pre-approved hits a permission prompt claude cannot display,
+so the call is declined and the agent silently continues without it — the same
+reason a shell command gets refused when no `permission_mode` is set.
+
+`allowed_tools` is the narrow way to fix that: it grants exactly the tools named
+and nothing else, so a reviewer can query a read-only MCP server without being
+handed `permission_mode: bypassPermissions` (which would also grant Bash and
+Edit — a real prompt-injection surface for an agent reading untrusted code).
+
+Both accept a single value or a list, and a per-step `metadata` entry overrides
+the runner definition.
+
 ## Agent runners
 
 Coding-agent CLIs that execute a role's prompt.

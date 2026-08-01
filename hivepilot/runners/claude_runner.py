@@ -482,6 +482,32 @@ class ClaudeRunner(BaseRunner):
         tools = self._resolve_tools(payload)
         if tools is not None:
             args.extend(["--tools", tools])
+        # MCP servers (additive — absent by default, so existing invocations
+        # stay byte-identical). Until this existed, HivePilot never passed
+        # `--mcp-config`, so NO agent could reach an MCP server: a CISO asked
+        # for a code-graph review had to answer from plain file reads and said
+        # so in its own report. Both flags verified against `claude --help`:
+        # `--mcp-config <configs...>` and `--strict-mcp-config` ("Only use MCP
+        # servers from --mcp-config, ignoring all other MCP configurations").
+        mcp_configs = self._resolve_mcp_config(payload)
+        if mcp_configs:
+            args.append("--mcp-config")
+            args.extend(mcp_configs)
+            if self._resolve_bool_option(payload, "strict_mcp_config"):
+                args.append("--strict-mcp-config")
+        # Named-tool pre-approval. This is the piece that makes MCP usable in
+        # headless mode WITHOUT `permission_mode: bypassPermissions`: a tool
+        # that is available but not pre-approved still hits a permission
+        # prompt that `--print` cannot show, so the call is declined and the
+        # agent silently works without it. `--allowed-tools` grants exactly
+        # the tools named (e.g. `mcp__<server>__query`) and nothing
+        # else — read-only graph access for a reviewer that must NOT get Bash
+        # or Edit. Deliberately an ALLOW-list: `--disallowedTools` fails OPEN
+        # for every tool name it does not enumerate.
+        allowed_tools = self._resolve_allowed_tools(payload)
+        if allowed_tools:
+            args.append("--allowed-tools")
+            args.extend(allowed_tools)
         # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
         # agent actually write code in headless --print mode. Without it claude
         # blocks on an interactive permission prompt it cannot show and the run
@@ -572,6 +598,47 @@ class ClaudeRunner(BaseRunner):
         if isinstance(value, (list, tuple)):
             return ",".join(str(v) for v in value)
         return str(value)
+
+    def _resolve_str_list_option(self, payload: RunnerPayload, name: str) -> list[str]:
+        """Resolve a variadic option to a list of non-empty strings.
+
+        Step metadata wins over the runner definition, same precedence as
+        `tools`/`permission_mode`. Accepts a single string or a list. Blank
+        entries are dropped: an empty value must never reach the CLI as a
+        bare flag with no operand, which would make the NEXT argument look
+        like its value.
+        """
+        value = payload.step.metadata.get(name)
+        if value is None:
+            value = self.definition.options.get(name)
+        if value is None:
+            return []
+        items = value if isinstance(value, (list, tuple)) else [value]
+        return [str(v).strip() for v in items if str(v).strip()]
+
+    def _resolve_mcp_config(self, payload: RunnerPayload) -> list[str]:
+        """Resolve `--mcp-config` paths, each made absolute against the project.
+
+        A relative path would otherwise resolve against the runner's working
+        directory, which is not where an operator writes the file.
+        """
+        raw = self._resolve_str_list_option(payload, "mcp_config")
+        resolved: list[str] = []
+        for item in raw:
+            path = Path(item)
+            resolved.append(str(path if path.is_absolute() else payload.project.path / path))
+        return resolved
+
+    def _resolve_allowed_tools(self, payload: RunnerPayload) -> list[str]:
+        """Resolve `--allowed-tools` entries (e.g. `mcp__server__tool`)."""
+        return self._resolve_str_list_option(payload, "allowed_tools")
+
+    def _resolve_bool_option(self, payload: RunnerPayload, name: str) -> bool:
+        """Resolve a boolean flag option; step metadata wins over the definition."""
+        value = payload.step.metadata.get(name)
+        if value is None:
+            value = self.definition.options.get(name)
+        return bool(value)
 
     def _permission_mode(self, payload: RunnerPayload) -> str | None:
         """Resolve the effective permission mode for *payload* (same logic as _build_invocation)."""
