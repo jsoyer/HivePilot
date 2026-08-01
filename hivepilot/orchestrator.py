@@ -293,13 +293,35 @@ def _build_checkpoint_details(
             for bullet in bullets:
                 lines.append(f"  • {bullet}")
         else:
-            # Fallback: plain excerpt of the last chunk
-            excerpt = last_chunk[:_DETAILS_FALLBACK_CHARS]
-            if len(last_chunk) > _DETAILS_FALLBACK_CHARS:
-                excerpt += "…"
-            lines.append(f"\n📋 *Plan excerpt:*\n{excerpt}")
+            # Fallback: plain excerpt of the last chunk. Drop the leading
+            # "## Agent (Stage)" heading — the card already says whose stage
+            # this is — and cut on a LINE boundary. Cutting mid-word (the
+            # operator sees "...no user sto…") makes an approval decision
+            # harder to take, which is the whole point of this card.
+            body = last_chunk
+            if body.startswith("## "):
+                body = body.split("\n", 1)[1].strip() if "\n" in body else ""
+            excerpt = body[:_DETAILS_FALLBACK_CHARS]
+            if len(body) > _DETAILS_FALLBACK_CHARS:
+                cut = excerpt.rfind("\n")
+                if cut > _DETAILS_FALLBACK_CHARS // 2:
+                    excerpt = excerpt[:cut]
+                excerpt = excerpt.rstrip() + "\n…"
+            if excerpt.strip():
+                lines.append(f"\n📋 *Plan excerpt:*\n{excerpt}")
 
-    lines.append("\n📂 _Full plan: in the Obsidian vault._")
+    # Name the actual destination — "in the Obsidian vault" does not tell an
+    # operator which of dozens of folders to open.
+    _vault_hint = ""
+    try:
+        from hivepilot.config import settings as _settings
+
+        _vault = getattr(_settings, "obsidian_vault", None)
+        if _vault:
+            _vault_hint = f" ({_vault})"
+    except Exception:  # noqa: BLE001 — a footer must never break the card
+        _vault_hint = ""
+    lines.append(f"\n📂 _Full plan: in the Obsidian vault{_vault_hint}._")
 
     return "\n".join(lines)
 
@@ -3579,7 +3601,13 @@ class Orchestrator:
                 if _surfaces is not None:
                     selected_modules = _surfaces
 
-            prior_chunks.append(f"## {self._agent_name(stage)} ({stage.name})\n{stage_output}")
+            _agent = self._agent_name(stage)
+            # "Blaise (CTO)" + stage "CTO" rendered as "Blaise (CTO) (CTO)".
+            # Skip the suffix when the stage name adds nothing to the agent's.
+            _heading = (
+                _agent if stage.name.lower() in _agent.lower() else f"{_agent} ({stage.name})"
+            )
+            prior_chunks.append(f"## {_heading}\n{stage_output}")
             write_stage_artifact(
                 vault_path=vault_path,
                 run_id=run_id,
