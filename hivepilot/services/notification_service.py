@@ -355,8 +355,36 @@ def _write_topics(path: Path, mapping: dict[str, int]) -> None:
 
 
 def _save_topics(mapping: dict[str, int]) -> None:
-    """Persist the topics registry to disk. Best-effort."""
+    """Persist the topics registry AUTHORITATIVELY (deletions included).
+
+    Used by `_invalidate_topic`, which must be able to REMOVE a dead topic —
+    so this deliberately does not merge. To add an entry without clobbering a
+    concurrent registration, use `_register_topic`.
+    """
     _write_topics(_topics_registry_path(), mapping)
+
+
+def _register_topic(agent_key: str, thread_id: int) -> None:
+    """Add one agent_key -> thread_id entry, preserving concurrent writes.
+
+    `_ensure_topic_thread` loads the registry, calls Telegram, then saves —
+    writing that stale snapshot wholesale silently drops every entry another
+    process registered in between, and a dropped entry means the next call
+    creates a SECOND topic for an agent that already has one. Re-read
+    immediately before writing so this is add-only.
+
+    Reads the target file directly rather than via `_load_topics`, which would
+    also run the legacy-registry migration as a side effect of a save.
+    """
+    path = _topics_registry_path()
+    on_disk: dict[str, int] = {}
+    try:
+        if path.exists():
+            on_disk = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.topics.merge_read_failed", error=str(exc))
+    on_disk[agent_key] = thread_id
+    _write_topics(path, on_disk)
 
 
 def _invalidate_topic(agent_key: str) -> int | None:
@@ -379,13 +407,29 @@ def _normalize(text: str) -> str:
     return unicodedata.normalize("NFD", text.lower()).encode("ascii", "ignore").decode()
 
 
-def _resolve_agent_key(actor: str) -> str:
+def _resolve_agent_key(actor: str) -> str | None:
     """Map an actor display string (e.g. 'Blaise (CTO)') to a stable role key.
 
-    Matches against ROLES display_name (accent/case-insensitive). Falls back to
-    a slug derived from the actor string. Never returns an empty string.
+    Matches against ROLES display_name/title (accent/case-insensitive), then
+    falls back to a slug of the actor's first word — that fallback is
+    load-bearing for the non-role streams that legitimately get their own
+    topic (`hivepilot`, `pentest`).
+
+    Returns ``None`` when ROLES is EMPTY. The registry is keyed by role key,
+    so minting a slug while the roster is mid-reload gives a real role a
+    SECOND key: 'Gustave' resolves to `developer` normally, but to `gustave`
+    in that window — a duplicate topic under a name that also loses the
+    "Firstname (Role)" convention, because the title comes from the raw actor
+    string. Roles are reloaded continuously, so the window is real: two such
+    'Gustave' topics were created in production. A caller receiving ``None``
+    must NOT create a topic; it sends to the group's General topic instead,
+    which is recoverable — a wrongly-named topic is not.
     """
     from hivepilot.roles import ROLES
+
+    if not ROLES:
+        logger.warning("stream.topics.roles_empty_skipping_topic", actor=actor)
+        return None
 
     actor_norm = _normalize(actor)
     for key, role in ROLES.items():
@@ -393,9 +437,27 @@ def _resolve_agent_key(actor: str) -> str:
             return key
         if _normalize(role.title) in actor_norm:
             return key
-    # Fallback: slug from first word of actor
+    # Fallback: slug from first word of actor (non-role streams)
     slug = actor_norm.split()[0] if actor_norm.strip() else "general"
     return slug or "general"
+
+
+def _canonical_topic_title(agent_key: str, fallback: str | None = None) -> str:
+    """The topic name for *agent_key* — always "Firstname (Role)" for a role.
+
+    Derived from ROLES rather than from whatever string the call site happened
+    to pass, so the naming convention cannot drift between callers: one path
+    passed a bare display name (producing a topic called "Gustave") and
+    another passed nothing at all, falling back to the raw key (producing a
+    topic called "pentest"). Both bypassed the convention that
+    `Gustave (Developer)` follows.
+    """
+    from hivepilot.roles import ROLES
+
+    role = ROLES.get(agent_key)
+    if role and role.display_name and role.title:
+        return f"{role.display_name} ({role.title})"
+    return fallback or agent_key
 
 
 def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
@@ -419,8 +481,7 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
         data = resp.json()
         if data.get("ok"):
             thread_id: int = data["result"]["message_thread_id"]
-            registry[agent_key] = thread_id
-            _save_topics(registry)
+            _register_topic(agent_key, thread_id)
             return thread_id
         logger.warning("stream.topics.create_failed", agent_key=agent_key, response=data)
     except Exception as exc:  # noqa: BLE001
@@ -831,7 +892,9 @@ def _send_one_chunk(
                 dead_message_thread_id=dead if dead is not None else message_thread_id,
                 description=description,
             )
-            new_thread_id = _ensure_topic_thread(agent_key, topic_title or agent_key)
+            new_thread_id = _ensure_topic_thread(
+                agent_key, _canonical_topic_title(agent_key, topic_title)
+            )
             if new_thread_id is not None:
                 logger.info(
                     "stream.topic_recreated",
@@ -990,8 +1053,11 @@ def _stream_agent_turn_telegram(
     stream_topic_title: str | None = None
     if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
         stream_agent_key = _resolve_agent_key(actor)
-        stream_topic_title = f"{actor}"
-        message_thread_id = _ensure_topic_thread(stream_agent_key, stream_topic_title)
+        if stream_agent_key is not None:
+            # Canonical, role-derived name — never the raw actor string, which
+            # varies by call site and produced bare "Gustave" topics.
+            stream_topic_title = _canonical_topic_title(stream_agent_key, actor)
+            message_thread_id = _ensure_topic_thread(stream_agent_key, stream_topic_title)
 
     use_rich = getattr(settings, "telegram_stream_rich", True)
     chat_id = settings.telegram_stream_chat_id
@@ -1152,7 +1218,13 @@ def _stream_agent_turn_generic(
     )
     formatted = channel.format(markdown)
     agent_key = _resolve_agent_key(actor)
-    thread = channel.ensure_agent_thread(agent_key, actor)
+    # ROLES mid-reload (None): fall back to the channel's default thread rather
+    # than minting a per-agent one under a guessed key — see _resolve_agent_key.
+    thread = (
+        channel.ensure_agent_thread(agent_key, _canonical_topic_title(agent_key, actor))
+        if agent_key is not None
+        else None
+    )
     for chunk in split_for(formatted, channel.max_len, entity_aware=False):
         channel.send(thread, chunk, rich=True)
 
