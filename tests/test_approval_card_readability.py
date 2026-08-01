@@ -133,3 +133,73 @@ def test_the_excerpt_skips_preamble_and_starts_at_the_content():
     assert "TECHNICAL_SPEC" in details
     assert "Component A talks to B." in details, "the substance must survive the cut"
     assert "Verified directly this cycle" not in details, "preamble must be skipped"
+
+
+# ---------------------------------------------------------------------------
+# What approving actually does
+# ---------------------------------------------------------------------------
+
+
+def test_the_card_states_the_consequence_not_just_the_next_stage():
+    """ "Next: Implementation" names a stage. It does not say what will happen."""
+    from types import SimpleNamespace as NS
+
+    from hivepilot.orchestrator import _checkpoint_effects
+
+    tasks = {
+        "dev": NS(git=NS(commit=True, push=True, create_pr=False)),
+        "rev": NS(git=NS(commit=False, push=False, create_pr=True)),
+    }
+    stages = [NS(name="Implementation", task="dev"), NS(name="Review", task="rev")]
+    effects = _checkpoint_effects(stages, tasks, auto_git=True, dry_run=False)
+
+    details = _build_checkpoint_details(
+        completed=["CTO"],
+        next_stage="Implementation",
+        prior_chunks=[],
+        group_mode=False,
+        components=[],
+        remaining=[s.name for s in stages],
+        effects=effects,
+    )
+    assert "2 stages" in details
+    assert "Implementation → Review" in details
+    assert "commits" in details and "pushes" in details
+    assert "opens a pull request (never merges it)" in details
+
+
+def test_nothing_is_claimed_about_git_when_auto_git_is_off():
+    from types import SimpleNamespace as NS
+
+    from hivepilot.orchestrator import _checkpoint_effects
+
+    tasks = {"dev": NS(git=NS(commit=True, push=True, create_pr=True))}
+    effects = _checkpoint_effects(
+        [NS(name="Implementation", task="dev")], tasks, auto_git=False, dry_run=True
+    )
+    assert "no git actions (auto-git off)" in effects
+    assert not any("push" in e for e in effects)
+    assert "dry-run: vault writes skipped" in effects
+
+
+def test_a_bulleted_report_now_reaches_the_card():
+    """Agents write `- status: PASS`; the parser only matched column 0, so the
+    structured path was dead and status/blockers never reached the operator."""
+    chunk = (
+        "## Colette (Release Manager)\nPreamble prose.\n\n"
+        "- status: BLOCK\n"
+        "- summary:\n  - reviewer verdict never issued\n"
+        "- blockers: security clearance withheld\n"
+        "- confidence: HIGH\n"
+    )
+    details = _build_checkpoint_details(
+        completed=["QA"],
+        next_stage="PR Approval",
+        prior_chunks=[chunk],
+        group_mode=False,
+        components=[],
+    )
+    assert "BLOCK" in details
+    assert "security clearance withheld" in details
+    assert "reviewer verdict never issued" in details
+    assert "Preamble prose" not in details

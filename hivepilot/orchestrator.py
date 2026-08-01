@@ -294,12 +294,59 @@ def _substantive_excerpt(chunk: str, limit: int = _DETAILS_FALLBACK_CHARS) -> st
     return excerpt.rstrip() + "\n…"
 
 
+def _checkpoint_effects(
+    remaining_stages: list[Any],
+    tasks: dict[str, Any],
+    *,
+    auto_git: bool,
+    dry_run: bool,
+) -> list[str]:
+    """State what approving will actually DO, read from the task configs.
+
+    A checkpoint card that says only "Next: Implementation" names a stage, not
+    a consequence. The operator is being asked to let the run commit to their
+    repository, push a branch and open a pull request — and none of that was
+    ever written down, so the only way to answer confidently was to already
+    know the pipeline by heart.
+
+    Every line here is derived from configuration, never guessed: the `git`
+    block of each remaining stage's task. Silence is meaningful — when
+    `auto_git` is off, nothing is claimed about git at all.
+    """
+    effects: list[str] = []
+    if not auto_git:
+        effects.append("no git actions (auto-git off)")
+    else:
+        commits = pushes = prs = False
+        for stage in remaining_stages:
+            task = tasks.get(getattr(stage, "task", "")) if tasks else None
+            git_cfg = getattr(task, "git", None)
+            if not git_cfg:
+                continue
+            commits = commits or bool(getattr(git_cfg, "commit", False))
+            pushes = pushes or bool(getattr(git_cfg, "push", False))
+            prs = prs or bool(getattr(git_cfg, "create_pr", False))
+        if commits:
+            effects.append("commits to the repository")
+        if pushes:
+            effects.append("pushes a branch")
+        if prs:
+            effects.append("opens a pull request (never merges it)")
+        if not effects:
+            effects.append("no git actions configured on the remaining stages")
+    if dry_run:
+        effects.append("dry-run: vault writes skipped")
+    return effects
+
+
 def _build_checkpoint_details(
     prior_chunks: list[str],
     completed: list[str],
     next_stage: str,
     components: list[str],
     group_mode: bool,
+    remaining: list[str] | None = None,
+    effects: list[str] | None = None,
 ) -> str:
     """Build a human-readable details string for the Telegram approval DM.
 
@@ -307,10 +354,17 @@ def _build_checkpoint_details(
 
     The resulting string is composed of (in order):
     - Components line (group mode only)
-    - Completed / next stage lines
-    - Plan summary extracted from the last prior_chunk via parse_agent_report;
-      falls back to a plain text excerpt when structured parsing yields nothing.
+    - Completed stages, and what remains — not just the next stage. Approving
+      releases the whole rest of the pipeline, so naming one stage understates
+      what is being authorised.
+    - What approving will DO (`effects`, from `_checkpoint_effects`): commits,
+      pushes, pull requests. A stage name is not a consequence.
+    - The agent's STATUS and BLOCKERS, then its plan summary or a substantive
+      excerpt.
     - A footer pointing to the Obsidian vault.
+
+    `remaining`/`effects` are optional so existing callers and tests keep
+    working unchanged.
     """
     lines: list[str] = []
 
@@ -320,6 +374,11 @@ def _build_checkpoint_details(
     if completed:
         lines.append(f"✅ *Completed:* {', '.join(completed)}")
     lines.append(f"▶️ *Next:* {next_stage}")
+    # Approving releases the REST of the pipeline, not just the next stage.
+    if remaining and len(remaining) > 1:
+        lines.append(f"🔓 *Approving runs {len(remaining)} stages:* {' → '.join(remaining)}")
+    if effects:
+        lines.append(f"⚙️ *Which will:* {'; '.join(effects)}")
 
     last_chunk = prior_chunks[-1].strip() if prior_chunks else ""
     if last_chunk:
@@ -3481,6 +3540,13 @@ class Orchestrator:
                         next_stage=stage.name,
                         components=selected_components,
                         group_mode=group_mode,
+                        remaining=[s.name for s in pipeline.stages[stage_idx:]],
+                        effects=_checkpoint_effects(
+                            pipeline.stages[stage_idx:],
+                            self.tasks.tasks,
+                            auto_git=auto_git,
+                            dry_run=dry_run,
+                        ),
                     ),
                 )
                 proposal_excerpt = (prior_chunks[-1] if prior_chunks else "").strip()

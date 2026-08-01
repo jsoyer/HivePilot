@@ -134,8 +134,16 @@ def parse_agent_report(text: str) -> AgentReport:  # noqa: C901
                 fields[key] = value
 
     # --- Colon style: field_name: value (single line or multi-line block) ---
+    # The leading `[ \t]*[-*]?[ \t]*\**` is not cosmetic tolerance: agents emit
+    # their report as a BULLET LIST (`- status: PASS`, `**blockers:** none`),
+    # and anchoring the field name at column 0 matched none of it. The whole
+    # structured path was silently dead on real output — every approval card
+    # fell back to a raw text excerpt, and `status`/`blockers` never reached
+    # the operator at all.
     colon_re = re.compile(
-        r"^(status|summary|decisions|blockers|next_handoff|confidence|links|challenge|rejection_notice)[ \t]*:[ \t]*(.*)",
+        r"^[ \t]*[-*]?[ \t]*\**"
+        r"(status|summary|decisions|blockers|next_handoff|confidence|links|challenge|rejection_notice)"
+        r"\**[ \t]*:[ \t]*(.*)",
         re.IGNORECASE | re.MULTILINE,
     )
     for m in colon_re.finditer(text):
@@ -146,6 +154,12 @@ def parse_agent_report(text: str) -> AgentReport:  # noqa: C901
             continuation_lines: list[str] = []
             for line in text[m.end() :].splitlines():
                 stripped = line.strip()
+                # A bulleted line that is ITSELF a field ends this field.
+                # Reports are written as bullet lists, so without this check
+                # `status` swallows `blockers`, `confidence` and everything
+                # after it as its own continuation.
+                if colon_re.match(line):
+                    break
                 if stripped.startswith("- ") or stripped.startswith("* "):
                     continuation_lines.append(stripped)
                 elif not stripped:
