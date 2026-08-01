@@ -141,3 +141,21 @@ def test_extra_kwargs_survive_both_shapes(mem0_mod):
     method = MagicMock(return_value={})
     mem0_mod._call_scoped(method, "k", "content", metadata={"category": "decision"})
     assert method.call_args.kwargs["metadata"] == {"category": "decision"}
+
+
+def test_store_keeps_the_top_level_entity_id(mem0_mod):
+    """mem0 2.x is ASYMMETRIC and a live run caught this the hard way.
+
+    `search` rejects `user_id=` and demands `filters=`; `add` does the
+    opposite — it REQUIRES a top-level entity id ("At least one entity ID is
+    required (user_id, agent_id, app_id, or run_id)") and 400s on `filters=`.
+    Routing `add` through the search-shaped helper broke storing, which had
+    been working.
+    """
+    import inspect
+
+    src = inspect.getsource(mem0_mod)
+    assert "client.add(content, user_id=key" in src, (
+        "add must pass a top-level user_id; mem0 2.x rejects filters= there"
+    )
+    assert "_call_scoped(client.add" not in src

@@ -111,12 +111,16 @@ def _compress_text(original: str, model_hint: str | None) -> str | None:
     to an earlier headroom keeps working. Returns None when nothing usable
     came back — the caller then leaves the original untouched.
     """
+    # Only pass `model` when we actually have one: headroom has its own
+    # default and an explicit `model=None` reaches it as a real value,
+    # failing with `'NoneType' object has no attribute 'lower'`.
+    kwargs = {"model": model_hint} if model_hint else {}
     try:
-        result = compress([{"role": "user", "content": original}], model=model_hint)
+        result = compress([{"role": "user", "content": original}], **kwargs)
     except (AttributeError, TypeError):
         # Pre-message-API headroom: string in, string out.
         try:
-            legacy = compress(original, model=model_hint)
+            legacy = compress(original, **kwargs)
         except Exception:  # noqa: BLE001
             return None
         return legacy if isinstance(legacy, str) else None
