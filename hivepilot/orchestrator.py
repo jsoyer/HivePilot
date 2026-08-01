@@ -257,6 +257,43 @@ def _synthetic_project(kind: str) -> ProjectConfig:
     )
 
 
+def _substantive_excerpt(chunk: str, limit: int = _DETAILS_FALLBACK_CHARS) -> str:
+    """Excerpt the part of an agent's output an approver actually needs.
+
+    An agent opens with verification prose — what it read, what it could not
+    reach, what it is assuming — and only then emits its `## SECTION` blocks.
+    A head-of-text excerpt therefore spends its entire budget on preamble and
+    cuts off exactly where the substance begins; a real card showed several
+    lines of "verified directly this cycle..." followed by `## TECHNICAL_SPEC`
+    and nothing under it.
+
+    So: skip the `## Agent (Stage)` heading, then start at the first section
+    heading that has content under it. Falls back to the whole body when
+    there are no sections. Always cuts on a line boundary.
+    """
+    body = chunk.strip()
+    if body.startswith("## "):
+        body = body.split("\n", 1)[1].strip() if "\n" in body else ""
+    if not body:
+        return ""
+
+    lines = body.split("\n")
+    starts = [i for i, line in enumerate(lines) if line.startswith("## ")]
+    for i in starts:
+        # A heading is worth jumping to only if something follows it.
+        if any(line.strip() for line in lines[i + 1 :]):
+            body = "\n".join(lines[i:]).strip()
+            break
+
+    if len(body) <= limit:
+        return body
+    excerpt = body[:limit]
+    cut = excerpt.rfind("\n")
+    if cut > limit // 2:
+        excerpt = excerpt[:cut]
+    return excerpt.rstrip() + "\n…"
+
+
 def _build_checkpoint_details(
     prior_chunks: list[str],
     completed: list[str],
@@ -287,27 +324,28 @@ def _build_checkpoint_details(
     last_chunk = prior_chunks[-1].strip() if prior_chunks else ""
     if last_chunk:
         report = parse_agent_report(last_chunk)
+
+        # STATUS and BLOCKERS first. They are the two facts that decide the
+        # answer, and neither was shown at all: an operator was asked to
+        # approve advancing while a blocking verdict sat unread in the body.
+        if report.status:
+            lines.append(f"\n🧭 *Status:* {report.status}")
+        if report.blockers and report.blockers.strip().lower() not in {"none", "n/a", "-"}:
+            lines.append(f"⛔ *Blockers:* {report.blockers.strip()}")
+
         bullets = report.summary[:_DETAILS_MAX_BULLETS]
         if bullets:
             lines.append("\n📋 *Plan summary:*")
             for bullet in bullets:
                 lines.append(f"  • {bullet}")
-        else:
-            # Fallback: plain excerpt of the last chunk. Drop the leading
-            # "## Agent (Stage)" heading — the card already says whose stage
-            # this is — and cut on a LINE boundary. Cutting mid-word (the
-            # operator sees "...no user sto…") makes an approval decision
-            # harder to take, which is the whole point of this card.
-            body = last_chunk
-            if body.startswith("## "):
-                body = body.split("\n", 1)[1].strip() if "\n" in body else ""
-            excerpt = body[:_DETAILS_FALLBACK_CHARS]
-            if len(body) > _DETAILS_FALLBACK_CHARS:
-                cut = excerpt.rfind("\n")
-                if cut > _DETAILS_FALLBACK_CHARS // 2:
-                    excerpt = excerpt[:cut]
-                excerpt = excerpt.rstrip() + "\n…"
-            if excerpt.strip():
+        elif not report.status:
+            # Nothing structured to show. Fall back to an excerpt, but start
+            # at the first "## SECTION" heading: an agent's output opens with
+            # verification prose, and a head-of-text excerpt spent its whole
+            # budget on that preamble, then cut off exactly where the real
+            # content began ("## TECHNICAL_SPEC" followed by nothing).
+            excerpt = _substantive_excerpt(last_chunk)
+            if excerpt:
                 lines.append(f"\n📋 *Plan excerpt:*\n{excerpt}")
 
     # Name the actual destination — "in the Obsidian vault" does not tell an
