@@ -620,7 +620,12 @@ def store(**kwargs: Any) -> None:
         run_id = kwargs.get("run_id")
         confidence = kwargs.get("confidence")
         provenance = _provenance_metadata(payload, role, run_id=run_id, confidence=confidence)
-        _call_scoped(client.add, key, content, metadata=provenance)
+        # NOT `_call_scoped`: mem0 2.x is asymmetric here. `add` REQUIRES a
+        # top-level entity id ("At least one entity ID is required (user_id,
+        # agent_id, app_id, or run_id)") and rejects `filters=`, while
+        # `search` rejects `user_id=` and demands `filters=`. Verified against
+        # the live 2.0.14 API, both directions.
+        client.add(content, user_id=key, metadata=provenance)
         logger.info("plugin.mem0.stored", key=key, step=step_name, category=provenance["category"])
 
         # Memory-quality instrumentation (best-effort, own try/except so a
