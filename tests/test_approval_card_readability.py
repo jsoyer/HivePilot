@@ -79,3 +79,57 @@ def test_the_next_stage_is_always_stated():
     )
     assert "Implementation" in details
     assert "CEO Intake" in details
+
+
+# ---------------------------------------------------------------------------
+# The two facts that decide the answer
+# ---------------------------------------------------------------------------
+
+
+def test_status_and_blockers_are_surfaced():
+    """Neither was shown at all — an operator approved past an unread verdict."""
+    chunk = (
+        "## Colette (Release Manager)\n"
+        "- status: BLOCK\n"
+        "- summary:\n"
+        "  - reviewer verdict never issued\n"
+        "- blockers: security clearance withheld\n"
+    )
+    details = _build_checkpoint_details(
+        completed=["Review"],
+        next_stage="PR Approval",
+        prior_chunks=[chunk],
+        group_mode=False,
+        components=[],
+    )
+    assert "BLOCK" in details
+    assert "security clearance withheld" in details
+
+
+def test_an_absent_blocker_is_not_rendered_as_the_word_none():
+    chunk = "## Blaise (CTO)\n- status: PASS\n- summary:\n  - all clear\n- blockers: none\n"
+    details = _build_checkpoint_details(
+        completed=[],
+        next_stage="Implementation",
+        prior_chunks=[chunk],
+        group_mode=False,
+        components=[],
+    )
+    assert "Blockers" not in details
+    assert "PASS" in details
+
+
+def test_the_excerpt_skips_preamble_and_starts_at_the_content():
+    """The real failure: budget spent on prose, cut where substance began."""
+    preamble = " ".join(["Verified directly this cycle, not inherited."] * 40)
+    chunk = f"## Blaise (CTO)\n{preamble}\n\n## TECHNICAL_SPEC\n\nComponent A talks to B."
+    details = _build_checkpoint_details(
+        completed=[],
+        next_stage="Implementation",
+        prior_chunks=[chunk],
+        group_mode=False,
+        components=[],
+    )
+    assert "TECHNICAL_SPEC" in details
+    assert "Component A talks to B." in details, "the substance must survive the cut"
+    assert "Verified directly this cycle" not in details, "preamble must be skipped"
