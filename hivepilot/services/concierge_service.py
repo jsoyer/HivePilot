@@ -435,10 +435,20 @@ def _grounding_snapshot() -> str:
     lines: list[str] = []
     try:
         for r in state_service.list_recent_runs(limit=5):
-            lines.append(
-                f"run: [{r.get('status')}] {r.get('project')}/{r.get('task')} "
-                f"@ {display_time.to_display(r.get('started_at'))}"
+            # `finished_at` is NOT optional decoration: rendering only
+            # `started_at` leaves the classifier unable to tell a finished run
+            # from an in-flight one, and it fills that gap by guessing. That is
+            # the exact production incident this closes — run 267 had been
+            # `success` for four minutes when the concierge told the operator
+            # it had "just been dispatched, no time to produce results yet".
+            finished = r.get("finished_at")
+            when = (
+                f"started {display_time.to_display(r.get('started_at'))}, "
+                f"finished {display_time.to_display(finished)}"
+                if finished
+                else f"started {display_time.to_display(r.get('started_at'))}, STILL RUNNING"
             )
+            lines.append(f"run: [{r.get('status')}] {r.get('project')}/{r.get('task')} {when}")
     except Exception as exc:  # noqa: BLE001
         logger.warning("concierge.list_recent_runs_error", error=str(exc))
     try:

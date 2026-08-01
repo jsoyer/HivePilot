@@ -200,6 +200,28 @@ def _format_results(results) -> str:
     return "\n".join(lines) or "Done."
 
 
+async def _reply_results(message, results) -> None:
+    """Reply with *results*, split across as many Telegram messages as needed.
+
+    A run's ``detail`` carries the agent's full output — a CISO threat
+    assessment or an architecture review is routinely 10-40k characters,
+    far past Telegram's ~4096-char cap. A single `reply_text` of that text
+    raises ``BadRequest("Message is too long")`` and the operator silently
+    never sees the work the run actually produced (observed: run 267,
+    `noxys-ciso`, a 13,961-char report lost on delivery).
+
+    Reuses `notification_service._split_for_telegram` — the same
+    never-truncating, boundary-aware splitter the notification path already
+    uses — rather than re-deriving a second chunking rule here. Plain text,
+    so ``html_aware=False``: agent output containing ``List<int>`` or a
+    shell redirect must never be re-interpreted as markup.
+    """
+    from hivepilot.services.notification_service import _split_for_telegram
+
+    for chunk in _split_for_telegram(_format_results(results), html_aware=False):
+        await message.reply_text(chunk)
+
+
 # ---------------------------------------------------------------------------
 # Agent registry — source of truth for direct agent commands
 # ---------------------------------------------------------------------------
@@ -587,7 +609,7 @@ async def _run_agent_order(update: Any, role_key: str, target: str, order: str) 
         return
 
     await ack.delete()
-    await update.message.reply_text(_format_results(results))
+    await _reply_results(update.message, results)
 
 
 # ---------------------------------------------------------------------------
@@ -754,7 +776,7 @@ async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDeci
                         auto_git=True,
                     ),
                 )
-            await update_like.message.reply_text(_format_results(results))
+            await _reply_results(update_like.message, results)
         except Exception as exc:
             logger.error("telegram.concierge.action_error", action=decision.action, error=str(exc))
             await update_like.message.reply_text(f"❌ Error: {exc}")
@@ -1178,7 +1200,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
         return
 
     await ack.delete()
-    await update.message.reply_text(_format_results(results))
+    await _reply_results(update.message, results)
 
 
 def _make_alias_handler(role_key: str):
@@ -1329,7 +1351,7 @@ async def _cmd_run(update, context) -> None:
         return
 
     await ack.delete()
-    await update.message.reply_text(_format_results(results))
+    await _reply_results(update.message, results)
 
 
 async def _cmd_diff(update, context) -> None:
@@ -1967,7 +1989,7 @@ async def _cmd_run_pipeline(update, context) -> None:
         logger.error("telegram.cmd_run_pipeline.error", error=str(exc))
         await update.message.reply_text(f"\u274c Error: {exc}")
         return
-    await update.message.reply_text(_format_results(results))
+    await _reply_results(update.message, results)
 
 
 async def _cmd_debate(update, context) -> None:
@@ -2045,14 +2067,31 @@ async def _on_error(update: Any, context: Any) -> None:
     `telegram.error` is imported lazily here, matching this module's
     established convention of never hard-importing `telegram` at module
     scope (python-telegram-bot stays an optional `[notifications]` extra).
+
+    ORDER MATTERS: in python-telegram-bot `BadRequest` is a *subclass* of
+    `NetworkError` (`BadRequest -> NetworkError -> TelegramError`), so a
+    plain `isinstance(error, NetworkError)` swallows every malformed-request
+    failure — a too-long message, a bad parse_mode, a dead chat — and logs
+    it as a transient hiccup that "will retry". Nothing retries: PTB's
+    polling retry covers transport failures, not rejected payloads. That
+    mislabelling is how run 267's `noxys-ciso` report vanished with no
+    error surfaced to anyone. `BadRequest` is therefore matched FIRST and
+    logged at error level, with no retry promise the code cannot keep.
     """
-    from telegram.error import Conflict, NetworkError, TimedOut
+    from telegram.error import BadRequest, Conflict, NetworkError, TimedOut
 
     error = context.error
     if isinstance(error, Conflict):
         logger.warning(
             "telegram.polling_conflict",
             detail="another bot instance is polling the same token — ensure only one instance runs",
+            error=str(error),
+        )
+        return
+    if isinstance(error, BadRequest):
+        logger.error(
+            "telegram.bad_request",
+            detail="Telegram rejected the payload — NOT retried; the message is lost",
             error=str(error),
         )
         return

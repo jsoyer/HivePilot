@@ -603,6 +603,35 @@ def record_step(
             pass
 
 
+def attach_run_artifacts(run_id: int, artifacts_path: str) -> None:
+    """Point a finished run at the artifact directory holding its output.
+
+    A *successful* run records no ``detail`` — `complete_run(run_id,
+    "success")` is called without one, so the agent's actual output lives
+    only in ``<run_dir>/artifacts/results.json`` on disk with nothing in the
+    database pointing at it. When delivery of that output failed (see the
+    `_reply_results` fix), the work became unreachable: the run row said
+    "success" and held nothing else (observed: run 267, `noxys-ciso`).
+
+    Writes ONLY into an empty ``detail`` — a failure/denial message already
+    stored there is the more important record and is never overwritten. This
+    is deliberately a pointer, not the output itself: agent dumps reach
+    hundreds of KB and the runs table is queried on every status request.
+    """
+    init_db()
+    from hivepilot.services.config_provenance import redact_text
+
+    pointer = redact_text(f"artifacts: {artifacts_path}")
+    with db.connect() as conn:
+        conn.execute(
+            db.ph(
+                "UPDATE runs SET detail=? WHERE id=? "
+                "AND (detail IS NULL OR detail='')"  # never clobber a failure message
+            ),
+            (pointer, run_id),
+        )
+
+
 def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
     init_db()
     # Choke point: same rationale as record_step — `detail` may carry `str(exc)`.
