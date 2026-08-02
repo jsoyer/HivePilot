@@ -203,3 +203,42 @@ def test_a_bulleted_report_now_reaches_the_card():
     assert "security clearance withheld" in details
     assert "reviewer verdict never issued" in details
     assert "Preamble prose" not in details
+
+
+def test_the_excerpt_prefers_the_plan_over_a_challenge_resolution():
+    """A `[RESOLVED] Challenge ...` block is appended AFTER the agent's report.
+
+    Taking the literal last chunk therefore showed an inter-agent dispute
+    where the technical spec should have been — observed on run #304.
+    """
+    cto = (
+        "## Blaise (CTO)\n"
+        "- status: PASS\n"
+        "- summary:\n  - align .windsurfrules with .cursorrules\n"
+        "- blockers: none\n"
+    )
+    challenge = (
+        "## Challenge Resolution\n[RESOLVED] Challenge between Blaise (CTO) → "
+        "Aliénor (CEO) closed. Point: ENVIRONMENTS.md is cited but absent."
+    )
+    details = _build_checkpoint_details(
+        completed=["CTO"],
+        next_stage="Implementation",
+        prior_chunks=[cto, challenge],
+        group_mode=False,
+        components=[],
+    )
+    assert "align .windsurfrules with .cursorrules" in details
+    assert "PASS" in details
+    assert "[RESOLVED]" not in details
+
+
+def test_it_still_shows_something_when_no_chunk_parses():
+    details = _build_checkpoint_details(
+        completed=[],
+        next_stage="Implementation",
+        prior_chunks=["## Notes\nfree-form prose with no report structure at all"],
+        group_mode=False,
+        components=[],
+    )
+    assert "free-form prose" in details
