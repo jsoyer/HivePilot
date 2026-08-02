@@ -171,3 +171,31 @@ describe('EfficiencyView', () => {
     expect(container.textContent).toContain('Gain rtk')
   })
 })
+
+describe('degenerate data must not be drawn as a trend', () => {
+  async function renderWithSeries(saved_series: { date: string; saved_tokens: number }[]) {
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      rtk: { ...efficiency.rtk, saved_series },
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+  }
+
+  it('does not draw a trend from a single point', async () => {
+    // One sample drew a flat stub that read as a real, flat trend --
+    // worse than saying nothing.
+    await renderWithSeries([{ date: '2026-08-01', saved_tokens: 49 }])
+    expect(container.textContent).toContain('No daily series recorded yet.')
+  })
+
+  it('draws a trend once there are two points', async () => {
+    await renderWithSeries([
+      { date: '2026-08-01', saved_tokens: 40 },
+      { date: '2026-08-02', saved_tokens: 50 },
+    ])
+    expect(container.textContent).not.toContain('No daily series recorded yet.')
+  })
+})

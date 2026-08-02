@@ -22,6 +22,12 @@ import { RunDetailPanel } from './RunDetailPanel'
  * `<= 3000` per the sprint's acceptance criteria. */
 const POLL_INTERVAL_MS = 3000
 
+// How many runs the board requests. 50 used to be hard-coded with no way to
+// ask for fewer, so an operator watching one pipeline had to read 50 cards.
+// The API bounds the value to 1-500; these are the steps offered in the UI.
+const RUN_LIMIT_OPTIONS = [10, 25, 50, 100, 200] as const
+const DEFAULT_RUN_LIMIT = 50
+
 // ---------------------------------------------------------------------------
 // Status -> Kanban column mapping. Mirrors `hivepilot/services/
 // analytics_service.py`'s canonical status classification (its
@@ -454,6 +460,8 @@ interface ToolbarProps {
   onProject: (value: string) => void
   onTask: (value: string) => void
   onDensity: (value: BoardDensity) => void
+  limit: number
+  onLimit: (value: number) => void
 }
 
 /**
@@ -476,6 +484,8 @@ function Toolbar({
   onProject,
   onTask,
   onDensity,
+  limit,
+  onLimit,
 }: ToolbarProps) {
   const t = useT()
 
@@ -545,6 +555,25 @@ function Toolbar({
         </div>
       </div>
 
+      <div className="flex flex-col gap-1">
+        <label htmlFor="run-board-limit" className="eyebrow">
+          {t('board.limit')}
+        </label>
+        <Select
+          id="run-board-limit"
+          data-testid="run-board-limit"
+          className="min-w-24"
+          value={String(limit)}
+          onChange={(event) => onLimit(Number(event.target.value))}
+        >
+          {RUN_LIMIT_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </Select>
+      </div>
+
       <span
         data-testid="run-board-result-count"
         className="metric-mono ml-auto text-xs text-muted-foreground"
@@ -584,7 +613,11 @@ export function RunBoardView() {
   const [projectFilter, setProjectFilter] = useState<string>(ALL)
   const [taskFilter, setTaskFilter] = useState<string>(ALL)
   const [density, setDensity] = usePersistedState<BoardDensity>('pollen.board.density', 'comfortable')
-  const state = useAsyncData(() => fetchRuns(), [refreshKey])
+  // How many runs to ask the API for. Persisted like density: an operator
+  // watching one pipeline should not have to re-narrow the board on every
+  // visit. Bounded server-side (1-500); these are the offered steps.
+  const [limit, setLimit] = usePersistedState<number>('pollen.board.limit', DEFAULT_RUN_LIMIT)
+  const state = useAsyncData(() => fetchRuns(limit), [refreshKey, limit])
   const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   // Poll on an interval, cleaned up on unmount (or before the next interval
@@ -694,6 +727,8 @@ export function RunBoardView() {
                 onProject={setProjectFilter}
                 onTask={setTaskFilter}
                 onDensity={setDensity}
+                limit={limit}
+                onLimit={setLimit}
               />
 
               {filtered.length === 0 ? (

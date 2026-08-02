@@ -594,8 +594,12 @@ export interface RunSummary {
   detail?: string | null
 }
 
-export function fetchRuns(): Promise<RunSummary[]> {
-  return apiFetch<RunSummary[]>('/v1/runs', { on403: 'forbidden' })
+/** Recent runs. `limit` is caller-chosen — the board was pinned to 50 with no
+ * way to ask for fewer, so watching a single pipeline meant reading 50 cards.
+ * The API bounds it to 1-500 and rejects anything else outright. */
+export function fetchRuns(limit?: number): Promise<RunSummary[]> {
+  const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : ''
+  return apiFetch<RunSummary[]>(`/v1/runs${query}`, { on403: 'forbidden' })
 }
 
 export interface NewRunInput {

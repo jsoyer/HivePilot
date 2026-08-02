@@ -477,3 +477,46 @@ class TestGetRunEndpoint:
         assert body["started_at"] == raw_row["started_at"]
         assert "CEST" not in body["started_at"]
         assert "+02:00" not in body["started_at"]
+
+
+class TestRunsLimit:
+    """`GET /v1/runs` was pinned to 50 with no way to ask for fewer.
+
+    An operator watching a single pipeline had to read 50 cards to find it.
+    Bounds are enforced by FastAPI rather than clamped silently: an
+    out-of-range value must be a visible 422, not a number quietly replaced
+    with a different one.
+    """
+
+    def test_limit_is_forwarded_to_the_query(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import state_service
+
+        seen: dict[str, object] = {}
+
+        def fake(limit: int = 50, tenant: str | None = None):
+            seen["limit"] = limit
+            return []
+
+        monkeypatch.setattr(state_service, "list_recent_runs", fake)
+        raw, _ = add_token("admin", tenant="t")
+        assert api_client.get("/v1/runs?limit=10", headers=_auth(raw)).status_code == 200
+        assert seen["limit"] == 10
+
+    def test_default_is_unchanged_when_omitted(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import state_service
+
+        seen: dict[str, object] = {}
+
+        def fake(limit: int = 50, tenant: str | None = None):
+            seen["limit"] = limit
+            return []
+
+        monkeypatch.setattr(state_service, "list_recent_runs", fake)
+        raw, _ = add_token("admin", tenant="t")
+        assert api_client.get("/v1/runs", headers=_auth(raw)).status_code == 200
+        assert seen["limit"] == 50
+
+    def test_out_of_range_is_rejected_not_clamped(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("admin", tenant="t")
+        assert api_client.get("/v1/runs?limit=0", headers=_auth(raw)).status_code == 422
+        assert api_client.get("/v1/runs?limit=5000", headers=_auth(raw)).status_code == 422
