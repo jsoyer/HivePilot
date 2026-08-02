@@ -380,9 +380,24 @@ def _build_checkpoint_details(
     if effects:
         lines.append(f"⚙️ *Which will:* {'; '.join(effects)}")
 
-    last_chunk = prior_chunks[-1].strip() if prior_chunks else ""
+    # Prefer the last chunk that actually reads as an agent REPORT. A
+    # `[RESOLVED] Challenge ...` block is appended AFTER the producing agent's
+    # report, so `prior_chunks[-1]` is often the challenge and not the plan —
+    # a real card showed an inter-agent dispute where the technical spec
+    # should have been. Falls back to the literal last chunk so a checkpoint
+    # with no structured report still shows something.
+    last_chunk = ""
+    report = None
+    for candidate in reversed([c.strip() for c in prior_chunks if c.strip()]):
+        parsed = parse_agent_report(candidate)
+        if parsed.status or parsed.summary:
+            last_chunk, report = candidate, parsed
+            break
+    if not last_chunk and prior_chunks:
+        last_chunk = prior_chunks[-1].strip()
     if last_chunk:
-        report = parse_agent_report(last_chunk)
+        if report is None:
+            report = parse_agent_report(last_chunk)
 
         # STATUS and BLOCKERS first. They are the two facts that decide the
         # answer, and neither was shown at all: an operator was asked to
