@@ -417,13 +417,32 @@ def list_tasks():
     return list(_get_orchestrator().tasks.tasks.keys())
 
 
+_RUNS_LIMIT_DEFAULT = 50
+_RUNS_LIMIT_MAX = 500
+
+
 @v1.get("/runs")
 @app.get("/runs")
-def list_runs(caller: token_service.TokenEntry = Depends(require_role("run"))):
-    """List runs, filtered to caller's tenant for non-admin roles."""
+def list_runs(
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+    limit: int = Query(
+        _RUNS_LIMIT_DEFAULT,
+        ge=1,
+        le=_RUNS_LIMIT_MAX,
+        description="How many recent runs to return (1-500).",
+    ),
+):
+    """List runs, filtered to caller's tenant for non-admin roles.
+
+    `limit` is caller-chosen because the board was pinned to 50 with no way
+    to ask for fewer — an operator watching one pipeline had to read 50 cards
+    to find it. Bounded on both ends by FastAPI (`ge`/`le`) rather than
+    clamped silently: an out-of-range value is a 422 the caller can see, not
+    a number quietly replaced with a different one.
+    """
     if caller.role == "admin":
-        return state_service.list_recent_runs()
-    return state_service.list_recent_runs(tenant=caller.tenant)
+        return state_service.list_recent_runs(limit=limit)
+    return state_service.list_recent_runs(limit=limit, tenant=caller.tenant)
 
 
 # ---------------------------------------------------------------------------

@@ -268,6 +268,7 @@ export const en = {
   'board.densityComfortable': 'Comfortable',
   'board.densityCompact': 'Compact',
   'board.showingCount': '{shown} of {total} runs',
+  'board.limit': 'Show',
   // Failure/pause reasons, derived from the canonical run status — the only
   // real "why" the list endpoint carries (`detail` is untrusted free text
   // and is never rendered).
@@ -428,7 +429,7 @@ export const en = {
   'efficiency.description': 'Token-savings signals from Headroom compression and the rtk CLI',
   'efficiency.headroomTitle': 'Headroom',
   'efficiency.headroomDescription': 'Context-compression savings recorded by the Headroom plugin',
-  'efficiency.headroomNotAvailable': 'Headroom is not reporting yet — no compressions have been recorded.',
+  'efficiency.headroomNotAvailable': 'No compressions recorded yet. Headroom only rewrites context large enough to be worth compressing, so this stays empty until a run produces one — it does not mean the plugin is failing (check Health for that).',
   'efficiency.tokensSaved': 'Tokens saved',
   'efficiency.compressions': 'Compressions recorded',
   'efficiency.charsSaved': 'Characters saved',

@@ -268,6 +268,7 @@ export const fr: Record<TranslationKey, string> = {
   'board.densityComfortable': 'Confortable',
   'board.densityCompact': 'Compacte',
   'board.showingCount': '{shown} exécutions sur {total}',
+  'board.limit': 'Afficher',
   // Motifs d'échec / de pause, déduits du statut canonique de l'exécution —
   // le seul « pourquoi » réel exposé par la liste (`detail` est du texte
   // libre non fiable, jamais affiché).
@@ -423,7 +424,7 @@ export const fr: Record<TranslationKey, string> = {
   'efficiency.description': 'Signaux d’économie de tokens de la compression Headroom et de la CLI rtk',
   'efficiency.headroomTitle': 'Headroom',
   'efficiency.headroomDescription': 'Économies de compression de contexte enregistrées par le plugin Headroom',
-  'efficiency.headroomNotAvailable': "Headroom ne remonte aucune donnée pour l'instant — aucune compression enregistrée.",
+  'efficiency.headroomNotAvailable': "Aucune compression enregistrée pour l'instant. Headroom ne réécrit que les contextes assez volumineux pour valoir une compression : tant qu'aucune exécution n'en produit, cette section reste vide — ce n'est pas un signe de panne (voir Santé pour cela).",
   'efficiency.tokensSaved': 'Tokens économisés',
   'efficiency.compressions': 'Compressions enregistrées',
   'efficiency.charsSaved': 'Caractères économisés',

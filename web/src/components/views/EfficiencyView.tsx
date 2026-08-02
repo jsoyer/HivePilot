@@ -3,6 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Gauge } from '@/components/dashboard/Gauge'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { Sparkline } from '@/components/dashboard/Sparkline'
+
+// Below this, a sparkline shows a shape the data does not support.
+const MIN_TREND_POINTS = 2
 import { useT } from '@/lib/i18n'
 import { fetchEfficiency, type HeadroomEfficiency, type RtkEfficiency } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
@@ -110,7 +113,9 @@ function RtkPanel({ rtk }: { rtk: RtkEfficiency | null }) {
       </div>
       <div className="flex flex-col gap-2">
         <h4 className="text-sm font-medium">{t('efficiency.rtkSavedSeriesTitle')}</h4>
-        {rtk.saved_series.length > 0 ? (
+        {/* A trend needs at least two points. One sample drew a flat stub that
+            looked like a real (and flat) trend — worse than saying nothing. */}
+        {rtk.saved_series.length >= MIN_TREND_POINTS ? (
           <Sparkline points={rtk.saved_series.map((point) => point.saved_tokens)} tone="good" />
         ) : (
           <p className="text-sm text-muted-foreground">{t('efficiency.noSavedSeries')}</p>
