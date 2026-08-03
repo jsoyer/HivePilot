@@ -145,6 +145,31 @@ export const fr: Record<TranslationKey, string> = {
   'health.pendingBadgeTitle':
     'Marqué pour désactivation — prendra effet au prochain redémarrage du serveur. Toujours actif actuellement.',
   'health.restartAppliesTitle': "Ce changement s'applique au prochain redémarrage du serveur API.",
+  // Activité — la seconde réponse, indépendante. Le statut dit « installé »,
+  // l'activité dit « a réellement tourné ». `headroom` et `mem0` sont restés
+  // à `ok` pendant des semaines en échouant à chaque appel : aucune de ces
+  // formulations ne laisse un badge vert tenir lieu de preuve.
+  'health.activityNote':
+    " Le statut signifie installé et configuré. L'activité signifie qu'il a réellement tourné — les deux peuvent diverger pendant des semaines.",
+  'health.summary.loaded': '{count} chargés',
+  'health.summary.exercised': '{count} sollicités',
+  'health.summary.idle': '{count} inactifs',
+  'health.summary.unreadable': '{count} illisibles',
+  'health.summary.neverRun': "{count} jamais exécutés",
+  'health.summary.unmeasured': '{count} non mesurables',
+  'health.activity.active': '{count} événements · dernier {when}',
+  'health.activity.idle': 'rien depuis {days} j · dernier {when}',
+  'health.activity.neverRun': 'jamais exécuté',
+  'health.activity.unreadable': 'activité illisible',
+  'health.activity.presenceOnly': 'simple test de présence',
+  'health.activity.presenceOnlyTitle':
+    "Ce plugin n'enregistre aucune télémétrie. Le badge de statut confirme qu'il est installé — pas qu'il fonctionne.",
+  'health.activity.unreadableTitle':
+    "Ce plugin est mesurable, mais la lecture de sa télémétrie a échoué. Ce n'est pas la même chose que n'avoir rien fait.",
+  'health.activity.evidenceTitle': 'Mesuré depuis {evidence}.',
+  'health.activity.contradiction': "annonce ok, n'a jamais tourné",
+  'health.activity.contradictionTitle':
+    "Le plugin se charge et est configuré, mais n'a aucune activité enregistrée. À vérifier avant de lui faire confiance.",
 
   // ---- Graph view ------------------------------------------------------
   'graph.title': 'Graphe',

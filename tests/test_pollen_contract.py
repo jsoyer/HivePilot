@@ -303,7 +303,19 @@ class TestPluginsHealthContract:
         data = resp.json()
         assert set(data.keys()) == {"plugins", "disabled"}
         assert len(data["plugins"]) == 1
-        assert set(data["plugins"][0].keys()) == {"name", "status", "detail"}
+        # `activity`/`activity_available` are a second answer, independent of
+        # `status`: installed-and-configured vs has-actually-run. They are two
+        # fields rather than one because "no reading" has two causes -- not
+        # measurable at all, vs measurable but the read failed -- and neither
+        # is the same as a measured zero. Pollen's `PluginHealthEntry` in
+        # `web/src/lib/pollen-api.ts` mirrors this shape.
+        assert set(data["plugins"][0].keys()) == {
+            "name",
+            "status",
+            "detail",
+            "activity_available",
+            "activity",
+        }
 
 
 # ---------------------------------------------------------------------------

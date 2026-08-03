@@ -66,9 +66,9 @@ describe('StatusPills', () => {
   it('renders one pill per plugin with its name and status', async () => {
     const data: PluginsHealthResponse = {
       plugins: [
-        { name: 'store', status: 'ok', detail: '' },
-        { name: 'mem0', status: 'ok', detail: '' },
-        { name: 'headroom', status: 'degraded', detail: 'slow' },
+        { name: 'store', status: 'ok', detail: '', activity_available: false, activity: null },
+        { name: 'mem0', status: 'ok', detail: '', activity_available: false, activity: null },
+        { name: 'headroom', status: 'degraded', detail: 'slow', activity_available: false, activity: null },
       ],
       disabled: [],
     }
@@ -86,8 +86,8 @@ describe('StatusPills', () => {
   it('styles a plugin pill by its status (ok/degraded/error map to distinct classes)', async () => {
     const data: PluginsHealthResponse = {
       plugins: [
-        { name: 'store', status: 'ok', detail: '' },
-        { name: 'broken', status: 'error', detail: 'down' },
+        { name: 'store', status: 'ok', detail: '', activity_available: false, activity: null },
+        { name: 'broken', status: 'error', detail: 'down', activity_available: false, activity: null },
       ],
       disabled: [],
     }
@@ -104,9 +104,9 @@ describe('StatusPills', () => {
   it('visual identity: pulses the status dot for a healthy plugin, but not for degraded/error ones', async () => {
     const data: PluginsHealthResponse = {
       plugins: [
-        { name: 'store', status: 'ok', detail: '' },
-        { name: 'headroom', status: 'degraded', detail: '' },
-        { name: 'broken', status: 'error', detail: '' },
+        { name: 'store', status: 'ok', detail: '', activity_available: false, activity: null },
+        { name: 'headroom', status: 'degraded', detail: '', activity_available: false, activity: null },
+        { name: 'broken', status: 'error', detail: '', activity_available: false, activity: null },
       ],
       disabled: [],
     }

@@ -1085,9 +1085,26 @@ class TestPluginsHealthEndpoint:
         raw, _ = add_token("read")
         resp = api_client.get("/v1/plugins/health", headers=_auth(raw))
         assert resp.status_code == 200
-        data = resp.json()["plugins"]
-        assert {"name": "mem0", "status": "ok", "detail": "self-host"} in data
-        assert {"name": "rtk", "status": "degraded", "detail": "not configured"} in data
+        data = {row["name"]: row for row in resp.json()["plugins"]}
+
+        assert data["mem0"]["status"] == "ok"
+        assert data["mem0"]["detail"] == "self-host"
+        assert data["rtk"]["status"] == "degraded"
+        assert data["rtk"]["detail"] == "not configured"
+
+        # Health and activity are two independent answers, and the payload must
+        # keep them apart. `mem0` writes telemetry, so it gets a real reading --
+        # here `events == 0`, meaning "measured, and it has done nothing", which
+        # is precisely the state its green `status="ok"` was hiding.
+        assert data["mem0"]["activity_available"] is True
+        assert data["mem0"]["activity"]["events"] == 0
+        assert data["mem0"]["activity"]["last_used"] is None
+
+        # `rtk` is a PATH check that records nothing. It must report no reading
+        # at all rather than a fabricated zero, which would read as "installed
+        # but idle" -- a claim no data here supports.
+        assert data["rtk"]["activity_available"] is False
+        assert data["rtk"]["activity"] is None
 
     def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file, monkeypatch):
         from types import SimpleNamespace

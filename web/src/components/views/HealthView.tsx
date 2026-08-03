@@ -5,7 +5,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
-import { fetchPluginsHealth, togglePlugin, type PluginHealthStatus } from '@/lib/pollen-api'
+import { formatAge, formatTimestamp } from '@/lib/format-time'
+import {
+  fetchPluginsHealth,
+  togglePlugin,
+  type PluginHealthEntry,
+  type PluginHealthStatus,
+} from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
@@ -14,6 +20,44 @@ const STATUS_VARIANT: Record<PluginHealthStatus, 'secondary' | 'outline' | 'dest
   ok: 'secondary',
   degraded: 'outline',
   error: 'destructive',
+}
+
+/**
+ * What the activity probe found, as five mutually exclusive states.
+ *
+ * Modelling this as a union rather than a pile of nullable fields is
+ * deliberate: the states that matter here are the ones easiest to collapse by
+ * accident. `never` ("measured, and it has done nothing") is a real reading;
+ * `presenceOnly` ("nothing records this plugin's use") is the absence of one;
+ * `unreadable` ("measurable, but the read failed") is a third thing again.
+ * Rendering any of them as "0" would tell the operator something untrue.
+ */
+type ActivityState =
+  | { kind: 'active'; events: number; lastUsed: string; evidence: string }
+  | { kind: 'idle'; windowDays: number; lastUsed: string; evidence: string }
+  | { kind: 'never'; evidence: string }
+  | { kind: 'unreadable' }
+  | { kind: 'presenceOnly' }
+
+function activityState(plugin: PluginHealthEntry): ActivityState {
+  if (!plugin.activity_available) return { kind: 'presenceOnly' }
+  if (!plugin.activity) return { kind: 'unreadable' }
+
+  const { events, last_used: lastUsed, window_days: windowDays, evidence } = plugin.activity
+  // No timestamp means nothing was ever recorded. Checked before `events` so
+  // a count without a date can never render as an activity with no date.
+  if (!lastUsed) return { kind: 'never', evidence }
+  if (events > 0) return { kind: 'active', events, lastUsed, evidence }
+  return { kind: 'idle', windowDays, lastUsed, evidence }
+}
+
+/** A plugin that loads, reports `ok`, and has never once run.
+ *
+ * This is the exact state `headroom` and `mem0` sat in for weeks, and the
+ * reason this view was rebuilt: nothing on screen contradicted the green
+ * badge. It gets its own marker so it cannot pass for healthy again. */
+function contradictsStatus(plugin: PluginHealthEntry, activity: ActivityState): boolean {
+  return plugin.status === 'ok' && activity.kind === 'never'
 }
 
 /** Per-row toggle result, tracked locally so a just-toggled row can show a
@@ -105,10 +149,77 @@ function PluginToggle({ name, toggled, onToggled, initialDisabled = false }: Plu
   )
 }
 
+/** Colour carries emphasis, the leading glyph carries the state.
+ *
+ * Encoding activity in hue alone would leave the whole distinction invisible
+ * to a colour-blind operator and to anyone reading a greyscale screenshot —
+ * and this column exists precisely to be noticed. */
+const ACTIVITY_STYLE: Record<ActivityState['kind'], { glyph: string; className: string }> = {
+  active: { glyph: '●', className: 'text-emerald-600 dark:text-emerald-500' },
+  idle: { glyph: '◐', className: 'text-muted-foreground' },
+  never: { glyph: '○', className: 'text-amber-600 dark:text-amber-500' },
+  unreadable: { glyph: '?', className: 'text-muted-foreground' },
+  presenceOnly: { glyph: '–', className: 'text-muted-foreground/70' },
+}
+
+function ActivityChip({ state }: { state: ActivityState }) {
+  const t = useT()
+  const style = ACTIVITY_STYLE[state.kind]
+
+  let label: string
+  let title: string
+
+  switch (state.kind) {
+    case 'active':
+      label = t('health.activity.active', {
+        count: state.events,
+        when: formatAge(state.lastUsed),
+      })
+      title = `${formatTimestamp(state.lastUsed)} — ${t('health.activity.evidenceTitle', { evidence: state.evidence })}`
+      break
+    case 'idle':
+      label = t('health.activity.idle', {
+        days: state.windowDays,
+        when: formatAge(state.lastUsed),
+      })
+      title = `${formatTimestamp(state.lastUsed)} — ${t('health.activity.evidenceTitle', { evidence: state.evidence })}`
+      break
+    case 'never':
+      label = t('health.activity.neverRun')
+      title = t('health.activity.evidenceTitle', { evidence: state.evidence })
+      break
+    case 'unreadable':
+      label = t('health.activity.unreadable')
+      title = t('health.activity.unreadableTitle')
+      break
+    case 'presenceOnly':
+      label = t('health.activity.presenceOnly')
+      title = t('health.activity.presenceOnlyTitle')
+      break
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 text-sm tabular-nums ${style.className}`}
+      title={title}
+    >
+      <span aria-hidden="true">{style.glyph}</span>
+      {label}
+    </span>
+  )
+}
+
 /**
  * Health tab -- `GET /v1/plugins/health`, one badge per plugin, plus an
  * admin-only enable/disable toggle (`POST /v1/plugins/{name}/toggle`,
  * Mirador actionable dashboard PRD, Sprint 5).
+ *
+ * **Two independent answers per plugin.** `status` says installed and
+ * configured; `activity` says it has actually run. They can disagree for a
+ * long time without anything looking wrong — `headroom` and `mem0` both held
+ * `ok` for weeks while failing every call. The activity column, the summary
+ * counts, and the `contradictsStatus` marker all exist so that state is
+ * visible on screen instead of having to be discovered in the database.
  *
  * Non-admin tokens (`useRole().can('admin')` false) see the exact same
  * read-only rows Sprint 1 shipped -- no toggle control renders at all.
@@ -140,6 +251,7 @@ export function HealthView() {
         <CardTitle>{t('health.title')}</CardTitle>
         <CardDescription>
           {t('health.description')}
+          {t('health.activityNote')}
           {canAdmin && t('health.restartNote')}
         </CardDescription>
       </CardHeader>
@@ -157,8 +269,57 @@ export function HealthView() {
             // list (with a "disable pending" badge), so exclude it here.
             const trulyDisabled = data.disabled.filter((name) => !loadedNames.has(name))
 
+            const states = data.plugins.map((plugin) => activityState(plugin))
+            // Counted separately rather than rolled into one "healthy"
+            // figure: a plugin nothing measures and a plugin measured as idle
+            // are not interchangeable, and summing them would recreate the
+            // false reassurance this view was rebuilt to remove.
+            //
+            // **Every state gets a bucket.** An earlier version counted only
+            // exercised/never-run/presence-only, so a plugin idle for ninety
+            // days — or one whose probe failed — fell through all three and
+            // the strip still read "0 never run". A count that silently omits
+            // a case is worse than no count: it reassures about ground it
+            // never covered. `test_every_plugin_lands_in_exactly_one_bucket`
+            // pins the totals to `plugins.length`.
+            const count = (kind: ActivityState['kind']) =>
+              states.filter((state) => state.kind === kind).length
+            const exercised = count('active')
+            const idle = count('idle')
+            const neverRun = count('never')
+            const unmeasured = count('presenceOnly')
+            const unreadable = count('unreadable')
+
             return (
               <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm tabular-nums text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    {t('health.summary.loaded', { count: data.plugins.length })}
+                  </span>
+                  <span className={exercised > 0 ? 'text-emerald-600 dark:text-emerald-500' : ''}>
+                    {ACTIVITY_STYLE.active.glyph}{' '}
+                    {t('health.summary.exercised', { count: exercised })}
+                  </span>
+                  <span>
+                    {ACTIVITY_STYLE.idle.glyph} {t('health.summary.idle', { count: idle })}
+                  </span>
+                  <span className={neverRun > 0 ? 'text-amber-600 dark:text-amber-500' : ''}>
+                    {ACTIVITY_STYLE.never.glyph}{' '}
+                    {t('health.summary.neverRun', { count: neverRun })}
+                  </span>
+                  <span>
+                    {ACTIVITY_STYLE.presenceOnly.glyph}{' '}
+                    {t('health.summary.unmeasured', { count: unmeasured })}
+                  </span>
+                  {/* An error state, not a resting state — shown only when it
+                      actually happens rather than sitting at a permanent 0. */}
+                  {unreadable > 0 && (
+                    <span>
+                      {ACTIVITY_STYLE.unreadable.glyph}{' '}
+                      {t('health.summary.unreadable', { count: unreadable })}
+                    </span>
+                  )}
+                </div>
                 <ul className="flex flex-col gap-2">
                   {data.plugins.map((plugin) => {
                     // Seeded from the load-time snapshot; a local toggle this
@@ -170,23 +331,51 @@ export function HealthView() {
                       ? toggled[plugin.name].disabled
                       : pendingFromLoad
 
+                    const activity = activityState(plugin)
+                    const contradicts = contradictsStatus(plugin, activity)
+
                     return (
                       <li
                         key={plugin.name}
-                        className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2"
+                        className={`flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between ${
+                          contradicts
+                            ? 'border-amber-500/40 bg-amber-500/5'
+                            : 'border-border'
+                        }`}
                       >
-                        <span className="font-medium">{plugin.name}</span>
-                        <Badge variant={STATUS_VARIANT[plugin.status]}>
-                          {t(`health.status.${plugin.status}`)}
-                        </Badge>
-                        {pendingDisable && (
-                          <Badge variant="outline" title={t('health.pendingBadgeTitle')}>
-                            {t('health.disablePending')}
-                          </Badge>
-                        )}
-                        {plugin.detail && (
-                          <span className="text-sm text-muted-foreground">{plugin.detail}</span>
-                        )}
+                        <div className="flex min-w-0 flex-col gap-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">{plugin.name}</span>
+                            <Badge variant={STATUS_VARIANT[plugin.status]}>
+                              {t(`health.status.${plugin.status}`)}
+                            </Badge>
+                            {pendingDisable && (
+                              <Badge variant="outline" title={t('health.pendingBadgeTitle')}>
+                                {t('health.disablePending')}
+                              </Badge>
+                            )}
+                            {/* The badge above says `ok`. This says it has
+                                never run. Both are true, and the operator
+                                needs the second one to act on the first. */}
+                            {contradicts && (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-500/50 text-amber-700 dark:text-amber-500"
+                                title={t('health.activity.contradictionTitle')}
+                              >
+                                {t('health.activity.contradiction')}
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <ActivityChip state={activity} />
+                            {plugin.detail && (
+                              <span className="truncate text-sm text-muted-foreground">
+                                {plugin.detail}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                         {canAdmin && (
                           <PluginToggle
                             name={plugin.name}

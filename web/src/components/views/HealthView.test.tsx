@@ -28,9 +28,9 @@ let root: Root
 
 const health: PluginsHealthResponse = {
   plugins: [
-    { name: 'rtk', status: 'ok', detail: 'reachable' },
-    { name: 'mem0', status: 'degraded', detail: 'self-hosted, slow' },
-    { name: 'obsidian', status: 'error', detail: 'vault path missing' },
+    { name: 'rtk', status: 'ok', detail: 'reachable', activity_available: false, activity: null },
+    { name: 'mem0', status: 'degraded', detail: 'self-hosted, slow', activity_available: false, activity: null },
+    { name: 'obsidian', status: 'error', detail: 'vault path missing', activity_available: false, activity: null },
   ],
   disabled: [],
 }
@@ -295,8 +295,8 @@ describe('HealthView', () => {
 
   const healthWithPendingDisable: PluginsHealthResponse = {
     plugins: [
-      { name: 'rtk', status: 'ok', detail: 'reachable' },
-      { name: 'tmux', status: 'ok', detail: 'session active' },
+      { name: 'rtk', status: 'ok', detail: 'reachable', activity_available: false, activity: null },
+      { name: 'tmux', status: 'ok', detail: 'session active', activity_available: false, activity: null },
     ],
     // tmux is active right now AND already flagged in plugins_disabled --
     // the "disable" click from a previous session hasn't taken effect yet
@@ -396,5 +396,237 @@ describe('HealthView', () => {
     expect(container.textContent).toContain('dégradé')
     expect(container.textContent).toContain('erreur')
     expect(container.querySelector('button[aria-label="Désactiver rtk"]')).not.toBeNull()
+  })
+
+  /**
+   * Activity is a second answer, independent of status.
+   *
+   * These tests exist because the previous view had no way to be wrong out
+   * loud: `headroom` and `mem0` both rendered a green `ok` badge for weeks
+   * while failing every single call. Each case below pins one distinction
+   * that, if it collapsed, would let that happen again.
+   */
+  describe('activity', () => {
+    /** A naive UTC timestamp *minutes* ago, matching the SQLite
+     * `CURRENT_TIMESTAMP` format the API actually returns. */
+    function recentUtc(minutesAgo: number): string {
+      return new Date(Date.now() - minutesAgo * 60_000)
+        .toISOString()
+        .replace('T', ' ')
+        .slice(0, 19)
+    }
+
+    it('reports how much a measurable plugin has actually done', async () => {
+      fetchPluginsHealth.mockResolvedValue({
+        plugins: [
+          {
+            name: 'mem0',
+            status: 'ok',
+            detail: 'self-host',
+            activity_available: true,
+            activity: {
+              last_used: recentUtc(5),
+              events: 42,
+              window_days: 30,
+              evidence: 'memory_events',
+            },
+          },
+        ],
+        disabled: [],
+      } satisfies PluginsHealthResponse)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+      })
+
+      expect(container.textContent).toContain('42 events')
+      expect(container.textContent).toContain('1 exercised')
+    })
+
+    it('flags a plugin that reports ok but has never run', async () => {
+      // The exact state headroom sat in: loads, configured, green badge, and
+      // it has never once done anything. The badge alone must not stand.
+      fetchPluginsHealth.mockResolvedValue({
+        plugins: [
+          {
+            name: 'headroom',
+            status: 'ok',
+            detail: 'compressor ready',
+            activity_available: true,
+            activity: {
+              last_used: null,
+              events: 0,
+              window_days: 30,
+              evidence: 'headroom_compressions + headroom_skips',
+            },
+          },
+        ],
+        disabled: [],
+      } satisfies PluginsHealthResponse)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+      })
+
+      expect(container.textContent).toContain('never run')
+      expect(container.textContent).toContain('reports ok, never ran')
+      expect(container.textContent).toContain('1 never run')
+    })
+
+    it('does not credit a presence-only plugin with a zero reading', async () => {
+      // `rtk` is a PATH check; nothing records its use. "0 events" would read
+      // as "installed but idle" -- a measurement that was never taken.
+      fetchPluginsHealth.mockResolvedValue({
+        plugins: [
+          {
+            name: 'rtk',
+            status: 'ok',
+            detail: 'on PATH',
+            activity_available: false,
+            activity: null,
+          },
+        ],
+        disabled: [],
+      } satisfies PluginsHealthResponse)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+      })
+
+      expect(container.textContent).toContain('presence check only')
+      expect(container.textContent).toContain('1 presence-only')
+      // Counted as neither exercised nor never-run: it was not measured.
+      expect(container.textContent).toContain('0 never run')
+      expect(container.textContent).toContain('0 exercised')
+      expect(container.textContent).not.toContain('0 events')
+    })
+
+    it('separates an unreadable probe from a plugin that never ran', async () => {
+      // Measurable, but the read failed. Showing this as "never run" would
+      // report a missing measurement as a finding.
+      fetchPluginsHealth.mockResolvedValue({
+        plugins: [
+          {
+            name: 'headroom',
+            status: 'ok',
+            detail: 'compressor ready',
+            activity_available: true,
+            activity: null,
+          },
+        ],
+        disabled: [],
+      } satisfies PluginsHealthResponse)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+      })
+
+      expect(container.textContent).toContain('activity unreadable')
+      // A failed read is not a finding: it must not be counted as never-run,
+      // and must not raise the ok-but-never-ran flag.
+      expect(container.textContent).toContain('0 never run')
+      expect(container.textContent).not.toContain('reports ok, never ran')
+    })
+
+    it('keeps a long-idle plugin distinguishable from one that never ran', async () => {
+      // `events: 0` inside the window, but it did run once -- and we know
+      // when. Collapsing this to "never" would discard the only evidence
+      // that the plugin has ever worked at all.
+      fetchPluginsHealth.mockResolvedValue({
+        plugins: [
+          {
+            name: 'mem0',
+            status: 'ok',
+            detail: 'self-host',
+            activity_available: true,
+            activity: {
+              last_used: '2026-01-04 09:00:00',
+              events: 0,
+              window_days: 30,
+              evidence: 'memory_events',
+            },
+          },
+        ],
+        disabled: [],
+      } satisfies PluginsHealthResponse)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+      })
+
+      expect(container.textContent).toContain('nothing in 30 d')
+      expect(container.textContent).toContain('0 never run')
+      expect(container.textContent).not.toContain('reports ok, never ran')
+    })
+
+    it('lands every plugin in exactly one summary bucket', async () => {
+      // A count that silently omits a case is worse than no count: it
+      // reassures about ground it never covered. An earlier version had no
+      // `idle` or `unreadable` bucket, so a plugin dead for ninety days fell
+      // through every counter while the strip still read "0 never run".
+      fetchPluginsHealth.mockResolvedValue({
+        plugins: [
+          {
+            name: 'active-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: { last_used: recentUtc(2), events: 7, window_days: 30, evidence: 'e' },
+          },
+          {
+            name: 'idle-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: {
+              last_used: '2026-01-04 09:00:00',
+              events: 0,
+              window_days: 30,
+              evidence: 'e',
+            },
+          },
+          {
+            name: 'never-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: { last_used: null, events: 0, window_days: 30, evidence: 'e' },
+          },
+          {
+            name: 'unreadable-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: null,
+          },
+          {
+            name: 'presence-one',
+            status: 'ok',
+            detail: '',
+            activity_available: false,
+            activity: null,
+          },
+        ],
+        disabled: [],
+      } satisfies PluginsHealthResponse)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+      })
+
+      // 1 + 1 + 1 + 1 + 1 = 5 loaded. Nothing falls through.
+      expect(container.textContent).toContain('5 loaded')
+      expect(container.textContent).toContain('1 exercised')
+      expect(container.textContent).toContain('1 idle')
+      expect(container.textContent).toContain('1 never run')
+      expect(container.textContent).toContain('1 presence-only')
+      expect(container.textContent).toContain('1 unreadable')
+    })
   })
 })
