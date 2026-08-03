@@ -115,6 +115,43 @@ def fetch_pr_diff(pr: int, *, repo: str, timeout: int = _GH_TIMEOUT_SECONDS) -> 
     return diff
 
 
+def fetch_pr_diff_for_branch(repo_path: str, *, timeout: int = _GH_TIMEOUT_SECONDS) -> str:
+    """The diff of the PR open on *repo_path*'s current branch.
+
+    This is what `review_target: "github_pr"` was always supposed to review.
+    Until now the only subject the orchestrator ever computed was `git diff`
+    on the working tree, so `github_pr` and `internal` differed solely in
+    *where the block was enforced* — never in *what was reviewed*. On the
+    noxys pipeline the review sits on a stage that commits nothing, so the
+    working tree was clean and the reviewers were handed an empty subject
+    every single time.
+
+    `gh pr diff` with no arguments resolves the repository and the current
+    branch's PR by itself, which is why neither is passed: the pipeline stage
+    knows its checkout, not a PR number.
+
+    Raises `ReviewProbeError` rather than returning "" — see that class.
+    """
+    cmd = ["gh", "pr", "diff"]
+    try:
+        completed = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=repo_path
+        )
+    except Exception as exc:  # noqa: BLE001 — surfaced, not swallowed
+        raise ReviewProbeError(f"could not run `gh pr diff` in {repo_path}: {exc}") from exc
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or "").strip() or f"exit {completed.returncode}"
+        raise ReviewProbeError(f"`gh pr diff` in {repo_path} failed: {detail}")
+
+    diff = completed.stdout or ""
+    if not diff.strip():
+        raise ReviewProbeError(
+            f"the PR for {repo_path}'s current branch has an empty diff — nothing to review"
+        )
+    return diff
+
+
 def plan_reviewers(reviewers: list[str]) -> list[PlannedReviewer]:
     """Resolve each reviewer to the runner and model it would dispatch on.
 
