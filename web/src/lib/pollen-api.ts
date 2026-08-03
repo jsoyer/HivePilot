@@ -174,7 +174,7 @@ export interface CostAccumulation {
   unpriced_steps: number
   /** Steps that could not have cost anything (shell runner, skipped stage) —
    *  counted separately so the "total understated" warning stays truthful. */
-  unpriceable_steps: number
+  unpriceable_steps?: number
   /** Why steps are unpriced, by cause: `no_usage_captured` (the model is in
    *  the price map but no tokens were recorded), `no_price_for_model`, or
    *  `no_model_recorded`. The banner must name the right subsystem. */
@@ -233,7 +233,7 @@ export interface ModelRollup {
   unpriced_steps: number
   /** Steps that could not have cost anything (shell runner, skipped stage) —
    *  counted separately so the "total understated" warning stays truthful. */
-  unpriceable_steps: number
+  unpriceable_steps?: number
   /** Why steps are unpriced, by cause: `no_usage_captured` (the model is in
    *  the price map but no tokens were recorded), `no_price_for_model`, or
    *  `no_model_recorded`. The banner must name the right subsystem. */
@@ -1123,7 +1123,7 @@ export interface AgentActivityStats {
   unpriced_steps: number
   /** Steps that could not have cost anything (shell runner, skipped stage) —
    *  counted separately so the "total understated" warning stays truthful. */
-  unpriceable_steps: number
+  unpriceable_steps?: number
   /** Why steps are unpriced, by cause: `no_usage_captured` (the model is in
    *  the price map but no tokens were recorded), `no_price_for_model`, or
    *  `no_model_recorded`. The banner must name the right subsystem. */
