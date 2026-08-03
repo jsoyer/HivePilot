@@ -1013,6 +1013,57 @@ def _agent_role_stats(group: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# The three reasons a step can carry no role. Always all present in the
+# payload, at zero when empty — a missing key would read as "this cannot
+# happen here" rather than "this did not happen".
+_UNKNOWN_REASONS = ("no_model", "skipped", "attribution_gap")
+
+
+def _unknown_reason(row: dict[str, Any]) -> str:
+    """Why this row has no role.
+
+    Only ``attribution_gap`` is a defect. The other two are structural and
+    correctly excluded from per-role figures:
+
+    - ``skipped`` — the step never ran, so it invoked nothing. Checked first:
+      a skip is a skip whatever provider was declared for it.
+    - ``no_model`` — a non-model provider (`shell`), which cannot have a role
+      because no agent was involved. Uses the same `_NON_MODEL_PROVIDERS`
+      definition as `_steps_grouped_by`, so "not a model invocation" means
+      one thing across analytics.
+    - ``attribution_gap`` — a model ran (or the provider is NULL, a genuine
+      telemetry gap) and no role was recorded. This is spend and work missing
+      from every per-agent figure, and the only number here worth acting on.
+      NULL-provider non-skip rows land here deliberately: an unknown is not
+      evidence of harmlessness.
+    """
+    if str(row.get("step") or "").startswith("skip:"):
+        return "skipped"
+    provider = row.get("provider")
+    if provider is not None and provider in _NON_MODEL_PROVIDERS:
+        return "no_model"
+    return "attribution_gap"
+
+
+def _unknown_breakdown(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Split the NULL-role bucket by cause, with the cost each carries.
+
+    Every row lands in exactly one bucket, so the counts sum to the bucket's
+    own `step_count` — a breakdown that dropped rows would understate the
+    attribution gap without saying so.
+    """
+    breakdown: dict[str, dict[str, Any]] = {
+        reason: {"step_count": 0, "cost_usd": 0.0} for reason in _UNKNOWN_REASONS
+    }
+    for row in rows:
+        part = breakdown[_unknown_reason(row)]
+        part["step_count"] += 1
+        part["cost_usd"] += float(row.get("cost_usd") or 0.0)
+    for part in breakdown.values():
+        part["cost_usd"] = round(part["cost_usd"], 6)
+    return breakdown
+
+
 def agents_summary(
     tenant: str | None = None,
     days: int | None = None,
@@ -1071,6 +1122,7 @@ def agents_summary(
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT s.role AS role, s.run_id AS run_id, s.status AS status,
+               s.step AS step, s.provider AS provider,
                s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
                s.cache_read_tokens AS cache_read_tokens,
                s.cache_creation_tokens AS cache_creation_tokens,
@@ -1112,6 +1164,12 @@ def agents_summary(
 
     unknown_stats = _agent_role_stats(unknown_rows)
     unknown_stats.pop("attributed", None)
+    # Why each row is here, not just how many there are. The single number
+    # this replaces was described in the UI as legacy pre-attribution
+    # history; on real data it was overwhelmingly roleless `shell` steps,
+    # with a much smaller set of genuinely unattributed model invocations
+    # hidden inside it.
+    unknown_stats["breakdown"] = _unknown_breakdown(unknown_rows)
 
     return {
         "agents": agents,

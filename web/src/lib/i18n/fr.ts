@@ -675,9 +675,24 @@ export const fr: Record<TranslationKey, string> = {
   'agents.tokensLabel': 'Jetons (entrée/sortie)',
   'agents.lastActiveLabel': 'Dernière activité',
   'agents.successRateLabel': 'Taux de réussite',
-  'agents.unknownTitle': 'Activité non attribuée',
+  // L'ancienne formulation présentait ce bucket comme de l'historique
+  // antérieur à l'attribution par rôle. Sur les données réelles, c'était
+  // faux pour chacune de ses lignes : l'essentiel est constitué d'étapes
+  // shell qui ne peuvent pas avoir de rôle, et le reliquat est du vrai
+  // travail modèle non attribué, porteur de dépense. Les trois causes sont
+  // désormais nommées séparément, car une seule est un défaut.
+  'agents.unknownTitle': 'Étapes sans agent',
   'agents.unknownDescription':
-    'Enregistrée avant l’existence de l’attribution par rôle. Elle ne peut être rattachée à aucun rôle et n’entre donc dans aucun chiffre ci-dessus.',
+    "Exclues de tous les chiffres ci-dessus. Deux de ces causes sont structurelles ; la troisième est un manque à combler.",
+  'agents.unknown.noModel': 'Aucun agent impliqué',
+  'agents.unknown.noModelHint': "Étapes shell — rien n'a tourné qui puisse avoir un rôle.",
+  'agents.unknown.skipped': 'Ignorées',
+  'agents.unknown.skippedHint': "L'étape n'a jamais tourné, elle n'a donc rien appelé.",
+  'agents.unknown.attributionGap': 'Exécutées sans rôle enregistré',
+  'agents.unknown.attributionGapHint':
+    "Un modèle a tourné sans qu'aucun rôle soit enregistré. C'est la seule cause ici qui soit un défaut.",
+  'agents.unknown.gapCost': '{cost} de dépense manquent aux chiffres par agent ci-dessus.',
+  'agents.unknown.stepsSuffix': '{count} étapes',
   'agents.detailAriaLabel': "Détail de l'agent : {name}",
   'agents.closeAriaLabel': "Fermer le détail de l'agent",
   'agents.lessonsTitle': 'Leçons récentes',

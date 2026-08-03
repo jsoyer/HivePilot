@@ -669,9 +669,23 @@ export const en = {
   'agents.tokensLabel': 'Tokens (in/out)',
   'agents.lastActiveLabel': 'Last active',
   'agents.successRateLabel': 'Success rate',
-  'agents.unknownTitle': 'Unattributed activity',
+  // The old copy said this was history recorded before per-role attribution
+  // existed. On real data that was wrong for every row in the bucket: almost
+  // all of it is shell steps that cannot have a role, and the small
+  // remainder is genuinely unattributed model work carrying real spend. The
+  // three causes are now named separately, because only one is a defect.
+  'agents.unknownTitle': 'Steps with no agent',
   'agents.unknownDescription':
-    'Recorded before per-role attribution existed. It cannot be assigned to a role, so it is excluded from every figure above.',
+    'Excluded from every figure above. Two of these causes are structural; the third is a gap worth closing.',
+  'agents.unknown.noModel': 'No agent involved',
+  'agents.unknown.noModelHint': 'Shell steps — nothing ran that could have a role.',
+  'agents.unknown.skipped': 'Skipped',
+  'agents.unknown.skippedHint': 'The step never ran, so it invoked nothing.',
+  'agents.unknown.attributionGap': 'Ran without a recorded role',
+  'agents.unknown.attributionGapHint':
+    'A model ran and no role was recorded. This is the only cause here that is a defect.',
+  'agents.unknown.gapCost': '{cost} of spend is missing from the per-agent figures above.',
+  'agents.unknown.stepsSuffix': '{count} steps',
   'agents.detailAriaLabel': 'Agent detail: {name}',
   'agents.closeAriaLabel': 'Close agent detail',
   'agents.lessonsTitle': 'Recent lessons',

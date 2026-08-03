@@ -1182,7 +1182,31 @@ export interface AgentRoster extends AgentActivityStats {
 /** The NULL-role ("unknown") bucket — same counters as a roster entry,
  * minus `attributed` (always true by construction: it's whatever activity
  * actually has no role). */
-export type AgentUnknownBucket = AgentActivityStats
+/** One cause a step can carry no role, with the spend it accounts for. */
+export interface UnknownBreakdownPart {
+  step_count: number
+  cost_usd: number
+}
+
+/** Why the roleless steps are roleless.
+ *
+ * Only `attribution_gap` is a defect. `no_model` (shell steps — no agent was
+ * involved) and `skipped` (never ran) are structural and correctly excluded
+ * from every per-role figure. The bucket used to be one undifferentiated
+ * number labelled as legacy pre-attribution history; on real data that was
+ * wrong for every row in it, and the handful of genuinely unattributed model
+ * invocations — the ones carrying real cost — were invisible inside it.
+ *
+ * Counts sum to the bucket's own `step_count`. */
+export interface UnknownBreakdown {
+  no_model: UnknownBreakdownPart
+  skipped: UnknownBreakdownPart
+  attribution_gap: UnknownBreakdownPart
+}
+
+export interface AgentUnknownBucket extends AgentActivityStats {
+  breakdown: UnknownBreakdown
+}
 
 export interface AgentsResponse {
   agents: AgentRoster[]

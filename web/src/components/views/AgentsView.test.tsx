@@ -38,7 +38,17 @@ function agent(overrides: Partial<AgentRoster>): AgentRoster {
   }
 }
 
-function response(agents: AgentRoster[]): AgentsResponse {
+/** All three causes at zero — the shape `agents_summary` always returns,
+ * even for an empty bucket. */
+function emptyBreakdown() {
+  return {
+    no_model: { step_count: 0, cost_usd: 0 },
+    skipped: { step_count: 0, cost_usd: 0 },
+    attribution_gap: { step_count: 0, cost_usd: 0 },
+  }
+}
+
+function response(agents: AgentRoster[], unknown: Record<string, unknown> = {}): AgentsResponse {
   return {
     agents,
     unknown: {
@@ -50,7 +60,9 @@ function response(agents: AgentRoster[]): AgentsResponse {
       unpriced_steps: 0,
       success_rate: null,
       last_active: null,
+      breakdown: emptyBreakdown(),
       note: 'ENGINEERING NOTE ABOUT steps.role AND _LATENCY_UNAVAILABLE_NOTE',
+      ...unknown,
     },
     note: 'Per-role attribution requires steps.role, added in the Pollen Agent Panels backend sprint.',
   } as AgentsResponse
@@ -267,6 +279,153 @@ describe('AgentsView', () => {
     expect(bucket).not.toBeNull()
     expect(bucket?.textContent).toContain('$0.500')
     expect(bucket?.textContent).not.toContain('steps.role')
+  })
+
+  /**
+   * The bucket used to be one number described as history from before
+   * per-role attribution existed. On real data that was wrong for every row
+   * in it: the bulk were shell steps that cannot have a role, and a much
+   * smaller set were model invocations carrying real spend that genuinely
+   * should have been attributed. A single total made those two look the
+   * same, which is what made the panel unreadable.
+   */
+  describe('unknown-bucket breakdown', () => {
+    it('names each cause with its own count', async () => {
+      const data = response([agent({})], {
+        step_count: 245,
+        cost_usd: 4.81,
+        breakdown: {
+          no_model: { step_count: 210, cost_usd: 0 },
+          skipped: { step_count: 16, cost_usd: 0 },
+          attribution_gap: { step_count: 19, cost_usd: 4.81 },
+        },
+      })
+      fetchAgents.mockResolvedValue(data)
+      await mount()
+
+      const bucket = container.querySelector('[data-testid="agents-unknown-bucket"]')
+      expect(bucket?.textContent).toContain('No agent involved')
+      expect(bucket?.textContent).toContain('210')
+      expect(bucket?.textContent).toContain('Skipped')
+      expect(bucket?.textContent).toContain('16')
+      expect(bucket?.textContent).toContain('Ran without a recorded role')
+      expect(bucket?.textContent).toContain('19')
+    })
+
+    it('states the missing spend in money when there is an attribution gap', async () => {
+      fetchAgents.mockResolvedValue(
+        response([agent({})], {
+          step_count: 19,
+          cost_usd: 4.81,
+          breakdown: {
+            no_model: { step_count: 0, cost_usd: 0 },
+            skipped: { step_count: 0, cost_usd: 0 },
+            attribution_gap: { step_count: 19, cost_usd: 4.81 },
+          },
+        }),
+      )
+      await mount()
+
+      const banner = container.querySelector('[data-testid="agents-unknown-gap-cost"]')
+      expect(banner).not.toBeNull()
+      expect(banner?.textContent).toContain('$4.810')
+    })
+
+    it('raises no alarm when every roleless step is structurally roleless', async () => {
+      // 210 shell steps are not a defect and must not be dressed as one --
+      // an alarm that is always on is an alarm nobody reads.
+      fetchAgents.mockResolvedValue(
+        response([agent({})], {
+          step_count: 210,
+          cost_usd: 0,
+          breakdown: {
+            no_model: { step_count: 210, cost_usd: 0 },
+            skipped: { step_count: 0, cost_usd: 0 },
+            attribution_gap: { step_count: 0, cost_usd: 0 },
+          },
+        }),
+      )
+      await mount()
+
+      expect(container.querySelector('[data-testid="agents-unknown-gap-cost"]')).toBeNull()
+      const gapRow = container.querySelector('[data-testid="agents-unknown-cause-attributionGap"]')
+      expect(gapRow?.className).not.toContain('amber')
+    })
+
+    it('marks the gap row when it holds real steps', async () => {
+      fetchAgents.mockResolvedValue(
+        response([agent({})], {
+          step_count: 19,
+          breakdown: {
+            no_model: { step_count: 0, cost_usd: 0 },
+            skipped: { step_count: 0, cost_usd: 0 },
+            attribution_gap: { step_count: 19, cost_usd: 4.81 },
+          },
+        }),
+      )
+      await mount()
+
+      const gapRow = container.querySelector('[data-testid="agents-unknown-cause-attributionGap"]')
+      expect(gapRow?.className).toContain('amber')
+    })
+  })
+
+  describe('agent avatar', () => {
+    it('shows the initial of the display name beside each agent', async () => {
+      fetchAgents.mockResolvedValue(
+        response([agent({ name: 'ciso', display_name: 'Hugo', title: 'CISO' })]),
+      )
+      await mount()
+
+      const avatar = container.querySelector('[data-testid="agent-avatar-ciso"]')
+      expect(avatar?.textContent).toBe('H')
+      // The name itself is right beside it; announcing the initial too would
+      // just stutter for a screen reader.
+      expect(avatar?.getAttribute('aria-hidden')).toBe('true')
+    })
+
+    it('falls back to the role name when a persona has no display name', async () => {
+      fetchAgents.mockResolvedValue(
+        response([agent({ name: 'groomer', display_name: null, title: null })]),
+      )
+      await mount()
+
+      expect(container.querySelector('[data-testid="agent-avatar-groomer"]')?.textContent).toBe('G')
+    })
+
+    it('keys its tint on the role, so renaming a persona keeps its colour', async () => {
+      // HivePilot is a generic engine -- personas are tenant config, so the
+      // tint has to be derived, not looked up. Deriving it from the role
+      // name (not the display name) is what keeps identity stable when an
+      // org renames someone.
+      fetchAgents.mockResolvedValue(
+        response([agent({ name: 'ciso', display_name: 'Hugo' })]),
+      )
+      await mount()
+      const before = container
+        .querySelector('[data-testid="agent-avatar-ciso"]')
+        ?.className.match(/bg-[a-z]+-500/)?.[0]
+
+      fetchAgents.mockResolvedValue(
+        response([agent({ name: 'ciso', display_name: 'Amélie' })]),
+      )
+      await mount()
+      const after = container
+        .querySelector('[data-testid="agent-avatar-ciso"]')
+        ?.className.match(/bg-[a-z]+-500/)?.[0]
+
+      expect(before).toBeDefined()
+      expect(after).toBe(before)
+    })
+
+    it('survives a non-Latin first character instead of splitting it', async () => {
+      fetchAgents.mockResolvedValue(
+        response([agent({ name: 'ops', display_name: 'Élodie' })]),
+      )
+      await mount()
+
+      expect(container.querySelector('[data-testid="agent-avatar-ops"]')?.textContent).toBe('É')
+    })
   })
 
   it('an empty roster explains how one gets populated', async () => {
