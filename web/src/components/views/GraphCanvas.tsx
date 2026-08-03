@@ -389,9 +389,13 @@ function gridLayout(nodes: GraphNode[]): Map<string, { x: number; y: number }> {
  * nodes top-to-bottom by edge direction. A node with no edges still gets a
  * position (dagre places disconnected nodes on their own row), so an empty
  * `edges` array never crashes this. */
-function dagLayout(nodes: GraphNode[], edges: GraphEdge[]): Map<string, { x: number; y: number }> {
+function layoutWith(
+  rankdir: 'TB' | 'LR',
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+): { positions: Map<string, { x: number; y: number }>; width: number; height: number } {
   const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: 'TB', nodesep: GRID_GAP_X, ranksep: GRID_GAP_Y })
+  g.setGraph({ rankdir, nodesep: GRID_GAP_X, ranksep: GRID_GAP_Y })
   g.setDefaultEdgeLabel(() => ({}))
   for (const node of nodes) {
     g.setNode(node.id, { width: CARD_WIDTH, height: CARD_HEIGHT })
@@ -407,7 +411,40 @@ function dagLayout(nodes: GraphNode[], edges: GraphEdge[]): Map<string, { x: num
     const pos = g.node(node.id) as { x: number; y: number } | undefined
     positions.set(node.id, pos ? { x: pos.x - CARD_WIDTH / 2, y: pos.y - CARD_HEIGHT / 2 } : { x: 0, y: 0 })
   }
-  return positions
+  // Measured from the positions actually placed, not from dagre's own
+  // `graph().width/height` — those are not reliably populated across
+  // versions, and a layout decision must rest on what will really be drawn.
+  const xs = [...positions.values()].map((pt) => pt.x)
+  const ys = [...positions.values()].map((pt) => pt.y)
+  const span = (v: number[]) => (v.length ? Math.max(...v) - Math.min(...v) : 0)
+  return { positions, width: span(xs) + CARD_WIDTH, height: span(ys) + CARD_HEIGHT }
+}
+
+/** Layered layout for `layout_hint === "dag"`, via `dagre`.
+ *
+ * Direction is chosen from the graph's own shape rather than fixed. A
+ * pipeline is a CHAIN: laid out top-to-bottom, 15 stages become one very
+ * tall column on a canvas three times wider than it is tall, and the
+ * operator scrolls past a stage at a time instead of reading the lineage at
+ * a glance. Laying the long axis along the wide axis is what makes it
+ * legible.
+ *
+ * Implemented by measuring rather than guessing: lay out both ways and keep
+ * whichever aspect ratio is less extreme. A branchy graph (the `plugins`
+ * source) stays top-to-bottom because for it TB already measures better.
+ *
+ * A node with no edges still gets a position (dagre places disconnected
+ * nodes on their own rank), so an empty `edges` array never crashes this. */
+export function dagLayout(nodes: GraphNode[], edges: GraphEdge[]): Map<string, { x: number; y: number }> {
+  const tb = layoutWith('TB', nodes, edges)
+  const lr = layoutWith('LR', nodes, edges)
+  // Keep the SHORTER layout. The canvas is far wider than it is tall, and
+  // vertical overflow is what forces the operator to scroll; horizontal room
+  // is free. A chain measures 1380px tall as TB and 120px as LR, so it flips.
+  // A fan-out is already short as TB and would become tall as LR, so it does
+  // not. Deliberately not "least extreme aspect ratio" — cards are wide and
+  // short, which makes that metric prefer TB for everything.
+  return lr.height < tb.height ? lr.positions : tb.positions
 }
 
 /** Real per-edge particle density (see `FlowEdgeData.particleCount`'s
@@ -553,7 +590,12 @@ export function GraphCanvas({
          * `bg-grid-dot` CSS class (see `src/index.css`) already paints the
          * faint dot-grid texture behind the canvas; layering react-flow's
          * OWN dot background on top would double it up. */}
-        <Controls position="bottom-left" />
+        {/* react-flow ships light-theme defaults for these buttons (near-white
+         * fill, dark glyph). On the dark ground they render dark-on-dark and
+         * the operator cannot see the zoom controls at all — a control you
+         * cannot see does not exist. Bound to the theme tokens instead, so
+         * both themes stay legible. */}
+        <Controls position="bottom-left" className="graph-controls" />
         {/* Mobile audit: `<MiniMap>` renders a FIXED 202x152px regardless of
          * viewport. Measured, that is 18% of the entire canvas area at 390px
          * and 44% of its width at 768px — and it sits directly on top of the
