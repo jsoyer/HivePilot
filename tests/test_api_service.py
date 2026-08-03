@@ -564,7 +564,10 @@ class TestAnalyticsCostCsvExport:
         assert resp.status_code == 200
         assert "text/csv" in resp.headers["content-type"]
         rows = resp.text.strip().splitlines()
-        assert rows[0] == "scope,key,total_steps,input_tokens,output_tokens,cost_usd,unpriced_steps"
+        assert rows[0] == (
+            "scope,key,total_steps,input_tokens,output_tokens,cost_usd,"
+            "unpriced_steps,unpriceable_steps"
+        )
         assert len(rows) >= 2
 
     def test_cost_csv_escapes_formula_injection_in_provider_name(self, api_client, tmp_tokens_file):
@@ -602,6 +605,8 @@ class TestAnalyticsCostByProjectAndRole:
                 "output_tokens": 0,
                 "cost_usd": 1.0,
                 "unpriced_steps": 0,
+                "unpriceable_steps": 0,
+                "unpriced_reasons": {},
             }
         ]
         # No role was threaded into this seeded step -> role=NULL -> the
@@ -615,6 +620,8 @@ class TestAnalyticsCostByProjectAndRole:
                 "output_tokens": 0,
                 "cost_usd": 1.0,
                 "unpriced_steps": 0,
+                "unpriceable_steps": 0,
+                "unpriced_reasons": {},
             }
         ]
         assert isinstance(data["by_role_note"], str) and data["by_role_note"]
