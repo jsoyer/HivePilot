@@ -171,3 +171,39 @@ class TestRegistrySurvivesLosingItsFile:
         registry.write_text(json.dumps({"developer": 999}), encoding="utf-8")
 
         assert ns._load_topics() == {"developer": 999}
+
+    def test_topics_registered_before_the_mirror_existed_are_backfilled(
+        self, tmp_path, monkeypatch
+    ):
+        """Otherwise the restore path could only ever restore nothing.
+
+        A deployment whose topics predate the mirror would carry something
+        that looks like protection and restores an empty registry — worse
+        than having no restore path at all.
+        """
+        registry = tmp_path / "stream_topics.json"
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+        monkeypatch.setattr(ns, "_mirror_reconciled", False)
+        registry.write_text(json.dumps({"developer": 330, "ciso": 284}), encoding="utf-8")
+
+        ns._load_topics()
+
+        assert ns._read_topic_mirror() == {"developer": 330, "ciso": 284}
+
+    def test_reconciliation_happens_once_per_process(self, tmp_path, monkeypatch):
+        """The registry is read on every send; a DB round-trip per send would
+        be pure overhead for a mapping that changes a handful of times."""
+        registry = tmp_path / "stream_topics.json"
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+        monkeypatch.setattr(ns, "_mirror_reconciled", False)
+        registry.write_text(json.dumps({"developer": 330}), encoding="utf-8")
+
+        calls: list[int] = []
+        real = ns._read_topic_mirror
+        monkeypatch.setattr(ns, "_read_topic_mirror", lambda: (calls.append(1), real())[1])
+
+        ns._load_topics()
+        ns._load_topics()
+        ns._load_topics()
+
+        assert len(calls) == 1
