@@ -38,6 +38,9 @@ class TestHeadroomSummary:
             "avg_ratio": 0.0,
             "p95_ratio": 0.0,
             "est_tokens_saved": 0.0,
+            "total_skipped": 0,
+            "skip_reasons": {},
+            "total_attempts": 0,
         }
 
     def test_reflects_recorded_compressions(self) -> None:
@@ -241,3 +244,49 @@ class TestEfficiencySummary:
             result = efficiency_service.efficiency_summary(tenant="default")
         assert result["headroom"]["total_compressions"] == 1
         assert result["rtk"]["gain_pct"] == 80.0
+
+
+class TestHeadroomSkipsAreVisible:
+    """Zero compressions has two completely different meanings.
+
+    Until skips were persisted, a plugin running correctly and finding
+    nothing worth rewriting was indistinguishable from one that never ran —
+    and the dashboard said "not reporting yet" for weeks while it was
+    working.
+    """
+
+    def test_a_skip_is_recorded_and_counted(self) -> None:
+        headroom_metrics.record_skip(tenant="default", step="s1", reason="non_shrinking", chars=4)
+
+        result = efficiency_service.headroom_summary(tenant="default")
+        assert result["total_compressions"] == 0
+        assert result["total_skipped"] == 1
+        assert result["total_attempts"] == 1
+        assert result["skip_reasons"] == {"non_shrinking": 1}
+
+    def test_skips_do_not_pollute_the_compression_aggregates(self) -> None:
+        headroom_metrics.record_compression(
+            tenant="default", step="s1", chars_before=1000, chars_after=250, ratio=0.25
+        )
+        headroom_metrics.record_skip(tenant="default", step="s2", reason="non_shrinking", chars=4)
+
+        result = efficiency_service.headroom_summary(tenant="default")
+        assert result["total_compressions"] == 1
+        assert result["chars_saved"] == 750
+        assert result["avg_ratio"] == 0.25
+        assert result["total_attempts"] == 2
+
+    def test_reasons_are_grouped_not_listed(self) -> None:
+        for _ in range(3):
+            headroom_metrics.record_skip(tenant="default", step="s", reason="non_shrinking")
+        headroom_metrics.record_skip(tenant="default", step="s", reason="already_compressed")
+
+        assert efficiency_service.headroom_summary(tenant="default")["skip_reasons"] == {
+            "non_shrinking": 3,
+            "already_compressed": 1,
+        }
+
+    def test_a_skip_is_tenant_scoped(self) -> None:
+        headroom_metrics.record_skip(tenant="other", step="s", reason="non_shrinking")
+
+        assert efficiency_service.headroom_summary(tenant="default")["total_skipped"] == 0

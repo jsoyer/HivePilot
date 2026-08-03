@@ -39,10 +39,29 @@ function HeadroomPanel({ headroom }: { headroom: HeadroomEfficiency }) {
   const t = useT()
 
   if (headroom.total_compressions === 0) {
+    // Zero compressions has two meanings, and the operator needs to know
+    // which. Skips recorded => headroom RAN and declined; nothing at all =>
+    // it never ran. Saying only "no compressions yet" for both is what sent
+    // someone hunting a broken integration that was working correctly.
+    const skipped = headroom.total_skipped ?? 0
+    const reasons = Object.entries(headroom.skip_reasons ?? {})
     return (
-      <p data-testid="efficiency-headroom-empty" className="text-sm text-muted-foreground">
-        {t('efficiency.headroomNotAvailable')}
-      </p>
+      <div data-testid="efficiency-headroom-empty" className="flex flex-col gap-1">
+        <p className="text-sm text-muted-foreground">
+          {skipped > 0
+            ? t('efficiency.headroomRanAndDeclined', { count: skipped })
+            : t('efficiency.headroomNeverRan')}
+        </p>
+        {reasons.length > 0 && (
+          <ul className="metric-mono flex flex-col gap-0.5 text-xs text-muted-foreground">
+            {reasons.map(([reason, count]) => (
+              <li key={reason}>
+                {reason} · {count}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     )
   }
 

@@ -87,6 +87,27 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_headroom_compressions_tenant_ts "
             "ON headroom_compressions(tenant, ts)"
         )
+        # A SKIPPED attempt is the answer to "is headroom working?". Until
+        # now only successes were persisted, so a plugin that ran correctly
+        # and found nothing worth compressing was indistinguishable from one
+        # that never ran at all -- the dashboard said "not reporting yet" for
+        # weeks while it was in fact working. Recorded in the same table,
+        # flagged, so the existing aggregates stay comparable.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS headroom_skips (
+                id {pk},
+                tenant TEXT NOT NULL DEFAULT 'default',
+                step TEXT,
+                reason TEXT NOT NULL,
+                chars INTEGER,
+                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """.format(pk=pk)
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_headroom_skips_tenant_ts ON headroom_skips(tenant, ts)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +139,32 @@ def record_compression(
         logger.warning("headroom_metrics.record_compression_failed", error=str(exc))
 
 
+def record_skip(
+    *,
+    tenant: str = "default",
+    step: str | None,
+    reason: str,
+    chars: int | None = None,
+) -> None:
+    """Record one attempt headroom made and declined. Best-effort: NEVER raises.
+
+    `reason` is a short stable slug (`non_shrinking`, `already_compressed`,
+    `compressor_unavailable`), not prose: it is grouped and counted, and a
+    free-text message would fragment the count.
+    """
+    try:
+        init_db()
+        with db.connect() as conn:
+            conn.execute(
+                db.ph(
+                    "INSERT INTO headroom_skips (tenant, step, reason, chars) VALUES (?, ?, ?, ?)"
+                ),
+                (tenant, step, reason, chars),
+            )
+    except Exception as exc:  # noqa: BLE001 — instrumentation must never break the caller
+        logger.warning("headroom_metrics.record_skip_failed", error=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Percentile (nearest-rank method — mirrors analytics_service._percentile)
 # ---------------------------------------------------------------------------
@@ -144,6 +191,11 @@ def efficiency_summary(*, tenant: str | None = "default") -> dict[str, Any]:
     Zero-safe: an empty table (or no rows for *tenant*) yields
     ``total_compressions=0``, ``chars_saved=0``, ``avg_ratio=0.0``,
     ``p95_ratio=0.0``, ``est_tokens_saved=0.0`` -- never fabricated.
+
+    ``total_attempts``/``total_skipped``/``skip_reasons`` answer the question
+    the compression counters cannot: whether headroom ran at all. Zero
+    compressions alongside a positive skip count means it ran and declined;
+    zero of both means it never ran.
     """
     init_db()
     where = " WHERE tenant = ?" if tenant is not None else ""
@@ -163,6 +215,10 @@ def efficiency_summary(*, tenant: str | None = "default") -> dict[str, Any]:
             db.ph(f"SELECT ratio FROM headroom_compressions{where} ORDER BY ratio"),
             params,
         ).fetchall()
+        skip_rows = conn.execute(
+            db.ph(f"SELECT reason, COUNT(*) AS cnt FROM headroom_skips{where} GROUP BY reason"),
+            params,
+        ).fetchall()
 
     total_compressions = int(row["cnt"] or 0)
     chars_saved = int(row["saved"] or 0)
@@ -171,10 +227,20 @@ def efficiency_summary(*, tenant: str | None = "default") -> dict[str, Any]:
     p95_ratio = _percentile(ratios, 95)
     est_tokens_saved = chars_saved / 4.0
 
+    skips = {str(r["reason"]): int(r["cnt"]) for r in skip_rows}
+    total_skipped = sum(skips.values())
+
     return {
         "total_compressions": total_compressions,
         "chars_saved": chars_saved,
         "avg_ratio": round(avg_ratio, 4),
         "p95_ratio": round(p95_ratio, 4),
         "est_tokens_saved": est_tokens_saved,
+        # Attempts headroom made and declined, by reason. Zero compressions
+        # with a positive skip count means the plugin IS running and finding
+        # nothing worth rewriting -- a completely different fact from zero
+        # attempts, which means it never ran.
+        "total_skipped": total_skipped,
+        "skip_reasons": skips,
+        "total_attempts": total_compressions + total_skipped,
     }

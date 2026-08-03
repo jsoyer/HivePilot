@@ -279,6 +279,11 @@ export interface HeadroomEfficiency {
   avg_ratio: number
   p95_ratio: number
   est_tokens_saved: number
+  /** Attempts headroom made and declined. Zero compressions WITH skips means
+   *  it ran and found nothing worth rewriting; zero of both means it never ran. */
+  total_skipped?: number
+  total_attempts?: number
+  skip_reasons?: Record<string, number>
 }
 
 export interface RtkSavedPoint {

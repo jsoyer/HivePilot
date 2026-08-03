@@ -199,3 +199,33 @@ describe('degenerate data must not be drawn as a trend', () => {
     expect(container.textContent).not.toContain('No daily series recorded yet.')
   })
 })
+
+describe('zero compressions is not one fact but two', () => {
+  async function renderHeadroom(headroom: Record<string, unknown>) {
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      headroom: { ...efficiency.headroom, total_compressions: 0, ...headroom },
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+  }
+
+  it('says it ran and declined when skips are recorded', async () => {
+    await renderHeadroom({ total_skipped: 7, skip_reasons: { non_shrinking: 7 } })
+    expect(container.textContent).toContain('ran and declined')
+    expect(container.textContent).toContain('non_shrinking')
+  })
+
+  it('says it never ran when there is neither', async () => {
+    await renderHeadroom({ total_skipped: 0, skip_reasons: {} })
+    expect(container.textContent).toContain('has not run yet')
+  })
+
+  it('degrades to never-ran when the API omits the fields entirely', async () => {
+    // An older API has no skip telemetry; that must not be read as activity.
+    await renderHeadroom({})
+    expect(container.textContent).toContain('has not run yet')
+  })
+})

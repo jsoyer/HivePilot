@@ -427,6 +427,10 @@ export const fr: Record<TranslationKey, string> = {
   'efficiency.headroomTitle': 'Headroom',
   'efficiency.headroomDescription': 'Économies de compression de contexte enregistrées par le plugin Headroom',
   'efficiency.headroomNotAvailable': "Aucune compression enregistrée pour l'instant. Headroom ne réécrit que les contextes assez volumineux pour valoir une compression : tant qu'aucune exécution n'en produit, cette section reste vide — ce n'est pas un signe de panne (voir Santé pour cela).",
+  'efficiency.headroomRanAndDeclined':
+    "Headroom s'est exécuté et a renoncé {count} fois — aucun contexte n'était assez volumineux pour valoir une réécriture. Il fonctionne, il n'y a simplement rien à comprimer.",
+  'efficiency.headroomNeverRan':
+    "Headroom ne s'est jamais exécuté — ni compression ni saut enregistré. Voir Santé si tu t'attendais à ce qu'il tourne.",
   'efficiency.tokensSaved': 'Tokens économisés',
   'efficiency.compressions': 'Compressions enregistrées',
   'efficiency.charsSaved': 'Caractères économisés',
