@@ -27,6 +27,13 @@ logger = get_logger(__name__)
 # Keep DB_PATH as a module-level name: retry_service.py and tests reference it.
 DB_PATH = settings.resolve_path(settings.state_db)
 
+# Runner kinds that cannot have invoked a model. THE single definition of
+# "not agent work" — `record_step` uses it to refuse attribution, and
+# `analytics_service` imports it so a step is classified the same way it was
+# recorded. Two copies of this set would eventually disagree, and the
+# disagreement would show up as spend that belongs to no one.
+NON_MODEL_PROVIDERS = frozenset({"shell"})
+
 # ---------------------------------------------------------------------------
 # Formal run-status enum
 # ---------------------------------------------------------------------------
@@ -572,6 +579,19 @@ def record_step(
     from hivepilot.services.config_provenance import redact_text
 
     detail = redact_text(detail) if detail is not None else detail
+    # Choke point: a step no agent performed must not carry an agent. Role is
+    # declared per *task*, but a task's stages can mix agent work with plain
+    # shell commands, so the task's role reaches both. Persisting it on a
+    # `shell` step would credit an agent with work no model did — inflating
+    # its step count and making every per-agent figure mean less the more
+    # shell a pipeline uses.
+    #
+    # Only providers KNOWN not to invoke a model strip attribution. A NULL
+    # provider is a telemetry gap, not proof that no agent ran: dropping the
+    # role there would erase real attribution to guard against a case we
+    # cannot confirm, so the uncertain direction keeps it.
+    if provider is not None and provider in NON_MODEL_PROVIDERS:
+        role = None
     with db.connect() as conn:
         conn.execute(
             db.ph(

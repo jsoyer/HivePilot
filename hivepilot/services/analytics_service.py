@@ -448,7 +448,11 @@ def step_failure_hotspots(
 # "success rate" that belonged to neither a model nor an agent. They are now
 # excluded from model grouping and REPORTED as a separate count -- silently
 # dropping rows would trade one wrong number for another.
-_NON_MODEL_PROVIDERS = frozenset({"shell"})
+# Imported, not redeclared: `record_step` refuses to attribute these very
+# providers, so classification here must use the same set it was recorded
+# under. Two copies would eventually disagree, and the disagreement would
+# surface as spend belonging to no one.
+_NON_MODEL_PROVIDERS = state_service.NON_MODEL_PROVIDERS
 
 
 def _steps_grouped_by(
