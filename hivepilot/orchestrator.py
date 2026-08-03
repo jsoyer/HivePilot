@@ -3267,9 +3267,38 @@ class Orchestrator:
                     logger.warning(
                         "review.call_failed", role=role_name, error=redact_text(str(exc))
                     )
+                    if run_id and not simulate:
+                        state_service.record_step(
+                            run_id,
+                            f"review:{role_name}",
+                            "failed",
+                            "reviewer call failed",
+                            provider=runner_kind,
+                            model=role_model,
+                            role=role_name,
+                        )
                     all_pass = False
                     reviewer_summaries.append(f"{role_name}: CALL_FAILED")
                     continue
+
+                # A reviewer dispatch is real agent work costing real money,
+                # and none of it was recorded: after 312 runs there were ZERO
+                # steps named `review:*`, so a review round appeared in no cost
+                # figure, no per-agent total, and no panel. The question "do
+                # all three reviewers need to be on opus?" was unanswerable
+                # for want of this one call.
+                #
+                # Recorded under the REVIEWER's own role, because that is who
+                # did the work — the reviewing agent, not the stage's task.
+                if run_id and not simulate:
+                    _record_step_success(
+                        run_id,
+                        f"review:{role_name}",
+                        runner_kind,
+                        role_model,
+                        pop_last_usage(),
+                        role=role_name,
+                    )
 
                 output = redact_text(output) if output else output
                 token = _parse_reviewer_verdict(output or "")
