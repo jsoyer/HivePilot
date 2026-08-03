@@ -349,3 +349,22 @@ def _no_outbound_notifications(monkeypatch):
     # Henri's auto-observation runs vibe (not installed in CI) — keep it off in tests.
     monkeypatch.setattr(notification_service.settings, "auditor_auto", False, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_governance_config(monkeypatch):
+    """Pin `governance_files` to the CODE-OWNED default for every test.
+
+    These settings are deployment config: a real `.env` can list eleven
+    governance documents where the shipped default lists six. Tests that
+    assert on the list then pass in CI (no `.env`) and fail locally — which
+    trains everyone to dismiss local failures as "environment", and that is
+    exactly how a genuine misconfiguration went unnoticed for a full day.
+
+    A test that wants a different list must set it explicitly.
+    """
+    from hivepilot.config import Settings, settings
+
+    default = Settings.model_fields["governance_files"].default_factory()  # type: ignore[misc]
+    monkeypatch.setattr(settings, "governance_files", list(default))
+    yield

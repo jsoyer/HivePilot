@@ -1552,6 +1552,8 @@ _COST_CSV_FIELDS = [
     "output_tokens",
     "cost_usd",
     "unpriced_steps",
+    "unpriceable_steps",
+    "unpriced_reasons",
 ]
 
 

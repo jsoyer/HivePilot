@@ -172,6 +172,13 @@ export interface CostAccumulation {
   output_tokens: number
   cost_usd: number
   unpriced_steps: number
+  /** Steps that could not have cost anything (shell runner, skipped stage) —
+   *  counted separately so the "total understated" warning stays truthful. */
+  unpriceable_steps: number
+  /** Why steps are unpriced, by cause: `no_usage_captured` (the model is in
+   *  the price map but no tokens were recorded), `no_price_for_model`, or
+   *  `no_model_recorded`. The banner must name the right subsystem. */
+  unpriced_reasons?: Record<string, number>
 }
 
 export interface ProviderCost extends CostAccumulation {
@@ -224,6 +231,13 @@ export interface ModelRollup {
   output_tokens: number
   cost_usd: number
   unpriced_steps: number
+  /** Steps that could not have cost anything (shell runner, skipped stage) —
+   *  counted separately so the "total understated" warning stays truthful. */
+  unpriceable_steps: number
+  /** Why steps are unpriced, by cause: `no_usage_captured` (the model is in
+   *  the price map but no tokens were recorded), `no_price_for_model`, or
+   *  `no_model_recorded`. The banner must name the right subsystem. */
+  unpriced_reasons?: Record<string, number>
   success_rate: SuccessRate
   share_of_spend: number
 }
@@ -1107,6 +1121,13 @@ export interface AgentActivityStats {
   output_tokens: number
   cost_usd: number
   unpriced_steps: number
+  /** Steps that could not have cost anything (shell runner, skipped stage) —
+   *  counted separately so the "total understated" warning stays truthful. */
+  unpriceable_steps: number
+  /** Why steps are unpriced, by cause: `no_usage_captured` (the model is in
+   *  the price map but no tokens were recorded), `no_price_for_model`, or
+   *  `no_model_recorded`. The banner must name the right subsystem. */
+  unpriced_reasons?: Record<string, number>
   success_rate: SuccessRate
   last_active: string | null
 }
