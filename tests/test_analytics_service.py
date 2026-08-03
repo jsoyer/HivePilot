@@ -708,10 +708,15 @@ class TestStepsByModel:
         assert models["claude-haiku-4-6"] == 1
 
     def test_null_model_grouped_as_unknown(self) -> None:
-        """A shell step: provider known, model genuinely unknown -> 'unknown'
-        bucket, never dropped or invented."""
+        """A step that REACHED a model but recorded none -> 'unknown' bucket,
+        never dropped or invented.
+
+        Seeded with `provider="claude"`, not `"shell"`: a shell runner never
+        invoked a model at all, so it is not a missing value but an
+        inapplicable one, and it now leaves the model view entirely (see
+        `TestModelViewExcludesNonModelSteps`)."""
         run1 = _seed_run()
-        _seed_step(run1, "shell-step", "success", provider="shell", model=None)
+        _seed_step(run1, "review", "success", provider="claude", model=None)
 
         result = analytics_service.steps_by_model(days=None)
         assert any(row["model"] == "unknown" and row["total"] == 1 for row in result)
@@ -815,12 +820,19 @@ class TestCostSummary:
         assert result["overall"]["input_tokens"] == 1_000_000
         assert result["overall"]["output_tokens"] == 500_000
 
-    def test_no_usage_at_all_counts_as_unpriced(self) -> None:
+    def test_a_shell_step_is_unpriceable_not_unpriced(self) -> None:
+        """A shell runner never called a model, so no price is MISSING.
+
+        Counting it as unpriced is what made the dashboard warn that the
+        total was understated about 271 steps that could not have cost
+        anything.
+        """
         run1 = _seed_run()
         _seed_step_with_usage(run1, "s1", "success", provider="shell", model=None)
 
         result = analytics_service.cost_summary(days=None)
-        assert result["overall"]["unpriced_steps"] == 1
+        assert result["overall"]["unpriceable_steps"] == 1
+        assert result["overall"]["unpriced_steps"] == 0
         assert result["overall"]["cost_usd"] == 0.0
         assert result["overall"]["input_tokens"] == 0
         assert result["overall"]["output_tokens"] == 0
@@ -1033,6 +1045,8 @@ class TestCostSummaryByProjectAndRole:
                 "output_tokens": 0,
                 "cost_usd": 1.0,
                 "unpriced_steps": 0,
+                "unpriceable_steps": 0,
+                "unpriced_reasons": {},
             }
         ]
 
@@ -1072,6 +1086,8 @@ class TestCostSummaryByProjectAndRole:
                 "output_tokens": 0,
                 "cost_usd": 1.0,
                 "unpriced_steps": 0,
+                "unpriceable_steps": 0,
+                "unpriced_reasons": {},
             }
         ]
 
@@ -1498,3 +1514,77 @@ class TestLessonsSummary:
         result = analytics_service.lessons_summary(tenant="acme", role="reviewer")
         assert len(result["lessons"]) == 1
         assert result["lessons"][0]["role"] == "reviewer"
+
+
+class TestModelViewExcludesNonModelSteps:
+    """A shell command is not a model, and a skipped stage is not a run.
+
+    Pooling them produced an `unknown` pseudo-model with 234 steps and a 9%
+    "success rate" that belonged to neither a model nor an agent — while the
+    real telemetry gap (9 claude steps with no model recorded) was invisible
+    inside it.
+    """
+
+    def test_shell_steps_do_not_appear_as_a_model(self) -> None:
+        run = _seed_run()
+        _seed_step(run, "signals", "failed", provider="shell", model=None)
+        _seed_step(run, "review", "success", provider="claude", model="claude-opus-5")
+
+        models = {row["model"] for row in analytics_service.steps_by_model(days=None)}
+        assert "claude-opus-5" in models
+        assert "unknown" not in models
+
+    def test_skipped_stages_do_not_appear_as_a_model(self) -> None:
+        run = _seed_run()
+        _seed_step(run, "skip:Design Spec", "skipped", provider=None, model=None)
+        _seed_step(run, "review", "success", provider="claude", model="claude-opus-5")
+
+        result = analytics_service.steps_by_model(days=None)
+        assert {row["model"] for row in result} == {"claude-opus-5"}
+
+    def test_a_real_telemetry_gap_stays_visible(self) -> None:
+        """claude ran but recorded no model — that must NOT be filtered away."""
+        run = _seed_run()
+        _seed_step(run, "review", "success", provider="claude", model=None)
+
+        result = analytics_service.steps_by_model(days=None)
+        assert any(row["model"] == "unknown" and row["total"] == 1 for row in result)
+
+
+class TestUnpricedReasonBlamesTheRightSubsystem:
+    """The banner said "no pricing data on record" and pointed at the price
+    map. On the reference deployment it was wrong for every model it named:
+    `opus`/`sonnet`/`haiku` are IN the map, and their unpriced steps were
+    exactly the steps that recorded no tokens.
+    """
+
+    def test_a_known_model_with_no_tokens_blames_the_usage_capture(self) -> None:
+        run = _seed_run()
+        _seed_step_with_usage(run, "s1", "success", provider="claude", model="sonnet")
+
+        overall = analytics_service.cost_summary(days=None)["overall"]
+        assert overall["unpriced_steps"] == 1
+        assert overall["unpriced_reasons"] == {"no_usage_captured": 1}
+
+    def test_an_unknown_model_blames_the_price_map(self) -> None:
+        run = _seed_run()
+        _seed_step_with_usage(run, "s1", "success", provider="claude", model="model-not-in-any-map")
+
+        overall = analytics_service.cost_summary(days=None)["overall"]
+        assert overall["unpriced_reasons"] == {"no_price_for_model": 1}
+
+    def test_a_step_with_no_model_at_all_is_its_own_reason(self) -> None:
+        run = _seed_run()
+        _seed_step_with_usage(run, "s1", "success", provider="claude", model=None)
+
+        overall = analytics_service.cost_summary(days=None)["overall"]
+        assert overall["unpriced_reasons"] == {"no_model_recorded": 1}
+
+    def test_a_shell_step_produces_no_reason_at_all(self) -> None:
+        """It is unpriceable, not unpriced — it belongs to neither cause."""
+        run = _seed_run()
+        _seed_step_with_usage(run, "s1", "success", provider="shell", model=None)
+
+        overall = analytics_service.cost_summary(days=None)["overall"]
+        assert overall["unpriced_reasons"] == {}
+        assert overall["unpriceable_steps"] == 1

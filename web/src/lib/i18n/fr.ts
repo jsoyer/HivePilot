@@ -127,6 +127,8 @@ export const fr: Record<TranslationKey, string> = {
   'cost.percentOfTotal': '% du total',
   'cost.unpricedBanner':
     '{count} modèle(s) sans tarification connue — le coût total est sous-estimé : {models}',
+  'cost.unpricedBannerUsage':
+    "{count} modèle(s) ont des étapes non chiffrées faute d'usage enregistré — la table de prix est correcte, c'est la capture qui manque : {models}",
 
   // ---- Health view -----------------------------------------------------
   'health.title': 'État des plugins',

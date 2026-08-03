@@ -106,10 +106,19 @@ export function CostView() {
                   >
                     <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
                     <span>
-                      {t('cost.unpricedBanner', {
-                        count: data.unpriced_models.length,
-                        models: data.unpriced_models.join(', '),
-                      })}
+                      {/* Name the subsystem that is actually at fault. Blaming the
+                          price map when the model IS in it, and only the tokens are
+                          missing, sends the operator to the wrong config. */}
+                      {t(
+                        (data.overall.unpriced_reasons?.no_usage_captured ?? 0) >=
+                          (data.overall.unpriced_reasons?.no_price_for_model ?? 0)
+                          ? 'cost.unpricedBannerUsage'
+                          : 'cost.unpricedBanner',
+                        {
+                          count: data.unpriced_models.length,
+                          models: data.unpriced_models.join(', '),
+                        },
+                      )}
                     </span>
                   </div>
                 )}

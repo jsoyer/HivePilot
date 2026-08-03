@@ -133,6 +133,8 @@ export const en = {
   'cost.percentOfTotal': '% of total',
   'cost.unpricedBanner':
     '{count} model(s) have no pricing data on record — total cost is understated: {models}',
+  'cost.unpricedBannerUsage':
+    '{count} model(s) have unpriced steps because no token usage was recorded — the price map is fine, the usage capture is not: {models}',
 
   // ---- Health view -----------------------------------------------------
   'health.title': 'Plugin health',

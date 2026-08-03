@@ -1552,6 +1552,10 @@ _COST_CSV_FIELDS = [
     "output_tokens",
     "cost_usd",
     "unpriced_steps",
+    # `unpriceable_steps` is a scalar and belongs in the CSV. `unpriced_reasons`
+    # is a dict — it stays JSON-only rather than being flattened into a column
+    # nobody can parse.
+    "unpriceable_steps",
 ]
 
 

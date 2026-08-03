@@ -439,6 +439,18 @@ def step_failure_hotspots(
     return hotspots[:limit]
 
 
+# A step only belongs in a MODEL view if it actually invoked a model. Two
+# kinds of row do not: a `shell` runner (`groomer-scan`'s `signals` step runs
+# `hivepilot drift scan`, no LLM involved) and a `skip:<stage>` bookkeeping
+# row written for a stage that never executed.
+#
+# Counting them produced a `unknown` pseudo-model with 234 steps and a 9%
+# "success rate" that belonged to neither a model nor an agent. They are now
+# excluded from model grouping and REPORTED as a separate count -- silently
+# dropping rows would trade one wrong number for another.
+_NON_MODEL_PROVIDERS = frozenset({"shell"})
+
+
 def _steps_grouped_by(
     column: str,
     tenant: str | None,
@@ -447,6 +459,7 @@ def _steps_grouped_by(
     until: str | None,
     project: str | None,
     task: str | None,
+    model_invocations_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Shared query for `steps_by_provider`/`steps_by_model` (Phase 24b.1):
     `steps` rows joined to `runs` for tenant scoping (mirrors
@@ -481,6 +494,13 @@ def _steps_grouped_by(
     if until_ts is not None:
         clauses.append("s.timestamp<=?")
         params.append(until_ts)
+    if model_invocations_only:
+        placeholders = ", ".join("?" for _ in _NON_MODEL_PROVIDERS)
+        # NULL provider is KEPT: it is a genuine telemetry gap and must stay
+        # visible. Only rows that cannot have invoked a model are removed.
+        clauses.append(f"(s.provider IS NULL OR s.provider NOT IN ({placeholders}))")
+        params.extend(sorted(_NON_MODEL_PROVIDERS))
+        clauses.append("s.step NOT LIKE 'skip:%'")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT s.{column} AS grouping_key, s.status AS status
@@ -538,9 +558,17 @@ def steps_by_model(
     project: str | None = None,
     task: str | None = None,
 ) -> list[dict[str, Any]]:
-    """`steps` grouped by `model`, with counts + outcome split. Steps with no
-    recorded model (e.g. a shell runner) group under ``"unknown"``."""
-    return _steps_grouped_by("model", tenant, days, since, until, project, task)
+    """`steps` grouped by `model`, restricted to steps that actually invoked
+    one — see `_NON_MODEL_PROVIDERS`.
+
+    A step that reaches a model but records none (9 rows in the reference
+    deployment: `provider='claude'`, `model IS NULL`) still groups under
+    ``"unknown"``. That is a genuine telemetry gap and must stay visible; it
+    is not the same thing as a shell command, which is why the shell rows are
+    now filtered out rather than pooled with it."""
+    return _steps_grouped_by(
+        "model", tenant, days, since, until, project, task, model_invocations_only=True
+    )
 
 
 def approval_latency(
@@ -624,24 +652,77 @@ def _step_cost(row: dict[str, Any]) -> tuple[float, bool]:
     return 0.0, False
 
 
+def _unpriced_reason(row: dict[str, Any]) -> str:
+    """Why this step has no cost — the price map, or the usage capture.
+
+    The dashboard warned *"N model(s) have no pricing data on record — total
+    cost is understated"* and pointed the operator at
+    `HIVEPILOT_LLM_PRICE_MAP`. On the reference deployment that was wrong for
+    every model it named: `opus`, `sonnet` and `haiku` ARE in the price map,
+    and their unpriced steps correlate exactly with steps that recorded no
+    tokens (16/16, 21/21, 1/1). Nothing was missing from the map; the usage
+    capture never ran. Blaming the wrong subsystem sends the fix to the wrong
+    place, so the two causes are now separated.
+    """
+    model = row.get("model")
+    if not model:
+        return "no_model_recorded"
+    if model not in pricing._effective_price_map():
+        return "no_price_for_model"
+    if not (row.get("input_tokens") or row.get("output_tokens")):
+        return "no_usage_captured"
+    return "no_price_for_model"
+
+
+def _is_model_invocation(row: dict[str, Any]) -> bool:
+    """True when this step could have called a model at all.
+
+    A `shell` runner and a `skip:<stage>` bookkeeping row could not — see
+    `_NON_MODEL_PROVIDERS`.
+    """
+    provider = row.get("provider")
+    if provider in _NON_MODEL_PROVIDERS:
+        return False
+    step = row.get("step") or ""
+    return not step.startswith("skip:")
+
+
 def _accumulate_cost(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Totals over *rows*, splitting UNPRICED from UNPRICEABLE.
+
+    A step run by a `shell` runner, or a `skip:<stage>` bookkeeping row, never
+    invoked a model: it has no token cost to miss. Counting it alongside a
+    genuine pricing gap is what made the dashboard warn *"total cost is
+    understated"* about 271 steps when almost none of them could have cost
+    anything. The rows are still counted in `total_steps` — nothing is
+    dropped — but only `unpriced_steps` justifies that warning.
+    """
     total_cost = 0.0
     total_input = 0
     total_output = 0
     unpriced_steps = 0
+    unpriceable_steps = 0
+    reasons: dict[str, int] = defaultdict(int)
     for row in rows:
         cost, priced = _step_cost(row)
         total_cost += cost
         total_input += row.get("input_tokens") or 0
         total_output += row.get("output_tokens") or 0
-        if not priced:
-            unpriced_steps += 1
+        if priced:
+            continue
+        if not _is_model_invocation(row):
+            unpriceable_steps += 1
+            continue
+        unpriced_steps += 1
+        reasons[_unpriced_reason(row)] += 1
     return {
         "total_steps": len(rows),
         "input_tokens": total_input,
         "output_tokens": total_output,
         "cost_usd": round(total_cost, 6),
         "unpriced_steps": unpriced_steps,
+        "unpriceable_steps": unpriceable_steps,
+        "unpriced_reasons": dict(reasons),
     }
 
 
@@ -709,10 +790,13 @@ def cost_summary(
     if until_ts is not None:
         clauses.append("s.timestamp<=?")
         params.append(until_ts)
+    # Same exclusion as the model view: a shell command and a skipped stage
+    # have no token cost, and counting them as "unpriced steps" turned a
+    # complete picture into a warning about 271 missing prices.
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT s.provider AS provider, s.model AS model, r.project AS project,
-               s.role AS role,
+               s.role AS role, s.step AS step,
                s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
                s.cache_read_tokens AS cache_read_tokens,
                s.cache_creation_tokens AS cache_creation_tokens,

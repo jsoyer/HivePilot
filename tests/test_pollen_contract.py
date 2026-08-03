@@ -243,6 +243,8 @@ _COST_ACCUMULATION_KEYS = {
     "output_tokens",
     "cost_usd",
     "unpriced_steps",
+    "unpriceable_steps",
+    "unpriced_reasons",
 }
 
 
