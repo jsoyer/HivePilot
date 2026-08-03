@@ -158,6 +158,8 @@ export const en = {
     ' Status means installed and configured. Activity means it has actually run — the two can disagree for weeks.',
   'health.summary.loaded': '{count} loaded',
   'health.summary.exercised': '{count} exercised',
+  'health.summary.idle': '{count} idle',
+  'health.summary.unreadable': '{count} unreadable',
   'health.summary.neverRun': '{count} never run',
   'health.summary.unmeasured': '{count} presence-only',
   'health.activity.active': '{count} events · last {when}',

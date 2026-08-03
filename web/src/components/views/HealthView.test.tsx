@@ -563,5 +563,70 @@ describe('HealthView', () => {
       expect(container.textContent).toContain('0 never run')
       expect(container.textContent).not.toContain('reports ok, never ran')
     })
+
+    it('lands every plugin in exactly one summary bucket', async () => {
+      // A count that silently omits a case is worse than no count: it
+      // reassures about ground it never covered. An earlier version had no
+      // `idle` or `unreadable` bucket, so a plugin dead for ninety days fell
+      // through every counter while the strip still read "0 never run".
+      fetchPluginsHealth.mockResolvedValue({
+        plugins: [
+          {
+            name: 'active-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: { last_used: recentUtc(2), events: 7, window_days: 30, evidence: 'e' },
+          },
+          {
+            name: 'idle-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: {
+              last_used: '2026-01-04 09:00:00',
+              events: 0,
+              window_days: 30,
+              evidence: 'e',
+            },
+          },
+          {
+            name: 'never-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: { last_used: null, events: 0, window_days: 30, evidence: 'e' },
+          },
+          {
+            name: 'unreadable-one',
+            status: 'ok',
+            detail: '',
+            activity_available: true,
+            activity: null,
+          },
+          {
+            name: 'presence-one',
+            status: 'ok',
+            detail: '',
+            activity_available: false,
+            activity: null,
+          },
+        ],
+        disabled: [],
+      } satisfies PluginsHealthResponse)
+
+      await act(async () => {
+        mount()
+        await Promise.resolve()
+      })
+
+      // 1 + 1 + 1 + 1 + 1 = 5 loaded. Nothing falls through.
+      expect(container.textContent).toContain('5 loaded')
+      expect(container.textContent).toContain('1 exercised')
+      expect(container.textContent).toContain('1 idle')
+      expect(container.textContent).toContain('1 never run')
+      expect(container.textContent).toContain('1 presence-only')
+      expect(container.textContent).toContain('1 unreadable')
+    })
   })
 })

@@ -270,13 +270,25 @@ export function HealthView() {
             const trulyDisabled = data.disabled.filter((name) => !loadedNames.has(name))
 
             const states = data.plugins.map((plugin) => activityState(plugin))
-            // Counted separately rather than as one "healthy" figure: a
-            // plugin nothing measures and a plugin measured as idle are not
-            // interchangeable, and summing them would recreate exactly the
+            // Counted separately rather than rolled into one "healthy"
+            // figure: a plugin nothing measures and a plugin measured as idle
+            // are not interchangeable, and summing them would recreate the
             // false reassurance this view was rebuilt to remove.
-            const exercised = states.filter((state) => state.kind === 'active').length
-            const neverRun = states.filter((state) => state.kind === 'never').length
-            const unmeasured = states.filter((state) => state.kind === 'presenceOnly').length
+            //
+            // **Every state gets a bucket.** An earlier version counted only
+            // exercised/never-run/presence-only, so a plugin idle for ninety
+            // days — or one whose probe failed — fell through all three and
+            // the strip still read "0 never run". A count that silently omits
+            // a case is worse than no count: it reassures about ground it
+            // never covered. `test_every_plugin_lands_in_exactly_one_bucket`
+            // pins the totals to `plugins.length`.
+            const count = (kind: ActivityState['kind']) =>
+              states.filter((state) => state.kind === kind).length
+            const exercised = count('active')
+            const idle = count('idle')
+            const neverRun = count('never')
+            const unmeasured = count('presenceOnly')
+            const unreadable = count('unreadable')
 
             return (
               <div className="flex flex-col gap-4">
@@ -288,6 +300,9 @@ export function HealthView() {
                     {ACTIVITY_STYLE.active.glyph}{' '}
                     {t('health.summary.exercised', { count: exercised })}
                   </span>
+                  <span>
+                    {ACTIVITY_STYLE.idle.glyph} {t('health.summary.idle', { count: idle })}
+                  </span>
                   <span className={neverRun > 0 ? 'text-amber-600 dark:text-amber-500' : ''}>
                     {ACTIVITY_STYLE.never.glyph}{' '}
                     {t('health.summary.neverRun', { count: neverRun })}
@@ -296,6 +311,14 @@ export function HealthView() {
                     {ACTIVITY_STYLE.presenceOnly.glyph}{' '}
                     {t('health.summary.unmeasured', { count: unmeasured })}
                   </span>
+                  {/* An error state, not a resting state — shown only when it
+                      actually happens rather than sitting at a permanent 0. */}
+                  {unreadable > 0 && (
+                    <span>
+                      {ACTIVITY_STYLE.unreadable.glyph}{' '}
+                      {t('health.summary.unreadable', { count: unreadable })}
+                    </span>
+                  )}
                 </div>
                 <ul className="flex flex-col gap-2">
                   {data.plugins.map((plugin) => {

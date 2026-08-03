@@ -153,6 +153,8 @@ export const fr: Record<TranslationKey, string> = {
     " Le statut signifie installé et configuré. L'activité signifie qu'il a réellement tourné — les deux peuvent diverger pendant des semaines.",
   'health.summary.loaded': '{count} chargés',
   'health.summary.exercised': '{count} sollicités',
+  'health.summary.idle': '{count} inactifs',
+  'health.summary.unreadable': '{count} illisibles',
   'health.summary.neverRun': "{count} jamais exécutés",
   'health.summary.unmeasured': '{count} non mesurables',
   'health.activity.active': '{count} événements · dernier {when}',
