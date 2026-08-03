@@ -26,9 +26,21 @@ export function formatDurationSeconds(totalSeconds: number): string {
   return `${seconds}s`
 }
 
+/** True when the string already says which zone it is in. */
+const HAS_ZONE = /([zZ]|[+-]\d{2}:?\d{2})$/
+
 function parse(iso: string | null | undefined): Date | null {
   if (!iso) return null
-  const date = new Date(iso)
+  // The API returns SQLite `CURRENT_TIMESTAMP` values: `"2026-08-03 09:15:21"`
+  // — UTC, but carrying no zone designator. `new Date()` reads that shape as
+  // LOCAL time, so every instant in Pollen was shifted by the viewer's UTC
+  // offset: a run started seconds ago read "started 2h ago" in Paris, and the
+  // clock times shown were UTC wearing a local label.
+  //
+  // Only a genuinely naive string is stamped; anything that already declares a
+  // zone (or an offset) is left exactly as sent.
+  const normalised = HAS_ZONE.test(iso) ? iso : `${iso.trim().replace(' ', 'T')}Z`
+  const date = new Date(normalised)
   return Number.isNaN(date.getTime()) ? null : date
 }
 

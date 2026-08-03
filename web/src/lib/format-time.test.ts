@@ -76,3 +76,36 @@ describe('formatClock', () => {
     expect(formatClock(null)).toBe('—')
   })
 })
+
+describe('a naive API timestamp is UTC, not local', () => {
+  // The API returns SQLite `CURRENT_TIMESTAMP`: UTC with no zone designator.
+  // Reading it as local shifted every instant in Pollen by the viewer's
+  // offset — a run started seconds ago showed "started 2h ago" in Paris.
+
+  it('does not inflate the age by the local UTC offset', () => {
+    const now = new Date('2026-08-03T09:15:41Z')
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    try {
+      // 20 seconds before `now`, in the shape the API actually sends.
+      expect(formatAge('2026-08-03 09:15:21')).toBe('20s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves a string that already declares its zone alone', () => {
+    const withZ = formatElapsed('2026-08-03T09:00:00Z', '2026-08-03T09:01:00Z')
+    const withOffset = formatElapsed('2026-08-03T11:00:00+02:00', '2026-08-03T11:01:00+02:00')
+    expect(withZ).toBe('1m')
+    expect(withOffset).toBe('1m')
+  })
+
+  it('measures a span between two naive stamps consistently', () => {
+    expect(formatElapsed('2026-08-03 09:15:21', '2026-08-03 09:18:21')).toBe('3m')
+  })
+
+  it('still refuses an unparseable instant', () => {
+    expect(formatAge('not a date')).toBe('—')
+  })
+})
