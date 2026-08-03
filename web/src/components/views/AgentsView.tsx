@@ -239,8 +239,9 @@ function AttentionBand({ rows, onSelect }: AttentionBandProps) {
               type="button"
               data-testid={`agents-attention-${agent.name}`}
               onClick={() => onSelect(agent.name)}
-              className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded px-1 py-0.5 text-left text-sm hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded px-1 py-0.5 text-left text-sm hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
+              <AgentAvatar roleName={agent.name} label={agent.display_name ?? agent.name} />
               <span className="font-medium">{agent.display_name ?? agent.name}</span>
               <span className="text-muted-foreground">
                 {nonNominalVerdict
@@ -318,7 +319,9 @@ function RosterTable({ rows, maxCost, selected, onSelect }: RosterTableProps) {
             )}
           >
             <TableCell>
-              <div className="flex min-w-0 flex-col">
+              <div className="flex min-w-0 items-center gap-2">
+                <AgentAvatar roleName={agent.name} label={agent.display_name ?? agent.name} />
+                <div className="flex min-w-0 flex-col">
                 <span className="truncate font-medium">{agent.display_name ?? agent.name}</span>
                 {agent.title && (
                   <span className="truncate text-xs text-muted-foreground">{agent.title}</span>
@@ -331,6 +334,7 @@ function RosterTable({ rows, maxCost, selected, onSelect }: RosterTableProps) {
                     {t('agents.noActivityYet')}
                   </span>
                 )}
+                </div>
               </div>
             </TableCell>
             <TableCell className="text-right">
@@ -364,16 +368,68 @@ function RosterTable({ rows, maxCost, selected, onSelect }: RosterTableProps) {
   )
 }
 
+/** Avatar tints. Chosen to stay legible on both grounds and to read as
+ * distinct from the semantic colours used elsewhere in this view (amber for
+ * attention, red for failure) — an agent's identity must never look like a
+ * status. */
+const AVATAR_TONES = [
+  'bg-sky-500/15 text-sky-700 dark:text-sky-300',
+  'bg-violet-500/15 text-violet-700 dark:text-violet-300',
+  'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+  'bg-teal-500/15 text-teal-700 dark:text-teal-300',
+  'bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300',
+  'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300',
+]
+
+/** Deterministic tint from the ROLE name, not the display name.
+ *
+ * HivePilot is a generic engine: personas, their names and their count are
+ * tenant configuration, so there can be no built-in name-to-icon table. A
+ * hash gives every org stable per-agent identity without the engine knowing
+ * anything about who its agents are. Keying on the role name (rather than
+ * the display name) keeps the colour stable when a tenant renames a persona. */
+function avatarTone(roleName: string): string {
+  let hash = 0
+  for (let index = 0; index < roleName.length; index += 1) {
+    hash = (hash * 31 + roleName.charCodeAt(index)) | 0
+  }
+  return AVATAR_TONES[Math.abs(hash) % AVATAR_TONES.length]
+}
+
+/** `aria-hidden` on purpose: the name it decorates is rendered right beside
+ * it, so announcing the initial too would just stutter for a screen reader. */
+function AgentAvatar({ roleName, label }: { roleName: string; label: string }) {
+  // Spread rather than `charAt`, so an accented or non-Latin first character
+  // (or an emoji) survives instead of being split mid-codepoint.
+  const initial = [...label.trim()][0]?.toUpperCase() ?? '?'
+  return (
+    <span
+      aria-hidden="true"
+      data-testid={`agent-avatar-${roleName}`}
+      className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${avatarTone(roleName)}`}
+    >
+      {initial}
+    </span>
+  )
+}
+
 /**
- * The top-level `"unknown"` (NULL-role) bucket — activity recorded before
- * per-role attribution existed, kept visually distinct (dashed border) from
- * the real roster so it never reads as "just another agent".
+ * The top-level `"unknown"` (NULL-role) bucket, kept visually distinct
+ * (dashed border) from the real roster so it never reads as "just another
+ * agent".
  *
  * The backend's `unknown.note` is deliberately NOT rendered: it explains an
  * implementation detail (which sprint added the `steps.role` column) to
- * whoever reads the API, not something an operator can act on. The heading
- * and one plain sentence carry the operator-relevant fact — this activity
- * predates attribution and cannot be assigned to a role.
+ * whoever reads the API, not something an operator can act on.
+ *
+ * **The breakdown is the point of this card.** It used to show one number
+ * described as history recorded before per-role attribution existed. On real
+ * data that description was wrong for every row: the overwhelming majority
+ * were `shell` steps that cannot have a role at all, and buried inside was a
+ * much smaller set of model invocations that genuinely should have been
+ * attributed — carrying real spend that no per-agent figure accounted for.
+ * A single total made the harmless and the defective look identical, so the
+ * three causes are now named and counted separately.
  */
 function UnknownBucketCard({ unknown }: { unknown: AgentUnknownBucket }) {
   const t = useT()
@@ -382,10 +438,57 @@ function UnknownBucketCard({ unknown }: { unknown: AgentUnknownBucket }) {
     return null
   }
 
+  const { no_model: noModel, skipped, attribution_gap: gap } = unknown.breakdown
+  const causes = [
+    { key: 'noModel', label: t('agents.unknown.noModel'), hint: t('agents.unknown.noModelHint'), part: noModel },
+    { key: 'skipped', label: t('agents.unknown.skipped'), hint: t('agents.unknown.skippedHint'), part: skipped },
+    {
+      key: 'attributionGap',
+      label: t('agents.unknown.attributionGap'),
+      hint: t('agents.unknown.attributionGapHint'),
+      part: gap,
+      isDefect: true,
+    },
+  ]
+
   return (
     <div data-testid="agents-unknown-bucket" className="rounded-lg border border-dashed border-border p-3">
       <p className="mb-2 text-sm font-medium">{t('agents.unknownTitle')}</p>
       <p className="mb-3 max-w-prose text-xs text-muted-foreground">{t('agents.unknownDescription')}</p>
+
+      <ul className="mb-3 flex flex-col gap-2">
+        {causes.map((cause) => (
+          <li
+            key={cause.key}
+            data-testid={`agents-unknown-cause-${cause.key}`}
+            className={`flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 rounded-md px-2 py-1.5 ${
+              // Only the defect gets emphasis, and only when it is actually
+              // happening — a permanently amber row would stop meaning
+              // anything.
+              cause.isDefect && cause.part.step_count > 0
+                ? 'bg-amber-500/10 text-amber-700 dark:text-amber-500'
+                : 'text-muted-foreground'
+            }`}
+          >
+            <span className="text-sm font-medium">{cause.label}</span>
+            <span className="metric-mono text-sm tabular-nums">
+              {t('agents.unknown.stepsSuffix', { count: cause.part.step_count.toLocaleString('en-US') })}
+              {cause.part.cost_usd > 0 && ` · ${formatCost(cause.part.cost_usd)}`}
+            </span>
+            <span className="w-full text-xs opacity-80">{cause.hint}</span>
+          </li>
+        ))}
+      </ul>
+
+      {/* Named in money, because that is what makes it worth acting on. */}
+      {gap.cost_usd > 0 && (
+        <p
+          data-testid="agents-unknown-gap-cost"
+          className="mb-3 max-w-prose text-xs font-medium text-amber-700 dark:text-amber-500"
+        >
+          {t('agents.unknown.gapCost', { cost: formatCost(gap.cost_usd) })}
+        </p>
+      )}
       <div className="metric-mono grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
         <div className="flex flex-col">
           <span className="text-xs text-muted-foreground">{t('agents.costLabel')}</span>

@@ -1325,6 +1325,93 @@ class TestAgentsSummary:
             assert "p50" not in agent
             assert "p95" not in agent
 
+    # -- unknown-bucket breakdown -------------------------------------------
+    #
+    # The bucket was a single undifferentiated number described in the UI as
+    # "recorded before per-role attribution existed". On real data that
+    # explanation was wrong for every row in it: 210 of 245 were `shell`
+    # steps that cannot have a role at all, 16 were skips that never ran, and
+    # 19 were model invocations carrying $4.81 that genuinely should have
+    # been attributed and were not. Only the last group is a defect, and
+    # lumping the three together hid it behind a number that looked like
+    # legacy noise.
+
+    def test_unknown_bucket_splits_by_cause(self) -> None:
+        run = _seed_run(status="success")
+        # No LLM involved -- a shell step has no role by construction.
+        _seed_step_with_usage(run, "signals", "success", provider="shell")
+        # Never ran, so it invoked nothing.
+        _seed_step_with_usage(run, "skip:Design Spec", "skipped", provider=None)
+        # A model ran and produced cost, with no role recorded. The defect.
+        _seed_step_with_usage(run, "propose", "success", provider="claude", cost_usd=2.5)
+
+        breakdown = analytics_service.agents_summary(days=None)["unknown"]["breakdown"]
+
+        assert breakdown["no_model"]["step_count"] == 1
+        assert breakdown["skipped"]["step_count"] == 1
+        assert breakdown["attribution_gap"]["step_count"] == 1
+
+    def test_only_the_attribution_gap_carries_cost(self) -> None:
+        """Cost in the gap is spend missing from every per-agent figure.
+
+        Shell steps and skips cost nothing, so a non-zero cost anywhere but
+        the gap would mean the classifier put a real model invocation in a
+        bucket the UI describes as harmless.
+        """
+        run = _seed_run(status="success")
+        _seed_step_with_usage(run, "signals", "success", provider="shell", cost_usd=0.0)
+        _seed_step_with_usage(run, "skip:x", "skipped", provider=None)
+        _seed_step_with_usage(run, "propose", "success", provider="claude", cost_usd=4.75)
+
+        breakdown = analytics_service.agents_summary(days=None)["unknown"]["breakdown"]
+
+        assert breakdown["attribution_gap"]["cost_usd"] == 4.75
+        assert breakdown["no_model"]["cost_usd"] == 0.0
+        assert breakdown["skipped"]["cost_usd"] == 0.0
+
+    def test_a_shell_step_is_never_reported_as_an_attribution_gap(self) -> None:
+        """The gap count is the number the operator is asked to act on.
+
+        Counting 210 roleless `shell` steps as gaps would bury the 19 real
+        ones and make the figure impossible to act on -- the same failure as
+        the undifferentiated bucket, one level down.
+        """
+        run = _seed_run(status="success")
+        for index in range(5):
+            _seed_step_with_usage(run, f"signals-{index}", "success", provider="shell")
+
+        breakdown = analytics_service.agents_summary(days=None)["unknown"]["breakdown"]
+
+        assert breakdown["no_model"]["step_count"] == 5
+        assert breakdown["attribution_gap"]["step_count"] == 0
+
+    def test_breakdown_accounts_for_every_row_in_the_bucket(self) -> None:
+        """A breakdown that drops rows would understate the gap silently."""
+        run = _seed_run(status="success")
+        _seed_step_with_usage(run, "signals", "success", provider="shell")
+        _seed_step_with_usage(run, "skip:a", "skipped", provider=None)
+        _seed_step_with_usage(run, "propose", "success", provider="claude", cost_usd=1.0)
+        # A NULL provider that is NOT a skip: a telemetry gap, not a
+        # known-harmless row, so it must land in the gap rather than vanish.
+        _seed_step_with_usage(run, "ceo intake", "success", provider=None, cost_usd=0.5)
+
+        unknown = analytics_service.agents_summary(days=None)["unknown"]
+        breakdown = unknown["breakdown"]
+
+        assert sum(part["step_count"] for part in breakdown.values()) == unknown["step_count"]
+        assert breakdown["attribution_gap"]["step_count"] == 2
+
+    def test_attributed_steps_never_enter_the_breakdown(self) -> None:
+        run = _seed_run(status="success")
+        _seed_step_with_usage(
+            run, "build", "success", provider="claude", cost_usd=9.0, role="developer"
+        )
+
+        unknown = analytics_service.agents_summary(days=None)["unknown"]
+
+        assert unknown["step_count"] == 0
+        assert all(part["step_count"] == 0 for part in unknown["breakdown"].values())
+
 
 # ---------------------------------------------------------------------------
 # Mirador Agent Panels backend sprint -- verdicts_summary (GET /v1/verdicts)
