@@ -399,6 +399,37 @@ def _read_topic_mirror() -> dict[str, int]:
         return {}
 
 
+# Set once the mirror has been reconciled in this process. The registry is
+# read on every send, and a database round-trip per send to re-check a
+# mapping that changes a handful of times in a deployment's life would be
+# pure overhead.
+_mirror_reconciled = False
+
+
+def _reconcile_topic_mirror(loaded: dict[str, int]) -> None:
+    """Copy into the mirror anything the file has and it does not.
+
+    Without this the mirror only ever learns about topics registered AFTER it
+    shipped — so an existing deployment would carry a restore path that could
+    restore nothing, which is worse than no restore path at all because it
+    looks like protection. Runs once per process, best-effort, never raises.
+    """
+    global _mirror_reconciled
+    if _mirror_reconciled or not loaded:
+        return
+    _mirror_reconciled = True
+    try:
+        known = _read_topic_mirror()
+        missing = {k: v for k, v in loaded.items() if known.get(k) != v}
+        if not missing:
+            return
+        for agent_key, thread_id in missing.items():
+            _mirror_topic(agent_key, thread_id)
+        logger.info("stream.topics.mirror_backfilled", count=len(missing))
+    except Exception as exc:  # noqa: BLE001 — a mirror must never break a send
+        logger.warning("stream.topics.mirror_reconcile_failed", error=str(exc))
+
+
 def _load_topics() -> dict[str, int]:
     """Load the agent_key -> message_thread_id registry. Best-effort.
 
@@ -419,6 +450,7 @@ def _load_topics() -> dict[str, int]:
         logger.warning("stream.topics.load_failed", error=str(exc))
 
     if loaded:
+        _reconcile_topic_mirror(loaded)
         return loaded
 
     restored = _read_topic_mirror()
