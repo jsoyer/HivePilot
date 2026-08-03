@@ -432,6 +432,10 @@ export const en = {
   'efficiency.headroomTitle': 'Headroom',
   'efficiency.headroomDescription': 'Context-compression savings recorded by the Headroom plugin',
   'efficiency.headroomNotAvailable': 'No compressions recorded yet. Headroom only rewrites context large enough to be worth compressing, so this stays empty until a run produces one — it does not mean the plugin is failing (check Health for that).',
+  'efficiency.headroomRanAndDeclined':
+    'Headroom ran and declined {count} time(s) — every context so far was too small to be worth rewriting. It is working; there is simply nothing to compress yet.',
+  'efficiency.headroomNeverRan':
+    'Headroom has not run yet — no compression and no skip has been recorded. Check Health if you expected it to have run.',
   'efficiency.tokensSaved': 'Tokens saved',
   'efficiency.compressions': 'Compressions recorded',
   'efficiency.charsSaved': 'Characters saved',

@@ -169,6 +169,7 @@ def before_step(**kwargs: Any) -> None:
         if step is not None:
             model_hint = (getattr(step, "metadata", None) or {}).get("model")
 
+        step_name = getattr(step, "name", None) if step is not None else None
         attempted_any = False
         for key in _COMPRESSIBLE_METADATA_KEYS:
             original = metadata.get(key)
@@ -187,6 +188,19 @@ def before_step(**kwargs: Any) -> None:
                     chars_before=chars_before,
                     chars_after=chars_after,
                 )
+                # Persist the decline, not just log it. Until now only
+                # successes reached the database, so a plugin running
+                # correctly and finding nothing worth rewriting looked
+                # identical to one that never ran — and the dashboard said
+                # "not reporting yet" for weeks while it was working.
+                try:
+                    from hivepilot.services import headroom_metrics
+
+                    headroom_metrics.record_skip(
+                        step=step_name, reason="non_shrinking", chars=chars_before
+                    )
+                except Exception as metrics_exc:  # noqa: BLE001
+                    logger.debug("plugin.headroom.record_skip_failed", error=str(metrics_exc))
                 continue
             metadata[key] = compressed
             ratio = round(chars_after / chars_before, 3)
@@ -207,7 +221,6 @@ def before_step(**kwargs: Any) -> None:
             try:
                 from hivepilot.services import headroom_metrics
 
-                step_name = getattr(step, "name", None) if step is not None else None
                 headroom_metrics.record_compression(
                     tenant="default",
                     step=step_name,
