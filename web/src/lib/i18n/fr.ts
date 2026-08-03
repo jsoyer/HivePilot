@@ -464,6 +464,9 @@ export const fr: Record<TranslationKey, string> = {
   'autopilot.dailyBudget': 'Budget quotidien',
   'autopilot.spentToday': "Dépensé aujourd'hui",
   'autopilot.remaining': 'Restant',
+  'autopilot.blockedByBudget': 'Bloqué — budget consommé',
+  'autopilot.spentTodayTenant': "Dépensé aujourd'hui (tout confondu)",
+  'autopilot.remainingTenant': 'Budget restant aujourd’hui',
   'autopilot.unknown': 'inconnu',
   'autopilot.noBudgetTitle': 'Aucun plafond de dépense quotidien',
   'autopilot.noBudgetBody':

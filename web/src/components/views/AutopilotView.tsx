@@ -138,6 +138,9 @@ function StatusRow({ data }: { data: AutopilotState }) {
       ? Math.max(0, Math.min(1, data.budget_spent_today! / budget))
       : null
   const gaugeTone: VizTone = fraction === null ? 'default' : fraction >= 1 ? 'crit' : fraction >= 0.8 ? 'warn' : 'good'
+  // Only claim "blocked" from a MEASURED remaining of zero. An unknown spend
+  // must not be rendered as either free or exhausted.
+  const budgetExhausted = budget != null && budget > 0 && data.budget_remaining != null && data.budget_remaining <= 0
 
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
@@ -147,11 +150,30 @@ function StatusRow({ data }: { data: AutopilotState }) {
        * MEASURED (a spend-lookup failure). Neither is ever rendered as
        * `$0.00`, which would read as a real measurement. */}
       <div className="grid flex-1 grid-cols-2 gap-4 lg:grid-cols-5">
+        {/* Three states, not two. "Active" alongside a 100%-burn gauge and
+         * `Remaining $0.00` claimed the autopilot was working when the budget
+         * gate had already closed: it is enabled, and it cannot act. An
+         * operator reading "Active · nothing dispatched" has no way to tell
+         * whether that is calm or blocked. */}
         <MetricReadout
-          icon={data.paused ? <Pause className="size-4" /> : <Play className="size-4" />}
+          icon={
+            data.paused ? (
+              <Pause className="size-4" />
+            ) : budgetExhausted ? (
+              <Wallet className="size-4" />
+            ) : (
+              <Play className="size-4" />
+            )
+          }
           label={t('autopilot.statusLabel')}
-          value={data.paused ? t('autopilot.paused') : t('autopilot.active')}
-          tone={data.paused ? 'warn' : 'good'}
+          value={
+            data.paused
+              ? t('autopilot.paused')
+              : budgetExhausted
+                ? t('autopilot.blockedByBudget')
+                : t('autopilot.active')
+          }
+          tone={data.paused || budgetExhausted ? 'warn' : 'good'}
         />
         <MetricReadout
           icon={<ListChecks className="size-4" />}
@@ -164,12 +186,12 @@ function StatusRow({ data }: { data: AutopilotState }) {
           value={budget == null ? EM_DASH : formatCost(budget)}
         />
         <MetricReadout
-          label={t('autopilot.spentToday')}
+          label={t('autopilot.spentTodayTenant')}
           value={spentKnown ? formatCost(data.budget_spent_today!) : t('autopilot.unknown')}
           tone={spentKnown ? 'default' : 'warn'}
         />
         <MetricReadout
-          label={t('autopilot.remaining')}
+          label={t('autopilot.remainingTenant')}
           value={
             data.budget_remaining != null ? formatCost(data.budget_remaining) : t('autopilot.unknown')
           }

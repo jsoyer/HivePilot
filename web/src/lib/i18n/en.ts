@@ -464,6 +464,9 @@ export const en = {
   'autopilot.dailyBudget': 'Daily budget',
   'autopilot.spentToday': 'Spent today',
   'autopilot.remaining': 'Remaining',
+  'autopilot.blockedByBudget': 'Blocked — budget spent',
+  'autopilot.spentTodayTenant': 'Spent today (all work)',
+  'autopilot.remainingTenant': 'Budget left today',
   'autopilot.unknown': 'unknown',
   'autopilot.noBudgetTitle': 'No daily spend ceiling',
   'autopilot.noBudgetBody':
