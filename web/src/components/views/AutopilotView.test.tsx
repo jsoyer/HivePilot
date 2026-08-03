@@ -515,3 +515,39 @@ describe('AutopilotView', () => {
     expect(container.textContent).not.toMatch(/\$0\.00/)
   })
 })
+
+describe('status distinguishes enabled from able to act', () => {
+  async function render(state: Record<string, unknown>) {
+    fetchAutopilot.mockResolvedValue({ ...BASE_STATE, paused: false, ...state })
+    mockRole('run', 1)
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+  }
+
+  it('reads blocked, not active, when the budget is spent', async () => {
+    // "Active" beside a 100%-burn gauge and `Remaining $0.00` claimed the
+    // autopilot was working when the budget gate had already closed.
+    await render({ budget_daily_usd: 2, budget_spent_today: 14.4, budget_remaining: 0 })
+    expect(container.textContent).toContain('Blocked')
+    expect(container.textContent).not.toContain('Active')
+  })
+
+  it('still reads active when budget remains', async () => {
+    await render({ budget_daily_usd: 2, budget_spent_today: 0.5, budget_remaining: 1.5 })
+    expect(container.textContent).toContain('Active')
+    expect(container.textContent).not.toContain('Blocked')
+  })
+
+  it('does not claim blocked when spend is unknown', async () => {
+    // An unmeasurable spend is neither free nor exhausted.
+    await render({ budget_daily_usd: 2, budget_spent_today: null, budget_remaining: null })
+    expect(container.textContent).not.toContain('Blocked')
+  })
+
+  it('says whose spend the ceiling measures', async () => {
+    await render({ budget_daily_usd: 2, budget_spent_today: 1, budget_remaining: 1 })
+    expect(container.textContent).toContain('all work')
+  })
+})
