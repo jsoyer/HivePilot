@@ -11,10 +11,35 @@ test_pipeline_execution.py to succeed even though langchain is not installed.
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
+
+# ---------------------------------------------------------------------------
+# Pin the config home BEFORE the first `hivepilot` import below.
+#
+# The roles registry is built at IMPORT time (`hivepilot/roles.py`:
+# `ROLES = load_roles()`), reading `~/.config/hivepilot/roles.yaml` when one
+# exists. On a machine that also RUNS HivePilot, that file is the deployment's
+# roster — 20 noxys roles instead of the 8 built-in defaults — so every test
+# asserting the default roster failed. That was 49 failures locally against a
+# permanently green CI, which has no such file, and the divergence went
+# undiagnosed for weeks: it looked like flakiness or test-ordering because it
+# tracked neither the code nor the branch.
+#
+# It has to happen here, at module scope, rather than in a fixture: a fixture
+# runs long after `ROLES` is bound. Rebinding it afterwards was tried and made
+# things worse (49 failures became 61) — `refresh_roles()` rebinds the module
+# global while callers already hold the old mapping.
+#
+# `HIVEPILOT_TEST_KEEP_CONFIG_HOME=1` opts out, for the rare case of
+# reproducing a deployment-specific failure on purpose.
+# ---------------------------------------------------------------------------
+if not os.environ.get("HIVEPILOT_TEST_KEEP_CONFIG_HOME"):
+    os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="hivepilot-test-config-")
 
 
 def _make_stub(name: str) -> types.ModuleType:
