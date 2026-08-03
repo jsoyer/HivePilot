@@ -6102,7 +6102,36 @@ class Orchestrator:
                 # (repo/worktree root) -- reviewers are runner dispatches
                 # like any other step, so they get `_runner_project`
                 # (module-scoped when a module target is active).
-                _review_subject = self._git_diff(_exec_project.path)
+                # What gets reviewed depends on the target, and until now it
+                # did not: `github_pr` reviewed the same working-tree diff as
+                # `internal`, so the two differed only in where the block was
+                # enforced. On a stage that commits nothing — which is where
+                # the PR gate has to sit, since that stage owns `promote_pr` —
+                # the working tree is clean and the reviewers were handed an
+                # empty subject every time.
+                #
+                # Fail-closed on failure: an unreachable PR diff yields an
+                # empty subject, which `_run_review` blocks on and now records
+                # a verdict for. Guessing with the working-tree diff instead
+                # would let a review pass having read something other than
+                # what is about to be promoted.
+                if effective_debate.review_target == "github_pr":
+                    from hivepilot.services.review_probe import (
+                        ReviewProbeError,
+                        fetch_pr_diff_for_branch,
+                    )
+
+                    try:
+                        _review_subject = fetch_pr_diff_for_branch(str(_exec_project.path))
+                    except ReviewProbeError as _pr_exc:
+                        logger.warning(
+                            "review.pr_diff_unavailable",
+                            project=_exec_project.path.name,
+                            error=redact_text(str(_pr_exc)),
+                        )
+                        _review_subject = None
+                else:
+                    _review_subject = self._git_diff(_exec_project.path)
                 self._run_review(
                     stage=stage,
                     pipeline=pipeline,
