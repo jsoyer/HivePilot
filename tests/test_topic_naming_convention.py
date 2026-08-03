@@ -124,3 +124,50 @@ def test_saving_stays_authoritative_so_a_dead_topic_can_be_removed(tmp_path, mon
     ns._save_topics({"developer": 330})  # ciso invalidated
 
     assert json.loads(registry.read_text(encoding="utf-8")) == {"developer": 330}
+
+
+class TestRegistrySurvivesLosingItsFile:
+    """Telegram cannot be asked whether a topic name already exists.
+
+    The Bot API has no method to list a forum's topics, so the local registry
+    is the ONLY guard against creating a duplicate. Losing the file would
+    therefore give every agent a second topic with the same name — accepted
+    silently by Telegram, and undetectable afterwards by any API call.
+    """
+
+    def test_an_emptied_file_is_rebuilt_from_the_mirror(self, tmp_path, monkeypatch):
+        registry = tmp_path / "stream_topics.json"
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+
+        ns._register_topic("developer", 330)
+        ns._register_topic("ciso", 284)
+        registry.write_text("{}", encoding="utf-8")  # file lost / reset
+
+        assert ns._load_topics() == {"developer": 330, "ciso": 284}
+
+    def test_the_rebuilt_registry_is_written_back(self, tmp_path, monkeypatch):
+        registry = tmp_path / "stream_topics.json"
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+
+        ns._register_topic("developer", 330)
+        registry.unlink()
+
+        ns._load_topics()
+        assert json.loads(registry.read_text(encoding="utf-8")) == {"developer": 330}
+
+    def test_a_genuinely_fresh_install_still_starts_empty(self, tmp_path, monkeypatch):
+        """Restoration must not invent history where there is none."""
+        registry = tmp_path / "stream_topics.json"
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+
+        assert ns._load_topics() == {}
+
+    def test_the_file_wins_while_it_has_content(self, tmp_path, monkeypatch):
+        """The file is the hot path; the mirror is only a fallback."""
+        registry = tmp_path / "stream_topics.json"
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+
+        ns._register_topic("developer", 330)
+        registry.write_text(json.dumps({"developer": 999}), encoding="utf-8")
+
+        assert ns._load_topics() == {"developer": 999}
