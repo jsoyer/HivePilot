@@ -387,3 +387,21 @@
     @apply font-sans;
     }
 }
+/* Graph canvas controls — react-flow's defaults assume a light ground and
+   become invisible on the dark theme (see GraphCanvas.tsx). Bind them to the
+   same tokens as the rest of the surface. */
+.graph-controls .react-flow__controls-button {
+  background: var(--color-card);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-foreground);
+}
+.graph-controls .react-flow__controls-button:hover {
+  background: var(--color-muted);
+}
+.graph-controls .react-flow__controls-button svg {
+  fill: currentColor;
+}
+.graph-controls .react-flow__controls-button:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}

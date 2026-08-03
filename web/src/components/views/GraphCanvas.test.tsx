@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 // `vite build`. Loads this file's OWN source as a plain string for the
 // static-scan assertion below.
 import source from './GraphCanvas.tsx?raw'
+import { dagLayout } from './GraphCanvas'
 
 describe('GraphCanvas source', () => {
   it('never uses dangerouslySetInnerHTML — all node/edge content is untrusted, GraphNode-authored text', () => {
@@ -101,5 +102,56 @@ describe('GraphCanvas source', () => {
     const minimap = source.slice(source.indexOf('<MiniMap'), source.indexOf('</ReactFlow>'))
     expect(minimap).toMatch(/hidden!/)
     expect(minimap).toMatch(/lg:block!/)
+  })
+})
+
+describe('layout direction follows the graph shape', () => {
+  it('lays a chain along the wide axis, not the tall one', () => {
+    // A pipeline is a chain. Top-to-bottom turned 15 stages into one very
+    // tall column on a canvas three times wider than tall, so the operator
+    // scrolled past a stage at a time instead of reading the lineage.
+    const nodes = Array.from({ length: 8 }, (_, i) => ({
+      id: `s${i}`,
+      label: `Stage ${i}`,
+      kind: 'stage',
+    })) as never[]
+    const edges = Array.from({ length: 7 }, (_, i) => ({
+      source: `s${i}`,
+      target: `s${i + 1}`,
+      kind: 'flow',
+    })) as never[]
+
+    const positions = dagLayout(nodes, edges)
+    const xs = [...positions.values()].map((p) => p.x)
+    const ys = [...positions.values()].map((p) => p.y)
+    const spread = (v: number[]) => Math.max(...v) - Math.min(...v)
+
+    expect(spread(xs)).toBeGreaterThan(spread(ys))
+  })
+
+  it('keeps a wide, shallow graph horizontal rather than stacking it', () => {
+    // One root fanning out to many children is already wider than tall;
+    // flipping it would make it worse.
+    const nodes = [
+      { id: 'root', label: 'root', kind: 'plugin' },
+      ...Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, label: `c${i}`, kind: 'plugin' })),
+    ] as never[]
+    const edges = Array.from({ length: 8 }, (_, i) => ({
+      source: 'root',
+      target: `c${i}`,
+      kind: 'flow',
+    })) as never[]
+
+    const positions = dagLayout(nodes, edges)
+    const xs = [...positions.values()].map((p) => p.x)
+    const ys = [...positions.values()].map((p) => p.y)
+    const spread = (v: number[]) => Math.max(...v) - Math.min(...v)
+
+    expect(spread(xs)).toBeGreaterThan(spread(ys))
+  })
+
+  it('never crashes on a graph with no edges', () => {
+    const nodes = [{ id: 'a', label: 'a', kind: 'stage' }] as never[]
+    expect(() => dagLayout(nodes, [])).not.toThrow()
   })
 })
