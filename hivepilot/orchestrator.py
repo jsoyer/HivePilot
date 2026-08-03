@@ -1660,6 +1660,51 @@ class Orchestrator:
         """
         return resolve_debate_config(pipeline=pipeline, stage=stage)
 
+    def _block_review(
+        self,
+        reason: str,
+        *,
+        effective: "EffectiveDebateConfig",
+        project: "ProjectConfig",
+        run_id: int | None,
+    ) -> None:
+        """Fail a review closed **and leave a trace of it.**
+
+        `_register_verdict` is in-memory only — it feeds the
+        `perform_git_actions` PR gate and nothing else. Every fail-closed exit
+        in `_run_review` used to call just that, so a review could block
+        promotion and write no row at all.
+
+        In production that read as the feature being dead: the `noxys`
+        pipeline ran `PR Approval` with three reviewers configured, hit
+        `review.empty_subject`, blocked correctly — and after 312 runs the
+        `verdicts` table was still empty, so the honest conclusion from the
+        outside was that the review gate had never run once.
+
+        Blocking silently is worse than not blocking. The gate does its job
+        and no surface says so, which costs an operator the one signal that
+        would let them fix the cause.
+
+        *reason* is persisted as the verdict summary and must name what to
+        fix — the fail-closed exits block for different, individually
+        actionable reasons, and "blocked" alone sends the reader to the logs.
+        """
+        verdict = Verdict(decision=None, confidence=None)
+        self._register_verdict(verdict, confidence_threshold=effective.confidence_threshold)
+        try:
+            state_service.record_verdict(
+                run_id=run_id,
+                project=project.path.name,
+                task=None,
+                role="review",
+                kind="review",
+                decision=verdict.decision,
+                confidence=verdict.confidence,
+                summary=reason,
+            )
+        except Exception as exc:  # noqa: BLE001 — never let bookkeeping break the gate
+            logger.warning("verdict.persist_failed", kind="review", error=str(exc))
+
     def _register_verdict(
         self, verdict: "Verdict | None", *, confidence_threshold: float | None = None
     ) -> None:
@@ -3146,9 +3191,11 @@ class Orchestrator:
             # would let an empty subject sail through as if it had been
             # genuinely reviewed; block instead.
             logger.warning("review.empty_subject", review_target=effective.review_target)
-            self._register_verdict(
-                Verdict(decision=None, confidence=None),
-                confidence_threshold=effective.confidence_threshold,
+            self._block_review(
+                "blocked: empty subject — no diff was produced for reviewers to look at",
+                effective=effective,
+                project=project,
+                run_id=run_id,
             )
             return
 
@@ -3157,9 +3204,11 @@ class Orchestrator:
             # config-resolve time on `review_target` set + reviewers=[] -- but
             # this method never trusts that invariant blindly.
             logger.warning("review.no_reviewers_configured", review_target=effective.review_target)
-            self._register_verdict(
-                Verdict(decision=None, confidence=None),
-                confidence_threshold=effective.confidence_threshold,
+            self._block_review(
+                "blocked: no reviewers configured for this review target",
+                effective=effective,
+                project=project,
+                run_id=run_id,
             )
             return
 
@@ -3250,14 +3299,22 @@ class Orchestrator:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("verdict.persist_failed", kind="review", error=str(exc))
-        except Exception:
+        except Exception as exc:
             # Anything unexpected in the aggregation logic itself (not a
             # single reviewer's own resolve/call -- those are already caught
             # above and counted as blocking) must never leave the gate
-            # unset. Register blocking, then re-raise.
-            self._register_verdict(
-                Verdict(decision=None, confidence=None),
-                confidence_threshold=effective.confidence_threshold,
+            # unset. Block, record why, then re-raise.
+            #
+            # Recorded like the other fail-closed exits: this is the path
+            # least likely to be reproduced on demand, so it is the one that
+            # most needs a row of its own rather than only a traceback in a
+            # log the operator may never think to open. Only the exception's
+            # TYPE is persisted -- its message can carry step output.
+            self._block_review(
+                f"blocked: review aggregation raised {type(exc).__name__}",
+                effective=effective,
+                project=project,
+                run_id=run_id,
             )
             raise
 
