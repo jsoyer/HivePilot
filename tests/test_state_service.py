@@ -298,6 +298,49 @@ class TestRecordStepProviderModel:
         assert rows[0]["model"] is None
 
 
+class TestRecordStepAttribution:
+    """A step no agent performed must not carry an agent.
+
+    Role is declared per *task*, but a task's stages can mix agent work with
+    plain shell commands. Persisting the task's role on a `shell` step would
+    credit an agent with work no model did — inflating its step count with
+    activity it never performed, and making the Agents panel's per-agent
+    figures mean less the more shell a pipeline uses.
+
+    Enforced here, at the single point where role is written, rather than in
+    each caller: an invariant every call site has to remember is one that
+    eventually gets forgotten.
+    """
+
+    def test_a_shell_step_never_carries_a_role(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "signals", "success", provider="shell", role="groomer")
+        assert get_steps_for_run(run_id)[0]["role"] is None
+
+    def test_a_failed_shell_step_never_carries_a_role(self) -> None:
+        """Failing does not turn a shell command into agent work."""
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "signals", "failed", "boom", provider="shell", role="groomer")
+        assert get_steps_for_run(run_id)[0]["role"] is None
+
+    def test_a_model_step_keeps_its_role(self) -> None:
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "propose", "success", provider="claude", role="groomer")
+        assert get_steps_for_run(run_id)[0]["role"] == "groomer"
+
+    def test_an_unknown_provider_keeps_its_role(self) -> None:
+        """Only providers *known* not to invoke a model strip attribution.
+
+        A NULL provider is a telemetry gap, not proof that no agent ran.
+        Dropping the role there would silently erase real attribution to
+        protect against a case we cannot even confirm — so the uncertain
+        direction is to keep it.
+        """
+        run_id = record_run_start("proj", "task")
+        record_step(run_id, "mystery", "success", provider=None, role="groomer")
+        assert get_steps_for_run(run_id)[0]["role"] == "groomer"
+
+
 # ---------------------------------------------------------------------------
 # Phase 24b.2a — steps.input_tokens / steps.output_tokens / steps.cost_usd
 # (idempotent migration + record_step persistence)
