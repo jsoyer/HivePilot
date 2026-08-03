@@ -25,6 +25,12 @@ from hivepilot.utils.shell import run_command
 
 logger = get_logger(__name__)
 
+# GitHub's refusal when a branch has nothing ahead of its base, verbatim from
+# the API: "No commits between staging and hivepilot/noxys (createPullRequest)".
+# Matched lowercased on the stderr `gh` relays. A substring rather than an exact
+# message because the branch names are interpolated into it.
+_NO_COMMITS_MARKER = "no commits between"
+
 
 class GitHubForge:
     """`ForgeProvider` for github.com, via the `gh` CLI."""
@@ -217,7 +223,16 @@ class GitHubForge:
             cmd += ["--body", "Automated pull request opened by HivePilot."]
         try:
             completed = subprocess.run(
-                cmd, cwd=str(project.path), check=True, text=True, stdout=subprocess.PIPE
+                cmd,
+                cwd=str(project.path),
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                # Captured so a failure can say WHAT went wrong. Without it a
+                # `gh` error reached the operator as "returned non-zero exit
+                # status 1" and nothing else, which is how the cause below
+                # went unidentified across eight pipeline runs.
+                stderr=subprocess.PIPE,
             )
             url = extract_pr_url(getattr(completed, "stdout", None))
             logger.info(
@@ -229,6 +244,29 @@ class GitHubForge:
                 pr_url_captured=url is not None,
             )
             return url
+        except subprocess.CalledProcessError as exc:
+            stderr = str(getattr(exc, "stderr", "") or "")
+            # An agent that changed nothing is an ordinary outcome, not a
+            # failure. The branch then has no commits ahead of the base and
+            # `gh` refuses — "No commits between <base> and <branch>". Raising
+            # there killed the whole pipeline at the stage that opens the PR:
+            # on the noxys pipeline, 6 of 8 runs died exactly here, after the
+            # agents had already done (and been billed for) their work.
+            #
+            # There is nothing to open, so no URL is returned — which the
+            # signature has always allowed. The pipeline continues, and the
+            # absence of a PR speaks for itself downstream.
+            if _NO_COMMITS_MARKER in stderr.lower():
+                logger.info(
+                    "git.pr_not_opened_no_commits",
+                    project=project.path.name,
+                    branch=branch,
+                    base=base,
+                )
+                return None
+            raise RuntimeError(
+                f"Failed to create PR for {project.path.name}: {exc}: {stderr.strip()}"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Failed to create PR for {project.path.name}: {exc}") from exc
 
