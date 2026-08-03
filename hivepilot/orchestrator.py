@@ -731,6 +731,18 @@ def resolve_step_runner(
     role_host = resolve_host(task.role, policy)
 
     if not step.runner_ref:
+        # A step declaring a command-executing kind keeps it: a role's agent
+        # runner cannot execute a shell command, so substituting one turns
+        # `hivepilot drift scan` into a prompt. `TaskStep.runner` is a
+        # required field, so this is always an explicit declaration and never
+        # a default standing in for one.
+        #
+        # Deliberately narrow. Every step declares a `runner`, so honouring
+        # that declaration wholesale would leave a role's runner binding with
+        # nothing left to decide — only kinds that CANNOT be agent work
+        # override the role.
+        if step.runner in state_service.NON_MODEL_PROVIDERS and step.runner != runner_kind:
+            return step.runner, registry._definition_for(step.runner)
         return task.role, RunnerDefinition(
             name=f"role:{task.role}",
             kind=cast(RunnerKind, runner_kind),

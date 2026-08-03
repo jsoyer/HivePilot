@@ -27,12 +27,15 @@ logger = get_logger(__name__)
 # Keep DB_PATH as a module-level name: retry_service.py and tests reference it.
 DB_PATH = settings.resolve_path(settings.state_db)
 
-# Runner kinds that cannot have invoked a model. THE single definition of
-# "not agent work" — `record_step` uses it to refuse attribution, and
-# `analytics_service` imports it so a step is classified the same way it was
-# recorded. Two copies of this set would eventually disagree, and the
-# disagreement would show up as spend that belongs to no one.
-NON_MODEL_PROVIDERS = frozenset({"shell"})
+# Runner kinds that cannot have invoked a model — they execute a command.
+# THE single definition of "not agent work", used for three decisions that
+# must agree: `record_step` refuses to attribute these steps to a role,
+# `analytics_service` classifies them, and `orchestrator.resolve_step_runner`
+# lets a step declaring one of them keep it even when its task has a role (a
+# role's agent runner cannot execute a shell command). Separate copies of
+# this set would eventually disagree, and the disagreement would surface as
+# spend belonging to no one — or as a test suite handed to a model.
+NON_MODEL_PROVIDERS = frozenset({"shell", "container"})
 
 # ---------------------------------------------------------------------------
 # Formal run-status enum

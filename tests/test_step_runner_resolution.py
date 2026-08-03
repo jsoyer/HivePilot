@@ -85,6 +85,38 @@ def test_a_shell_step_stays_shell_under_a_claude_role(registry: _FakeRegistry) -
     assert runner_def.command == "pytest"
 
 
+def test_a_bare_shell_step_stays_shell_under_a_role(registry: _FakeRegistry) -> None:
+    """The same protection, for the other way a step declares itself.
+
+    `groomer-scan`'s `signals` step is `runner: shell` with an inline
+    `command` and NO `runner_ref` — the form `runner_ref` handling alone does
+    not cover. Without this, giving that task a role (the open attribution
+    gap) would send `hivepilot drift scan` to a model.
+
+    `TaskStep.runner` is a required field, so it is always an explicit
+    declaration — never a default standing in for one.
+    """
+    step = TaskStep(name="signals", runner="shell", command="hivepilot drift scan")
+    key, runner_def = _resolve(_task("ciso", [step]), step, registry)
+
+    assert runner_def.kind == "shell"
+    assert key == "shell"
+
+
+def test_a_model_step_still_follows_the_roles_runner(registry: _FakeRegistry) -> None:
+    """The narrow rule must not gut role → runner mapping.
+
+    Every step declares a `runner`, so honouring that declaration wholesale
+    would leave a role's runner binding with nothing left to decide. Only
+    kinds that *cannot* be agent work override it.
+    """
+    step = TaskStep(name="review", runner="claude")
+    key, runner_def = _resolve(_task("ciso", [step]), step, registry)
+
+    assert key == "ciso"
+    assert runner_def.name == "role:ciso"
+
+
 def test_a_named_runners_options_survive_the_role(registry: _FakeRegistry) -> None:
     """`profile: automation` is the whole reason a config names a runner.
 
