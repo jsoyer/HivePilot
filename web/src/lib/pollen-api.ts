@@ -316,10 +316,39 @@ export function fetchEfficiency(days = 30): Promise<EfficiencySummary> {
 
 export type PluginHealthStatus = 'ok' | 'degraded' | 'error'
 
+/** Evidence a plugin actually ran, from `hivepilot/services/plugin_activity.py`.
+ *
+ * `last_used` is a naive UTC timestamp (the SQLite `CURRENT_TIMESTAMP`
+ * convention) — always render it through `@/lib/format-time`, which stamps
+ * naive strings as UTC. `new Date()` would read them as local time and report
+ * a plugin used minutes ago as hours old. */
+export interface PluginActivity {
+  last_used: string | null
+  /** Events inside `window_days`. `last_used` is NOT window-bounded, so a
+   * long-idle plugin reads as a real date here with `events: 0`. */
+  events: number
+  window_days: number
+  /** The tables the numbers came from, shown to the operator rather than
+   * asking them to trust a badge. */
+  evidence: string
+}
+
 export interface PluginHealthEntry {
   name: string
+  /** Whether the plugin is installed and configured — NOT whether it works.
+   * `headroom` and `mem0` both sat at `ok` for weeks while failing every
+   * call, which is why `activity` exists as a separate answer. */
   status: PluginHealthStatus
   detail: string
+  /** False when the plugin records no telemetry (`rtk`, `gh` are PATH
+   * checks). The UI must then say the check is presence-only rather than let
+   * a green badge imply more. */
+  activity_available: boolean
+  /** `null` has two causes, split by `activity_available`: not measurable at
+   * all (false), or measurable but the read failed (true). Neither is the
+   * same as `events: 0`, which is a real reading meaning "measured, and it
+   * has done nothing". */
+  activity: PluginActivity | null
 }
 
 export interface PluginsHealthResponse {

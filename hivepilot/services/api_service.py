@@ -36,6 +36,7 @@ from hivepilot.services import (
     efficiency_service,
     memory_service,
     notification_service,
+    plugin_activity,
     policy_service,
     state_service,
     token_service,
@@ -2194,9 +2195,16 @@ def record_memory_evaluation(
 # ---------------------------------------------------------------------------
 
 
-@v1.get("/plugins/health", dependencies=[Depends(require_role("read"))])
-@app.get("/plugins/health", dependencies=[Depends(require_role("read"))])
-def plugins_health_endpoint() -> dict[str, Any]:
+def _plugin_activity_payload(name: str, *, tenant: str | None) -> dict[str, Any] | None:
+    activity = plugin_activity.activity_for(name, tenant=tenant)
+    return activity.as_dict() if activity is not None else None
+
+
+@v1.get("/plugins/health")
+@app.get("/plugins/health")
+def plugins_health_endpoint(
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
     """Plugin health, mirroring the `plugins health` CLI's
     `PluginManager.check_all()` call (see `hivepilot/cli.py`
     `_print_health_table`). Health is process-global plugin state (NOT
@@ -2212,11 +2220,41 @@ def plugins_health_endpoint() -> dict[str, Any]:
     unexpectedly, only the exception's type name (never the exception
     message, which is logged server-side instead). No additional redaction
     is needed here.
+
+    **`activity` is a second, independent answer** (see
+    `hivepilot.services.plugin_activity`). `status`/`detail` say whether a
+    plugin is installed and configured; `activity` says whether it has
+    actually run. Both `headroom` and `mem0` reported `status="ok"` for weeks
+    while failing every call, so a green badge alone must not be read as
+    "working".
+
+    Two fields, because "no reading" has two distinct causes the operator
+    needs told apart:
+
+    - `activity_available=false` — the plugin writes no telemetry (`rtk`,
+      `gh` are PATH checks). The health check above is presence-only and the
+      UI must say so rather than imply more.
+    - `activity_available=true` with `activity=null` — measurable, but the
+      read failed. Distinct from `activity.events == 0`, which is a real
+      reading meaning "measured, and it has done nothing".
+
+    Unlike the health fields, **`activity` IS tenant-partitioned**: it comes
+    from `headroom_*`/`memory_events`, which carry a tenant column, so it is
+    scoped via `_analytics_tenant` like the analytics endpoints. Serving one
+    tenant's activity timestamps to another would leak their run cadence.
     """
     results = _get_orchestrator().plugins.check_all()
+    tenant = _analytics_tenant(caller)
+    measurable = plugin_activity.probed_plugins()
     return {
         "plugins": [
-            {"name": name, "status": health.status, "detail": health.detail}
+            {
+                "name": name,
+                "status": health.status,
+                "detail": health.detail,
+                "activity_available": name in measurable,
+                "activity": _plugin_activity_payload(name, tenant=tenant),
+            }
             for name, health in sorted(results.items())
         ],
         "disabled": sorted(settings.plugins_disabled),

@@ -150,6 +150,29 @@ export const en = {
   'health.pendingBadgeTitle':
     "Flagged to disable — takes effect on the server's next restart. Currently still active.",
   'health.restartAppliesTitle': "This change applies on the API server's next restart.",
+  // Activity — the second, independent answer. Status says a plugin is
+  // installed; activity says it has run. `headroom` and `mem0` both read `ok`
+  // for weeks while failing every call, so the copy here never lets a green
+  // badge stand in for working.
+  'health.activityNote':
+    ' Status means installed and configured. Activity means it has actually run — the two can disagree for weeks.',
+  'health.summary.loaded': '{count} loaded',
+  'health.summary.exercised': '{count} exercised',
+  'health.summary.neverRun': '{count} never run',
+  'health.summary.unmeasured': '{count} presence-only',
+  'health.activity.active': '{count} events · last {when}',
+  'health.activity.idle': 'nothing in {days} d · last {when}',
+  'health.activity.neverRun': 'never run',
+  'health.activity.unreadable': 'activity unreadable',
+  'health.activity.presenceOnly': 'presence check only',
+  'health.activity.presenceOnlyTitle':
+    'This plugin records no telemetry. The status badge confirms it is installed — not that it works.',
+  'health.activity.unreadableTitle':
+    'This plugin is measurable, but reading its telemetry failed. Not the same as having done nothing.',
+  'health.activity.evidenceTitle': 'Measured from {evidence}.',
+  'health.activity.contradiction': 'reports ok, never ran',
+  'health.activity.contradictionTitle':
+    'The plugin loads and is configured, but has no recorded activity at all. Worth checking before trusting it.',
 
   // ---- Graph view ------------------------------------------------------
   'graph.title': 'Graph',
