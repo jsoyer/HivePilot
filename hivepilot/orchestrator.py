@@ -571,53 +571,25 @@ def _find_gating_step(
     fail-open-on-resolution-failure default `_resolve_runner_for_destructive_check`
     already uses (an unresolvable runner can't be destructive by definition).
     """
-    _role_runner_def: RunnerDefinition | None = None
-    if task.role:
-        from typing import cast
-
-        from hivepilot.models import RunnerKind
-        from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
-
-        try:
-            # No pipeline stage is available at this static, pre-execution
-            # probe (called once per task start, before any stage context
-            # exists) — resolves identically to `resolve_runner` (stage_model/
-            # stage_effort default None).
-            runner_kind, role_model, _role_effort = resolve_stage_dispatch(task.role, policy)
-            role_options: dict[str, Any] = {}
-            _role = get_role(task.role)
-            role_perm = _role.permission_mode
-            if role_perm:
-                role_options["permission_mode"] = role_perm
-            # Named-tool pre-approval: lets a role reach exactly the plugins it
-            # needs without `bypassPermissions` granting it Bash and Edit
-            # wholesale. Absent by default — omitted entirely when unset.
-            if _role.allowed_tools:
-                role_options["allowed_tools"] = list(_role.allowed_tools)
-            _role_runner_def = RunnerDefinition(
-                name=f"role:{task.role}",
-                kind=cast(RunnerKind, runner_kind),
-                command=None,
-                model=role_model,
-                effort=_role_effort,
-                host=resolve_host(task.role, policy),
-                options=role_options,
-            )
-        except Exception:  # noqa: BLE001 — can't resolve role runner: don't gate
-            _role_runner_def = None
-
     _probe_project = ProjectConfig(path=Path("."))
     for step in task.steps:
         if step.require_approval:
             return step
-        if task.role:
-            runner_def = _role_runner_def
-        else:
-            try:
-                runner_key = step.runner_ref or step.runner
-                runner_def = registry._definition_for(runner_key)
-            except Exception:  # noqa: BLE001 — unresolvable step runner: don't gate
-                runner_def = None
+        # Same resolution the executor performs, via the same function. These
+        # were two hand-maintained copies of one branch, and they had already
+        # drifted: the probe resolved a role's `allowed_tools` while the
+        # executor rebuilt the definition without them. A gate that decides on
+        # a different runner than the one that runs is deciding about nothing.
+        #
+        # No pipeline stage exists at this static, pre-execution probe (called
+        # once per task start, before any stage context), so stage_model and
+        # stage_effort stay unset — resolving identically to `resolve_runner`.
+        try:
+            _, runner_def = resolve_step_runner(
+                task=task, step=step, registry=registry, policy=policy
+            )
+        except Exception:  # noqa: BLE001 — unresolvable runner: don't gate
+            runner_def = None
         if runner_def is None:
             continue
         gate_runner = _resolve_runner_for_destructive_check(runner_def)
@@ -695,6 +667,93 @@ def _resolve_step_provider_model(
         return provider, model
     model = step.metadata.get("model") or runner_def.model
     return runner_def.kind, model
+
+
+def resolve_step_runner(
+    *,
+    task: Any,
+    step: Any,
+    registry: Any,
+    policy: object | None = None,
+    stage_model: str | None = None,
+    stage_effort: "EffortLevel | None" = None,
+) -> tuple[str, Any]:
+    """The ``(runner_key, RunnerDefinition)`` a step actually executes on.
+
+    Two sites need this identically — the executor and the pre-flight
+    approval probe — and they drifted into two copies of the same branch.
+    One of them being wrong is how this bug survived.
+
+    **A step's explicitly declared runner wins.** Previously ``if task.role``
+    synthesized a definition from the role alone (``command=None``, options
+    holding only ``permission_mode``) and never read ``step.runner_ref``, so
+    every named runner a config declared was discarded the moment its task
+    gained a role. In the noxys config that was 21 of 29 tasks, dropping
+    every ``profile`` option — and it would have sent `pentest`'s declared
+    test suite (``runner: shell, runner_ref: validation-suite``) to Claude.
+
+    **The role still governs where the step expresses no preference.** With
+    no ``runner_ref``, behaviour is byte-identical to before.
+
+    **The role only overlays onto a runner of its OWN kind.** A claude role's
+    model, effort and permission mode mean nothing to a shell step; stamping
+    them on would make a shell runner read as if an agent configured it. When
+    the kinds match, the documented ``policy > stage > role > runner-default``
+    chain applies as before — the role's resolved model/effort outrank the
+    named runner's own, falling back to the runner's when the role sets none.
+    """
+    if not task.role:
+        runner_key = step.runner_ref or step.runner
+        return runner_key, registry._definition_for(runner_key)
+
+    from typing import cast
+
+    from hivepilot.models import RunnerDefinition, RunnerKind
+    from hivepilot.roles import get_role, resolve_host, resolve_stage_dispatch
+
+    runner_kind, role_model, role_effort = resolve_stage_dispatch(
+        task.role, policy, stage_model=stage_model, stage_effort=stage_effort
+    )
+    role_options: dict[str, Any] = {}
+    _role = get_role(task.role)
+    if _role.permission_mode:
+        role_options["permission_mode"] = _role.permission_mode
+    # `allowed_tools` reaches the executing runner for the first time here.
+    # The pre-flight approval probe already resolved it (it decided gating on
+    # a definition the executor then rebuilt without it), so a role could
+    # declare exactly which tools it may use and the engine would never tell
+    # the runner — `claude_runner._resolve_allowed_tools` reads this option,
+    # and nothing was setting it on the execution path. Seven roles in the
+    # noxys config declare it. Passing it through honours what the config
+    # already states; it does not widen it.
+    if _role.allowed_tools:
+        role_options["allowed_tools"] = list(_role.allowed_tools)
+    role_host = resolve_host(task.role, policy)
+
+    if not step.runner_ref:
+        return task.role, RunnerDefinition(
+            name=f"role:{task.role}",
+            kind=cast(RunnerKind, runner_kind),
+            command=None,
+            model=role_model,
+            effort=role_effort,
+            host=role_host,
+            options=role_options,
+        )
+
+    declared = registry._definition_for(step.runner_ref)
+    if declared.kind != runner_kind:
+        # A different kind entirely — the step is doing something the role's
+        # runner cannot do. Take it exactly as declared.
+        return step.runner_ref, declared
+    return step.runner_ref, declared.model_copy(
+        update={
+            "model": role_model or declared.model,
+            "effort": role_effort or declared.effort,
+            "host": declared.host or role_host,
+            "options": {**declared.options, **role_options},
+        }
+    )
 
 
 def _record_step_success(
@@ -5393,39 +5452,19 @@ class Orchestrator:
                     set_status_on_exception=False,
                 ) as _step_span:
                     try:
-                        if task.role:
-                            from typing import cast
-
-                            from hivepilot.models import RunnerDefinition, RunnerKind
-                            from hivepilot.roles import (
-                                get_role,
-                                resolve_host,
-                                resolve_stage_dispatch,
-                            )
-
-                            runner_kind, role_model, resolved_effort = resolve_stage_dispatch(
-                                task.role,
-                                policy,
-                                stage_model=stage_model,
-                                stage_effort=stage_effort,
-                            )
-                            role_options: dict[str, str] = {}
-                            role_perm = get_role(task.role).permission_mode
-                            if role_perm:
-                                role_options["permission_mode"] = role_perm
-                            runner_def = RunnerDefinition(
-                                name=f"role:{task.role}",
-                                kind=cast(RunnerKind, runner_kind),
-                                command=None,
-                                model=role_model,
-                                effort=resolved_effort,
-                                host=resolve_host(task.role, policy),
-                                options=role_options,
-                            )
-                            runner_key = task.role
-                        else:
-                            runner_key = step.runner_ref or step.runner
-                            runner_def = self.registry._definition_for(runner_key)
+                        # Role governs where the step expresses no preference;
+                        # an explicit `runner_ref` wins. See
+                        # `resolve_step_runner` for why that distinction
+                        # matters (a shell test suite must not be handed to a
+                        # model because its task gained a role).
+                        runner_key, runner_def = resolve_step_runner(
+                            task=task,
+                            step=step,
+                            registry=self.registry,
+                            policy=policy,
+                            stage_model=stage_model,
+                            stage_effort=stage_effort,
+                        )
                         _used_runner_def = runner_def
                         _step_span.set_attribute("hivepilot.step.runner_kind", str(runner_def.kind))
                         # Skill attachment (Sprint 4, skill-plugin-type PRD): resolve this
@@ -5665,7 +5704,7 @@ class Orchestrator:
                         elif task.role:
                             from typing import cast
 
-                            from hivepilot.models import RunnerDefinition, RunnerKind
+                            from hivepilot.models import RunnerKind
                             from hivepilot.services.quota import parse_quota_error
                             from hivepilot.services.runner_throttle import semaphore_for_kind
 
@@ -5717,14 +5756,26 @@ class Orchestrator:
                                             ).inc()
                                         except Exception:  # noqa: BLE001
                                             pass
-                                    _runner_def_to_try = RunnerDefinition(
-                                        name=f"role:{task.role}:{_next_kind}",
-                                        kind=cast(RunnerKind, _next_kind),
-                                        command=None,
-                                        model=role_model,
-                                        effort=resolved_effort,
-                                        host=resolve_host(task.role, policy),
-                                        options=role_options,
+                                    # Derived from the runner this step
+                                    # actually resolved to, swapping only the
+                                    # kind: identical to the previous
+                                    # role-built definition when the step
+                                    # declares no `runner_ref`, and it now
+                                    # also carries a named runner's options
+                                    # through the fallback instead of
+                                    # dropping them. `command` is cleared
+                                    # because it belonged to the kind we are
+                                    # leaving.
+                                    from typing import cast
+
+                                    from hivepilot.models import RunnerKind
+
+                                    _runner_def_to_try = runner_def.model_copy(
+                                        update={
+                                            "name": f"role:{task.role}:{_next_kind}",
+                                            "kind": cast(RunnerKind, _next_kind),
+                                            "command": None,
+                                        }
                                     )
                                     # Re-prepare the payload (mode
                                     # validation/injection + skill
