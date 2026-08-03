@@ -47,6 +47,8 @@ role_app = typer.Typer(help="Manage roles.yaml entries")
 app.add_typer(role_app, name="role")
 stage_app = typer.Typer(help="Manage pipelines.yaml stage entries")
 app.add_typer(stage_app, name="stage")
+review_app = typer.Typer(help="Run the adversarial review on demand (never touches git)")
+app.add_typer(review_app, name="review")
 telegram_app = typer.Typer(help="Telegram bot")
 app.add_typer(telegram_app, name="telegram")
 caddy_app = typer.Typer(help="Caddy reverse proxy management")
@@ -5189,6 +5191,74 @@ def ownership_check(
     )
     for entry in advisory:
         typer.echo(f"  {entry.path} -> owned by '{entry.owner_role}'")
+    raise typer.Exit(code=0)
+
+
+@review_app.command("pr")
+def review_pr(
+    pr: int = typer.Argument(..., help="Pull request number to review."),
+    repo: str = typer.Option(..., "--repo", help="owner/name of the GitHub repository."),
+    reviewers: str = typer.Option(
+        "reviewer,ciso,qa", "--reviewers", help="Comma-separated role names."
+    ),
+    project: str = typer.Option("default", "--project", help="Project name to record under."),
+    threshold: float = typer.Option(0.7, "--threshold", help="Confidence threshold."),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help="Actually dispatch the reviewers. Without this, plans and costs nothing.",
+    ),
+) -> None:
+    """Run the adversarial review over a PR's diff, on demand.
+
+    The gate this exercises otherwise only runs inside a full pipeline —
+    twice in five weeks on `noxys`, and only when the run survives to its
+    last stage. This turns "wait for the next pipeline" into one command.
+
+    Dispatching is OPT-IN (`--execute`). Two of the three default reviewers
+    resolve to opus, so the expensive path is the one you ask for, not the
+    one you get by forgetting a flag. Without it you get the reviewer list,
+    the model behind each, and the diff size — enough to decide.
+
+    Never touches git: no promote, no merge, no commit. It reports.
+    """
+    from hivepilot.services import review_probe
+
+    names = [r.strip() for r in reviewers.split(",") if r.strip()]
+    if not names:
+        typer.echo("No reviewers given — a review with nobody in it always blocks.", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        subject = review_probe.fetch_pr_diff(pr, repo=repo)
+    except review_probe.ReviewProbeError as exc:
+        typer.echo(f"Could not fetch the diff: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    result = review_probe.run_probe(
+        subject=subject,
+        reviewers=names,
+        project=project,
+        confidence_threshold=threshold,
+        dry_run=not execute,
+    )
+
+    typer.echo(f"PR {pr} in {repo} — {result.subject_bytes} bytes of diff")
+    for planned in result.planned:
+        who = planned.display_name or planned.role
+        typer.echo(
+            f"  {who} ({planned.role}): runner={planned.runner} "
+            f"model={planned.model or '-'} effort={planned.effort or '-'}"
+        )
+
+    if result.dry_run:
+        typer.echo("\nPlanned only — nothing was dispatched. Re-run with --execute.")
+        raise typer.Exit(code=0)
+
+    typer.echo(f"\nDispatched (run {result.run_id}):")
+    for d in result.dispatched:
+        typer.echo(f"  {d.role}: {d.status} model={d.model or '-'} ${d.cost_usd:.4f}")
+    typer.echo(f"Total: ${result.total_cost_usd:.4f}")
     raise typer.Exit(code=0)
 
 
