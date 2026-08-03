@@ -333,16 +333,104 @@ def _migrate_legacy_topics(new_path: Path) -> dict[str, int]:
     return data
 
 
+# ---------------------------------------------------------------------------
+# Durable mirror of the topic registry.
+#
+# Telegram's Bot API cannot list a forum's topics, so "does a topic with this
+# name already exist?" is unanswerable — the local registry is the ONLY guard
+# against creating a duplicate. That makes losing the registry file
+# catastrophic in a quiet way: every agent would get a second topic with the
+# same name, and Telegram would accept all of them without complaint.
+#
+# The JSON file stays the hot path. Each registration is also mirrored into
+# `state.db`, so a lost or reset file is REBUILT rather than treated as a
+# fresh install.
+# ---------------------------------------------------------------------------
+
+
+def _init_topic_mirror() -> None:
+    from hivepilot.services import db, state_service
+
+    state_service.init_db()
+    with db.connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stream_topic_registry (
+                agent_key TEXT PRIMARY KEY,
+                message_thread_id INTEGER NOT NULL,
+                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+def _mirror_topic(agent_key: str, thread_id: int) -> None:
+    """Best-effort durable copy of one registration. NEVER raises."""
+    try:
+        from hivepilot.services import db
+
+        _init_topic_mirror()
+        with db.connect() as conn:
+            conn.execute(
+                db.ph(
+                    "INSERT INTO stream_topic_registry (agent_key, message_thread_id) "
+                    "VALUES (?, ?) ON CONFLICT(agent_key) DO UPDATE SET "
+                    "message_thread_id=excluded.message_thread_id"
+                ),
+                (agent_key, thread_id),
+            )
+    except Exception as exc:  # noqa: BLE001 — a mirror must never break a send
+        logger.warning("stream.topics.mirror_failed", agent_key=agent_key, error=str(exc))
+
+
+def _read_topic_mirror() -> dict[str, int]:
+    """Everything the mirror knows. Empty on any failure — never raises."""
+    try:
+        from hivepilot.services import db
+
+        _init_topic_mirror()
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT agent_key, message_thread_id FROM stream_topic_registry"
+            ).fetchall()
+        return {str(r["agent_key"]): int(r["message_thread_id"]) for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.topics.mirror_read_failed", error=str(exc))
+        return {}
+
+
 def _load_topics() -> dict[str, int]:
-    """Load the agent_key -> message_thread_id registry from disk. Best-effort."""
+    """Load the agent_key -> message_thread_id registry. Best-effort.
+
+    A file that yields NOTHING while the durable mirror holds entries means
+    the registry was lost, not that this is a fresh install. Rebuilding from
+    the mirror is the difference between resuming and silently giving every
+    agent a second topic with the same name — which Telegram would accept
+    without complaint, and which no API call can detect afterwards.
+    """
+    loaded: dict[str, int] = {}
     try:
         path = _topics_registry_path()
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-        return _migrate_legacy_topics(path)
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            loaded = _migrate_legacy_topics(path)
     except Exception as exc:  # noqa: BLE001
         logger.warning("stream.topics.load_failed", error=str(exc))
-    return {}
+
+    if loaded:
+        return loaded
+
+    restored = _read_topic_mirror()
+    if restored:
+        logger.warning(
+            "stream.topics.restored_from_mirror",
+            count=len(restored),
+            detail="registry file was empty or unreadable; rebuilt from the durable mirror "
+            "instead of recreating every topic",
+        )
+        _write_topics(_topics_registry_path(), restored)
+    return restored
 
 
 def _write_topics(path: Path, mapping: dict[str, int]) -> None:
@@ -385,6 +473,7 @@ def _register_topic(agent_key: str, thread_id: int) -> None:
         logger.warning("stream.topics.merge_read_failed", error=str(exc))
     on_disk[agent_key] = thread_id
     _write_topics(path, on_disk)
+    _mirror_topic(agent_key, thread_id)
 
 
 def _invalidate_topic(agent_key: str) -> int | None:
