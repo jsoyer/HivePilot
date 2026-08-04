@@ -536,6 +536,18 @@ class Settings(BaseSettings):
     # mirrors context_routing_mode's opt-in-only gating above.
     # env: HIVEPILOT_HEADROOM_ENABLED
     headroom_enabled: bool = False
+    # Base URL of a local context-compression proxy (see
+    # `deploy/systemd/hivepilot-headroom-proxy.service`). When set AND
+    # reachable, agent dispatches are routed through it by exporting
+    # `ANTHROPIC_BASE_URL` into the runner's subprocess environment.
+    #
+    # Deliberately resolved per dispatch rather than pinned in the service
+    # environment: `ANTHROPIC_BASE_URL` is a HARD redirect, so a proxy that is
+    # down, restarting, or failed to start at boot would fail every agent call.
+    # `hivepilot.services.proxy_route` probes it and falls back to a direct
+    # call — loudly — so an optimisation can never take the fleet down.
+    # env: HIVEPILOT_COMPRESSION_PROXY_URL
+    compression_proxy_url: str | None = None
     # Opt-in gate for the `mem0` before_step/after_step plugin (plugins/mem0.py):
     # persistent cross-run agent memory (recall before a step, store after)
     # via the optional `mem0ai` library. Defaults False — ships dormant even
