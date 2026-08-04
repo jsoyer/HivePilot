@@ -15,6 +15,29 @@ system and a different `EnvironmentFile` gotcha (no shell — see below).
 | `hivepilot-telegram`   | `telegram start --mode polling`    | Long-poll (outbound)                      | No                               |
 | `hivepilot-slack`      | `slack start --mode socket`        | Slack **Socket Mode** (outbound)          | **No**                           |
 | `hivepilot-discord`    | `discord start --mode gateway`     | Discord **gateway** WebSocket (outbound)  | **No**                           |
+| `hivepilot-headroom-proxy` | `headroom proxy --stateless --offline --no-cache` | HTTP on loopback | **No** — and must stay loopback |
+
+### `hivepilot-headroom-proxy` is opt-in and ships disabled
+
+Shipping the unit does not turn it on. It compresses tool outputs, logs and
+RAG chunks in flight between the agent CLIs and the provider, which is where
+coding agents actually burn tokens — a single review round was measured
+reading 350k–517k cache tokens to review a 3.8 KB diff.
+
+**Read this before enabling it.** The proxy sees every prompt, every tool
+output, and the credential the client sends. Under a Claude Code
+*subscription*, that credential is the **account OAuth session**, not a scoped
+API key. The safety argument for running it is narrow and worth stating
+plainly: the `claude` process already sees the same data, under the same user,
+on the same host — so a loopback-only, write-nothing proxy adds a local
+process, **not a new network boundary**. Every flag in the unit exists to keep
+that true. `--log-messages` in particular would persist prompt content *and*
+serve it on a live HTTP feed; on our prompts that means resolved
+`${secret:NAME}` values.
+
+Agents are pointed at it with `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`
+(verified to be honoured even under OAuth). Removing that variable is the
+one-line rollback.
 
 Slack/Discord token requirements and the outbound-only rationale are
 identical to the OpenRC templates — see
