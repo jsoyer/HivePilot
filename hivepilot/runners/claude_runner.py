@@ -540,6 +540,19 @@ class ClaudeRunner(BaseRunner):
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}
+        # Route through the local compression proxy only when it is actually
+        # answering. `ANTHROPIC_BASE_URL` is a hard redirect — pinning it in
+        # the service environment means a dead proxy fails every dispatch —
+        # so `proxy_route` probes it here and returns None to fall back to a
+        # direct call, which is the pre-proxy behaviour and always works.
+        # A project/definition/secret that sets the variable explicitly wins:
+        # an operator naming a base URL outranks our optimisation.
+        if "ANTHROPIC_BASE_URL" not in env:
+            from hivepilot.services.proxy_route import resolve_base_url
+
+            proxy_url = resolve_base_url(settings.compression_proxy_url)
+            if proxy_url:
+                env = {**env, "ANTHROPIC_BASE_URL": proxy_url}
         return args, env
 
     def _resolve_effort(self, payload: RunnerPayload) -> str | None:
