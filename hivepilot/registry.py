@@ -190,6 +190,27 @@ class RunnerRegistry:
         runner_cls = resolve_runner_class(definition.kind)
         runner_cls(definition, settings).run(payload)
 
+    @staticmethod
+    def supports_capture(definition: RunnerDefinition) -> bool:
+        """Whether this runner kind can return its output.
+
+        Ask the RUNNER, never infer it from the task. `groomer-scan` broke
+        the morning after it was given a role because the executor decided
+        between capture and execute on `task.role` — a safe proxy only while
+        a role-bearing task always got a claude runner. Once #403 let a
+        `runner: shell` step keep `shell`, that inference failed the step
+        outright: "Runner kind 'shell' does not support capture."
+
+        An unresolvable kind answers `False`. Neither answer is right for a
+        runner that does not exist, but only one of them fails the step, so
+        this returns the one that lets the caller deal with it.
+        """
+        try:
+            runner_cls = resolve_runner_class(definition.kind)
+        except Exception:  # noqa: BLE001 — unknown kind: not assumed capable
+            return False
+        return getattr(runner_cls, "capture", None) is not None
+
     def capture_definition(self, definition: RunnerDefinition, payload: RunnerPayload) -> str:
         # Phase 24b.2a follow-up: clear any usage stashed by an EARLIER,
         # unrelated capture (e.g. a debate/rebuttal/challenge-resolution call
