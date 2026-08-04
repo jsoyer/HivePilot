@@ -1,0 +1,67 @@
+[Unit]
+# Context-compression proxy sitting between the agent CLIs and the model
+# provider. Agents reach it by setting ANTHROPIC_BASE_URL (or the provider's
+# equivalent); it compresses tool outputs, logs and RAG chunks in flight and
+# forwards the request upstream.
+#
+# NOT enabled by default, and shipping this file does not turn it on. Read
+# the security analysis before you `systemctl enable` it: the proxy sees every
+# prompt, every tool output, and the credential the client sends. On a
+# subscription (OAuth) setup that credential is the account session, not a
+# scoped API key.
+Description=HivePilot headroom context-compression proxy (opt-in)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Every flag here is load-bearing. Read before changing any of them.
+#
+#   --host 127.0.0.1  loopback only. The whole safety argument is that this
+#                     adds a local process at the same privilege as the agent
+#                     that already sees the same data — NOT a network
+#                     boundary. Binding elsewhere destroys that argument.
+#   --stateless       no filesystem writes at all. Prompts carry resolved
+#                     ${secret:NAME} values; nothing that sensitive should
+#                     reach disk for a compression cache.
+#   --offline         hard-disables ALL egress: telemetry, update checks,
+#                     licence reporting, model downloads.
+#   --no-cache        no semantic cache. Its on-disk location is undocumented,
+#                     so it is removed rather than audited.
+#
+# DELIBERATELY ABSENT, and must stay absent:
+#   --log-file        would persist request/response records
+#   --log-messages    would store full prompt/response CONTENT in that log
+#                     AND serve it on a live HTTP feed. On our prompts that
+#                     exposes resolved secrets to any local request. This is
+#                     the single most dangerous flag in the tool; it lives
+#                     here, in a reviewed unit file, precisely so nobody adds
+#                     it to a hand-typed command "just to debug" and leaves it.
+ExecStart=/opt/hivepilot/venv/bin/headroom proxy \
+    --host 127.0.0.1 \
+    --port 8787 \
+    --stateless \
+    --offline \
+    --no-cache
+
+Restart=always
+RestartSec=2
+
+# No EnvironmentFile. The proxy needs no configuration of ours, and an env
+# file is exactly how a logging flag would creep back in unreviewed.
+
+# The proxy is on the critical path: if it is down, every agent call fails.
+# Restart=always plus this watchdog-free simple type is deliberate — a proxy
+# that silently stays dead is worse than one that flaps visibly.
+
+WorkingDirectory=/
+
+# Hardening. The proxy handles credentials in flight and needs no filesystem.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
