@@ -301,9 +301,35 @@ export interface RtkEfficiency {
   top_commands: null
 }
 
+/** The compression proxy's own `/stats`, verbatim. Shape is the proxy's, not
+ * ours, so only the fields the view actually reads are typed — the rest ride
+ * along untouched rather than being re-declared and drifting. */
+export interface ProxyEfficiency {
+  summary?: {
+    api_requests?: number
+    mode?: string
+    compression?: {
+      requests_compressed?: number
+      total_tokens_removed?: number
+      avg_compression_pct?: number
+    }
+    cost?: {
+      without_headroom_usd?: number
+      with_headroom_usd?: number
+      total_saved_usd?: number
+      savings_pct?: number
+    }
+  }
+}
+
 export interface EfficiencySummary {
   headroom: HeadroomEfficiency
   rtk: RtkEfficiency | null
+  /** `null` means the proxy is unconfigured, unreachable, or answered
+   * garbage — never "it compressed nothing". It sits on the critical path of
+   * every agent call and can fall back to a direct one silently, so this is
+   * the only surface that would show it had gone away. */
+  proxy: ProxyEfficiency | null
 }
 
 export function fetchEfficiency(days = 30): Promise<EfficiencySummary> {

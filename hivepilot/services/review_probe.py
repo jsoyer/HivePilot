@@ -276,15 +276,26 @@ def run_probe(
 
     # A run of its own, so the dispatches are attributable and this probe's
     # spend never lands on an unrelated pipeline run.
+    #
+    # It must also be CLOSED. The first version opened a run and never
+    # completed it, so every probe left a row stuck at `running` forever —
+    # cluttering the Runs view and making "what is executing right now"
+    # unanswerable. `try/finally` because a reviewer raising must not leave
+    # the row open either.
     run_id = state_service.record_run_start(project, "review-probe")
-    _run_review_for(
-        orchestrator=orchestrator,
-        subject=subject,
-        reviewers=reviewers,
-        project_path=project_path,
-        confidence_threshold=confidence_threshold,
-        run_id=run_id,
-    )
+    try:
+        _run_review_for(
+            orchestrator=orchestrator,
+            subject=subject,
+            reviewers=reviewers,
+            project_path=project_path,
+            confidence_threshold=confidence_threshold,
+            run_id=run_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — record the outcome, then re-raise
+        state_service.complete_run(run_id, "failed", str(exc)[:200])
+        raise
+    state_service.complete_run(run_id, "complete")
     return ReviewProbeResult(
         reviewers=list(reviewers),
         subject_bytes=len(subject),

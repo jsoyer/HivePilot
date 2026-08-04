@@ -27,6 +27,7 @@ const efficiency: EfficiencySummary = {
     p95_ratio: 0.85,
     est_tokens_saved: 3000,
   },
+  proxy: null,
   rtk: {
     gain_pct: 62.5,
     tokens_saved: 15000,
@@ -58,6 +59,76 @@ afterEach(() => {
   })
   container.remove()
   vi.restoreAllMocks()
+})
+
+describe('EfficiencyView — compression proxy', () => {
+  it('says the proxy is not answering rather than showing a fabricated 0%', async () => {
+    // A proxy nobody can reach is a degraded system; a proxy reporting zero
+    // saved is a working one with nothing to compress. Showing "$0.0000" for
+    // both would hide the first behind the second.
+    mocks.fetchEfficiency.mockResolvedValue({ ...efficiency, proxy: null })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-proxy-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="efficiency-proxy-section"]')).toBeNull()
+  })
+
+  it('reports what the proxy actually did when it answers', async () => {
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      proxy: {
+        summary: {
+          api_requests: 10,
+          mode: 'token',
+          compression: {
+            requests_compressed: 10,
+            total_tokens_removed: 15493,
+            avg_compression_pct: 3.1,
+          },
+          cost: { without_headroom_usd: 0.4, with_headroom_usd: 0.37, total_saved_usd: 0.03 },
+        },
+      },
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    const section = container.querySelector('[data-testid="efficiency-proxy-section"]')
+    expect(section).not.toBeNull()
+    expect(section?.textContent).toContain('15,493')
+    expect(section?.textContent).toContain('token')
+    expect(section?.textContent).toContain('$0.0300')
+  })
+
+  it('survives a server too old to send the field at all', async () => {
+    // Not the same as `null`. A server that predates this field omits it, and
+    // an `=== null` guard would fall straight through to `proxy.summary` and
+    // crash the panel on a payload that is merely out of date.
+    const { proxy: _dropped, ...withoutProxy } = efficiency
+    mocks.fetchEfficiency.mockResolvedValue(withoutProxy)
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-proxy-empty"]')).not.toBeNull()
+  })
+
+  it('survives a proxy payload missing the fields it wants', async () => {
+    // The shape belongs to the proxy, not to us. A version bump that drops
+    // or renames a field must degrade to zeros, not blank the panel.
+    mocks.fetchEfficiency.mockResolvedValue({ ...efficiency, proxy: {} })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-proxy-section"]')).not.toBeNull()
+  })
 })
 
 describe('EfficiencyView', () => {
@@ -94,6 +165,7 @@ describe('EfficiencyView', () => {
   it('shows an honest "not available" state when headroom has recorded nothing yet', async () => {
     mocks.fetchEfficiency.mockResolvedValue({
       headroom: { total_compressions: 0, chars_saved: 0, avg_ratio: 0, p95_ratio: 0, est_tokens_saved: 0 },
+      proxy: null,
       rtk: null,
     } satisfies EfficiencySummary)
 
@@ -109,6 +181,7 @@ describe('EfficiencyView', () => {
   it('shows an honest "rtk not available" state when rtk is null', async () => {
     mocks.fetchEfficiency.mockResolvedValue({
       headroom: efficiency.headroom,
+      proxy: null,
       rtk: null,
     } satisfies EfficiencySummary)
 
@@ -126,6 +199,7 @@ describe('EfficiencyView', () => {
   it('never fabricates numbers — a null rtk never shows a $ or % figure for it', async () => {
     mocks.fetchEfficiency.mockResolvedValue({
       headroom: efficiency.headroom,
+      proxy: null,
       rtk: null,
     } satisfies EfficiencySummary)
 
@@ -176,6 +250,7 @@ describe('degenerate data must not be drawn as a trend', () => {
   async function renderWithSeries(saved_series: { date: string; saved_tokens: number }[]) {
     mocks.fetchEfficiency.mockResolvedValue({
       ...efficiency,
+      proxy: null,
       rtk: { ...efficiency.rtk, saved_series },
     })
     await act(async () => {
