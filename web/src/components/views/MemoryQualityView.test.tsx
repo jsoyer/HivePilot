@@ -197,7 +197,7 @@ describe('MemoryQualityView', () => {
     expect(container.textContent).not.toContain('0%')
   })
 
-  it('renders the gaps distribution bar with top queries per namespace', async () => {
+  it('ranks the gaps as a list, with top queries per scope', async () => {
     mockAllSuccess()
     await act(async () => {
       mount()
@@ -205,12 +205,52 @@ describe('MemoryQualityView', () => {
       await Promise.resolve()
     })
 
-    expect(container.querySelector('[data-slot="distribution-bar"]')).not.toBeNull()
+    // The stacked bar is deliberately gone. On real data it rendered eleven
+    // segments of 8% each — a bar shows DOMINANCE, and equal slivers show
+    // nothing at all. The ranking lives in the ordered list instead.
+    expect(container.querySelector('[data-slot="distribution-bar"]')).toBeNull()
     expect(container.textContent).toContain('runbooks')
     expect(container.textContent).toContain('deploy failure')
     expect(container.textContent).toContain('rollback steps')
     expect(container.textContent).toContain('incidents')
     expect(container.textContent).toContain('db outage')
+  })
+
+  it('collapses run-scoped namespaces so one role is one row', async () => {
+    // The namespace carries the run id, so the same role used to appear once
+    // per run with a single gap each and no trend could ever form.
+    mocks.fetchMemoryReality.mockResolvedValue(reality)
+    mocks.fetchMemoryEvaluations.mockResolvedValue({ evaluations: [] })
+    mocks.fetchMemoryJournal.mockResolvedValue({ journal: [] })
+    mocks.fetchMemoryGaps.mockResolvedValue({
+      gaps: [
+        {
+          namespace: 'af10fde4-94d9-49fb-897f-b9b7f2423382:noxys-developer:developer',
+          no_result_count: 1,
+          top_queries: ['noxys-developer implementation'],
+        },
+        {
+          namespace: '02e8acdf-08aa-40ae-ba68-a370bba64624:noxys-developer:developer',
+          no_result_count: 1,
+          top_queries: ['noxys-developer implementation'],
+        },
+      ],
+    })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const rows = container.querySelectorAll('[data-testid^="gap-"]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain('noxys-developer:developer')
+    expect(rows[0].textContent).toContain('2')
+    // A gap that recurs across runs is a different problem from a one-off.
+    expect(rows[0].textContent).toMatch(/across 2 runs/i)
+    // The run ids are noise here and must not survive into the label.
+    expect(container.textContent).not.toContain('af10fde4')
   })
 
   it('renders recent evaluations with useful/not-useful markers', async () => {
