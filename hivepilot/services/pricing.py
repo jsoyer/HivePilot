@@ -139,4 +139,61 @@ def estimate_cost(
     return cost
 
 
-__all__: list[str] = ["DEFAULT_PRICE_MAP", "estimate_cost"]
+def cost_components(
+    model: str | None,
+    *,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_read_tokens: int | None = 0,
+    cache_creation_tokens: int | None = 0,
+) -> dict[str, float] | None:
+    """`estimate_cost` split by what was billed, or `None` on the same terms.
+
+    A cost table that counts 517 000 cache-read tokens the same way as 3 000
+    fresh input tokens tells the operator nothing true — those are real
+    numbers from one review dispatch, and cache reads price at a fraction of
+    input. The volume that looks alarming is the cheap part; the 20 000
+    output tokens that look modest are where the money went.
+
+    That distinction decides where an optimisation effort goes. Read as raw
+    volume it says "bound what the reviewers read", which is wrong — the
+    reading is cached and cheap. Read as cost it says "bound what they
+    write". Guessing it sent one effort at the wrong parameter before this
+    was measurable.
+
+    The returned parts SUM to `estimate_cost` for the same arguments; a
+    breakdown that did not reconcile would put two contradictory figures on
+    one dashboard. `None` propagates the same refusals — unknown model,
+    missing base counts, or cache volume the model has no rate for — because
+    zeros here would read as "this was free", which is a claim rather than a
+    gap. Pure function: no I/O.
+    """
+    if not model or input_tokens is None or output_tokens is None:
+        return None
+    rates = _effective_price_map().get(model)
+    if rates is None:
+        return None
+
+    parts = {
+        "input": (input_tokens / 1_000_000) * rates.get("input", 0.0),
+        "output": (output_tokens / 1_000_000) * rates.get("output", 0.0),
+        "cache_read": 0.0,
+        "cache_write": 0.0,
+    }
+
+    if cache_read_tokens:
+        rate = rates.get("cache_read")
+        if rate is None:
+            return None
+        parts["cache_read"] = (cache_read_tokens / 1_000_000) * rate
+
+    if cache_creation_tokens:
+        rate = rates.get("cache_write")
+        if rate is None:
+            return None
+        parts["cache_write"] = (cache_creation_tokens / 1_000_000) * rate
+
+    return parts
+
+
+__all__: list[str] = ["DEFAULT_PRICE_MAP", "cost_components", "estimate_cost"]

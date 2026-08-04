@@ -1781,6 +1781,31 @@ def models_endpoint(
     )
 
 
+@v1.get("/sessions/cost")
+@app.get("/sessions/cost")
+def session_costs_endpoint(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(25, ge=1, le=200),
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Per-run cost split by what was billed — input, output, cache read,
+    cache write.
+
+    A total answers "how much" and cannot answer "where did it go". On this
+    workload the intuitive reading of raw volume is the wrong one: one review
+    dispatch recorded 516 982 cache-read tokens against 3 040 input and
+    20 455 output. As volume, the reviewers look like they read too much; as
+    cost, they write a lot and the reading is cached and cheap. Only the
+    split distinguishes the two, and the wrong reading has already sent an
+    optimisation effort at the wrong parameter once.
+
+    Tenant-filtered via `_analytics_tenant` like every other analytics
+    endpoint. `unpriced_steps` counts steps that plausibly cost something and
+    could not be priced, so a partly-unpriceable session never looks cheap.
+    """
+    return analytics_service.session_costs(tenant=_analytics_tenant(caller), days=days, limit=limit)
+
+
 @v1.get("/efficiency")
 @app.get("/efficiency")
 def efficiency_endpoint(

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { useT } from '@/lib/i18n'
-import { fetchAnalyticsCost } from '@/lib/pollen-api'
+import { fetchAnalyticsCost, fetchSessionCosts } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
 import { AsyncSection } from './AsyncSection'
@@ -80,6 +80,7 @@ export function CostView() {
   const t = useT()
   const [days, setDays] = useState<WindowDays>(30)
   const cost = useAsyncData(() => fetchAnalyticsCost(days), [days])
+  const sessions = useAsyncData(() => fetchSessionCosts(days), [days])
 
   return (
     <div className="flex flex-col gap-4">
@@ -218,6 +219,71 @@ export function CostView() {
                   )}
                 </div>
               </>
+            )}
+          </AsyncSection>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('cost.sessionsTitle')}</CardTitle>
+          <CardDescription>{t('cost.sessionsDescription')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AsyncSection
+            state={sessions}
+            isEmpty={(data) => data.sessions.length === 0}
+            emptyMessage={t('cost.noSessions')}
+          >
+            {(data) => (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t('cost.sessionRun')}</TableHead>
+                    <TableHead className="text-right">{t('cost.sessionTotal')}</TableHead>
+                    <TableHead className="text-right">{t('cost.sessionOutput')}</TableHead>
+                    <TableHead className="text-right">{t('cost.sessionInput')}</TableHead>
+                    <TableHead className="text-right">{t('cost.sessionCacheRead')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.sessions.map((s) => (
+                    <TableRow key={s.run_id} data-testid={`session-cost-${s.run_id}`}>
+                      <TableCell>
+                        <span className="font-medium">{s.task}</span>{' '}
+                        <span className="text-xs text-muted-foreground">#{s.run_id}</span>
+                        {/* A partly-unpriceable session must never read as a
+                            cheap one, so the gap is stated next to the total
+                            rather than left to be inferred from its absence. */}
+                        {s.unpriced_steps > 0 && (
+                          <span className="ml-2 text-xs text-amber-600 dark:text-amber-500">
+                            {t('cost.sessionUnpriced', { count: s.unpriced_steps })}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="metric-mono text-right tabular-nums">
+                        {formatCost(s.cost_usd)}
+                      </TableCell>
+                      {/* Cost per component, not token counts. 517k cache
+                          reads next to 20k output tokens reads as "they read
+                          too much"; the same two priced read as "they write
+                          a lot and the reading is cheap". */}
+                      <TableCell className="metric-mono text-right tabular-nums">
+                        {formatCost(s.by_component.output)}
+                      </TableCell>
+                      <TableCell className="metric-mono text-right tabular-nums">
+                        {formatCost(s.by_component.input)}
+                      </TableCell>
+                      <TableCell className="metric-mono text-right tabular-nums text-muted-foreground">
+                        {formatCost(s.by_component.cache_read)}
+                        <span className="ml-1 text-xs">
+                          ({(s.cache_read_tokens / 1000).toFixed(0)}k tok)
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </AsyncSection>
         </CardContent>

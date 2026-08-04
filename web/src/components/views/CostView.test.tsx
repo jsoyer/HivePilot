@@ -7,6 +7,7 @@ import type { AnalyticsCost } from '@/lib/pollen-api'
 
 const mocks = vi.hoisted(() => ({
   fetchAnalyticsCost: vi.fn(),
+  fetchSessionCosts: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
@@ -55,6 +56,10 @@ function mount() {
 
 beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset()
+  // The sessions panel fetches alongside the summary on every mount. Give it
+  // a benign default so tests about the SUMMARY do not have to know it exists.
+  mocks.fetchSessionCosts.mockResolvedValue({ sessions: [], total_sessions: 0 })
+  mocks.fetchAnalyticsCost.mockResolvedValue(emptyCost)
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -66,6 +71,57 @@ afterEach(() => {
   })
   container.remove()
   vi.restoreAllMocks()
+})
+
+describe('CostView — cost by session', () => {
+  const session = {
+    run_id: 313,
+    project: 'noxys',
+    task: 'review',
+    started_at: '2026-08-03 12:00:00',
+    status: 'success',
+    input_tokens: 3040,
+    output_tokens: 20455,
+    cache_read_tokens: 516982,
+    cache_creation_tokens: 34873,
+    cost_usd: 1.1214,
+    unpriced_steps: 0,
+    by_component: { input: 0.045, output: 1.02, cache_read: 0.05, cache_write: 0.006 },
+  }
+
+  it('shows cost per component, not raw token counts', async () => {
+    // 517k cache reads beside 20k output tokens reads as "they read too
+    // much". The same two priced read as "they write a lot and the reading
+    // is cheap". Only the second is true.
+    mocks.fetchSessionCosts.mockResolvedValue({ sessions: [session], total_sessions: 1 })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const row = container.querySelector('[data-testid="session-cost-313"]')
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toContain('$1.02')
+    expect(row?.textContent).toContain('review')
+  })
+
+  it('flags a session that could not be fully priced', async () => {
+    // A partly-unpriceable session must never read as a cheap one.
+    mocks.fetchSessionCosts.mockResolvedValue({
+      sessions: [{ ...session, unpriced_steps: 3 }],
+      total_sessions: 1,
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(
+      container.querySelector('[data-testid="session-cost-313"]')?.textContent,
+    ).toMatch(/3 unpriced/i)
+  })
 })
 
 describe('CostView', () => {
