@@ -345,6 +345,7 @@ export const fr: Record<TranslationKey, string> = {
   'quality.noSamples': 'Aucune donnée',
   'quality.noKpiData': 'Aucune recherche ni évaluation enregistrée sur cette période.',
   'quality.gapsTitle': 'Lacunes par namespace',
+  'quality.acrossRuns': 'sur {count} runs',
   'quality.gapsDescription': 'Recherches sans résultat regroupées par namespace, les plus nombreuses en premier',
   'quality.noGaps': 'Aucune lacune de recherche enregistrée.',
   'quality.topQueriesLabel': 'requêtes principales :',
@@ -522,12 +523,14 @@ export const fr: Record<TranslationKey, string> = {
   'partitions.description':
     "Une partition découpe un même travail en tâches budgétées. Relisez le plan, modifiez-le, puis lancez. Rien ne démarre tant que vous n'avez pas ratifié.",
   'partitions.descriptionReadOnly':
-    'Lecture seule. Ratifier une partition — le seul garde-fou entre une proposition et N agents lancés — demande un jeton de rang approve.',
+    "Une partition est un plan découpé en tâches, proposé par un agent, qu'un humain ratifie avant que quoi que ce soit ne démarre. Lecture seule ici — ratifier demande un jeton de rang approve.",
   'partitions.forbidden':
     'Cette liste demande un jeton de rang run (ou supérieur). Votre jeton reste valable sur tous les autres onglets de Pollen.',
   'partitions.emptyTitle': 'Aucune partition',
   'partitions.emptyBody':
-    "Une partition apparaît ici dès qu'un pipeline proposeur en soumet une (hivepilot partition submit --file plan.json --source text:docs/bug-1234.md). Qui est ce proposeur, et ce qu'une tâche veut dire chez vous, relève de votre configuration — pas du moteur.",
+    "Rien n'en a proposé. Une partition arrive quand un pipeline soumet un plan "
+    + '(hivepilot partition submit --file plan.json). Aucun de vos pipelines ne le fait '
+    + "encore — quel proposeur ajouter, et ce qu'une tâche signifie pour vous, relève de votre config, pas du moteur.",
   'partitions.review': 'Relire',
   'partitions.reviewAriaLabel': 'Relire la partition {id}',
   'partitions.sourceLabel': 'Source',

@@ -345,7 +345,8 @@ export const en = {
   'quality.noSamples': 'No data',
   'quality.noKpiData': 'No searches or evaluations recorded in this window.',
   'quality.gapsTitle': 'Gaps by namespace',
-  'quality.gapsDescription': 'No-result searches grouped by namespace, most gaps first',
+  'quality.acrossRuns': 'across {count} runs',
+  'quality.gapsDescription': 'No-result searches, grouped by scope and ranked. Run ids are stripped so the same role accumulates instead of splitting.',
   'quality.noGaps': 'No search gaps recorded.',
   'quality.topQueriesLabel': 'top queries:',
   'quality.evaluationsTitle': 'Recent evaluations',
@@ -521,12 +522,12 @@ export const en = {
   'partitions.description':
     'A proposed partition splits one piece of work into budgeted tasks. Review the plan, edit it, then dispatch. Nothing runs until you ratify.',
   'partitions.descriptionReadOnly':
-    'Read-only. Ratifying a partition — the single gate between a proposal and N running agents — needs an approve-rank token.',
+    'A partition is a plan split into tasks, proposed by an agent, that a human ratifies before any of it runs. Read-only here — ratifying needs an approve-rank token.',
   'partitions.forbidden':
     'This list needs a run-rank (or higher) token. Your token still works on every other Pollen tab.',
   'partitions.emptyTitle': 'No partitions yet',
   'partitions.emptyBody':
-    'A partition appears here once a proposer pipeline submits one (hivepilot partition submit --file plan.json --source text:docs/bug-1234.md). Who the proposer is, and what a task means for you, is your config — not the engine.',
+    'Nothing has proposed one. A partition arrives when a pipeline submits a plan (hivepilot partition submit --file plan.json). No pipeline of yours does that yet — which proposer to add, and what a task means for you, is your config, not the engine.',
   'partitions.review': 'Review',
   'partitions.reviewAriaLabel': 'Review partition {id}',
   'partitions.sourceLabel': 'Source',

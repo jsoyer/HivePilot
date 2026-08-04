@@ -2,11 +2,11 @@ import { Brain, CheckCircle2, Clock, SearchX, ShieldCheck, XCircle } from 'lucid
 import type { ReactNode } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { EmptyState } from '@/components/dashboard/EmptyState'
 import { StatCard, type StatCardTone } from '@/components/dashboard/StatCard'
 import { ApiForbiddenError } from '@/lib/api'
 import { useT } from '@/lib/i18n'
+import { groupGapsByScope } from '@/lib/memory-namespace'
 import {
   fetchMemoryEvaluations,
   fetchMemoryGaps,
@@ -223,36 +223,54 @@ export function MemoryQualityView() {
             isEmpty={(data) => data.gaps.length === 0}
             emptyMessage={t('quality.noGaps')}
           >
-            {(data) => (
-              <div className="flex flex-col gap-4">
-                <DistributionBar
-                  segments={data.gaps.map((gap) => ({
-                    key: gap.namespace,
-                    label: gap.namespace,
-                    value: gap.no_result_count,
-                  }))}
-                />
+            {(data) => {
+              // Grouped by scope, not by raw namespace. Run-scoped namespaces
+              // carry the run id, so the same role appeared as N separate
+              // entries with one gap each and no trend could ever form — on
+              // real data, four `noxys-developer` entries of 8% each, beside
+              // seven other 8% entries.
+              //
+              // The stacked bar is gone with them: eleven segments of equal
+              // size communicate nothing. A bar shows DOMINANCE; an ordered
+              // list shows a ranking, which is what this data actually has
+              // once it is grouped.
+              const grouped = groupGapsByScope(data.gaps)
+              const total = grouped.reduce((sum, gap) => sum + gap.count, 0)
+
+              return (
                 <ul className="flex flex-col gap-2">
-                  {data.gaps.map((gap) => (
-                    <li key={gap.namespace} className="text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">{gap.namespace}</span>
-                      {gap.top_queries.length > 0 && (
-                        <>
-                          {' — '}
+                  {grouped.map((gap) => (
+                    <li
+                      key={gap.scope}
+                      data-testid={`gap-${gap.scope}`}
+                      className="flex flex-col gap-0.5 border-b border-border/50 pb-2 last:border-0"
+                    >
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                        <span className="truncate font-medium">{gap.scope}</span>
+                        <span className="metric-mono text-sm tabular-nums text-muted-foreground">
+                          {gap.count}
+                          {total > 0 && ` · ${Math.round((gap.count / total) * 100)}%`}
+                          {/* A gap that recurs run after run is a different
+                              problem from one that happened once. */}
+                          {gap.runs > 1 && ` · ${t('quality.acrossRuns', { count: gap.runs })}`}
+                        </span>
+                      </div>
+                      {gap.topQueries.length > 0 && (
+                        <span className="truncate text-xs text-muted-foreground">
                           {t('quality.topQueriesLabel')}{' '}
-                          {gap.top_queries.map((query, index) => (
-                            <span key={`${gap.namespace}-${index}`}>
+                          {gap.topQueries.map((query, index) => (
+                            <span key={`${gap.scope}-${index}`}>
                               {index > 0 && ', '}
                               &ldquo;{query}&rdquo;
                             </span>
                           ))}
-                        </>
+                        </span>
                       )}
                     </li>
                   ))}
                 </ul>
-              </div>
-            )}
+              )
+            }}
           </ForbiddenAwareSection>
         </CardContent>
       </Card>
