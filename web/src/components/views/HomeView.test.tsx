@@ -84,6 +84,7 @@ const ZERO_SUMMARY: AnalyticsSummary = {
 
 const ZERO_EFFICIENCY: EfficiencySummary = {
   headroom: { total_compressions: 0, chars_saved: 0, avg_ratio: 0, p95_ratio: 0, est_tokens_saved: 0 },
+  proxy: null,
   rtk: null,
 }
 
@@ -175,6 +176,7 @@ describe('HomeView — hero KPIs', () => {
     fetchApprovals.mockResolvedValue([SAMPLE_APPROVAL])
     fetchEfficiency.mockResolvedValue({
       headroom: { total_compressions: 5, chars_saved: 4000, avg_ratio: 0.5, p95_ratio: 0.6, est_tokens_saved: 1000 },
+      proxy: null,
       rtk: { gain_pct: 10, tokens_saved: 500, total_commands: 20, saved_series: [], top_commands: null },
     })
     fetchMemoryReality.mockResolvedValue({ ...ZERO_MEMORY, total_searches: 10, search_success_rate: 0.9 })
@@ -207,6 +209,7 @@ describe('HomeView — hero KPIs', () => {
     fetchApprovals.mockResolvedValue([SAMPLE_APPROVAL])
     fetchEfficiency.mockResolvedValue({
       headroom: { total_compressions: 5, chars_saved: 4000, avg_ratio: 0.5, p95_ratio: 0.6, est_tokens_saved: 1000 },
+      proxy: null,
       rtk: { gain_pct: 10, tokens_saved: 500, total_commands: 20, saved_series: [], top_commands: null },
     })
     fetchMemoryReality.mockResolvedValue({ ...ZERO_MEMORY, total_searches: 10, search_success_rate: 0.9 })

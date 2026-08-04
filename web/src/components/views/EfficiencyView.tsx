@@ -7,7 +7,8 @@ import { Sparkline } from '@/components/dashboard/Sparkline'
 // Below this, a sparkline shows a shape the data does not support.
 const MIN_TREND_POINTS = 2
 import { useT } from '@/lib/i18n'
-import { fetchEfficiency, type HeadroomEfficiency, type RtkEfficiency } from '@/lib/pollen-api'
+import { fetchEfficiency, type HeadroomEfficiency, type ProxyEfficiency,
+  type RtkEfficiency } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 
@@ -101,6 +102,67 @@ function HeadroomPanel({ headroom }: { headroom: HeadroomEfficiency }) {
 }
 
 /**
+ * Compression-proxy panel.
+ *
+ * The proxy is the third savings source and the only one on the critical
+ * path of every agent call — it can also fall back to a direct call when
+ * unreachable (`proxy_route`), which keeps the agents working and silently
+ * stops compressing them. This panel is the only surface that would show
+ * that had happened.
+ *
+ * `null` means unconfigured, unreachable or unparseable — rendered as an
+ * honest "not answering" state, never a fabricated 0%. The distinction
+ * matters: a proxy nobody can reach is a degraded system, while a proxy
+ * reporting zero saved is a working one with nothing to compress.
+ */
+function ProxyPanel({ proxy }: { proxy: ProxyEfficiency | null | undefined }) {
+  const t = useT()
+
+  // `undefined` as well as `null`: a server older than this field simply
+  // omits it, and `proxy === null` would fall through to `proxy.summary` and
+  // crash the whole panel on a payload that is merely out of date.
+  if (!proxy) {
+    return (
+      <p data-testid="efficiency-proxy-empty" className="text-sm text-muted-foreground">
+        {t('efficiency.proxyNotAvailable')}
+      </p>
+    )
+  }
+
+  const summary = proxy.summary ?? {}
+  const compression = summary.compression ?? {}
+  const cost = summary.cost ?? {}
+
+  return (
+    <div data-testid="efficiency-proxy-section" className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricReadout
+          label={t('efficiency.proxyRequests')}
+          value={(summary.api_requests ?? 0).toLocaleString('en-US')}
+          sub={t('efficiency.proxyMode', { mode: summary.mode ?? '—' })}
+        />
+        <MetricReadout
+          label={t('efficiency.proxyCompressed')}
+          value={(compression.requests_compressed ?? 0).toLocaleString('en-US')}
+        />
+        <MetricReadout
+          label={t('efficiency.proxyTokensRemoved')}
+          value={(compression.total_tokens_removed ?? 0).toLocaleString('en-US')}
+          sub={`${(compression.avg_compression_pct ?? 0).toFixed(1)}%`}
+        />
+        <MetricReadout
+          label={t('efficiency.proxySaved')}
+          value={`$${(cost.total_saved_usd ?? 0).toFixed(4)}`}
+          sub={t('efficiency.proxyAgainst', {
+            total: `$${(cost.without_headroom_usd ?? 0).toFixed(2)}`,
+          })}
+        />
+      </div>
+    </div>
+  )
+}
+
+/**
  * rtk panel — `EfficiencySummary.rtk` is `null` whenever the `rtk` binary
  * is absent/erroring/unparseable (see `efficiency_service.rtk_summary`'s
  * docstring) — rendered as an honest "not available on this host" state,
@@ -176,6 +238,11 @@ export function EfficiencyView() {
                   <h3 className="mb-2 text-sm font-semibold">{t('efficiency.rtkTitle')}</h3>
                   <p className="mb-3 text-xs text-muted-foreground">{t('efficiency.rtkDescription')}</p>
                   <RtkPanel rtk={data.rtk} />
+                </div>
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold">{t('efficiency.proxyTitle')}</h3>
+                  <p className="mb-3 text-xs text-muted-foreground">{t('efficiency.proxyDescription')}</p>
+                  <ProxyPanel proxy={data.proxy} />
                 </div>
               </div>
             )}

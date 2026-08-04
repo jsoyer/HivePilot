@@ -140,10 +140,55 @@ def rtk_summary(*, days: int | None = 30) -> dict[str, Any] | None:
     return parsed
 
 
+def proxy_summary(*, timeout: float = 1.0) -> dict[str, Any] | None:
+    """The compression proxy's own `/stats`, or ``None`` when unavailable.
+
+    The proxy is the third thing that compresses, and the only one on the
+    critical path of every agent call. It can also fall back to a direct
+    call when unreachable (`hivepilot.services.proxy_route`) — so if it goes
+    down and every agent quietly stops being compressed, this is the only
+    surface that would say so.
+
+    ``None`` covers unconfigured, malformed and unreachable alike, and never
+    a zero: reporting `0 saved` for a proxy nobody could reach would claim it
+    is useless when in fact nobody looked. The caller separates "no proxy
+    configured" from "configured but down" by whether a URL is set at all.
+
+    Never raises — a dashboard panel must not be able to 500 because a local
+    HTTP endpoint is having a bad day.
+    """
+    import json
+    import urllib.request
+    from urllib.parse import urlsplit
+
+    from hivepilot.config import settings
+
+    base_url = getattr(settings, "compression_proxy_url", None)
+    if not base_url:
+        return None
+    try:
+        if not urlsplit(base_url).hostname:
+            raise ValueError(f"no host in {base_url!r}")
+        with urllib.request.urlopen(  # noqa: S310 — loopback http by construction
+            f"{base_url.rstrip('/')}/stats", timeout=timeout
+        ) as response:
+            return dict(json.loads(response.read().decode("utf-8")))
+    except Exception as exc:  # noqa: BLE001 — unreachable/malformed/garbage payload
+        logger.warning("efficiency_service.proxy_unreachable", url=base_url, error=str(exc))
+        return None
+
+
 def efficiency_summary(*, tenant: str | None = "default", days: int | None = 30) -> dict[str, Any]:
-    """``{"headroom": <real dict, never null>, "rtk": <real dict or null>}``
-    -- see module docstring for the investigation behind each source."""
+    """``{"headroom": <real dict, never null>, "rtk": <dict|null>,
+    "proxy": <dict|null>}`` -- see module docstring for the investigation
+    behind each source.
+
+    `proxy` joined the other two when compression moved onto the request
+    path: a view that composes savings sources has to name every one of
+    them, or the total it implies is wrong.
+    """
     return {
         "headroom": headroom_summary(tenant=tenant),
         "rtk": rtk_summary(days=days),
+        "proxy": proxy_summary(),
     }
