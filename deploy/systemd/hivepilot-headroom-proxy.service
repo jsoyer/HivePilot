@@ -16,19 +16,29 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# Every flag here is load-bearing. Read before changing any of them.
+# Every flag here is load-bearing, and every one was verified against the
+# installed CLI rather than the docs — `--offline`, which the documentation
+# describes, does NOT exist in 0.32.1 and crash-loops the unit.
 #
 #   --host 127.0.0.1  loopback only. The whole safety argument is that this
 #                     adds a local process at the same privilege as the agent
 #                     that already sees the same data — NOT a network
 #                     boundary. Binding elsewhere destroys that argument.
-#   --stateless       no filesystem writes at all. Prompts carry resolved
-#                     ${secret:NAME} values; nothing that sensitive should
-#                     reach disk for a compression cache.
-#   --offline         hard-disables ALL egress: telemetry, update checks,
-#                     licence reporting, model downloads.
+#   --stateless       "Disable all filesystem writes — run purely in-memory."
+#                     Prompts carry resolved ${secret:NAME} values; nothing
+#                     that sensitive should reach disk for a compression cache.
 #   --no-cache        no semantic cache. Its on-disk location is undocumented,
 #                     so it is removed rather than audited.
+#   --no-telemetry    already the default; stated so it cannot drift.
+#   --no-learn        `--learn` extracts "error→recovery patterns, environment
+#                     facts, and user preferences" FROM OUR TRAFFIC and
+#                     persists them. Off by default, pinned off here.
+#   --no-subscription-tracking
+#                     By default the proxy polls Anthropic's subscription
+#                     usage endpoint (GET /api/oauth/usage) — an outbound call
+#                     made with the CLIENT'S credential, on the proxy's own
+#                     initiative rather than the agent's. Under OAuth that
+#                     credential is the account session. Off.
 #
 # DELIBERATELY ABSENT, and must stay absent:
 #   --log-file        would persist request/response records
@@ -38,12 +48,15 @@ Type=simple
 #                     the single most dangerous flag in the tool; it lives
 #                     here, in a reviewed unit file, precisely so nobody adds
 #                     it to a hand-typed command "just to debug" and leaves it.
+#   --memory          persistent memory with its own DB. Off by default.
 ExecStart=/opt/hivepilot/venv/bin/headroom proxy \
     --host 127.0.0.1 \
     --port 8787 \
     --stateless \
-    --offline \
-    --no-cache
+    --no-cache \
+    --no-telemetry \
+    --no-learn \
+    --no-subscription-tracking
 
 Restart=always
 RestartSec=2
@@ -52,8 +65,14 @@ RestartSec=2
 # file is exactly how a logging flag would creep back in unreviewed.
 
 # The proxy is on the critical path: if it is down, every agent call fails.
-# Restart=always plus this watchdog-free simple type is deliberate — a proxy
-# that silently stays dead is worse than one that flaps visibly.
+#
+# Restart=always with Type=simple means `systemctl is-active` reports "active"
+# for a process that is crash-looping on a bad argument — which is exactly
+# what an unverified `--offline` did here, 12 restarts deep, while the unit
+# looked healthy. After any change to ExecStart, check that something is
+# actually LISTENING, not that systemd says active:
+#
+#     ss -lntp | grep 8787
 
 WorkingDirectory=/
 
