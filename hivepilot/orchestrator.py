@@ -5844,11 +5844,26 @@ class Orchestrator:
                                 _sem = semaphore_for_kind(_runner_def_to_try.kind)
                                 _sem.acquire()
                                 try:
-                                    outputs.append(
-                                        self.registry.capture_definition(
+                                    # Ask the RUNNER whether it can capture,
+                                    # never infer it from the task having a
+                                    # role. `groomer-scan` failed the morning
+                                    # after it gained one: its `signals` step
+                                    # is `runner: shell`, #403 correctly let
+                                    # it keep `shell`, and capture raised
+                                    # "Runner kind 'shell' does not support
+                                    # capture." The non-role path
+                                    # (`_capture_or_execute`) has always
+                                    # asked; this one only assumed.
+                                    if self.registry.supports_capture(_runner_def_to_try):
+                                        outputs.append(
+                                            self.registry.capture_definition(
+                                                _runner_def_to_try, payload
+                                            )
+                                        )
+                                    else:
+                                        self.registry.execute_definition(
                                             _runner_def_to_try, payload
                                         )
-                                    )
                                     _last_exc = None
                                     break  # success
                                 except Exception as _exc:
