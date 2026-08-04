@@ -216,6 +216,50 @@ export function fetchAnalyticsCost(days = 30): Promise<AnalyticsCost> {
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/sessions/cost — per-run cost split by what was actually billed.
+//
+// A total answers "how much" and cannot answer "where did it go". Measured on
+// one review dispatch: 516 982 cache-read tokens against 3 040 input and
+// 20 455 output. As volume the reviewers look like they read too much; as
+// cost they write a lot and the reading is cached and cheap. Only the split
+// tells them apart — and the volume reading already sent one optimisation
+// effort at the wrong parameter.
+// ---------------------------------------------------------------------------
+
+export interface SessionCostComponents {
+  input: number
+  output: number
+  cache_read: number
+  cache_write: number
+}
+
+export interface SessionCost {
+  run_id: number
+  project: string
+  task: string
+  started_at: string
+  status: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  cost_usd: number
+  /** Steps that plausibly cost something and could not be priced. Shown so a
+   * partly-unpriceable session never reads as a cheap one. */
+  unpriced_steps: number
+  by_component: SessionCostComponents
+}
+
+export interface SessionCostsResponse {
+  sessions: SessionCost[]
+  total_sessions: number
+}
+
+export function fetchSessionCosts(days = 30, limit = 25): Promise<SessionCostsResponse> {
+  return apiFetch<SessionCostsResponse>(`/v1/sessions/cost?days=${days}&limit=${limit}`)
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/models — Mirador Home command-center sprint. Shape transcribed
 // from `hivepilot/services/analytics_service.py`'s `models_summary` — read
 // that before changing anything here. `latency_available` is always `false`

@@ -108,6 +108,16 @@ export const en = {
   'analytics.actionedApprovals': 'Actioned approvals',
 
   // ---- Cost view -----------------------------------------------------
+  'cost.sessionsTitle': 'Cost by session',
+  'cost.sessionsDescription':
+    'Where the money went, not how many tokens moved. Cache reads are voluminous and cheap; output is small and expensive — reading the two as one number points optimisation at the wrong parameter.',
+  'cost.noSessions': 'No priced sessions in this window.',
+  'cost.sessionRun': 'Session',
+  'cost.sessionTotal': 'Total',
+  'cost.sessionOutput': 'Output',
+  'cost.sessionInput': 'Input',
+  'cost.sessionCacheRead': 'Cache read',
+  'cost.sessionUnpriced': '{count} unpriced',
   'cost.title': 'Cost & tokens',
   'cost.noCost': 'No cost data yet.',
   'cost.totalCost': 'Total cost',

@@ -745,6 +745,115 @@ _BY_ROLE_NOTE = (
 )
 
 
+def session_costs(
+    tenant: str | None = None,
+    days: int | None = 30,
+    limit: int = 25,
+) -> dict[str, Any]:
+    """Per-run cost, split by what was actually billed.
+
+    A total alone cannot answer "where did the money go", and on this
+    workload the intuitive reading is the wrong one: one review dispatch
+    recorded 516 982 cache-read tokens against 3 040 fresh input and 20 455
+    output. Read as volume that says the reviewers read too much; read as
+    cost it says they write a lot and the reading is cached and cheap. Only
+    the second is true, and only the split shows it.
+
+    Each session reports token counts AND the cost each component carries
+    (`pricing.cost_components`). Steps whose model has no price on record —
+    or has cache volume it holds no rate for — are counted in
+    ``unpriced_steps`` rather than silently contributing zero: a session
+    that is partly unpriceable must not look cheap.
+    """
+    state_service.init_db()
+    since_ts, until_ts = _resolve_window(days, None, None)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if since_ts is not None:
+        clauses.append("s.timestamp>=?")
+        params.append(since_ts)
+    if until_ts is not None:
+        clauses.append("s.timestamp<=?")
+        params.append(until_ts)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with db.connect() as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                db.ph(
+                    "SELECT s.run_id AS run_id, r.project AS project, r.task AS task, "
+                    "r.started_at AS started_at, r.status AS status, s.model AS model, "
+                    "s.input_tokens AS input_tokens, s.output_tokens AS output_tokens, "
+                    "s.cache_read_tokens AS cache_read_tokens, "
+                    "s.cache_creation_tokens AS cache_creation_tokens "
+                    f"FROM steps s JOIN runs r ON r.id = s.run_id {where}"
+                ),
+                tuple(params),
+            ).fetchall()
+        ]
+
+    sessions: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        run_id = int(row["run_id"])
+        entry = sessions.setdefault(
+            run_id,
+            {
+                "run_id": run_id,
+                "project": row["project"],
+                "task": row["task"],
+                "started_at": row["started_at"],
+                "status": row["status"],
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cost_usd": 0.0,
+                "unpriced_steps": 0,
+                "by_component": {
+                    "input": 0.0,
+                    "output": 0.0,
+                    "cache_read": 0.0,
+                    "cache_write": 0.0,
+                },
+            },
+        )
+        for field, key in (
+            ("input_tokens", "input_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("cache_read_tokens", "cache_read_tokens"),
+            ("cache_creation_tokens", "cache_creation_tokens"),
+        ):
+            entry[key] += int(row.get(field) or 0)
+
+        parts = pricing.cost_components(
+            row.get("model"),
+            input_tokens=row.get("input_tokens"),
+            output_tokens=row.get("output_tokens"),
+            cache_read_tokens=row.get("cache_read_tokens") or 0,
+            cache_creation_tokens=row.get("cache_creation_tokens") or 0,
+        )
+        if parts is None:
+            # Only count a step as unpriceable when it plausibly cost
+            # something. A shell step with no tokens is not a pricing gap.
+            if row.get("input_tokens") or row.get("output_tokens"):
+                entry["unpriced_steps"] += 1
+            continue
+        for component, value in parts.items():
+            entry["by_component"][component] += value
+        entry["cost_usd"] += sum(parts.values())
+
+    ordered = sorted(sessions.values(), key=lambda s: -s["cost_usd"])[:limit]
+    for entry in ordered:
+        entry["cost_usd"] = round(entry["cost_usd"], 6)
+        entry["by_component"] = {k: round(v, 6) for k, v in entry["by_component"].items()}
+    return {"sessions": ordered, "total_sessions": len(sessions)}
+
+
 def cost_summary(
     tenant: str | None = None,
     days: int | None = 30,

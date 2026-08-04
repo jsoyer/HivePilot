@@ -104,6 +104,16 @@ export const fr: Record<TranslationKey, string> = {
   'analytics.actionedApprovals': 'Approbations traitées',
 
   // ---- Cost view -----------------------------------------------------
+  'cost.sessionsTitle': 'Coût par session',
+  'cost.sessionsDescription':
+    "Où est passé l'argent, pas combien de tokens ont circulé. Les lectures de cache sont volumineuses et bon marché ; la sortie est petite et chère — lire les deux comme un seul chiffre dirige l'optimisation vers le mauvais paramètre.",
+  'cost.noSessions': 'Aucune session chiffrée sur cette période.',
+  'cost.sessionRun': 'Session',
+  'cost.sessionTotal': 'Total',
+  'cost.sessionOutput': 'Sortie',
+  'cost.sessionInput': 'Entrée',
+  'cost.sessionCacheRead': 'Lecture cache',
+  'cost.sessionUnpriced': '{count} non chiffrées',
   'cost.title': 'Coûts et tokens',
   'cost.noCost': "Aucune donnée de coût pour l'instant.",
   'cost.totalCost': 'Coût total',
