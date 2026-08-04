@@ -1067,6 +1067,21 @@ _REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
     "you can find). If, after genuinely adversarial scrutiny, you find no "
     "reason to reject it, say so explicitly -- but never manufacture approval "
     "just to be agreeable.\n\n"
+    # The perimeter, and it is the expensive part when it is missing. An
+    # agent handed a diff with no statement of scope reasonably assumes it
+    # must go and find the context itself: measured at 23 bare commands,
+    # `ls -la /` and `find / -maxdepth 6` among them, and 1 099 726 cache
+    # tokens to review 3.8 KB. Permissions do not fix this -- Claude Code
+    # auto-allows recognised read-only commands, so an allowlist OPENS
+    # (rtk, gh) rather than CLOSES. Only the instruction bounds it.
+    #
+    # Exploration stays available on purpose. A reviewer that genuinely
+    # needs context must be able to get it; requiring it to be declared
+    # makes the cost visible instead of mysterious.
+    "The diff above is the COMPLETE change under review. Review it as given.\n"
+    "Do not explore the repository or the filesystem unless the diff alone "
+    "genuinely cannot be judged -- and if you do, say so in your answer and "
+    "state what you needed. Prefer `rtk gh pr diff` over walking directories.\n\n"
     # The format has to be stated HERE, in the instruction that governs the
     # answer. Reviewers also receive their role prompt, which mandates the
     # same `status:` line -- and that was not enough: a general format rule
