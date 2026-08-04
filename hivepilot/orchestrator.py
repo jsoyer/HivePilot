@@ -669,6 +669,44 @@ def _resolve_step_provider_model(
     return runner_def.kind, model
 
 
+def _role_runner_options(role_name: str) -> dict[str, Any]:
+    """A role's `permission_mode` + `allowed_tools`, as runner options.
+
+    **Every** synthesized `RunnerDefinition` must carry these, because
+    `allowed_tools` is a WHITELIST: its absence is not "no grant", it is "no
+    limit". A definition built without options hands the agent an
+    unrestricted shell.
+
+    Measured 2026-08-04. The review dispatch built its definition with
+    name/kind/command/model/effort/host and no `options=`. The reviewer then
+    ran 23 bare Bash commands — `ls -la /`, `find / -maxdepth 6`, `cat …` —
+    across the whole filesystem, and burned 1 099 726 cache tokens reviewing
+    a 3.8 KB diff. It never once ran `gh pr diff`: nothing pointed it at the
+    PR, and nothing stopped it walking the disk.
+
+    Absent grants yield an ABSENT key, never an empty list — an empty
+    `allowed_tools` is a whitelist matching nothing, which would block every
+    command rather than leave the role as it was.
+
+    An unresolvable role returns `{}` and lets the dispatch proceed: a stale
+    role name must not kill a run, and no options is exactly the behaviour
+    that preceded this function.
+    """
+    from hivepilot.roles import get_role
+
+    try:
+        role = get_role(role_name)
+    except Exception:  # noqa: BLE001 — a stale role name must not fail a dispatch
+        return {}
+
+    options: dict[str, Any] = {}
+    if role.permission_mode:
+        options["permission_mode"] = role.permission_mode
+    if role.allowed_tools:
+        options["allowed_tools"] = list(role.allowed_tools)
+    return options
+
+
 def resolve_step_runner(
     *,
     task: Any,
@@ -3069,6 +3107,12 @@ class Orchestrator:
             kind=cast(RunnerKind, debate_config.runner),
             command=None,
             model=debate_config.model,
+            # Empty ON PURPOSE, and stated rather than omitted. The arbiter is
+            # deliberately independent of both parties (see
+            # `_resolve_challenge_via_arbiter`) so it has no role to draw
+            # grants from. It adjudicates from the text it is given and needs
+            # no shell at all.
+            options={},
         )
         try:
             verdict = self._adjudicate_challenge(
@@ -3286,6 +3330,13 @@ class Orchestrator:
                             model=role_model,
                             effort=role_effort,
                             host=review_host,
+                            # Without these the reviewer gets an unrestricted
+                            # shell and roams: measured at 23 bare commands,
+                            # `find /` included, and 1.1M cache tokens to
+                            # review a 3.8 KB diff — while never once running
+                            # `gh pr diff`. A whitelist is what points it at
+                            # the PR instead of at the filesystem.
+                            options=_role_runner_options(role_name),
                         )
                         output = self.registry.capture_definition(rdef, payload)
                 except Exception as exc:  # a reviewer call failing must not fail open
@@ -5056,6 +5107,10 @@ class Orchestrator:
                     model=brain_model,
                     effort=role_effort,
                     host=debate_host,
+                    # Same rule as the review dispatch: a definition without
+                    # options leaves the agent unbounded, because
+                    # `allowed_tools` restricts rather than grants.
+                    options=_role_runner_options(role_name),
                 )
                 output = self.registry.capture_definition(rdef, payload)
             positions.append(
@@ -5085,6 +5140,7 @@ class Orchestrator:
                 model=effective.model,
                 effort=role_effort,
                 host=debate_host,
+                options=_role_runner_options(role_name),
             )
             verdict = self._adjudicate(
                 positions,
