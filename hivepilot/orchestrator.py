@@ -1028,7 +1028,19 @@ _REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
     "security, missing tests, scope creep, style/consistency, anything else "
     "you can find). If, after genuinely adversarial scrutiny, you find no "
     "reason to reject it, say so explicitly -- but never manufacture approval "
-    "just to be agreeable."
+    "just to be agreeable.\n\n"
+    # The format has to be stated HERE, in the instruction that governs the
+    # answer. Reviewers also receive their role prompt, which mandates the
+    # same `status:` line -- and that was not enough: a general format rule
+    # loses to a specific task instruction, and 4 of the first 6 recorded
+    # verdicts came back UNPARSEABLE. Every one of them blocked, so the gate
+    # was refusing changes because nobody could read the reviewer, not
+    # because the reviewer objected.
+    "END YOUR RESPONSE WITH EXACTLY ONE LINE:\n"
+    "status: PASS | REQUEST_CHANGES | BLOCKED | NEEDS_HUMAN\n\n"
+    "Use PASS only if you found nothing that should block this change. "
+    "Anything else -- including an unreadable or missing verdict -- is "
+    "treated as a block, so say what you mean plainly."
 )
 
 
@@ -1071,7 +1083,20 @@ def _parse_reviewer_verdict(text: str) -> str | None:
         return None
     found: set[str] = set()
     for line in text.splitlines():
-        match = re.match(r"^\s*-?\s*status\s*:\s*([A-Za-z_]+)", line, re.IGNORECASE)
+        # Tolerates the markdown an agent writing a report naturally reaches
+        # for -- `**status:** PASS`, `**status**: PASS`, `## status: PASS`,
+        # a `-` bullet, or any combination. Decoration is not ambiguity, and
+        # rejecting it discarded real review work: same class of bug, and the
+        # same fix, as the agent-report parser (`agent_report._colon_re`).
+        #
+        # What is NOT widened: the token set, the requirement for an explicit
+        # `status:` label, and the refusal to guess between contradictory
+        # verdicts. A reviewer still never gets the benefit of the doubt.
+        match = re.match(
+            r"^[ \t]*[-*#]*[ \t]*\**[ \t]*status[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z_]+)",
+            line,
+            re.IGNORECASE,
+        )
         if not match:
             continue
         token = match.group(1).strip().upper()
