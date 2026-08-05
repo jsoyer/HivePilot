@@ -13,6 +13,10 @@ placeholder says so and says how to get it.
 Small changes to the same files are shown in full: a two-line lockfile edit
 is the targeted one worth reading, and treating it like a 4 000-line
 regeneration would hide the interesting case behind the noisy one.
+
+And nothing is withheld at all unless something survives to be read. A PR
+made entirely of generated files is passed through whole -- see the note in
+`summarise_with_report`.
 """
 
 from __future__ import annotations
@@ -157,11 +161,29 @@ def summarise_with_report(diff: str) -> tuple[str, list[str]]:
 
     kept: list[str] = []
     omitted: list[str] = []
+    file_sections = 0
     for section in _split_sections(diff.split("\n")):
+        # Only a real `diff --git` section counts towards "is anything left
+        # to read": a preamble is not content a reviewer can judge, and
+        # counting it would quietly defeat the all-noise check below.
+        if _PATH_RE.match(section[0]):
+            file_sections += 1
         replacement, path = _summarise_section(section)
         kept.extend(replacement)
         if path is not None:
             omitted.append(path)
+
+    # Withholding bodies is justified by "leave room for the code" -- and
+    # that warrant does not exist when there is no code. A PR that only
+    # regenerates a lockfile would arrive as a single placeholder, and a
+    # reviewer with nothing to read returns PASS: a dependency substitution
+    # waved through precisely because the one file that mattered is the one
+    # we hid. Nothing was competing for the budget either, so the saving
+    # would have been zero. Hand back the diff and let the truncation path
+    # describe its size honestly.
+    if omitted and len(omitted) == file_sections:
+        return diff, []
+
     return "\n".join(kept), omitted
 
 

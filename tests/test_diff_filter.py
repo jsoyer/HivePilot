@@ -35,16 +35,26 @@ _CODE = "\n".join(
     ]
 )
 
+# Every "noise is summarised" fixture below carries a real source file.
+#
+# That is not decoration. Withholding a body is justified by leaving room
+# for the code, so the filter declines to fire when a change is generated
+# files and nothing else -- otherwise a lockfile-only PR would reach the
+# reviewer as a single placeholder and get waved through (see
+# tests/test_diff_filter_all_noise.py). A fixture of pure noise therefore
+# exercises that exception, not the summarising these tests are about.
+_MIXED = f"{_CODE}\n{_LOCKFILE}"
+
 
 class TestNoiseIsSummarisedNotRemoved:
     def test_the_filename_survives(self) -> None:
         """A changed lockfile is a supply-chain signal even unread."""
-        out = summarise_noisy_files(_LOCKFILE)
+        out = summarise_noisy_files(_MIXED)
 
         assert "package-lock.json" in out
 
     def test_the_body_is_gone(self) -> None:
-        out = summarise_noisy_files(_LOCKFILE)
+        out = summarise_noisy_files(_MIXED)
 
         assert "sha512-499" not in out
         assert len(out) < len(_LOCKFILE) / 10
@@ -55,7 +65,7 @@ class TestNoiseIsSummarisedNotRemoved:
         Two changed lines in a lockfile is a targeted edit worth reading; four
         thousand is a routine regeneration.
         """
-        out = summarise_noisy_files(_LOCKFILE)
+        out = summarise_noisy_files(_MIXED)
 
         assert "500" in out
         assert "omitted" in out.lower()
@@ -93,12 +103,12 @@ class TestWhatCountsAsNoise:
             "composer.lock",
             "Gemfile.lock",
         ):
-            diff = f"diff --git a/{name} b/{name}\n" + "+x\n" * 400
+            diff = f"{_CODE}\ndiff --git a/{name} b/{name}\n" + "+x\n" * 400
             assert "+x" not in summarise_noisy_files(diff), name
 
     def test_vendored_and_generated_paths(self) -> None:
         for path in ("vendor/lib.go", "node_modules/x/index.js", "dist/app.min.js"):
-            diff = f"diff --git a/{path} b/{path}\n" + "+x\n" * 400
+            diff = f"{_CODE}\ndiff --git a/{path} b/{path}\n" + "+x\n" * 400
             assert "+x" not in summarise_noisy_files(diff), path
 
     def test_a_small_lockfile_change_is_shown_in_full(self) -> None:
@@ -128,7 +138,7 @@ class TestWhatCountsAsNoise:
         """
         body = "+" + "a" * 280_000
         header = "diff --git a/webui/static/index-Dht.js b/webui/static/index-Dht.js"
-        diff = f"{header}\n{body}\n{body}\n"
+        diff = f"{_CODE}\n{header}\n{body}\n{body}\n"
 
         out = summarise_noisy_files(diff)
 
