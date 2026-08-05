@@ -78,6 +78,7 @@ from hivepilot.services import (
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.config_provenance import redact_text, redact_value, register_secret_value
+from hivepilot.services.diff_filter import summarise_with_report
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
 from hivepilot.services.interaction_service import (
     Interaction,
@@ -1112,8 +1113,10 @@ _REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
 # Genuinely huge PRs (2.6 MB, 27 MB in this repo) still truncate and still get
 # the honest warning.
 #
-# NOT a filter. A lockfile or a generated blob will still eat this budget;
-# excluding by path is a separate decision and is deliberately not made here.
+# Generated content is summarised before this cap applies (`diff_filter`), so
+# a lockfile regeneration no longer crowds the code out of the budget. It is
+# summarised, never dropped: the filename and the size of the change always
+# reach the reviewer, because a changed lockfile is a supply-chain signal.
 _REVIEW_SUBJECT_LIMIT = 200_000
 
 # Whole diff: the premise for the perimeter holds, so bound the reviewer.
@@ -1140,20 +1143,61 @@ _PERIMETER_TRUNCATED = (
 )
 
 
+# Whole diff minus the generated bodies. The perimeter still holds -- a
+# withheld lockfile is not a licence to roam -- but the completeness claim
+# cannot stand, and the reviewer is told exactly what it would be fetching.
+_PERIMETER_WHOLE_WITH_OMISSIONS = (
+    "The diff above is the change under review, EXCEPT that the bodies of "
+    "{count} generated or vendored file(s) were replaced by a one-line "
+    "placeholder: {paths}. Their names and change sizes are shown because a "
+    "change there can matter.\n"
+    "Review what is shown. Do not explore the repository or the filesystem "
+    "for anything else -- but if one of those files could carry the defect "
+    "(a substituted dependency, an unexpected rebuild), fetch it with "
+    "`rtk gh pr diff` and say in your answer that you needed it."
+)
+
+# Cut diff that also had bodies withheld: the perimeter is already lifted, so
+# this only has to name what a full fetch would additionally reveal.
+_OMISSION_NOTE = (
+    "\nSeparately, the bodies of {count} generated or vendored file(s) were "
+    "replaced by a placeholder before truncation: {paths}."
+)
+
+# Enough to judge whether to fetch, short enough not to eat the prompt.
+_OMISSION_PATHS_SHOWN = 10
+
+
+def _format_omitted(paths: list[str]) -> str:
+    shown = ", ".join(paths[:_OMISSION_PATHS_SHOWN])
+    extra = len(paths) - _OMISSION_PATHS_SHOWN
+    return f"{shown} and {extra} more" if extra > 0 else shown
+
+
 def _build_review_challenge_prompt(subject: str) -> str:
     """Render the adversarial-review challenge prompt (Sprint 2 contract).
 
-    The perimeter clause depends on whether the subject survived truncation.
+    The perimeter clause depends on what the reviewer is actually holding.
     Claiming a cut diff is "the COMPLETE change" would be false on most real
     PRs here, and it would also forbid the reviewer from compensating -- the
-    one case where exploring is exactly the right thing to do.
+    one case where exploring is exactly the right thing to do. Summarising a
+    lockfile body reopens the same hole on a smaller scale, so it is declared
+    the same way.
     """
+    subject, omitted = summarise_with_report(subject)
     truncated = len(subject) > _REVIEW_SUBJECT_LIMIT
-    perimeter = (
-        _PERIMETER_TRUNCATED.format(shown=_REVIEW_SUBJECT_LIMIT, total=len(subject))
-        if truncated
-        else _PERIMETER_WHOLE
-    )
+
+    if truncated:
+        perimeter = _PERIMETER_TRUNCATED.format(shown=_REVIEW_SUBJECT_LIMIT, total=len(subject))
+        if omitted:
+            perimeter += _OMISSION_NOTE.format(count=len(omitted), paths=_format_omitted(omitted))
+    elif omitted:
+        perimeter = _PERIMETER_WHOLE_WITH_OMISSIONS.format(
+            count=len(omitted), paths=_format_omitted(omitted)
+        )
+    else:
+        perimeter = _PERIMETER_WHOLE
+
     return _REVIEW_CHALLENGE_PROMPT_TEMPLATE.format(
         subject=subject[:_REVIEW_SUBJECT_LIMIT], perimeter=perimeter
     )
