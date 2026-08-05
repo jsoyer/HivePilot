@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from hivepilot.services import db, state_service
+from hivepilot.services.diff_filter import summarise_noisy_files
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -77,7 +78,14 @@ class DispatchedReviewer:
 @dataclass(frozen=True)
 class ReviewProbeResult:
     reviewers: list[str]
+    # The raw diff length. Kept even after filtering lands, because it is
+    # still the proof that a rebuild happened — losing it would hide that
+    # fact from an operator who only ever reads `reviewed_bytes`.
     subject_bytes: int
+    # What `summarise_noisy_files` leaves once generated files are stripped
+    # out — this is what the reviewer actually reads, and so what the run
+    # actually costs.
+    reviewed_bytes: int
     dry_run: bool
     planned: list[PlannedReviewer] = field(default_factory=list)
     dispatched: list[DispatchedReviewer] = field(default_factory=list)
@@ -152,7 +160,7 @@ def fetch_pr_diff_for_branch(repo_path: str, *, timeout: int = _GH_TIMEOUT_SECON
     return diff
 
 
-def plan_reviewers(reviewers: list[str]) -> list[PlannedReviewer]:
+def _plan_each_reviewer(reviewers: list[str]) -> list[PlannedReviewer]:
     """Resolve each reviewer to the runner and model it would dispatch on.
 
     Unresolvable roles are surfaced with `model=None` rather than dropped —
@@ -184,6 +192,20 @@ def plan_reviewers(reviewers: list[str]) -> list[PlannedReviewer]:
                 )
             )
     return planned
+
+
+def plan_reviewers(subject: str, *, reviewers: list[str]) -> ReviewProbeResult:
+    """What a dry run reports: each reviewer's dispatch plan, plus what
+    *subject* costs both before and after the noise filter — see
+    `ReviewProbeResult.reviewed_bytes` for why both numbers are kept.
+    """
+    return ReviewProbeResult(
+        reviewers=list(reviewers),
+        subject_bytes=len(subject),
+        reviewed_bytes=len(summarise_noisy_files(subject)),
+        dry_run=True,
+        planned=_plan_each_reviewer(reviewers),
+    )
 
 
 def _run_review_for(
@@ -260,14 +282,10 @@ def run_probe(
     Defaults to `dry_run=True`: the expensive thing should be the one you ask
     for explicitly, not the one you get by forgetting a flag.
     """
-    planned = plan_reviewers(reviewers)
     if dry_run:
-        return ReviewProbeResult(
-            reviewers=list(reviewers),
-            subject_bytes=len(subject),
-            dry_run=True,
-            planned=planned,
-        )
+        return plan_reviewers(subject, reviewers=reviewers)
+
+    planned = _plan_each_reviewer(reviewers)
 
     if orchestrator is None:
         from hivepilot.orchestrator import Orchestrator
@@ -299,6 +317,7 @@ def run_probe(
     return ReviewProbeResult(
         reviewers=list(reviewers),
         subject_bytes=len(subject),
+        reviewed_bytes=len(summarise_noisy_files(subject)),
         dry_run=False,
         planned=planned,
         dispatched=_recorded_dispatches(run_id),

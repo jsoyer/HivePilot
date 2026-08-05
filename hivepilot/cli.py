@@ -5243,7 +5243,10 @@ def review_pr(
         dry_run=not execute,
     )
 
-    typer.echo(f"PR {pr} in {repo} — {result.subject_bytes} bytes of diff")
+    size_note = f"{result.subject_bytes} bytes of diff"
+    if result.reviewed_bytes != result.subject_bytes:
+        size_note += f", {result.reviewed_bytes} after filtering generated files"
+    typer.echo(f"PR {pr} in {repo} — {size_note}")
     for planned in result.planned:
         who = planned.display_name or planned.role
         typer.echo(
