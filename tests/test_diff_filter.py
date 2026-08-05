@@ -118,13 +118,33 @@ class TestWhatCountsAsNoise:
         This repo commits its own built bundle under a hashed filename that
         no lockfile list would match. Machine-written lines are long — that
         holds whatever the path.
-        """
-        diff = (
-            "diff --git a/webui/static/index-Dht.js b/webui/static/index-Dht.js\n"
-            + ("+" + "a" * 400 + "\n") * 60
-        )
 
-        assert "aaaa" not in summarise_noisy_files(diff)
+        The shape here is measured from PR 413, not invented: git diffs a
+        minified bundle as a handful of enormous lines, **not** many short
+        ones. The first version of this test used 60 short-ish lines, which
+        passed against a filter that gated on line count and therefore never
+        fired on any real bundle — the test agreed with the code and both
+        were wrong. Measured reduction on PRs 400/413/417 was 0%.
+        """
+        body = "+" + "a" * 280_000
+        header = "diff --git a/webui/static/index-Dht.js b/webui/static/index-Dht.js"
+        diff = f"{header}\n{body}\n{body}\n"
+
+        out = summarise_noisy_files(diff)
+
+        assert "aaaa" not in out
+        assert len(out) < 1000
+
+    def test_a_long_change_to_a_real_source_file_is_untouched(self) -> None:
+        """The character gate must not start summarising hand-written code.
+
+        Size is only a precondition — a section still has to look generated
+        or sit on a vendored path. A long docstring is neither.
+        """
+        prose = "+" + "a sentence of ordinary prose. " * 40
+        diff = f"diff --git a/src/big.py b/src/big.py\n{prose}\n{prose}\n{prose}\n"
+
+        assert "ordinary prose" in summarise_noisy_files(diff)
 
 
 class TestThePromptNeverClaimsItSawWhatWasWithheld:

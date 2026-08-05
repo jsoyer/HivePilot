@@ -23,14 +23,31 @@ __all__ = ["summarise_noisy_files", "summarise_with_report"]
 
 _SECTION_START = "diff --git "
 
-#: Below this, the body is cheap enough that showing it beats explaining it --
-#: and a small edit to a generated file is the suspicious kind.
-_SUMMARY_THRESHOLD_LINES = 50
+#: Below BOTH of these, the body is cheap enough that showing it beats
+#: explaining it -- and a small edit to a generated file is the suspicious
+#: kind, the one worth reading in full.
+#:
+#: Two measures because a lockfile and a bundle are big in different ways.
+#: The first version gated on line count alone and measured 0% on the three
+#: real PRs it was written for: git diffs a minified bundle as 2-4 lines of
+#: 280 000 characters each, so it fell under a 50-line threshold and was
+#: never even tested against the generated-content rules below.
+_SUMMARY_MIN_LINES = 50
+_SUMMARY_MIN_CHARS = 2_000
 
-#: Machine-written lines are long. Averaged over 50+ changed lines this
-#: separates a minified bundle from anything a person typed, whatever the
-#: path -- which matters for generated assets no basename rule would catch.
-_GENERATED_LINE_WIDTH = 200
+#: Machine-written lines are long -- long enough that this separates a
+#: minified bundle from anything a person typed, whatever the path, which
+#: matters for generated assets no basename rule would catch.
+#:
+#: Set from measurement, with room on both sides. The narrowest real bundle
+#: line in this repo's own committed assets is ~44 000 characters (the CSS
+#: bundle); the widest are 214 000 and 286 000 (PRs 400 and 413). Against
+#: that, a long hand-written line -- a reflowed markdown paragraph, a dense
+#: dict literal -- runs to maybe 1 000. An earlier 200 misclassified three
+#: lines of ordinary prose as generated, which would have summarised a real
+#: source file out of the review: a false positive here costs a blind spot,
+#: so the gap is deliberately wide rather than tight.
+_GENERATED_LINE_WIDTH = 5_000
 
 _NOISY_BASENAMES = frozenset(
     {
@@ -61,11 +78,15 @@ _NOISY_SUFFIXES = (".min.js", ".min.css", ".map", ".lock")
 
 _PATH_RE = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+?)\s*$")
 
+#: States both measures, because either alone misreads one of the two shapes:
+#: "4 changed lines" hides a 1.1 MB bundle rebuild, and a character count
+#: alone hides a 4 000-line lockfile regeneration.
 _PLACEHOLDER = (
-    "[{path} is a generated or vendored file: {count} changed lines omitted "
-    "from this review to leave room for the code. The change to it is real -- "
-    "if it could matter (a substituted dependency, an unexpected rebuild), "
-    "ask for it with `rtk gh pr diff` and judge it directly.]"
+    "[{path} is a generated or vendored file: {count} changed lines "
+    "({chars} characters) omitted from this review to leave room for the "
+    "code. The change to it is real -- if it could matter (a substituted "
+    "dependency, an unexpected rebuild), ask for it with `rtk gh pr diff` "
+    "and judge it directly.]"
 )
 
 
@@ -112,12 +133,16 @@ def _summarise_section(section: list[str]) -> tuple[list[str], str | None]:
 
     path = match.group("b")
     changed = _changed_lines(section[1:])
-    if len(changed) < _SUMMARY_THRESHOLD_LINES:
+    volume = sum(len(line) for line in changed)
+    if len(changed) < _SUMMARY_MIN_LINES and volume < _SUMMARY_MIN_CHARS:
         return section, None
     if not (_is_noisy_path(path) or _looks_generated(changed)):
         return section, None
 
-    return [section[0], _PLACEHOLDER.format(path=path, count=len(changed))], path
+    placeholder = _PLACEHOLDER.format(
+        path=path, count=len(changed), chars=f"{volume:,}".replace(",", " ")
+    )
+    return [section[0], placeholder], path
 
 
 def summarise_with_report(diff: str) -> tuple[str, list[str]]:
