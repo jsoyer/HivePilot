@@ -1078,10 +1078,7 @@ _REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
     # Exploration stays available on purpose. A reviewer that genuinely
     # needs context must be able to get it; requiring it to be declared
     # makes the cost visible instead of mysterious.
-    "The diff above is the COMPLETE change under review. Review it as given.\n"
-    "Do not explore the repository or the filesystem unless the diff alone "
-    "genuinely cannot be judged -- and if you do, say so in your answer and "
-    "state what you needed. Prefer `rtk gh pr diff` over walking directories.\n\n"
+    "{perimeter}\n\n"
     # The format has to be stated HERE, in the instruction that governs the
     # answer. Reviewers also receive their role prompt, which mandates the
     # same `status:` line -- and that was not enough: a general format rule
@@ -1097,9 +1094,54 @@ _REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
 )
 
 
+# How much of the subject reaches the reviewer. Small on purpose -- the whole
+# point of the perimeter is not to ship a repository into a prompt -- but it
+# means most real diffs arrive CUT, and the prompt has to say which case it is
+# in. Real PRs in this repo run to 72 KB and 2.6 MB, where this is 5% and
+# 0.15% of the change.
+_REVIEW_SUBJECT_LIMIT = 4000
+
+# Whole diff: the premise for the perimeter holds, so bound the reviewer.
+# Measured on a 3.8 KB diff -- 9 259 cache tokens and $0.17, against 1 003 249
+# and $1.17 unbounded, with the verdict unchanged (REQUEST_CHANGES).
+_PERIMETER_WHOLE = (
+    "The diff above is the COMPLETE change under review. Review it as given.\n"
+    "Do not explore the repository or the filesystem unless the diff alone "
+    "genuinely cannot be judged -- and if you do, say so in your answer and "
+    "state what you needed. Prefer `rtk gh pr diff` over walking directories."
+)
+
+# Cut diff: the premise fails, so the perimeter lifts. Telling a reviewer that
+# a fragment is the whole change AND forbidding it from looking further is
+# worse than the roaming the perimeter was written to stop -- it would review
+# 5% of a PR while believing it had seen everything.
+_PERIMETER_TRUNCATED = (
+    "WARNING: the diff above is TRUNCATED. You are seeing the first {shown} "
+    "characters of {total}. Do NOT assume the rest is uninteresting, and do "
+    "not judge the whole change from this fragment.\n"
+    "Fetch the remainder before concluding -- `rtk gh pr diff` gives you the "
+    "full diff. If you cannot obtain it, say so plainly and return "
+    "NEEDS_HUMAN rather than approving what you could not read."
+)
+
+
 def _build_review_challenge_prompt(subject: str) -> str:
-    """Render the adversarial-review challenge prompt (Sprint 2 contract)."""
-    return _REVIEW_CHALLENGE_PROMPT_TEMPLATE.format(subject=subject[:4000])
+    """Render the adversarial-review challenge prompt (Sprint 2 contract).
+
+    The perimeter clause depends on whether the subject survived truncation.
+    Claiming a cut diff is "the COMPLETE change" would be false on most real
+    PRs here, and it would also forbid the reviewer from compensating -- the
+    one case where exploring is exactly the right thing to do.
+    """
+    truncated = len(subject) > _REVIEW_SUBJECT_LIMIT
+    perimeter = (
+        _PERIMETER_TRUNCATED.format(shown=_REVIEW_SUBJECT_LIMIT, total=len(subject))
+        if truncated
+        else _PERIMETER_WHOLE
+    )
+    return _REVIEW_CHALLENGE_PROMPT_TEMPLATE.format(
+        subject=subject[:_REVIEW_SUBJECT_LIMIT], perimeter=perimeter
+    )
 
 
 # Explicit reviewer verdict tokens -- see `prompts/agents/reviewer.md`'s
