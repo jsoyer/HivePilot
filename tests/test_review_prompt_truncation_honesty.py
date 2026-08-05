@@ -23,7 +23,7 @@ fragment is everything cannot.
 
 from __future__ import annotations
 
-from hivepilot.orchestrator import _build_review_challenge_prompt
+from hivepilot.orchestrator import _REVIEW_SUBJECT_LIMIT, _build_review_challenge_prompt
 
 
 class TestAWholeDiffIsCalledWhole:
@@ -43,7 +43,13 @@ class TestAWholeDiffIsCalledWhole:
 class TestATruncatedDiffSaysSo:
     @staticmethod
     def _big() -> str:
-        return "diff --git a/x b/x\n" + ("+padding line\n" * 2000)
+        """Derived from the limit, never a hardcoded size.
+
+        The first version hardcoded 28 KB, which stopped being "big" the
+        moment the cap was raised to 200 000 — the tests went green on a
+        subject that was no longer truncated at all, testing nothing.
+        """
+        return "diff --git a/x b/x\n" + ("+padding line\n" * (_REVIEW_SUBJECT_LIMIT // 10))
 
     def test_it_never_calls_a_fragment_complete(self) -> None:
         prompt = _build_review_challenge_prompt(self._big())
@@ -78,13 +84,13 @@ class TestATruncatedDiffSaysSo:
 
 class TestUnchangedContract:
     def test_the_status_line_survives_both_paths(self) -> None:
-        for subject in ("small diff", "x" * 9000):
+        for subject in ("small diff", "x" * (_REVIEW_SUBJECT_LIMIT + 1000)):
             prompt = _build_review_challenge_prompt(subject)
             assert "status:" in prompt.lower()
             for token in ("PASS", "REQUEST_CHANGES", "BLOCKED", "NEEDS_HUMAN"):
                 assert token in prompt
 
     def test_adversarial_framing_survives_both_paths(self) -> None:
-        for subject in ("small diff", "x" * 9000):
+        for subject in ("small diff", "x" * (_REVIEW_SUBJECT_LIMIT + 1000)):
             prompt = _build_review_challenge_prompt(subject).lower()
             assert "not to approve it by default" in prompt
