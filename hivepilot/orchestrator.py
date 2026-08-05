@@ -1094,12 +1094,27 @@ _REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
 )
 
 
-# How much of the subject reaches the reviewer. Small on purpose -- the whole
-# point of the perimeter is not to ship a repository into a prompt -- but it
-# means most real diffs arrive CUT, and the prompt has to say which case it is
-# in. Real PRs in this repo run to 72 KB and 2.6 MB, where this is 5% and
-# 0.15% of the change.
-_REVIEW_SUBJECT_LIMIT = 4000
+# How much of the subject reaches the reviewer.
+#
+# Was 4 000 characters -- a cap chosen before anyone measured what it cost.
+# Measured 2026-08-05, full panel on a 72 KB PR where 4 000 characters is 5%
+# of the change: the three reviewers burned 9 914 867 cache tokens and $8.26
+# going and fetching what the prompt had withheld. Marie alone read 4 874 168
+# tokens to reconstitute a diff worth ~18 000.
+#
+# A diff passed IN is billed once. A diff the agent must go and find is billed
+# in round trips, and on that PR it came to roughly 270x the size of the diff
+# itself. The cheap direction is to hand it over.
+#
+# 200 000 characters is ~50 000 tokens: comfortable for the models in use, and
+# it makes "the whole diff" the normal case rather than the exception --
+# measured at $0.17 with a bounded perimeter, against $1.17 unbounded.
+# Genuinely huge PRs (2.6 MB, 27 MB in this repo) still truncate and still get
+# the honest warning.
+#
+# NOT a filter. A lockfile or a generated blob will still eat this budget;
+# excluding by path is a separate decision and is deliberately not made here.
+_REVIEW_SUBJECT_LIMIT = 200_000
 
 # Whole diff: the premise for the perimeter holds, so bound the reviewer.
 # Measured on a 3.8 KB diff -- 9 259 cache tokens and $0.17, against 1 003 249
