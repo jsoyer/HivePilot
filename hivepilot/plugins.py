@@ -63,6 +63,78 @@ class PluginRecord:
 HEALTH_STATUSES = ("ok", "degraded", "error")
 
 
+# Execution order for lifecycle hooks, coarsest thing that fixes a real bug.
+#
+# Until this existed, hooks ran in `sorted(plugin_dir.glob("*.py"))` order --
+# by FILENAME. Measured on the shipped set:
+#
+#     before_step: headroom -> mem0 -> obsidian -> token_savior
+#
+# Three of those write the same metadata key, `extra_prompt`: headroom
+# compresses it, mem0 injects up to five recalled memories into it, obsidian
+# appends vault excerpts. So compression ran first, on the operator's ask
+# alone, and the two largest injections landed after it and were never
+# compressed.
+#
+# The failure was quiet in the worst way: headroom's statistics describe the
+# text it was handed, so its numbers looked healthy while the prompt it
+# existed to shrink grew behind its back. And the whole ordering hung on
+# 'h' < 'm' -- renaming a file would have changed the result.
+#
+# A closed vocabulary rather than numeric priorities: numbers drift, collide,
+# and record no intent. Same shape as HEALTH_STATUSES and PLUGIN_CAPABILITIES.
+HOOK_PHASES: tuple[str, ...] = (
+    "retrieve",  # fetches context from outside and injects it
+    "transform",  # anything else; the default
+    "compress",  # rewrites what earlier hooks produced — must see all of it
+)
+
+_DEFAULT_HOOK_PHASE = "transform"
+_HOOK_PHASE_ATTR = "_hivepilot_hook_phase"
+
+
+def hook_phase(phase: str) -> Callable[[Any], Any]:
+    """Declare when a lifecycle hook runs relative to the others.
+
+    A hook that declares nothing lands in `transform` and keeps the order it
+    has always had, so every plugin written before this existed is
+    unaffected.
+    """
+    if phase not in HOOK_PHASES:
+        raise ValueError(f"unknown hook phase {phase!r}; expected one of {HOOK_PHASES}")
+
+    def decorate(fn: Any) -> Any:
+        setattr(fn, _HOOK_PHASE_ATTR, phase)
+        return fn
+
+    return decorate
+
+
+def _phase_of(hook: Any) -> str:
+    return getattr(hook, _HOOK_PHASE_ATTR, _DEFAULT_HOOK_PHASE)
+
+
+def order_hooks(hooks: list[Any]) -> list[Any]:
+    """Return *hooks* in phase order, stable within a phase.
+
+    Stable on purpose: only the phase reorders anything. A fix that also
+    shuffled same-phase plugins would be a second, unannounced change to
+    behaviour nobody asked about.
+
+    Raises on an unknown phase rather than falling back to the default --
+    silently treating a typo as `transform` would reorder the stack without
+    telling anyone, which is the exact failure this replaces.
+    """
+    for hook in hooks:
+        phase = _phase_of(hook)
+        if phase not in HOOK_PHASES:
+            raise ValueError(
+                f"hook {getattr(hook, '__name__', hook)!r} declares unknown "
+                f"phase {phase!r}; expected one of {HOOK_PHASES}"
+            )
+    return sorted(hooks, key=lambda h: HOOK_PHASES.index(_phase_of(h)))
+
+
 class HealthStatus(NamedTuple):
     """Small typed result a plugin's `health` callable returns.
 
@@ -1061,7 +1133,12 @@ class PluginManager:
         # only makes the refusal legible instead of leaving the plugin
         # silently missing from `loaded`.
         self.denied: list[tuple[PluginRecord, str]] = staged.denied
-        self.hooks: dict[str, list[Any]] = staged.hooks
+        # Phase-ordered at commit, once, rather than on every dispatch: the
+        # list identity that `_is_network_hook` compares against is the
+        # callable itself, so reordering the list leaves that check intact.
+        self.hooks: dict[str, list[Any]] = {
+            name: order_hooks(fns) for name, fns in staged.hooks.items()
+        }
         self.declared_notifiers: dict[str, Callable[[str], None]] = staged.declared_notifiers
         self.health: dict[str, Callable[..., Any]] = staged.health
         self.panels: dict[str, PanelSpec] = staged.panels

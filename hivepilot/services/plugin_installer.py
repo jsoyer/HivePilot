@@ -116,6 +116,22 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
         prereq_kind="binary",
         prereq_detail="the `herdr` binary on PATH",
     ),
+    "token_savior": ExamplePluginSpec(
+        name="token_savior",
+        description=(
+            "Wires the token-savior MCP symbol index (github.com/mibayy/token-savior) "
+            "onto each step, generating a per-project config so an agent can fetch "
+            "`get(symbol)` instead of reading whole files."
+        ),
+        env_flag="HIVEPILOT_TOKEN_SAVIOR_ENABLED",
+        prereq_kind="binary",
+        # Matches the plugin's own `shutil.which(_BINARY)` probe, not the
+        # import name: the server is launched by the agent CLI, so what has
+        # to exist is the console script.
+        prereq_detail=(
+            'the `token-savior` binary on PATH (pip install "token-savior-recall[mcp]")'
+        ),
+    ),
     "hugo": ExamplePluginSpec(
         name="hugo",
         description="Wraps the Hugo static-site-generator CLI (new/build/serve) as a runner.",

@@ -177,6 +177,22 @@ class TestWiringAStep:
         written = Path(payload.step.metadata["mcp_config"])
         assert written.parent == tmp_path
 
+    def test_it_disables_its_own_memory_engine(self, token_savior, tmp_path) -> None:
+        """token-savior ships a memory engine; HivePilot already has mem0.
+
+        Two stores recalling near-identical context into one prompt is paying
+        twice for one fact. It happens to be inert today only because the
+        `[memory-vector]` extra is not installed — an accident of packaging
+        that any future `pip install` would undo silently.
+        """
+        payload = _Payload(project=_Project("/srv/x"), project_name="x")
+
+        token_savior.before_step(payload=payload)
+        written = json.loads((tmp_path / "x.mcp.json").read_text())
+
+        env = written["mcpServers"][token_savior._SERVER_NAME]["env"]
+        assert env["TS_MEMORY_DISABLE"] == "1"
+
     def test_it_pre_approves_only_its_own_tools(self, token_savior) -> None:
         """`--allowed-tools` is a whitelist that RESTRICTS. Adding a broad
         entry here would widen what every other tool may do."""
