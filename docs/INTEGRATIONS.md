@@ -351,6 +351,62 @@ exits 1 when it examined zero folders or found an unconfigured engine slot. Same
 names in `vault.yaml` (`examples/vault.yaml` is a starting point), or leave the vault integration
 disabled entirely (`HIVEPILOT_OBSIDIAN_ENABLED=false`).
 
+## herdr (live role board)
+
+Watch roles work as they work, in a terminal multiplexer, instead of reading
+about it afterwards in Telegram or Slack.
+
+```bash
+hivepilot herdr board --roles reviewer,ciso,qa | herdr layout apply
+```
+
+One pane per role, each running `hivepilot watch --role <name>`.
+
+### Why the pane runs a follower and not the agent
+
+herdr has no PTY-less pane. A `pane` node without `command` starts a shell
+rather than becoming a passive surface, and popups carry no `pane_id` so
+they cannot be addressed. A pane must run *something* — so the board gives
+it the cheapest stable thing there is.
+
+That constraint produces the better design rather than a compromise:
+
+- **The board stands between runs.** A follower outlives any pipeline;
+  panes running agents would blink in and out.
+- **Restoring a layout is safe.** herdr recreates terminals on
+  `layout.apply` and the followers simply re-attach. Had the panes run the
+  agents, restoring a saved layout would **re-execute them** — a saved
+  layout would become a re-run trigger.
+- **Nothing about execution changes.** Cost capture, verdict parsing and
+  runner resolution stay exactly where they are.
+
+### Remote deployments
+
+The board runs where you are; the services run on the box. `--stdin` bridges
+that with no new network surface — nothing new listens anywhere:
+
+```bash
+hivepilot herdr board --roles ciso \
+  --remote noxysdevbot --log-path /runs/logs/hivepilot.log
+```
+
+### What is safe to display
+
+The stream is untrusted text bound for a terminal: agent output is quoted
+verbatim into `detail`. Every rendered field has its control characters
+stripped, including under `--json` — piping does not make bytes safe, the
+other end is usually another terminal.
+
+That strip also prevents line forgery. The board reads one record per line,
+so an embedded newline in agent output could otherwise fabricate a line that
+looks like an event the system emitted.
+
+Secrets are handled upstream: every field of every event passes through the
+redaction processor before it is written.
+
+See [`watch` and `herdr board`](./CLI-REFERENCE.md#watch) for flags, and the
+banner that tells you which log file you are actually following.
+
 ## Caddy (reverse proxy for the API)
 
 Manage a Caddy reverse proxy in front of the HTTP API:
