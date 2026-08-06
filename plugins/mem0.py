@@ -462,6 +462,25 @@ def recall(**kwargs: Any) -> None:
             # Already recalled for this shared metadata dict (same task, a
             # later step) — skip to avoid re-querying / re-appending.
             return
+        # Sit out when the payload's input was written by someone else.
+        #
+        # `store()` persists the step's real `output`, so what lives in mem0
+        # is what an agent wrote AFTER reading its input. On a reviewer
+        # prompt that input is a PR diff from outside this system: a diff
+        # carrying injected instructions that an agent quoted would be stored
+        # here and replayed into the security reviewer through a channel that
+        # looks trusted. Laundering, not recall.
+        #
+        # The operator's rule is "injection is fine from trusted sources".
+        # This plugin is the one that knows its own store holds agent-derived
+        # content, so it applies the rule to itself rather than waiting for
+        # the engine to hold an opinion — a source carrying operator-authored
+        # material (obsidian's vault) correctly ignores the same flag.
+        from hivepilot.services.review_context import is_untrusted
+
+        if is_untrusted(payload):
+            logger.info("plugin.mem0.recall_skipped_untrusted_input")
+            return
 
         client = _get_client()
         if client is None:
