@@ -72,6 +72,7 @@ from hivepilot.services import (
     knowledge_service,
     notification_service,
     policy_service,
+    review_context,
     scan_service,
     state_service,
 )
@@ -3425,9 +3426,35 @@ class Orchestrator:
                     project=project,
                     task_name=f"review:{role_name}",
                     step=step,
-                    metadata={"extra_prompt": prompt, "prior_context": ""},
+                    # Marked untrusted: a reviewer's input is a diff written
+                    # by someone outside this system, the one prompt here
+                    # that must be assumed hostile. Sources decide for
+                    # themselves what that means -- compression ignores it,
+                    # a store of agent output honours it. See
+                    # `services/review_context`.
+                    metadata=review_context.prepare(
+                        {"extra_prompt": prompt, "prior_context": ""},
+                        untrusted_input=True,
+                    ),
                     secrets=self._resolve_secrets(step, project, policy),
                 )
+                # Until this call existed, NO `before_step` hook ever saw a
+                # reviewer's prompt: this function builds its own payload and
+                # dispatched it straight to `capture_definition`. So headroom
+                # never compressed the two opus calls that dominate the bill,
+                # on prompts carrying a whole PR diff -- every review-cost
+                # win measured so far came from the diff filter and the
+                # perimeter clause instead, with compression never in the
+                # path at all.
+                try:
+                    self.plugins.run_hook("before_step", payload=payload, role=role_name)
+                except Exception as exc:  # noqa: BLE001 — a hook must not fail a review
+                    logger.warning(
+                        "plugins.hook_failed",
+                        hook="before_step",
+                        step=f"review:{role_name}",
+                        error=str(exc),
+                    )
                 try:
                     if simulate:
                         # Dry-run infrastructure only -- no real reviewer
