@@ -1,0 +1,37 @@
+# logrotate configuration for HivePilot's event log.
+#
+#   install -m 0644 deploy/logrotate/hivepilot /etc/logrotate.d/hivepilot
+#
+# Adjust the path to match your deployment. It is NOT guessed here: `logs_dir`
+# defaults to `runs/logs` *relative to the working directory*, so a box ends up
+# with one `hivepilot.log` per directory the CLI was ever run from. The
+# reference deployment has five, four of them stale; the live one is
+# /runs/logs/ only because the units set `WorkingDirectory=/`. Rotating the
+# wrong one succeeds silently and rotates nothing that matters.
+#
+# Confirm which file is live before installing:
+#
+#   hivepilot watch --role any-role     # prints the path it opened, and its size
+#   sudo lsof /runs/logs/hivepilot.log  # shows every process writing to it
+#
+# No `postrotate` reload is needed. The services use WatchedFileHandler, which
+# notices the inode change and reopens on its next record — that is what makes
+# rotating out from under several live writers safe. Do not switch this to
+# `copytruncate`: it loses whatever is written during the copy, and buys
+# nothing here.
+
+/runs/logs/hivepilot.log {
+    daily
+    rotate 14
+    # Bound the disk cost too, not just the age: this log's volume tracks
+    # pipeline activity, not the calendar. A busy day can outweigh a quiet
+    # month, so `daily` alone does not bound anything.
+    maxsize 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    # The services run as root and write 0644; keep both so a rotation does
+    # not silently change who can read the history.
+    create 0644 root root
+}

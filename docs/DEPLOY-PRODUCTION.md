@@ -589,7 +589,44 @@ hivepilot run-pipeline <your-pipeline> --project <your-project>   # safe: defaul
   the OpenRC scripts above run as `hivepilot:hivepilot` for the same reason.
 - **Logs**: structured JSON to stdout/stderr by default (captured by
   `docker compose logs` in the container path) or to the `output_log`/
-  `error_log` paths configured in the OpenRC scripts above.
+  `error_log` paths configured in the OpenRC scripts above. A JSONL copy is
+  also written to `<logs_dir>/hivepilot.log` — this is what `hivepilot watch`
+  and a herdr board follow. See **Log rotation** below before it grows.
+
+### Log rotation
+
+The event log is unbounded. Install the shipped config:
+
+```bash
+sudo install -m 0644 deploy/logrotate/hivepilot /etc/logrotate.d/hivepilot
+sudo logrotate --debug /etc/logrotate.d/hivepilot   # dry run first
+```
+
+**Edit the path in it first.** `logs_dir` defaults to `runs/logs` *relative to
+the working directory*, so a host accumulates one `hivepilot.log` per directory
+the CLI was ever run from. The reference deployment has five, four stale; the
+live one is `/runs/logs/` only because the units set `WorkingDirectory=/`.
+Rotating the wrong one succeeds silently and rotates nothing that matters.
+Confirm which file is live before installing:
+
+```bash
+hivepilot watch --role <any-role>       # prints the path it opened, and its size
+sudo lsof /runs/logs/hivepilot.log      # every process writing to it
+```
+
+No `postrotate` reload is needed, and none should be added. The services use
+`WatchedFileHandler`, which notices the inode change and reopens on its next
+record. That is deliberate: a deployment has several processes writing to one
+log — five on the reference box — and a plain `FileHandler` holds its
+descriptor forever, so the first rotation would orphan all of them. Every line
+would keep landing in `hivepilot.log.1` while the fresh `hivepilot.log` stayed
+empty, `hivepilot watch` reported *"empty, never written"*, and the services
+merely looked idle.
+
+For the same reason rotation stays **external**. In-process rotation would put
+those processes in a race to rename one file, each invalidating the others'
+descriptors. Rotating belongs to one scheduled process; the writers only have
+to notice.
 - **Healthcheck**: `hivepilot doctor` doubles as the container `HEALTHCHECK`
   (see the Dockerfile) — a non-zero exit means a hard failure (missing base
   dir, a mandatory binary reported missing).

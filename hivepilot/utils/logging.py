@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 
 import structlog
 from structlog.typing import EventDict, WrappedLogger
@@ -68,12 +69,31 @@ def configure_logging() -> None:
     if _configured:
         return
     settings.logs_dir.mkdir(parents=True, exist_ok=True)
+    # WatchedFileHandler, not FileHandler: it re-opens the path when the
+    # inode changes, which is what makes EXTERNAL rotation safe.
+    #
+    # A deployment runs several HivePilot processes against one log --
+    # measured on the reference box, five of them (api, scheduler, telegram,
+    # slack, discord) each holding a write descriptor on the same inode, with
+    # `logrotate.timer` already firing daily. A plain FileHandler holds its
+    # descriptor forever, so the first rotation would have orphaned all five:
+    # every line would keep landing in `hivepilot.log.1` while the fresh
+    # `hivepilot.log` stayed empty. `hivepilot watch` would have reported
+    # "empty, never written" and the services would have looked idle.
+    #
+    # Rotation itself deliberately stays external (see deploy/logrotate/).
+    # RotatingFileHandler would put those same five processes in a race to
+    # rename one file, each invalidating the descriptors of the others --
+    # one writer wins, the rest are orphaned. Rotating belongs to a single
+    # scheduled process; the writers only have to notice that it happened.
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(settings.logs_dir / "hivepilot.log", encoding="utf-8"),
+            logging.handlers.WatchedFileHandler(
+                settings.logs_dir / "hivepilot.log", encoding="utf-8"
+            ),
         ],
     )
     structlog.configure(
