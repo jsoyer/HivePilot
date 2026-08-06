@@ -68,6 +68,7 @@ import yaml
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
+from hivepilot.utils.terminal import strip_control_chars
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from hivepilot.plugins import SkillSpec
@@ -101,9 +102,9 @@ _OPTIONAL_TEXT_KEYS = ("system_prompt",)
 
 # `description` is free-form text read off disk and rendered straight into a
 # terminal table by `hivepilot skills list`. Bound it and strip anything that
-# could move the cursor, emit ANSI, or break the table across lines.
+# could move the cursor, emit ANSI, or break the table across lines (via the
+# shared `hivepilot.utils.terminal.strip_control_chars` helper).
 _MAX_DESCRIPTION_CHARS = 300
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 class SkillDirectoryError(RuntimeError):
@@ -237,7 +238,7 @@ def _sanitize_description(value: object, name: str) -> str:
     """
     if not isinstance(value, str):
         return f"Skill directory {name}"
-    cleaned = _CONTROL_CHARS_RE.sub(" ", value)
+    cleaned = strip_control_chars(value, replacement=" ")
     cleaned = " ".join(cleaned.split())
     if not cleaned:
         return f"Skill directory {name}"

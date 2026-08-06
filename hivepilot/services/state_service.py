@@ -619,6 +619,31 @@ def record_step(
                 cache_creation_tokens,
             ),
         )
+    # Announce the step on the event stream. Until this existed the stream
+    # carried a run's endpoints and never its middle -- `state.run_start`,
+    # then silence for ten minutes, then `state.verdict` -- so anything
+    # watching could see that a pipeline ran but never the roles working.
+    #
+    # Emitted here, after the insert and after the attribution correction
+    # above, so the event says exactly what the database says. Computing
+    # "which agent did this" a second time somewhere else is how the two
+    # drift, and a live board that credits an agent with `bash` work is
+    # worse than one that shows nothing.
+    #
+    # `detail` is already redacted at the top of this function, which matters
+    # more here than for SQLite: this stream is meant to be rendered into a
+    # terminal pane.
+    logger.info(
+        "state.step",
+        run_id=run_id,
+        step=step,
+        status=status,
+        role=role,
+        provider=provider,
+        model=model,
+        cost_usd=cost_usd,
+        detail=detail,
+    )
     if _METRICS_AVAILABLE and _metrics is not None:
         try:
             _metrics.steps_total.labels(status=status).inc()
