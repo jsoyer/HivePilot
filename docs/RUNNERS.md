@@ -49,6 +49,34 @@ and nothing else, so a reviewer can query a read-only MCP server without being
 handed `permission_mode: bypassPermissions` (which would also grant Bash and
 Edit — a real prompt-injection surface for an agent reading untrusted code).
 
+### `disable_git_instructions` — stop paying for advice the agent cannot use
+
+```yaml
+    options:
+      disable_git_instructions: true
+```
+
+Sets `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1` for that dispatch, dropping
+roughly **1 800 tokens of system prompt per call** that teach the agent to
+stage, commit and push.
+
+HivePilot does its own git — `perform_git_actions` promotes and merges — and a
+reviewer handed a diff and told not to explore never runs a git command. On the
+reference deployment that is ~1 800 tokens bought and discarded on every one of
+those calls.
+
+**Per-role, and off by default, deliberately.** The tempting version is one
+global setting: it would be wrong. Some prompts *do* instruct their agent to
+commit (`refactor`, `docs_rewrite` in the reference config), and a global switch
+would strip the instructions out from under them with no signal. Set it on the
+roles that never touch git — reviewers, analysts, planners — and leave it off
+where an agent genuinely commits.
+
+Resolution is the same as `permission_mode` and `allowed_tools`: step metadata
+beats the runner definition. An explicit `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS`
+in the project or definition environment beats both — an operator naming the
+variable outranks the optimisation.
+
 Both accept a single value or a list, and a per-step `metadata` entry overrides
 the runner definition.
 
