@@ -540,6 +540,27 @@ class ClaudeRunner(BaseRunner):
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}
+        # Drop Claude Code's git instructions for roles that never touch git.
+        # They are roughly 1 800 tokens of system prompt teaching the agent to
+        # stage, commit and push -- paid on every call. HivePilot does its own
+        # git (`perform_git_actions` promotes and merges), and no role in the
+        # reference config is granted a `git` command in `allowed_tools`, so a
+        # reviewer handed a diff and told not to explore buys nothing with it.
+        #
+        # Opt-in and per-role rather than one global setting, which is what it
+        # first looked like. Two prompts in the reference config
+        # (`refactor.md`, `docs_rewrite.md`) DO instruct their agent to
+        # commit; a global switch would have stripped the instructions out
+        # from under them silently. Resolution matches `permission_mode` and
+        # `allowed_tools` -- step metadata over runner definition.
+        #
+        # An explicit value already in `env` wins, same rule as
+        # ANTHROPIC_BASE_URL below: an operator naming the variable outranks
+        # our optimisation.
+        if self._resolve_bool_option(payload, "disable_git_instructions") and (
+            "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS" not in env
+        ):
+            env = {**env, "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS": "1"}
         # Route through the local compression proxy only when it is actually
         # answering. `ANTHROPIC_BASE_URL` is a hard redirect — pinning it in
         # the service environment means a dead proxy fails every dispatch —
