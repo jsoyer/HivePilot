@@ -26,6 +26,7 @@ import requests
 
 from hivepilot.config import settings
 from hivepilot.utils.logging import get_logger
+from hivepilot.utils.terminal import strip_control_chars
 
 if TYPE_CHECKING:
     from hivepilot.plugins import PluginManager
@@ -38,12 +39,12 @@ logger = get_logger(__name__)
 MAX_INDEX_BYTES = 5 * 1024 * 1024  # 5 MiB
 _STREAM_CHUNK_SIZE = 65536
 
-# Strip C0 control characters (0x00-0x1F) and DEL (0x7F) from every string
-# field at PARSE time (MUST/SHOULD-FIX 2) — every field in the index is
-# ATTACKER-CONTROLLED, and a literal ESC/control byte in e.g. `description`
-# or `checksum` could spoof/hide terminal output no matter how the CLI
-# renders it later. Stripped here so nothing downstream ever sees them.
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+# Strip control characters from every string field at PARSE time (MUST/
+# SHOULD-FIX 2) — every field in the index is ATTACKER-CONTROLLED, and a
+# literal ESC/control byte in e.g. `description` or `checksum` could
+# spoof/hide terminal output no matter how the CLI renders it later.
+# Stripped here (via the shared `hivepilot.utils.terminal.strip_control_chars`
+# helper — C0 + DEL + C1) so nothing downstream ever sees them.
 
 # MUST-FIX 1 (adversarial review): `install.target` is rendered verbatim
 # into a copy-paste-able `pip install <target>` / `git clone <target>`
@@ -82,10 +83,11 @@ class PluginIndexEntry:
 
 
 def _strip_control_chars(value: str) -> str:
-    """Remove C0 control characters (0x00-0x1F) and DEL (0x7F) — see the
-    `_CONTROL_CHAR_RE` module docstring above. Applied to every string field
-    at parse time, before any of it ever reaches a renderer."""
-    return _CONTROL_CHAR_RE.sub("", value)
+    """Remove control characters (C0 + DEL + C1 — see the shared
+    `hivepilot.utils.terminal.strip_control_chars` docstring) from *value*.
+    Applied to every string field at parse time, before any of it ever
+    reaches a renderer."""
+    return strip_control_chars(value)
 
 
 def _optional_str(raw: dict[str, Any], key: str) -> str | None:
