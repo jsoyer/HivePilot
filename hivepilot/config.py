@@ -536,6 +536,16 @@ class Settings(BaseSettings):
     # mirrors context_routing_mode's opt-in-only gating above.
     # env: HIVEPILOT_HEADROOM_ENABLED
     headroom_enabled: bool = False
+    # token-savior MCP symbol index (plugins/token_savior.py). Opt-in for the
+    # same reason as headroom_enabled above, and one more: the server indexes
+    # the repository and keeps a memory database, which is a decision for
+    # whoever owns the code rather than a default.
+    # env: HIVEPILOT_TOKEN_SAVIOR_ENABLED
+    token_savior_enabled: bool = False
+    # Tool manifest the server exposes. The vendor's documented default;
+    # `tiny`/`full` are the other values it names.
+    # env: HIVEPILOT_TOKEN_SAVIOR_PROFILE
+    token_savior_profile: str = "optimized"
     # Base URL of a local context-compression proxy (see
     # `deploy/systemd/hivepilot-headroom-proxy.service`). When set AND
     # reachable, agent dispatches are routed through it by exporting

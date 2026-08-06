@@ -159,6 +159,7 @@ Finding **zero** source files always prints the directories that were searched, 
 |---|---|---|
 | `rtk` | runner + health | ON |
 | `herdr` | runner + health | ON |
+| `token_savior` | `before_step` hook + health | OFF (opt-in) |
 | `hugo` | runner + health | ON, PATH-gated |
 | `tmux` | runner + health | ON |
 | `gh` | runner + health | ON, PATH-gated |
@@ -220,6 +221,55 @@ See [Pinokio detection](#pinokio-detection) below for why this one contributes n
 `HIVEPILOT_PINOKIO_ENABLED` defaults `true` as a *permission* gate ("report Pinokio if you find it"), never as an assertion that the operator installed it. Set it `false` to suppress detection entirely.
 
 HivePilot never installs Pinokio; there is no `hivepilot agents install pinokio` recipe.
+
+### token-savior (MCP symbol index)
+
+[token-savior](https://github.com/mibayy/token-savior) (MIT) is an MCP server
+that indexes a codebase into symbols, so an agent can fetch `get(symbol)`
+instead of reading whole files.
+
+```bash
+pip install "token-savior-recall[mcp]"
+export HIVEPILOT_TOKEN_SAVIOR_ENABLED=1
+export HIVEPILOT_PLUGINS_CAPABILITY_POLICY=filesystem   # plus whatever you already allow
+```
+
+The claude runner already knows how to pass `--mcp-config` and
+`--allowed-tools`. What this plugin adds is the wiring, and the wiring is not
+boilerplate: the vendor's stanza carries `WORKSPACE_ROOTS`, so the config is
+**per project**. Hand-maintaining one JSON file per project is what drifts —
+a stale `WORKSPACE_ROOTS` indexes the wrong repository and the agent gives
+confident answers about somebody else's code.
+
+On each step the `before_step` hook writes
+`<base_dir>/token-savior/<project>.mcp.json` and points the step at it, then
+appends `mcp__token-savior-recall` to `allowed_tools` — appends, because
+`--allowed-tools` is a whitelist that *restricts*, so replacing it would
+silently revoke grants the role depends on.
+
+**It never takes the wheel.** A step that already declares `mcp_config` is
+left exactly as it is, and its tools are not pre-approved onto someone else's
+server, where they would advertise availability that does not exist.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `HIVEPILOT_TOKEN_SAVIOR_ENABLED` | `false` | Opt-in. The server indexes your repository and keeps a memory database — that is the code owner's call. |
+| `HIVEPILOT_TOKEN_SAVIOR_PROFILE` | `optimized` | Tool manifest the server exposes (`tiny`/`full` are the vendor's other values). |
+
+Declares `filesystem` and deliberately **not** `subprocess`: a token-savior
+process is spawned, but by the agent CLI from the config stanza, under
+authority the runner already holds. This plugin writes one JSON file and
+reads `PATH`. Over-declaring would cost you an allowlist entry for the most
+load-bearing token there is and discriminate nothing.
+
+**On the published numbers.** The README claims 97.9% against 78.3% plain, at
+−80% active tokens, measured by its author on its author's benchmark. This
+plugin reports no savings of its own, and its health check quotes none: a
+vendor ratio measures the vendor's baseline, which is how another tool's
+claimed 99.2% turned out to be ~10% here. HivePilot already records
+`input_tokens`, `cache_read_tokens` and `cost_usd` per step — run the same
+review twice, with the flag off and on, and compare what *your* pipeline
+recorded.
 
 ## Plugin CLI
 
