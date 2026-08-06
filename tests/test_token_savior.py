@@ -35,6 +35,27 @@ import pytest
 from hivepilot import plugins as plugin_mod
 
 
+@pytest.fixture(autouse=True)
+def _no_module_leak():
+    """Undo the `plugins.*` import this file's fixture performs.
+
+    `importlib.import_module("plugins.token_savior")` registers `plugins` in
+    `sys.modules` for the rest of the session, and
+    `tests/test_plugins.py::test_loads_plugin_without_plugins_on_syspath`
+    asserts that module is absent. Alphabetically this file sorts after that
+    one, so the suite passes — by luck, not by correctness. Any reordering
+    (pytest-randomly, a new filename, running a subset) turns it red in a
+    file with nothing in its own source to explain why.
+    """
+    import sys
+
+    before = set(sys.modules)
+    yield
+    for name in set(sys.modules) - before:
+        if name == "plugins" or name.startswith("plugins."):
+            sys.modules.pop(name, None)
+
+
 @pytest.fixture
 def token_savior(monkeypatch, tmp_path):
     """Load the plugin module with the feature enabled and a temp config dir."""
@@ -107,6 +128,45 @@ class TestGating:
         capabilities = token_savior.register()["capabilities"]
 
         assert capabilities == ["filesystem"]
+
+
+class TestFindingTheBinary:
+    """`shutil.which` alone is not enough under systemd.
+
+    Measured on the box: the server installs to
+    `/opt/hivepilot/venv/bin/token-savior`, and the unit's PATH is
+    `/root/.local/bin:/usr/local/sbin:...` — no venv. So the binary was
+    present, invisible, and the health check honestly said `degraded` while
+    an operator who had just installed it would swear it was there.
+
+    HivePilot runs from that venv, so its sibling console scripts are the
+    likeliest place of all. `self-update` already resolves `sys.executable`
+    for exactly this reason.
+    """
+
+    def test_a_sibling_of_sys_executable_is_found(
+        self, token_savior, monkeypatch, tmp_path
+    ) -> None:
+        binary = tmp_path / "bin" / token_savior._BINARY
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+
+        monkeypatch.setattr(token_savior.shutil, "which", lambda _: None)
+        monkeypatch.setattr(token_savior.sys, "executable", str(binary.parent / "python"))
+
+        assert token_savior._resolve_binary() == str(binary)
+
+    def test_path_still_wins_when_it_has_one(self, token_savior, monkeypatch) -> None:
+        monkeypatch.setattr(token_savior.shutil, "which", lambda _: "/usr/bin/token-savior")
+
+        assert token_savior._resolve_binary() == "/usr/bin/token-savior"
+
+    def test_absent_everywhere_is_none(self, token_savior, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(token_savior.shutil, "which", lambda _: None)
+        monkeypatch.setattr(token_savior.sys, "executable", str(tmp_path / "python"))
+
+        assert token_savior._resolve_binary() is None
 
 
 class TestItLoadsForReal:
