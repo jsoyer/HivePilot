@@ -187,8 +187,16 @@ def efficiency_summary(*, tenant: str | None = "default", days: int | None = 30)
     path: a view that composes savings sources has to name every one of
     them, or the total it implies is wrong.
     """
+    from hivepilot.services.cache_efficiency import cache_summary
+
     return {
         "headroom": headroom_summary(tenant=tenant),
         "rtk": rtk_summary(days=days),
         "proxy": proxy_summary(),
+        # Prompt cache is a savings source this view named nowhere, which by
+        # its own rule above made the total it implies wrong. It is also the
+        # only one measured from our OWN telemetry rather than a tool's
+        # self-report -- and the one that found a step paying full price
+        # nineteen times behind a healthy-looking 85% aggregate.
+        "cache": cache_summary(tenant=tenant),
     }

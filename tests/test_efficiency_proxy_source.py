@@ -51,15 +51,23 @@ class TestProxySummary:
 
 
 class TestEfficiencySummaryShape:
-    def test_it_now_carries_three_sources(self) -> None:
-        """headroom and rtk were the whole story until the proxy landed.
+    def test_it_names_every_savings_source(self) -> None:
+        """headroom and rtk were the whole story until the proxy landed, and
+        then prompt cache turned out to be a fourth.
 
         A view that composes savings sources has to name every one of them,
-        or the total it implies is wrong.
+        or the total it implies is wrong. The count in this test's old name
+        was never the invariant — the completeness is. Cache is also the only
+        source measured from our OWN telemetry rather than a tool's
+        self-report.
+
+        Kept as an exact-set assertion rather than a subset: a source
+        silently disappearing from this view is the same defect as one never
+        being added.
         """
         result = efficiency_service.efficiency_summary(days=30)
 
-        assert set(result) == {"headroom", "rtk", "proxy"}
+        assert set(result) == {"headroom", "rtk", "proxy", "cache"}
 
     def test_headroom_is_still_never_null(self) -> None:
         """Unchanged contract: headroom is a local DB read, always real."""
