@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -173,7 +173,11 @@ def render_event(event: dict[str, Any], *, as_json: bool = False) -> str:
 
 def follow_lines(
     path: Path, *, from_start: bool = False, poll_seconds: float = _POLL_SECONDS
-) -> Iterator[str]:
+) -> Generator[str, None, None]:
+    # Typed as a Generator, not an Iterator: this holds an open file handle,
+    # and a caller that stops early needs `.close()` to release it. Narrowing
+    # the annotation to Iterator hides that from the type checker and would
+    # leak the descriptor on any early exit.
     """Yield lines as they are appended, surviving rotation and late creation.
 
     Reopens when the inode changes or the file shrinks, so a rotated or
