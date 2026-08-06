@@ -32,6 +32,7 @@ These commands are ungrouped — invoke them directly as `hivepilot <cmd>`.
 | `interactive` | Guided REPL for building and running tasks/pipelines. | Depends on actions taken inside |
 | `doctor` | Environment and installation diagnostics. | No |
 | `dashboard` | Textual TUI showing recent runs. Requires `HIVEPILOT_ENABLE_TEXTUAL_UI`. | No |
+| `watch` | Follow the event stream live, filtered by role or run. The process a herdr board pane runs. | No |
 | `lint` | Lint config files for errors/warnings. | No |
 | `init` | Scaffold a new HivePilot workspace. | **Yes** |
 | `setup` | Guided, idempotent setup wizard (config repo, admin token, agent runners, Telegram, plugins, concierge, services). | **Yes** |
@@ -81,6 +82,65 @@ hivepilot setup --only telegram                    # just one section
 hivepilot setup --non-interactive --yes \
   --telegram-bot-token "$TELEGRAM_BOT_TOKEN"        # CI/automation-friendly
 ```
+
+### `watch`
+
+Follows `hivepilot.log` and prints one line per event, newest last.
+
+| Flag | Effect |
+| --- | --- |
+| `--role NAME` | Only that role's steps. Repeatable. |
+| `--run N` | Only that run id. |
+| `--from-start` | Replay the file before following it. |
+| `--json` | Emit JSONL instead of text (still control-character stripped). |
+| `--stdin` | Read the stream from stdin instead of the log file. |
+
+**It always names the file it opened, on stderr, before any event.** That is
+not decoration: `logs_dir` is resolved relative to the working directory, so
+a box accumulates one `hivepilot.log` per directory the CLI was ever run
+from. On the reference deployment there are five, four of them stale.
+Following a dead one prints nothing — which looks exactly like a quiet
+system. The banner distinguishes the three cases:
+
+```
+watching /runs/logs/hivepilot.log — 2800519 bytes, last written 2026-08-06 09:46:09 UTC
+watching /tmp/x/hivepilot.log — empty, never written (nothing will appear)
+watching /tmp/x/hivepilot.log — does not exist (nothing will appear)
+```
+
+Run the CLI from the same working directory as your services (the units use
+`WorkingDirectory=/`), or set `HIVEPILOT_LOGS_DIR` to an absolute path.
+
+A `--role` filter drops events with no role. Steps no model performed —
+plain shell commands — carry `role: null` by design, so a pane dedicated to
+one agent never shows work that agent did not do.
+
+## `herdr` — terminal multiplexer
+
+| Command | Purpose | Mutating? |
+| --- | --- | --- |
+| `herdr board` | Print the layout JSON for a standing board: one follower pane per role. | No |
+
+```bash
+hivepilot herdr board --roles reviewer,ciso,qa | herdr layout apply
+```
+
+Every pane carries a command. A `pane` node may omit `command`, but
+`layout.apply` then starts the default shell — absent `command` means
+"start a shell", not "a pane with nothing in it", so a command-less board
+applies cleanly and shows a wall of idle prompts.
+
+For a deployment on another host, pipe the stream over ssh:
+
+```bash
+hivepilot herdr board --roles ciso \
+  --remote noxysdevbot --log-path /runs/logs/hivepilot.log
+```
+
+`--log-path` is required with `--remote` and is deliberately not guessed,
+for the reason given under `watch`. Role names must be plain identifiers:
+they land inside a shell command, and one that is not is rejected rather
+than escaped.
 
 ## `gh` — GitHub
 
