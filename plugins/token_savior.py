@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -68,9 +69,30 @@ def _config_dir() -> Path:
     return Path(_settings.base_dir) / "token-savior"
 
 
+def _resolve_binary() -> str | None:
+    """Absolute path to the MCP server binary, or None.
+
+    PATH first, then next to `sys.executable`. That second lookup is not
+    belt-and-braces: measured on the reference box, the server installs to
+    `/opt/hivepilot/venv/bin/token-savior` while the systemd unit's PATH is
+    `/root/.local/bin:/usr/local/sbin:...` with no venv in it. The binary was
+    present, invisible, and the health check honestly reported `degraded`
+    while an operator who had just installed it would swear it was there.
+
+    HivePilot runs from that venv, so its sibling console scripts are the
+    likeliest location of all -- `self-update` resolves `sys.executable` for
+    exactly this reason.
+    """
+    found = shutil.which(_BINARY)
+    if found:
+        return found
+    sibling = Path(sys.executable).parent / _BINARY
+    return str(sibling) if sibling.is_file() else None
+
+
 def _server_available() -> bool:
     """Whether the MCP server binary can actually be launched."""
-    return shutil.which(_BINARY) is not None
+    return _resolve_binary() is not None
 
 
 def _config_path(project_name: str | None) -> Path:
@@ -102,7 +124,7 @@ def _stanza(workspace_root: str | None) -> dict[str, Any]:
             _SERVER_NAME: {
                 # Absolute: the server is launched by the agent CLI, whose
                 # PATH is not necessarily the one this process resolved.
-                "command": shutil.which(_BINARY) or _BINARY,
+                "command": _resolve_binary() or _BINARY,
                 "env": env,
             }
         }
@@ -177,7 +199,7 @@ def health() -> HealthStatus:
     """
     try:
         if _server_available():
-            return HealthStatus("ok", f"token-savior available ({shutil.which(_BINARY)})")
+            return HealthStatus("ok", f"token-savior available ({_resolve_binary()})")
         return HealthStatus(
             "degraded",
             f"token-savior enabled but `{_BINARY}` is not on PATH — "
