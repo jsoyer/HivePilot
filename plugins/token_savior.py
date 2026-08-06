@@ -83,6 +83,17 @@ def _stanza(workspace_root: str | None) -> dict[str, Any]:
     env: dict[str, str] = {
         "TOKEN_SAVIOR_CLIENT": "hivepilot",
         "TOKEN_SAVIOR_PROFILE": settings.token_savior_profile,
+        # token-savior ships a memory engine of its own. HivePilot already
+        # has one (mem0), and two stores recalling near-identical context
+        # into the same prompt is paying twice for one fact -- the duplication
+        # that makes a layered context stack expensive instead of cheap.
+        #
+        # Today it is inert anyway, because the `[memory-vector]` extra we do
+        # not install is what provides `fastembed`/`sqlite-vec`. That is an
+        # accident of packaging, not a decision, and installing that extra for
+        # any reason would silently re-enable it. Stated here so the boundary
+        # survives the next `pip install`.
+        "TS_MEMORY_DISABLE": "1",
     }
     if workspace_root:
         env["WORKSPACE_ROOTS"] = workspace_root

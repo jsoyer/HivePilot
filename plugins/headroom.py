@@ -72,7 +72,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from hivepilot.plugins import HealthStatus
+from hivepilot.plugins import HealthStatus, hook_phase
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -135,6 +135,7 @@ def _compress_text(original: str, model_hint: str | None) -> str | None:
     return content if isinstance(content, str) else None
 
 
+@hook_phase("compress")
 def before_step(**kwargs: Any) -> None:
     """Compress the reachable prompt/context field(s) on ``payload`` in place.
 
