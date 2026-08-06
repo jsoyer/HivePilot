@@ -541,6 +541,56 @@ def doctor() -> None:
 
 
 @app.command()
+def watch(
+    role: list[str] = typer.Option(  # noqa: B008
+        [], "--role", help="Only show this role's steps. Repeatable."
+    ),
+    run: int | None = typer.Option(None, "--run", help="Only show this run id."),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSONL instead of text."),
+    from_start: bool = typer.Option(
+        False, "--from-start", help="Replay the file before following it."
+    ),
+    stdin: bool = typer.Option(
+        False, "--stdin", help="Read the stream from stdin instead of the log file."
+    ),
+) -> None:
+    """Follow the event stream — the process a herdr board pane runs.
+
+    `--stdin` is how the board reaches a remote deployment without adding
+    any network surface: `ssh box tail -F <log> | hivepilot watch --stdin
+    --role ciso`. Nothing new listens anywhere.
+    """
+    import sys
+    from collections.abc import Iterable
+
+    from hivepilot.services import watch_service
+
+    roles = set(role) or None
+
+    if stdin:
+        typer.echo("watching stdin", err=True)
+        lines: Iterable[str] = sys.stdin
+    else:
+        source = watch_service.resolve_log_source(logs_dir=settings.logs_dir)
+        # Always, before any event: silence has two causes -- nothing is
+        # happening, or nothing was ever written to the file we opened --
+        # and on screen they are identical. `logs_dir` is cwd-relative, so
+        # picking the wrong one of several is the normal failure, not an
+        # exotic one. To stderr so `--json` stays pipeable.
+        typer.echo(watch_service.describe_source(source), err=True)
+        lines = watch_service.follow_lines(source.path, from_start=from_start)
+
+    try:
+        for line in lines:
+            event = watch_service.parse_event(line)
+            if event is None or not watch_service.event_matches(event, roles=roles, run_id=run):
+                continue
+            typer.echo(watch_service.render_event(event, as_json=as_json))
+    except KeyboardInterrupt:  # pragma: no cover - operator ^C
+        pass
+
+
+@app.command()
 def dashboard() -> None:
     """Minimal Textual dashboard listing recent runs."""
     if not settings.enable_textual_ui:
