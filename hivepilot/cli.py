@@ -49,6 +49,8 @@ stage_app = typer.Typer(help="Manage pipelines.yaml stage entries")
 app.add_typer(stage_app, name="stage")
 review_app = typer.Typer(help="Run the adversarial review on demand (never touches git)")
 app.add_typer(review_app, name="review")
+herdr_app = typer.Typer(help="herdr terminal-multiplexer integration")
+app.add_typer(herdr_app, name="herdr")
 telegram_app = typer.Typer(help="Telegram bot")
 app.add_typer(telegram_app, name="telegram")
 caddy_app = typer.Typer(help="Caddy reverse proxy management")
@@ -588,6 +590,36 @@ def watch(
             typer.echo(watch_service.render_event(event, as_json=as_json))
     except KeyboardInterrupt:  # pragma: no cover - operator ^C
         pass
+
+
+@herdr_app.command("board")
+def herdr_board(
+    roles: str = typer.Option(..., "--roles", help="Comma-separated role names."),
+    remote: str | None = typer.Option(
+        None, "--remote", help="ssh host running the services (pipes over ssh)."
+    ),
+    log_path: str | None = typer.Option(
+        None, "--log-path", help="Absolute path to hivepilot.log on --remote."
+    ),
+) -> None:
+    """Emit the herdr layout for a standing board — one follower pane per role.
+
+    Pipe it to `herdr layout apply`. Every pane carries a command on
+    purpose: a `pane` node without one makes herdr launch the default
+    shell, so a command-less board applies cleanly and shows a wall of idle
+    prompts — indistinguishable from a board with nothing to report.
+    """
+    from hivepilot.services.herdr_board import build_board_layout
+
+    try:
+        layout = build_board_layout(
+            [r.strip() for r in roles.split(",") if r.strip()],
+            remote=remote,
+            log_path=log_path,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(layout, indent=2))
 
 
 @app.command()
