@@ -3760,6 +3760,23 @@ class Orchestrator:
                 status=RunStatus.RUNNING.value,
             )
 
+        # Bring the vault forward BEFORE any agent reads from it.
+        #
+        # `plugins/obsidian.py`'s `recall` pulls vault excerpts straight into
+        # the prompt -- observed on run 347, `plugin.obsidian.recalled
+        # count=5` on the reviewer. Nothing had ever refreshed the clone, so
+        # what agents recalled was as old as the last push from this machine:
+        # 54 commits behind on the reference box.
+        #
+        # That is worse than the push failure beside it. A rejected push logs
+        # a warning; a stale READ yields a confident answer built on
+        # superseded notes with nothing anywhere saying so. Best-effort and
+        # never blocking -- `refresh_vault` logs whichever outcome it got.
+        if vault_path is not None and not dry_run:
+            from hivepilot.services.git_service import refresh_vault
+
+            refresh_vault(vault_path)
+
         interactions_svc = InteractionService(vault_path, dry_run=dry_run)
         notification_service.emit_event(
             "pipeline_start", run_id=run_id, pipeline=pipeline_name, projects=project_names

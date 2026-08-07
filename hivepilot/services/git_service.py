@@ -173,6 +173,52 @@ def run_git_command(args: list[str], cwd: Path) -> None:
     subprocess.run([settings.git_command, *args], cwd=str(cwd), check=True)
 
 
+def refresh_vault(vault_path: Path) -> bool:
+    """Bring the vault clone up to date before agents read from it.
+
+    The vault is not only written, it is READ: `plugins/obsidian.py`'s
+    `recall` pulls excerpts straight into the prompt. Nothing ever refreshed
+    the clone, so the notes agents recalled were as old as the last time
+    someone happened to push from that machine -- on the reference box, 54
+    commits behind, for an unknown number of runs.
+
+    That is worse than the push failure it sits beside. A rejected push at
+    least logs a warning; a stale READ produces a confident answer built on
+    superseded notes, and nothing anywhere says so.
+
+    `--autostash` because a stage may already have committed or dirtied the
+    tree: refreshing must never become a way to lose that. Nothing here
+    resets or checks out.
+
+    Never raises and never blocks. An unreachable remote is a reason to run
+    on the notes we have, not a reason to fail a pipeline -- but the outcome
+    is logged either way, because "the notes are current" and "the notes are
+    whatever was here last time" look identical in every artifact
+    downstream.
+    """
+    try:
+        repo = Repo(vault_path, search_parent_directories=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("vault.refresh_skipped_not_git_repo", path=str(vault_path), error=str(exc))
+        return False
+
+    if repo.head.is_detached:
+        # No branch to pull onto, and guessing one would move a deliberately
+        # pinned checkout.
+        logger.warning("vault.refresh_skipped_detached_head", path=str(vault_path))
+        return False
+
+    branch = repo.active_branch.name
+    try:
+        repo.git.pull("--rebase", "--autostash", "origin", branch)
+    except Exception as exc:  # noqa: BLE001 — stale notes beat a failed run
+        logger.warning("vault.refresh_failed", path=str(vault_path), branch=branch, error=str(exc))
+        return False
+
+    logger.info("vault.refreshed", path=str(vault_path), branch=branch)
+    return True
+
+
 def _push_with_rebase_retry(repo: Any, branch: str) -> None:
     """Push *branch*, and on rejection rebase onto the remote and push once more.
 
