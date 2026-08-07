@@ -664,8 +664,39 @@ class ClaudeRunner(BaseRunner):
         return resolved
 
     def _resolve_allowed_tools(self, payload: RunnerPayload) -> list[str]:
-        """Resolve `--allowed-tools` entries (e.g. `mcp__server__tool`)."""
-        return self._resolve_str_list_option(payload, "allowed_tools")
+        """Combine `--allowed-tools` across layers -- union, not override.
+
+        Every other option here resolves "step metadata beats the runner
+        definition", which is right for a scalar: one model, one permission
+        mode, last writer wins. It is wrong for a whitelist. Overriding a set
+        of grants does not refine it, it REVOKES everything the other layer
+        granted.
+
+        Run 347 is what that cost. `plugins/token_savior.py` appended one MCP
+        entry to the step's `allowed_tools`, which replaced the reviewer
+        role's entire grant list. The reviewer then had its own tools denied
+        (`rtk git status` among them) and the dispatch died on
+        `400 Tool reference 'WaitForMcpServers' not found in available tools`
+        -- a `--mcp-config` invocation also needs Claude Code's MCP bootstrap
+        tool present, and the list had been narrowed to a single entry.
+        $0.56 spent, the stage failed, five stages skipped.
+
+        Definition first, then the step's additions, deduplicated: a config
+        file's grants read back in the order the operator wrote them.
+        """
+        combined: list[str] = []
+        for source in (
+            self.definition.options.get("allowed_tools"),
+            payload.step.metadata.get("allowed_tools"),
+        ):
+            if source is None:
+                continue
+            items = source if isinstance(source, (list, tuple)) else [source]
+            for item in items:
+                text = str(item).strip()
+                if text and text not in combined:
+                    combined.append(text)
+        return combined
 
     def _resolve_bool_option(self, payload: RunnerPayload, name: str) -> bool:
         """Resolve a boolean flag option; step metadata wins over the definition."""
