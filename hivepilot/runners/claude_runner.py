@@ -1222,21 +1222,23 @@ class ClaudeRunner(BaseRunner):
             instructions_section = build_repo_instructions_section(payload.project, self.settings)
             if instructions_section:
                 sections.append(instructions_section)
-        if knowledge_context:
-            sections.append(f"Knowledge context:\n{knowledge_context}")
-        lessons_context = self._build_lessons_context(payload)
-        if lessons_context:
-            sections.append(f"Lessons learned:\n{lessons_context}")
-        # Volatile sections last (user-specific, per-run context).
-        extra = payload.metadata.get("extra_prompt")
-        if extra:
-            sections.append(f"Extra instructions from user: {extra}")
-        append = payload.step.append_prompt or self.definition.append_prompt
-        if append:
-            sections.append(f"Step-specific instructions: {append}")
-        prior = payload.metadata.get("prior_context")
-        if prior:
-            sections.append(f"Outputs from previous agents:\n{prior}")
+        # The role's own prompt file belongs HERE, in the stable prefix.
+        #
+        # It used to be appended after everything else, which defeated the
+        # intent stated at the top of this function: a prefix cache stops at
+        # the first byte that changed, so with the volatile sections in
+        # front, the largest stable block in the whole prompt -- hundreds of
+        # lines, identical every run -- was re-created every time.
+        #
+        # Measured on the noxys deployment, `ceo intake` over ten runs:
+        # cache_creation ~43 000 against cache_read ~16 000, amortisation
+        # 0.40. It created more cache than it ever read back, at 1.25x base
+        # input for a creation against 0.1x for a read.
+        #
+        # The order also reads better than it caches. The role prompt is
+        # CONTEXT ("you are the CEO, this is how you work"); `extra_prompt`
+        # is the REQUEST. Putting the request last is the conventional shape
+        # -- it was the caching accident that had it in the middle.
         target_repo = str(payload.project.path) if payload.project and payload.project.path else "."
         obsidian_vault = resolve_prompt_vault(self.settings, payload.project)
         instructions = render_prompt_vars(
@@ -1245,7 +1247,24 @@ class ClaudeRunner(BaseRunner):
             governance_repo=settings.governance_repo or "",
             obsidian_vault=obsidian_vault,
         )
-        return "\n".join(sections) + f"\n\nInstructions:\n{instructions}"
+        sections.append(f"Instructions:\n{instructions}")
+
+        if knowledge_context:
+            sections.append(f"Knowledge context:\n{knowledge_context}")
+        lessons_context = self._build_lessons_context(payload)
+        if lessons_context:
+            sections.append(f"Lessons learned:\n{lessons_context}")
+        append = payload.step.append_prompt or self.definition.append_prompt
+        if append:
+            sections.append(f"Step-specific instructions: {append}")
+        prior = payload.metadata.get("prior_context")
+        if prior:
+            sections.append(f"Outputs from previous agents:\n{prior}")
+        # Volatile last, and the per-run request last of all.
+        extra = payload.metadata.get("extra_prompt")
+        if extra:
+            sections.append(f"Extra instructions from user: {extra}")
+        return "\n".join(sections)
 
     def _resolve_model(self, payload: RunnerPayload) -> str | None:
         profile = (

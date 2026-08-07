@@ -416,9 +416,22 @@ class TestClaudeRunnerLessonsWiring:
         out = _claude_runner()._build_prompt(payload, "INSTRUCTIONS", None)
         assert "Lessons learned:" in out
         assert "Never skip tests." in out
-        # Lessons learned must appear before the volatile "Instructions:"
-        # section (stable-first ordering, same discipline as Knowledge context).
-        assert out.index("Lessons learned:") < out.index("Instructions:")
+        # Lessons sit in the stable region, grouped with Knowledge context —
+        # the invariant this test is named for.
+        #
+        # It used to assert `Lessons learned:` came before `Instructions:`,
+        # with a comment calling that section "volatile". That was backwards:
+        # `Instructions:` is the ROLE PROMPT, the most stable and largest
+        # block in the whole prompt. Believing it volatile is very likely why
+        # it was appended last, which put it outside the prefix cache and
+        # cost `ceo intake` an amortisation of 0.40 over ten runs.
+        #
+        # So the ordering is asserted against what is genuinely volatile:
+        # the per-run request.
+        assert out.index("Lessons learned:") > out.index("Instructions:")
+        payload.metadata["extra_prompt"] = "THE-REQUEST"
+        with_request = _claude_runner()._build_prompt(payload, "INSTRUCTIONS", None)
+        assert with_request.index("Lessons learned:") < with_request.index("THE-REQUEST")
 
     def test_flag_off_prompt_byte_identical(self, tmp_path: Path) -> None:
         settings.enable_lesson_distillation = False
