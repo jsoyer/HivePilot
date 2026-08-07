@@ -105,7 +105,26 @@ company-release:
 
 `pause_before: true` halts the run before that stage executes and waits for a human to approve the plan (see [Approvals](#approvals-in-a-pipeline) below). `continue_on_failure` lets a stage fail without aborting the rest of the run — useful for optional/advisory stages. `only_components` / `only_tags` restrict a stage to a subset of a group's member projects (see [Multi-repo groups](#multi-repo-groups)).
 
-### Choosing which plugins run
+### Choosing which plugin *hooks* run
+
+This scopes **lifecycle hooks only** — `before_step` / `after_step`. Those
+are the contributions that fire on every step without anyone asking for
+them, which is the coarseness worth fixing.
+
+It does **not** scope runners, panels, notifiers, secrets backends or health
+checks. A runner is chosen explicitly by a task (`runner: rtk`), so it never
+fires unbidden and needs no pipeline-level opt-out.
+
+| plugin | contributes | scoped by `enable:`? |
+|---|---|---|
+| `headroom`, `token_savior` | `before_step` | **yes** |
+| `mem0`, `obsidian` | `before_step` / `after_step` | **yes** |
+| `rtk`, `gh`, `herdr`, `hugo` | runners | no — a task names the runner it wants |
+| `headroom_panel` | panel | no |
+| any | health check | no — health must report on everything installed |
+
+Naming a plugin that contributes no hooks has no effect, and `hivepilot lint`
+says so rather than letting the line sit there looking load-bearing.
 
 Plugins are enabled per **deployment**, by env flag. Once enabled, their
 hooks fire on every step of every pipeline — which is too coarse as soon as

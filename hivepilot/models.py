@@ -806,6 +806,21 @@ def resolve_enabled_plugins(*, loaded: set[str], pipeline: PipelineConfig | None
     return {name for name in pipeline.plugins.enable if name in loaded}
 
 
+def unscoped_plugin_names(enable: list[str], *, hook_plugins: set[str]) -> list[str]:
+    """Names in *enable* that contribute no lifecycle hook, in written order.
+
+    `enable:` scopes `before_step`/`after_step` and nothing else. A runner is
+    chosen explicitly by a task (`runner: rtk`), so it never fires unbidden
+    and needs no pipeline-level opt-out -- which means `enable: [rtk]` is
+    inert, and an operator who wrote it plainly believed otherwise.
+
+    Reported rather than rejected: the line is harmless, and refusing to load
+    a pipeline over it would be worse than the misunderstanding. But leaving
+    it silent would let a line that looks load-bearing hold nothing up.
+    """
+    return [name for name in enable if name not in hook_plugins]
+
+
 def resolve_debate_config(
     *,
     floor: DebateFloor | None = None,

@@ -226,6 +226,33 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
                     f"Pipeline '{pipeline_name}' stage '{stage.get('name', '?')}' "
                     f"references unknown task '{task_ref}'"
                 )
+        # `plugins.enable` scopes lifecycle hooks and nothing else. A runner
+        # is chosen explicitly by a task (`runner: rtk`), so it never fires
+        # unbidden and needs no pipeline-level opt-out -- which makes
+        # `enable: [rtk]` inert, though an operator who wrote it plainly
+        # believed otherwise. Reported, not rejected: the line is harmless,
+        # but leaving it silent lets something that looks load-bearing hold
+        # nothing up.
+        enable = ((pipeline.get("plugins") or {}).get("enable")) or []
+        if enable:
+            from hivepilot.models import unscoped_plugin_names
+            from hivepilot.plugins import PluginManager
+
+            manager = PluginManager()
+            hook_plugins = {
+                manager.hook_owner[id(fn)]
+                for fns in manager.hooks.values()
+                for fn in fns
+                if id(fn) in manager.hook_owner
+            }
+            inert = unscoped_plugin_names(list(enable), hook_plugins=hook_plugins)
+            if inert:
+                problems.append(
+                    f"Pipeline '{pipeline_name}' plugins.enable lists "
+                    f"{inert} which contribute no lifecycle hook — "
+                    "`enable` scopes before_step/after_step only, so these "
+                    "entries have no effect (runners are selected per task)"
+                )
 
     # -----------------------------------------------------------------------
     # Check: every task's `role` exists in roles.yaml

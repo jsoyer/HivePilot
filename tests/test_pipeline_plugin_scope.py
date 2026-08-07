@@ -86,6 +86,38 @@ class TestAbsenceChangesNothing:
         assert resolve_enabled_plugins(loaded=set(), pipeline=_pipeline(["mem0"])) == set()
 
 
+class TestItSaysWhenALineDoesNothing:
+    """`enable:` scopes lifecycle hooks and nothing else.
+
+    A runner is chosen explicitly by a task (`runner: rtk`), so it never
+    fires unbidden and needs no pipeline-level opt-out. But that means
+    `enable: [rtk]` is inert — and an operator who wrote it plainly believed
+    otherwise. Silence there is the same defect as everywhere else today: a
+    line that looks load-bearing and holds nothing up.
+    """
+
+    def test_a_runner_only_plugin_is_reported(self) -> None:
+        from hivepilot.models import unscoped_plugin_names
+
+        assert unscoped_plugin_names(["rtk", "headroom"], hook_plugins={"headroom"}) == ["rtk"]
+
+    def test_a_hook_plugin_is_not_reported(self) -> None:
+        from hivepilot.models import unscoped_plugin_names
+
+        assert unscoped_plugin_names(["headroom"], hook_plugins={"headroom"}) == []
+
+    def test_an_empty_selection_reports_nothing(self) -> None:
+        """`enable: []` means "no hooks", which is meaningful, not a typo."""
+        from hivepilot.models import unscoped_plugin_names
+
+        assert unscoped_plugin_names([], hook_plugins={"headroom"}) == []
+
+    def test_the_order_written_is_preserved(self) -> None:
+        from hivepilot.models import unscoped_plugin_names
+
+        assert unscoped_plugin_names(["gh", "rtk"], hook_plugins=set()) == ["gh", "rtk"]
+
+
 class TestTheManagerHonoursIt:
     def test_run_hook_skips_a_plugin_outside_the_scope(self) -> None:
         from hivepilot.plugins import PluginManager
