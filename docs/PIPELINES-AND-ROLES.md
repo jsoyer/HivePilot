@@ -105,6 +105,48 @@ company-release:
 
 `pause_before: true` halts the run before that stage executes and waits for a human to approve the plan (see [Approvals](#approvals-in-a-pipeline) below). `continue_on_failure` lets a stage fail without aborting the rest of the run — useful for optional/advisory stages. `only_components` / `only_tags` restrict a stage to a subset of a group's member projects (see [Multi-repo groups](#multi-repo-groups)).
 
+### Choosing which plugins run
+
+Plugins are enabled per **deployment**, by env flag. Once enabled, their
+hooks fire on every step of every pipeline — which is too coarse as soon as
+you run more than one kind of work. A docs refresh has no use for a symbol
+index; a security review should not be handed recalled agent output.
+
+A pipeline may name the subset it wants:
+
+```yaml
+pipelines:
+  docs-refresh:
+    plugins:
+      enable: [headroom]        # compression only — no memory, no index
+    stages: [...]
+
+  product:
+    plugins:
+      enable: [headroom, obsidian, token_savior]
+    stages: [...]
+```
+
+**It narrows, it never widens.** A name the deployment did not enable grants
+nothing. Config-repo YAML must not be able to switch on a plugin the
+operator withheld — that would route around the capability policy
+(`HIVEPILOT_PLUGINS_CAPABILITY_POLICY`) and the `allowed_tools` whitelist.
+
+This is deliberately the opposite direction to the [`debate:`](./DEBATE-AND-LESSONS.md)
+block, which is strengthen-only. The asymmetry is the point: for a **gate**,
+safe means you can only add; for a **capability**, safe means you can only
+remove.
+
+| form | meaning |
+|---|---|
+| no `plugins:` block | every plugin the deployment enabled — unchanged |
+| `enable: [a, b]` | only `a` and `b`, and only if the deployment enabled them |
+| `enable: []` | none for this pipeline (explicit, not "no opinion") |
+
+Combining them is the point: enable everything you are willing to run at the
+deployment level, then let each pipeline compose the set that earns its
+place there.
+
 ## Running a pipeline
 
 ```bash
