@@ -8,7 +8,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 from git import GitCommandError, Repo  # type: ignore
 
@@ -173,6 +173,40 @@ def run_git_command(args: list[str], cwd: Path) -> None:
     subprocess.run([settings.git_command, *args], cwd=str(cwd), check=True)
 
 
+def _push_with_rebase_retry(repo: Any, branch: str) -> None:
+    """Push *branch*, and on rejection rebase onto the remote and push once more.
+
+    The vault is a SHARED repository -- the operator writes notes from their
+    own machine, and every other run writes to it too. A plain push therefore
+    gets rejected the moment anyone else has pushed, and without this it stays
+    rejected forever, because nothing here ever pulled.
+
+    Observed on run 347: the remote held 54 commits the box did not have, the
+    box held 20 it had never pushed, and the commit for EVERY stage of that
+    run sat locally unreachable while the pipeline logged `vault.commit_failed`
+    and carried on. Nothing was lost, which is precisely what made it quiet --
+    a pipeline looks healthy while its entire written record stops leaving the
+    machine.
+
+    Rebase rather than merge: these are append-only note commits, and a merge
+    bubble per run would bury the history the vault exists to hold.
+
+    Once, not in a loop. If the second push also fails, something other than a
+    moved remote is wrong; retrying will not discover what, and swallowing it
+    would recreate the silence this exists to fix. The exception reaches the
+    caller, which logs `vault.commit_failed` -- the honest outcome.
+    """
+    try:
+        repo.git.push("origin", branch)
+        return
+    except Exception as exc:  # noqa: BLE001 — inspected, then retried once
+        logger.info("vault.push_rejected_rebasing", branch=branch, error=str(exc))
+
+    repo.git.pull("--rebase", "origin", branch)
+    repo.git.push("origin", branch)
+    logger.info("vault.pushed_after_rebase", branch=branch)
+
+
 def commit_vault(
     vault_path: Path, message: str = "HivePilot: update Obsidian notes", *, push: bool = True
 ) -> bool:
@@ -197,7 +231,7 @@ def commit_vault(
         if repo.head.is_detached:
             logger.warning("vault.detached_head_no_push", path=pathspec)
         else:
-            repo.git.push("origin", repo.active_branch.name)  # explicit remote + branch
+            _push_with_rebase_retry(repo, repo.active_branch.name)
     logger.info("vault.committed", path=pathspec, pushed=push)
     return True
 
