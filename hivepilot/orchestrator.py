@@ -3447,7 +3447,12 @@ class Orchestrator:
                 # perimeter clause instead, with compression never in the
                 # path at all.
                 try:
-                    self.plugins.run_hook("before_step", payload=payload, role=role_name)
+                    self.plugins.run_hook(
+                        "before_step",
+                        allowed_plugins=self._allowed_plugins(pipeline),
+                        payload=payload,
+                        role=role_name,
+                    )
                 except Exception as exc:  # noqa: BLE001 — a hook must not fail a review
                     logger.warning(
                         "plugins.hook_failed",
@@ -5448,6 +5453,20 @@ class Orchestrator:
             _task_span.set_attribute("hivepilot.task.status", "success")
             return result
 
+    def _allowed_plugins(self, pipeline: "PipelineConfig | None") -> set[str] | None:
+        """Which plugins may fire for *pipeline*, or None for "all of them".
+
+        A pipeline with no `plugins:` block, or no pipeline at all (a bare
+        `run`, a review probe), keeps the deployment's full set -- absent
+        must stay byte-identical to before this existed.
+        """
+        if pipeline is None or getattr(pipeline, "plugins", None) is None:
+            return None
+        from hivepilot.models import resolve_enabled_plugins
+
+        loaded = {record.name for record in self.plugins.loaded}
+        return resolve_enabled_plugins(loaded=loaded, pipeline=pipeline)
+
     def _execute_task_body(
         self,
         *,
@@ -6011,6 +6030,7 @@ class Orchestrator:
                         # here in exchange for that regression.
                         self.plugins.run_hook(
                             "before_step",
+                            allowed_plugins=self._allowed_plugins(pipeline),
                             payload=replace(payload, secrets={}),
                             dry_run=dry_run,
                             role=task.role,

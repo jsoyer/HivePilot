@@ -837,6 +837,10 @@ class _StagedPluginState:
     hooks: dict[str, list[Any]] = field(
         default_factory=lambda: {"before_step": [], "after_step": []}
     )
+    # id(callable) -> contributing plugin name. Keyed by identity because the
+    # hook lists hold the callables themselves (`_is_network_hook` compares
+    # the same way), and a plugin may contribute several.
+    hook_owner: dict[int, str] = field(default_factory=dict)
     declared_notifiers: dict[str, Callable[[str], None]] = field(default_factory=dict)
     health: dict[str, Callable[..., Any]] = field(default_factory=dict)
     panels: dict[str, PanelSpec] = field(default_factory=dict)
@@ -1139,6 +1143,7 @@ class PluginManager:
         self.hooks: dict[str, list[Any]] = {
             name: order_hooks(fns) for name, fns in staged.hooks.items()
         }
+        self.hook_owner: dict[int, str] = staged.hook_owner
         self.declared_notifiers: dict[str, Callable[[str], None]] = staged.declared_notifiers
         self.health: dict[str, Callable[..., Any]] = staged.health
         self.panels: dict[str, PanelSpec] = staged.panels
@@ -1576,6 +1581,7 @@ class PluginManager:
             applied_hooks = sorted(hooks)
             for hook_name, hook_callable in hooks.items():
                 staged.hooks.setdefault(hook_name, []).append(hook_callable)
+                staged.hook_owner[id(hook_callable)] = record.name
 
             # Runtime `external_api` gate (propose -> ratify -> dispatch PRD,
             # spec §6): remember which of THIS plugin's surviving
@@ -1649,10 +1655,26 @@ class PluginManager:
 
         return staged
 
-    def run_hook(self, hook_name: str, **kwargs: Any) -> None:
+    def run_hook(
+        self, hook_name: str, *, allowed_plugins: set[str] | None = None, **kwargs: Any
+    ) -> None:
+        """Fan out *hook_name*, optionally restricted to *allowed_plugins*.
+
+        `allowed_plugins` is the pipeline's narrowed selection (see
+        `models.resolve_enabled_plugins`). None means every loaded plugin --
+        a bare `run`, a review probe, or a pipeline with no `plugins:` block
+        all behave exactly as before this existed.
+        """
         from hivepilot import outward
 
         for hook in self.hooks.get(hook_name, []):
+            if allowed_plugins is not None:
+                owner = self.hook_owner.get(id(hook))
+                # Fail toward RUNNING on an unattributed hook: a missing
+                # owner is a bookkeeping gap, and dropping it would disable
+                # a plugin for a reason nobody could see from the config.
+                if owner is not None and owner not in allowed_plugins:
+                    continue
             # Outward consent (`external_api`): a lifecycle hook contributed
             # by a plugin that DECLARED `network` is the engine routing
             # execution into something that told us it calls out. A

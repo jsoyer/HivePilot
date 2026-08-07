@@ -698,6 +698,11 @@ class PipelineConfig(BaseModel):
     # Sprint 1). None -- dormant, byte-identical when absent. See
     # `resolve_lessons_config`.
     lessons: LessonsConfig | None = None
+    # Which of the deployment's enabled plugins run for this pipeline. None --
+    # every loaded plugin, byte-identical when absent. NARROWS only; see
+    # `resolve_enabled_plugins` for why the direction is the opposite of
+    # `debate`'s.
+    plugins: PluginsConfig | None = None
 
 
 def resolve_mode(pipeline: PipelineConfig, stage: PipelineStage) -> Literal["cli", "api"]:
@@ -768,6 +773,52 @@ class EffectiveDebateConfig:
     # naming these two fields keeps working byte-identically.
     reviewers: list[str] = field(default_factory=list)
     review_target: str | None = None
+
+
+class PluginsConfig(BaseModel):
+    """Which of the deployment's enabled plugins this pipeline wants.
+
+    `enable` NARROWS, it never widens. A name the deployment did not enable
+    grants nothing -- config-repo YAML must not be able to switch on a plugin
+    the operator withheld, which would route around the capability policy and
+    the tool whitelist.
+
+    The direction is deliberately opposite to `DebateConfig`, which is
+    strengthen-only, and the asymmetry is the point: for a GATE, safe means
+    you can only add; for a CAPABILITY, safe means you can only remove.
+    """
+
+    enable: list[str] | None = None
+
+
+def resolve_enabled_plugins(*, loaded: set[str], pipeline: PipelineConfig | None) -> set[str]:
+    """Plugins that may run for *pipeline*, given what the deployment loaded.
+
+    Absent block, or no pipeline at all (a bare `run`, a review probe), means
+    the full loaded set -- byte-identical to before this existed.
+
+    An EMPTY list is not absence. `plugins: {enable: []}` is an operator
+    saying "none for this pipeline", and reading it as "no opinion" would
+    silently do the opposite of what was written.
+    """
+    if pipeline is None or pipeline.plugins is None or pipeline.plugins.enable is None:
+        return set(loaded)
+    return {name for name in pipeline.plugins.enable if name in loaded}
+
+
+def unscoped_plugin_names(enable: list[str], *, hook_plugins: set[str]) -> list[str]:
+    """Names in *enable* that contribute no lifecycle hook, in written order.
+
+    `enable:` scopes `before_step`/`after_step` and nothing else. A runner is
+    chosen explicitly by a task (`runner: rtk`), so it never fires unbidden
+    and needs no pipeline-level opt-out -- which means `enable: [rtk]` is
+    inert, and an operator who wrote it plainly believed otherwise.
+
+    Reported rather than rejected: the line is harmless, and refusing to load
+    a pipeline over it would be worse than the misunderstanding. But leaving
+    it silent would let a line that looks load-bearing hold nothing up.
+    """
+    return [name for name in enable if name not in hook_plugins]
 
 
 def resolve_debate_config(
