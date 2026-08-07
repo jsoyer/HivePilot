@@ -62,6 +62,13 @@ _CONFIG_FILENAME = "token-savior.mcp.json"
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
+#: Claude Code's own tool for bringing MCP servers up. Because
+#: `--allowed-tools` is a whitelist that RESTRICTS, naming only the server's
+#: tools excludes the very thing that STARTS the server -- run 347 died on
+#: `400 Tool reference 'WaitForMcpServers' not found in available tools`.
+#: The plugin that wires MCP is the one that has to grant it.
+_MCP_BOOTSTRAP_TOOL = "WaitForMcpServers"
+
 
 def _config_dir() -> Path:
     from hivepilot.config import settings as _settings
@@ -177,7 +184,11 @@ def before_step(**kwargs: Any) -> None:
         existing = metadata.get("allowed_tools") or []
         if isinstance(existing, str):
             existing = [existing]
-        metadata["allowed_tools"] = [*existing, f"mcp__{_SERVER_NAME}"]
+        metadata["allowed_tools"] = [
+            *existing,
+            f"mcp__{_SERVER_NAME}",
+            _MCP_BOOTSTRAP_TOOL,
+        ]
 
         logger.info(
             "token_savior.wired",

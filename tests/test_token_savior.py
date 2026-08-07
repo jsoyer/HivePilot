@@ -253,15 +253,41 @@ class TestWiringAStep:
         env = written["mcpServers"][token_savior._SERVER_NAME]["env"]
         assert env["TS_MEMORY_DISABLE"] == "1"
 
-    def test_it_pre_approves_only_its_own_tools(self, token_savior) -> None:
-        """`--allowed-tools` is a whitelist that RESTRICTS. Adding a broad
-        entry here would widen what every other tool may do."""
+    def test_it_grants_the_mcp_bootstrap_tool(self, token_savior) -> None:
+        """Wiring `--mcp-config` is not enough on its own.
+
+        Run 347 died on `400 Tool reference 'WaitForMcpServers' not found in
+        available tools`. Claude Code needs its own MCP bootstrap tool
+        present once servers are configured, and `--allowed-tools` is a
+        whitelist that RESTRICTS -- so naming only the server's tools
+        excludes the very thing that starts the server. The plugin that
+        wires MCP is the one that has to grant it.
+        """
         payload = _Payload()
 
         token_savior.before_step(payload=payload)
 
-        for tool in payload.step.metadata["allowed_tools"]:
-            assert tool.startswith(f"mcp__{token_savior._SERVER_NAME}")
+        assert token_savior._MCP_BOOTSTRAP_TOOL in payload.step.metadata["allowed_tools"]
+
+    def test_it_grants_nothing_beyond_its_own_server(self, token_savior) -> None:
+        """`--allowed-tools` is a whitelist that RESTRICTS, so anything named
+        here is something the agent may then do.
+
+        The invariant is not "only `mcp__` entries" — the MCP bootstrap tool
+        is neither, and is required. It is that nothing broad gets in: no
+        Bash, no Edit, no Write. Enabling a symbol index must not widen what
+        an agent reading untrusted code is allowed to touch.
+        """
+        payload = _Payload()
+
+        token_savior.before_step(payload=payload)
+
+        allowed = set(payload.step.metadata["allowed_tools"])
+        expected = {
+            f"mcp__{token_savior._SERVER_NAME}",
+            token_savior._MCP_BOOTSTRAP_TOOL,
+        }
+        assert allowed == expected
 
     def test_existing_allowed_tools_survive(self, token_savior) -> None:
         """Replacing the list would silently revoke grants a role depends on
