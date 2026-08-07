@@ -212,7 +212,12 @@ class TestDistillValidateInjectEndToEnd:
         prompt = _claude_runner()._build_prompt(payload, "INSTRUCTIONS", None)
         assert "Lessons learned:" in prompt
         assert "Run migrations before seeding fixtures." in prompt
-        assert prompt.index("Lessons learned:") < prompt.index("Instructions:")
+        # Lessons land in the stable region, after the role prompt. This
+        # previously asserted the reverse, on the mistaken premise that
+        # `Instructions:` was volatile — it is the role prompt, the largest
+        # byte-identical block there is, and appending it last is what kept
+        # it out of the prefix cache. See tests/test_prompt_cache_ordering.py.
+        assert prompt.index("Lessons learned:") > prompt.index("Instructions:")
 
 
 # ---------------------------------------------------------------------------
