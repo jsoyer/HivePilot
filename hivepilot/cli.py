@@ -469,7 +469,20 @@ def doctor() -> None:
                 continue
             _seen.add(_binary)
             _found = shutil.which(_binary)
-            typer.echo(f"  {_binary:<14}: {'found at ' + _found if _found else 'NOT FOUND'}")
+            # The version, not just the presence. The agent CLI IS the
+            # runtime -- `WaitForMcpServers` is a version-dependent internal,
+            # `--mcp-config` is a recent flag, and the scoped
+            # `Read(./**)` permission specifier the roles rely on to refuse
+            # reads outside the workspace is a permission-syntax feature. A
+            # silent version move can widen a grant we depend on to narrow.
+            if _found:
+                from hivepilot.services.agent_versions import probe_version
+
+                _ver = probe_version(_binary)
+                _suffix = f" ({_ver})" if _ver else " (version unknown)"
+                typer.echo(f"  {_binary:<14}: found at {_found}{_suffix}")
+            else:
+                typer.echo(f"  {_binary:<14}: NOT FOUND")
     except Exception as _exc:  # noqa: BLE001
         typer.echo(f"  (could not inspect runners: {_exc})")
 
@@ -478,7 +491,13 @@ def doctor() -> None:
 
     _report = check_mandatory_agents()
     for _agent_name in MANDATORY_AGENTS:
-        _status = "found" if _agent_name in _report.present else "NOT FOUND"
+        if _agent_name in _report.present:
+            from hivepilot.services.agent_versions import probe_version
+
+            _ver = probe_version(_agent_name)
+            _status = f"found ({_ver})" if _ver else "found (version unknown)"
+        else:
+            _status = "NOT FOUND"
         typer.echo(f"  {_agent_name:<12}: {_status}")
     if _report.any_ok:
         _verdict = (
