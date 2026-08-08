@@ -460,15 +460,36 @@ class ClaudeRunner(BaseRunner):
         """
         prompt_file = payload.step.prompt_file
         if not prompt_file:
-            raise ValueError(
-                f"Step '{payload.step.name}' requires a prompt_file for Claude runner."
-            )
-        prompt_path = self.settings.resolve_config_path(prompt_file)
-        if not prompt_path.exists():
-            raise FileNotFoundError(
-                prompt_file_not_found_message(payload, self.settings, prompt_file, prompt_path)
-            )
-        prompt_text = prompt_path.read_text(encoding="utf-8").strip()
+            # The engine's own synthesized calls have no role and no file to
+            # point at: they carry their whole prompt in `extra_prompt`.
+            # Three do this deliberately -- `{role}-judge` and the arbiter in
+            # `orchestrator.py`, and `lessons-distiller` in
+            # `lessons_service.py` -- and all three were unreachable through
+            # this runner because the check below only knew about role steps.
+            #
+            # The distiller is the one that showed: every pipeline run logged
+            # `Step 'lessons-distiller' requires a prompt_file`, and `lessons`
+            # stayed 0 across 136 interactions and 15 verdicts.
+            #
+            # The distinction is not who is calling, it is whether there is a
+            # prompt at all. A step with neither a file nor an `extra_prompt`
+            # is broken however it was built -- dispatching an agent with no
+            # instructions is the failure this error exists to prevent -- so
+            # that case still raises.
+            supplied = payload.metadata.get("extra_prompt")
+            if not (isinstance(supplied, str) and supplied.strip()):
+                raise ValueError(
+                    f"Step '{payload.step.name}' requires a prompt_file for Claude runner "
+                    "(or a non-empty `extra_prompt` for an internally synthesized call)."
+                )
+            prompt_text = ""
+        else:
+            prompt_path = self.settings.resolve_config_path(prompt_file)
+            if not prompt_path.exists():
+                raise FileNotFoundError(
+                    prompt_file_not_found_message(payload, self.settings, prompt_file, prompt_path)
+                )
+            prompt_text = prompt_path.read_text(encoding="utf-8").strip()
         knowledge_context = self._build_knowledge_context(payload)
         return self._build_prompt(payload, prompt_text, knowledge_context)
 
