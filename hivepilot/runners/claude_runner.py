@@ -277,6 +277,51 @@ def _extract_model_usage(data: dict[str, Any]) -> UsageInfo | None:
     )
 
 
+def extract_permission_denials(stdout: str) -> list[str]:
+    """Tools the agent asked for and was refused, from the result envelope.
+
+    Claude Code reports these on every dispatch and HivePilot threw the
+    field away -- `permission_denials` appeared nowhere in the codebase.
+
+    Run 356's CTO stage is what that cost. The agent asked for a cheap
+    directory listing (`rtk fd . surfaces/agent -t d -d 3`), was refused,
+    explored the monorepo file by file instead, reached 84 969 input tokens
+    and died on "Prompt is too long". $1.17 spent, the stage failed, eleven
+    stages skipped -- over one missing line in a role's `allowed_tools`,
+    findable only by reading a 4 000-character failure blob by hand.
+
+    The FAILING case is the lucky one. An agent refused a tool that still
+    finishes looks like a success: it did the expensive thing instead, and
+    will keep doing it on every run until somebody happens to look. So the
+    caller reports these whether the dispatch succeeded or not.
+
+    Never raises: a dispatch must not fail because its diagnostics could not
+    be read. This is reporting, not control flow.
+    """
+    try:
+        data = json.loads(stdout)
+    except Exception:  # noqa: BLE001 — malformed output is not this function's problem
+        return []
+    if not isinstance(data, dict):
+        return []
+    entries = data.get("permission_denials")
+    if not isinstance(entries, list):
+        return []
+
+    refused: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        tool_input = entry.get("tool_input")
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        # A command names the missing grant precisely; for a tool that takes
+        # none, its own name is still enough to say which grant is absent.
+        label = command or entry.get("tool_name")
+        if isinstance(label, str) and label.strip():
+            refused.append(label)
+    return refused
+
+
 def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
     """Parse a ``claude --output-format json`` stdout envelope.
 
@@ -999,6 +1044,30 @@ class ClaudeRunner(BaseRunner):
                         f"claude exited {json_result.returncode}: {err}{hint_suffix}",
                         context=context,
                     )
+                # Report refused tools BEFORE branching on success. The
+                # failing dispatch is the lucky one: an agent refused a tool
+                # that still finishes looks like a success, having done the
+                # expensive thing instead — and it will keep doing that on
+                # every run until somebody happens to look. Run 356's CTO
+                # was refused `rtk fd`, explored a monorepo by hand, and died
+                # at 84 969 input tokens on "Prompt is too long"; the same
+                # denial on a smaller repo would simply have cost more,
+                # forever, in silence.
+                denied = extract_permission_denials(json_result.stdout)
+                if denied:
+                    logger.warning(
+                        "claude_runner.permission_denied",
+                        project=payload.project_name,
+                        step=payload.step.name,
+                        role=payload.step.metadata.get("role"),
+                        denied=denied,
+                        remediation=(
+                            "add the matching pattern to this role's "
+                            "`allowed_tools` (governance prefixes shell "
+                            "commands with `rtk `, so the grant must too)"
+                        ),
+                    )
+
                 parsed = _parse_usage_envelope(json_result.stdout)
                 if parsed is not None:
                     text, usage = parsed
