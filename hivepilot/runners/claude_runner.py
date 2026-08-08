@@ -1058,6 +1058,52 @@ class ClaudeRunner(BaseRunner):
                         stderr_text=stderr_text,
                         skill_applied=bool(scratch_dir),
                     )
+                    # A failing dispatch still reports a full envelope: real
+                    # operator output (step 393, run 360) carries `is_error:
+                    # true` alongside a complete `modelUsage` block, its
+                    # `permission_denials`, and `"result": "Prompt is too
+                    # long"`. Both reads below used to sit AFTER this raise,
+                    # so every one of the 211 failed steps on the box recorded
+                    # `cost_usd = NULL` for money that was genuinely spent,
+                    # and `extract_permission_denials` never fired on the
+                    # failing case its own docstring was written for.
+                    #
+                    # Diagnostics only — neither read may change the outcome.
+                    # The step failed; only its accounting changes.
+                    context["denied_tools"] = [
+                        redact_text(d) for d in extract_permission_denials(json_result.stdout)
+                    ]
+                    if context["denied_tools"]:
+                        logger.warning(
+                            "claude_runner.permission_denied",
+                            project=payload.project_name,
+                            step=payload.step.name,
+                            # `context["role"]`, not `payload.step.metadata` —
+                            # the role lives in the PAYLOAD-level metadata
+                            # (orchestrator sets `metadata["role"]`), and the
+                            # step's own dict never carries it. The success
+                            # path below reads the wrong dict, which is why
+                            # every denial it has ever reported said
+                            # `"role": null` while its own remediation text
+                            # tells the reader to go fix "this role's"
+                            # allowed_tools. Reusing the already-resolved
+                            # context keeps one source of truth.
+                            #
+                            # Still not airtight: the orchestrator only sets
+                            # that key when context injection is enabled, so a
+                            # flag-off run reports None here honestly rather
+                            # than guessing.
+                            role=context["role"],
+                            denied=context["denied_tools"],
+                            remediation=(
+                                "add the matching pattern to this role's "
+                                "`allowed_tools` (governance prefixes shell "
+                                "commands with `rtk `, so the grant must too)"
+                            ),
+                        )
+                    _failed_parse = _parse_usage_envelope(json_result.stdout)
+                    if _failed_parse is not None:
+                        set_last_usage(_failed_parse[1])
                     logger.error("claude_runner.run_failed", **context)
                     err = redact_text(stderr_text)[-2000:]
                     hint_suffix = f" | hint: {context['hint']}" if context.get("hint") else ""
@@ -1080,7 +1126,9 @@ class ClaudeRunner(BaseRunner):
                         "claude_runner.permission_denied",
                         project=payload.project_name,
                         step=payload.step.name,
-                        role=payload.step.metadata.get("role"),
+                        # Same correction as the failure path above: the role
+                        # is on the payload metadata, never on the step's.
+                        role=payload.metadata.get("role"),
                         denied=denied,
                         remediation=(
                             "add the matching pattern to this role's "
@@ -1124,6 +1172,12 @@ class ClaudeRunner(BaseRunner):
                     stderr_text=stderr_text,
                     skill_applied=bool(scratch_dir),
                 )
+                # Always present, so a consumer never has to tell "no denials"
+                # apart from "this path does not report them". Flag-off runs
+                # dispatch without `--output-format json`, so stdout is raw
+                # text and this is structurally always empty — that is a fact
+                # about the dispatch, not a missing feature.
+                context["denied_tools"] = []
                 logger.error("claude_runner.run_failed", **context)
                 err = redact_text(stderr_text)[-2000:]
                 hint_suffix = f" | hint: {context['hint']}" if context.get("hint") else ""
