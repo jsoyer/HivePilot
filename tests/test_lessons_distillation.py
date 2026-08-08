@@ -41,7 +41,12 @@ from hivepilot.config import settings
 from hivepilot.models import PipelineConfig, PipelineStage, ProjectConfig, TaskConfig, TaskStep
 from hivepilot.orchestrator import RunResult
 from hivepilot.services import config_provenance, state_service
-from hivepilot.services.lessons_service import Lesson, OutcomeSignal, validate_lesson
+from hivepilot.services.lessons_service import (
+    _RUN_SUCCESS_SCORE,
+    Lesson,
+    OutcomeSignal,
+    validate_lesson,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers (mirrors tests/test_verdict_run_correlation.py)
@@ -155,7 +160,10 @@ class TestDistillAndPersistLessons:
         # Sprint 3: `_distill_and_persist_lessons` now also validates each
         # candidate against the run's REAL outcome signal right after
         # persisting it — this run's `RunResult.success=True` is real
-        # positive signal, so the candidate is validated with score 1.0.
+        # positive signal, so the candidate is validated — at the admission
+        # floor, `_RUN_SUCCESS_SCORE`, since a finished run is the weakest
+        # thing the module knows. (It scored 1.0 until the box accumulated
+        # 100 lessons all tied at the ceiling, ranked by nothing.)
         # Critically, that score is NOT the distiller's self-reported 0.99/
         # 1.0 (`score`/`confidence` in the JSON above) — those keys are
         # never even read (see `lessons_service.Lesson`/`parse_distilled_
@@ -163,7 +171,7 @@ class TestDistillAndPersistLessons:
         # does NOT contribute either: `_build_lesson_outcome_signal` scopes
         # verdict-confidence signal to `kind == "challenge"` only.
         assert row["validated"] == 1
-        assert row["score"] == 1.0
+        assert row["score"] == _RUN_SUCCESS_SCORE
         assert row["score"] != 0.99
         assert row["confidence"] is None
 
@@ -418,7 +426,11 @@ class TestBuildLessonOutcomeSignal:
         lesson = Lesson(text="Do the risky thing.", category="general")
         validated, score = validate_lesson(lesson, signal)
         assert validated is True
-        assert score == 1.0
+        # Independence is what this test is about, and it still holds. Only
+        # the magnitude moved: `run_success` alone used to score 1.0, which
+        # on the box produced 100 lessons all tied at the ceiling and
+        # therefore ranked by nothing. See `_RUN_SUCCESS_SCORE`.
+        assert score == _RUN_SUCCESS_SCORE
 
 
 # ---------------------------------------------------------------------------
