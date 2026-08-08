@@ -147,11 +147,50 @@ def ensure_repo(path: Path) -> Repo:
         raise RuntimeError(f"{path} is not a git repository: {exc}") from exc
 
 
+#: git's wording when a branch is checked out in a different worktree. A
+#: branch can only live in one at a time, and git says so precisely.
+_BRANCH_CLAIMED_MARKER = "is already used by worktree at"
+
+
 def checkout_branch(path: Path, branch: str) -> None:
+    """Check *branch* out in *path*, creating or resetting it.
+
+    Retries once with ``--ignore-other-worktrees`` when git refuses because
+    the branch is claimed elsewhere. Run 425 died on exactly that, at the
+    second-to-last stage, after eleven stages and $25.78 of work:
+
+        git checkout -B hivepilot/noxys
+        fatal: 'hivepilot/noxys' is already used by worktree at '/root/noxys'
+
+    Two features interacting, each right alone: `perform_git_actions` checks
+    the branch out in `project.path`, and worktree isolation runs a stage
+    somewhere else. The main clone was simply parked on the branch, left
+    there by an earlier stage.
+
+    The retry is safe HERE SPECIFICALLY because stages are serialised -- the
+    parked clone is idle, not writing. It is scoped to this one stderr
+    signature rather than applied to any failure, and logged: a genuine
+    concurrent claim stays visible instead of being silently overridden.
+
+    What it actually bought: that run never reached the PR-approval stage,
+    which carries the review gate, so no verdict was produced at all.
+    """
     repo = ensure_repo(path)
     git = repo.git
     try:
         git.checkout("-B", branch)
+        return
+    except GitCommandError as exc:
+        if _BRANCH_CLAIMED_MARKER not in str(exc):
+            raise RuntimeError(f"Failed to checkout {branch}: {exc}") from exc
+        logger.warning(
+            "git.branch_claimed_by_other_worktree",
+            branch=branch,
+            path=str(path),
+            remediation="retrying with --ignore-other-worktrees; stages are serialised",
+        )
+    try:
+        git.checkout("-B", branch, "--ignore-other-worktrees")
     except GitCommandError as exc:
         raise RuntimeError(f"Failed to checkout {branch}: {exc}") from exc
 
