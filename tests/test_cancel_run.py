@@ -56,16 +56,47 @@ def _auth(raw_token: str) -> dict:
     return {"Authorization": f"Bearer {raw_token}"}
 
 
-def _wait_for_terminal(run_id: int, timeout: float = 5.0) -> dict:
+def _wait_for_terminal(run_id: int, timeout: float = 30.0) -> dict:
+    """Block until *run_id* leaves `running`, or fail saying what it saw.
+
+    Two things were wrong with the 5-second version, and both showed up as
+    load-dependent flakes: this file's cancel test and
+    `test_async_runs_endpoint`'s each failed roughly one full-suite run in
+    six while passing 18/18 and 20/20 in isolation. A security assertion
+    that sometimes does not run is worse than one that fails.
+
+    - **The deadline was wall-clock.** The run completes on a background
+      thread, and under 7 300 tests on a contended CPU that thread is not
+      guaranteed to be scheduled within five seconds. Nothing was broken;
+      the test simply gave up first. 30 s costs nothing on a healthy run,
+      which returns on the first or second poll.
+    - **`list_recent_runs(limit=200)` is a truncated window.** The row was
+      looked up by scanning a capped list rather than fetched by id, so a
+      busy database could hide the run entirely and the assertion would
+      blame the run's *status* for what was really a missing row.
+      `get_run` asks the question directly.
+
+    The message now carries the status actually observed, so a genuine hang
+    ("still running") reads differently from a vanished row ("no such run")
+    instead of both arriving as "never reached a terminal status".
+
+    NOTE: a twin of this helper lives in the other of
+    `test_cancel_run.py` / `test_async_runs_endpoint.py`. Keep them
+    identical; there is no shared test-helper module in this repo.
+    """
     from hivepilot.services import state_service
 
     deadline = time.monotonic() + timeout
+    last: dict | None = None
     while time.monotonic() < deadline:
-        rows = [r for r in state_service.list_recent_runs(limit=200) if r["id"] == run_id]
-        if rows and rows[0]["status"] not in ("running",):
-            return rows[0]
+        row = state_service.get_run(run_id)
+        if row is not None:
+            last = row
+            if row["status"] not in ("running",):
+                return row
         time.sleep(0.05)
-    raise AssertionError(f"run {run_id} never reached a terminal status")
+    seen = f"last status {last['status']!r}" if last else "no such run row ever appeared"
+    raise AssertionError(f"run {run_id} never reached a terminal status within {timeout}s ({seen})")
 
 
 # ---------------------------------------------------------------------------
