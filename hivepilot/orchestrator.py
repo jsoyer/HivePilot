@@ -4351,6 +4351,39 @@ class Orchestrator:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("auditor.observe_failed", run_id=run_id, error=str(exc))
+
+        # Feed the lessons loop. Until this call existed the loop had exactly
+        # ONE call site, in `_run_task_body` -- the bare `hivepilot run` path
+        # -- and a deployment that works in pipelines therefore accumulated
+        #
+        #     interactions 136    verdicts 14    lessons 0
+        #
+        # with `HIVEPILOT_ENABLE_LESSON_DISTILLATION=true` set the whole
+        # time. Every piece worked and was tested; the loop was simply wired
+        # to the path nobody uses, and nothing anywhere said so.
+        #
+        # Gated exactly like the task path: distillation makes a REAL, costed
+        # LLM call, so a simulation or a dry run must not spend money. Wrapped
+        # for the same reason too -- a broken distiller must never fail a
+        # pipeline that otherwise succeeded.
+        if settings.enable_lesson_distillation and not simulate and not dry_run:
+            for result in results:
+                try:
+                    self._distill_and_persist_lessons(
+                        run_id=run_id,
+                        project=self._project(result.project),
+                        role=None,
+                        task_name=pipeline_name,
+                        result=result,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "lessons.distill_error",
+                        pipeline=pipeline_name,
+                        project=result.project,
+                        run_id=run_id,
+                        error=redact_text(str(exc)),
+                    )
         return results
 
     def approve_run(
