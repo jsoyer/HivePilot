@@ -1158,11 +1158,24 @@ def list_ranked_lessons(
     init_db()
     clauses = ["project=?", "validated=1"]
     params: list[Any] = [project]
+    # A lesson with NO role is a GENERAL lesson -- it applies to every role,
+    # and its `task` is the pipeline it came from rather than a stage.
+    #
+    # Filtering it on equality made 214 of the 219 lessons on the box
+    # unreachable: the pipeline-end distiller stores `role=NULL,
+    # task=<pipeline>` (correctly -- a distillation covering fifteen stages
+    # belongs to no single role), while injection asks per stage with
+    # `role="reviewer", task="noxys-reviewer"`. The two could never meet, so
+    # lessons were distilled, scored, validated, stored -- and never read
+    # back. `retrieve_lessons("noxys")` returned 5; with a role, 0.
+    #
+    # Role-specific rows stay narrowed exactly as before, task included, so a
+    # `release_manager` lesson still cannot appear in a `reviewer`'s context.
     if role is not None:
-        clauses.append("role=?")
+        clauses.append("(role IS NULL OR role=?)")
         params.append(role)
     if task is not None:
-        clauses.append("task=?")
+        clauses.append("(role IS NULL OR task IS NULL OR task=?)")
         params.append(task)
     where = " AND ".join(clauses)
     sql = (
