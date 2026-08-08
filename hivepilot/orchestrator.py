@@ -856,6 +856,54 @@ def _record_step_success(
     )
 
 
+def _record_step_failure(
+    run_id: int,
+    step_name: str,
+    detail: str,
+    provider: str | None,
+    model: str | None,
+    usage: UsageInfo | None,
+    role: str | None = None,
+) -> None:
+    """The failure-path twin of ``_record_step_success``.
+
+    A step that failed still spent the money, and until this existed none of
+    it was recorded: on the box, 211 of 211 failed steps carried
+    ``cost_usd = NULL``. Every cost total the system reported was therefore an
+    underestimate of unknown size — and the runs it under-reported were the
+    expensive ones an operator most wants costed.
+
+    Kept as a mirror of ``_record_step_success`` on purpose. The two paths
+    drifted apart precisely because the failure branch open-coded its
+    ``record_step`` call; a named twin makes the asymmetry visible the next
+    time either side gains a field.
+
+    When *usage* is None (non-claude runner, flag off, or an envelope the
+    parser refused) this issues the exact call the failure branch issued
+    before — no new None-valued columns, and no invented zero. A step whose
+    cost is genuinely unknown must read as unknown, not as free.
+    """
+    if usage is None:
+        state_service.record_step(
+            run_id, step_name, "failed", detail, provider=provider, model=model, role=role
+        )
+        return
+    state_service.record_step(
+        run_id,
+        step_name,
+        "failed",
+        detail,
+        provider=provider,
+        model=usage.model or model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cost_usd=usage.cost_usd,
+        role=role,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_creation_tokens=usage.cache_creation_tokens,
+    )
+
+
 def _parse_brain(entry: str, default_runner: str) -> tuple[str, str]:
     """Split a debate brain spec into ``(runner, model)``.
 
@@ -6377,20 +6425,30 @@ class Orchestrator:
                         # step's success path.
                         record_exception_on_span(_step_span, exc)
                         _step_span.set_attribute("hivepilot.step.status", "failed")
-                        pop_last_usage()
+                        # Pop, don't discard. This used to be a defensive
+                        # clear whose comment asserted the stash "is expected
+                        # to be None" — that assumption is what made every
+                        # failed step cost nothing. A failing `claude`
+                        # dispatch now stashes the usage it really reported,
+                        # so the pop returns a genuine cost most of the time
+                        # and None when there is honestly nothing to record.
+                        #
+                        # The clear itself still matters: whatever comes back
+                        # must not leak into the next step's success path.
+                        _failed_usage = pop_last_usage()
                         if run_id:
                             _provider, _model = (
                                 _resolve_step_provider_model(_used_runner_def, step)
                                 if _used_runner_def is not None
                                 else (None, None)
                             )
-                            state_service.record_step(
+                            _record_step_failure(
                                 run_id,
                                 step.name,
-                                "failed",
                                 str(exc),
                                 provider=_provider,
                                 model=_model,
+                                usage=_failed_usage,
                                 role=task.role,
                             )
                         if step.allow_failure:
