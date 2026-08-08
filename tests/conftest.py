@@ -312,6 +312,27 @@ def _isolate_state_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(state_service, "DB_PATH", tmp_path / "test_state.db")
     yield
+    # Drain any async run this test started BEFORE its database goes away.
+    #
+    # `async_run_service` submits to a module-level ThreadPoolExecutor shared
+    # for the whole session, and `submit_run` never joins the task — correct
+    # in production, where `POST /v1/runs` must return in <500ms. But every
+    # test gets a fresh DB above, so every test's first run is `id = 1`, and
+    # a straggler from an earlier test calling `complete_run(1, ...)` resolves
+    # its path at call time and lands HERE, stamping a status and
+    # `finished_at` on a run it knows nothing about.
+    #
+    # That is what made `test_failure_never_surfaces_raw_exception_text` fail
+    # about one full-suite run in six while passing in isolation — a security
+    # assertion (raw secret-bearing exception text must never reach the
+    # persisted `detail`) that sometimes did not run. Two earlier attempts
+    # treated the symptom in the waiter; this is the source.
+    #
+    # Bounded: `wait_until_idle` returns False rather than blocking, so one
+    # stuck task cannot hang the suite.
+    from hivepilot.services import async_run_service
+
+    async_run_service.wait_until_idle(10.0)
 
 
 @pytest.fixture(autouse=True)
