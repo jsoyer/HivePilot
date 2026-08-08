@@ -136,40 +136,95 @@ _DISTILL_PROMPT_TEMPLATE = (
 )
 
 
+#: Per-field excerpt ceiling. A stage's `summary` is its entire output --
+#: run 390's interactions averaged 9 KB each -- and every block interpolated
+#: it whole. A lesson is written from the shape of what happened, not from a
+#: transcript, so the head of each field is what carries the signal.
+_MAX_FIELD_CHARS = 700
+
+#: Failures get a bigger budget than everything else, because #445 settled
+#: that the error text is the single highest-signal thing a run produces --
+#: and the runner already caps a failure `detail` at 2 000 chars, so this is
+#: sized to carry a whole one rather than cut the sentence that names the
+#: cause. Run 360's was 1 973 chars and ended on `"result": "Prompt is too
+#: long"`; at 700 the diagnosis would have been the part thrown away.
+_MAX_FAILURE_FIELD_CHARS = 2_500
+
+#: Rows kept per block, most recent first. 203 interactions have accrued on
+#: the box; a distiller handed all of them paraphrases instead of distilling.
+_MAX_ENTRIES_PER_BLOCK = 40
+
+#: Hard ceiling on the assembled prompt. Deliberately well under Linux's
+#: `MAX_ARG_STRLEN` (131 072 bytes for a single argv element, which is how
+#: the runner passes a prompt) so the per-field and per-block bounds above
+#: are the ones that normally bite and this only ever backstops them.
+_MAX_PROMPT_CHARS = 60_000
+
+
+def _excerpt(value: Any, limit: int = _MAX_FIELD_CHARS) -> str:
+    """`repr` of *value*, cut to *limit* with the cut declared.
+
+    Never silently shortens: a distiller fed a trimmed transcript that looks
+    complete would write confident lessons about material it never saw.
+    """
+    text = repr(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}… [truncated, {len(text) - limit} more chars]"
+
+
+def _bounded(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """The most recent *_MAX_ENTRIES_PER_BLOCK* entries, plus a note naming
+    what was dropped.
+
+    Most recent, not first: a lesson is about what just happened, and the
+    step that failed is at the end of the run. Keeping the head would distil
+    the intake and discard the crash.
+    """
+    if len(entries) <= _MAX_ENTRIES_PER_BLOCK:
+        return entries, ""
+    kept = entries[-_MAX_ENTRIES_PER_BLOCK:]
+    dropped = len(entries) - len(kept)
+    return kept, f"\n  [{dropped} older entries omitted; showing the {len(kept)} most recent]"
+
+
 def _format_verdicts(verdicts: list[dict[str, Any]]) -> str:
     if not verdicts:
         return "(none)"
+    kept, note = _bounded(verdicts)
     lines = []
-    for v in verdicts:
+    for v in kept:
         lines.append(
             f"- id={v.get('id')} kind={v.get('kind')} decision={v.get('decision')!r} "
-            f"confidence={v.get('confidence')} summary={v.get('summary')!r}"
+            f"confidence={v.get('confidence')} summary={_excerpt(v.get('summary'))}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) + note
 
 
 def _format_interactions(interactions: list[dict[str, Any]]) -> str:
     if not interactions:
         return "(none)"
+    kept, note = _bounded(interactions)
     lines = []
-    for i in interactions:
+    for i in kept:
         lines.append(
             f"- id={i.get('id')} actor={i.get('actor')} action={i.get('action')} "
-            f"target={i.get('target')} summary={i.get('summary')!r}"
+            f"target={i.get('target')} summary={_excerpt(i.get('summary'))}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) + note
 
 
 def _format_outcomes(outcomes: list[dict[str, Any]]) -> str:
     if not outcomes:
         return "(none)"
+    kept, note = _bounded(outcomes)
     lines = []
-    for o in outcomes:
+    for o in kept:
         lines.append(
             f"- project={o.get('project')} target={o.get('target')} "
-            f"success={o.get('success')} detail={o.get('detail')!r}"
+            f"success={o.get('success')} detail={_excerpt(o.get('detail'))}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) + note
 
 
 def _format_failures(failures: list[dict[str, Any]]) -> str:
@@ -181,13 +236,14 @@ def _format_failures(failures: list[dict[str, Any]]) -> str:
     """
     if not failures:
         return "(none)"
+    kept, note = _bounded(failures)
     lines = []
-    for f in failures:
+    for f in kept:
         lines.append(
             f"- step={f.get('step')} role={f.get('role')} "
-            f"status={f.get('status')} error={f.get('detail')!r}"
+            f"status={f.get('status')} error={_excerpt(f.get('detail'), _MAX_FAILURE_FIELD_CHARS)}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) + note
 
 
 def has_distillable_signal(
@@ -232,7 +288,7 @@ def build_distill_prompt(
     are the runs whose lessons are cheapest to state and most expensive to
     rediscover.
     """
-    return _DISTILL_PROMPT_TEMPLATE.format(
+    prompt = _DISTILL_PROMPT_TEMPLATE.format(
         project=project or "(unknown)",
         role=role or "(unknown)",
         task=task or "(unknown)",
@@ -241,6 +297,24 @@ def build_distill_prompt(
         outcomes_block=_format_outcomes(outcomes),
         failures_block=_format_failures(failures or []),
     )
+    if len(prompt) > _MAX_PROMPT_CHARS:
+        # Backstop only -- the per-field and per-block bounds should have
+        # kept us here already, so reaching this means one of them no longer
+        # matches the data. Logged rather than silent for exactly that
+        # reason: run 390's distillation failed for weeks' worth of runs and
+        # the only trace was `[Errno 7]` at the very end of a pipeline.
+        logger.warning(
+            "lessons.prompt_truncated",
+            project=project,
+            task=task,
+            chars=len(prompt),
+            ceiling=_MAX_PROMPT_CHARS,
+        )
+        prompt = (
+            prompt[:_MAX_PROMPT_CHARS] + f"\n\n[prompt truncated at {_MAX_PROMPT_CHARS} chars; "
+            "material beyond this point was not shown]"
+        )
+    return prompt
 
 
 def parse_distilled_lessons(raw: str) -> list[Lesson]:

@@ -78,6 +78,13 @@ def _resolve_skill_text(text: str, catalog: dict[str, dict[str, Any]]) -> str:
 # used for short capture/debate turns, not long headless coding sessions.
 _ANTHROPIC_API_MAX_TOKENS = 4096
 
+#: Linux's `MAX_ARG_STRLEN` — the ceiling on a SINGLE argv element (32 pages
+#: of 4 096 bytes), independent of the much larger total `ARG_MAX`. The prompt
+#: is passed as one element, so this is the wall it hits, and crossing it
+#: raises a bare `[Errno 7] Argument list too long: 'claude'` that names the
+#: binary rather than the prompt.
+_MAX_ARG_STRLEN = 131_072
+
 # Effort -> MAX_THINKING_TOKENS map (reasoning-effort knob). `effort` is the
 # only depth lever HivePilot exposes for Claude besides model choice. A
 # role/step with no `effort` declared performs NO injection at all (see
@@ -613,6 +620,33 @@ class ClaudeRunner(BaseRunner):
         # costs nothing on the plain/no-flags path while making every
         # variadic-flag path permanently safe against this class of bug.
         args.append("--")
+        # The prompt travels as ONE argv element, and Linux caps a single
+        # element at MAX_ARG_STRLEN (131 072 bytes) no matter how large the
+        # total ARG_MAX is. Exceeding it raises a bare
+        # `[Errno 7] Argument list too long: 'claude'` from `subprocess.run`
+        # -- an error that names the binary and says nothing about the
+        # prompt. Run 390's lesson distillation died that way, and tracing it
+        # back to an unbounded prompt took three rounds of investigation.
+        #
+        # Checked here rather than caught below so the message names the
+        # cause and carries the size. Still a hard failure: silently trimming
+        # an agent's prompt would change what it was asked to do.
+        _prompt_bytes = len(prompt.encode())
+        if _prompt_bytes > _MAX_ARG_STRLEN:
+            context = {
+                "prompt_bytes": _prompt_bytes,
+                "limit_bytes": _MAX_ARG_STRLEN,
+                "task": payload.task_name,
+                "stage": payload.step.name,
+                "project": payload.project_name,
+            }
+            logger.error("claude_runner.prompt_too_large_for_argv", **context)
+            raise RunnerExecutionError(
+                f"prompt is {_prompt_bytes} bytes, over the {_MAX_ARG_STRLEN}-byte "
+                "single-argument limit the OS imposes on a command line "
+                "(MAX_ARG_STRLEN) -- the caller must bound what it assembles",
+                context=context,
+            )
         args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}
