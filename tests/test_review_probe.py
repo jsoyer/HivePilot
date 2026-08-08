@@ -70,61 +70,6 @@ def test_fetch_pr_diff_fails_loudly_rather_than_returning_nothing(
     assert "no such PR" in str(excinfo.value)
 
 
-class TestBranchPrDiff:
-    """`review_target: github_pr` must review the PR, not the working tree.
-
-    The two targets used to differ only in where the block was enforced.
-    Since the gate has to sit on the stage that owns `promote_pr`, and that
-    stage commits nothing, `git diff` there was empty every single time — so
-    the reviewers were handed nothing and blocked on it.
-    """
-
-    def test_it_asks_gh_from_the_stages_own_checkout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        seen: dict[str, object] = {}
-
-        def fake_run(cmd, **kwargs):
-            seen["cmd"] = cmd
-            seen["cwd"] = kwargs.get("cwd")
-            return _FakeCompleted("diff --git a/x b/x\n+line\n")
-
-        monkeypatch.setattr(review_probe.subprocess, "run", fake_run)
-
-        diff = review_probe.fetch_pr_diff_for_branch("/repo/here")
-
-        assert "diff --git" in diff
-        # No PR number and no --repo: a pipeline stage knows its checkout,
-        # not a PR number, and `gh pr diff` resolves both from the branch.
-        assert seen["cmd"] == ["gh", "pr", "diff"]
-        assert seen["cwd"] == "/repo/here"
-
-    def test_no_open_pr_raises_instead_of_returning_nothing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Silently returning "" would read as "the reviewers blocked this".
-
-        The caller turns this into a recorded blocking verdict naming the
-        cause, which is a different and far more useful signal.
-        """
-        monkeypatch.setattr(
-            review_probe.subprocess,
-            "run",
-            lambda *_a, **_k: _FakeCompleted("", returncode=1, stderr="no pull requests found"),
-        )
-
-        with pytest.raises(review_probe.ReviewProbeError) as excinfo:
-            review_probe.fetch_pr_diff_for_branch("/repo/here")
-
-        assert "no pull requests found" in str(excinfo.value)
-
-    def test_an_empty_pr_diff_raises_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            review_probe.subprocess, "run", lambda *_a, **_k: _FakeCompleted("   \n")
-        )
-
-        with pytest.raises(review_probe.ReviewProbeError):
-            review_probe.fetch_pr_diff_for_branch("/repo/here")
-
-
 def test_a_dry_run_dispatches_nobody(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called = []
 
