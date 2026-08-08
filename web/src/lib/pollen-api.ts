@@ -366,6 +366,30 @@ export interface ProxyEfficiency {
   }
 }
 
+/** One step that creates more prompt cache than it ever reads back.
+ *
+ * `amortisation` is the MEDIAN per run, not the total. Summing hid the real
+ * case entirely: `ceo intake` is pathological on nine runs out of ten, and a
+ * single outlier that read 326 696 tokens lifted the sum over the floor. */
+export interface UnamortisedStep {
+  step: string
+  runs: number
+  cache_read: number
+  cache_creation: number
+  amortisation: number
+}
+
+export interface CacheEfficiency {
+  steps: number
+  /** `null`, never 0, when nothing has been measured — a rate of zero reads
+   * as "the cache never works", which is a far louder claim than "no model
+   * step has run yet". */
+  hit_rate: number | null
+  cache_read: number
+  cache_creation: number
+  unamortised: UnamortisedStep[]
+}
+
 export interface EfficiencySummary {
   headroom: HeadroomEfficiency
   rtk: RtkEfficiency | null
@@ -374,6 +398,11 @@ export interface EfficiencySummary {
    * every agent call and can fall back to a direct one silently, so this is
    * the only surface that would show it had gone away. */
   proxy: ProxyEfficiency | null
+  /** Prompt cache — the only source here measured from our OWN telemetry
+   * rather than a tool's self-report, and the one that found a step paying
+   * full price ten times behind a healthy-looking 85% aggregate. Optional:
+   * a server older than this field omits it. */
+  cache?: CacheEfficiency | null
 }
 
 export function fetchEfficiency(days = 30): Promise<EfficiencySummary> {

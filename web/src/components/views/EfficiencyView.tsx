@@ -7,8 +7,8 @@ import { Sparkline } from '@/components/dashboard/Sparkline'
 // Below this, a sparkline shows a shape the data does not support.
 const MIN_TREND_POINTS = 2
 import { useT } from '@/lib/i18n'
-import { fetchEfficiency, type HeadroomEfficiency, type ProxyEfficiency,
-  type RtkEfficiency } from '@/lib/pollen-api'
+import { fetchEfficiency, type CacheEfficiency, type HeadroomEfficiency,
+  type ProxyEfficiency, type RtkEfficiency } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 
@@ -115,6 +115,90 @@ function HeadroomPanel({ headroom }: { headroom: HeadroomEfficiency }) {
  * matters: a proxy nobody can reach is a degraded system, while a proxy
  * reporting zero saved is a working one with nothing to compress.
  */
+/**
+ * Prompt-cache panel — the only source on this view measured from our OWN
+ * telemetry rather than a tool's self-report.
+ *
+ * The headline rate is a shop window and deliberately not the point. On the
+ * reference deployment it read a healthy 85% while one step, `ceo intake`,
+ * created ~43k tokens of cache per run and read back ~16k, ten times over,
+ * at 1.25x base input for a creation against 0.1x for a read. An aggregate
+ * cannot show that: a busy healthy step drowns a quiet pathological one, and
+ * the number that looks fine is exactly why nobody looks further.
+ *
+ * So the offender list is what this panel exists for. `amortisation` is the
+ * MEDIAN per run, not the total — summing hid the real case entirely,
+ * because one lucky run that read 326 696 tokens lifted the sum over the
+ * floor while nine runs out of ten paid double.
+ */
+function CachePanel({ cache }: { cache: CacheEfficiency | null | undefined }) {
+  const t = useT()
+
+  // `undefined` as well as `null`: a server older than this field simply
+  // omits it, and crashing here would take the whole view down over a
+  // payload that is merely out of date.
+  if (!cache || cache.hit_rate === null) {
+    return (
+      <p data-testid="efficiency-cache-empty" className="text-sm text-muted-foreground">
+        {t('efficiency.cacheNotMeasured')}
+      </p>
+    )
+  }
+
+  return (
+    <div data-testid="efficiency-cache-section" className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <MetricReadout
+          label={t('efficiency.cacheHitRate')}
+          value={`${Math.round(cache.hit_rate * 100)}%`}
+          sub={t('efficiency.cacheSteps', { count: cache.steps })}
+        />
+        <MetricReadout
+          label={t('efficiency.cacheRead')}
+          value={formatTokens(cache.cache_read)}
+        />
+        <MetricReadout
+          label={t('efficiency.cacheCreated')}
+          value={formatTokens(cache.cache_creation)}
+        />
+      </div>
+
+      {cache.unamortised.length > 0 && (
+        <div data-testid="efficiency-cache-offenders" className="flex flex-col gap-2">
+          <h4 className="text-xs font-semibold">{t('efficiency.cacheUnamortisedTitle')}</h4>
+          <p className="text-xs text-muted-foreground">
+            {t('efficiency.cacheUnamortisedDescription')}
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs tabular-nums">
+              <thead>
+                <tr className="text-left text-muted-foreground">
+                  <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColStep')}</th>
+                  <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColRuns')}</th>
+                  <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColCreated')}</th>
+                  <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColRead')}</th>
+                  <th className="py-1 font-medium">{t('efficiency.cacheColAmortisation')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cache.unamortised.map((s) => (
+                  <tr key={s.step} className="border-t border-border/50">
+                    <td className="py-1 pr-4">{s.step}</td>
+                    <td className="py-1 pr-4">{s.runs}</td>
+                    <td className="py-1 pr-4">{formatTokens(s.cache_creation)}</td>
+                    <td className="py-1 pr-4">{formatTokens(s.cache_read)}</td>
+                    <td className="py-1">{s.amortisation.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ProxyPanel({ proxy }: { proxy: ProxyEfficiency | null | undefined }) {
   const t = useT()
 
@@ -243,6 +327,11 @@ export function EfficiencyView() {
                   <h3 className="mb-2 text-sm font-semibold">{t('efficiency.proxyTitle')}</h3>
                   <p className="mb-3 text-xs text-muted-foreground">{t('efficiency.proxyDescription')}</p>
                   <ProxyPanel proxy={data.proxy} />
+                </div>
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold">{t('efficiency.cacheTitle')}</h3>
+                  <p className="mb-3 text-xs text-muted-foreground">{t('efficiency.cacheDescription')}</p>
+                  <CachePanel cache={data.cache} />
                 </div>
               </div>
             )}

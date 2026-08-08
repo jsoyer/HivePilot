@@ -304,3 +304,74 @@ describe('zero compressions is not one fact but two', () => {
     expect(container.textContent).toContain('has not run yet')
   })
 })
+
+describe('EfficiencyView — prompt cache', () => {
+  it('names the step that creates cache it never reads back', async () => {
+    // The global hit rate is a shop window. On the reference deployment it
+    // read a healthy 85% while one step, `ceo intake`, created ~43k tokens
+    // of cache per run and read back ~16k — ten times, at 1.25x input for a
+    // creation against 0.1x for a read. An aggregate cannot show that: a
+    // busy healthy step drowns a quiet pathological one, and the number
+    // that looks fine is exactly why nobody looks further.
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      cache: {
+        steps: 132,
+        hit_rate: 0.85,
+        cache_read: 36770730,
+        cache_creation: 5342937,
+        unamortised: [
+          { step: 'ceo intake', runs: 12, cache_read: 461032, cache_creation: 536379, amortisation: 0.35 },
+        ],
+      },
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-cache-section"]')).not.toBeNull()
+    expect(container.textContent).toContain('ceo intake')
+  })
+
+  it('says nothing was measured rather than showing a fabricated 0%', async () => {
+    // A rate of zero reads as "the cache never works". No model step having
+    // run yet is a different and much quieter statement.
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      cache: { steps: 0, hit_rate: null, cache_read: 0, cache_creation: 0, unamortised: [] },
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-cache-empty"]')).not.toBeNull()
+  })
+
+  it('survives a server too old to send the field', async () => {
+    // `undefined` as well as `null`: an out-of-date server simply omits it,
+    // and a panel that crashed on that would take the whole view with it.
+    mocks.fetchEfficiency.mockResolvedValue({ ...efficiency, cache: undefined })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-cache-empty"]')).not.toBeNull()
+  })
+
+  it('shows no offender list when every step amortises', async () => {
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      cache: { steps: 40, hit_rate: 0.93, cache_read: 900, cache_creation: 100, unamortised: [] },
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-cache-section"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="efficiency-cache-offenders"]')).toBeNull()
+  })
+})
