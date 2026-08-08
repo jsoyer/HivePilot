@@ -54,8 +54,13 @@ class TestItAsksForTheRightThing:
         assert m.call_args.args[0] == [
             "git",
             "diff",
-            "staging...hivepilot/noxys",
+            "origin/staging...origin/hivepilot/noxys",
         ], "three dots: a PR shows merge-base..tip, not the two-dot range"
+        # `origin/` prefixes: this test asserted the LOCAL range until the box
+        # showed the local branch pointer sitting at the base while the work
+        # sat on the remote (1 byte vs 23 247). See
+        # `test_review_diff_remote_refs.py`. The three-dot shape this test
+        # exists to pin is unchanged.
 
     def test_it_runs_in_the_repo_it_was_given(self) -> None:
         with _run(return_value=MagicMock(returncode=0, stdout="d", stderr="")) as m:
