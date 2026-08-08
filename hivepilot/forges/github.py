@@ -31,6 +31,15 @@ logger = get_logger(__name__)
 # message because the branch names are interpolated into it.
 _NO_COMMITS_MARKER = "no commits between"
 
+#: `gh pr create` refuses a second PR for a head branch that already has one.
+#: That is the NORMAL case for any second pass over the same branch, so
+#: treating it as fatal makes iterating on our own PR impossible: run 404
+#: completed intake, spec, synthesis, CTO, design and implementation -- $16.30
+#: of work -- and then died here, skipping security, QA, design review,
+#: documentation and the release gate. Nothing was wrong; the branch was
+#: pushed and the existing PR had already been updated.
+_PR_EXISTS_MARKER = "already exists"
+
 
 class GitHubForge:
     """`ForgeProvider` for github.com, via the `gh` CLI."""
@@ -264,6 +273,24 @@ class GitHubForge:
                     base=base,
                 )
                 return None
+            # Same category as the no-commits case above: an ordinary outcome
+            # that used to be fatal. Better than returning None, though --
+            # `gh` prints the existing PR's URL in the very message it
+            # refuses with, so the FORGE reports it and `extract_pr_url`'s
+            # standing contract holds (a URL the forge gave us, never one
+            # assembled from a slug and a guessed number). When it refuses
+            # without naming one, None is the honest answer and the pipeline
+            # continues either way.
+            if _PR_EXISTS_MARKER in stderr.lower():
+                existing = extract_pr_url(stderr)
+                logger.info(
+                    "git.pr_already_open",
+                    project=project.path.name,
+                    branch=branch,
+                    base=base,
+                    pr_url_captured=existing is not None,
+                )
+                return existing
             raise RuntimeError(
                 f"Failed to create PR for {project.path.name}: {exc}: {stderr.strip()}"
             ) from exc
