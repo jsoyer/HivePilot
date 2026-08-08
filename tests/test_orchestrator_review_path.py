@@ -431,7 +431,19 @@ class TestUnknownReviewerRoleFailsClosed:
                 run_id=None,
             )
 
-        assert orch._governing_verdict == Verdict(decision=None, confidence=None)
+        # The blocking property — what this test is named for — is asserted
+        # directly below and is unchanged. This line used to pin
+        # `Verdict(None, None)` as a PROXY for it, which was weaker than the
+        # name promised: it could not tell "the reviewers refused" from "we
+        # could not read them", and every verdict row on the box carried NULL
+        # decision and NULL confidence as a result. The refusal is now named,
+        # and named for its cause — a reviewer that could not be reached is a
+        # NEEDS_HUMAN, not an absence of judgement.
+        assert orch._governing_verdict is not None
+        assert orch._governing_verdict.decision == "NEEDS_HUMAN"
+        assert orch._governing_verdict.confidence == pytest.approx(0.5), (
+            "one of two reviewers was readable"
+        )
         assert is_blocking(orch._governing_verdict, effective.confidence_threshold) is True
 
 
