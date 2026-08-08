@@ -2561,6 +2561,11 @@ class Orchestrator:
         )
         verdicts = state_service.list_recent_verdicts(run_id=run_id)
         interactions = state_service.list_recent_interactions(run_id=run_id)
+        # The steps that DIED. Verdicts and interactions both describe
+        # COMPLETED work being judged, so a run that crashed produced
+        # neither and taught nothing -- three failures this week, each a
+        # one-line configuration gap costing $0.56-$1.17, left no trace.
+        failures = state_service.list_failed_steps(run_id)
         outcomes = [
             {
                 "project": result.project,
@@ -2581,6 +2586,7 @@ class Orchestrator:
             verdicts=verdicts,
             interactions=interactions,
             outcomes=outcomes,
+            failures=failures,
             distiller_def=distiller_def,
             capture_fn=self.registry.capture_definition,
         )
