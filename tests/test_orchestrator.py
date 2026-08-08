@@ -1007,6 +1007,7 @@ class TestUsageThreading:
             role="reviewer",
             cache_read_tokens=None,
             cache_creation_tokens=None,
+            turns=None,
         )
 
     def test_captured_usage_threads_cache_tokens(self) -> None:
@@ -1060,6 +1061,7 @@ class TestUsageThreading:
             role="reviewer",
             cache_read_tokens=40000,
             cache_creation_tokens=2000,
+            turns=None,
         )
 
     def test_captured_usage_model_overrides_resolved_model(self) -> None:

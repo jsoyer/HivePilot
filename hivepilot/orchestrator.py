@@ -853,6 +853,7 @@ def _record_step_success(
         role=role,
         cache_read_tokens=usage.cache_read_tokens,
         cache_creation_tokens=usage.cache_creation_tokens,
+        turns=usage.turns,
     )
 
 
@@ -901,6 +902,7 @@ def _record_step_failure(
         role=role,
         cache_read_tokens=usage.cache_read_tokens,
         cache_creation_tokens=usage.cache_creation_tokens,
+        turns=usage.turns,
     )
 
 

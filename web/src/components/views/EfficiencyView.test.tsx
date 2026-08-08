@@ -374,4 +374,30 @@ describe('EfficiencyView — prompt cache', () => {
     expect(container.querySelector('[data-testid="efficiency-cache-section"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="efficiency-cache-offenders"]')).toBeNull()
   })
+
+  it('says so when steps could not be judged, rather than showing an empty table', async () => {
+    // Every row recorded before turn capture lands here. An empty offender
+    // table with nothing beside it reads as "all clear", which is exactly
+    // the misreading the turns split exists to prevent.
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      cache: {
+        steps: 40,
+        hit_rate: 0.85,
+        cache_read: 900,
+        cache_creation: 100,
+        unamortised: [],
+        unclassified: 3,
+      },
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="efficiency-cache-offenders"]')).toBeNull()
+    const note = container.querySelector('[data-testid="efficiency-cache-unclassified"]')
+    expect(note).not.toBeNull()
+    expect(note?.textContent).toContain('3')
+  })
 })

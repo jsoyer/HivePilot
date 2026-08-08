@@ -205,6 +205,11 @@ def init_db() -> None:
         # tracked as their own columns rather than folded into
         # input_tokens/output_tokens, same additive ALTER TABLE ... ADD
         # COLUMN pattern as every other steps migration above.
+        # Not a cost column: the discriminator that tells a short step apart
+        # from a wasteful prefix when reading the two cache columns below.
+        # Historic rows stay NULL and are reported as unclassified rather
+        # than folded into either answer.
+        _add_column_if_missing(conn, "steps", "turns INTEGER")
         _add_column_if_missing(conn, "steps", "cache_read_tokens INTEGER")
         _add_column_if_missing(conn, "steps", "cache_creation_tokens INTEGER")
         conn.execute(
@@ -550,6 +555,7 @@ def record_step(
     role: str | None = None,
     cache_read_tokens: int | None = None,
     cache_creation_tokens: int | None = None,
+    turns: int | None = None,
 ) -> None:
     """Record a step outcome.
 
@@ -574,6 +580,15 @@ def record_step(
     (usage-capture-modelusage fix): prompt-cache tokens, billed at different
     rates than base input/output tokens — existing callers that omit them
     are unaffected and persist ``NULL`` for both, exactly as before this fix.
+
+    ``turns`` is additive and optional, and is not a cost field: it is what
+    makes the two cache columns readable. A step that ran a single turn wrote
+    its prompt to cache and ended before it could read much of it back, so
+    its ``cache_read / cache_creation`` falls below 1.0 by construction no
+    matter how well the prompt is ordered. Without it, a short step and a
+    genuinely wasteful prefix look identical and the cache detector called
+    both pathological. Omitting callers persist ``NULL``, which the detector
+    reports as unclassified rather than resolving by guess.
     """
     init_db()
     # Choke point: `detail` often carries `str(exc)` from a failed step, which
@@ -601,8 +616,8 @@ def record_step(
                 "INSERT INTO steps "
                 "(run_id, step, status, detail, provider, model, "
                 "input_tokens, output_tokens, cost_usd, role, "
-                "cache_read_tokens, cache_creation_tokens) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "cache_read_tokens, cache_creation_tokens, turns) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
             (
                 run_id,
@@ -617,6 +632,7 @@ def record_step(
                 role,
                 cache_read_tokens,
                 cache_creation_tokens,
+                turns,
             ),
         )
     # Announce the step on the event stream. Until this existed the stream

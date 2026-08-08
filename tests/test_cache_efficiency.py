@@ -6,10 +6,17 @@ repeated on every single run:
 
     ceo intake   cache_creation ≈ 43 000     cache_read ≈ 16 000
 
-It *creates* 43 000 tokens of cache each time and reads back 16 000. A fresh
-prefix, every run. Creation is billed at 1.25× base input and a read at
-0.1×, so this is full price paid nineteen times over and never amortised —
-roughly 800 000 creation tokens that bought nothing.
+It *creates* 43 000 tokens of cache each time and reads back 16 000.
+Creation is billed at 1.25× base input and a read at 0.1×, so a step in that
+shape pays close to full price every time.
+
+**Correction (2026-08-08): `ceo intake` is not that step.** Its 15 268-token
+read is byte-identical three runs apart, so the prefix is stable and cached
+as intended; it simply runs one turn and ends before it can read much back.
+A short step falls below 1.0 by construction. The ratio arithmetic below is
+right and is what this file tests; the conclusion drawn from it about this
+particular step was wrong, and `turns` is what tells the two apart — see
+`test_cache_detector_short_steps.py`.
 
 The overall rate hides it completely. 85% looks fine; the step that is
 quietly paying double is invisible inside it. So the useful number is not a
@@ -39,7 +46,17 @@ def db(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _step(step: str, *, read: int, create: int, inp: int = 100, n: int = 1) -> None:
+def _step(
+    step: str, *, read: int, create: int, inp: int = 100, n: int = 1, turns: int | None = 12
+) -> None:
+    """`turns` defaults high on purpose.
+
+    These tests are about the ratio arithmetic — the median, the outlier, the
+    ordering — and a low ratio is only a finding when the step ran enough
+    turns for the prefix to have been read back. Supplying a many-turn count
+    keeps each case in the bucket it was written to exercise. The short-step
+    and unknown-turns paths have their own file.
+    """
     for _ in range(n):
         run = state_service.record_run_start("p", "t")
         state_service.record_step(
@@ -51,6 +68,7 @@ def _step(step: str, *, read: int, create: int, inp: int = 100, n: int = 1) -> N
             input_tokens=inp,
             cache_read_tokens=read,
             cache_creation_tokens=create,
+            turns=turns,
         )
 
 
@@ -80,7 +98,15 @@ class TestTheOverallPicture:
 
 class TestFindingTheStepThatPaysTwice:
     def test_a_step_that_never_amortises_is_flagged(self, db) -> None:
-        """The production case: creates far more than it reads, every run."""
+        """Creates far more than it reads, every run, over many turns — so
+        the prefix could have been read back and was not.
+
+        Named `ceo intake` when this was written, on the belief that the
+        production step was pathological. It is not: it runs one turn, which
+        puts it below the floor by construction. See
+        `test_cache_detector_short_steps.py`. The arithmetic under test here
+        is unchanged; only the example was wrong.
+        """
         _step("ceo intake", read=16000, create=43000, n=5)
 
         flagged = [s["step"] for s in cache_efficiency.cache_summary()["unamortised"]]

@@ -231,6 +231,14 @@ class UsageInfo:
     model: str | None = None
     cache_read_tokens: int | None = None
     cache_creation_tokens: int | None = None
+    #: How many turns the agent took. Not a cost field — the discriminator
+    #: for reading the two above. A step that ran once wrote its prompt to
+    #: cache and ended before it could read much of it back, so its
+    #: `cache_read / cache_creation` sits below 1.0 by construction however
+    #: well the prompt is ordered. Without this, a short step and a genuinely
+    #: wasteful prefix are indistinguishable, and the cache detector called
+    #: both pathological.
+    turns: int | None = None
 
 
 # ``capture()`` returns only ``str`` (the existing, widely-relied-on contract
