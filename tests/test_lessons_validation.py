@@ -34,7 +34,12 @@ from collections.abc import Iterator
 import pytest
 
 from hivepilot.config import settings
-from hivepilot.services.lessons_service import Lesson, OutcomeSignal, validate_lesson
+from hivepilot.services.lessons_service import (
+    _RUN_SUCCESS_SCORE,
+    Lesson,
+    OutcomeSignal,
+    validate_lesson,
+)
 
 _LESSON = Lesson(text="Always run tests before merging.", category="testing")
 
@@ -120,10 +125,19 @@ class TestValidatedFromRealOutcome:
         assert not hasattr(_LESSON, "confidence")
 
     def test_success_run_validates_with_score_from_outcome(self) -> None:
+        """Still admitted — but at the floor, not the ceiling.
+
+        This asserted 1.0 until the box showed what that meant in practice:
+        100 distilled lessons, every one scoring exactly 1.0 and validated,
+        because almost every run succeeds. A scale where everything sits at
+        the top ranks nothing, and `retrieve_lessons` then picks five of a
+        hundred arbitrarily. `run_success` is the weakest signal this module
+        has; it now scores accordingly. Admission is unchanged.
+        """
         signal = OutcomeSignal(run_success=True)
         validated, score = validate_lesson(_LESSON, signal)
         assert validated is True
-        assert score == 1.0
+        assert score == _RUN_SUCCESS_SCORE
 
     def test_resolved_challenge_validates(self) -> None:
         signal = OutcomeSignal(resolved_challenge=True)
@@ -152,8 +166,12 @@ class TestValidatedFromRealOutcome:
         signal = OutcomeSignal(run_success=True, max_verdict_confidence=0.3)
         validated, score = validate_lesson(_LESSON, signal)
         assert validated is True
-        # run_success (1.0) wins over the lower confidence signal.
-        assert score == 1.0
+        # MAX semantics, unchanged: run_success still wins over a 0.3
+        # confidence. Only its magnitude moved — from the ceiling to the
+        # admission floor — so that a confident verdict can now outrank it
+        # instead of tying with it. See `_RUN_SUCCESS_SCORE`.
+        assert score == _RUN_SUCCESS_SCORE
+        assert score > 0.3
 
     def test_score_never_equals_a_distiller_self_report(self) -> None:
         """A `Lesson` built from a distiller response that (illegally, per

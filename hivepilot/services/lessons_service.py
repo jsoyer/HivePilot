@@ -532,6 +532,28 @@ class OutcomeSignal:
     max_verdict_confidence: float | None = None
 
 
+#: What a merely-successful run is worth on its own.
+#:
+#: It used to be 1.0, which is why the box accumulated 100 lessons every one
+#: of which scored exactly 1.0 and was `validated`. Almost every run
+#: succeeds, so almost every lesson saturated the scale, `lesson_min_score`
+#: filtered nothing, and `retrieve_lessons` picked five of a hundred by no
+#: criterion at all — the actual blocker on agents learning anything, since
+#: what reached them was arbitrary.
+#:
+#: `run_success` is also the weakest thing this module knows. That a
+#: fifteen-stage pipeline finished says almost nothing about whether one
+#: distilled sentence is correct; a judge's confidence on a challenge that
+#: was actually adjudicated says a great deal. Ranking them identically
+#: threw that difference away.
+#:
+#: Set to the DEFAULT `lesson_min_score` on purpose: nothing that used to be
+#: admitted becomes quarantined by this change alone. What changes is order
+#: — a judged lesson now outranks an unjudged one — and that
+#: `lesson_min_score` becomes a dial that can actually exclude something.
+_RUN_SUCCESS_SCORE = 0.5
+
+
 def validate_lesson(
     lesson: Lesson, outcome_signal: OutcomeSignal | None, *, min_score: float | None = None
 ) -> tuple[bool, float]:
@@ -573,7 +595,7 @@ def validate_lesson(
 
     candidate_scores: list[float] = []
     if outcome_signal.run_success:
-        candidate_scores.append(1.0)
+        candidate_scores.append(_RUN_SUCCESS_SCORE)
     if outcome_signal.resolved_challenge:
         candidate_scores.append(1.0)
     confidence = outcome_signal.max_verdict_confidence
