@@ -159,22 +159,49 @@ def fetch_branch_diff(
     empty range raises too: a branch with nothing to review must not read as
     a review that found nothing wrong.
     """
-    cmd = ["git", "diff", f"{base}...{branch}"]
-    try:
-        completed = subprocess.run(  # noqa: S603 — fixed argv, no shell
-            cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=repo_path
-        )
-    except Exception as exc:  # noqa: BLE001 — surfaced, not swallowed
-        raise ReviewProbeError(f"could not run `git diff {base}...{branch}`: {exc}") from exc
+    # Remote-tracking refs FIRST. The local branch pointer does not hold the
+    # work: every stage runs in a fresh isolated worktree created from the
+    # base, and `perform_git_actions` calls `checkout_branch` there, so a
+    # stage that commits nothing leaves the local branch sitting at the
+    # worktree's HEAD. Measured on the box after run 412:
+    #
+    #     git diff staging...hivepilot/noxys                ->      1 byte
+    #     git diff origin/staging...origin/hivepilot/noxys  -> 23 247 bytes
+    #
+    # The remote refs are what the pull request is actually made of, and a
+    # gate deciding whether to promote that PR must read them.
+    #
+    # Local stays as a fallback for a branch that was never pushed — no
+    # remote-tracking ref is not a reason to refuse to review it.
+    ranges = [f"origin/{base}...origin/{branch}", f"{base}...{branch}"]
+    failures: list[str] = []
+    for rng in ranges:
+        try:
+            completed = subprocess.run(  # noqa: S603 — fixed argv, no shell
+                ["git", "diff", rng],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                cwd=repo_path,
+            )
+        except Exception as exc:  # noqa: BLE001 — recorded, surfaced below
+            failures.append(f"`git diff {rng}`: {exc}")
+            continue
+        if completed.returncode != 0:
+            detail = (completed.stderr or "").strip() or f"exit {completed.returncode}"
+            failures.append(f"`git diff {rng}` in {repo_path} failed: {detail}")
+            continue
+        diff = completed.stdout or ""
+        if diff.strip():
+            return diff
+        failures.append(f"`git diff {rng}` produced an empty diff")
 
-    if completed.returncode != 0:
-        detail = (completed.stderr or "").strip() or f"exit {completed.returncode}"
-        raise ReviewProbeError(f"`git diff {base}...{branch}` in {repo_path} failed: {detail}")
-
-    diff = completed.stdout or ""
-    if not diff.strip():
-        raise ReviewProbeError(f"{branch} has an empty diff against {base} — nothing to review")
-    return diff
+    # Fail closed, and say which attempts were made: "no diff" and "the ref
+    # does not exist" are different problems and used to arrive identically.
+    raise ReviewProbeError(
+        f"{branch} has an empty diff against {base} — nothing to review ({'; '.join(failures)})"
+    )
 
 
 def _plan_each_reviewer(reviewers: list[str]) -> list[PlannedReviewer]:
