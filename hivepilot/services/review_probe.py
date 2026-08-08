@@ -123,40 +123,57 @@ def fetch_pr_diff(pr: int, *, repo: str, timeout: int = _GH_TIMEOUT_SECONDS) -> 
     return diff
 
 
-def fetch_pr_diff_for_branch(repo_path: str, *, timeout: int = _GH_TIMEOUT_SECONDS) -> str:
-    """The diff of the PR open on *repo_path*'s current branch.
+def fetch_branch_diff(
+    repo_path: str, *, base: str, branch: str, timeout: int = _GH_TIMEOUT_SECONDS
+) -> str:
+    """The change set that would become (or update) the PR: ``base...branch``.
 
-    This is what `review_target: "github_pr"` was always supposed to review.
-    Until now the only subject the orchestrator ever computed was `git diff`
-    on the working tree, so `github_pr` and `internal` differed solely in
-    *where the block was enforced* — never in *what was reviewed*. On the
-    noxys pipeline the review sits on a stage that commits nothing, so the
-    working tree was clean and the reviewers were handed an empty subject
-    every single time.
+    This is what `review_target: "github_pr"` was always meant to review, and
+    what the removed `fetch_pr_diff_for_branch` could not deliver. That
+    function asked ``gh pr diff`` with no arguments — which resolves *the
+    current branch's PR* — inside the stage's own **isolated worktree**,
+    created from the base branch. So its HEAD was `staging`, which has no PR,
+    while the
+    implementation's commits sat on ``hivepilot/<project>`` in the shared
+    ``.git``. `gh` answered truthfully: ``no pull requests found for branch
+    "staging"``, the reviewers got an empty subject, and the gate blocked
+    without judging — 17 verdicts on the box, none carrying a decision or a
+    confidence.
 
-    `gh pr diff` with no arguments resolves the repository and the current
-    branch's PR by itself, which is why neither is passed: the pipeline stage
-    knows its checkout, not a PR number.
+    Three dots on purpose: ``base...branch`` is merge-base to branch tip,
+    which is what a pull request displays. Two dots would also show whatever
+    landed on *base* since the branch forked — changes the branch's author
+    never made and a reviewer must not be asked to judge.
 
-    Raises `ReviewProbeError` rather than returning "" — see that class.
+    Reads the shared refs, so the worktree's own HEAD is irrelevant. No
+    network. And it works identically whether or not a PR exists yet, which
+    matters because the review runs BEFORE its stage's git actions: on a
+    first pass there is nothing to ask `gh` about.
+
+    Not the working-tree diff, which `_git_diff` provides for
+    ``review_target: "internal"``: that would let a review pass having read
+    something other than what is about to be promoted. ``base...branch`` IS
+    what is about to be promoted.
+
+    Raises `ReviewProbeError` rather than returning "" — see that class. An
+    empty range raises too: a branch with nothing to review must not read as
+    a review that found nothing wrong.
     """
-    cmd = ["gh", "pr", "diff"]
+    cmd = ["git", "diff", f"{base}...{branch}"]
     try:
         completed = subprocess.run(  # noqa: S603 — fixed argv, no shell
             cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=repo_path
         )
     except Exception as exc:  # noqa: BLE001 — surfaced, not swallowed
-        raise ReviewProbeError(f"could not run `gh pr diff` in {repo_path}: {exc}") from exc
+        raise ReviewProbeError(f"could not run `git diff {base}...{branch}`: {exc}") from exc
 
     if completed.returncode != 0:
         detail = (completed.stderr or "").strip() or f"exit {completed.returncode}"
-        raise ReviewProbeError(f"`gh pr diff` in {repo_path} failed: {detail}")
+        raise ReviewProbeError(f"`git diff {base}...{branch}` in {repo_path} failed: {detail}")
 
     diff = completed.stdout or ""
     if not diff.strip():
-        raise ReviewProbeError(
-            f"the PR for {repo_path}'s current branch has an empty diff — nothing to review"
-        )
+        raise ReviewProbeError(f"{branch} has an empty diff against {base} — nothing to review")
     return diff
 
 

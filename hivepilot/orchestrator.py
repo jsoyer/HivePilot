@@ -6493,15 +6493,34 @@ class Orchestrator:
                 if effective_debate.review_target == "github_pr":
                     from hivepilot.services.review_probe import (
                         ReviewProbeError,
-                        fetch_pr_diff_for_branch,
+                        fetch_branch_diff,
                     )
 
+                    # `base...branch`, not `gh pr diff`. The old call asked
+                    # `gh` for "the current branch's PR" from inside
+                    # `_exec_project.path` -- which is THIS stage's isolated
+                    # worktree, created from the base branch. Its HEAD was
+                    # `staging`, which has no PR, while the implementation's
+                    # commits lived on `hivepilot/<project>` in the shared
+                    # `.git`. Every reviewer therefore received an empty
+                    # subject and the gate blocked without judging: 17
+                    # verdicts on the box, not one carrying a decision or a
+                    # confidence, and `validate_lesson` starved of the only
+                    # signal that can rank a lesson.
+                    _review_base = _exec_project.default_branch or "main"
+                    _review_branch = f"{task.git.branch_prefix}/{project.path.name}"
                     try:
-                        _review_subject = fetch_pr_diff_for_branch(str(_exec_project.path))
+                        _review_subject = fetch_branch_diff(
+                            str(_exec_project.path),
+                            base=_review_base,
+                            branch=_review_branch,
+                        )
                     except ReviewProbeError as _pr_exc:
                         logger.warning(
                             "review.pr_diff_unavailable",
                             project=_exec_project.path.name,
+                            base=_review_base,
+                            branch=_review_branch,
                             error=redact_text(str(_pr_exc)),
                         )
                         _review_subject = None
