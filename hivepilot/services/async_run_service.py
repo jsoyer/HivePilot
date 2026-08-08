@@ -23,6 +23,7 @@ thread is started merely by importing this module.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
@@ -47,6 +48,35 @@ def _get_executor() -> ThreadPoolExecutor:
                     max_workers=_MAX_WORKERS, thread_name_prefix="hivepilot-async-run"
                 )
     return _executor
+
+
+def wait_until_idle(timeout: float = 5.0) -> bool:
+    """Block until no run is in flight, or *timeout* elapses. True iff idle.
+
+    `submit_run` is deliberately fire-and-forget so `POST /v1/runs` stays
+    fast, and nothing joins the task. That is right in production and wrong
+    in a test suite: the executor is a module-level singleton shared for the
+    whole session, while `conftest`'s `_isolate_state_db` gives every test a
+    FRESH database -- so every test's first run is `id = 1`.
+
+    A task submitted by one test can therefore still be running during the
+    next, and `state_service.complete_run(1, ...)` resolves its path at call
+    time, landing on the *current* test's database and stamping a status and
+    `finished_at` on a run it knows nothing about. That is what made
+    `test_failure_never_surfaces_raw_exception_text` fail about one
+    full-suite run in six while passing in isolation.
+
+    Returns False rather than blocking forever: a drain that hangs the whole
+    suite on one stuck task would be worse than the flake it replaces.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with _registry_lock:
+            if not _registry:
+                return True
+        time.sleep(0.01)
+    with _registry_lock:
+        return not _registry
 
 
 def request_cancel(run_id: int) -> bool:
