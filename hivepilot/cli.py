@@ -449,6 +449,14 @@ def doctor() -> None:
     typer.echo(f"  Prompts dir   : {settings.resolve_path(settings.prompts_dir)}")
     typer.echo(f"  Runs dir      : {settings.resolve_path(settings.runs_dir)}")
     typer.echo(f"  State DB      : {settings.resolve_path(settings.state_db)}")
+    # Which .env is actually governing this process. The relative fallback
+    # resolves against the cwd, and the services run with
+    # WorkingDirectory=/, so plugin activation flags live in `/.env` --
+    # named in no unit file. Reported at its absolute resolution because a
+    # bare ".env" tells an operator nothing.
+    from hivepilot.config import describe_env_file
+
+    typer.echo(f"  Env file      : {describe_env_file()}")
 
     typer.echo("\n=== External binaries ===")
     for binary in [settings.claude_command, settings.gh_command, settings.git_command, "caddy"]:

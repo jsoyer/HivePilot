@@ -54,15 +54,51 @@ def _default_swarm_instance_id() -> str:
     return "swarm-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _resolve_env_file() -> str:
-    """Return the .env path to load, following XDG then cwd precedence."""
+def resolve_env_file_with_provenance() -> tuple[str, str]:
+    """The .env path to load, and *where the choice came from*.
+
+    Provenance is ``"explicit"`` (``HIVEPILOT_ENV_FILE``), ``"xdg"``, or
+    ``"cwd-relative"``. The last one is the one worth naming out loud: it
+    returns a bare ``".env"``, and the systemd units run with
+    ``WorkingDirectory=/``, so on the deployment box it resolves to ``/.env``
+    — which is where `plugins install` wrote the plugin activation flags. No
+    unit file mentions it, so "which plugins are enabled here" was only
+    answerable by archaeology.
+
+    Fourth instance of the same shape, after ``state.db``, ``logs_dir`` and
+    the plugin install directory. The relative default is kept because moving
+    it would strand whatever is already written there; what was missing was
+    any way to ask.
+    """
     explicit = os.environ.get("HIVEPILOT_ENV_FILE")
     if explicit:
-        return explicit
+        return explicit, "explicit"
     xdg_env = _xdg_config_dir() / ".env"
     if xdg_env.exists():
-        return str(xdg_env)
-    return ".env"
+        return str(xdg_env), "xdg"
+    return ".env", "cwd-relative"
+
+
+def describe_env_file() -> str:
+    """One line an operator can act on, for `doctor`.
+
+    A bare ``.env`` tells nobody anything, so a cwd-relative result is
+    reported at its ABSOLUTE resolution — that is what makes ``/.env``
+    visible as "not where you expected". Whether the file exists is stated
+    too: a resolved path holding no file governs nothing, and reads very
+    differently from one quietly setting flags.
+    """
+    path, provenance = resolve_env_file_with_provenance()
+    resolved = Path(path).resolve()
+    suffix = "" if resolved.exists() else " (not present)"
+    if provenance == "cwd-relative":
+        return f"{resolved} [cwd-relative fallback, cwd={Path.cwd()}]{suffix}"
+    return f"{resolved} [{provenance}]{suffix}"
+
+
+def _resolve_env_file() -> str:
+    """Return the .env path to load, following XDG then cwd precedence."""
+    return resolve_env_file_with_provenance()[0]
 
 
 class Settings(BaseSettings):
