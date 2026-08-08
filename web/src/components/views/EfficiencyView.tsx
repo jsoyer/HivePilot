@@ -177,6 +177,7 @@ function CachePanel({ cache }: { cache: CacheEfficiency | null | undefined }) {
                   <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColRuns')}</th>
                   <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColCreated')}</th>
                   <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColRead')}</th>
+                  <th className="py-1 pr-4 font-medium">{t('efficiency.cacheColTurns')}</th>
                   <th className="py-1 font-medium">{t('efficiency.cacheColAmortisation')}</th>
                 </tr>
               </thead>
@@ -187,6 +188,7 @@ function CachePanel({ cache }: { cache: CacheEfficiency | null | undefined }) {
                     <td className="py-1 pr-4">{s.runs}</td>
                     <td className="py-1 pr-4">{formatTokens(s.cache_creation)}</td>
                     <td className="py-1 pr-4">{formatTokens(s.cache_read)}</td>
+                    <td className="py-1 pr-4">{s.turns ?? '—'}</td>
                     <td className="py-1">{s.amortisation.toFixed(2)}</td>
                   </tr>
                 ))}
@@ -194,6 +196,16 @@ function CachePanel({ cache }: { cache: CacheEfficiency | null | undefined }) {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Without this the table just looks empty after the turn-capture
+          split lands, and an empty table reads as "nothing to fix" — which
+          is the same misreading the split was written to stop. Every row
+          recorded before the column existed sits here. */}
+      {(cache.unclassified ?? 0) > 0 && (
+        <p data-testid="efficiency-cache-unclassified" className="text-xs text-muted-foreground">
+          {t('efficiency.cacheUnclassified', { count: cache.unclassified ?? 0 })}
+        </p>
       )}
     </div>
   )

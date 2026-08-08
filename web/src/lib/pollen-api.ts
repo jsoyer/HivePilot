@@ -377,6 +377,9 @@ export interface UnamortisedStep {
   cache_read: number
   cache_creation: number
   amortisation: number
+  /** Median turns. Optional: a server older than this field reports the
+   * ratio without the evidence for it. */
+  turns?: number
 }
 
 export interface CacheEfficiency {
@@ -387,7 +390,18 @@ export interface CacheEfficiency {
   hit_rate: number | null
   cache_read: number
   cache_creation: number
+  /** Below the amortisation floor with turns to spare, so the prefix could
+   * have been read back and was not. Actionable: reorder the prompt. */
   unamortised: UnamortisedStep[]
+  /** Below the floor over too few turns for the ratio to mean anything — a
+   * short step sits there by construction. Reported so the panel can say
+   * "we looked, there is nothing to do", which is not the same as omitting
+   * the step. Optional: absent from a server older than the split. */
+  single_pass?: UnamortisedStep[]
+  /** Below the floor with an unknown turn count — every row written before
+   * the column existed. Counted, never resolved by guess. Without this the
+   * table simply looks empty, which reads as "solved". */
+  unclassified?: number
 }
 
 export interface EfficiencySummary {

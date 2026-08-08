@@ -355,9 +355,18 @@ def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
     if not isinstance(text, str):
         return None
 
+    # Top-level, so it has to be read outside `modelUsage` and attached to
+    # whichever path produced the usage. `bool` is excluded deliberately:
+    # `isinstance(True, int)` is True in Python, and `num_turns: true` must
+    # not become one turn.
+    raw_turns = data.get("num_turns")
+    turns = (
+        int(raw_turns) if isinstance(raw_turns, int) and not isinstance(raw_turns, bool) else None
+    )
+
     model_usage_result = _extract_model_usage(data)
     if model_usage_result is not None:
-        return text, model_usage_result
+        return text, replace(model_usage_result, turns=turns)
 
     usage_field = data.get("usage")
     raw_input = usage_field.get("input_tokens") if isinstance(usage_field, dict) else None
@@ -375,6 +384,7 @@ def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
         output_tokens=output_tokens,
         cost_usd=cost_usd,
         model=model,
+        turns=turns,
     )
 
 
