@@ -98,7 +98,15 @@ def _wait_for_terminal(run_id: int, timeout: float = 30.0) -> dict:
         row = state_service.get_run(run_id)
         if row is not None:
             last = row
-            if row["status"] not in ("running",):
+            # `finished_at`, not a status denylist — see the twin in
+            # `test_cancel_run.py`. `status not in ("running",)` treated
+            # `"pending"` as terminal, and `POST /v1/runs` (right here in this
+            # file's subject) opens a run as `"pending"` whenever the resolved
+            # policy requires approval, which the default `Policy()` these
+            # tests inject does. `complete_run` sets `finished_at` for every
+            # terminal status, so this is the condition that cannot fall
+            # behind a new status value.
+            if row.get("finished_at") is not None:
                 return row
         time.sleep(0.05)
     seen = f"last status {last['status']!r}" if last else "no such run row ever appeared"
