@@ -14,9 +14,12 @@ Design invariants:
 - ONE `capture_definition` call per run (mirrors
   `Orchestrator._adjudicate`/`_adjudicate_challenge` in `orchestrator.py` --
   same "build ONE prompt, make ONE runner call, parse the JSON" shape). The
-  call is skipped entirely when there's no real signal to distill (no
-  verdicts AND no interactions) -- an outcome-only run isn't worth a costed
-  LLM call.
+  call is skipped when there's no real signal to distill -- a clean, quiet
+  run isn't worth a costed LLM call. A FAILED STEP counts as signal (see
+  `has_distillable_signal`): the old condition was "no verdicts AND no
+  interactions", which skipped exactly the run where a lesson is worth most,
+  because a run that crashed early has no verdict -- no reviewer got to
+  judge anything.
 - Redaction guards BOTH directions, not just persistence: the fully-assembled
   prompt is passed through `redact_text` immediately before the `capture_fn`
   call (egress choke point) -- `outcomes[].detail` in particular is sourced
@@ -109,6 +112,13 @@ _DISTILL_PROMPT_TEMPLATE = (
     "JUDGE/ARBITER VERDICTS FROM THIS RUN:\n{verdicts_block}\n\n"
     "AGENT INTERACTIONS FROM THIS RUN:\n{interactions_block}\n\n"
     "OUTCOMES FROM THIS RUN:\n{outcomes_block}\n\n"
+    # Last and named as the strongest signal: a step that DIED is usually a
+    # one-line configuration gap that cost real money and a hand-read of a
+    # 4 000-character error blob. Cheap to state, expensive to rediscover --
+    # exactly what a lesson is for. The distiller never saw these before.
+    "STEPS THAT FAILED IN THIS RUN (strongest signal -- a failure is usually "
+    "a concrete, fixable gap rather than a matter of judgement):\n"
+    "{failures_block}\n\n"
     "Extract zero or more concise, reusable lessons that would help an agent "
     "do better on a SIMILAR future task. Only propose a lesson when the "
     "record actually supports it -- do not invent lessons from nothing, and "
@@ -162,6 +172,47 @@ def _format_outcomes(outcomes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_failures(failures: list[dict[str, Any]]) -> str:
+    """Render the steps that DIED, with enough to write a lesson from.
+
+    The step name alone says something broke; the role says whose
+    configuration to fix, and the error says what to fix in it. All three or
+    the entry is not actionable.
+    """
+    if not failures:
+        return "(none)"
+    lines = []
+    for f in failures:
+        lines.append(
+            f"- step={f.get('step')} role={f.get('role')} "
+            f"status={f.get('status')} error={f.get('detail')!r}"
+        )
+    return "\n".join(lines)
+
+
+def has_distillable_signal(
+    *,
+    verdicts: list[dict[str, Any]],
+    interactions: list[dict[str, Any]],
+    failures: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Whether this run is worth a costed distillation call.
+
+    A clean, quiet run is not -- that reasoning was right and survives.
+
+    But a FAILURE is, and used not to count. The old condition was "no
+    verdicts and no interactions -> skip", which is exactly the shape of a
+    run that crashed early: no reviewer got to judge anything, so no verdict
+    exists. The run where a lesson is worth most was the one guaranteed to
+    be skipped.
+
+    Three failures this week, each a one-line configuration gap costing
+    $0.56-$1.17 and a hand-read of a 4 000-character error blob, left
+    nothing behind.
+    """
+    return bool(verdicts or interactions or failures)
+
+
 def build_distill_prompt(
     *,
     project: str | None,
@@ -170,9 +221,17 @@ def build_distill_prompt(
     verdicts: list[dict[str, Any]],
     interactions: list[dict[str, Any]],
     outcomes: list[dict[str, Any]],
+    failures: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render the ONE distillation prompt covering *verdicts*/*interactions*/
-    *outcomes* for a single completed run."""
+    *outcomes*/*failures* for a single completed run.
+
+    `failures` is the steps that DIED. They were never in the material the
+    distiller saw: `outcomes` carried the run-level result only, so which
+    step broke, in which role, with what error, was invisible -- and those
+    are the runs whose lessons are cheapest to state and most expensive to
+    rediscover.
+    """
     return _DISTILL_PROMPT_TEMPLATE.format(
         project=project or "(unknown)",
         role=role or "(unknown)",
@@ -180,6 +239,7 @@ def build_distill_prompt(
         verdicts_block=_format_verdicts(verdicts),
         interactions_block=_format_interactions(interactions),
         outcomes_block=_format_outcomes(outcomes),
+        failures_block=_format_failures(failures or []),
     )
 
 
@@ -285,6 +345,7 @@ def distill_lessons(
     outcomes: list[dict[str, Any]],
     distiller_def: RunnerDefinition,
     capture_fn: CaptureFn,
+    failures: list[dict[str, Any]] | None = None,
 ) -> list[Lesson]:
     """Distill *verdicts*/*interactions*/*outcomes* from ONE completed run
     into structured lesson CANDIDATEs via ONE `capture_fn` (i.e.
@@ -327,7 +388,12 @@ def distill_lessons(
     """
     from hivepilot.services.config_provenance import redact_text
 
-    if not verdicts and not interactions:
+    # A failure counts. The old condition skipped exactly the run where a
+    # lesson is worth most: one that crashed early produces no verdict,
+    # because no reviewer got to judge anything.
+    if not has_distillable_signal(
+        verdicts=verdicts, interactions=interactions, failures=failures or []
+    ):
         return []
 
     prompt = build_distill_prompt(
@@ -337,6 +403,7 @@ def distill_lessons(
         verdicts=verdicts,
         interactions=interactions,
         outcomes=outcomes,
+        failures=failures or [],
     )
     # Egress choke point: redact the FULL prompt -- not just the response --
     # before it ever reaches `capture_fn` (i.e. before it's sent to the

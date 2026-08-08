@@ -846,6 +846,35 @@ def record_verdict(
         return verdict_id
 
 
+def list_failed_steps(run_id: int, limit: int = 50) -> list[dict[str, Any]]:
+    """Steps of *run_id* that did not succeed, oldest first.
+
+    Feeds the lessons distiller, which until now saw only verdicts,
+    interactions and the run-level outcome -- all of which describe
+    COMPLETED work being judged. A step that died produced none of them, so
+    the failures that actually cost money taught nothing.
+
+    Oldest first because the first failure is usually the cause and the rest
+    the consequence: a denied tool, then a context blowout, then a
+    fail-fast. Reading them in order is reading the causal chain.
+
+    `detail` was already redacted by `record_step`'s choke point, so it is
+    safe to hand onward -- but the distiller redacts the whole prompt again
+    before egress regardless.
+    """
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            db.ph(
+                "SELECT step, role, status, detail, provider, model FROM steps "
+                "WHERE run_id=? AND status NOT IN ('success', 'skipped') "
+                "ORDER BY id ASC LIMIT ?"
+            ),
+            (run_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def list_recent_verdicts(limit: int = 50, run_id: int | None = None) -> list[dict[str, Any]]:
     """Read back persisted verdicts (redacted summary), newest first."""
     init_db()
