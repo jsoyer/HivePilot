@@ -1263,6 +1263,61 @@ _REVIEWER_VERDICT_TOKENS: frozenset[str] = frozenset(
 )
 
 
+#: Blocking reviewer tokens, least to most severe. "If more than one verdict
+#: applies, the most-blocking wins" -- the rule `_register_verdict` already
+#: applies ACROSS verdicts, applied here WITHIN one review round.
+_REVIEWER_BLOCK_SEVERITY: tuple[str, ...] = ("REQUEST_CHANGES", "NEEDS_HUMAN", "BLOCKED")
+
+
+def _review_verdict_from_tokens(tokens: "list[str | None]") -> "Verdict":
+    """Derive the review's governing :class:`Verdict` from each reviewer's
+    parsed ``status:`` token.
+
+    A refusal is a DECISION, and it used to be recorded as the absence of
+    one: anything short of unanimous PASS produced
+    ``Verdict(decision=None, confidence=None)``, discarding tokens that had
+    already been parsed and rendered into the row's own prose summary. All 17
+    verdicts on the box carry NULL decision and NULL confidence while their
+    summaries say ``reviewer: REQUEST_CHANGES``.
+
+    That cost two things, neither of them safety:
+
+    * the gate could not tell a refusal from an unreadable answer -- both
+      arrived as "no decision";
+    * `validate_lesson`'s only discriminating input is
+      ``max_verdict_confidence``, so every distilled lesson scored at the
+      admission floor.
+
+    ``confidence`` is the share of reviewers that could be READ, not a
+    strength-of-feeling: a verdict derived from one voice out of three should
+    not claim the certainty of three. ``None`` is reserved for the case where
+    nothing parsed at all -- there, genuinely, nothing was decided.
+
+    **The gate is untouched.** ``git_service._APPROVE_VERDICTS`` is
+    ``{ACCEPT, ACCEPTED, APPROVE, APPROVED}``; none of the blocking tokens
+    are in it, so ``is_blocking`` returns True for all of them at any
+    confidence. This adds information to a row that already blocked.
+    """
+    readable = [t for t in tokens if t]
+    if not readable:
+        return Verdict(decision=None, confidence=None)
+
+    confidence = len(readable) / len(tokens)
+    if len(readable) == len(tokens) and all(t == "PASS" for t in readable):
+        return Verdict(decision="ACCEPT", confidence=1.0)
+
+    blocking = [t for t in readable if t != "PASS"]
+    if not blocking:
+        # Every readable reviewer passed, but at least one could not be read.
+        # `_parse_reviewer_verdict` is explicit that a caller must treat that
+        # as blocking, never as an implicit pass -- so this is a refusal whose
+        # cause is an unreachable reviewer, and it is named as such.
+        return Verdict(decision="NEEDS_HUMAN", confidence=confidence)
+
+    decision = max(blocking, key=lambda t: _REVIEWER_BLOCK_SEVERITY.index(t))
+    return Verdict(decision=decision, confidence=confidence)
+
+
 def _parse_reviewer_verdict(text: str) -> str | None:
     """Parse a reviewer's raw stage output for its explicit ``status:``
     verdict token (adversarial-review fail-open fix, Sprint 2 follow-up).
@@ -3457,7 +3512,12 @@ class Orchestrator:
         try:
             prompt = _build_review_challenge_prompt(subject)
             reviewer_summaries: list[str] = []
-            all_pass = True
+            # One entry per reviewer, `None` when that reviewer could not be
+            # read at all -- unresolvable role, failed call, or unparseable
+            # output. `_review_verdict_from_tokens` needs the absences as much
+            # as the answers: they are what separates "they refused" from "we
+            # could not ask", and what makes `confidence` mean something.
+            reviewer_tokens: list[str | None] = []
 
             for role_name in effective.reviewers:
                 try:
@@ -3468,7 +3528,7 @@ class Orchestrator:
                     logger.warning(
                         "review.role_unresolved", role=role_name, error=redact_text(str(exc))
                     )
-                    all_pass = False
+                    reviewer_tokens.append(None)
                     reviewer_summaries.append(f"{role_name}: UNRESOLVED")
                     continue
 
@@ -3557,7 +3617,7 @@ class Orchestrator:
                             model=role_model,
                             role=role_name,
                         )
-                    all_pass = False
+                    reviewer_tokens.append(None)
                     reviewer_summaries.append(f"{role_name}: CALL_FAILED")
                     continue
 
@@ -3582,15 +3642,16 @@ class Orchestrator:
 
                 output = redact_text(output) if output else output
                 token = _parse_reviewer_verdict(output or "")
-                if token != "PASS":
-                    all_pass = False
+                reviewer_tokens.append(token)
                 reviewer_summaries.append(f"{role_name}: {token or 'UNPARSEABLE'}")
 
-            verdict = (
-                Verdict(decision="ACCEPT", confidence=1.0)
-                if all_pass
-                else Verdict(decision=None, confidence=None)
-            )
+            # A refusal is a decision. This used to collapse every non-PASS
+            # outcome to `Verdict(None, None)`, throwing away tokens that had
+            # already been parsed and written into the summary a line above --
+            # which is why all 17 verdicts on the box read NULL/NULL while
+            # their own prose said `reviewer: REQUEST_CHANGES`. Same gate
+            # outcome either way; strictly more information in the row.
+            verdict = _review_verdict_from_tokens(reviewer_tokens)
             self._register_verdict(verdict, confidence_threshold=effective.confidence_threshold)
             try:
                 state_service.record_verdict(
