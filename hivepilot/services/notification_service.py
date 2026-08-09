@@ -293,7 +293,15 @@ NotifierRegistry.register("telegram", _send_telegram)
 # It fails open in the worst way: nothing is lost, nothing errors, a topic
 # simply appears. Deployment-specific additions belong in
 # `settings.stream_topic_extra_keys`, not here.
-_ENGINE_STREAM_TOPIC_KEYS: frozenset[str] = frozenset({"hivepilot"})
+#
+# `approvals` is here for a second reason: `telegram_bot` passes it to
+# `_ensure_topic_thread` DIRECTLY (`_APPROVALS_TOPIC_KEY`), never through
+# `_resolve_agent_key`, so listing it changes no routing. What it changes is
+# the doctor's orphan report, which compares registry keys against roles +
+# this set -- without it, the live approvals topic is reported as belonging
+# to no role, and acting on that advice deletes the topic approvals are sent
+# to. A cleanup suggestion that breaks a working feature is worse than none.
+_ENGINE_STREAM_TOPIC_KEYS: frozenset[str] = frozenset({"hivepilot", "approvals"})
 
 _STALE_TOPIC_MARKERS: tuple[str, ...] = (
     "message thread not found",
