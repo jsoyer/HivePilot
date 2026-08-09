@@ -311,3 +311,45 @@ class TestOrphanTopicKeys:
         findings = dl.check_orphan_topic_keys()
 
         assert _severities(findings) == {"warning"}
+
+
+class TestAgentPrivilege:
+    """Agents read a client's PR diff — untrusted input — and run shell
+    commands. As root, the tool allowlist guards a door that is not the only
+    way in: the agent can read `/etc/hivepilot/shared.env` directly.
+    """
+
+    def test_root_is_flagged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("os.geteuid", lambda: 0)
+
+        findings = dl.check_agent_privilege()
+
+        assert _severities(findings) == {"warning"}
+        assert "root" in _messages(findings)
+
+    def test_non_root_is_reported_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Printed even when correct, so a future change back to root reads as
+        a change rather than being discovered months later."""
+        monkeypatch.setattr("os.geteuid", lambda: 1001)
+
+        findings = dl.check_agent_privilege()
+
+        assert _severities(findings) == {"info"}
+        assert "1001" in _messages(findings)
+
+    def test_root_is_a_warning_not_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only `error` makes `config doctor` exit non-zero. Root is a
+        documented, supported deployment — failing the whole command on it
+        would train people to stop running the doctor."""
+        monkeypatch.setattr("os.geteuid", lambda: 0)
+
+        assert all(f.severity != "error" for f in dl.check_agent_privilege())
+
+    def test_the_fix_names_the_systemd_mechanism(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """systemd parses EnvironmentFile= as root BEFORE dropping privileges,
+        which is what lets shared.env stay 0600 root:root and unreadable by the
+        agent. Without that fact the advice looks like it would break the
+        service."""
+        monkeypatch.setattr("os.geteuid", lambda: 0)
+
+        assert "EnvironmentFile" in dl.check_agent_privilege()[0].fix
