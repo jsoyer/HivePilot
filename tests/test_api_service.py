@@ -2497,9 +2497,9 @@ class TestPluginCatalogEndpoint:
         monkeypatch.setattr(_settings, "op_service_account_token", "tok-LEAK-canary", raising=False)
         raw, _ = add_token("read")
 
-        assert "tok-LEAK-canary" not in api_client.get(
-            "/v1/plugins/catalog", headers=_auth(raw)
-        ).text
+        assert (
+            "tok-LEAK-canary" not in api_client.get("/v1/plugins/catalog", headers=_auth(raw)).text
+        )
 
 
 class TestPluginInstallEndpoint:
@@ -2514,9 +2514,7 @@ class TestPluginInstallEndpoint:
         from hivepilot.services import api_service, plugin_installer
 
         called: list[str] = []
-        monkeypatch.setattr(
-            plugin_installer, "fetch_plugin", lambda name, **k: called.append(name)
-        )
+        monkeypatch.setattr(plugin_installer, "fetch_plugin", lambda name, **k: called.append(name))
         raw, _ = add_token("admin")
 
         resp = api_client.post("/v1/plugins/..%2Fevil/install", headers=_auth(raw))
@@ -2540,6 +2538,7 @@ class TestPluginInstallEndpoint:
         monkeypatch.setattr(
             plugin_installer, "fetch_plugin", lambda name, **k: tmp_path / f"{name}.py"
         )
+
         def _persist(name: str, **_k: object):
             persisted.append(name)
             return tmp_path / ".env"
@@ -2564,7 +2563,9 @@ class TestPluginInstallEndpoint:
         monkeypatch.setattr(
             plugin_installer, "fetch_plugin", lambda name, **k: tmp_path / f"{name}.py"
         )
-        monkeypatch.setattr(plugin_installer, "persist_enabled", lambda name, **k: tmp_path / ".env")
+        monkeypatch.setattr(
+            plugin_installer, "persist_enabled", lambda name, **k: tmp_path / ".env"
+        )
         raw, _ = add_token("admin")
 
         body = api_client.post("/v1/plugins/rtk/install", headers=_auth(raw)).json()
