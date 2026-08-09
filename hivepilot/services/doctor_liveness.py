@@ -383,3 +383,63 @@ def check_orphan_topic_keys() -> list[DoctorFinding]:
             "in HIVEPILOT_STREAM_TOPIC_EXTRA_KEYS.",
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# privilege -- who the agents actually run as
+# ---------------------------------------------------------------------------
+
+_CHECK_PRIVILEGE = "agent_privilege"
+
+
+def check_agent_privilege() -> list[DoctorFinding]:
+    """Report when agents run as root.
+
+    Agents read a client's PR diff -- untrusted input -- and run shell
+    commands. As root on a host holding `/etc/hivepilot/shared.env`, the
+    permission allowlist is compensating for the wrong thing: an agent that
+    reads an untrusted diff can read the secret file directly, whatever its
+    tool grants say.
+
+    Non-root closes it cleanly, because systemd parses `EnvironmentFile=` as
+    root BEFORE dropping privileges -- the file can stay `0600 root:root`,
+    unreadable by the agent, while the service still gets its config.
+
+    Reported as a warning rather than an error: root is a legitimate,
+    documented deployment (see `deploy/systemd/*.service`, which carries a
+    commented `User=hivepilot`), and a doctor that exits non-zero on a
+    supported configuration is a doctor people stop running.
+    """
+    import os
+
+    try:
+        uid = os.geteuid()
+    except AttributeError:  # pragma: no cover - non-POSIX
+        return []
+
+    if uid != 0:
+        return [
+            _mk(
+                "info",
+                _CHECK_PRIVILEGE,
+                f"agents run as uid {uid} (not root)",
+                "Printed even when correct, so a future change to root is "
+                "visible as a change rather than discovered later.",
+                "No action needed.",
+            )
+        ]
+
+    return [
+        _mk(
+            "warning",
+            _CHECK_PRIVILEGE,
+            "agents run as root",
+            "An agent reads untrusted input (a client's PR diff) and runs shell "
+            "commands. As root it can read /etc/hivepilot/*.env directly, so the "
+            "tool allowlist is guarding a door that is not the only way in.",
+            "Set User=/Group= in deploy/systemd/*.service (a commented "
+            "User=hivepilot is already there). systemd reads EnvironmentFile= as "
+            "root before dropping privileges, so shared.env can stay 0600 "
+            "root:root and become unreadable by the agent.",
+        )
+    ]
