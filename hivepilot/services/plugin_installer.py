@@ -84,15 +84,54 @@ class ExamplePluginSpec:
 # `test_every_spec_has_a_real_settings_enabled_flag` in
 # tests/test_plugin_installer.py) — descriptions are drawn from each plugin's
 # own module docstring; prereqs from its own `shutil.which(...)` / lazy
-# `import` / documented config vars. Agent-runner CLI plugins (codex, cursor,
-# gemini, ollama, opencode, kimi_cli, qwen_code, antigravity, pi) are
-# deliberately NOT included here — they are already covered by the guided
-# `hivepilot agents install` flow (hivepilot/services/agent_install.py), and
-# demo-only plugins (sample, sample_skill, example_graph_source,
-# drift_panel, drift_graph_source, autopilot_panel,
-# secrets_trust_graph_source) are internal showcases, not something an
-# operator would reach for via a one-command install.
+# `import` / documented config vars.
+#
+# EVERY file under `plugins/` belongs to exactly one of three sets, and a
+# test enforces it. The rule, so the next person does not have to work it
+# out from absence:
+#
+#   1. this registry     — an operator would plausibly install it by name.
+#   2. AGENT_CLI_PLUGINS — an agent CLI, already covered by the guided
+#                          `hivepilot agents install` flow. Two install paths
+#                          for one thing eventually disagree; there is one.
+#   3. DEMO_PLUGINS      — an internal showcase of a contribution type, not
+#                          something anyone runs.
+#
+# Being in none of them used to be indistinguishable from "nobody has
+# decided yet", which is how `headroom_panel`, `improve` and `shadcn` sat
+# outside every path: not installable by name, not discoverable in the
+# Pollen plugins page, and with no written reason. They are now curated.
 # ---------------------------------------------------------------------------
+
+#: Agent CLIs. Installed via `hivepilot agents install`, never from here.
+AGENT_CLI_PLUGINS: frozenset[str] = frozenset(
+    {
+        "antigravity",
+        "codex",
+        "cursor",
+        "gemini",
+        "kimi_cli",
+        "ollama",
+        "opencode",
+        "pi",
+        "qwen_code",
+    }
+)
+
+#: Internal showcases of a contribution type. Deliberately not installable:
+#: they exist to be read, and `sample_skill` is the canonical example every
+#: other skill plugin points at.
+DEMO_PLUGINS: frozenset[str] = frozenset(
+    {
+        "autopilot_panel",
+        "drift_graph_source",
+        "drift_panel",
+        "example_graph_source",
+        "sample",
+        "sample_skill",
+        "secrets_trust_graph_source",
+    }
+)
 
 KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
     "rtk": ExamplePluginSpec(
@@ -195,6 +234,44 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
             "`pip install onepasswordconnectsdk` plus "
             "HIVEPILOT_OP_CONNECT_HOST/_CONNECT_TOKEN for Connect mode. "
             "`hivepilot plugins health` names which are ready."
+        ),
+    ),
+    "headroom_panel": ExamplePluginSpec(
+        name="headroom_panel",
+        description=("A Pollen panel summarising cumulative headroom compression efficiency."),
+        env_flag="HIVEPILOT_HEADROOM_PANEL_ENABLED",
+        prereq_kind="config",
+        prereq_detail=(
+            "the `headroom` plugin writing to state.db's `headroom_compressions` "
+            "table -- this panel only READS it, so with no compressions recorded "
+            "it renders an empty summary rather than an error"
+        ),
+    ),
+    "improve": ExamplePluginSpec(
+        name="improve",
+        description=(
+            "A `skill` contribution: a read-only auditor feeding the review/lessons loop."
+        ),
+        env_flag="HIVEPILOT_IMPROVE_ENABLED",
+        prereq_kind="none",
+        prereq_detail=(
+            "nothing to install. A skill only reaches an agent when a step or "
+            "stage declares `skills: [improve]` -- the enable flag alone does "
+            "nothing"
+        ),
+    ),
+    "shadcn": ExamplePluginSpec(
+        name="shadcn",
+        description=(
+            "A `skill` contribution: a shadcn/ui + Tailwind cheat sheet for building "
+            "the Pollen web UI (`web/`)."
+        ),
+        env_flag="HIVEPILOT_SHADCN_ENABLED",
+        prereq_kind="none",
+        prereq_detail=(
+            "nothing to install. A skill only reaches an agent when a step or "
+            "stage declares `skills: [shadcn]` -- the enable flag alone does "
+            "nothing"
         ),
     ),
     "kms": ExamplePluginSpec(
