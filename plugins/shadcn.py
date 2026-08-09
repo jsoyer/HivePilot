@@ -47,7 +47,8 @@ with HivePilot -- a dark, tabbed React app.
 - **shadcn/ui** (`web/components.json`: style `base-nova`, base color
   `neutral`, CSS variables on, icon library `lucide`). Existing primitives
   live in `web/src/components/ui/` (`badge.tsx`, `button.tsx`, `card.tsx`,
-  `input.tsx`, `table.tsx`, `tabs.tsx`).
+  `drawer.tsx`, `input.tsx`, `select.tsx`, `switch.tsx`, `table.tsx`,
+  `tabs.tsx`).
 - `lucide-react` for icons, `class-variance-authority` + `clsx` +
   `tailwind-merge` (via the `cn()` helper in `web/src/lib/utils.ts`) for
   variant/conditional class composition.
@@ -76,24 +77,33 @@ the `@/components/ui/<component>` alias (see `aliases` in
 - **Where things live:** app shell = `web/src/components/Pollen.tsx`
   (dark, tabbed layout); auth gate = `TokenGate.tsx`; tab bodies =
   `web/src/components/views/*View.tsx` (one file per tab, e.g.
-  `RunsView.tsx`, `HealthView.tsx`, `AnalyticsView.tsx`, `CostView.tsx`,
-  `GraphView.tsx`, `Mem0View.tsx`); shared UI primitives =
+  `RunBoardView.tsx`, `HealthView.tsx`, `AnalyticsView.tsx`,
+  `CostView.tsx`, `GraphView.tsx`, `PluginsView.tsx`); shared UI
+  primitives =
   `web/src/components/ui/`; data fetching + API clients =
   `web/src/lib/api.ts` and `web/src/lib/pollen-api.ts`; the
   `useAsyncData` hook (`web/src/lib/use-async-data.ts`) standardizes
   loading/error/success state for every view.
-- **Panel render pattern:** a generic tab body composes
+- **Panel render pattern:** a tab body composes
   `Card` / `CardHeader` / `CardTitle` / `CardDescription` / `CardContent`
   from `@/components/ui/card`, drives data via `useAsyncData(() =>
-  fetchX(...), [deps])`, and renders three states inline: a
-  `role="status"` pulsing "Loading…" block, a `role="alert"` destructive
-  error block (or a graceful `ApiForbiddenError` message when a panel's
-  `min_role` exceeds the caller's token), and the success content. See
-  `web/src/components/views/PanelView.tsx` +
-  `web/src/components/views/PanelRenderer.tsx` for the reference
-  implementation of this pattern -- follow it for any new
-  plugin-contributed panel or view rather than building a bespoke
-  loading/error scaffold.
+  fetchX(...), [deps])`, and hands the resulting state to
+  **`<AsyncSection>`** (`web/src/components/views/AsyncSection.tsx`) rather
+  than writing loading/error/empty branches by hand. It owns all four
+  states -- pending, error (including a graceful `ApiForbiddenError`
+  message when a panel's `min_role` exceeds the caller's token), empty via
+  its required `isEmpty` predicate, and success:
+
+  ```tsx
+  <AsyncSection state={data} isEmpty={(d) => d.rows.length === 0}>
+    {(d) => <Table>…</Table>}
+  </AsyncSection>
+  ```
+
+  Thirteen of the views already do this. Hand-rolling the scaffold
+  duplicates a component that exists -- see `HealthView.tsx` or
+  `PluginsView.tsx` for a current example, and `PanelView.tsx` +
+  `PanelRenderer.tsx` for plugin-contributed panels specifically.
 - **Graph render pattern:** graph-shaped data (nodes/edges) renders via
   `GraphCanvas.tsx` (a thin `@xyflow/react` wrapper with `dagre` auto-layout)
   driven by `GraphView.tsx`, which fetches from a `graph_sources`
@@ -102,6 +112,15 @@ the `@/components/ui/<component>` alias (see `aliases` in
 - **Errors:** `web/src/lib/format-error.ts`'s `describeApiError()` turns a
   thrown error into a user-facing string; use it instead of
   `String(error)`/`error.message` directly in a view.
+- **Every visible string is translated.** Views call `const t = useT()`
+  (`@/lib/i18n`) and render `t('some.key')` -- 16 of the 17 views do. A key
+  must be added to BOTH `web/src/lib/i18n/en.ts` and
+  `web/src/lib/i18n/fr.ts`; a missing one is not a build error, so
+  hardcoded text passes lint and typecheck and only shows up on screen.
+  Nav labels additionally need an entry in
+  `web/src/components/nav/nav-config.ts` (`NAV_GROUP_ORDER`), whose exact
+  tab list `Pollen.test.tsx` pins on purpose so a new tab cannot silently
+  fail to appear.
 
 ## Tailwind conventions
 
