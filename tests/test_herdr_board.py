@@ -125,3 +125,66 @@ def _panes(node) -> list[dict]:
     if isinstance(node, list):
         return [p for item in node for p in _panes(item)]
     return []
+
+
+class TestRolesDefaultsToTheConfiguredRoster:
+    """`--roles` was required and hand-typed.
+
+    Nobody enumerates twenty roles, which is exactly why no full board ever
+    existed on this deployment: a feature already paid for, unreachable
+    through its own ergonomics.
+    """
+
+    def _invoke(self, monkeypatch: pytest.MonkeyPatch, roster: dict[str, object], *args: str):
+        from typer.testing import CliRunner
+
+        import hivepilot.roles as roles_mod
+        from hivepilot.cli import app
+
+        monkeypatch.setattr(roles_mod, "load_roles", lambda *a, **k: roster)
+        return CliRunner().invoke(app, ["herdr", "board", *args])
+
+    def test_no_flag_builds_a_pane_per_configured_role(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = self._invoke(monkeypatch, {"ceo": object(), "cto": object(), "qa": object()})
+
+        assert result.exit_code == 0, result.output
+        assert [p["label"] for p in _panes(json.loads(result.output))] == ["ceo", "cto", "qa"]
+
+    def test_file_order_is_preserved_not_sorted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """roles.yaml order is the operator's own ordering -- usually the
+        order the pipeline runs in. Sorting would discard that for nothing."""
+        result = self._invoke(monkeypatch, {"zulu": object(), "alpha": object()})
+
+        assert [p["label"] for p in _panes(json.loads(result.output))] == ["zulu", "alpha"]
+
+    def test_every_configured_role_appears_even_if_it_has_never_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Deliberately NOT filtered to roles with run history.
+
+        Only 13 of this deployment's 20 roles have ever been dispatched. A
+        role missing from the board because it never ran is indistinguishable
+        from a role that does not exist -- a silent omission, which is the
+        failure mode a standing board exists to remove.
+        """
+        result = self._invoke(monkeypatch, {f"role_{i}": object() for i in range(20)})
+
+        assert len(_panes(json.loads(result.output))) == 20
+
+    def test_an_explicit_flag_still_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = self._invoke(monkeypatch, {"ceo": object(), "cto": object()}, "--roles", "qa")
+
+        assert [p["label"] for p in _panes(json.loads(result.output))] == ["qa"]
+
+    def test_an_empty_roster_says_so_instead_of_emitting_an_empty_board(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty layout would apply cleanly and show nothing -- the same
+        silent-plausible failure the module docstring warns about for
+        command-less panes."""
+        result = self._invoke(monkeypatch, {})
+
+        assert result.exit_code != 0
+        assert "no roles configured" in result.output
