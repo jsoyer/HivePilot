@@ -301,7 +301,14 @@ class TestPluginsHealthContract:
         resp = api_client.get("/v1/plugins/health", headers=_auth(read_token))
         assert resp.status_code == 200
         data = resp.json()
-        assert set(data.keys()) == {"plugins", "disabled"}
+        # Exact set on purpose -- this file exists to catch API/Pollen drift,
+        # so a new key must be a deliberate contract change, not a surprise.
+        #
+        # `denied` and `not_installed` are the two plugin states that had no
+        # surface anywhere: enabled-installed-and-rolled-back-at-load, and
+        # written-but-never-fetched-onto-this-host. Pollen types both as
+        # OPTIONAL (a host can lag the bundle) but the API always sends them.
+        assert set(data.keys()) == {"plugins", "disabled", "denied", "not_installed"}
         assert len(data["plugins"]) == 1
         # `activity`/`activity_available` are a second answer, independent of
         # `status`: installed-and-configured vs has-actually-run. They are two
