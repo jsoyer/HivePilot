@@ -43,14 +43,24 @@ class TestResolveAgentKey:
         key = _resolve_agent_key("Jules (Chief of Staff)")
         assert key == "chief_of_staff"
 
-    def test_unknown_returns_non_empty_slug(self):
-        key = _resolve_agent_key("SomethingUnknown (Foo)")
-        assert key  # not empty
-        assert isinstance(key, str)
+    def test_an_unknown_actor_gets_no_key(self):
+        """Deliberately inverted. This used to assert a non-empty slug, and
+        that slug was the defect: it became a permanent Telegram topic, so
+        every unmatched actor minted one. `Orchestrator._agent_name` falls
+        back to `stage.name` for a roleless task, which meant pipeline stages
+        grew topics -- `refresh` and `pentest` were found in the live
+        registry. None sends to the General topic instead, which is
+        recoverable; a stray topic has to be deleted by hand.
 
-    def test_empty_actor_returns_general(self):
-        key = _resolve_agent_key("")
-        assert key  # not empty
+        See TestOnlyDeclaredNonRoleStreamsGetATopic in
+        test_topic_naming_convention.py for the full behaviour.
+        """
+        assert _resolve_agent_key("SomethingUnknown (Foo)") is None
+
+    def test_an_empty_actor_gets_no_key(self):
+        """Was `general` — a literal topic named after the absence of an
+        actor, which is a topic nobody ever asked for."""
+        assert _resolve_agent_key("") is None
 
 
 # ---------------------------------------------------------------------------

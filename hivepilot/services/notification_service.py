@@ -278,6 +278,23 @@ NotifierRegistry.register("telegram", _send_telegram)
 # route to the chat's General topic instead (see `_send_one_chunk`).
 # ---------------------------------------------------------------------------
 
+# Non-role stream keys the ENGINE itself emits and which legitimately own a
+# forum topic. Closed on purpose.
+#
+# `_resolve_agent_key` used to slug the first word of ANY unmatched actor into
+# a topic key, which made topic creation unbounded: `Orchestrator._agent_name`
+# falls back to `stage.name` when a task declares no role, so a stage called
+# `refresh` produced an actor "refresh", a key `refresh`, and a permanent
+# Telegram topic named after a pipeline stage. Every new roleless stage minted
+# another one, forever -- observed in production as `refresh` and `pentest`
+# sitting in the registry beside 19 real roles, and as the operator deleting
+# topics by hand.
+#
+# It fails open in the worst way: nothing is lost, nothing errors, a topic
+# simply appears. Deployment-specific additions belong in
+# `settings.stream_topic_extra_keys`, not here.
+_ENGINE_STREAM_TOPIC_KEYS: frozenset[str] = frozenset({"hivepilot"})
+
 _STALE_TOPIC_MARKERS: tuple[str, ...] = (
     "message thread not found",
     "topic_deleted",
@@ -570,9 +587,32 @@ def _resolve_agent_key(actor: str) -> str | None:
             return key
         if _normalize(role.title) in actor_norm:
             return key
-    # Fallback: slug from first word of actor (non-role streams)
-    slug = actor_norm.split()[0] if actor_norm.strip() else "general"
-    return slug or "general"
+
+    # Unmatched actor. The slug of its first word is only allowed to become a
+    # topic key when it is one the engine or the deployment DECLARED.
+    slug = actor_norm.split()[0] if actor_norm.strip() else ""
+    if slug and slug in _allowed_non_role_topic_keys():
+        return slug
+
+    logger.info(
+        "stream.topics.unmatched_actor_no_topic",
+        actor=actor,
+        slug=slug or None,
+        detail="actor matched no role and is not a declared stream key; "
+        "sending to the group's General topic instead of minting a topic",
+    )
+    return None
+
+
+def _allowed_non_role_topic_keys() -> frozenset[str]:
+    """Stream keys that may own a topic without being a role.
+
+    Deployment additions come from `settings.stream_topic_extra_keys` so the
+    engine stays generic -- which of a tenant's non-role streams deserve a
+    topic is a tenant decision, not an engine one.
+    """
+    extra = {_normalize(k) for k in (settings.stream_topic_extra_keys or []) if k.strip()}
+    return _ENGINE_STREAM_TOPIC_KEYS | frozenset(extra)
 
 
 def _canonical_topic_title(agent_key: str, fallback: str | None = None) -> str:
@@ -615,6 +655,19 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
         if data.get("ok"):
             thread_id: int = data["result"]["message_thread_id"]
             _register_topic(agent_key, thread_id)
+            # Creating a topic was the one thing here that recorded NOTHING on
+            # success -- only failures logged. So a group filling up with
+            # topics left no trace to count, and diagnosing it meant reading
+            # a registry that looks healthy precisely because it is keyed.
+            # `registry_size_before` is the number that makes growth visible.
+            logger.info(
+                "stream.topics.created",
+                agent_key=agent_key,
+                title=title,
+                message_thread_id=thread_id,
+                registry_size_before=len(registry),
+                registry_path=str(_topics_registry_path()),
+            )
             return thread_id
         logger.warning("stream.topics.create_failed", agent_key=agent_key, response=data)
     except Exception as exc:  # noqa: BLE001

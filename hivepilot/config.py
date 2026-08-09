@@ -31,6 +31,7 @@ _ENV_LIST_FIELDS = (
     "signal_allowed_numbers",
     "governance_files",
     "swarm_served_tenants",
+    "stream_topic_extra_keys",
 )
 
 
@@ -491,6 +492,15 @@ class Settings(BaseSettings):
     # default here would split into two registries and cause duplicate
     # Telegram forum topics (each cwd context creating its own set).
     stream_topics_registry_path: Path | None = None
+    # env: HIVEPILOT_STREAM_TOPIC_EXTRA_KEYS — non-role stream keys allowed to
+    # own their own Telegram forum topic, beyond the engine's own
+    # (`notification_service._ENGINE_STREAM_TOPIC_KEYS`). Empty by default:
+    # an actor matching no role sends to the group's General topic rather
+    # than minting a topic, because the previous behaviour -- slug the first
+    # word of ANY unmatched actor -- made topic creation unbounded and is
+    # what filled this deployment's group with topics named after pipeline
+    # stages. Which non-role streams deserve a topic is a tenant decision.
+    stream_topic_extra_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
     auditor_auto: bool = (
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
