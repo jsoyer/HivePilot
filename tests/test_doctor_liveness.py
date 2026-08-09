@@ -98,32 +98,79 @@ class TestStateDbLiveness:
 
 
 class TestVaultLiveness:
-    """Configured is not the same as present on disk."""
+    """Configured is not the same as present on disk — and the GLOBAL setting
+    is not the whole story.
 
-    def test_a_missing_vault_warns(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Recall against a missing vault returns nothing and logs success —
-        indistinguishable from a vault with nothing to say. That ran for
-        months here."""
+    The first version of this check looked only at the global vault and
+    concluded the plugin was dead. It was wrong: `_resolve_vault` prefers a
+    project's own `obsidian_vault:` override, and the two projects carrying
+    one had been recalling from real, populated vaults the entire time.
+    Turning a partial gap into a false total-failure claim is worse than
+    saying nothing — a check that cries wolf gets ignored.
+    """
+
+    def _projects(self, monkeypatch: pytest.MonkeyPatch, mapping: dict[str, object]) -> None:
+        from types import SimpleNamespace
+
+        import hivepilot.services.project_service as ps
+
+        projects = {name: SimpleNamespace(obsidian_vault=vault) for name, vault in mapping.items()}
+        monkeypatch.setattr(ps, "load_projects", lambda *a, **k: SimpleNamespace(projects=projects))
+
+    def test_a_project_with_its_own_vault_is_reported_from_that_vault(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The precedence the first version ignored."""
+        vault = tmp_path / "noxys-vault"
+        vault.mkdir()
+        (vault / "a.md").write_text("x")
+        monkeypatch.setattr(dl.settings, "obsidian_vault", None, raising=False)
+        self._projects(monkeypatch, {"noxys": str(vault)})
+
+        findings = dl.check_vault_liveness()
+
+        assert _severities(findings) == {"info"}
+        assert "noxys" in _messages(findings)
+        assert "1 notes" in _messages(findings)
+
+    def test_an_unset_global_is_silent_when_nothing_depends_on_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Deliberately changed. Every project declaring its own vault means
+        the global is genuinely unused, and warning about it is the noise that
+        makes operators stop reading the report."""
+        vault = tmp_path / "v"
+        vault.mkdir()
+        (vault / "a.md").write_text("x")
+        monkeypatch.setattr(dl.settings, "obsidian_vault", None, raising=False)
+        self._projects(monkeypatch, {"noxys": str(vault)})
+
+        assert not [f for f in dl.check_vault_liveness() if f.severity == "warning"]
+
+    def test_an_unset_global_warns_and_NAMES_the_projects_that_fall_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The real gap, and the actionable form of it: those projects recall
+        nothing and write no run notes while the plugin reports healthy."""
+        monkeypatch.setattr(dl.settings, "obsidian_vault", None, raising=False)
+        self._projects(monkeypatch, {"noxys-ml": None, "noxys-website": None})
+
+        findings = dl.check_vault_liveness()
+
+        assert _severities(findings) == {"warning"}
+        assert "noxys-ml" in _messages(findings)
+        assert "noxys-website" in _messages(findings)
+
+    def test_a_missing_global_vault_warns_when_projects_rely_on_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(dl.settings, "obsidian_vault", str(tmp_path / "absent"), raising=False)
+        self._projects(monkeypatch, {"noxys-ml": None})
 
         findings = dl.check_vault_liveness()
 
         assert _severities(findings) == {"warning"}
         assert "does not exist" in _messages(findings)
-
-    def test_an_existing_vault_reports_its_note_count(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        vault = tmp_path / "vault"
-        (vault / "sub").mkdir(parents=True)
-        (vault / "a.md").write_text("x")
-        (vault / "sub" / "b.md").write_text("y")
-        monkeypatch.setattr(dl.settings, "obsidian_vault", str(vault), raising=False)
-
-        findings = dl.check_vault_liveness()
-
-        assert _severities(findings) == {"info"}
-        assert "2 notes" in _messages(findings)
 
     def test_an_empty_vault_warns_because_it_recalls_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -133,19 +180,26 @@ class TestVaultLiveness:
         vault = tmp_path / "vault"
         vault.mkdir()
         monkeypatch.setattr(dl.settings, "obsidian_vault", str(vault), raising=False)
+        self._projects(monkeypatch, {})
+
+        assert _severities(dl.check_vault_liveness()) == {"warning"}
+
+    def test_an_unreadable_vault_is_reported_rather_than_crashing_the_check(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The first rewrite raised PermissionError and took the whole check
+        down — caught by `_run_check`, which is the safety net, not the fix."""
+        monkeypatch.setattr(dl.settings, "obsidian_vault", "/root/someone-elses", raising=False)
+        self._projects(monkeypatch, {})
+
+        def boom(self: Path) -> bool:
+            raise PermissionError("nope")
+
+        monkeypatch.setattr(Path, "exists", boom)
 
         findings = dl.check_vault_liveness()
 
-        assert _severities(findings) == {"warning"}
-
-    def test_an_unconfigured_vault_still_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Silence would be wrong: it is the enabled-plugin case that matters."""
-        monkeypatch.setattr(dl.settings, "obsidian_vault", None, raising=False)
-
-        findings = dl.check_vault_liveness()
-
-        assert _severities(findings) == {"info"}
-        assert "no obsidian vault" in _messages(findings)
+        assert all(f.severity in {"info", "warning"} for f in findings)
 
 
 class TestRegisteredHooks:
