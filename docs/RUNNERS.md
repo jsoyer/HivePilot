@@ -116,8 +116,43 @@ and the missing binary — never a bare `KeyError`.
 
 ```bash
 hivepilot agents list              # show availability per kind
+hivepilot agents versions          # installed VERSION per active kind
 hivepilot agents install <name>    # guided, host-modifying install
 ```
+
+### Versions
+
+`agents list` answers *is it on PATH*. `agents versions` answers *which
+version*, which is the question that explains a run: an agent CLI changes the
+behaviour of every role that uses it, so the version at the time of a run is
+part of that run's evidence. `config doctor` reports the same probe under
+`agent_cli_versions`.
+
+```bash
+hivepilot agents versions                  # offline, active kinds only
+hivepilot agents versions --check-latest   # compare against the npm registry
+hivepilot agents versions --update claude  # explicit, confirmed
+```
+
+Only ACTIVE kinds are probed. Twelve exist and a deployment runs one or two;
+listing the rest would print "not installed" lines that are not problems.
+
+`--check-latest` is the only thing that touches the network — deliberately
+opt-in, so `config doctor` keeps working on a host with no outbound access.
+It reports three distinct outcomes, never collapsing them: `current`,
+`OUTDATED`, and `n/a · not npm-installed` for a CLI that manages its own
+updates (Claude Code's native installer lives under
+`~/.local/share/claude/versions/`, where there is no registry to compare
+against). A lookup that genuinely failed says `lookup failed` — different
+from "cannot be checked".
+
+**Updating is never automatic.** Nothing in the engine calls `--update`; an
+operator does. An agent CLI that updated itself underneath a running fleet
+would change every role's behaviour at once with no signal in any run that
+anything had moved, and the resulting regression would look like the agents
+simply getting worse. `--update` works only for npm-installed CLIs, because
+an `npm install -g` aimed at a natively-installed binary would report success
+and change nothing.
 
 See [PLUGINS.md](PLUGINS.md) for the plugin model these kinds are registered under.
 

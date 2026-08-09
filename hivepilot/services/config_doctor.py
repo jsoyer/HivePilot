@@ -2366,6 +2366,14 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
         findings.extend(_run_check("orphan_topic_keys", doctor_liveness.check_orphan_topic_keys))
         findings.extend(_run_check("agent_privilege", doctor_liveness.check_agent_privilege))
 
+        # Which agent CLI is installed, and at what version. Offline: the
+        # registry lookup lives behind `hivepilot agents versions
+        # --check-latest`, because a health command that needs the internet
+        # stops being run on the box that has no outbound access.
+        from hivepilot.services import agent_versions
+
+        findings.extend(_run_check("agent_cli_versions", agent_versions.check_agent_cli_versions))
+
     findings.extend(
         _run_check("check_dangling_references", lambda: check_dangling_references(config_dir))
     )

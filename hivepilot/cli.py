@@ -4591,6 +4591,120 @@ def agents_list() -> None:
     console.print(table)
 
 
+@agents_app.command("versions")
+def agents_versions(
+    check_latest: bool = typer.Option(
+        False,
+        "--check-latest",
+        help="Query the npm registry for the latest published version (network).",
+    ),
+    update: Optional[str] = typer.Option(
+        None,
+        "--update",
+        help="Update ONE agent kind to @latest. Explicit, confirmed, never automatic.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation for --update."),
+) -> None:
+    """Report the installed version of every ACTIVE agent CLI.
+
+    `agents list` answers "is it on PATH". This answers "which version",
+    which is the question that explains a run: an agent CLI changes the
+    behaviour of every role that uses it, so the version at the time of a run
+    is part of the run's evidence.
+
+    Offline by default -- `--check-latest` is the only thing that touches the
+    network, deliberately opt-in so `config doctor` (which runs the same
+    probe) keeps working on a box with no outbound access.
+
+    **`--update` is the only way this ever updates anything.** Nothing in the
+    engine calls it. An agent CLI that updated itself underneath a running
+    fleet would change every role's behaviour at once with no signal in any
+    run that something had moved, and the resulting regression would look
+    like the agents simply getting worse.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.registry import active_agent_runner_kinds
+    from hivepilot.services.agent_versions import (
+        _is_outdated,
+        fetch_latest_npm_version,
+        probe_agent_cli,
+        update_npm_package,
+    )
+
+    console = Console(width=160)
+    kinds = sorted(active_agent_runner_kinds())
+    if not kinds:
+        typer.echo("No agent runner kinds are active.")
+        raise typer.Exit(0)
+
+    probes = {kind: probe_agent_cli(kind) for kind in kinds}
+
+    table = Table(title="Agent CLI versions")
+    table.add_column("kind")
+    table.add_column("installed")
+    table.add_column("source")
+    if check_latest:
+        table.add_column("latest")
+        table.add_column("status")
+
+    for kind in kinds:
+        probe = probes[kind]
+        installed = probe.version or ("not on PATH" if not probe.on_path else "unknown")
+        source = probe.npm_package or (probe.binary or "—")
+        row = [kind, installed, source]
+        if check_latest:
+            if not probe.npm_package:
+                # NOT the same as a failed lookup. Claude Code's native
+                # installer puts it under `~/.local/share/claude/versions/`,
+                # and that CLI manages its own updates -- there is no registry
+                # to compare against, so saying "unknown" would imply we tried
+                # and could not tell.
+                row += ["—", "n/a · not npm-installed"]
+            else:
+                latest = fetch_latest_npm_version(probe.npm_package)
+                outdated = _is_outdated(probe.version, latest)
+                # Three outcomes, not two: `None` means undecidable and must
+                # not render as "up to date", a claim with no basis.
+                status = {True: "OUTDATED", False: "current"}.get(outdated, "lookup failed")
+                row += [latest or "—", status]
+        table.add_row(*row)
+
+    console.print(table)
+
+    if update is None:
+        return
+
+    probe = probes.get(update)
+    if probe is None:
+        raise typer.BadParameter(
+            f"{update!r} is not an active agent kind. Active: {', '.join(kinds)}"
+        )
+    if not probe.npm_package:
+        raise typer.BadParameter(
+            f"{update} was not installed via npm ({probe.binary or 'not on PATH'}). "
+            "Update it the way it was installed -- an `npm install -g` here would "
+            "silently not apply."
+        )
+
+    typer.echo(f"\nAbout to run: npm install -g {probe.npm_package}@latest")
+    typer.echo("This changes the behaviour of every role that uses this CLI.")
+    if not yes and not typer.confirm("Proceed?", default=False):
+        typer.echo("Aborted.")
+        raise typer.Exit(1)
+
+    ok, tail = update_npm_package(probe.npm_package)
+    typer.echo(tail)
+    if not ok:
+        typer.echo(f"Update FAILED for {probe.npm_package}.", err=True)
+        raise typer.Exit(1)
+    after = probe_agent_cli(update)
+    # Re-probed rather than trusting npm's exit code: this codebase's
+    # characteristic failure is a success that changed nothing.
+    typer.echo(f"{update}: {probe.version or 'unknown'} -> {after.version or 'unknown'}")
+
+
 @agents_app.command("install")
 def agents_install(
     name: str = typer.Argument(..., help="Agent kind to install, e.g. claude, codex, cursor"),
