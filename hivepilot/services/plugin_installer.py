@@ -182,12 +182,19 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
     ),
     "onepassword": ExamplePluginSpec(
         name="onepassword",
-        description="A `secrets` provider backed by 1Password (Connect server or service-account token).",
+        description=(
+            "A `secrets` provider backed by 1Password "
+            "(the `op` CLI, a Connect server, or a service-account token)."
+        ),
         env_flag="HIVEPILOT_ONEPASSWORD_ENABLED",
         prereq_kind="pip",
         prereq_detail=(
-            "`pip install onepassword-sdk` for service-account mode "
-            "(not required for Connect mode -- set HIVEPILOT_OP_CONNECT_HOST/_CONNECT_TOKEN instead)"
+            "ANY ONE of three modes: the `op` CLI on PATH (no pip install -- "
+            "needs HIVEPILOT_OP_SERVICE_ACCOUNT_TOKEN or an `op signin` session); "
+            "`pip install onepassword-sdk` for service-account mode; or "
+            "`pip install onepasswordconnectsdk` plus "
+            "HIVEPILOT_OP_CONNECT_HOST/_CONNECT_TOKEN for Connect mode. "
+            "`hivepilot plugins health` names which are ready."
         ),
     ),
     "kms": ExamplePluginSpec(
