@@ -834,18 +834,6 @@ class Settings(BaseSettings):
     # _OPTIONAL_AGENT_PLUGIN_KINDS.
     # env: HIVEPILOT_GH_ENABLED
     gh_enabled: bool = True
-    # Pinokio DETECTION plugin (plugins/pinokio.py) — opt-OUT permission gate,
-    # same "activate IF present" semantics as ollama_enabled/gh_enabled above:
-    # True means "you MAY report Pinokio if you find it", never "the operator
-    # asserted Pinokio is installed". Unlike every flag above it, this one
-    # gates NO runner: Pinokio is a launcher for local AI apps with web UIs
-    # and ships no headless prompt CLI (and no `pinokio` binary on PATH at
-    # all on Linux — it installs as a .deb/.rpm/.AppImage Electron app), so
-    # the plugin contributes only a `health` check reporting the resolved
-    # Pinokio home + how many apps are installed. register() returns {} when
-    # this flag is False OR when detection finds no complete Pinokio home.
-    # env: HIVEPILOT_PINOKIO_ENABLED
-    pinokio_enabled: bool = True
     # Sprint 02 (plugin-arch-overhaul PRD) — obsidian "brain" recall sub-flags.
     # `obsidian_recall_enabled` gates the NEW `before_step` (`recall`) /
     # `after_step` (`store`) context-provider behavior independently of
