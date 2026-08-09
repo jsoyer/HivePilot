@@ -258,7 +258,17 @@ export function HealthView() {
       <CardContent>
         <AsyncSection
           state={health}
-          isEmpty={(data) => data.plugins.length === 0 && data.disabled.length === 0}
+          // `denied` and `not_installed` count as content. Without them, a
+          // host where every plugin was rolled back at load would render
+          // "No plugins registered" and hide the denial list — reproducing
+          // the silence this section exists to end, in the one case where it
+          // matters most.
+          isEmpty={(data) =>
+            data.plugins.length === 0 &&
+            data.disabled.length === 0 &&
+            (data.denied ?? []).length === 0 &&
+            (data.not_installed ?? []).length === 0
+          }
           emptyMessage={t('health.noPlugins')}
         >
           {(data) => {
@@ -388,6 +398,54 @@ export function HealthView() {
                     )
                   })}
                 </ul>
+                {/* Enabled AND installed AND did not load — the third state,
+                    which had no surface anywhere. `check_all()` only covers
+                    REGISTERED plugins and a capability-denied plugin is rolled
+                    back before registration, so it appears in neither the list
+                    above nor the disabled list below. An operator could enable
+                    it, watch the toggle succeed, and find it nowhere. */}
+                {(data.denied ?? []).length > 0 && (
+                  <div className="flex flex-col gap-2 border-t border-border pt-4">
+                    <h3 className="text-sm font-semibold text-muted-foreground">
+                      {t('health.deniedPlugins')}
+                    </h3>
+                    <ul className="flex flex-col gap-2">
+                      {(data.denied ?? []).map((denied) => (
+                        <li
+                          key={denied.name}
+                          className="flex flex-col gap-1 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">{denied.name}</span>
+                            <Badge variant="destructive">{t('health.denied')}</Badge>
+                          </div>
+                          <span className="text-sm text-muted-foreground">{denied.error}</span>
+                          <span className="text-sm text-muted-foreground">
+                            {denied.remediation}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {/* Written in the repo, never fetched onto this host. Plugins
+                    are not in the wheel, so a merge does not install them —
+                    showing only what IS installed answers "what is on" while
+                    hiding "what exists". Not a problem, so it is quiet: a
+                    plain list, no badge, no severity. */}
+                {(data.not_installed ?? []).length > 0 && (
+                  <div className="flex flex-col gap-2 border-t border-border pt-4">
+                    <h3 className="text-sm font-semibold text-muted-foreground">
+                      {t('health.notInstalledPlugins')}
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      {t('health.notInstalledHint')}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {(data.not_installed ?? []).join(', ')}
+                    </p>
+                  </div>
+                )}
                 {trulyDisabled.length > 0 && (
                   <div className="flex flex-col gap-2 border-t border-border pt-4">
                     <h3 className="text-sm font-semibold text-muted-foreground">
