@@ -5,6 +5,7 @@ import {
   Cpu,
   Database,
   DollarSign,
+  Blocks,
   HeartPulse,
   LayoutDashboard,
   LayoutGrid,
@@ -40,6 +41,7 @@ import { HealthView } from './views/HealthView'
 import { HomeView } from './views/HomeView'
 import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
+import { PluginsView } from './views/PluginsView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
@@ -67,6 +69,12 @@ const BUILTIN_TABS = [
   { value: 'models', labelKey: 'nav.models', Panel: ModelsView, Icon: Cpu },
   { value: 'efficiency', labelKey: 'nav.efficiency', Panel: EfficiencyView, Icon: Zap },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
+  // One card per curated plugin: description, on/off switch, and what it
+  // needs. Built on GET /v1/plugins/catalog rather than /plugins/health --
+  // health reports what LOADED, so the ~23 plugins that are written and not
+  // installed (the interesting set) would be invisible. Read-only for any
+  // token; the switches gate themselves on useRole().can('admin').
+  { value: 'plugins', labelKey: 'nav.plugins', Panel: PluginsView, Icon: Blocks },
   // Mirador "Agents" view sprint: per-role activity roster + lessons +
   // verdicts (GET /v1/agents, /v1/lessons, /v1/verdicts) — read-only for any
   // token, grouped with Health/Graph under "System" in nav-config.ts's

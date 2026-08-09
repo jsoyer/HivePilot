@@ -499,6 +499,54 @@ export interface PluginsHealthResponse {
   not_installed?: string[]
 }
 
+/** One curated plugin, as a card needs it.
+ *
+ * `/plugins/health` reports what LOADED; this reports what EXISTS. ~23 of the
+ * curated plugins are written and not installed on a given host, and that is
+ * exactly the set an operator wants to browse and turn on. */
+export interface PluginCatalogEntry {
+  name: string
+  description: string
+  /** `pip` / `binary` / `config` — what KIND of thing must be present. */
+  prereq_kind: string
+  /** The exact thing to install, in the operator's own terms. HivePilot never
+   * installs it: a `pip install` triggered from a web switch runs arbitrary
+   * package code as the service user, and a heavy one has wedged this
+   * project's production host before. */
+  prereq_detail: string
+  installed: boolean
+  enabled: boolean
+  env_flag: string
+}
+
+export interface PluginCatalogResponse {
+  plugins: PluginCatalogEntry[]
+}
+
+export function fetchPluginCatalog(): Promise<PluginCatalogResponse> {
+  return apiFetch<PluginCatalogResponse>('/v1/plugins/catalog')
+}
+
+export interface PluginInstallResult {
+  name: string
+  installed_to: string
+  enabled: boolean
+  /** Always true. `PluginManager` scans once at construction, so a freshly
+   * installed plugin is inert until the process restarts — a UI implying
+   * otherwise sends the operator hunting a plugin that is on disk, enabled,
+   * and doing nothing. */
+  restart_required: boolean
+  prereq_detail: string
+}
+
+/** Fetch a curated plugin file onto the host and persist its enable flag.
+ * Admin-only, and restricted server-side to the curated registry. */
+export function installPlugin(name: string): Promise<PluginInstallResult> {
+  return apiFetch<PluginInstallResult>(`/v1/plugins/${encodeURIComponent(name)}/install`, {
+    method: 'POST',
+  })
+}
+
 export function fetchPluginsHealth(): Promise<PluginsHealthResponse> {
   return apiFetch<PluginsHealthResponse>('/v1/plugins/health')
 }

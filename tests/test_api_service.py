@@ -2422,3 +2422,153 @@ class TestPluginsHealthSurfacesTheSilentStates:
 
         assert "rtk" not in body["not_installed"]
         assert "onepassword" in body["not_installed"]
+
+
+class TestPluginCatalogEndpoint:
+    """The card UI needs the plugins that EXIST, not the ones that loaded.
+
+    `/plugins/health` only reports registered plugins, so a page built on it
+    could never show the ~23 curated plugins that are written and not
+    installed — which is exactly the set an operator wants to browse and
+    turn on.
+    """
+
+    def test_it_lists_every_curated_plugin_not_just_the_loaded_ones(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(plugins=SimpleNamespace(check_all=lambda: {}, denied=[])),
+        )
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/plugins/catalog", headers=_auth(raw)).json()
+        names = {p["name"] for p in body["plugins"]}
+
+        assert "onepassword" in names
+        assert "rtk" in names
+        assert len(names) > 10
+
+    def test_each_entry_carries_what_a_card_must_show(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A switch with no description is a switch nobody dares flip."""
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(plugins=SimpleNamespace(check_all=lambda: {}, denied=[])),
+        )
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/plugins/catalog", headers=_auth(raw)).json()
+        entry = next(p for p in body["plugins"] if p["name"] == "onepassword")
+
+        assert entry["description"]
+        assert entry["prereq_detail"]
+        assert entry["prereq_kind"]
+        assert "installed" in entry
+        assert "enabled" in entry
+
+    def test_it_never_leaks_a_secret_value(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Catalog metadata only — this endpoint is `read`-role, unlike the
+        admin-gated install/toggle ones."""
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(plugins=SimpleNamespace(check_all=lambda: {}, denied=[])),
+        )
+        from hivepilot.config import settings as _settings
+
+        monkeypatch.setattr(_settings, "op_service_account_token", "tok-LEAK-canary", raising=False)
+        raw, _ = add_token("read")
+
+        assert (
+            "tok-LEAK-canary" not in api_client.get("/v1/plugins/catalog", headers=_auth(raw)).text
+        )
+
+
+class TestPluginInstallEndpoint:
+    """Flipping a switch on a plugin that is not installed has to be able to
+    install it, or the switch is decorative."""
+
+    def test_it_refuses_a_name_outside_the_curated_registry(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail-closed BEFORE any fetch: this writes executable Python onto
+        the host, so an arbitrary name must never reach the fetcher."""
+        from hivepilot.services import api_service, plugin_installer
+
+        called: list[str] = []
+        monkeypatch.setattr(plugin_installer, "fetch_plugin", lambda name, **k: called.append(name))
+        raw, _ = add_token("admin")
+
+        resp = api_client.post("/v1/plugins/..%2Fevil/install", headers=_auth(raw))
+
+        assert resp.status_code in (400, 404)
+        assert called == []
+        assert api_service is not None
+
+    def test_a_read_token_cannot_install(self, api_client) -> None:
+        """It modifies the host and stages code that runs in-process."""
+        raw, _ = add_token("read")
+
+        assert api_client.post("/v1/plugins/rtk/install", headers=_auth(raw)).status_code == 403
+
+    def test_installing_persists_the_enable_flag(
+        self, api_client, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        from hivepilot.services import plugin_installer
+
+        persisted: list[str] = []
+        monkeypatch.setattr(
+            plugin_installer, "fetch_plugin", lambda name, **k: tmp_path / f"{name}.py"
+        )
+
+        def _persist(name: str, **_k: object):
+            persisted.append(name)
+            return tmp_path / ".env"
+
+        monkeypatch.setattr(plugin_installer, "persist_enabled", _persist)
+        raw, _ = add_token("admin")
+
+        resp = api_client.post("/v1/plugins/rtk/install", headers=_auth(raw))
+
+        assert resp.status_code == 200
+        assert persisted == ["rtk"]
+
+    def test_the_response_says_a_restart_is_needed(
+        self, api_client, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """`PluginManager` scans once at construction, so a freshly installed
+        plugin is inert until the process restarts. A UI that implied
+        otherwise would have the operator hunting a plugin that is on disk,
+        enabled, and doing nothing."""
+        from hivepilot.services import plugin_installer
+
+        monkeypatch.setattr(
+            plugin_installer, "fetch_plugin", lambda name, **k: tmp_path / f"{name}.py"
+        )
+        monkeypatch.setattr(
+            plugin_installer, "persist_enabled", lambda name, **k: tmp_path / ".env"
+        )
+        raw, _ = add_token("admin")
+
+        body = api_client.post("/v1/plugins/rtk/install", headers=_auth(raw)).json()
+
+        assert body["restart_required"] is True
+        assert body["prereq_detail"]

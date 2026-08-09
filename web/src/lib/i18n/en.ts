@@ -69,6 +69,7 @@ export const en = {
   'nav.models': 'Models',
   'nav.efficiency': 'Efficiency',
   'nav.health': 'Health',
+  'nav.plugins': 'Plugins',
   'nav.approvals': 'Approvals',
   'nav.runs': 'Runs',
   'nav.autopilot': 'Autopilot',
@@ -147,6 +148,23 @@ export const en = {
     '{count} model(s) have unpriced steps because no token usage was recorded — the price map is fine, the usage capture is not: {models}',
 
   // ---- Health view -----------------------------------------------------
+  'plugins.title': 'Plugins',
+  'plugins.description':
+    'Every curated plugin, whether or not it is installed here. Turning one on installs the plugin file and enables it — it never installs the plugin\u2019s own prerequisite.',
+  'plugins.empty': 'No curated plugins.',
+  'plugins.notInstalled': 'not installed',
+  'plugins.restartRequired': 'restart required',
+  'plugins.restartTitle': 'Takes effect on the server\u2019s next restart only — no live reload.',
+  'plugins.adminOnly': 'An admin token is required to change any of these.',
+  'plugins.forbidden': 'Insufficient role — your token can no longer change plugins.',
+  'plugins.showPrereq': 'Requirements',
+  'plugins.hidePrereq': 'Hide requirements',
+  'plugins.prereqLabel': 'Needs',
+  'plugins.prereqNotAutomatic':
+    'HivePilot does not install this for you — running it here would execute arbitrary package code as the service user. Install it yourself, then restart.',
+  'plugins.action.install': 'Install and enable',
+  'plugins.action.enable': 'Enable',
+  'plugins.action.disable': 'Disable',
   'health.title': 'Plugin health',
   'health.description': 'Process-global plugin status, same as `hivepilot plugins health`.',
   'health.restartNote': " Enable/disable applies on the server's next restart only.",
