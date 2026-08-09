@@ -70,6 +70,9 @@ Configured via ``HIVEPILOT_OP_*`` (``hivepilot/config.py``): ``op_connect_host``
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Coroutine
 
@@ -98,6 +101,79 @@ except ImportError:  # onepassword-sdk is optional — never installed by this p
 # Provider name — the key this backend registers under in SECRETS_MAP and the
 # only identifier (besides the reference identity) ever surfaced in an error.
 _PROVIDER = "onepassword"
+
+# The `op` CLI binary. A third resolution mode, and the only one that needs no
+# Python package: both SDK modes require a pip install, and on this project's
+# production box a heavy `pip install` has wedged the host before.
+#
+# It does NOT remove the credential requirement -- headless, `op` still needs
+# OP_SERVICE_ACCOUNT_TOKEN (or an interactive `op signin` session). What it
+# removes is the SDK.
+_CLI_BINARY = "op"
+_CLI_TIMEOUT_S = 20
+
+_MODE_CONNECT = "connect"
+_MODE_SERVICE_ACCOUNT = "service-account"
+_MODE_CLI = "cli"
+
+
+def _cli_available() -> bool:
+    """True when the `op` binary is on PATH."""
+    return shutil.which(_CLI_BINARY) is not None
+
+
+def _sdk_available() -> bool:
+    """True when the direct service-account SDK is importable."""
+    return _OPClient is not None
+
+
+def _mode_report(settings_obj: Any) -> list[tuple[str, bool, str]]:
+    """(mode, usable, detail) for every mode, in precedence order.
+
+    Reported per mode rather than collapsed into one verdict because the
+    modes need DIFFERENT things -- `onepasswordconnectsdk`, `onepassword-sdk`,
+    or just the binary -- and the previous single verdict called a working
+    service-account or CLI deployment "error: onepasswordconnectsdk not
+    installed". Never contains a token: presence booleans only.
+    """
+    host = bool(getattr(settings_obj, "op_connect_host", None))
+    connect_token = bool(getattr(settings_obj, "op_connect_token", None))
+    sa_token = bool(getattr(settings_obj, "op_service_account_token", None))
+
+    connect_ok = host and (connect_token or sa_token) and new_client is not None
+    connect_detail = (
+        "ready" if connect_ok else "needs op_connect_host + a token + onepasswordconnectsdk"
+    )
+
+    sa_ok = sa_token and not host and _sdk_available()
+    sa_detail = "ready" if sa_ok else "needs op_service_account_token + onepassword-sdk"
+
+    cli_ok = _cli_available() and (sa_token or _cli_session_present())
+    if cli_ok:
+        cli_detail = "ready"
+    elif not _cli_available():
+        cli_detail = f"needs the `{_CLI_BINARY}` binary on PATH"
+    else:
+        cli_detail = "binary present, needs op_service_account_token or an `op signin` session"
+
+    return [
+        (_MODE_CONNECT, bool(connect_ok), connect_detail),
+        (_MODE_SERVICE_ACCOUNT, bool(sa_ok), sa_detail),
+        (_MODE_CLI, bool(cli_ok), cli_detail),
+    ]
+
+
+def _cli_session_present() -> bool:
+    """True when the environment already carries an `op` session/credential.
+
+    Checked rather than assumed: a daemon has neither, and reporting `ok`
+    because a binary exists would be the "installed therefore working"
+    mistake this codebase keeps paying for.
+    """
+    return any(
+        os.environ.get(name)
+        for name in ("OP_SERVICE_ACCOUNT_TOKEN", "OP_SESSION", "OP_CONNECT_TOKEN")
+    ) or any(name.startswith("OP_SESSION_") for name in os.environ)
 
 
 def _run_coro(coro: "Coroutine[Any, Any, Any]") -> Any:
@@ -214,10 +290,35 @@ class OnePasswordBackend:
         # a service-account token — so existing Connect deployments are
         # unaffected (backward-compatible selection).
         if not settings.op_connect_host and settings.op_service_account_token:
+            if _sdk_available():
+                return self._resolve_service_account(ref, settings)
+            # The SDK is absent. Before failing, try the `op` CLI -- same
+            # credential, same reference model, no Python package. This is the
+            # ONLY behaviour change for an existing deployment, and it can only
+            # turn a hard failure into a success.
+            if _cli_available():
+                try:
+                    return self._resolve_cli(ref, settings)
+                except RuntimeError as exc:
+                    # Keep BOTH facts. The CLI failure alone would hide that
+                    # the intended mode was service-account and that its
+                    # package is simply not installed -- the one thing the
+                    # operator can act on.
+                    raise RuntimeError(
+                        f"{exc} The 'onepassword-sdk' package is also not "
+                        "installed, so direct service-account mode was "
+                        "unavailable (pip install onepassword-sdk)."
+                    ) from None
             return self._resolve_service_account(ref, settings)
 
         vault, item, field = _parse_ref(ref)
         identity = f"op://{vault}/{item}/{field}"
+
+        # No Connect host configured at all and no service-account token: the
+        # CLI may still be signed in. Checked before the Connect error below,
+        # whose advice would otherwise be wrong for a CLI-only host.
+        if not settings.op_connect_host and _cli_available() and _cli_session_present():
+            return self._resolve_cli(ref, settings)
 
         if new_client is None:
             raise RuntimeError(
@@ -253,6 +354,65 @@ class OnePasswordBackend:
             field=field,
             identity=identity,
         )
+
+    def _resolve_cli(self, ref: SecretRef, settings: Settings) -> str:
+        """Resolve via `op read op://vault/item/field`.
+
+        The token goes in the ENVIRONMENT, never in argv: a process's command
+        line is world-readable through /proc, so a token on it leaks to every
+        local user. Its environment is not.
+
+        stdout is the secret. It is never logged, and a failure surfaces the
+        reference identity and the exit code ONLY -- `op`'s stderr can echo
+        both the reference and, on some errors, the value, so it is
+        deliberately not propagated.
+        """
+        vault, item, field = _parse_ref(ref)
+        identity = f"op://{vault}/{item}/{field}"
+        binary = shutil.which(_CLI_BINARY)
+        if binary is None:
+            raise RuntimeError(
+                f"{_PROVIDER} secret {identity!r} cannot be resolved: the "
+                f"`{_CLI_BINARY}` CLI is not on PATH"
+            )
+
+        env = dict(os.environ)
+        token = settings.op_service_account_token
+        if token:
+            env["OP_SERVICE_ACCOUNT_TOKEN"] = token
+
+        try:
+            completed = subprocess.run(  # noqa: S603 - operator-installed 1Password CLI
+                [binary, "read", identity, "--no-newline"],
+                capture_output=True,
+                text=True,
+                timeout=_CLI_TIMEOUT_S,
+                check=False,
+                env=env,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception as exc:  # noqa: BLE001 - never leak the upstream message
+            raise RuntimeError(
+                f"{_PROVIDER} secret {identity!r} could not be read via the "
+                f"`{_CLI_BINARY}` CLI ({type(exc).__name__})"
+            ) from None
+
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"{_PROVIDER} secret {identity!r} could not be read via the "
+                f"`{_CLI_BINARY}` CLI (exit {completed.returncode}). Check the "
+                "reference and that the credential grants access to that vault."
+            )
+
+        value = (completed.stdout or "").strip()
+        if not value:
+            # An empty string would sail through as a resolved secret and fail
+            # far away, at whatever consumes it.
+            raise RuntimeError(
+                f"{_PROVIDER} secret {identity!r} resolved to an EMPTY value via "
+                f"the `{_CLI_BINARY}` CLI; refusing to return it as a secret"
+            )
+        return value
 
     def _resolve_service_account(self, ref: SecretRef, settings: Settings) -> str:
         """Direct (non-Connect) resolution via the official async
@@ -372,14 +532,19 @@ class OnePasswordBackend:
 
 
 def health(**kwargs: Any) -> HealthStatus:
-    """Report 1Password Connect CONFIGURATION status only — NEVER a token
-    value and NEVER a resolved secret (Phase 19 discipline; mirrors
-    `plugins/mem0.py`'s `health()`):
+    """Report CONFIGURATION status per MODE — NEVER a token value and NEVER a
+    resolved secret (Phase 19 discipline; mirrors `plugins/mem0.py`).
 
-    - `error` when the `onepasswordconnectsdk` package isn't importable.
-    - `degraded` ("not configured") when the required connection config
-      (Connect host + a Connect or service-account token) is incomplete.
-    - `ok` ("configured") when the SDK is importable AND that config is present.
+    - `ok` when AT LEAST ONE mode is usable, naming which.
+    - `degraded` when none is, listing what each mode is missing.
+    - `error` only when the check itself fails.
+
+    Per mode, because the three need DIFFERENT things -- `onepasswordconnectsdk`,
+    `onepassword-sdk`, or just the `op` binary. This previously returned
+    `error: onepasswordconnectsdk not installed` whenever the Connect SDK was
+    absent, which called a perfectly working service-account or CLI deployment
+    broken -- and a health check that reports a working thing as broken is the
+    same defect as one reporting a broken thing as fine.
 
     The detail carries presence booleans / mode names only — never the token,
     the Connect host URL, or a fetched value. Never raises: any internal error
@@ -387,16 +552,15 @@ def health(**kwargs: Any) -> HealthStatus:
     `PluginManager.run_health_check`.
     """
     try:
-        if new_client is None:
-            return HealthStatus("error", "onepasswordconnectsdk not installed")
-
         from hivepilot.config import settings
 
-        host = settings.op_connect_host
-        token = settings.op_connect_token or settings.op_service_account_token
-        if host and token:
-            return HealthStatus("ok", "configured")
-        return HealthStatus("degraded", "not configured")
+        modes = _mode_report(settings)
+        usable = [name for name, ok, _ in modes if ok]
+        summary = "; ".join(f"{name}: {detail}" for name, _, detail in modes)
+
+        if usable:
+            return HealthStatus("ok", f"usable via {', '.join(usable)} ({summary})")
+        return HealthStatus("degraded", f"no usable mode ({summary})")
     except Exception as exc:  # noqa: BLE001 — a health check must never crash
         return HealthStatus("error", type(exc).__name__)
 

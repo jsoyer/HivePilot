@@ -142,11 +142,29 @@ class TestHealth:
     `error` if the SDK is missing, `degraded` if unconfigured, `ok` when both
     the SDK is importable and a Connect host + a token are present."""
 
-    def test_error_when_sdk_missing(self, op_module: ModuleType) -> None:
-        with patch.object(op_module, "new_client", None):
+    def test_a_missing_connect_sdk_is_not_an_error_on_its_own(
+        self, op_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Deliberately inverted. This used to assert `error` whenever
+        `onepasswordconnectsdk` was absent — which called a perfectly working
+        service-account or CLI deployment broken. The Connect SDK is one
+        mode's dependency, not the plugin's.
+
+        A health check that reports a working thing as broken is the same
+        defect as one reporting a broken thing as fine; it just fails in the
+        direction that gets ignored.
+        """
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", None, raising=False)
+        with (
+            patch.object(op_module, "new_client", None),
+            patch.object(op_module.shutil, "which", return_value=None),
+        ):
             result = op_module.health()
-        assert result.status == "error"
-        assert "onepasswordconnectsdk" in result.detail
+
+        assert result.status == "degraded"
+        assert "onepasswordconnectsdk" in result.detail  # still names what connect needs
 
     def test_ok_when_sdk_and_config_present(self, op_module: ModuleType) -> None:
         # Autouse `_op_settings` provides a fully-configured Connect baseline.
@@ -171,7 +189,10 @@ class TestHealth:
         with patch.object(op_module, "new_client", MagicMock()):
             result = op_module.health()
         assert result.status == "degraded"
-        assert "not configured" in result.detail
+        # Was a bare "not configured", which gave an operator nothing to act
+        # on. The detail now names every mode and what each one is missing.
+        assert "no usable mode" in result.detail
+        assert "connect" in result.detail
 
     def test_health_never_leaks_token_value(self, op_module: ModuleType) -> None:
         """The token value must NEVER appear in the health detail — only
@@ -705,3 +726,188 @@ class TestPluginManagerRegistersOnePassword:
 
         with pytest.raises(SecretsBackendCollisionError):
             SecretsRegistry.register("onepassword", _Other())
+
+
+# ---------------------------------------------------------------------------
+# `op` CLI mode.
+#
+# The two SDK modes both need a pip install, and the production box is one
+# where a heavy `pip install` has wedged the host before. The `op` CLI is the
+# path a person who already uses 1Password actually has, and it needs no
+# Python package at all -- only the binary plus a credential.
+#
+# It does NOT remove the credential requirement: headless, `op` still needs
+# OP_SERVICE_ACCOUNT_TOKEN (or an interactive session). What it removes is the
+# SDK.
+# ---------------------------------------------------------------------------
+
+
+class TestCliModeDetection:
+    def test_the_cli_is_reported_when_the_binary_is_present(self, op_module) -> None:
+        with patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"):
+            assert op_module._cli_available() is True
+
+    def test_the_cli_is_reported_absent_when_the_binary_is_missing(self, op_module) -> None:
+        with patch.object(op_module.shutil, "which", return_value=None):
+            assert op_module._cli_available() is False
+
+
+class TestCliModeResolves:
+    def _settings_for_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No Connect host, no SDK -- the shape where CLI mode is the only
+        one that can work."""
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", _FAKE_TOKEN, raising=False)
+
+    def test_it_reads_the_reference_through_op_read(
+        self, op_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._settings_for_cli(monkeypatch)
+        monkeypatch.setattr(op_module, "new_client", None)
+        monkeypatch.setattr(op_module, "_sdk_available", lambda: False)
+
+        completed = MagicMock(returncode=0, stdout=_FAKE_VALUE, stderr="")
+        with (
+            patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"),
+            patch.object(op_module.subprocess, "run", return_value=completed) as run,
+        ):
+            out = op_module.OnePasswordBackend().resolve(
+                _ref(vault="v", item="i", field="password"), settings
+            )
+
+        assert out == _FAKE_VALUE
+        argv = run.call_args[0][0]
+        assert argv[:2] == ["/usr/local/bin/op", "read"]
+        assert "op://v/i/password" in argv
+
+    def test_the_service_account_token_is_passed_in_the_ENV_not_the_argv(
+        self, op_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """argv is world-readable via /proc; the env of a process is not.
+        A token on the command line would leak to every local user."""
+        self._settings_for_cli(monkeypatch)
+        monkeypatch.setattr(op_module, "new_client", None)
+        monkeypatch.setattr(op_module, "_sdk_available", lambda: False)
+
+        completed = MagicMock(returncode=0, stdout=_FAKE_VALUE, stderr="")
+        with (
+            patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"),
+            patch.object(op_module.subprocess, "run", return_value=completed) as run,
+        ):
+            op_module.OnePasswordBackend().resolve(
+                _ref(vault="v", item="i", field="password"), settings
+            )
+
+        assert _FAKE_TOKEN not in " ".join(run.call_args[0][0])
+        assert run.call_args.kwargs["env"]["OP_SERVICE_ACCOUNT_TOKEN"] == _FAKE_TOKEN
+
+    def test_a_failing_cli_never_leaks_the_value_or_the_token(
+        self, op_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._settings_for_cli(monkeypatch)
+        monkeypatch.setattr(op_module, "new_client", None)
+        monkeypatch.setattr(op_module, "_sdk_available", lambda: False)
+
+        completed = MagicMock(
+            returncode=1, stdout="", stderr=f"error with {_FAKE_TOKEN} and {_FAKE_VALUE}"
+        )
+        with (
+            patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"),
+            patch.object(op_module.subprocess, "run", return_value=completed),
+            pytest.raises(RuntimeError) as excinfo,
+        ):
+            op_module.OnePasswordBackend().resolve(
+                _ref(vault="v", item="i", field="password"), settings
+            )
+
+        message = str(excinfo.value)
+        assert _FAKE_TOKEN not in message
+        assert _FAKE_VALUE not in message
+        assert "op://v/i/password" in message
+
+    def test_an_empty_result_is_an_error_not_an_empty_secret(
+        self, op_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty string would sail through as a resolved secret and fail
+        far away, at whatever consumes it."""
+        self._settings_for_cli(monkeypatch)
+        monkeypatch.setattr(op_module, "new_client", None)
+        monkeypatch.setattr(op_module, "_sdk_available", lambda: False)
+
+        completed = MagicMock(returncode=0, stdout="   \n", stderr="")
+        with (
+            patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"),
+            patch.object(op_module.subprocess, "run", return_value=completed),
+            pytest.raises(RuntimeError),
+        ):
+            op_module.OnePasswordBackend().resolve(
+                _ref(vault="v", item="i", field="password"), settings
+            )
+
+
+class TestModePrecedenceIsUnchanged:
+    """Adding a third mode must not re-route an existing deployment."""
+
+    def test_connect_still_wins_when_a_host_is_configured(
+        self, op_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _mock_client_returning(_FAKE_VALUE)
+        with (
+            patch.object(op_module, "new_client", return_value=client),
+            patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"),
+            patch.object(op_module.subprocess, "run") as run,
+        ):
+            out = op_module.OnePasswordBackend().resolve(
+                _ref(vault="v", item="i", field="password"), settings
+            )
+
+        assert out == _FAKE_VALUE
+        assert run.call_count == 0, "the CLI must not be used when Connect is configured"
+
+
+class TestHealthReportsEveryMode:
+    """The old health returned `error` whenever `onepasswordconnectsdk` was
+    absent -- even for a deployment using service-account or CLI mode, which
+    need a DIFFERENT package or none at all. It reported a working setup as
+    broken."""
+
+    def test_a_missing_connect_sdk_is_not_an_error_when_the_cli_can_serve(
+        self, op_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", _FAKE_TOKEN, raising=False)
+        monkeypatch.setattr(op_module, "new_client", None)
+        monkeypatch.setattr(op_module, "_sdk_available", lambda: False)
+
+        with patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"):
+            status = op_module.health()
+
+        assert status.status == "ok"
+        assert "cli" in status.detail
+
+    def test_it_names_which_modes_are_usable(
+        self, op_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare "not configured" gives an operator nothing to act on."""
+        monkeypatch.setattr(settings, "op_connect_host", None, raising=False)
+        monkeypatch.setattr(settings, "op_connect_token", None, raising=False)
+        monkeypatch.setattr(settings, "op_service_account_token", None, raising=False)
+        monkeypatch.setattr(op_module, "new_client", None)
+        monkeypatch.setattr(op_module, "_sdk_available", lambda: False)
+
+        with patch.object(op_module.shutil, "which", return_value=None):
+            status = op_module.health()
+
+        assert status.status == "degraded"
+        for mode in ("connect", "service-account", "cli"):
+            assert mode in status.detail
+
+    def test_health_never_leaks_a_token(self, op_module, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "op_service_account_token", _FAKE_TOKEN, raising=False)
+
+        with patch.object(op_module.shutil, "which", return_value="/usr/local/bin/op"):
+            status = op_module.health()
+
+        assert _FAKE_TOKEN not in status.detail
