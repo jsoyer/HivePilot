@@ -385,3 +385,79 @@ class TestPluginManagerDiscoversObsidian:
         assert "obsidian" not in NOTIFIER_MAP
         assert not pm.hooks.get("on_pipeline_end")
         assert not pm.hooks.get("on_error")
+
+
+class TestHealthSeesPerProjectVaults:
+    """`health()` looked only at the GLOBAL `obsidian_vault` and reported
+    "not configured" while the plugin was demonstrably working.
+
+    `_resolve_vault` PREFERS a project's own `obsidian_vault:` override, and
+    on the production deployment all seven projects carry one — recalling
+    from vaults holding 2035 and 206 notes, with `plugin.obsidian.recalled`
+    in the log. The health row said "not configured" the whole time.
+
+    Same blind spot the `vault_liveness` doctor check had, and fixed there
+    for the same reason: a health check that reports a working thing as
+    broken is the same defect as one reporting a broken thing as fine — it
+    just fails in the direction that gets ignored.
+    """
+
+    def test_a_project_vault_makes_it_configured(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        vault = tmp_path / "noxys-vault"
+        vault.mkdir()
+        monkeypatch.setattr(
+            config_mod.settings,
+            "obsidian_vault",
+            obsidian_module._DEFAULT_OBSIDIAN_VAULT,
+            raising=False,
+        )
+        monkeypatch.setattr(obsidian_module, "_project_vaults", lambda: [vault])
+
+        status = obsidian_module.health()
+
+        assert status.status == "ok"
+        assert "project" in status.detail
+
+    def test_still_not_configured_when_nothing_resolves(
+        self, obsidian_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            config_mod.settings,
+            "obsidian_vault",
+            obsidian_module._DEFAULT_OBSIDIAN_VAULT,
+            raising=False,
+        )
+        monkeypatch.setattr(obsidian_module, "_project_vaults", lambda: [])
+
+        assert obsidian_module.health().status == "degraded"
+
+    def test_a_global_vault_still_wins_when_present(
+        self, obsidian_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unchanged for a deployment that configures only the global one."""
+        vault = tmp_path / "global"
+        vault.mkdir()
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", vault, raising=False)
+        monkeypatch.setattr(obsidian_module, "_project_vaults", lambda: [])
+
+        assert obsidian_module.health().status == "ok"
+
+    def test_reading_projects_never_breaks_the_check(
+        self, obsidian_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A health check that raises takes down the row it exists to report."""
+        monkeypatch.setattr(
+            config_mod.settings,
+            "obsidian_vault",
+            obsidian_module._DEFAULT_OBSIDIAN_VAULT,
+            raising=False,
+        )
+
+        def boom():
+            raise RuntimeError("projects.yaml unreadable")
+
+        monkeypatch.setattr(obsidian_module, "_project_vaults", boom)
+
+        assert obsidian_module.health().status in {"degraded", "error"}

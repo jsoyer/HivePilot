@@ -233,21 +233,64 @@ def on_error(**kwargs: Any) -> None:
         logger.warning("plugin.obsidian.on_error_failed", error=str(exc))
 
 
+def _project_vaults() -> list[Path]:
+    """Every per-project `obsidian_vault:` that exists on disk.
+
+    `_resolve_vault` PREFERS a project's override over the global setting,
+    so a deployment can be fully configured with the global one untouched --
+    which is exactly the shape `health()` used to call "not configured".
+    Never raises: a health check that breaks takes down the row it exists to
+    report.
+    """
+    try:
+        from hivepilot.services.project_service import load_projects
+
+        found = []
+        for project in load_projects().projects.values():
+            raw = getattr(project, "obsidian_vault", None)
+            if not raw:
+                continue
+            path = Path(str(raw)).expanduser()
+            if path.exists():
+                found.append(path)
+        return found
+    except Exception:  # noqa: BLE001 - never break the health check
+        return []
+
+
 def health(**kwargs: Any) -> HealthStatus:
-    """`ok` when `settings.obsidian_vault` is set (differs from the field
-    default) AND exists on disk; `error` when it's set but the path is
-    missing; `degraded` ("not configured") when it's still the field
-    default — see the `_DEFAULT_OBSIDIAN_VAULT` note above. Only the
-    boolean/existence is reported, never the path's contents.
+    """`ok` when a vault this plugin would actually USE exists on disk.
+
+    That means the global `settings.obsidian_vault` OR any per-project
+    `obsidian_vault:` override, because `_resolve_vault` prefers the latter.
+    Checking only the global one reported "not configured" on a deployment
+    where all seven projects carried an override and the plugin was recalling
+    from vaults of 2035 and 206 notes -- a health check calling a working
+    thing broken, which is the same defect as one calling a broken thing
+    fine and fails in the direction that gets ignored.
+
+    `degraded` when nothing resolves, `error` when the global is set to a
+    real value whose path is missing. Only booleans/counts are reported,
+    never a path's contents.
     """
     from hivepilot.config import settings
 
-    vault = settings.obsidian_vault
-    path = Path(vault).expanduser()
+    path = Path(settings.obsidian_vault).expanduser()
     if path.exists():
         return HealthStatus("ok", "vault configured and present")
+
+    # Guarded at the CALL as well as inside the helper: the contract this
+    # docstring states is "health never raises", and that must not depend on
+    # one particular implementation of `_project_vaults` staying total.
+    try:
+        project_vaults = _project_vaults()
+    except Exception:  # noqa: BLE001
+        project_vaults = []
+    if project_vaults:
+        return HealthStatus("ok", f"{len(project_vaults)} project vault(s) configured and present")
+
     if path == _DEFAULT_OBSIDIAN_VAULT:
-        return HealthStatus("degraded", "not configured")
+        return HealthStatus("degraded", "not configured (no global vault, no project override)")
     return HealthStatus("error", "obsidian_vault configured but path does not exist")
 
 
