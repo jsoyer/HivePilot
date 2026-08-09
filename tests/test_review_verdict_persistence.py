@@ -137,7 +137,11 @@ def test_an_unexpected_failure_records_its_type_and_re_raises(
     """
     import hivepilot.orchestrator as orch
 
-    def boom(_subject: str) -> str:
+    # `**_kw` so this double keeps mirroring the real signature as it grows.
+    # It gained `subject_path` when the full diff started being written to a
+    # file for reviewers to `Read`; a double pinned to the old arity fails
+    # with a TypeError that looks nothing like the RuntimeError under test.
+    def boom(_subject: str, **_kw: object) -> str:
         raise RuntimeError("secret-bearing detail")
 
     monkeypatch.setattr(orch, "_build_review_challenge_prompt", boom)

@@ -1168,7 +1168,17 @@ _REVIEW_CHALLENGE_PROMPT_TEMPLATE = (
 # a lockfile regeneration no longer crowds the code out of the budget. It is
 # summarised, never dropped: the filename and the size of the change always
 # reach the reviewer, because a changed lockfile is a supply-chain signal.
-_REVIEW_SUBJECT_LIMIT = 200_000
+#
+# 200_000 until 2026-08-09, which was above Linux's `MAX_ARG_STRLEN`
+# (131 072 bytes for ONE argv element — how the runner passes a prompt). So
+# the truncation could never prevent the failure it looks like it should:
+# `review pr 428` sent a 148 390-byte prompt and every reviewer failed at
+# zero cost, with no verdict. Any diff over roughly 123 KB was unreviewable.
+#
+# The gap to 131 072 is deliberate headroom: the runner adds a role prompt,
+# knowledge context and its own framing on top of what is built here. The
+# observed overhead was about 7.5 KB; this leaves four times that.
+_REVIEW_SUBJECT_LIMIT = 100_000
 
 # Whole diff: the premise for the perimeter holds, so bound the reviewer.
 # Measured on a 3.8 KB diff -- 9 259 cache tokens and $0.17, against 1 003 249
@@ -1225,7 +1235,45 @@ def _format_omitted(paths: list[str]) -> str:
     return f"{shown} and {extra} more" if extra > 0 else shown
 
 
-def _build_review_challenge_prompt(subject: str) -> str:
+#: Where the full, untruncated subject is written inside the reviewer's
+#: workspace. Dot-prefixed and named for what it is, so it is obvious in a
+#: `git status` if cleanup ever fails to run.
+_REVIEW_SUBJECT_FILENAME = ".hivepilot-review-subject.diff"
+
+#: Offered ONLY when the inline copy was cut. Naming a file to a reviewer
+#: that already holds the whole diff invites a pointless tool call.
+_PERIMETER_SUBJECT_FILE = (
+    "\nThe COMPLETE diff is on disk at `{path}` in your working directory -- "
+    "use `Read` on it before concluding. That is cheaper and more reliable "
+    "than fetching it again, and it is the same bytes this excerpt came from."
+)
+
+
+def _write_review_subject(workspace: Path, subject: str) -> str | None:
+    """Write *subject* into *workspace*, returning its relative name or None.
+
+    The reviewers hold `Read(./**)` as of 2026-08-08, scoped to their working
+    directory -- which is what makes this possible at all. Before that a cut
+    diff could only be recovered over the network, if at all.
+
+    Never raises: a read-only workspace must not stop a review from
+    happening. The file is a convenience; the inline excerpt remains the
+    subject, and it is honestly declared as an excerpt either way.
+    """
+    try:
+        path = workspace / _REVIEW_SUBJECT_FILENAME
+        path.write_text(subject, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 -- convenience, never load-bearing
+        logger.warning(
+            "review.subject_file_unavailable",
+            workspace=str(workspace),
+            error=redact_text(str(exc)),
+        )
+        return None
+    return _REVIEW_SUBJECT_FILENAME
+
+
+def _build_review_challenge_prompt(subject: str, *, subject_path: str | None = None) -> str:
     """Render the adversarial-review challenge prompt (Sprint 2 contract).
 
     The perimeter clause depends on what the reviewer is actually holding.
@@ -1240,6 +1288,8 @@ def _build_review_challenge_prompt(subject: str) -> str:
 
     if truncated:
         perimeter = _PERIMETER_TRUNCATED.format(shown=_REVIEW_SUBJECT_LIMIT, total=len(subject))
+        if subject_path:
+            perimeter += _PERIMETER_SUBJECT_FILE.format(path=subject_path)
         if omitted:
             perimeter += _OMISSION_NOTE.format(count=len(omitted), paths=_format_omitted(omitted))
     elif omitted:
@@ -3509,8 +3559,13 @@ class Orchestrator:
             )
             return
 
+        # The full subject on disk, so a reviewer can `Read` what the inline
+        # excerpt had to cut. Written before dispatch and removed after, in a
+        # `finally` -- a stray file in the workspace would be swept up by a
+        # later stage's `git add -A`.
+        _subject_path = _write_review_subject(project.path, subject)
         try:
-            prompt = _build_review_challenge_prompt(subject)
+            prompt = _build_review_challenge_prompt(subject, subject_path=_subject_path)
             reviewer_summaries: list[str] = []
             # One entry per reviewer, `None` when that reviewer could not be
             # read at all -- unresolvable role, failed call, or unparseable
@@ -3687,6 +3742,19 @@ class Orchestrator:
                 run_id=run_id,
             )
             raise
+        finally:
+            # Always, including on the blocking path above: a later stage
+            # runs `git add -A`, so a subject file left behind would be
+            # committed into the change it was written to review.
+            if _subject_path:
+                try:
+                    (project.path / _subject_path).unlink(missing_ok=True)
+                except OSError as _rm_exc:
+                    logger.warning(
+                        "review.subject_file_not_removed",
+                        path=str(project.path / _subject_path),
+                        error=redact_text(str(_rm_exc)),
+                    )
 
     def run_pipeline(
         self,
