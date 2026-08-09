@@ -621,7 +621,11 @@ def watch(
 
 @herdr_app.command("board")
 def herdr_board(
-    roles: str = typer.Option(..., "--roles", help="Comma-separated role names."),
+    roles: str | None = typer.Option(
+        None,
+        "--roles",
+        help="Comma-separated role names. Default: every role in roles.yaml, in file order.",
+    ),
     remote: str | None = typer.Option(
         None, "--remote", help="ssh host running the services (pipes over ssh)."
     ),
@@ -635,12 +639,32 @@ def herdr_board(
     purpose: a `pane` node without one makes herdr launch the default
     shell, so a command-less board applies cleanly and shows a wall of idle
     prompts — indistinguishable from a board with nothing to report.
+
+    `--roles` defaults to the configured roster because it was required and
+    hand-typed, and nobody enumerates twenty roles — which is precisely why
+    no full board existed. The default is EVERY configured role, not the
+    subset that has run before: a role absent from the board because it has
+    never been dispatched is indistinguishable from a role that does not
+    exist, and a silent omission is the failure mode this board is meant to
+    remove. File order, not sorted — that ordering is the operator's own.
     """
+    from hivepilot.roles import load_roles
     from hivepilot.services.herdr_board import build_board_layout
+
+    if roles is None:
+        selected = list(load_roles())
+        if not selected:
+            raise typer.BadParameter(
+                "no roles configured, so there is nothing to put on a board. "
+                f"Checked {settings.resolve_config_path(settings.roles_file)}. "
+                "Pass --roles explicitly to override."
+            )
+    else:
+        selected = [r.strip() for r in roles.split(",") if r.strip()]
 
     try:
         layout = build_board_layout(
-            [r.strip() for r in roles.split(",") if r.strip()],
+            selected,
             remote=remote,
             log_path=log_path,
         )
