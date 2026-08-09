@@ -2376,6 +2376,117 @@ def _uninstalled_plugins_payload() -> list[str]:
 _plugin_toggle_lock = threading.Lock()
 
 
+# ---------------------------------------------------------------------------
+# GET /v1/plugins/catalog + POST /v1/plugins/{name}/install
+#
+# `/plugins/health` reports what LOADED. A browsable plugin page needs what
+# EXISTS: ~23 of the curated plugins are written and not installed here, and
+# that is precisely the set an operator wants to look through and turn on.
+#
+# The install endpoint writes executable Python onto the host, so it is
+# admin-gated and restricted to `KNOWN_EXAMPLE_PLUGINS` -- the same closed
+# registry the CLI uses, validated BEFORE any fetch. There is no
+# arbitrary-name or arbitrary-URL path.
+#
+# It deliberately does NOT run `pip install`. Plugin prerequisites are the
+# operator's to install: a `pip install` triggered from a web switch runs
+# arbitrary package code as the service user, and a heavy one has wedged this
+# project's production host before. The prerequisite is REPORTED
+# (`prereq_detail`) so the page can show the exact command instead.
+# ---------------------------------------------------------------------------
+
+
+class PluginCatalogEntry(BaseModel):
+    name: str
+    description: str
+    prereq_kind: str
+    prereq_detail: str
+    installed: bool
+    enabled: bool
+    env_flag: str
+
+
+class PluginInstallResponse(BaseModel):
+    name: str
+    installed_to: str
+    enabled: bool
+    restart_required: bool
+    prereq_detail: str
+
+
+@v1.get("/plugins/catalog")
+@app.get("/plugins/catalog")
+def plugins_catalog_endpoint(
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """The curated plugin registry with per-plugin install/enable state.
+
+    Metadata only -- descriptions, prerequisites and two booleans. No secret,
+    no token, no resolved value, which is why `read` suffices here while
+    toggle and install require `admin`.
+    """
+    from hivepilot.services import plugin_installer as pi
+
+    entries = [
+        PluginCatalogEntry(
+            name=name,
+            description=spec.description,
+            prereq_kind=str(spec.prereq_kind),
+            prereq_detail=spec.prereq_detail,
+            installed=pi.is_installed(name),
+            enabled=pi.is_enabled(name),
+            env_flag=spec.env_flag,
+        ).model_dump()
+        for name, spec in sorted(pi.KNOWN_EXAMPLE_PLUGINS.items())
+    ]
+    return {"plugins": entries}
+
+
+@v1.post("/plugins/{name}/install")
+@app.post("/plugins/{name}/install")
+def install_plugin_endpoint(
+    name: str,
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> PluginInstallResponse:
+    """Fetch a CURATED plugin file onto this host and persist its enable flag.
+
+    Mirrors `hivepilot plugins install <name> --yes`. The name is validated
+    against `KNOWN_EXAMPLE_PLUGINS` before anything is fetched -- this writes
+    Python that later runs in-process, so an unvalidated name must never
+    reach the fetcher.
+
+    Does NOT install the plugin's own prerequisites (a pip package, a
+    binary). Those are returned as `prereq_detail` for the caller to show.
+    """
+    from hivepilot.services import plugin_installer as pi
+
+    spec = pi.KNOWN_EXAMPLE_PLUGINS.get(name)
+    if spec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown plugin")
+
+    with _plugin_toggle_lock:
+        try:
+            dest = pi.fetch_plugin(name)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"could not fetch plugin {name!r}: {type(exc).__name__}",
+            ) from None
+        pi.persist_enabled(name)
+
+    return PluginInstallResponse(
+        name=name,
+        installed_to=str(dest),
+        enabled=True,
+        # `PluginManager` scans once at construction, so a freshly installed
+        # plugin is inert until the process restarts. A UI implying otherwise
+        # would have the operator hunting a plugin that is on disk, enabled,
+        # and doing nothing.
+        restart_required=True,
+        prereq_detail=spec.prereq_detail,
+    )
+
+
 class PluginToggleResponse(BaseModel):
     name: str
     disabled: bool

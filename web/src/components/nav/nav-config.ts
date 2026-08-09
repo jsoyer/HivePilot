@@ -69,7 +69,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // Health (plugin health) and Graph (topology), not a Spend/Operate
   // concern. Placed before Graph (still fully reachable, just kept last per
   // its own demotion above).
-  { label: 'nav.system', values: ['health', 'agents', 'graph'] },
+  { label: 'nav.system', values: ['health', 'plugins', 'agents', 'graph'] },
 ]
 
 export interface NavItem {

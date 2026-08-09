@@ -186,6 +186,9 @@ const GROUPED_TAB_ORDER = [
   'Analytics',
   'Memory',
   'Health',
+  // One card per curated plugin (GET /v1/plugins/catalog) — grouped under
+  // System beside Health, which is where plugin state already lived.
+  'Plugins',
   'Agents',
   'Graph',
 ]

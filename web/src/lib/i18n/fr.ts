@@ -65,6 +65,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.models': 'Modèles',
   'nav.efficiency': 'Efficacité',
   'nav.health': 'Santé',
+  'nav.plugins': 'Plugins',
   'nav.approvals': 'Approbations',
   'nav.runs': 'Exécutions',
   'nav.autopilot': 'Autopilote',
@@ -141,6 +142,23 @@ export const fr: Record<TranslationKey, string> = {
     "{count} modèle(s) ont des étapes non chiffrées faute d'usage enregistré — la table de prix est correcte, c'est la capture qui manque : {models}",
 
   // ---- Health view -----------------------------------------------------
+  'plugins.title': 'Plugins',
+  'plugins.description':
+    'Tous les plugins du catalogue, installés ici ou non. Activer un plugin récupère son fichier et l\u2019active — cela n\u2019installe jamais son prérequis.',
+  'plugins.empty': 'Aucun plugin au catalogue.',
+  'plugins.notInstalled': 'non installé',
+  'plugins.restartRequired': 'redémarrage requis',
+  'plugins.restartTitle': 'Ne prend effet qu\u2019au prochain redémarrage du serveur — pas de rechargement à chaud.',
+  'plugins.adminOnly': 'Un token admin est requis pour modifier ces réglages.',
+  'plugins.forbidden': 'Rôle insuffisant — votre token ne peut plus modifier les plugins.',
+  'plugins.showPrereq': 'Prérequis',
+  'plugins.hidePrereq': 'Masquer les prérequis',
+  'plugins.prereqLabel': 'Nécessite',
+  'plugins.prereqNotAutomatic':
+    'HivePilot ne l\u2019installe pas pour vous — le faire ici exécuterait du code de paquet arbitraire sous l\u2019utilisateur du service. Installez-le vous-même, puis redémarrez.',
+  'plugins.action.install': 'Installer et activer',
+  'plugins.action.enable': 'Activer',
+  'plugins.action.disable': 'Désactiver',
   'health.title': 'État des plugins',
   'health.description': "État global des plugins, identique à `hivepilot plugins health`.",
   'health.restartNote': " Activer/désactiver ne s'applique qu'au prochain redémarrage du serveur.",
