@@ -760,7 +760,7 @@ class ReloadResult:
 
     `ok=False` means the LIVE plugin state -- every `RUNNER_MAP`/
     `NOTIFIER_MAP`/`SECRETS_MAP` entry this manager owns, plus its own
-    instance dicts (`hooks`/`declared_notifiers`/`health`/`panels`/`skills`)
+    instance dicts (`hooks`/`health`/`panels`/`skills`)
     -- was left COMPLETELY untouched: a broken/colliding candidate set never
     replaces a working one (staging-then-commit, see `PluginManager.reload`).
     `error` is a short, kind/tool-level message (exception type + str()) --
@@ -841,7 +841,6 @@ class _StagedPluginState:
     # hook lists hold the callables themselves (`_is_network_hook` compares
     # the same way), and a plugin may contribute several.
     hook_owner: dict[int, str] = field(default_factory=dict)
-    declared_notifiers: dict[str, Callable[[str], None]] = field(default_factory=dict)
     health: dict[str, Callable[..., Any]] = field(default_factory=dict)
     panels: dict[str, PanelSpec] = field(default_factory=dict)
     skills: dict[str, SkillSpec] = field(default_factory=dict)
@@ -1144,7 +1143,6 @@ class PluginManager:
             name: order_hooks(fns) for name, fns in staged.hooks.items()
         }
         self.hook_owner: dict[int, str] = staged.hook_owner
-        self.declared_notifiers: dict[str, Callable[[str], None]] = staged.declared_notifiers
         self.health: dict[str, Callable[..., Any]] = staged.health
         self.panels: dict[str, PanelSpec] = staged.panels
         self.skills: dict[str, SkillSpec] = staged.skills
@@ -1569,8 +1567,12 @@ class PluginManager:
                     # ever populated from it.
                     raise
 
-                if notifiers:
-                    staged.declared_notifiers.update(notifiers)
+                # `notifiers` is intentionally not stored a second time.
+                # It is already live in `NOTIFIER_MAP` (staged and rolled
+                # back with the other registries above); a parallel
+                # `declared_notifiers` field was populated here and read by
+                # nothing in the package -- two fields for one thing, and a
+                # place for them to disagree.
 
             # Whatever keys remain in `hooks` after the seven contribution
             # types above were popped out are lifecycle-hook names

@@ -446,6 +446,13 @@ class TestExplicitEntrySourceValue:
 
 class TestDeclaredNotifiersCollection:
     def test_notifiers_key_is_collected_not_treated_as_hook(self, tmp_path, monkeypatch) -> None:
+        """Asserted on `pm.declared_notifiers` until that field was removed:
+        it was populated here and read by nothing in the package, so the two
+        copies of the same fact could only ever diverge. `NOTIFIER_MAP` is
+        the live one -- what `send_notification` actually dispatches
+        through -- so it is what this now checks. The property under test,
+        that `notifiers` is a CONTRIBUTION and not a lifecycle hook, is
+        unchanged."""
         plugin_dir = tmp_path / "plugins"
         plugin_dir.mkdir(parents=True, exist_ok=True)
         (plugin_dir / "notifier_fixture.py").write_text(
@@ -459,7 +466,9 @@ class TestDeclaredNotifiersCollection:
 
         pm = PluginManager()
 
-        assert "fixture-notifier" in pm.declared_notifiers
+        from hivepilot.services.notification_service import NOTIFIER_MAP
+
+        assert "fixture-notifier" in NOTIFIER_MAP
         assert "notifiers" not in pm.hooks
 
 

@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # bug this fixes). Kept as a module-level tuple so it can be reused by the
 # shared `field_validator` decorator without repeating every name inline.
 _ENV_LIST_FIELDS = (
+    "notification_channels",
     "plugins_disabled",
     "plugins_capability_policy",
     "discovery_roots",
@@ -341,6 +342,18 @@ class Settings(BaseSettings):
     # as plugins_disabled above.
     plugins_capability_policy: Annotated[list[str], NoDecode] = Field(default_factory=list)
     discovery_roots: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["~/dev"])
+    # Which channels `send_notification` fans out to when a caller names
+    # none. That default used to be hard-coded in the function, which made
+    # every PLUGIN-contributed notifier unreachable: the obsidian plugin
+    # registers correctly into `NOTIFIER_MAP` and had no way to be selected,
+    # because nothing in the codebase passes `channels=` (verified: zero of
+    # 30+ call sites) and no setting existed to change the default.
+    #
+    # env: HIVEPILOT_NOTIFICATION_CHANNELS — JSON array or CSV, same
+    # convention as the other list fields.
+    notification_channels: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["slack", "discord", "telegram"]
+    )
     api_host: str = "127.0.0.1"
     api_port: int = 8045
     api_root_path: str = ""  # set to "/hivepilot" when behind a path-prefix proxy

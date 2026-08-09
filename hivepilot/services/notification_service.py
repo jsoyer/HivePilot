@@ -99,7 +99,19 @@ def send_notification(message: str, channels: Iterable[str] | None = None) -> No
     from hivepilot.services.config_provenance import redact_text
 
     message = redact_text(message)
-    channels = list(channels) if channels else ["slack", "discord", "telegram"]
+    # An explicit argument always wins. Otherwise the configured default --
+    # which used to be this hard-coded list, making every PLUGIN-contributed
+    # notifier unreachable: obsidian registers into `NOTIFIER_MAP` correctly
+    # and could not be selected, because nothing passes `channels=` (zero of
+    # 30+ call sites) and no setting existed.
+    #
+    # An EMPTY setting falls back rather than muting everything. "Notify
+    # nobody" is not a plausible intent for a misconfigured floor, and a
+    # silently muted alert channel is indistinguishable from a broken one --
+    # the same reasoning `outward.permits` uses when it logs suppressions.
+    channels = list(channels) if channels else (list(settings.notification_channels) or None)
+    if not channels:
+        channels = ["slack", "discord", "telegram"]
     # Outward consent (`notify`): a partition dispatched WITHOUT outward
     # consent must not reach Telegram/Slack/Discord/Signal. Checked here --
     # the one fan-out choke point every plain notification passes through --
