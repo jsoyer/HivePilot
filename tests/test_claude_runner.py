@@ -1384,3 +1384,74 @@ class TestReasoningEffortSandboxOverlay:
             runner.run(payload)
         env = m.call_args.kwargs["env"]
         assert env["MAX_THINKING_TOKENS"] == "24000"
+
+
+class TestStandingCorrectionsReachThePrompt:
+    """A correction that loads correctly and never reaches the model is the
+    exact failure this codebase keeps hitting: the operator writes the
+    instruction, every surface looks right, and the agent never sees it.
+
+    See `hivepilot/services/corrections_service.py` for why this is not the
+    lessons table.
+    """
+
+    def test_corrections_are_placed_in_the_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hivepilot.runners import claude_runner as cr
+
+        monkeypatch.setattr(cr, "load_corrections", lambda role: "CORRECTION-CANARY")
+        payload = _payload(tmp_path, {"role": "developer"})
+
+        out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+
+        assert "CORRECTION-CANARY" in out
+
+    def test_the_role_is_read_from_payload_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`payload.metadata["role"]` is what the orchestrator sets.
+        `payload.step.metadata` is a different dict that reports `None` here,
+        and reading the wrong one yields corrections for nobody — silently."""
+        seen: list[object] = []
+        from hivepilot.runners import claude_runner as cr
+
+        def _record(role: object) -> str:
+            seen.append(role)
+            return ""
+
+        monkeypatch.setattr(cr, "load_corrections", _record)
+        _runner()._build_prompt(_payload(tmp_path, {"role": "ciso"}), "INSTRUCTIONS", None)
+
+        assert seen == ["ciso"]
+
+    def test_corrections_sit_above_the_volatile_sections(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A prefix cache stops at the first changed byte, and corrections
+        change only when a file is edited. Below the per-run sections they
+        would invalidate the cache for their own sake — the mistake the role
+        prompt's placement used to make (measured amortisation 0.40: more
+        cache created than ever read back)."""
+        from hivepilot.runners import claude_runner as cr
+
+        monkeypatch.setattr(cr, "load_corrections", lambda role: "CORRECTION-CANARY")
+        payload = _payload(tmp_path, {"role": "developer", "extra_prompt": "VOLATILE-CANARY"})
+
+        out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+
+        assert out.index("CORRECTION-CANARY") < out.index("VOLATILE-CANARY")
+
+    def test_no_corrections_changes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The overwhelmingly common case must stay byte-identical to before
+        this feature — it is on every call of every run."""
+        from hivepilot.runners import claude_runner as cr
+
+        payload = _payload(tmp_path, {"role": "developer"})
+        monkeypatch.setattr(cr, "load_corrections", lambda role: "")
+
+        out = _runner()._build_prompt(payload, "INSTRUCTIONS", None)
+
+        assert "Standing corrections" not in out

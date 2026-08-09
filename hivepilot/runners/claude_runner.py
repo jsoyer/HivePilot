@@ -25,6 +25,7 @@ from hivepilot.runners.base import (
     set_last_usage,
 )
 from hivepilot.services.config_provenance import redact_text, register_secret_value
+from hivepilot.services.corrections_service import load_corrections
 from hivepilot.services.obsidian_vault_resolver import resolve_prompt_vault
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.services.repo_instructions import build_repo_instructions_section
@@ -1436,6 +1437,18 @@ class ClaudeRunner(BaseRunner):
             obsidian_vault=obsidian_vault,
         )
         sections.append(f"Instructions:\n{instructions}")
+
+        # Standing operator corrections, immediately after the role prompt
+        # they modify: "this is how you work" then "and stop doing X".
+        #
+        # Deliberately inside the STABLE prefix, above knowledge/lessons/prior
+        # context. They change only when the operator edits a file, so keeping
+        # them here leaves the cached prefix contiguous -- moving them below
+        # the volatile sections would invalidate the cache for their sake, the
+        # same mistake the role prompt's placement used to make.
+        corrections = load_corrections(payload.metadata.get("role"))
+        if corrections:
+            sections.append(corrections)
 
         if knowledge_context:
             sections.append(f"Knowledge context:\n{knowledge_context}")
