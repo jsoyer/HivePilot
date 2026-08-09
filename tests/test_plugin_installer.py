@@ -481,3 +481,82 @@ def test_persist_enabled_json_disabled_flag_untouched(tmp_path: Path) -> None:
 
     content = env_path.read_text(encoding="utf-8")
     assert f"HIVEPILOT_PLUGINS_DISABLED={json.dumps(['other'])}" in content
+
+
+class TestEveryPluginFileIsClassified:
+    """Being in no set used to be indistinguishable from "nobody decided yet".
+
+    That is how `headroom_panel`, `improve` and `shadcn` ended up outside
+    every path: not installable by name, not discoverable in the Pollen
+    plugins page, and with no written reason anywhere. `headroom_panel` was
+    even installed on the production box, arrived by some other means, and
+    could not have been reinstalled through the supported route.
+
+    The registry is a CURATED list, not an inventory — so the fix is not
+    "add everything", it is "every file must be deliberately placed in one
+    of the three sets". This test is what makes forgetting fail loudly.
+    """
+
+    PLUGINS_DIR = Path(__file__).resolve().parents[1] / "plugins"
+
+    def _stems(self) -> set[str]:
+        return {p.stem for p in self.PLUGINS_DIR.glob("*.py") if not p.stem.startswith("_")}
+
+    def test_no_plugin_file_is_unclassified(self) -> None:
+        from hivepilot.services.plugin_installer import (
+            AGENT_CLI_PLUGINS,
+            DEMO_PLUGINS,
+            KNOWN_EXAMPLE_PLUGINS,
+        )
+
+        classified = set(KNOWN_EXAMPLE_PLUGINS) | AGENT_CLI_PLUGINS | DEMO_PLUGINS
+        unclassified = sorted(self._stems() - classified)
+
+        assert not unclassified, (
+            f"{unclassified} are in neither KNOWN_EXAMPLE_PLUGINS, "
+            "AGENT_CLI_PLUGINS nor DEMO_PLUGINS. Put each one in exactly one "
+            "— curated if an operator would install it by name, agent-CLI if "
+            "`hivepilot agents install` covers it, demo if it exists to be read."
+        )
+
+    def test_the_three_sets_do_not_overlap(self) -> None:
+        """An overlap means two answers to "how do I install this", which is
+        the thing the agent-CLI exclusion exists to prevent."""
+        from hivepilot.services.plugin_installer import (
+            AGENT_CLI_PLUGINS,
+            DEMO_PLUGINS,
+            KNOWN_EXAMPLE_PLUGINS,
+        )
+
+        curated = set(KNOWN_EXAMPLE_PLUGINS)
+
+        assert not curated & AGENT_CLI_PLUGINS
+        assert not curated & DEMO_PLUGINS
+        assert not AGENT_CLI_PLUGINS & DEMO_PLUGINS
+
+    def test_every_classified_name_still_has_a_file(self) -> None:
+        """A rename or a deletion leaves a name behind — `plugins install`
+        would then offer something that cannot be fetched, and the Pollen
+        page would show a card for a file that is not there."""
+        from hivepilot.services.plugin_installer import (
+            AGENT_CLI_PLUGINS,
+            DEMO_PLUGINS,
+            KNOWN_EXAMPLE_PLUGINS,
+        )
+
+        classified = set(KNOWN_EXAMPLE_PLUGINS) | AGENT_CLI_PLUGINS | DEMO_PLUGINS
+        orphaned = sorted(classified - self._stems())
+
+        assert not orphaned, f"classified but no plugins/<name>.py exists: {orphaned}"
+
+    def test_a_skill_plugin_says_the_flag_alone_does_nothing(self) -> None:
+        """`improve` and `shadcn` contribute SKILLS, which reach an agent
+        only when a step or stage declares them. An operator who flips the
+        switch and expects an effect is the exact silent no-op this codebase
+        keeps paying for, so the prereq text has to say it."""
+        from hivepilot.services.plugin_installer import KNOWN_EXAMPLE_PLUGINS
+
+        for name in ("improve", "shadcn"):
+            detail = KNOWN_EXAMPLE_PLUGINS[name].prereq_detail
+            assert "skills:" in detail, name
+            assert "enable flag alone does" in detail, name
