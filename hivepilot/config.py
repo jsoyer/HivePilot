@@ -102,6 +102,78 @@ def _resolve_env_file() -> str:
     return resolve_env_file_with_provenance()[0]
 
 
+# Settings fields holding a live credential. `Settings.__repr_args__` masks
+# every one of them, because pydantic's generated repr prints field VALUES and
+# a `Settings` instance is a local variable in dozens of frames -- so any
+# traceback, pytest dump or CI log renders the whole credential set in clear.
+# That was observed live: a pytest error dump printed `telegram_bot_token=`
+# with a working token in it. This codebase redacts `detail`, `stderr` and
+# prompts at choke points; the Settings object walked past all of them.
+#
+# Masking (`***set***`) rather than hiding: "is it configured?" is a real
+# diagnostic question, and a field that vanishes from the repr cannot answer
+# it. The VALUE TYPE is deliberately unchanged -- `SecretStr` would mask here
+# too, but `f"Bearer {token}"` would then render `Bearer **********`, turning
+# a visible leak into silent 401s at every auth-header site, which no type
+# checker catches because f-strings accept any object.
+_SECRET_SETTING_FIELDS = frozenset(
+    {
+        "chatops_token",
+        "config_token",
+        "telegram_bot_token",
+        "telegram_webhook_secret",
+        # A capability URL: n8n/Slack-style webhook endpoints embed an
+        # unguessable path segment, so possession of the URL IS the
+        # authorisation. Unlike `telegram_webhook_url` below.
+        "event_webhook_url",
+        "event_webhook_token",
+        "worker_token",
+        "vault_token",
+        "infisical_token",
+        "op_connect_token",
+        "op_service_account_token",
+        "mem0_api_key",
+        # Passed to `Memory.from_config()` with llm/embedder overrides, which
+        # is exactly where a provider `api_key` lands.
+        "mem0_config",
+        "slack_bot_token",
+        "slack_signing_secret",
+        "slack_app_token",
+        "discord_bot_token",
+        "linear_api_key",
+        "linear_webhook_secret",
+        "notion_token",
+        "swarm_key",
+        # A `{NAME: {source, ...}}` reference catalog rather than values --
+        # masked anyway because some sources admit an inline literal, and a
+        # field named `*_secrets` is the wrong place to be optimistic.
+        "swarm_secrets",
+    }
+)
+
+# Fields whose NAME matches the credential pattern but which carry no secret.
+# Its only consumer is the test that fails when a newly added `*_token` /
+# `*_secret` / `*_key` field is in NEITHER set -- the point being that adding
+# a credential to `Settings` cannot silently skip the mask; someone has to
+# classify it. Every entry needs a reason.
+_PUBLIC_DESPITE_SECRET_NAME = frozenset(
+    {
+        "tokens_file",  # a Path to the token store, not a token
+        "token_ttl_days",  # int
+        "token_savior_enabled",  # bool, plugin flag
+        "token_savior_profile",  # str, plugin flag
+        "secrets_allowed_dirs",  # list of directories
+        "secrets_cache_ttl_seconds",  # int
+        "secrets_trust_graph_source_enabled",  # bool
+        "onepassword_enabled",  # bool
+        "kms_key_id",  # a KMS key RESOURCE NAME; the key material never leaves the KMS
+        "discord_public_key",  # Ed25519 PUBLIC key, published by Discord
+        "telegram_webhook_url",  # our own inbound endpoint, publicly reachable by design;
+        # the guard is `telegram_webhook_secret`, which IS masked
+    }
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="HIVEPILOT_",
@@ -1204,6 +1276,24 @@ class Settings(BaseSettings):
     # runs -- e.g. pass --extras "api,notifications,webui" (or set
     # HIVEPILOT_UPDATE_EXTRAS) to keep the web UI, containers, etc.
     update_extras: str = "api,notifications"
+
+    def __repr_args__(self) -> Any:
+        """Mask credential values in `repr()` and `str()`.
+
+        pydantic derives both from this hook, so overriding it covers the
+        traceback path (`repr` of a frame local), the f-string path and
+        `print(settings)` in one place. `model_dump()` is deliberately NOT
+        touched -- nothing in the package dumps `Settings`, and a dump that
+        silently returned `***set***` would corrupt config round-trips.
+
+        See `_SECRET_SETTING_FIELDS` for why this masks instead of hiding,
+        and why the field types stay `str`.
+        """
+        for key, value in super().__repr_args__():
+            if key in _SECRET_SETTING_FIELDS and value not in (None, "", {}, []):
+                yield key, "***set***"
+            else:
+                yield key, value
 
     @property
     def xdg_config_home(self) -> Path:
