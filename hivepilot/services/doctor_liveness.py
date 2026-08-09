@@ -485,6 +485,31 @@ def check_agent_privilege() -> list[DoctorFinding]:
     """
     import os
 
+    # The SERVICE user, not this process's. `config doctor` is normally typed
+    # into a root shell, so reading `geteuid()` answered "am I root" while
+    # appearing to answer "do the agents run as root" -- it kept reporting
+    # root after the production fleet had already moved to `User=hivepilot`.
+    # A check answering a different question than the one it appears to
+    # answer is the failure this module exists to remove.
+    try:
+        service_user = _systemd_service_user()
+    except Exception:  # noqa: BLE001 - a doctor check must never raise
+        service_user = None
+
+    if service_user is not None:
+        if service_user != "root":
+            return [
+                _mk(
+                    "info",
+                    _CHECK_PRIVILEGE,
+                    f"agents run as {service_user} (systemd User=), not root",
+                    "Read from the unit rather than from this process, which is "
+                    "usually a root shell and would say root either way.",
+                    "No action needed.",
+                )
+            ]
+        return [_privilege_warning("the systemd unit declares User=root")]
+
     try:
         uid = os.geteuid()
     except AttributeError:  # pragma: no cover - non-POSIX
@@ -495,24 +520,56 @@ def check_agent_privilege() -> list[DoctorFinding]:
             _mk(
                 "info",
                 _CHECK_PRIVILEGE,
-                f"agents run as uid {uid} (not root)",
+                f"this process runs as uid {uid} (not root); no systemd User= found",
                 "Printed even when correct, so a future change to root is "
                 "visible as a change rather than discovered later.",
                 "No action needed.",
             )
         ]
 
-    return [
-        _mk(
-            "warning",
-            _CHECK_PRIVILEGE,
-            "agents run as root",
-            "An agent reads untrusted input (a client's PR diff) and runs shell "
-            "commands. As root it can read /etc/hivepilot/*.env directly, so the "
-            "tool allowlist is guarding a door that is not the only way in.",
-            "Set User=/Group= in deploy/systemd/*.service (a commented "
-            "User=hivepilot is already there). systemd reads EnvironmentFile= as "
-            "root before dropping privileges, so shared.env can stay 0600 "
-            "root:root and become unreadable by the agent.",
-        )
-    ]
+    return [_privilege_warning("no systemd User= found; reporting this process")]
+
+
+def _systemd_service_user() -> str | None:
+    """The `User=` a hivepilot unit declares, or None when unknown.
+
+    None means "systemd could not be asked" (not installed, no such unit, a
+    container) -- deliberately distinct from "it says root", because the
+    caller must fall back rather than accuse.
+    """
+    import shutil
+    import subprocess
+
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
+        return None
+    for unit in ("hivepilot-scheduler", "hivepilot-api", "hivepilot-telegram"):
+        try:
+            completed = subprocess.run(  # noqa: S603
+                [systemctl, "show", unit, "-p", "User", "--value"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if completed.returncode == 0 and completed.stdout.strip():
+            return completed.stdout.strip()
+    return None
+
+
+def _privilege_warning(basis: str) -> DoctorFinding:
+    return _mk(
+        "warning",
+        _CHECK_PRIVILEGE,
+        f"agents run as root ({basis})",
+        "An agent reads untrusted input (a client's PR diff) and runs shell "
+        "commands. As root it can read /etc/hivepilot/*.env directly, so the "
+        "tool allowlist is guarding a door that is not the only way in.",
+        "Set User=/Group= in deploy/systemd/*.service (a commented "
+        "User=hivepilot is already there). systemd reads EnvironmentFile= as "
+        "root before dropping privileges, so shared.env can stay 0600 "
+        "root:root and become unreadable by the agent.",
+    )
