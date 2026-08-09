@@ -146,6 +146,11 @@ export const fr: Record<TranslationKey, string> = {
   'health.restartNote': " Activer/désactiver ne s'applique qu'au prochain redémarrage du serveur.",
   'health.noPlugins': 'Aucun plugin enregistré.',
   'health.disabledPlugins': 'Plugins désactivés',
+  'health.deniedPlugins': 'Activés, installés, et non chargés',
+  'health.denied': 'refusé au chargement',
+  'health.notInstalledPlugins': 'Écrits mais non installés',
+  'health.notInstalledHint':
+    "Disponibles dans le dépôt, non récupérés sur cette machine. Les plugins ne sont pas livrés dans le wheel : un merge ne les installe pas — lancez `hivepilot plugins install <nom> --yes`.",
   'health.disablePending': 'désactivation en attente · redémarrage',
   'health.disabled': 'désactivé',
   'health.insufficientRole': 'Rôle insuffisant — votre jeton ne peut plus activer/désactiver les plugins.',

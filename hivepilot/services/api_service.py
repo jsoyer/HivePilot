@@ -2268,7 +2268,8 @@ def plugins_health_endpoint(
     scoped via `_analytics_tenant` like the analytics endpoints. Serving one
     tenant's activity timestamps to another would leak their run cadence.
     """
-    results = _get_orchestrator().plugins.check_all()
+    manager = _get_orchestrator().plugins
+    results = manager.check_all()
     tenant = _analytics_tenant(caller)
     measurable = plugin_activity.probed_plugins()
     return {
@@ -2283,7 +2284,56 @@ def plugins_health_endpoint(
             for name, health in sorted(results.items())
         ],
         "disabled": sorted(settings.plugins_disabled),
+        "denied": _denied_plugins_payload(manager),
+        "not_installed": _uninstalled_plugins_payload(),
     }
+
+
+def _denied_plugins_payload(manager: Any) -> list[dict[str, Any]]:
+    """Plugins that are enabled and installed and did NOT load.
+
+    The third state, and the one with no surface anywhere until now.
+    `check_all()` only covers REGISTERED plugins, and a capability-denied
+    plugin is rolled back before registration -- so an operator could enable
+    it, see the toggle succeed, and find it in neither the healthy list nor
+    the disabled list. It simply was not there.
+
+    Observed live: `token_savior` loads under the services' capability policy
+    and is denied under a CLI environment that lacks it. Same plugin, same
+    flag, opposite outcome, and the UI showed the same thing in both cases --
+    nothing.
+    """
+    denied = getattr(manager, "denied", None) or []
+    payload: list[dict[str, Any]] = []
+    for record, error in denied:
+        payload.append(
+            {
+                "name": getattr(record, "name", "?"),
+                "source": getattr(record, "source", None),
+                "error": error,
+                "remediation": (
+                    "add the declared capability to HIVEPILOT_PLUGINS_CAPABILITY_POLICY "
+                    "(plain or CSV, e.g. HIVEPILOT_PLUGINS_CAPABILITY_POLICY=subprocess), "
+                    "then restart"
+                ),
+            }
+        )
+    return sorted(payload, key=lambda p: str(p["name"]))
+
+
+def _uninstalled_plugins_payload() -> list[str]:
+    """Curated plugins that exist in the repo but are not on this host.
+
+    Plugins are not shipped in the wheel, so a merge does not install them.
+    Reporting only what IS installed answers "what is on" while hiding "what
+    exists" -- which is how ~23 written plugins sat inert here unnoticed.
+    """
+    try:
+        from hivepilot.services import plugin_installer as pi
+
+        return sorted(name for name in pi.KNOWN_EXAMPLE_PLUGINS if not pi.is_installed(name))
+    except Exception:  # noqa: BLE001 - never break the health endpoint
+        return []
 
 
 # ---------------------------------------------------------------------------

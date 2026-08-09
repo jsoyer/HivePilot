@@ -1119,7 +1119,19 @@ class TestPluginsHealthEndpoint:
         raw, _ = add_token("read")
         resp = api_client.get("/plugins/health", headers=_auth(raw))
         assert resp.status_code == 200
-        assert resp.json() == {"plugins": [], "disabled": []}
+        body = resp.json()
+        # This test's subject is that the UNVERSIONED alias is registered, so
+        # it asserts on the alias, not on the full payload shape. It used to
+        # compare the whole body for equality, which made every additive field
+        # a failure here rather than in the endpoint's own tests.
+        assert body["plugins"] == []
+        assert body["disabled"] == []
+        # `denied` and `not_installed` are the two states that previously had
+        # no surface at all: a plugin can be enabled and installed and still
+        # not load (capability policy), and a plugin can be written and never
+        # installed (they are not in the wheel).
+        assert body["denied"] == []
+        assert isinstance(body["not_installed"], list)
 
     def test_raising_check_surfaces_as_error_not_500(
         self, api_client, tmp_tokens_file, monkeypatch
@@ -2301,3 +2313,112 @@ class TestHandleApprovalExplicitFailures:
 
         assert resp.status_code == 200
         assert resp.json()["result"]["success"] is True
+
+
+class TestPluginsHealthSurfacesTheSilentStates:
+    """`check_all()` only covers REGISTERED plugins.
+
+    Two states were therefore invisible in every UI, and both mean "you think
+    this is running and it is not":
+
+    - **denied** — enabled AND installed, rolled back before registration
+      because its declared capability is outside
+      `plugins_capability_policy`. Not in the healthy list, not in the
+      disabled list. Observed live: `token_savior` loads under the services'
+      policy and is denied under a CLI environment that lacks it — same
+      plugin, same flag, opposite outcome, and the UI showed nothing either
+      way.
+    - **not_installed** — written in the repo, never fetched onto this host.
+      Plugins are not shipped in the wheel, so a merge does not install them.
+      Reporting only what IS installed answers "what is on" while hiding
+      "what exists", which is how ~23 written plugins sat inert here.
+    """
+
+    def test_a_capability_denied_plugin_is_reported(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        record = SimpleNamespace(name="token_savior", source="local-file")
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(
+                plugins=SimpleNamespace(
+                    check_all=lambda: {},
+                    denied=[(record, "declares ['filesystem'] not permitted")],
+                )
+            ),
+        )
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/plugins/health", headers=_auth(raw)).json()
+
+        assert [d["name"] for d in body["denied"]] == ["token_savior"]
+        assert "filesystem" in body["denied"][0]["error"]
+
+    def test_the_denial_says_how_to_fix_it(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A denial an operator cannot act on is only marginally better than
+        silence."""
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        record = SimpleNamespace(name="token_savior", source="local-file")
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(
+                plugins=SimpleNamespace(check_all=lambda: {}, denied=[(record, "nope")])
+            ),
+        )
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/plugins/health", headers=_auth(raw)).json()
+
+        assert "PLUGINS_CAPABILITY_POLICY" in body["denied"][0]["remediation"]
+
+    def test_a_manager_without_denied_does_not_break_the_endpoint(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Health must never 500 — an older manager simply reports none."""
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(plugins=SimpleNamespace(check_all=lambda: {})),
+        )
+        raw, _ = add_token("read")
+
+        resp = api_client.get("/v1/plugins/health", headers=_auth(raw))
+
+        assert resp.status_code == 200
+        assert resp.json()["denied"] == []
+
+    def test_written_but_uninstalled_plugins_are_listed(
+        self, api_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from hivepilot.services import api_service
+        from hivepilot.services import plugin_installer as pi
+
+        monkeypatch.setattr(
+            api_service,
+            "_get_orchestrator",
+            lambda: SimpleNamespace(plugins=SimpleNamespace(check_all=lambda: {}, denied=[])),
+        )
+        monkeypatch.setattr(pi, "is_installed", lambda name: name == "rtk")
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/plugins/health", headers=_auth(raw)).json()
+
+        assert "rtk" not in body["not_installed"]
+        assert "onepassword" in body["not_installed"]

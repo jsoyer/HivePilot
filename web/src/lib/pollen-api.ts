@@ -464,9 +464,39 @@ export interface PluginHealthEntry {
   activity: PluginActivity | null
 }
 
+/** A plugin that is enabled AND installed and did not load.
+ *
+ * The third state. `check_all()` only covers REGISTERED plugins, and a
+ * capability-denied plugin is rolled back before registration — so it appears
+ * in neither `plugins` nor `disabled`. An operator could enable it, watch the
+ * toggle succeed, and find it nowhere.
+ *
+ * Seen live: `token_savior` loads under the services' capability policy and is
+ * denied under a CLI environment that lacks it. Same plugin, same flag,
+ * opposite outcome, and the UI showed the same thing either way — nothing. */
+export interface PluginDenied {
+  name: string
+  source: string | null
+  error: string
+  /** A denial an operator cannot act on is only marginally better than
+   * silence. */
+  remediation: string
+}
+
 export interface PluginsHealthResponse {
   plugins: PluginHealthEntry[]
   disabled: string[]
+  /** Optional because an API that has not been redeployed yet does not send
+   * it. Pollen's bundle ships with the engine but a host can lag, and a hard
+   * requirement here would blank the whole Health tab against an older
+   * backend — trading a missing section for a missing page. */
+  denied?: PluginDenied[]
+  /** Curated plugins written in the repo but not fetched onto this host.
+   * Plugins are not shipped in the wheel, so a merge does not install them —
+   * listing only what IS installed answers "what is on" while hiding "what
+   * exists", which is how ~23 written plugins sat inert here unnoticed.
+   * Optional for the same reason as `denied`. */
+  not_installed?: string[]
 }
 
 export function fetchPluginsHealth(): Promise<PluginsHealthResponse> {

@@ -629,4 +629,101 @@ describe('HealthView', () => {
       expect(container.textContent).toContain('1 unreadable')
     })
   })
+
+  // ---------------------------------------------------------------------------
+  // The two states that had no surface anywhere.
+  //
+  // `check_all()` only covers REGISTERED plugins, so a plugin that is enabled
+  // AND installed but rolled back at load (capability policy) appeared in
+  // neither the healthy list nor the disabled list. It simply was not there.
+  // ---------------------------------------------------------------------------
+
+  it('renders a capability-denied plugin, which appears in no other list', async () => {
+    fetchPluginsHealth.mockResolvedValue({
+      plugins: [],
+      disabled: [],
+      denied: [
+        {
+          name: 'token_savior',
+          source: 'local-file',
+          error: "declares ['filesystem'] not permitted by the policy",
+          remediation: 'add the declared capability to HIVEPILOT_PLUGINS_CAPABILITY_POLICY',
+        },
+      ],
+      not_installed: [],
+    } satisfies PluginsHealthResponse)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('token_savior')
+    expect(container.textContent).toMatch(/not loaded/i)
+  })
+
+  it('shows the denial reason and how to fix it', async () => {
+    // A denial an operator cannot act on is only marginally better than
+    // silence — the whole point is that this state was previously invisible.
+    fetchPluginsHealth.mockResolvedValue({
+      plugins: [],
+      disabled: [],
+      denied: [
+        {
+          name: 'token_savior',
+          source: 'local-file',
+          error: "declares ['filesystem'] not permitted by the policy",
+          remediation: 'add the declared capability to HIVEPILOT_PLUGINS_CAPABILITY_POLICY',
+        },
+      ],
+      not_installed: [],
+    } satisfies PluginsHealthResponse)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('filesystem')
+    expect(container.textContent).toContain('HIVEPILOT_PLUGINS_CAPABILITY_POLICY')
+  })
+
+  it('lists plugins that are written but not installed on this host', async () => {
+    fetchPluginsHealth.mockResolvedValue({
+      plugins: [],
+      disabled: [],
+      denied: [],
+      not_installed: ['onepassword', 'bitwarden'],
+    } satisfies PluginsHealthResponse)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('onepassword')
+    expect(container.textContent).toContain('bitwarden')
+    expect(container.textContent).toMatch(/not installed/i)
+  })
+
+  it('renders nothing extra when an older API omits the new fields', async () => {
+    // Pollen's bundle ships with the engine but a host can lag. Requiring the
+    // fields would blank the whole tab against an older backend — trading a
+    // missing section for a missing page.
+    fetchPluginsHealth.mockResolvedValue({
+      plugins: [
+        { name: 'rtk', status: 'ok', detail: 'reachable', activity_available: false, activity: null },
+      ],
+      disabled: [],
+    } satisfies PluginsHealthResponse)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('rtk')
+    expect(container.textContent).not.toMatch(/not loaded/i)
+    expect(container.textContent).not.toMatch(/not installed/i)
+  })
 })

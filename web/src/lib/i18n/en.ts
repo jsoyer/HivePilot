@@ -152,6 +152,11 @@ export const en = {
   'health.restartNote': " Enable/disable applies on the server's next restart only.",
   'health.noPlugins': 'No plugins registered.',
   'health.disabledPlugins': 'Disabled plugins',
+  'health.deniedPlugins': 'Enabled, installed, and not loaded',
+  'health.denied': 'denied at load',
+  'health.notInstalledPlugins': 'Written but not installed',
+  'health.notInstalledHint':
+    'Available in the repo, not fetched onto this host. Plugins are not shipped in the wheel, so a merge does not install them — run `hivepilot plugins install <name> --yes`.',
   'health.disablePending': 'disable pending · restart',
   'health.disabled': 'disabled',
   'health.insufficientRole': 'Insufficient role — your token can no longer toggle plugins.',
