@@ -24,6 +24,14 @@ import pytest
 from hivepilot.services import agent_versions as av
 
 
+def _messages(findings) -> str:
+    return " | ".join(f.message for f in findings)
+
+
+def _severities(findings) -> set[str]:
+    return {f.severity for f in findings}
+
+
 class TestParsingTheVersionOutput:
     """Each CLI prints its version differently; none of them print only it."""
 
@@ -243,3 +251,80 @@ class TestProbeVersionIsUnchanged:
         monkeypatch.setattr(av.subprocess, "run", boom)
 
         assert av.probe_version("claude") is None
+
+
+class TestApiOnlyKindsAreNotMissingCLIs:
+    """`openrouter` reaches its model over HTTP and has no binary, ever.
+
+    The first version of this check reported it as "registered as a runner
+    but its CLI is not on PATH" and advised: *install the openrouter CLI, or
+    disable the runner*. Following that advice would have disabled a working
+    API runner — the same failure as recommending deletion of the live
+    approvals topic: a cleanup suggestion that breaks a working feature is
+    worse than no suggestion.
+
+    The knowledge existed, as a private local in `cli.py`'s table, where no
+    second consumer could see it. It is now `API_ONLY_AGENT_KINDS` in
+    `agent_checks`, beside `AGENT_RUNNER_KINDS`.
+    """
+
+    def test_an_api_only_kind_is_not_reported_as_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"openrouter"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, None, False, None, None, None),
+        )
+
+        findings = av.check_agent_cli_versions()
+
+        assert _severities(findings) == {"info"}
+        assert "API-only" in _messages(findings)
+
+    def test_the_advice_never_says_to_disable_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The specific harm: disabling a runner that works."""
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"openrouter"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, None, False, None, None, None),
+        )
+
+        assert all("_ENABLED=false" not in f.fix for f in av.check_agent_cli_versions())
+
+    def test_it_is_still_REPORTED_rather_than_skipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Silence would make "no version line" ambiguous between "API-only"
+        and "we forgot about it"."""
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"openrouter"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, None, False, None, None, None),
+        )
+
+        assert [f for f in av.check_agent_cli_versions() if "openrouter" in f.message]
+
+    def test_a_CLI_backed_kind_missing_from_PATH_still_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard must keep doing its job for kinds that DO need a binary."""
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"claude"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, None, False, None, None, None),
+        )
+
+        assert _severities(av.check_agent_cli_versions()) == {"warning"}
+
+    def test_the_canonical_set_is_shared_not_duplicated(self) -> None:
+        """It lived as a private local in cli.py, which is exactly why the
+        doctor check could not see it."""
+        from hivepilot.services.agent_checks import AGENT_RUNNER_KINDS, API_ONLY_AGENT_KINDS
+
+        assert "openrouter" in API_ONLY_AGENT_KINDS
+        assert API_ONLY_AGENT_KINDS <= AGENT_RUNNER_KINDS
