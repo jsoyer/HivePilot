@@ -62,9 +62,55 @@ def test_no_key_is_invented_while_roles_are_reloading(empty_roles):
     assert ns._resolve_agent_key("Gustave (Developer)") is None
 
 
-def test_non_role_streams_still_get_their_own_key(fake_roles):
-    """`hivepilot` / `pentest` legitimately stream to their own topic."""
-    assert ns._resolve_agent_key("pentest") == "pentest"
+class TestOnlyDeclaredNonRoleStreamsGetATopic:
+    """This used to slug the first word of ANY unmatched actor into a key.
+
+    That made topic creation unbounded, and `Orchestrator._agent_name` walks
+    straight into it: when a task declares no role it falls back to
+    `stage.name`, so a stage named `refresh` became actor "refresh", key
+    `refresh`, and a permanent Telegram topic named after a pipeline stage.
+    Every new roleless stage minted another one.
+
+    Found in production: the registry held `refresh` and `pentest` beside 19
+    real roles, and looked healthy the whole time -- being keyed, it shows one
+    entry per name no matter how many names there are. The operator was
+    deleting topics by hand.
+
+    It fails open in the quietest possible way: nothing errors, nothing is
+    lost, a topic simply appears.
+    """
+
+    def test_the_engines_own_stream_key_still_gets_a_topic(self, fake_roles):
+        """`actor="HivePilot"` is emitted by the orchestrator itself for
+        pipeline-level turns, and is declared."""
+        assert ns._resolve_agent_key("HivePilot") == "hivepilot"
+
+    def test_an_undeclared_actor_gets_no_topic(self, fake_roles):
+        """None routes the send to the group's General topic -- recoverable,
+        unlike a topic that has to be deleted by hand."""
+        assert ns._resolve_agent_key("pentest") is None
+
+    def test_a_stage_name_no_longer_mints_a_topic(self, fake_roles):
+        """The live case: tasks.yaml declares a stage `refresh`, whose task
+        has no role, so `_agent_name` handed the stage name over as an actor."""
+        assert ns._resolve_agent_key("refresh") is None
+        assert ns._resolve_agent_key("docs-refresh") is None
+
+    def test_a_deployment_can_declare_its_own(self, fake_roles, monkeypatch):
+        """Which non-role streams deserve a topic is a tenant decision, so it
+        lives in config rather than in the engine."""
+        monkeypatch.setattr(ns.settings, "stream_topic_extra_keys", ["pentest"])
+
+        assert ns._resolve_agent_key("pentest") == "pentest"
+        assert ns._resolve_agent_key("refresh") is None
+
+    def test_a_role_match_still_wins_over_everything(self, fake_roles):
+        assert ns._resolve_agent_key("Gustave (Developer)") == "developer"
+
+    def test_an_empty_actor_mints_nothing(self, fake_roles):
+        """It used to fall through to the literal key `general`."""
+        assert ns._resolve_agent_key("") is None
+        assert ns._resolve_agent_key("   ") is None
 
 
 # ---------------------------------------------------------------------------
