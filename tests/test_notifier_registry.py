@@ -150,7 +150,11 @@ class TestPluginNotifierWiring:
         )
         monkeypatch.setattr(plugins_mod.settings, "base_dir", tmp_path, raising=False)
 
-        pm = PluginManager()
+        # Called for its side effect: loading the plugin is what stages the
+        # contributed notifier into `NOTIFIER_MAP`. The instance itself is no
+        # longer inspected -- `declared_notifiers` was the only reason to
+        # hold it.
+        PluginManager()
 
         # Was `pm.declared_notifiers`, a second copy of this fact that the
         # package never read. `NOTIFIER_MAP` is the one `send_notification`
