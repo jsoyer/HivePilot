@@ -2337,6 +2337,34 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
     )
     findings.extend(_run_check("check_plugin_health", lambda: check_plugin_health(plugin_manager)))
 
+    # Liveness: what actually RUNS, as opposed to what is configured. Lives in
+    # its own module (this one is long enough) and is imported here rather than
+    # at module scope because it imports back into this one for `_finding`.
+    #
+    # Only for the LIVE deployment. An explicit `config_dir` means "validate
+    # this directory's config", and the state DB, vault, hooks and topic
+    # registry of the process doing the validating say nothing about it --
+    # they would report the auditor's own environment as findings against
+    # someone else's config.
+    if config_dir is None:
+        from hivepilot.services import doctor_liveness
+
+        findings.extend(_run_check("state_db_liveness", doctor_liveness.check_state_db_liveness))
+        findings.extend(_run_check("vault_liveness", doctor_liveness.check_vault_liveness))
+        findings.extend(
+            _run_check(
+                "registered_hooks",
+                lambda: doctor_liveness.check_registered_hooks(plugin_manager),
+            )
+        )
+        findings.extend(
+            _run_check(
+                "plugins_written_vs_installed",
+                lambda: doctor_liveness.check_plugins_written_vs_installed(plugin_manager),
+            )
+        )
+        findings.extend(_run_check("orphan_topic_keys", doctor_liveness.check_orphan_topic_keys))
+
     findings.extend(
         _run_check("check_dangling_references", lambda: check_dangling_references(config_dir))
     )
