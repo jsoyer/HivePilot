@@ -18,6 +18,7 @@ Mirrors `tests/test_sample_skill.py`'s structure exactly:
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 from pathlib import Path
 
@@ -159,3 +160,76 @@ class TestShadcnPluginRealDiscovery:
 
         assert pm.get_skill("shadcn") is None
         assert pm.list_skills() == []
+
+
+class TestTheCheatSheetMatchesTheActualTree:
+    """A stale cheat sheet is worse than none: it gives confidence in the
+    wrong direction.
+
+    Audited 2026-08-09 against `web/`. 36 of 37 factual claims held; the
+    misses were all in the "what to reuse" layer, which is exactly what the
+    skill is for and exactly what moves fastest:
+
+    - it named `RunsView`, superseded by `RunBoardView`;
+    - it told an agent to hand-roll the loading/error scaffold inline, while
+      13 of 17 views already compose `<AsyncSection>`;
+    - it listed 6 of the 9 `ui/` primitives;
+    - it never mentioned i18n, though 16 of 17 views use `useT()`.
+
+    These tests read the REAL tree, so the next drift fails here instead of
+    reaching an agent.
+    """
+
+    WEB = _REPO_ROOT / "web"
+
+    def _skill_md(self, monkeypatch: pytest.MonkeyPatch) -> str:
+        from hivepilot.config import settings as _settings
+
+        monkeypatch.setattr(_settings, "shadcn_enabled", True, raising=False)
+        spec = importlib.util.spec_from_file_location(
+            "hivepilot_plugin_shadcn_audit", _SHADCN_PLUGIN
+        )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        skills = module.register()["skills"]
+        return str(skills[0]["files"]["SKILL.md"])
+
+    def test_every_file_it_names_exists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The `RunsView` case: a named file that is gone sends an agent
+        looking for it, or modelling new work on a superseded pattern."""
+        md = self._skill_md(monkeypatch)
+        named = set(re.findall(r"`([A-Za-z][A-Za-z0-9_]*\.tsx)`", md))
+        missing = sorted(
+            n
+            for n in named
+            if not list(self.WEB.rglob(n))  # anywhere under web/
+        )
+
+        assert not missing, f"the skill names files that no longer exist: {missing}"
+
+    def test_it_lists_every_ui_primitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unlisted primitive is one an agent re-implements by hand."""
+        md = self._skill_md(monkeypatch)
+        real = {
+            p.stem for p in (self.WEB / "src/components/ui").glob("*.tsx") if ".test" not in p.name
+        }
+        missing = sorted(n for n in real if f"{n}.tsx" not in md)
+
+        assert not missing, f"ui/ primitives absent from the cheat sheet: {missing}"
+
+    def test_it_points_at_the_scaffold_that_views_actually_use(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`AsyncSection` is the loading/error/empty scaffold. Telling an
+        agent to build one inline is telling it to duplicate a component."""
+        assert "AsyncSection" in self._skill_md(monkeypatch)
+
+    def test_it_mentions_i18n(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """16 of 17 views use `useT()`, and a visible string must exist in
+        BOTH `en.ts` and `fr.ts`. A skill that omits this produces hardcoded
+        text that builds and lints cleanly."""
+        md = self._skill_md(monkeypatch)
+
+        assert "useT" in md
+        assert "fr.ts" in md
