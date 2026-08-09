@@ -908,13 +908,48 @@ def _same_local_plugin_origin(current: Any, obj: Any) -> bool:
     files that both attempt the same kind/name, still always raises --
     neither can ever produce a matching `(__module__, __qualname__)` pair.
     """
-    module = getattr(obj, "__module__", None)
+    module, obj_qualname = _origin_identity(obj)
     if not isinstance(module, str) or not module.startswith(_LOCAL_PLUGIN_MODULE_PREFIX):
         return False
-    if getattr(current, "__module__", None) != module:
+    current_module, current_qualname = _origin_identity(current)
+    if current_module != module:
         return False
-    obj_qualname = getattr(obj, "__qualname__", None)
-    return obj_qualname is not None and getattr(current, "__qualname__", None) == obj_qualname
+    return obj_qualname is not None and current_qualname == obj_qualname
+
+
+def _origin_identity(obj: Any) -> tuple[str | None, str | None]:
+    """The `(__module__, __qualname__)` pair identifying what PRODUCED *obj*.
+
+    Reads the pair off the CLASS when *obj* is an instance. `__module__`
+    falls through from a class to its instances, but `__qualname__` does NOT
+    -- it lives on the type object itself -- so an instance always reported
+    `(module, None)` and `_same_local_plugin_origin` returned False for it.
+
+    Runners and notifiers register classes and functions, which carry both
+    attributes, so this went unnoticed. Every SECRETS backend registers an
+    INSTANCE (`{"onepassword": OnePasswordBackend()}`), so all five secrets
+    plugins hit it: constructing a second `PluginManager` -- exactly what
+    `config_doctor.run_doctor` does before `check_dangling_references` calls
+    `validate_config` -- raised `SecretsBackendCollisionError` naming the
+    same class on both sides:
+
+        Secrets backend 'onepassword' is already registered to
+        OnePasswordBackend; refusing to silently replace it with
+        OnePasswordBackend
+
+    A backend refusing to be replaced by itself is not a collision. Observed
+    on the box the moment a secrets plugin was installed: the dangling-
+    reference checks stopped running entirely.
+
+    The trust boundary is unchanged -- the caller still requires the module
+    to start with `_LOCAL_PLUGIN_MODULE_PREFIX`, and two genuinely different
+    plugins still produce different pairs.
+    """
+    qualname = getattr(obj, "__qualname__", None)
+    if qualname is not None:
+        return getattr(obj, "__module__", None), qualname
+    cls = type(obj)
+    return getattr(cls, "__module__", None), getattr(cls, "__qualname__", None)
 
 
 def _stage_kind(

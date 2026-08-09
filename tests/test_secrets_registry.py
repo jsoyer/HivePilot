@@ -104,3 +104,77 @@ def test_resolve_env_missing_raises_runtime_error(monkeypatch: pytest.MonkeyPatc
     resolver = SecretResolver()
     with pytest.raises(RuntimeError, match="DOES_NOT_EXIST_SECRET_KEY"):
         resolver.resolve({"my_secret": {"source": "env", "key": "DOES_NOT_EXIST_SECRET_KEY"}})
+
+
+class TestABackendCannotCollideWithItself:
+    """Every secrets backend registers an INSTANCE, and instances broke the
+    same-origin check.
+
+    `__module__` falls through from a class to its instances; `__qualname__`
+    does NOT — it lives on the type object. So `_same_local_plugin_origin`
+    read `(module, None)` for a backend instance and always returned False,
+    and constructing a SECOND `PluginManager` — exactly what
+    `config_doctor.run_doctor` does before `check_dangling_references` calls
+    `validate_config` — raised a collision naming the same class on both
+    sides:
+
+        Secrets backend 'onepassword' is already registered to
+        OnePasswordBackend; refusing to silently replace it with
+        OnePasswordBackend
+
+    Runners and notifiers register classes and functions, which carry both
+    attributes, which is why this went unnoticed until a secrets plugin was
+    installed on the box and the dangling-reference checks stopped running.
+    """
+
+    def _fake_local_backend(self, qualname: str = "FakeBackend"):
+        from hivepilot.plugins import _LOCAL_PLUGIN_MODULE_PREFIX
+
+        cls = type(qualname, (), {})
+        cls.__module__ = f"{_LOCAL_PLUGIN_MODULE_PREFIX}fake"
+        cls.__qualname__ = qualname
+        return cls
+
+    def test_two_instances_of_the_same_local_plugin_class_match(self) -> None:
+        from hivepilot.plugins import _same_local_plugin_origin
+
+        cls = self._fake_local_backend()
+
+        assert _same_local_plugin_origin(cls(), cls()) is True
+
+    def test_instances_from_a_RE_EXECUTED_plugin_module_still_match(self) -> None:
+        """The real shape: a second PluginManager re-execs the file, so the
+        class object is brand new and identity can never match."""
+        from hivepilot.plugins import _same_local_plugin_origin
+
+        first, second = self._fake_local_backend(), self._fake_local_backend()
+
+        assert first is not second
+        assert _same_local_plugin_origin(first(), second()) is True
+
+    def test_two_DIFFERENT_backends_still_collide(self) -> None:
+        """The guard must keep doing its job — this is a real collision."""
+        from hivepilot.plugins import _same_local_plugin_origin
+
+        mine = self._fake_local_backend("MineBackend")
+        theirs = self._fake_local_backend("TheirsBackend")
+
+        assert _same_local_plugin_origin(mine(), theirs()) is False
+
+    def test_a_builtin_instance_never_matches(self) -> None:
+        """The trust boundary: only synthetic local-plugin modules qualify."""
+        from hivepilot.plugins import _same_local_plugin_origin
+
+        class Builtin:
+            pass
+
+        assert _same_local_plugin_origin(Builtin(), Builtin()) is False
+
+    def test_classes_still_match_as_before(self) -> None:
+        """Runners/notifiers register classes and functions; unchanged."""
+        from hivepilot.plugins import _same_local_plugin_origin
+
+        assert (
+            _same_local_plugin_origin(self._fake_local_backend(), self._fake_local_backend())
+            is True
+        )
