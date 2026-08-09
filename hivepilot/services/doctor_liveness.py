@@ -139,66 +139,139 @@ def check_state_db_liveness() -> list[DoctorFinding]:
 # ---------------------------------------------------------------------------
 
 
-def check_vault_liveness() -> list[DoctorFinding]:
-    """Report the resolved Obsidian vault AND whether it exists.
+def _describe_vault(raw: object) -> tuple[Path | None, str, int]:
+    """Resolve a vault path and describe what is behind it.
 
-    The obsidian plugin logged `plugin.obsidian.recalled` for months against
-    a directory that was not there. Recall from a missing vault returns
-    nothing, which is indistinguishable from a vault with nothing to say.
+    Returns (resolved_or_None, description, note_count). None means nothing
+    usable is there, which is what makes the plugin a no-op. The count is
+    returned separately because an existing but EMPTY vault recalls exactly
+    as much as a missing one -- zero -- and the caller must be able to say
+    so without parsing the description string.
     """
-    raw = getattr(settings, "obsidian_vault", None)
     if not raw:
-        return [
+        return None, "unset", 0
+    try:
+        resolved = Path(str(raw)).expanduser()
+        if not resolved.is_absolute():
+            resolved = settings.resolve_path(Path(str(raw)))
+        if not resolved.exists():
+            return None, f"{resolved} (does not exist)", 0
+        if not resolved.is_dir():
+            return None, f"{resolved} (not a directory)", 0
+    except OSError as exc:  # e.g. PermissionError on a parent directory
+        return None, f"{raw} (unreadable: {type(exc).__name__})", 0
+
+    # `rglob` walks the whole tree and raises on the first unreadable
+    # subdirectory -- a vault with one restricted folder would otherwise take
+    # down the entire check, which is how the first version of this crashed.
+    notes = 0
+    unreadable = False
+    try:
+        for path in resolved.rglob("*.md"):
+            try:
+                if path.is_file():
+                    notes += 1
+            except OSError:
+                unreadable = True
+    except OSError:
+        # The walk itself can raise, not just the per-entry stat.
+        unreadable = True
+    suffix = ", some subdirectories unreadable" if unreadable else ""
+    return resolved, f"{resolved} ({notes} notes{suffix})", notes
+
+
+def _projects_without_a_vault() -> tuple[list[str], list[str]]:
+    """(projects declaring their own vault, projects falling back to global)."""
+    try:
+        from hivepilot.services.project_service import load_projects
+
+        projects = load_projects().projects
+    except Exception:  # noqa: BLE001 - a doctor check must never raise
+        return [], []
+    own = sorted(n for n, p in projects.items() if getattr(p, "obsidian_vault", None))
+    fallback = sorted(n for n in projects if n not in own)
+    return own, fallback
+
+
+def check_vault_liveness() -> list[DoctorFinding]:
+    """Report which vault each project actually resolves.
+
+    The FIRST version of this check looked only at the global setting and
+    concluded the plugin was dead. It was wrong: `_resolve_vault` prefers a
+    project's own `obsidian_vault:` override, and on this deployment the two
+    projects that carry one were recalling from real, populated vaults the
+    whole time. Reporting the global alone turned a partial gap into a false
+    total-failure claim -- a check that cries wolf gets ignored, which is
+    worse than one that says nothing.
+
+    The gap it should have named is narrower and real: projects with NO
+    override fall back to the global, and a global that resolves nowhere
+    makes the plugin a silent no-op for exactly those.
+    """
+    global_vault, global_desc, global_notes = _describe_vault(
+        getattr(settings, "obsidian_vault", None)
+    )
+    own, fallback = _projects_without_a_vault()
+
+    findings: list[DoctorFinding] = []
+
+    if global_vault is not None:
+        # An existing but EMPTY vault recalls exactly as much as a missing one.
+        findings.append(
             _mk(
-                "info",
+                "warning" if global_notes == 0 else "info",
                 _CHECK_VAULT,
-                "no obsidian vault configured",
-                "Vault reads/writes are silent no-ops. Correct if unused; worth "
-                "knowing if the obsidian plugin is enabled.",
-                "Set HIVEPILOT_OBSIDIAN_VAULT to an absolute path to enable it.",
+                f"global obsidian vault: {global_desc}",
+                "Used by any project that declares no `obsidian_vault:` of its own. "
+                "An empty vault recalls nothing, indistinguishably from a missing one.",
+                "No action needed." if global_notes else "Confirm this is the intended vault.",
             )
-        ]
-
-    resolved = Path(str(raw)).expanduser()
-    if not resolved.is_absolute():
-        resolved = settings.resolve_path(Path(str(raw)))
-
-    if not resolved.exists():
-        return [
-            _mk(
-                "warning",
-                _CHECK_VAULT,
-                f"obsidian vault does not exist: {resolved}",
-                "Recall against a missing vault returns nothing and logs success, "
-                "so the plugin reports healthy while contributing no context at "
-                "all -- which is how this went unnoticed for months here.",
-                f"Create {resolved}, or correct HIVEPILOT_OBSIDIAN_VAULT.",
-            )
-        ]
-
-    if not resolved.is_dir():
-        return [
-            _mk(
-                "warning",
-                _CHECK_VAULT,
-                f"obsidian vault is not a directory: {resolved}",
-                "A file where a vault is expected fails every read the same "
-                "silent way a missing directory does.",
-                "Point HIVEPILOT_OBSIDIAN_VAULT at the vault directory.",
-            )
-        ]
-
-    notes = sum(1 for _ in resolved.rglob("*.md"))
-    return [
-        _mk(
-            "warning" if notes == 0 else "info",
-            _CHECK_VAULT,
-            f"obsidian vault: {resolved} ({notes} notes)",
-            "An existing but EMPTY vault recalls nothing, exactly like a missing "
-            "one. Existence alone was never the question worth asking.",
-            "No action needed." if notes else "Confirm this is the intended vault.",
         )
-    ]
+    elif fallback:
+        # Only a problem BECAUSE something depends on it. A global that
+        # resolves nowhere while every project carries its own override is
+        # noise, and naming the affected projects is what makes it actionable.
+        findings.append(
+            _mk(
+                "warning",
+                _CHECK_VAULT,
+                f"global obsidian vault {global_desc}; "
+                f"{len(fallback)} project(s) fall back to it: {', '.join(fallback)}",
+                "Those projects recall nothing and write no run notes, and the "
+                "plugin still reports healthy -- recall from a vault that is not "
+                "there returns nothing, which is indistinguishable from a vault "
+                "with nothing to say.",
+                "Give each project its own `obsidian_vault:` in projects.yaml "
+                "(preferred -- a global default silently captures future projects "
+                "into someone else's vault), or set HIVEPILOT_OBSIDIAN_VAULT.",
+            )
+        )
+
+    for name in own:
+        resolved, desc, notes = _describe_vault(_project_vault(name))
+        findings.append(
+            _mk(
+                "info" if resolved is not None and notes else "warning",
+                _CHECK_VAULT,
+                f"{name}: {desc}",
+                "Per-project vaults take precedence over the global one, so this "
+                "is the path that project actually reads and writes.",
+                "No action needed." if resolved is not None else "Correct it in projects.yaml.",
+            )
+        )
+
+    return findings
+
+
+def _project_vault(name: str) -> object | None:
+    """The `obsidian_vault:` a project declares, or None. Never raises."""
+    try:
+        from hivepilot.services.project_service import load_projects
+
+        project = load_projects().projects.get(name)
+        return getattr(project, "obsidian_vault", None) if project else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ---------------------------------------------------------------------------
