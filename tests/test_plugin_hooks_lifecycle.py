@@ -50,7 +50,6 @@ def _bare_plugin_manager() -> PluginManager:
     pm = PluginManager.__new__(PluginManager)
     pm.loaded = []
     pm.hooks = {"before_step": [], "after_step": []}
-    pm.declared_notifiers = {}
     pm.plugins = []
     return pm
 
