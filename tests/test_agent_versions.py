@@ -1,110 +1,245 @@
-"""Nothing records which agent CLI version produced a run.
+"""Is the installed agent CLI CURRENT?
 
-`doctor` reports whether `claude` is on PATH and stops there. The box runs
-2.1.220 and a change would pass unnoticed — which matters more than it
-sounds, because the CLI *is* the runtime:
+`probe_version` (#449) already answers "which version" and `agents list`
+answers "is it on PATH". Neither answered "and is that the latest", nor "how
+would you update it" — which turns out to depend on how the CLI was
+installed, not on which CLI it is.
 
-- `WaitForMcpServers`, which `token_savior` bootstraps against, is a Claude
-  Code internal whose name is version-dependent.
-- `--mcp-config` and `--strict-mcp-config` are recent flags.
-- `Read(./**)`-style scoped permission specifiers, which the noxys roles now
-  depend on for secret containment, are a permission-syntax feature. If a
-  future CLI parsed that string differently, a grant we rely on to *refuse*
-  `/etc/hivepilot/shared.env` could quietly widen.
+Deliberately generic. `claude` is one of twelve agent kinds
+(`AGENT_RUNNER_KINDS`), and hard-coding it into the engine would break the
+rule that the engine works for any deployment. The npm detection below keys
+off the resolved binary path, not off a name.
 
-So this reports the version. It deliberately does **not** update anything:
-updating the agent CLI would change every role's behaviour with no PR, no
-review and no verdict, and the deployment already sets
-`CLAUDE_CODE_DISABLE_LEGACY_MODEL_REMAP` precisely because an update can
-remap a model silently. Being a version behind is the lesser harm; not
-knowing which version is the one to fix.
+**Updating is never automatic.** The probe reports; an operator decides. An
+agent CLI updating itself underneath a running fleet changes the behaviour of
+every role at once, with no signal in any run that anything moved.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from pathlib import Path
 
-from hivepilot.services.agent_versions import probe_version
+import pytest
 
-
-class TestItReadsTheVersion:
-    def test_first_line_of_stdout(self) -> None:
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.return_value = MagicMock(returncode=0, stdout="2.1.220 (Claude Code)\n", stderr="")
-
-            assert probe_version("claude") == "2.1.220 (Claude Code)"
-
-    def test_only_the_first_line(self) -> None:
-        """Some CLIs print a banner after the version. The banner is noise in
-        a diagnostic table."""
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.return_value = MagicMock(returncode=0, stdout="1.2.3\nupdate available\n", stderr="")
-
-            assert probe_version("codex") == "1.2.3"
-
-    def test_stderr_is_used_when_stdout_is_empty(self) -> None:
-        """`--version` on stderr is common enough to handle rather than
-        report as unknown."""
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.return_value = MagicMock(returncode=0, stdout="", stderr="v0.9.1\n")
-
-            assert probe_version("gemini") == "v0.9.1"
+from hivepilot.services import agent_versions as av
 
 
-class TestItNeverBreaksTheDoctor:
-    def test_missing_binary_is_none(self) -> None:
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.side_effect = FileNotFoundError()
+class TestParsingTheVersionOutput:
+    """Each CLI prints its version differently; none of them print only it."""
 
-            assert probe_version("nope") is None
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("2.1.220 (Claude Code)", "2.1.220"),
+            ("claude-code/1.4.0 linux-x64", "1.4.0"),
+            ("v0.9.13", "0.9.13"),
+            ("codex 0.12.1\n", "0.12.1"),
+            ("  1.0.0  ", "1.0.0"),
+        ],
+    )
+    def test_a_version_is_extracted_from_noisy_output(self, raw: str, expected: str) -> None:
+        assert av._parse_version(raw) == expected
 
-    def test_nonzero_exit_is_none(self) -> None:
-        """A CLI that does not understand `--version` has told us nothing.
-        Reporting its usage text as a version would be worse than silence."""
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.return_value = MagicMock(returncode=2, stdout="usage: ...", stderr="")
-
-            assert probe_version("weird") is None
-
-    def test_timeout_is_none(self) -> None:
-        """A diagnostic must not hang the command it diagnoses."""
-        import subprocess
-
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=5)
-
-            assert probe_version("claude") is None
-
-    def test_any_other_exception_is_none(self) -> None:
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.side_effect = OSError("boom")
-
-            assert probe_version("claude") is None
-
-    def test_empty_output_is_none_not_empty_string(self) -> None:
-        """An empty string would render as `()` in the table and read as a
-        version of nothing."""
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.return_value = MagicMock(returncode=0, stdout="   \n", stderr="")
-
-            assert probe_version("claude") is None
+    def test_output_with_no_version_yields_none(self) -> None:
+        """None must not be confused with a version — it means the probe ran
+        and could not tell, which is a different fact from "old"."""
+        assert av._parse_version("command not found") is None
+        assert av._parse_version("") is None
 
 
-class TestItStaysReadable:
-    def test_a_long_line_is_bounded(self) -> None:
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.return_value = MagicMock(returncode=0, stdout="x" * 500, stderr="")
+class TestComparingVersions:
+    def test_a_newer_latest_is_outdated(self) -> None:
+        assert av._is_outdated("2.1.220", "2.2.0") is True
 
-            out = probe_version("claude")
+    def test_the_same_version_is_not_outdated(self) -> None:
+        assert av._is_outdated("2.1.220", "2.1.220") is False
 
-        assert out is not None
-        assert len(out) <= 80
+    def test_a_newer_local_is_not_outdated(self) -> None:
+        """A local build ahead of the registry is normal, not a problem."""
+        assert av._is_outdated("2.2.0", "2.1.220") is False
 
-    def test_it_asks_with_version_only(self) -> None:
-        """No subcommand, no flags that could do work. `--version` is the one
-        invocation safe to run against an unknown binary."""
-        with patch("hivepilot.services.agent_versions.subprocess.run") as m:
-            m.return_value = MagicMock(returncode=0, stdout="1.0", stderr="")
-            probe_version("claude")
+    def test_numeric_segments_compare_as_numbers_not_strings(self) -> None:
+        """The reason this needs code at all: "2.1.220" < "2.1.99" as strings,
+        which would report a current CLI as outdated forever."""
+        assert av._is_outdated("2.1.220", "2.1.99") is False
+        assert av._is_outdated("2.1.99", "2.1.220") is True
 
-        assert m.call_args.args[0] == ["claude", "--version"]
+    def test_an_unparseable_pair_is_undecidable_not_false(self) -> None:
+        """Returning False would quietly claim "up to date"."""
+        assert av._is_outdated("nightly", "2.1.0") is None
+        assert av._is_outdated("2.1.0", None) is None
+
+
+class TestDetectingHowItWasInstalled:
+    """Keyed off the resolved path, so it works for every npm-installed agent
+    CLI rather than for a hard-coded list of names."""
+
+    def test_an_npm_global_package_is_recognised(self) -> None:
+        p = Path("/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe")
+
+        assert av._npm_package_for(p) == "@anthropic-ai/claude-code"
+
+    def test_an_unscoped_npm_package_is_recognised(self) -> None:
+        p = Path("/usr/lib/node_modules/opencode/bin/opencode")
+
+        assert av._npm_package_for(p) == "opencode"
+
+    def test_a_non_npm_binary_yields_none(self) -> None:
+        """A distro package or a static binary must not be handed an
+        `npm install -g` instruction that would not work."""
+        assert av._npm_package_for(Path("/usr/bin/codex")) is None
+        assert av._npm_package_for(None) is None
+
+
+class TestProbing:
+    def test_a_missing_binary_is_reported_not_raised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(av.shutil, "which", lambda _n: None)
+
+        probe = av.probe_agent_cli("claude")
+
+        assert probe.on_path is False
+        assert probe.version is None
+
+    def test_a_probe_that_times_out_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """This shells out to an arbitrary binary. A hung CLI must not hang
+        `config doctor`."""
+        monkeypatch.setattr(av.shutil, "which", lambda _n: "/usr/bin/claude")
+
+        def boom(*_a: object, **_k: object) -> object:
+            raise av.subprocess.TimeoutExpired(cmd="claude", timeout=5)
+
+        monkeypatch.setattr(av.subprocess, "run", boom)
+
+        probe = av.probe_agent_cli("claude")
+
+        assert probe.on_path is True
+        assert probe.version is None
+        assert probe.error is not None
+
+    def test_a_successful_probe_reports_the_version(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(av.shutil, "which", lambda _n: "/usr/bin/claude")
+        monkeypatch.setattr(
+            av.subprocess,
+            "run",
+            lambda *a, **k: av.subprocess.CompletedProcess(a, 0, "2.1.220 (Claude Code)", ""),
+        )
+
+        probe = av.probe_agent_cli("claude")
+
+        assert probe.version == "2.1.220"
+        assert probe.error is None
+
+
+class TestTheDoctorCheck:
+    def test_only_ACTIVE_agent_kinds_are_probed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Twelve agent kinds exist and a deployment runs one or two. Probing
+        all of them would print ten "not installed" lines that are not
+        problems — the noise that made the first draft of
+        `plugins_written_vs_installed` useless."""
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"claude"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, "/usr/bin/x", True, "1.0", None, None),
+        )
+
+        findings = av.check_agent_cli_versions()
+
+        assert len(findings) == 1
+        assert "claude" in findings[0].message
+
+    def test_an_active_agent_missing_from_PATH_is_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Registered and dispatchable, but every call will fail."""
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"claude"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, None, False, None, None, None),
+        )
+
+        findings = av.check_agent_cli_versions()
+
+        assert findings[0].severity == "warning"
+
+    def test_the_version_is_printed_even_when_healthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same rule as the rest of the liveness checks: the number now is
+        what makes a future number mean something."""
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"claude"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, "/usr/bin/claude", True, "2.1.220", None, None),
+        )
+
+        findings = av.check_agent_cli_versions()
+
+        assert findings[0].severity == "info"
+        assert "2.1.220" in findings[0].message
+
+    def test_the_doctor_never_reaches_the_network(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`config doctor` must stay fast and work offline. Checking the
+        registry is opt-in, on the CLI command only."""
+        called: list[str] = []
+        monkeypatch.setattr(av, "active_agent_runner_kinds", lambda: {"claude"})
+        monkeypatch.setattr(
+            av,
+            "probe_agent_cli",
+            lambda kind: av.AgentCliProbe(kind, "/usr/bin/claude", True, "2.1.220", None, None),
+        )
+
+        def _record(pkg: str) -> str:
+            called.append(pkg)
+            return "9.9.9"
+
+        monkeypatch.setattr(av, "fetch_latest_npm_version", _record)
+
+        av.check_agent_cli_versions()
+
+        assert called == []
+
+
+class TestProbeVersionIsUnchanged:
+    """`probe_version` predates this work (#449) and its callers in `cli.py`
+    depend on its exact contract: the FIRST LINE of `--version`, capped, or
+    None on any failure.
+
+    Pinned because I overwrote this module while adding the newer helpers
+    below, and briefly replaced `probe_version` with a parsed-version variant.
+    Every caller would still have "worked" — they interpolate it into a
+    string — while quietly reporting something different from what they were
+    written to report.
+    """
+
+    def test_it_returns_the_whole_first_line_not_a_parsed_number(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            av.subprocess,
+            "run",
+            lambda *a, **k: av.subprocess.CompletedProcess(a, 0, "2.1.220 (Claude Code)\n", ""),
+        )
+
+        assert av.probe_version("claude") == "2.1.220 (Claude Code)"
+
+    def test_a_nonzero_exit_yields_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            av.subprocess,
+            "run",
+            lambda *a, **k: av.subprocess.CompletedProcess(a, 1, "usage: ...", ""),
+        )
+
+        assert av.probe_version("claude") is None
+
+    def test_a_failing_probe_yields_none_rather_than_raising(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*_a: object, **_k: object) -> object:
+            raise OSError("exec format error")
+
+        monkeypatch.setattr(av.subprocess, "run", boom)
+
+        assert av.probe_version("claude") is None
