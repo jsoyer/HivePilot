@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from hivepilot.registry import active_agent_runner_kinds
+from hivepilot.services.agent_checks import API_ONLY_AGENT_KINDS
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from hivepilot.services.config_doctor import DoctorFinding
@@ -276,6 +277,22 @@ def check_agent_cli_versions() -> list[DoctorFinding]:
     findings: list[DoctorFinding] = []
     for kind in sorted(active_agent_runner_kinds()):
         probe = probe_agent_cli(kind)
+
+        if kind in API_ONLY_AGENT_KINDS:
+            # Reaches its model over HTTP; there is no binary to find, ever.
+            # Reported rather than skipped, so "no version line" never has to
+            # mean "we forgot about it".
+            findings.append(
+                _finding(
+                    "info",
+                    _CHECK,
+                    f"{kind}: API-only, no CLI by design",
+                    "Version currency does not apply -- the provider's API is "
+                    "whatever it is on the day of the call.",
+                    "No action needed.",
+                )
+            )
+            continue
 
         if not probe.on_path:
             findings.append(

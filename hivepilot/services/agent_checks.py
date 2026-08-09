@@ -50,6 +50,20 @@ AGENT_RUNNER_KINDS: frozenset[str] = frozenset(
 )
 
 
+# Agent kinds that reach their model over HTTP and have NO CLI binary, ever.
+#
+# Canonical here rather than as a private local in `cli.py`'s table, which is
+# where it used to live. A second consumer -- `doctor_liveness`'s agent CLI
+# version check -- could not see it and reported `openrouter` as "registered
+# as a runner but its CLI is not on PATH", advising the operator to install a
+# binary that does not exist OR to disable a runner that works. A cleanup
+# suggestion that breaks a working feature is worse than no suggestion.
+#
+# Membership is a property of the RUNNER, not of a deployment: OpenRouterRunner
+# is documented API-only at hivepilot/registry.py and hivepilot/models.py.
+API_ONLY_AGENT_KINDS: frozenset[str] = frozenset({"openrouter"})
+
+
 @dataclass(frozen=True)
 class MandatoryAgentReport:
     """Result of scanning PATH for the mandatory agent CLIs."""

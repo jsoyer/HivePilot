@@ -3933,6 +3933,7 @@ def plugins_list() -> None:
         RUNNER_MAP,
         SECRETS_MAP,
     )
+    from hivepilot.services.agent_checks import API_ONLY_AGENT_KINDS
     from hivepilot.services.notification_service import KNOWN_NOTIFIER_NAMES, NOTIFIER_MAP
 
     orchestrator = Orchestrator()
@@ -3966,7 +3967,10 @@ def plugins_list() -> None:
     # into _OPTIONAL_AGENT_PLUGIN_KINDS — they now render via the plugin loop
     # below, not this built-in loop.
     _builtin_agent_kinds = ("claude", "vibe", "openrouter")
-    _api_only_agent_kinds = frozenset({"openrouter"})
+    # Canonical set, shared with `doctor_liveness`'s agent-CLI version check --
+    # it used to be a private local here, which is why that check could not see
+    # it and told the operator to install a CLI that does not exist.
+    _api_only_agent_kinds = API_ONLY_AGENT_KINDS
 
     agents_table = Table(title="Agent Runners")
     agents_table.add_column("kind")
@@ -4626,6 +4630,7 @@ def agents_versions(
     from rich.table import Table
 
     from hivepilot.registry import active_agent_runner_kinds
+    from hivepilot.services.agent_checks import API_ONLY_AGENT_KINDS
     from hivepilot.services.agent_versions import (
         _is_outdated,
         fetch_latest_npm_version,
@@ -4651,11 +4656,19 @@ def agents_versions(
 
     for kind in kinds:
         probe = probes[kind]
-        installed = probe.version or ("not on PATH" if not probe.on_path else "unknown")
+        # An API-only kind has no binary by design, so "not on PATH" would
+        # read as a fault. It is a property of the runner, not of this host.
+        api_only = kind in API_ONLY_AGENT_KINDS
+        if api_only:
+            installed = "API-only"
+        else:
+            installed = probe.version or ("not on PATH" if not probe.on_path else "unknown")
         source = probe.npm_package or (probe.binary or "—")
         row = [kind, installed, source]
         if check_latest:
-            if not probe.npm_package:
+            if api_only:
+                row += ["—", "n/a · no CLI by design"]
+            elif not probe.npm_package:
                 # NOT the same as a failed lookup. Claude Code's native
                 # installer puts it under `~/.local/share/claude/versions/`,
                 # and that CLI manages its own updates -- there is no registry
