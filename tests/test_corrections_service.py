@@ -205,3 +205,23 @@ class TestTheRoleReachesTheRunnerUnconditionally:
             enable_distillation = True
 
         assert orch._role_metadata_value(_Cfg(), None) is None
+
+
+def test_cap_is_sized_for_a_recurring_cost_not_the_argv_limit():
+    """The file rides in the stable prefix of EVERY call the role makes.
+
+    A cap set against Linux's 131 072-byte argv limit guards the wrong
+    failure: the binding constraint is that corrections are billed on every
+    call, not once. 4 000 characters is roughly 1 000 tokens per call.
+    """
+    assert cs._MAX_CORRECTION_CHARS == 4_000
+
+
+def test_oversized_file_declares_the_cut_to_the_agent(corrections_dir: Path):
+    """A silent truncation makes the agent act confidently on half a rule."""
+    (corrections_dir / "cto.md").write_text("x" * 10_000)
+
+    text = cs.load_corrections("cto")
+
+    assert len(text) < 10_000
+    assert "NOT delivered" in text
