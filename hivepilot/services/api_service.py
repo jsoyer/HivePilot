@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import logging
 import threading
 import uuid
 from collections import defaultdict
@@ -39,11 +41,14 @@ from hivepilot.services import (
     plugin_activity,
     policy_service,
     state_service,
+    telemetry_service,
     token_service,
 )
 from hivepilot.services.metrics import registry, run_duration_seconds
 from hivepilot.ui.plugin_persist import persist_plugins_disabled
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="HivePilot API",
@@ -309,6 +314,65 @@ class NewRunRequest(BaseModel):
     @classmethod
     def validate_extra_prompt(cls, v: str | None) -> str | None:
         return _validate_extra_prompt(v)
+
+
+# ---------------------------------------------------------------------------
+# OTLP metric ingest
+# ---------------------------------------------------------------------------
+# The agent CLI posts its own metrics here.  Mounted outside /v1 because the
+# path is fixed by the OTLP spec: an exporter pointed at ENDPOINT always POSTs
+# to ENDPOINT/v1/metrics, so the prefix belongs to OpenTelemetry, not to us.
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+
+# An OTLP batch for a single CLI session measured ~7 KB.  A megabyte is far
+# above anything legitimate and keeps a stray POST from being a memory event.
+_MAX_OTLP_BODY = 1_048_576
+
+
+def _is_loopback(request: Request) -> bool:
+    """Whether this request came from the same host.
+
+    A forwarded header means it travelled through a proxy, so it did not
+    originate on loopback whatever the socket says.
+    """
+    if request.headers.get("x-forwarded-for") or request.headers.get("forwarded"):
+        return False
+    return bool(request.client and request.client.host in _LOOPBACK_HOSTS)
+
+
+@app.post("/otlp/v1/metrics")
+async def otlp_metrics(request: Request) -> dict[str, Any]:
+    """Accept an OTLP/JSON metric batch from a local agent CLI.
+
+    Unauthenticated on purpose.  Authenticating it would mean putting a bearer
+    token in ``OTEL_EXPORTER_OTLP_HEADERS``, and ``OTEL_*`` now reaches the
+    agent subprocess -- handing an API credential to the sandboxed process is a
+    worse trade than accepting metrics from localhost only.
+
+    Always answers 200 once past the guards.  An error here makes the exporter
+    retry and log against the very process being measured, so a batch we cannot
+    read is dropped quietly rather than turned into noise on the agent.
+    """
+    if not settings.otel_ingest_enabled:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    if not _is_loopback(request):
+        raise HTTPException(status_code=403, detail="OTLP ingest accepts loopback only")
+
+    body = await request.body()
+    if len(body) > _MAX_OTLP_BODY:
+        logger.warning("otlp ingest: dropping %d-byte body over cap", len(body))
+        return {"partialSuccess": {}}
+
+    try:
+        payload = json.loads(body or b"{}")
+        points = telemetry_service.parse_otlp_metrics(payload)
+        telemetry_service.record_metrics(points)
+    except Exception:  # noqa: BLE001 - never fail the thing being measured
+        logger.exception("otlp ingest: unreadable batch dropped")
+
+    return {"partialSuccess": {}}
 
 
 # ---------------------------------------------------------------------------

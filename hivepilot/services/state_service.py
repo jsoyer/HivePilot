@@ -494,6 +494,34 @@ def init_db() -> None:
             )
             """
         )
+        # Metrics the agent CLI reports about itself, over OTLP.  Independent
+        # of our own per-step bookkeeping on purpose: the calls that build
+        # their own payload never reach that bookkeeping, so a total taken
+        # from `steps` alone reads as zero for spending that did happen.
+        #
+        # No identity columns.  The exporter tags every point with the user's
+        # email and account UUIDs; telemetry_service drops them before they
+        # get here, and there is deliberately nowhere to put them.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS agent_telemetry (
+                id {pk},
+                metric TEXT NOT NULL,
+                kind TEXT,
+                model TEXT,
+                effort TEXT,
+                query_source TEXT,
+                session_id TEXT,
+                unit TEXT,
+                value REAL NOT NULL,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_telemetry_lookup "
+            "ON agent_telemetry (metric, session_id, recorded_at)"
+        )
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:
