@@ -424,6 +424,7 @@ _NON_PLUGIN_ENABLED_FLAG_EXCEPTIONS = frozenset(
         "obsidian_recall",  # sub-flag of the `obsidian` plugin, not its own file
         "chatops_concierge",  # built-in NL feature flag, not a plugin
         "stage_cache",  # SQLite stage-memoization feature flag, not a plugin
+        "otel_ingest",  # OTLP metric route on the API, not a plugin
     }
 )
 
