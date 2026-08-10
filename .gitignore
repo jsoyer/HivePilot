@@ -15,6 +15,10 @@ dist/
 htmlcov/
 coverage.*
 state.db
+# WAL sidecars: same database, and a broad `git add` picks them up if
+# only state.db is listed.
+state.db-shm
+state.db-wal
 !.env.example
 
 # local API token store (never commit)
