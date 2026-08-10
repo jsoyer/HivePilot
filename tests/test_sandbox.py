@@ -336,3 +336,64 @@ def test_claude_runner_remote_host(tmp_path: Path, monkeypatch) -> None:
     # SSH-wrapped argv starts with "ssh", not "bwrap"
     assert argv[0] == "ssh", f"Remote run must use ssh, got: {argv[0]!r}"
     assert "bwrap" not in argv, "bwrap must not appear in SSH-wrapped argv"
+
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
+
+
+def test_otel_vars_reach_the_agent():
+    """Without OTEL_* on the allowlist telemetry is scrubbed and silently off.
+
+    That failure mode is indistinguishable from "the agent emits no metrics",
+    which is how several things here have sat inert unnoticed.
+    """
+    from hivepilot.utils.sandbox import scrub_env
+
+    kept = scrub_env(
+        {
+            "OTEL_METRICS_EXPORTER": "console",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "UNRELATED": "x",
+        }
+    )
+
+    assert kept["OTEL_METRICS_EXPORTER"] == "console"
+    assert kept["OTEL_EXPORTER_OTLP_PROTOCOL"] == "http/protobuf"
+    assert kept["CLAUDE_CODE_ENABLE_TELEMETRY"] == "1"
+    assert "UNRELATED" not in kept
+
+
+def test_prompt_logging_telemetry_never_passes_even_when_allowlisted():
+    """The denial must survive a broadened allowlist.
+
+    ``OTEL_*`` is a reasonable pattern to add, and it also matches the two
+    variables that put prompt text — including resolved ``${secret:NAME}``
+    values — into a metric stream written to run logs. If this test starts
+    failing because someone widened a pattern, the widening is the bug.
+    """
+    from hivepilot.utils.sandbox import scrub_env
+
+    env = {
+        "OTEL_LOG_USER_PROMPTS": "1",
+        "OTEL_LOG_RESPONSES": "true",
+        "OTEL_METRICS_EXPORTER": "console",
+    }
+
+    # Even an allow-everything list must not let them through.
+    for allowlist in ([], ["OTEL_*"], ["*"]):
+        kept = scrub_env(env, allowlist or None)
+        assert "OTEL_LOG_USER_PROMPTS" not in kept, f"leaked with allowlist={allowlist!r}"
+        assert "OTEL_LOG_RESPONSES" not in kept, f"leaked with allowlist={allowlist!r}"
+
+
+def test_telemetry_content_leaks_reports_names_only():
+    from hivepilot.utils.sandbox import telemetry_content_leaks
+
+    assert telemetry_content_leaks({"OTEL_LOG_USER_PROMPTS": "1"}) == ["OTEL_LOG_USER_PROMPTS"]
+    # Absent, empty, and the explicit off-values are all "not set".
+    for off in ("", "0", "false", "no", "  "):
+        assert telemetry_content_leaks({"OTEL_LOG_USER_PROMPTS": off}) == []
+    assert telemetry_content_leaks({}) == []

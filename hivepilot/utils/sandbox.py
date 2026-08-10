@@ -53,7 +53,37 @@ DEFAULT_ALLOWLIST: list[str] = [
     "NODE_*",
     "GOPATH",
     "GOCACHE",
+    # OpenTelemetry.  The agent CLI reads these itself and emits its own
+    # metrics; without them here they are scrubbed and telemetry is silently
+    # off — a configured-but-inert state that reads exactly like "the agent
+    # produces no data".  CLAUDE_* already covers the enable flag.
+    "OTEL_*",
 ]
+
+# Telemetry settings that would put prompt content into the metric stream.
+# Never allowlisted, and rejected loudly if someone sets one: the stream is
+# written to run logs, which are far more widely readable than the prompts
+# themselves — and prompts carry resolved ``${secret:NAME}`` values.
+TELEMETRY_CONTENT_VARS: frozenset[str] = frozenset(
+    {
+        "OTEL_LOG_USER_PROMPTS",
+        "OTEL_LOG_RESPONSES",
+    }
+)
+
+
+def telemetry_content_leaks(env: dict[str, str]) -> list[str]:
+    """Return the names of any set telemetry vars that would log prompt text.
+
+    Returns the *names* only.  A caller reporting this must not echo the
+    value, and there is nothing useful in it anyway — the fact that it is set
+    is the finding.
+    """
+    return sorted(
+        name
+        for name in TELEMETRY_CONTENT_VARS
+        if env.get(name, "").strip().lower() not in ("", "0", "false", "no")
+    )
 
 
 def scrub_env(env: dict[str, str], allowlist: list[str] | None = None) -> dict[str, str]:
@@ -62,6 +92,13 @@ def scrub_env(env: dict[str, str], allowlist: list[str] | None = None) -> dict[s
     Matching rules (evaluated left-to-right, first match wins):
     - entries containing ``*`` → fnmatch glob on the key
     - all other entries → case-sensitive exact equality
+
+    :data:`TELEMETRY_CONTENT_VARS` are dropped **after** matching, whatever
+    the allowlist says.  ``OTEL_*`` is a legitimate pattern to allow, and it
+    happens to also match the two variables that put prompt text into the
+    metric stream — so a broadening that looks routine would quietly re-admit
+    them.  The denial is enforced here rather than left to whoever writes the
+    pattern.
 
     Args:
         env: source environment (usually ``os.environ.copy()``).
@@ -85,6 +122,13 @@ def scrub_env(env: dict[str, str], allowlist: list[str] | None = None) -> dict[s
 
     result: dict[str, str] = {}
     for key, value in env.items():
+        if key in TELEMETRY_CONTENT_VARS:
+            logger.warning(
+                "scrub_env: dropping %s — telemetry that logs prompt content is "
+                "never passed to an agent subprocess",
+                key,
+            )
+            continue
         if key in exact:
             result[key] = value
             continue
