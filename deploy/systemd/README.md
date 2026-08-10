@@ -160,7 +160,15 @@ directory, you can safely layer these in yourself — see `systemd.exec(5)`.
 The current Alpine box runs these services as **root**. On systemd this is
 avoidable and preferable: set `User=`/`Group=` in each unit to a dedicated
 non-root account (e.g. `hivepilot`), owning `/data` and the checkouts it
-needs. If you keep root anyway, note that **`claude` refuses
+needs.
+
+**[NON-ROOT.md](NON-ROOT.md) is the full migration**, written from a real
+cutover: every path the services read (three of them invisible until they
+fail), which credentials copy and which must not be touched, the verification
+order, and why `systemctl is-active` is not one of the checks that proves
+anything. Read it before doing this by hand.
+
+If you keep root anyway, note that **`claude` refuses
 `--dangerously-skip-permissions` under root/sudo unless `IS_SANDBOX=1` is
 set** in the process environment — put `IS_SANDBOX=1` in
 `/etc/hivepilot/shared.env` (never in a single service's own `.env` file,
