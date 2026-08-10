@@ -28,6 +28,7 @@ mean something.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -573,3 +574,73 @@ def _privilege_warning(basis: str) -> DoctorFinding:
         "root before dropping privileges, so shared.env can stay 0600 "
         "root:root and become unreadable by the agent.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache economics -- a healthy average is not a healthy cache
+# ---------------------------------------------------------------------------
+
+_CHECK_CACHE = "cache_amortisation"
+
+# Creation is billed at 1.25x base input, a read at 0.1x.  One read per unit
+# created is the break-even point below which caching cost more than not
+# caching; the full 1.25/0.1 payback needs about 12.5.
+_BREAK_EVEN = 1.0
+
+
+def check_cache_amortisation() -> list[DoctorFinding]:
+    """Report sessions whose prompt cache never paid for itself.
+
+    Reported as a median and a count, never as a total. Summing hides exactly
+    the case this check exists to find: one session reading a prefix a hundred
+    times drags the fleet ratio above break-even while nineteen others pay to
+    create a cache nobody reads. That is not hypothetical here -- an 85% hit
+    rate coexisted with 1.7M tokens of wasted creation, and the aggregate said
+    everything was fine.
+
+    Silent when telemetry is off: ingest is opt-in, and an empty table means
+    nobody enabled it, not that the cache is healthy.
+    """
+    from hivepilot.services import telemetry_service
+
+    try:
+        report = telemetry_service.cache_report()
+    except Exception:  # noqa: BLE001 - a diagnostic must not break `config doctor`
+        logging.getLogger(__name__).debug(
+            "cache_amortisation: telemetry unavailable", exc_info=True
+        )
+        return []
+
+    if not report.sessions or report.healthy:
+        return []
+
+    worst = report.worst
+    worst_desc = ""
+    if worst is not None:
+        worst_desc = (
+            f" Worst: session {worst.session_id}"
+            f"{f' on {worst.model}' if worst.model else ''} created "
+            f"{worst.created:,.0f} cache tokens and read back {worst.read:,.0f} "
+            f"({worst.amortisation:.2f}x)."
+        )
+
+    severity = "error" if report.median_amortisation < _BREAK_EVEN else "warning"
+
+    return [
+        _mk(
+            severity,
+            _CHECK_CACHE,
+            f"{report.below_one} of {report.sessions} agent sessions read their prompt "
+            f"cache back less than once (median {report.median_amortisation:.2f}x, "
+            f"{report.wasted_tokens:,.0f} tokens of creation never read).{worst_desc}",
+            "Cache creation is billed at 1.25x base input and a read at 0.1x, so a "
+            "prefix read fewer than once cost MORE than sending it uncached. The "
+            "fleet-wide hit rate does not show this: it is dominated by whichever "
+            "session read the most, which is why this reports a median and a count "
+            "rather than a total.",
+            "Look at the named session's step: a prefix that changes on every call "
+            "(a timestamp, a run id, a re-ordered context block) is cached and then "
+            "never matched. Make the stable part actually stable, or stop caching "
+            "that step.",
+        )
+    ]
