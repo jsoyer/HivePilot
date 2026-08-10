@@ -57,7 +57,16 @@ _ROLE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # argv element. Bounded per file, and the cut is declared in the text the
 # agent sees: a silent truncation makes it act confidently on half an
 # instruction with nothing anywhere recording that the other half existed.
-_MAX_CORRECTION_CHARS = 20_000
+#
+# 4 000, not 20 000: this file rides in the STABLE PREFIX of every call the
+# role makes, so it is billed on each one -- 20 000 characters is roughly
+# 5 000 tokens on every single call, forever. A cap that only guards against
+# the argv limit is set for the wrong failure; the binding constraint is that
+# corrections are a recurring cost, not a one-off payload.
+#
+# The bound is also what forces the promote-or-delete rule to be used: a file
+# that can grow without limit never gets pruned.
+_MAX_CORRECTION_CHARS = 4_000
 
 _ALL_ROLES_FILE = "_all"
 _HEADER = (
