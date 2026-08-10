@@ -71,11 +71,24 @@ was the unknown that made the migration look risky, and it is not one.
 
 ```bash
 H=/var/lib/hivepilot/home
-cp -a /root/.claude   $H/.claude      # Claude CLI: .credentials.json
-cp -a /root/.config/gh $H/.config/gh  # git auth goes through `gh auth git-credential`
-cp -a /root/.ssh/id_ed25519{,.pub} $H/.ssh/   # OUTBOUND key only
+cp -a /root/.claude    $H/.claude      # Claude CLI: .credentials.json
+cp -a /root/.config/gh $H/.config/gh   # git auth: `gh auth git-credential`
 chown -R hivepilot:hivepilot $H
-chmod 700 $H/.ssh && chmod 600 $H/.ssh/id_ed25519
+```
+
+**No SSH key.** The first version of this document copied root's
+`id_ed25519` here, and that was wrong: the service account is `nologin`, so
+it cannot receive a session, and it initiates none either -- every git
+remote is HTTPS and authenticates through `gh`, and there are no remote
+workers configured. Copying it added a credential to a service account that
+has no use for it, widening the blast radius inside the change meant to
+narrow it.
+
+Check before granting one, rather than assuming a service needs SSH:
+
+```bash
+git -C <checkout> remote get-url origin      # https://… means no SSH key needed
+grep -c '^HIVEPILOT_\(SSH_OPTIONS\|WORKER\|REMOTE\)' /etc/hivepilot/shared.env
 ```
 
 Prove each one rather than assuming:
@@ -84,6 +97,7 @@ Prove each one rather than assuming:
 sudo -u hivepilot env HOME=$H gh auth status              # Logged in
 sudo -u hivepilot env HOME=$H IS_SANDBOX=1 claude --print \
   --permission-mode acceptEdits "Reply with exactly: OK"  # OK
+sudo -u hivepilot env HOME=$H … hivepilot config sync     # pulls over HTTPS
 ```
 
 The `claude --print` is the only test that proves the credentials moved. A
