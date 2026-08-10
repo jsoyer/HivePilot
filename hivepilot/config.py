@@ -229,6 +229,17 @@ class Settings(BaseSettings):
     # raw-stdout behaviour with null usage — this flag must never break a run.
     # env: HIVEPILOT_CLAUDE_CAPTURE_USAGE
     claude_capture_usage: bool = False
+    # OTLP metric ingest on the API (POST {api}/otlp/v1/metrics).  Off by
+    # default: an ingest route that exists before anyone asked for it is a
+    # write endpoint nobody is watching.
+    #
+    # Deliberately unauthenticated and loopback-only.  The alternative is a
+    # bearer token in OTEL_EXPORTER_OTLP_HEADERS, and OTEL_* now reaches the
+    # agent subprocess -- so authenticating this route would mean handing an
+    # API credential to the sandboxed process, which is a worse trade than
+    # accepting metrics from localhost.
+    # env: HIVEPILOT_OTEL_INGEST_ENABLED
+    otel_ingest_enabled: bool = False
     gh_command: str = "gh"
     git_command: str = "git"
     # Auto-clone of a missing project repo (PR B): when a project's `path`
