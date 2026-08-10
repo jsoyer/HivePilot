@@ -460,3 +460,71 @@ class TestAgentPrivilegeReportsTheServiceUser:
         monkeypatch.setattr(dl, "_systemd_service_user", boom)
 
         assert dl.check_agent_privilege()[0].severity in {"info", "warning"}
+
+
+# ---------------------------------------------------------------------------
+# Cache amortisation
+# ---------------------------------------------------------------------------
+
+
+class TestCacheAmortisation:
+    """The check exists to FIND the losing sessions, so it must not average.
+
+    Cache creation is billed at 1.25x base input and a read at 0.1x. Below one
+    read per unit created, the cache costs more than not caching at all. A
+    fleet-wide ratio is dominated by whichever session read the most: an 85%
+    hit rate sat here alongside 1.7M tokens of creation never read back.
+    """
+
+    def _run(self, monkeypatch, sessions):
+        from hivepilot.services import doctor_liveness, telemetry_service
+
+        report = telemetry_service.CacheReport(
+            sessions=len(sessions),
+            median_amortisation=(
+                telemetry_service.median([s.amortisation for s in sessions]) if sessions else 0.0
+            ),
+            below_one=len([s for s in sessions if s.amortisation < 1.0]),
+            worst=min(sessions, key=lambda s: s.amortisation) if sessions else None,
+            wasted_tokens=sum(s.wasted_tokens for s in sessions if s.amortisation < 1.0),
+        )
+        monkeypatch.setattr(telemetry_service, "cache_report", lambda *a, **k: report)
+        return doctor_liveness.check_cache_amortisation()
+
+    def test_one_whale_does_not_hide_the_losers(self, monkeypatch):
+        from hivepilot.services.telemetry_service import SessionCache
+
+        sessions = [SessionCache(f"s{i}", "opus", 1000, 0) for i in range(19)]
+        sessions.append(SessionCache("whale", "opus", 1000, 100_000))
+
+        findings = self._run(monkeypatch, sessions)
+
+        assert findings, "19 losing sessions must produce a finding"
+        # Summing gives 100000/20000 = 5.0x and would report nothing at all.
+        assert "19" in " ".join(f.message for f in findings)
+        assert findings[0].severity in ("warning", "error")
+
+    def test_silent_when_every_session_amortises(self, monkeypatch):
+        from hivepilot.services.telemetry_service import SessionCache
+
+        sessions = [SessionCache(f"s{i}", "opus", 1000, 20_000) for i in range(5)]
+
+        assert self._run(monkeypatch, sessions) == []
+
+    def test_no_telemetry_is_not_a_failure(self, monkeypatch):
+        """Ingest is opt-in; an empty table means nobody turned it on."""
+        assert self._run(monkeypatch, []) == []
+
+    def test_names_the_worst_session_not_just_a_count(self, monkeypatch):
+        """A count tells you to look; the worst case tells you where."""
+        from hivepilot.services.telemetry_service import SessionCache
+
+        sessions = [
+            SessionCache("fine", "opus", 1000, 5000),
+            SessionCache("terrible", "opus", 80_000, 100),
+        ]
+
+        findings = self._run(monkeypatch, sessions)
+
+        assert findings
+        assert "terrible" in " ".join(f.message for f in findings)
