@@ -407,3 +407,56 @@ class TestAgentPrivilege:
         monkeypatch.setattr("os.geteuid", lambda: 0)
 
         assert "EnvironmentFile" in dl.check_agent_privilege()[0].fix
+
+
+class TestAgentPrivilegeReportsTheServiceUser:
+    """The check reported the uid of whatever process ran `config doctor`.
+
+    After the production migration to `User=hivepilot`, a root CLI run still
+    printed "agents run as root" — true of that shell, false of the fleet.
+    A check answering a different question than the one it appears to answer
+    is the failure this module exists to remove, and it was mine.
+
+    The services' user is declared in systemd, so it can be read rather than
+    guessed.
+    """
+
+    def test_it_reports_the_unit_user_when_systemd_declares_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("os.geteuid", lambda: 0)
+        monkeypatch.setattr(dl, "_systemd_service_user", lambda: "hivepilot")
+
+        findings = dl.check_agent_privilege()
+
+        assert _severities(findings) == {"info"}
+        assert "hivepilot" in _messages(findings)
+
+    def test_a_unit_declaring_root_is_still_flagged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("os.geteuid", lambda: 0)
+        monkeypatch.setattr(dl, "_systemd_service_user", lambda: "root")
+
+        assert _severities(dl.check_agent_privilege()) == {"warning"}
+
+    def test_it_falls_back_to_this_process_when_systemd_says_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No systemd, or a unit with no `User=`: the invoking process is the
+        best evidence available, and the message must say which it is."""
+        monkeypatch.setattr("os.geteuid", lambda: 0)
+        monkeypatch.setattr(dl, "_systemd_service_user", lambda: None)
+
+        findings = dl.check_agent_privilege()
+
+        assert _severities(findings) == {"warning"}
+        assert "this process" in _messages(findings)
+
+    def test_probing_systemd_never_breaks_the_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("os.geteuid", lambda: 0)
+
+        def boom():
+            raise OSError("no systemctl")
+
+        monkeypatch.setattr(dl, "_systemd_service_user", boom)
+
+        assert dl.check_agent_privilege()[0].severity in {"info", "warning"}
