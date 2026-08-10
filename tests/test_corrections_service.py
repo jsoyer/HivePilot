@@ -166,3 +166,42 @@ class TestAFailedReadIsLoud:
             cs.load_corrections("developer")
 
         assert "corrections" in caplog.text
+
+
+class TestTheRoleReachesTheRunnerUnconditionally:
+    """`metadata["role"]` was set only when lesson distillation was enabled.
+
+    That was correct when retrieval was its only consumer. Corrections became
+    a second one, so turning distillation off silently disabled corrections
+    too — two unrelated features coupled through one dict key, failing in the
+    quiet direction.
+
+    Found by a real pipeline run: zero `corrections.applied` in a run whose
+    launch environment happened to omit the distillation flag, while a direct
+    call to `load_corrections()` resolved 937 characters. The unit tests could
+    not catch it because they pass `metadata={"role": …}` themselves.
+    """
+
+    def test_the_role_is_set_even_with_distillation_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hivepilot import orchestrator as orch
+
+        seen: dict[str, object] = {}
+
+        class _Cfg:
+            enable_distillation = False
+
+        monkeypatch.setattr(orch, "resolve_lessons_config", lambda **k: _Cfg())
+        # The assertion is on the helper the orchestrator uses to decide, not
+        # on a full pipeline run: the coupling lived in one branch.
+        assert orch._role_metadata_value(_Cfg(), "developer") == "developer"
+        assert seen == {}
+
+    def test_a_roleless_task_still_yields_none(self) -> None:
+        from hivepilot import orchestrator as orch
+
+        class _Cfg:
+            enable_distillation = True
+
+        assert orch._role_metadata_value(_Cfg(), None) is None
