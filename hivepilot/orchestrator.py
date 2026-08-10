@@ -1748,6 +1748,33 @@ def build_prior_context(
     return joined
 
 
+def _role_metadata_value(effective_lessons: Any, role: str | None) -> str | None:
+    """The value for `metadata["role"]`, which is how a runner learns the role.
+
+    Set whenever the task HAS one, and no longer gated on lesson
+    distillation. That gate was right while retrieval was the only consumer;
+    `corrections_service` became a second one, so switching distillation off
+    silently disabled corrections too -- two unrelated features coupled
+    through one dict key, failing in the quiet direction.
+
+    Found by a real pipeline run: zero `corrections.applied` in a run whose
+    environment omitted the distillation flag, while a direct
+    `load_corrections()` call resolved 937 characters. No unit test could
+    have caught it -- they all pass `metadata={"role": ...}` themselves.
+
+    The gate's stated concern was that `after_step` hooks receive this same
+    dict, so an unconditional key changes what plugins see on a flag-off run.
+    Real, but far smaller than a feature that does nothing: `role` is a plain
+    non-sensitive identifier, and a plugin that does not want it can ignore
+    it.
+
+    `effective_lessons` is accepted and unused so the call site still names
+    what this used to depend on; dropping the parameter would erase the
+    reason the function exists.
+    """
+    return role or None
+
+
 def _route_prior_context(
     *,
     role: "Role | None",
@@ -5783,21 +5810,15 @@ class Orchestrator:
         # `pipeline`/`stage` (a plain, non-pipeline task run) resolves to
         # the settings floor only, byte-identical to pre-Sprint-2 behaviour.
         effective_lessons = resolve_lessons_config(pipeline=pipeline)
-        if effective_lessons.enable_distillation:
-            # Auto-Learning Lessons Loop PRD, Sprint 3: the ONLY channel a
-            # runner (ClaudeRunner/PromptCliRunner) can key its 'Lessons
-            # learned' retrieval on -- RunnerPayload carries project_name/
-            # task_name natively but has no dedicated role field, and this
-            # SAME metadata dict is reused for every step of this task (see
-            # the step loop below). None for a non-role task -- retrieval
-            # degrades to project+task keying only, never crashes. Gated on
-            # the RESOLVED per-pipeline flag (post-review fix, LOW):
-            # injection is the only consumer of this key, and a flag-off
-            # run must stay byte-identical for every metadata CONSUMER, not
-            # just the rendered prompt string -- e.g. the `after_step` hook
-            # fan-out passes this SAME dict to every plugin, so an
-            # unconditional extra key would leak into flag-off runs too.
-            metadata["role"] = task.role
+        # `metadata["role"]` is the ONLY channel a runner has for the role --
+        # `RunnerPayload` carries project_name/task_name natively but no role
+        # field -- and it now has TWO consumers: lessons retrieval and
+        # `corrections_service`. It used to be gated on distillation, which
+        # silently disabled corrections whenever that unrelated flag was off.
+        # See `_role_metadata_value`.
+        # This SAME dict is reused for every step of this task, and None for a
+        # roleless one -- retrieval then degrades to project+task keying.
+        metadata["role"] = _role_metadata_value(effective_lessons, task.role)
         effective_debate = self._effective_debate(stage, pipeline)
         if task.engine != "native":
             from hivepilot.engines import run_engine
