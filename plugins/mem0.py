@@ -532,6 +532,9 @@ def recall(**kwargs: Any) -> None:
                 # A second backend writes here now, and a column that is only
                 # ever set by ONE of them reads as "obsidian or unknown".
                 backend="mem0",
+                # Ties this recall to the step it fed, so the value of memory
+                # can be measured rather than assumed.
+                run_id=kwargs.get("run_id"),
                 freshness_seconds=_freshness_seconds(results),
             )
         except Exception as instr_exc:  # noqa: BLE001 — instrumentation must never break recall
