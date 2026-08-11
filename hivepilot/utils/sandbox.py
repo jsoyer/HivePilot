@@ -53,6 +53,13 @@ DEFAULT_ALLOWLIST: list[str] = [
     "NODE_*",
     "GOPATH",
     "GOCACHE",
+    "PYTHONUNBUFFERED",
+    # Read by the agent CLI itself. Observed in a real subprocess before this
+    # scrub applied outside bwrap -- a scrub that breaks the agent gets turned
+    # off, and then protects nothing.
+    "IS_SANDBOX",
+    "MAX_THINKING_TOKENS",
+    "ANTHROPIC_*",
     # OpenTelemetry.  The agent CLI reads these itself and emits its own
     # metrics; without them here they are scrubbed and telemetry is silently
     # off — a configured-but-inert state that reads exactly like "the agent

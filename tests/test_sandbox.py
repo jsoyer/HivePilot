@@ -397,3 +397,132 @@ def test_telemetry_content_leaks_reports_names_only():
     for off in ("", "0", "false", "no", "  "):
         assert telemetry_content_leaks({"OTEL_LOG_USER_PROMPTS": off}) == []
     assert telemetry_content_leaks({}) == []
+
+
+# ---------------------------------------------------------------------------
+# Env scrubbing is not conditional on filesystem sandboxing
+# ---------------------------------------------------------------------------
+
+
+class TestScrubRunsWithoutBwrap:
+    """Measured on production: `dev_sandbox=none`, bwrap not installed, and the
+    agent subprocess carried EIGHT secrets.
+
+        HIVEPILOT_API_TOKEN, HIVEPILOT_DISCORD_BOT_TOKEN, HIVEPILOT_MEM0_API_KEY,
+        HIVEPILOT_OP_SERVICE_ACCOUNT_TOKEN, HIVEPILOT_SLACK_APP_TOKEN,
+        HIVEPILOT_SLACK_BOT_TOKEN, HIVEPILOT_SLACK_SIGNING_SECRET,
+        HIVEPILOT_TELEGRAM_BOT_TOKEN
+
+    Scrubbing was gated on `dev_sandbox == "bwrap"`, so with bwrap absent it
+    never ran. That makes the non-root migration's central claim false: the
+    migration stopped the agent READING `shared.env` off disk, and its contents
+    arrived through the environment anyway.
+
+    Filtering the environment and confining the filesystem are separate
+    properties. There is no reason to hand an agent every credential because a
+    filesystem sandbox is unavailable.
+    """
+
+    def _apply(self, monkeypatch, env, *, sandbox="none"):
+        from hivepilot.config import Settings
+        from hivepilot.runners import claude_runner
+
+        settings_obj = Settings()
+        monkeypatch.setattr(settings_obj, "dev_sandbox", sandbox, raising=False)
+        monkeypatch.setattr(claude_runner.os, "environ", env, raising=False)
+        return claude_runner._apply_sandbox(
+            ["claude", "--print"],
+            dict(env),
+            None,
+            permission_mode="acceptEdits",
+            definition_host=None,
+            settings_obj=settings_obj,
+            intentional_env={},
+        )
+
+    def test_secrets_are_dropped_without_bwrap(self, monkeypatch):
+        env = {
+            "PATH": "/usr/bin",
+            "HOME": "/var/lib/hivepilot/home",
+            "HIVEPILOT_SLACK_BOT_TOKEN": "xoxb-secret",
+            "HIVEPILOT_TELEGRAM_BOT_TOKEN": "tg-secret",
+        }
+
+        _argv, scrubbed = self._apply(monkeypatch, env)
+
+        assert scrubbed is not None
+        assert "HIVEPILOT_SLACK_BOT_TOKEN" not in scrubbed
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN" not in scrubbed
+        assert scrubbed["PATH"] == "/usr/bin"
+
+    def test_what_the_agent_needs_survives(self, monkeypatch):
+        """A scrub that breaks the agent gets turned off, and then protects
+        nothing. Everything observed in a real subprocess is kept."""
+        env = {
+            "PATH": "/usr/bin",
+            "HOME": "/h",
+            "USER": "hivepilot",
+            "LOGNAME": "hivepilot",
+            "SHELL": "/bin/sh",
+            "TERM": "xterm",
+            "LC_CTYPE": "C.UTF-8",
+            "XDG_CONFIG_HOME": "/h/.config",
+            "XDG_DATA_HOME": "/d",
+            "IS_SANDBOX": "1",
+            "MAX_THINKING_TOKENS": "31999",
+            "PYTHONUNBUFFERED": "1",
+            "ANTHROPIC_API_KEY": "k",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "OTEL_METRICS_EXPORTER": "otlp",
+        }
+
+        _argv, scrubbed = self._apply(monkeypatch, env)
+
+        assert scrubbed is not None
+        for key in env:
+            assert key in scrubbed, f"{key} was scrubbed but the agent needs it"
+
+    def test_intentional_overrides_still_win(self, monkeypatch):
+        """A secret a role was deliberately GIVEN must still arrive."""
+        from hivepilot.config import Settings
+        from hivepilot.runners import claude_runner
+
+        settings_obj = Settings()
+        monkeypatch.setattr(settings_obj, "dev_sandbox", "none", raising=False)
+        env = {"PATH": "/usr/bin", "HIVEPILOT_SLACK_BOT_TOKEN": "ambient"}
+        monkeypatch.setattr(claude_runner.os, "environ", env, raising=False)
+
+        _argv, scrubbed = claude_runner._apply_sandbox(
+            ["claude"],
+            dict(env),
+            None,
+            permission_mode="acceptEdits",
+            definition_host=None,
+            settings_obj=settings_obj,
+            intentional_env={"DEPLOY_KEY": "granted-on-purpose"},
+        )
+
+        assert scrubbed is not None
+        assert scrubbed["DEPLOY_KEY"] == "granted-on-purpose"
+        assert "HIVEPILOT_SLACK_BOT_TOKEN" not in scrubbed
+
+    def test_a_remote_run_is_left_alone(self, monkeypatch):
+        """An SSH run's env belongs to the far side; scrubbing here would only
+        strip what this host needs to reach it."""
+        from hivepilot.config import Settings
+        from hivepilot.runners import claude_runner
+
+        settings_obj = Settings()
+        env = {"PATH": "/usr/bin", "HIVEPILOT_SLACK_BOT_TOKEN": "x"}
+
+        _argv, out = claude_runner._apply_sandbox(
+            ["claude"],
+            dict(env),
+            None,
+            permission_mode="acceptEdits",
+            definition_host="dev-server",
+            settings_obj=settings_obj,
+            intentional_env={},
+        )
+
+        assert out == env
