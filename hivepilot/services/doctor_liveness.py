@@ -466,50 +466,139 @@ def check_orphan_topic_keys() -> list[DoctorFinding]:
 _CHECK_PRIVILEGE = "agent_privilege"
 
 
+#: Every unit that can run an agent. The previous version polled three of
+#: these, and the two it skipped -- discord and slack -- were the two still
+#: running as root, for two days, while this check reported the fleet clean.
+HIVEPILOT_UNITS: tuple[str, ...] = (
+    "hivepilot-api",
+    "hivepilot-scheduler",
+    "hivepilot-telegram",
+    "hivepilot-discord",
+    "hivepilot-slack",
+)
+
+
+def _unit_users() -> dict[str, tuple[str | None, str | None]]:
+    """Per unit: ``(declared User=, user the live process actually runs as)``.
+
+    A unit missing from the mapping means systemd could not be asked about it
+    -- deliberately distinct from "it says root", because the caller must fall
+    back rather than accuse.
+    """
+    import shutil
+    import subprocess
+
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
+        return {}
+
+    def _show(unit: str, prop: str) -> str | None:
+        try:
+            completed = subprocess.run(  # noqa: S603
+                [systemctl, "show", unit, "-p", prop, "--value"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        value = (completed.stdout or "").strip()
+        return value or None
+
+    result: dict[str, tuple[str | None, str | None]] = {}
+    for unit in HIVEPILOT_UNITS:
+        declared = _show(unit, "User")
+        pid = _show(unit, "MainPID")
+        running: str | None = None
+        if pid and pid != "0":
+            try:
+                completed = subprocess.run(  # noqa: S603
+                    ["ps", "-o", "user=", "-p", pid],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+                running = (completed.stdout or "").strip() or None
+            except (OSError, subprocess.SubprocessError):
+                running = None
+        if declared or running:
+            result[unit] = (declared or "root", running)
+    return result
+
+
 def check_agent_privilege() -> list[DoctorFinding]:
-    """Report when agents run as root.
+    """Report when agents run as root -- reading the LIVE process, not config.
 
-    Agents read a client's PR diff -- untrusted input -- and run shell
-    commands. As root on a host holding `/etc/hivepilot/shared.env`, the
-    permission allowlist is compensating for the wrong thing: an agent that
-    reads an untrusted diff can read the secret file directly, whatever its
-    tool grants say.
+    Agents read a client's PR diff (untrusted input) and run shell commands.
+    As root on a host holding `/etc/hivepilot/shared.env`, the tool allowlist
+    is compensating for the wrong thing: an agent that reads an untrusted diff
+    can read the secret file directly whatever its grants say.
 
-    Non-root closes it cleanly, because systemd parses `EnvironmentFile=` as
-    root BEFORE dropping privileges -- the file can stay `0600 root:root`,
-    unreadable by the agent, while the service still gets its config.
+    Non-root closes it because systemd parses `EnvironmentFile=` as root
+    BEFORE dropping privileges -- the file stays `0600 root:root`, unreadable
+    by the agent, while the service still gets its config.
 
-    Reported as a warning rather than an error: root is a legitimate,
-    documented deployment (see `deploy/systemd/*.service`, which carries a
-    commented `User=hivepilot`), and a doctor that exits non-zero on a
-    supported configuration is a doctor people stop running.
+    **A declared `User=` is not a running user.** A unit can carry
+    `User=hivepilot` while a process started before that drop-in landed is
+    still alive as root. That is not hypothetical: two units here ran as root
+    for two days after the migration was declared complete, and the earlier
+    version of this check -- which read only the declared value, and only for
+    three of the five units -- reported the fleet clean throughout.
     """
     import os
 
-    # The SERVICE user, not this process's. `config doctor` is normally typed
-    # into a root shell, so reading `geteuid()` answered "am I root" while
-    # appearing to answer "do the agents run as root" -- it kept reporting
-    # root after the production fleet had already moved to `User=hivepilot`.
-    # A check answering a different question than the one it appears to
-    # answer is the failure this module exists to remove.
-    try:
-        service_user = _systemd_service_user()
-    except Exception:  # noqa: BLE001 - a doctor check must never raise
-        service_user = None
+    users = _unit_users()
 
-    if service_user is not None:
-        if service_user != "root":
-            return [
-                _mk(
-                    "info",
-                    _CHECK_PRIVILEGE,
-                    f"agents run as {service_user} (systemd User=), not root",
-                    "Read from the unit rather than from this process, which is "
-                    "usually a root shell and would say root either way.",
-                    "No action needed.",
-                )
-            ]
-        return [_privilege_warning("the systemd unit declares User=root")]
+    mismatched = [
+        (unit, declared, running)
+        for unit, (declared, running) in users.items()
+        if running and declared and running != declared
+    ]
+    if mismatched:
+        detail = ", ".join(
+            f"{unit} declares User={declared} but runs as {running}"
+            for unit, declared, running in mismatched
+        )
+        return [
+            _mk(
+                "warning",
+                _CHECK_PRIVILEGE,
+                f"{len(mismatched)} unit(s) are not running as their declared user: {detail}",
+                "A drop-in takes effect on RESTART. Until then the old process keeps its "
+                "original privileges, so a migration can read as complete on disk while "
+                "the running fleet is unchanged -- which is how two units stayed root for "
+                "two days here.",
+                "systemctl restart " + " ".join(unit for unit, _, _ in mismatched),
+            )
+        ]
+
+    running_as_root = sorted(unit for unit, (_, running) in users.items() if running == "root")
+    if running_as_root:
+        return [_privilege_warning(f"running as root: {', '.join(running_as_root)}")]
+
+    declared_root = sorted(
+        unit for unit, (declared, running) in users.items() if declared == "root" and not running
+    )
+    if declared_root:
+        return [_privilege_warning(f"the unit declares User=root: {', '.join(declared_root)}")]
+
+    if users:
+        actual = sorted({running for _, running in users.values() if running})
+        return [
+            _mk(
+                "info",
+                _CHECK_PRIVILEGE,
+                f"agents run as {', '.join(actual) or 'a non-root user'}, not root "
+                f"({len(users)} unit(s) checked)",
+                "Read from the LIVE processes, not only the unit files -- a declared "
+                "User= that never took effect is the failure this check exists to catch.",
+                "No action needed.",
+            )
+        ]
 
     try:
         uid = os.geteuid()
@@ -521,44 +610,13 @@ def check_agent_privilege() -> list[DoctorFinding]:
             _mk(
                 "info",
                 _CHECK_PRIVILEGE,
-                f"this process runs as uid {uid} (not root); no systemd User= found",
-                "Printed even when correct, so a future change to root is "
-                "visible as a change rather than discovered later.",
+                f"this process runs as uid {uid} (not root); no systemd units found",
+                "Printed even when correct, so a future change to root is visible as a "
+                "change rather than discovered later.",
                 "No action needed.",
             )
         ]
-
-    return [_privilege_warning("no systemd User= found; reporting this process")]
-
-
-def _systemd_service_user() -> str | None:
-    """The `User=` a hivepilot unit declares, or None when unknown.
-
-    None means "systemd could not be asked" (not installed, no such unit, a
-    container) -- deliberately distinct from "it says root", because the
-    caller must fall back rather than accuse.
-    """
-    import shutil
-    import subprocess
-
-    systemctl = shutil.which("systemctl")
-    if systemctl is None:
-        return None
-    for unit in ("hivepilot-scheduler", "hivepilot-api", "hivepilot-telegram"):
-        try:
-            completed = subprocess.run(  # noqa: S603
-                [systemctl, "show", unit, "-p", "User", "--value"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-                stdin=subprocess.DEVNULL,
-            )
-        except Exception:  # noqa: BLE001
-            return None
-        if completed.returncode == 0 and completed.stdout.strip():
-            return completed.stdout.strip()
-    return None
+    return [_privilege_warning("this process runs as root and no systemd unit was found")]
 
 
 def _privilege_warning(basis: str) -> DoctorFinding:

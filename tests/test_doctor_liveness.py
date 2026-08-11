@@ -409,64 +409,6 @@ class TestAgentPrivilege:
         assert "EnvironmentFile" in dl.check_agent_privilege()[0].fix
 
 
-class TestAgentPrivilegeReportsTheServiceUser:
-    """The check reported the uid of whatever process ran `config doctor`.
-
-    After the production migration to `User=hivepilot`, a root CLI run still
-    printed "agents run as root" — true of that shell, false of the fleet.
-    A check answering a different question than the one it appears to answer
-    is the failure this module exists to remove, and it was mine.
-
-    The services' user is declared in systemd, so it can be read rather than
-    guessed.
-    """
-
-    def test_it_reports_the_unit_user_when_systemd_declares_one(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr("os.geteuid", lambda: 0)
-        monkeypatch.setattr(dl, "_systemd_service_user", lambda: "hivepilot")
-
-        findings = dl.check_agent_privilege()
-
-        assert _severities(findings) == {"info"}
-        assert "hivepilot" in _messages(findings)
-
-    def test_a_unit_declaring_root_is_still_flagged(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("os.geteuid", lambda: 0)
-        monkeypatch.setattr(dl, "_systemd_service_user", lambda: "root")
-
-        assert _severities(dl.check_agent_privilege()) == {"warning"}
-
-    def test_it_falls_back_to_this_process_when_systemd_says_nothing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """No systemd, or a unit with no `User=`: the invoking process is the
-        best evidence available, and the message must say which it is."""
-        monkeypatch.setattr("os.geteuid", lambda: 0)
-        monkeypatch.setattr(dl, "_systemd_service_user", lambda: None)
-
-        findings = dl.check_agent_privilege()
-
-        assert _severities(findings) == {"warning"}
-        assert "this process" in _messages(findings)
-
-    def test_probing_systemd_never_breaks_the_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("os.geteuid", lambda: 0)
-
-        def boom():
-            raise OSError("no systemctl")
-
-        monkeypatch.setattr(dl, "_systemd_service_user", boom)
-
-        assert dl.check_agent_privilege()[0].severity in {"info", "warning"}
-
-
-# ---------------------------------------------------------------------------
-# Cache amortisation
-# ---------------------------------------------------------------------------
-
-
 class TestCacheAmortisation:
     """The check exists to FIND the losing sessions, so it must not average.
 
@@ -565,3 +507,90 @@ class TestLessonsLearn:
     def test_empty_table_is_not_a_failure(self, monkeypatch):
         """Distillation is opt-in; no lessons means nobody turned it on."""
         assert self._run(monkeypatch, {"total": 0, "no_role": 0, "distinct_scores": 0}) == []
+
+
+class TestPrivilegeReadsTheRunningProcess:
+    """The check that was built to stop reading the wrong thing, read the
+    wrong thing.
+
+    It asked systemd for the unit's declared `User=` and reported that. A unit
+    can declare `User=hivepilot` while a root process started before the
+    drop-in landed is still alive -- which is exactly what happened here:
+    hivepilot-discord and hivepilot-slack ran as root for two days after the
+    migration was declared complete, and this check said "agents run as
+    hivepilot" the whole time.
+
+    It also polled three units and there are five, so the two that were wrong
+    were the two it never asked about.
+    """
+
+    def test_every_unit_is_polled(self):
+        """Three of five units were checked; the gap was where the fault was."""
+        from hivepilot.services import doctor_liveness
+
+        assert set(doctor_liveness.HIVEPILOT_UNITS) >= {
+            "hivepilot-api",
+            "hivepilot-scheduler",
+            "hivepilot-telegram",
+            "hivepilot-discord",
+            "hivepilot-slack",
+        }
+
+    def test_declared_non_root_but_running_as_root_is_a_finding(self, monkeypatch):
+        """Configured is not running. That distinction IS the check."""
+        from hivepilot.services import doctor_liveness
+
+        monkeypatch.setattr(
+            doctor_liveness,
+            "_unit_users",
+            lambda: {
+                "hivepilot-api": ("hivepilot", "hivepilot"),
+                "hivepilot-discord": ("hivepilot", "root"),
+            },
+        )
+
+        findings = doctor_liveness.check_agent_privilege()
+
+        assert findings
+        text = " ".join(f.message for f in findings)
+        assert "hivepilot-discord" in text
+        assert findings[0].severity in ("warning", "error")
+
+    def test_all_units_aligned_is_an_info(self, monkeypatch):
+        from hivepilot.services import doctor_liveness
+
+        monkeypatch.setattr(
+            doctor_liveness,
+            "_unit_users",
+            lambda: {
+                "hivepilot-api": ("hivepilot", "hivepilot"),
+                "hivepilot-slack": ("hivepilot", "hivepilot"),
+            },
+        )
+
+        findings = doctor_liveness.check_agent_privilege()
+
+        assert [f.severity for f in findings] == ["info"]
+
+    def test_declared_root_is_still_warned(self, monkeypatch):
+        from hivepilot.services import doctor_liveness
+
+        monkeypatch.setattr(
+            doctor_liveness,
+            "_unit_users",
+            lambda: {"hivepilot-api": ("root", "root")},
+        )
+
+        findings = doctor_liveness.check_agent_privilege()
+
+        assert findings and findings[0].severity == "warning"
+
+    def test_no_systemd_falls_back_without_accusing(self, monkeypatch):
+        """None means 'could not ask', which must not become 'runs as root'."""
+        from hivepilot.services import doctor_liveness
+
+        monkeypatch.setattr(doctor_liveness, "_unit_users", lambda: {})
+
+        findings = doctor_liveness.check_agent_privilege()
+
+        assert all(f.severity != "error" for f in findings)
