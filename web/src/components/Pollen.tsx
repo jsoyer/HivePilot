@@ -16,6 +16,7 @@ import {
   Users,
   Workflow,
   Zap,
+  Gauge,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -41,6 +42,7 @@ import { HealthView } from './views/HealthView'
 import { HomeView } from './views/HomeView'
 import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
+import { CacheView } from './views/CacheView'
 import { PluginsView } from './views/PluginsView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
@@ -75,6 +77,10 @@ const BUILTIN_TABS = [
   // installed (the interesting set) would be invisible. Read-only for any
   // token; the switches gate themselves on useRole().can('admin').
   { value: 'plugins', labelKey: 'nav.plugins', Panel: PluginsView, Icon: Blocks },
+  // Prompt-cache economics. Separate from the analytics screens on purpose:
+  // those aggregate, and an aggregate is exactly what hid 1.7M tokens of
+  // cache creation nobody ever read back behind an 85% hit rate.
+  { value: 'cache', labelKey: 'nav.cache', Panel: CacheView, Icon: Gauge },
   // Mirador "Agents" view sprint: per-role activity roster + lessons +
   // verdicts (GET /v1/agents, /v1/lessons, /v1/verdicts) — read-only for any
   // token, grouped with Health/Graph under "System" in nav-config.ts's

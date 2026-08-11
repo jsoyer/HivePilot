@@ -189,6 +189,10 @@ const GROUPED_TAB_ORDER = [
   // One card per curated plugin (GET /v1/plugins/catalog) — grouped under
   // System beside Health, which is where plugin state already lived.
   'Plugins',
+  // Prompt-cache economics, beside Plugins under System. Separate from
+  // Analytics on purpose: those aggregate, and an aggregate is what hid
+  // 1.7M tokens of unread cache creation behind an 85% hit rate.
+  'Cache',
   'Agents',
   'Graph',
 ]

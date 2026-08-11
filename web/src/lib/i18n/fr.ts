@@ -65,6 +65,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.models': 'Modèles',
   'nav.efficiency': 'Efficacité',
   'nav.health': 'Santé',
+  'nav.cache': 'Cache',
   'nav.plugins': 'Plugins',
   'nav.approvals': 'Approbations',
   'nav.runs': 'Exécutions',
@@ -142,6 +143,18 @@ export const fr: Record<TranslationKey, string> = {
     "{count} modèle(s) ont des étapes non chiffrées faute d'usage enregistré — la table de prix est correcte, c'est la capture qui manque : {models}",
 
   // ---- Health view -----------------------------------------------------
+  'cache.title': 'Cache de prompt',
+  'cache.description': 'Le cache s\'est-il remboursé ? La création est facturée 1,25x l\'entrée de base, une lecture 0,1x — un préfixe lu moins d\'une fois a coûté PLUS cher que sans cache.',
+  'cache.median': 'Amortissement médian',
+  'cache.breakEven': 'lectures par unité créée ; sous 1,00x c\'est une perte',
+  'cache.belowOne': 'Sessions sous le seuil',
+  'cache.belowOneHint': 'une moyenne les masque — un gros lecteur la remonte au-dessus de 1,00x',
+  'cache.wasted': 'Création jamais relue',
+  'cache.wastedHint': 'tokens payés et jamais utilisés',
+  'cache.sessions': 'Sessions mesurées',
+  'cache.worst': 'Pire session',
+  'cache.worstDetail': 'A créé {created} tokens de cache et n\'en a relu que {read}.',
+  'cache.noTelemetry': 'Aucune télémétrie enregistrée. L\'ingestion OTLP est optionnelle — ce n\'est pas un cache sain, c\'est une absence de mesure.',
   'plugins.title': 'Plugins',
   'plugins.description':
     'Tous les plugins du catalogue, installés ici ou non. Activer un plugin récupère son fichier et l\u2019active — cela n\u2019installe jamais son prérequis.',
