@@ -528,6 +528,10 @@ def recall(**kwargs: Any) -> None:
                 query=query,
                 result_count=len(memories),
                 actor=role or "system",
+                # Tagged explicitly rather than relying on NULL meaning mem0.
+                # A second backend writes here now, and a column that is only
+                # ever set by ONE of them reads as "obsidian or unknown".
+                backend="mem0",
                 freshness_seconds=_freshness_seconds(results),
             )
         except Exception as instr_exc:  # noqa: BLE001 — instrumentation must never break recall
@@ -672,7 +676,9 @@ def store(**kwargs: Any) -> None:
         try:
             from hivepilot.services import memory_service
 
-            memory_service.record_store(namespace=key, key=key, actor=role or "system")
+            memory_service.record_store(
+                namespace=key, key=key, actor=role or "system", backend="mem0"
+            )
         except Exception as instr_exc:  # noqa: BLE001 — instrumentation must never break store
             logger.warning("plugin.mem0.instrumentation_failed", op="store", error=str(instr_exc))
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
