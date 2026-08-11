@@ -15,6 +15,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import structlog
+
+from hivepilot.config import settings
+
+logger = structlog.get_logger(__name__)
+
 _ENV_KEY = "HIVEPILOT_PLUGINS_DISABLED"
 
 
@@ -44,6 +50,20 @@ def persist_plugins_disabled(disabled: list[str], *, env_path: Path | None = Non
         # it will NOT reflect a HIVEPILOT_ENV_FILE change made after startup.
         env_path = Path(str(Settings.model_config.get("env_file") or ".env"))
 
+    # Anchor a relative path to base_dir, never the CWD. `plugins install
+    # shadcn` typed from an SSH home wrote /home/<user>/.env -- a file no
+    # service reads -- and printed "persisted to .env" as though it had taken
+    # effect. Where a write lands must not depend on where the command was
+    # typed.
+    if not env_path.is_absolute():
+        env_path = settings.resolve_path(env_path)
+
+    # A file that did not exist is a file nothing was reading. On a deployment
+    # configured through systemd's EnvironmentFile= this write is inert
+    # wherever it lands, and saying so is the difference between a no-op and a
+    # no-op the operator knows about.
+    existed = env_path.exists()
+
     line = f"{_ENV_KEY}={json.dumps(sorted(disabled))}"
 
     lines: list[str] = []
@@ -59,4 +79,12 @@ def persist_plugins_disabled(disabled: list[str], *, env_path: Path | None = Non
 
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if not existed:
+        logger.warning(
+            "plugin_persist.created_new_env_file",
+            path=str(env_path),
+            detail="this file did not exist, so nothing was reading it; the flag "
+            "takes effect only if Settings actually loads this path",
+        )
+
     return env_path

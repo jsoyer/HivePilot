@@ -83,3 +83,58 @@ def test_persist_plugins_disabled_default_env_path_uses_settings(
 
     persist_plugins_disabled(["rtk", "obsidian"])
     assert env_path.exists()
+
+
+class TestWriteLandsSomewhereReadable:
+    """`plugins install shadcn` printed "persisted to .env" and persisted
+    nothing.
+
+    The env file resolves relative to the CWD, so a command typed from an SSH
+    home wrote `/home/<user>/.env` -- a file no service reads. On this
+    deployment config comes from an `EnvironmentFile=` that systemd parses, so
+    a freshly created `.env` is inert wherever it lands.
+
+    Two properties: the destination must not depend on where the command was
+    typed, and creating a file nothing has ever read must SAY so.
+    """
+
+    def test_relative_path_does_not_follow_the_cwd(self, tmp_path, monkeypatch):
+        from hivepilot.ui import plugin_persist
+
+        base = tmp_path / "base"
+        base.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        monkeypatch.setattr(plugin_persist.settings, "base_dir", base, raising=False)
+
+        from pathlib import Path as _P
+
+        written = plugin_persist.persist_plugins_disabled(["x"], env_path=_P(".env"))
+
+        assert written.is_absolute()
+        assert elsewhere not in written.parents, "followed the cwd"
+
+    def test_creating_a_brand_new_env_file_is_logged(self, tmp_path, monkeypatch, caplog):
+        """A file that did not exist is a file nothing was reading."""
+        from hivepilot.ui import plugin_persist
+
+        monkeypatch.setattr(plugin_persist.settings, "base_dir", tmp_path, raising=False)
+
+        with caplog.at_level("WARNING"):
+            plugin_persist.persist_plugins_disabled(["x"], env_path=tmp_path / "fresh.env")
+
+        assert "plugin_persist.created_new_env_file" in caplog.text
+
+    def test_updating_an_existing_file_is_quiet(self, tmp_path, monkeypatch, caplog):
+        from hivepilot.ui import plugin_persist
+
+        monkeypatch.setattr(plugin_persist.settings, "base_dir", tmp_path, raising=False)
+        existing = tmp_path / "known.env"
+        existing.write_text("HIVEPILOT_SOMETHING=1\n")
+
+        with caplog.at_level("WARNING"):
+            plugin_persist.persist_plugins_disabled(["x"], env_path=existing)
+
+        assert "created_new_env_file" not in caplog.text
+        assert "HIVEPILOT_SOMETHING=1" in existing.read_text()

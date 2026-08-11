@@ -263,6 +263,11 @@ _PATH_FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("state_db", "state_db", "HIVEPILOT_STATE_DB", False),
     ("prompts_dir", "prompts_dir", "HIVEPILOT_PROMPTS_DIR", True),
     ("obsidian_vault", "obsidian_vault", "HIVEPILOT_OBSIDIAN_VAULT", False),
+    # Defaults to a RELATIVE `runs/logs`, and produced the most copies of any
+    # field here: five `runs/logs/hivepilot.log` on the production host, one
+    # per directory a command was ever typed from, with only the one under `/`
+    # live. The check that names cwd-relative paths did not list it.
+    ("logs_dir", "logs_dir", "HIVEPILOT_LOGS_DIR", False),
 )
 
 
