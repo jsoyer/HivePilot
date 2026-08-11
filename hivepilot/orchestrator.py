@@ -979,6 +979,31 @@ def _build_judge_prompt(topic: str, positions: list[Position]) -> str:
     return _JUDGE_PROMPT_TEMPLATE.format(topic=topic, positions_block=positions_block)
 
 
+_VERDICT_SAMPLE_CHARS = 500
+
+
+def _log_unparseable_verdict(text: str, reason: str) -> None:
+    """Record a bounded, redacted sample of a judge answer we could not read.
+
+    Gated on `verdict_parse_debug` and never called for empty input. The cap
+    matters: a judge's answer runs to tens of kilobytes, and an unbounded log
+    line is its own incident.
+    """
+    from hivepilot.config import settings
+
+    if not getattr(settings, "verdict_parse_debug", False):
+        return
+    from hivepilot.services.config_provenance import redact_text
+
+    sample = redact_text(text[:_VERDICT_SAMPLE_CHARS])
+    logger.warning(
+        "verdict.unparseable",
+        reason=reason,
+        total_chars=len(text),
+        sample=sample,
+    )
+
+
 def _parse_verdict(raw: str) -> Verdict:
     """Parse the judge's raw text response into a :class:`Verdict`.
 
@@ -999,6 +1024,9 @@ def _parse_verdict(raw: str) -> Verdict:
     """
     text = raw.strip() if raw else ""
     if not text:
+        # An empty answer is a legitimate outcome, not a parse failure. Several
+        # production verdicts are empty because no diff was produced, and
+        # logging those would bury the interesting case under the common one.
         return Verdict(decision=None, confidence=None)
 
     if text.startswith("```"):
@@ -1009,13 +1037,16 @@ def _parse_verdict(raw: str) -> Verdict:
     try:
         data = json.loads(text)
     except (json.JSONDecodeError, ValueError):
+        _log_unparseable_verdict(text, "not json")
         return Verdict(decision=None, confidence=None)
 
     if not isinstance(data, dict):
+        _log_unparseable_verdict(text, "json is not an object")
         return Verdict(decision=None, confidence=None)
 
     decision = data.get("decision")
     if not isinstance(decision, str) or not decision.strip():
+        _log_unparseable_verdict(text, "no usable 'decision'")
         return Verdict(decision=None, confidence=None)
 
     confidence_raw = data.get("confidence")
@@ -1027,6 +1058,10 @@ def _parse_verdict(raw: str) -> Verdict:
         # Non-numeric, bool, or non-finite (NaN/Infinity, which json.loads
         # accepts by default) confidence is untrustworthy -> no confident
         # decision. A garbage response must never become MAX confidence.
+        #
+        # This branch is the prime suspect for the missing confidences: the
+        # decision parsed and only the number did not.
+        _log_unparseable_verdict(text, "decision parsed but confidence unusable")
         return Verdict(decision=None, confidence=None)
     confidence = max(0.0, min(1.0, float(confidence_raw)))
 

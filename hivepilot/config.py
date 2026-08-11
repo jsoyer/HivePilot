@@ -240,6 +240,18 @@ class Settings(BaseSettings):
     # accepting metrics from localhost.
     # env: HIVEPILOT_OTEL_INGEST_ENABLED
     otel_ingest_enabled: bool = False
+    # Log a BOUNDED, redacted sample of a judge's answer when the verdict
+    # parser cannot read it. Off by default: it puts agent output into run
+    # logs, which are read far more widely than the answers themselves.
+    #
+    # It exists to settle one question. 264 of 268 lessons score at the
+    # run-success default because only 1 of 20 verdicts carries a numeric
+    # confidence, and nothing recorded whether the judge returned something
+    # unreadable or legitimately had nothing to decide. Loosening the parser
+    # without that answer would risk turning "no decision" into a WRONG
+    # decision on the component that gates PRs.
+    # env: HIVEPILOT_VERDICT_PARSE_DEBUG
+    verdict_parse_debug: bool = False
     gh_command: str = "gh"
     git_command: str = "git"
     # Auto-clone of a missing project repo (PR B): when a project's `path`

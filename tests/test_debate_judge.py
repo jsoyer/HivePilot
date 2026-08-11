@@ -475,3 +475,83 @@ class TestParseVerdict:
         v = _parse_verdict(json.dumps({"decision": "Ship it", "confidence": raw_conf}))
         assert v.decision == "Ship it"
         assert v.confidence == expected
+
+
+# ---------------------------------------------------------------------------
+# Diagnosing why confidence is missing
+# ---------------------------------------------------------------------------
+
+
+class TestVerdictParseDiagnostics:
+    """264 of 268 lessons score at the run-success default because only 1 of 20
+    verdicts carries a numeric confidence.
+
+    Two explanations fit: the judge returned something this parser cannot read,
+    or it legitimately had nothing to decide (several production verdicts read
+    "blocked: empty subject -- no diff was produced"). Nothing recorded which,
+    so the parser could not be fixed without guessing -- and guessing on the
+    component that gates PRs risks turning "no decision" into a WRONG decision.
+
+    This logs a bounded, redacted sample on failure so the next real run
+    settles it. Off by default: it puts agent output into run logs.
+    """
+
+    def test_silent_when_disabled(self, monkeypatch, caplog):
+        from hivepilot.config import settings
+        from hivepilot.orchestrator import _parse_verdict
+
+        monkeypatch.setattr(settings, "verdict_parse_debug", False, raising=False)
+        with caplog.at_level("WARNING"):
+            _parse_verdict("this is not json at all")
+
+        assert "verdict.unparseable" not in caplog.text
+
+    def test_logs_a_bounded_sample_on_failure(self, monkeypatch, caplog):
+        from hivepilot.config import settings
+        from hivepilot.orchestrator import _parse_verdict
+
+        monkeypatch.setattr(settings, "verdict_parse_debug", True, raising=False)
+        with caplog.at_level("WARNING"):
+            _parse_verdict("Here is my verdict:\n" + "x" * 5000)
+
+        assert "verdict.unparseable" in caplog.text
+        # Bounded: a judge's answer runs to tens of kilobytes.
+        assert "x" * 600 not in caplog.text
+
+    def test_empty_input_is_not_logged(self, monkeypatch, caplog):
+        """An empty verdict is a legitimate outcome, not a parse failure.
+
+        Logging it would bury the interesting case under the common one --
+        several production verdicts are empty because no diff was produced.
+        """
+        from hivepilot.config import settings
+        from hivepilot.orchestrator import _parse_verdict
+
+        monkeypatch.setattr(settings, "verdict_parse_debug", True, raising=False)
+        with caplog.at_level("WARNING"):
+            _parse_verdict("   ")
+
+        assert "verdict.unparseable" not in caplog.text
+
+    def test_a_successful_parse_logs_nothing(self, monkeypatch, caplog):
+        from hivepilot.config import settings
+        from hivepilot.orchestrator import _parse_verdict
+
+        monkeypatch.setattr(settings, "verdict_parse_debug", True, raising=False)
+        with caplog.at_level("WARNING"):
+            verdict = _parse_verdict('{"decision": "APPROVE", "confidence": 0.9}')
+
+        assert verdict.decision == "APPROVE"
+        assert "verdict.unparseable" not in caplog.text
+
+    def test_registered_secrets_are_redacted(self, monkeypatch, caplog):
+        from hivepilot.config import settings
+        from hivepilot.orchestrator import _parse_verdict
+        from hivepilot.services.config_provenance import register_secret_value
+
+        monkeypatch.setattr(settings, "verdict_parse_debug", True, raising=False)
+        register_secret_value("sk-verdict-diag-secret-123456")
+        with caplog.at_level("WARNING"):
+            _parse_verdict("prose then sk-verdict-diag-secret-123456 then more prose")
+
+        assert "sk-verdict-diag-secret-123456" not in caplog.text
