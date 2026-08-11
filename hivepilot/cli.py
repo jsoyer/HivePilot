@@ -39,8 +39,10 @@ tokens_app = typer.Typer(help="Manage API tokens")
 app.add_typer(tokens_app, name="tokens")
 config_app = typer.Typer(help="Config repo sync")
 corrections_app = typer.Typer(help="Standing corrections injected into a role's prompts")
+topics_app = typer.Typer(help="Telegram forum topics: inspect the registry, prune strays")
 app.add_typer(config_app, name="config")
 app.add_typer(corrections_app, name="corrections")
+app.add_typer(topics_app, name="topics")
 project_app = typer.Typer(help="Manage projects.yaml entries")
 app.add_typer(project_app, name="project")
 task_app = typer.Typer(help="Manage tasks.yaml entries")
@@ -1250,6 +1252,64 @@ def corrections_show(
         return
     typer.echo(text)
     typer.echo(f"\n({len(text)} chars of {corrections_service._MAX_CORRECTION_CHARS})")
+
+
+@topics_app.command("list")
+def topics_list() -> None:
+    """Show the topic registry: which thread id each role streams into.
+
+    Compare this against what Telegram shows. Anything in the group and NOT
+    in this list is a stray -- the Bot API has no endpoint to list a forum's
+    topics, so that comparison is the only reliable discovery path.
+    """
+    from hivepilot.services import topics_admin
+
+    entries = topics_admin.list_topics()
+    if not entries:
+        typer.echo("Registry is empty — no topic has been recorded.")
+        return
+    for key, thread_id in sorted(entries.items()):
+        typer.echo(f"  {thread_id:<8} {key}")
+    typer.echo(f"\n{len(entries)} live topic(s). These are protected from `topics prune`.")
+
+
+@topics_app.command("prune")
+def topics_prune(
+    thread_ids: list[int] = typer.Argument(..., help="message_thread_id(s) to delete"),
+    yes: bool = typer.Option(False, "--yes", help="Actually delete (default: dry run)"),
+) -> None:
+    """Delete stray forum topics by id.
+
+    Takes explicit ids on purpose. The Bot API cannot list a forum's topics
+    and offers no safe existence probe -- `deleteForumTopic` destroys,
+    `editForumTopic`/`closeForumTopic` mutate, and
+    `unpinAllForumTopicMessages` would drop your pins. An id guessed right
+    would destroy a live topic, so this never guesses.
+
+    An id the registry still points at is refused, even with --yes.
+    """
+    from hivepilot.services import topics_admin
+
+    result = topics_admin.prune(list(thread_ids), confirm=yes)
+
+    for thread_id in result.protected:
+        typer.echo(f"  REFUSED  {thread_id} — live in the registry, `topics list` shows which role")
+    if not yes:
+        for thread_id in result.would_delete:
+            typer.echo(f"  would delete  {thread_id}")
+        typer.echo(
+            f"\nDry run. {len(result.would_delete)} topic(s) would be deleted. Re-run with --yes."
+        )
+        return
+    for thread_id in result.deleted:
+        typer.echo(f"  deleted  {thread_id}")
+    for thread_id, error in result.failed:
+        typer.echo(f"  FAILED   {thread_id} — {error}", err=True)
+    typer.echo(
+        f"\n{len(result.deleted)} deleted, {len(result.failed)} failed, {len(result.protected)} refused."
+    )
+    if result.failed:
+        raise typer.Exit(1)
 
 
 @config_app.command("sync")
