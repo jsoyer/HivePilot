@@ -94,3 +94,53 @@ def test_ingested_points_are_queryable(client, payload, monkeypatch):
     assert report.sessions >= 1
     # The captured call created 3110 tokens of cache and read back 18356.
     assert report.median_amortisation > 1.0
+
+
+# ---------------------------------------------------------------------------
+# Read side
+# ---------------------------------------------------------------------------
+
+
+def _auth(raw: str) -> dict:
+    return {"Authorization": f"Bearer {raw}"}
+
+
+def test_cache_endpoint_requires_a_token(client):
+    assert client.get("/v1/telemetry/cache").status_code == 401
+
+
+def test_cache_endpoint_reports_median_and_losers(client, payload, monkeypatch, tmp_path):
+    """The screen has to show the count below break-even, not an average.
+
+    A fleet ratio is dominated by whichever session read the most, so the
+    endpoint exposes the same shape the doctor check does.
+    """
+    from hivepilot.config import settings
+    from hivepilot.services.token_service import add_token
+
+    monkeypatch.setattr(settings, "tokens_file", tmp_path / "tokens.json")
+    monkeypatch.setattr(settings, "otel_ingest_enabled", True, raising=False)
+    client.post("/otlp/v1/metrics", json=payload)
+    raw, _ = add_token("read")
+
+    resp = client.get("/v1/telemetry/cache", headers=_auth(raw))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) >= {"sessions", "median_amortisation", "below_one", "wasted_tokens", "worst"}
+    assert body["sessions"] >= 1
+
+
+def test_cache_endpoint_is_empty_not_broken_without_telemetry(client, monkeypatch, tmp_path):
+    """Ingest is opt-in; nothing recorded is a valid, reportable state."""
+    from hivepilot.config import settings
+    from hivepilot.services.token_service import add_token
+
+    monkeypatch.setattr(settings, "tokens_file", tmp_path / "tokens.json")
+    raw, _ = add_token("read")
+
+    resp = client.get("/v1/telemetry/cache", headers=_auth(raw))
+
+    assert resp.status_code == 200
+    assert resp.json()["sessions"] == 0
+    assert resp.json()["worst"] is None

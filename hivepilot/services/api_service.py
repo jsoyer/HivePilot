@@ -381,6 +381,37 @@ async def otlp_metrics(request: Request) -> dict[str, Any]:
 v1 = APIRouter(prefix="/v1")
 
 
+@v1.get("/telemetry/cache", dependencies=[Depends(require_role("read"))])
+def telemetry_cache(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
+    """Prompt-cache economics from the agent CLI's own metrics.
+
+    Exposes a median and a count below break-even rather than a fleet ratio.
+    An aggregate is dominated by whichever session read the most, which is how
+    an 85% hit rate coexisted here with 1.7M tokens of creation never read
+    back -- a screen built on the average would have shown nothing wrong.
+    """
+    report = telemetry_service.cache_report(days)
+    worst = report.worst
+    return {
+        "sessions": report.sessions,
+        "median_amortisation": round(report.median_amortisation, 3),
+        "below_one": report.below_one,
+        "wasted_tokens": int(report.wasted_tokens),
+        "healthy": report.healthy,
+        "worst": (
+            None
+            if worst is None
+            else {
+                "session_id": worst.session_id,
+                "model": worst.model,
+                "created": int(worst.created),
+                "read": int(worst.read),
+                "amortisation": round(worst.amortisation, 3),
+            }
+        ),
+    }
+
+
 @v1.get("/health")
 @app.get("/health")
 def health():

@@ -69,6 +69,7 @@ export const en = {
   'nav.models': 'Models',
   'nav.efficiency': 'Efficiency',
   'nav.health': 'Health',
+  'nav.cache': 'Cache',
   'nav.plugins': 'Plugins',
   'nav.approvals': 'Approvals',
   'nav.runs': 'Runs',
@@ -148,6 +149,18 @@ export const en = {
     '{count} model(s) have unpriced steps because no token usage was recorded — the price map is fine, the usage capture is not: {models}',
 
   // ---- Health view -----------------------------------------------------
+  'cache.title': 'Prompt cache',
+  'cache.description': 'Whether the cache paid for itself. Creation is billed at 1.25x base input, a read at 0.1x — a prefix read fewer than once cost MORE than sending it uncached.',
+  'cache.median': 'Median amortisation',
+  'cache.breakEven': 'reads per unit created; below 1.00x is a loss',
+  'cache.belowOne': 'Sessions below break-even',
+  'cache.belowOneHint': 'a fleet average hides these — one heavy reader lifts it above 1.00x',
+  'cache.wasted': 'Creation never read back',
+  'cache.wastedHint': 'tokens paid for and never used',
+  'cache.sessions': 'Sessions measured',
+  'cache.worst': 'Worst session',
+  'cache.worstDetail': 'Created {created} cache tokens and read back {read}.',
+  'cache.noTelemetry': 'No telemetry recorded. OTLP ingest is opt-in — this is not a healthy cache, it is no measurement at all.',
   'plugins.title': 'Plugins',
   'plugins.description':
     'Every curated plugin, whether or not it is installed here. Turning one on installs the plugin file and enables it — it never installs the plugin\u2019s own prerequisite.',

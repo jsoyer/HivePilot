@@ -1667,3 +1667,29 @@ export function ratifyPartition(
 ): Promise<PartitionRatifyResult> {
   return postJson<PartitionRatifyResult>(`/v1/partitions/${encodeURIComponent(id)}/ratify`, body)
 }
+
+/**
+ * Prompt-cache economics, from the agent CLI's own OTLP metrics.
+ *
+ * Deliberately a median and a count below break-even, never a fleet ratio: an
+ * aggregate is dominated by whichever session read the most, which is how an
+ * 85% hit rate coexisted with 1.7M tokens of creation never read back.
+ */
+export interface CacheReport {
+  sessions: number
+  median_amortisation: number
+  below_one: number
+  wasted_tokens: number
+  healthy: boolean
+  worst: {
+    session_id: string
+    model: string | null
+    created: number
+    read: number
+    amortisation: number
+  } | null
+}
+
+export function fetchCacheReport(days = 30): Promise<CacheReport> {
+  return apiFetch<CacheReport>(`/v1/telemetry/cache?days=${days}`)
+}
