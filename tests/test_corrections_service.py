@@ -286,3 +286,41 @@ class TestAppendCorrection:
 
         text = (corrections_dir / "newrole.md").read_text().lower()
         assert "promote" in text and "delete" in text
+
+
+class TestWriteLandsWhereReadLooks:
+    """A write the reader never sees is worse than no write at all.
+
+    Shipped and immediately broken in production: `_write_path` went to the
+    config-repo clone while `load_corrections` resolves XDG first, and an XDG
+    copy existed. The correction was written, the command reported success,
+    and the role kept receiving the old file. The counter said 1, the agent
+    saw 0.
+    """
+
+    def test_appended_text_is_what_the_role_then_receives(self, corrections_dir: Path):
+        cs.append_correction("cto", "Always cite the command you ran.", commit=False)
+
+        assert "Always cite the command you ran." in cs.load_corrections("cto")
+
+    def test_write_prefers_an_existing_xdg_copy_over_the_clone(self, tmp_path, monkeypatch):
+        """XDG shadows the clone on read, so it must win on write too.
+
+        Writing to the clone while XDG shadows it produces two files that
+        drift apart silently -- and the shadowed one is the live one.
+        """
+        xdg = tmp_path / "xdg" / "hivepilot" / "prompts" / "corrections"
+        xdg.mkdir(parents=True)
+        (xdg / "cto.md").write_text("- an existing local rule\n")
+        clone = tmp_path / "clone"
+        (clone / "prompts" / "corrections").mkdir(parents=True)
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setattr(cs.settings, "base_dir", tmp_path)
+        monkeypatch.setattr(cs.settings, "config_repo", "https://example.invalid/x.git")
+
+        path = cs.append_correction("cto", "a new rule", commit=False)
+
+        assert path == xdg / "cto.md"
+        assert "an existing local rule" in path.read_text()
+        assert "a new rule" in path.read_text()

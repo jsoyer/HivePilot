@@ -179,6 +179,12 @@ _FILE_PREAMBLE = (
 )
 
 
+#: Identity for the unattended commit. systemd units have no HOME, so there is
+#: no ~/.gitconfig to fall back on.
+_COMMIT_NAME = "HivePilot"
+_COMMIT_EMAIL = "hivepilot@localhost"
+
+
 class CorrectionTooLarge(RuntimeError):
     """Appending would push the file past `_MAX_CORRECTION_CHARS`.
 
@@ -190,22 +196,28 @@ class CorrectionTooLarge(RuntimeError):
 
 
 def _write_path(role_key: str) -> Path:
-    """Where a correction is WRITTEN.
+    """Where a correction is WRITTEN: wherever the reader will look.
 
-    With a config repo configured this is the clone, so the entry can be
-    committed and reaches every host. Without one it falls back to wherever
-    the read chain resolves, so a local-only deployment can still record a
-    correction instead of writing it somewhere nothing will ever read.
+    This first shipped writing to the config-repo clone on the reasoning that
+    a write has one correct destination and the clone is the one that can be
+    committed. That was wrong, and wrong in the worst way: `resolve_config_path`
+    tries XDG *before* the clone, an XDG copy existed on the production host,
+    and so the correction was written, reported as recorded, and never read.
+    The command said 1, the agent saw 0.
 
-    A write has exactly one destination either way -- picking the read chain
-    unconditionally would let an entry land on an XDG copy that is never
-    committed and silently diverges.
+    An existing file always wins, because that is the file being read. Only
+    when the role has no file anywhere does the destination get chosen, and
+    then the clone is preferred so the entry can be committed and shared.
     """
+    existing = _corrections_path(role_key)
+    if existing.exists():
+        return existing
+
     if settings.config_repo:
         from hivepilot.services import config_service
 
         return config_service._config_dir() / "prompts" / "corrections" / f"{role_key}.md"
-    return _corrections_path(role_key)
+    return existing
 
 
 def append_correction(
@@ -271,9 +283,25 @@ def append_correction(
         path=str(path),
     )
 
-    if commit and settings.config_repo:
+    if commit and settings.config_repo and _inside_clone(path):
         _commit_one(path, role_key, body)
     return path
+
+
+def _inside_clone(path: Path) -> bool:
+    """Whether *path* lives in the config-repo clone.
+
+    A correction written to a local XDG override is deliberately NOT
+    committed: it is a machine-local rule, and committing it would push one
+    host's override to every other host.
+    """
+    try:
+        from hivepilot.services import config_service
+
+        path.resolve().relative_to(config_service._config_dir().resolve())
+    except (ValueError, OSError, Exception):  # noqa: BLE001
+        return False
+    return True
 
 
 def _commit_one(path: Path, role_key: str, body: str) -> None:
@@ -301,7 +329,18 @@ def _commit_one(path: Path, role_key: str, body: str) -> None:
     )
     try:
         repo.git.add("--", str(path))
-        repo.git.commit("-m", message)
+        # Explicit identity. systemd units run without HOME, so `~/.gitconfig`
+        # is invisible and `git commit` dies with "empty ident name" -- which
+        # it did on the first real run of this path. An unattended commit
+        # cannot depend on ambient git configuration.
+        repo.git.commit(
+            "-c",
+            f"user.name={_COMMIT_NAME}",
+            "-c",
+            f"user.email={_COMMIT_EMAIL}",
+            "-m",
+            message,
+        )
         repo.git.push("origin", settings.config_branch)
         logger.info("corrections.committed", role=role_key)
     except GitCommandError as exc:
