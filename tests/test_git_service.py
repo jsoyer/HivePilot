@@ -305,3 +305,106 @@ def test_create_pr_uses_declared_file_unchanged_when_present(tmp_path: Path) -> 
         assert forge.received_body == "## Real agent-written body\n"
     finally:
         FORGE_MAP.pop("capturing-present", None)
+
+
+class TestOneBranchPerRun:
+    """A perpetual branch makes every review cumulative.
+
+    `hivepilot/noxys` was reused by every run, so a run pushed into the PR
+    opened by an earlier one (`git.pr_already_open`) and the body was never
+    refreshed. PR #428 carried three runs' commits from three separate days,
+    and the reviewer of run 455 was implicitly reviewing runs 425 and 412 too.
+
+    The branch now carries the RUN ID and nothing else. A slug minted here
+    would describe an intention -- the branch is created before any code
+    exists, and the objective is not even persisted -- and a descriptive name
+    that is wrong is worse than a neutral one. The run id is the key to the
+    verdicts, lessons, costs and gate report, so a branch resolves to the
+    whole record in one step. Description belongs in the PR title, which is
+    written after the work exists.
+    """
+
+    def test_branch_carries_the_run_id(self):
+        from hivepilot.services.git_service import build_branch_name
+
+        assert build_branch_name(prefix="hivepilot", project_name="noxys", run_id=455) == (
+            "hivepilot/noxys/455"
+        )
+
+    def test_two_runs_never_share_a_branch(self):
+        from hivepilot.services.git_service import build_branch_name
+
+        first = build_branch_name(prefix="hivepilot", project_name="noxys", run_id=455)
+        second = build_branch_name(prefix="hivepilot", project_name="noxys", run_id=456)
+
+        assert first != second
+
+    def test_falls_back_to_the_old_name_without_a_run_id(self):
+        """Callers with no run in scope must keep working, not crash or invent
+        an id that resolves to nothing."""
+        from hivepilot.services.git_service import build_branch_name
+
+        assert build_branch_name(prefix="hivepilot", project_name="noxys", run_id=None) == (
+            "hivepilot/noxys"
+        )
+
+    def test_project_name_is_sanitised_into_a_ref(self):
+        """A project name is operator-supplied and becomes a git ref."""
+        from hivepilot.services.git_service import build_branch_name
+
+        name = build_branch_name(prefix="hivepilot", project_name="my proj/../x", run_id=7)
+
+        assert ".." not in name
+        assert " " not in name
+        assert name.count("/") == 2
+
+
+class TestPrTitleDescribesTheWork:
+    """`HivePilot: pipeline implementation` told a reviewer nothing.
+
+    The branch deliberately carries no description (see build_branch_name), so
+    the title is the only place a human learns what a PR is for -- and unlike
+    the branch, it is built AFTER the commits exist, so it can be accurate
+    instead of aspirational.
+    """
+
+    def test_uses_the_first_commit_subject(self):
+        from hivepilot.services.git_service import build_pr_title
+
+        title = build_pr_title(
+            branch="hivepilot/noxys/455",
+            commit_subjects=[
+                "fix(console): gate desktop AI allowlist behind isAdmin",
+                "test(console): cover the revoke path",
+            ],
+        )
+
+        # The count is part of it: a two-commit PR titled after one of them
+        # still hides the other.
+        assert title == "fix(console): gate desktop AI allowlist behind isAdmin (+1 more)"
+
+    def test_says_how_many_more_commits_there_are(self):
+        """A three-commit PR titled after one of them hides the other two."""
+        from hivepilot.services.git_service import build_pr_title
+
+        title = build_pr_title(
+            branch="hivepilot/noxys/455",
+            commit_subjects=["feat: a", "fix: b", "docs: c"],
+        )
+
+        assert "a" in title and "+2" in title
+
+    def test_falls_back_to_the_branch_when_there_are_no_commits(self):
+        from hivepilot.services.git_service import build_pr_title
+
+        assert build_pr_title(branch="hivepilot/noxys/455", commit_subjects=[]) == (
+            "HivePilot: hivepilot/noxys/455"
+        )
+
+    def test_bounded(self):
+        """Forges reject or truncate long titles; do it deliberately."""
+        from hivepilot.services.git_service import build_pr_title
+
+        title = build_pr_title(branch="b", commit_subjects=["x" * 500])
+
+        assert len(title) <= 120
