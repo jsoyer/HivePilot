@@ -1,6 +1,7 @@
 import { Database, Layers, TrendingUp, Users } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { MemoryBackendsView } from './MemoryBackendsView'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { EmptyState } from '@/components/dashboard/EmptyState'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
@@ -175,10 +176,17 @@ export function MemoryView() {
         <p className="text-sm text-muted-foreground">{t('memory.description')}</p>
       </div>
       <TabsList data-testid="memory-tabs" className="w-full max-w-md sm:w-fit">
+        <TabsTrigger value="backends">{t('memory.tabBackends')}</TabsTrigger>
         <TabsTrigger value="quality">{t('memory.tabQuality')}</TabsTrigger>
         <TabsTrigger value="growth">{t('memory.tabGrowth')}</TabsTrigger>
         <TabsTrigger value="search">{t('memory.tabSearch')}</TabsTrigger>
       </TabsList>
+      {/* Sources first: which backend answered, how often it came back with
+          nothing, and whether it sends work off the host. The quality/growth
+          tabs below describe the corpus; this one describes the retrieval. */}
+      <TabsContent value="backends">
+        <MemoryBackendsView />
+      </TabsContent>
       <TabsContent value="quality">
         <MemoryQualityView />
       </TabsContent>

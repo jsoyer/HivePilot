@@ -1693,3 +1693,27 @@ export interface CacheReport {
 export function fetchCacheReport(days = 30): Promise<CacheReport> {
   return apiFetch<CacheReport>(`/v1/telemetry/cache?days=${days}`)
 }
+
+/** Recall/store counters for one memory backend. */
+export interface MemoryBackendStats {
+  searches: number
+  /** Recalls that came back with nothing — the KPI that survives comparison.
+   * A full top-k means the CAP was hit, not that k relevant things exist. */
+  empty_searches: number
+  stores: number
+  reads: number
+  last_activity: string | null
+  actors: number
+}
+
+export interface MemoryBackendsResponse {
+  days: number
+  backends: Record<string, MemoryBackendStats>
+  /** Whether a backend sends work off the host. A property of the backend,
+   * and the one fact an operator most needs beside these counters. */
+  egress: Record<string, boolean>
+}
+
+export function fetchMemoryBackends(days = 30): Promise<MemoryBackendsResponse> {
+  return apiFetch<MemoryBackendsResponse>(`/v1/memory/backends?days=${days}`)
+}

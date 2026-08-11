@@ -86,6 +86,14 @@ def init_db() -> None:
             )
             """
         )
+        # Added after the fact: two backends write here now and `namespace` is
+        # the same project:task:role key for both, so nothing else could tell
+        # a mem0 recall from an Obsidian one. Rows predating this column are
+        # mem0's -- it was the only instrumented backend, which is precisely
+        # why Obsidian read as idle.
+        from hivepilot.services.state_service import _add_column_if_missing
+
+        _add_column_if_missing(conn, "memory_events", "backend TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_memory_events_tenant_ts ON memory_events(tenant, ts)"
         )
@@ -140,6 +148,7 @@ def record_search(
     result_count: int | None,
     actor: str | None,
     tenant: str = "default",
+    backend: str | None = None,
     freshness_seconds: float | None = None,
 ) -> None:
     """Record a memory search event. Best-effort: NEVER raises."""
@@ -149,10 +158,11 @@ def record_search(
             conn.execute(
                 db.ph(
                     "INSERT INTO memory_events "
-                    "(tenant, op, namespace, query_or_key, result_count, freshness_seconds, actor) "
-                    "VALUES (?, 'search', ?, ?, ?, ?, ?)"
+                    "(tenant, op, namespace, query_or_key, result_count, "
+                    "freshness_seconds, actor, backend) "
+                    "VALUES (?, 'search', ?, ?, ?, ?, ?, ?)"
                 ),
-                (tenant, namespace, query, result_count, freshness_seconds, actor),
+                (tenant, namespace, query, result_count, freshness_seconds, actor, backend),
             )
     except Exception as exc:  # noqa: BLE001 — instrumentation must never break the caller
         logger.warning("memory_service.record_search_failed", error=str(exc))
@@ -165,6 +175,7 @@ def record_read(
     found: bool,
     actor: str | None,
     tenant: str = "default",
+    backend: str | None = None,
     freshness_seconds: float | None = None,
 ) -> None:
     """Record a memory read (fetch-by-key) event. Best-effort: NEVER raises."""
@@ -174,10 +185,11 @@ def record_read(
             conn.execute(
                 db.ph(
                     "INSERT INTO memory_events "
-                    "(tenant, op, namespace, query_or_key, found, freshness_seconds, actor) "
-                    "VALUES (?, 'read', ?, ?, ?, ?, ?)"
+                    "(tenant, op, namespace, query_or_key, found, freshness_seconds, "
+                    "actor, backend) "
+                    "VALUES (?, 'read', ?, ?, ?, ?, ?, ?)"
                 ),
-                (tenant, namespace, key, int(bool(found)), freshness_seconds, actor),
+                (tenant, namespace, key, int(bool(found)), freshness_seconds, actor, backend),
             )
     except Exception as exc:  # noqa: BLE001 — instrumentation must never break the caller
         logger.warning("memory_service.record_read_failed", error=str(exc))
@@ -189,6 +201,7 @@ def record_store(
     key: str | None,
     actor: str | None,
     tenant: str = "default",
+    backend: str | None = None,
 ) -> None:
     """Record a memory store (write) event. Best-effort: NEVER raises."""
     try:
@@ -197,10 +210,10 @@ def record_store(
             conn.execute(
                 db.ph(
                     "INSERT INTO memory_events "
-                    "(tenant, op, namespace, query_or_key, actor) "
-                    "VALUES (?, 'store', ?, ?, ?)"
+                    "(tenant, op, namespace, query_or_key, actor, backend) "
+                    "VALUES (?, 'store', ?, ?, ?, ?)"
                 ),
-                (tenant, namespace, key, actor),
+                (tenant, namespace, key, actor, backend),
             )
     except Exception as exc:  # noqa: BLE001 — instrumentation must never break the caller
         logger.warning("memory_service.record_store_failed", error=str(exc))
@@ -523,3 +536,86 @@ def activity_journal(tenant: str | None = None, limit: int = 50) -> list[dict[st
         }
         for row in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Per-backend KPIs
+# ---------------------------------------------------------------------------
+
+#: Backends that always appear in a report, even with nothing recorded.
+#: A backend rendered as ABSENT reads as "not applicable"; rendered as zero it
+#: reads as "measured and idle". Only one of those is true, and getting it
+#: wrong is how Obsidian looked useless while simply being uninstrumented.
+KNOWN_BACKENDS: tuple[str, ...] = ("mem0", "obsidian")
+
+#: Rows written before the `backend` column existed. Every one of them is
+#: mem0's -- it was the only backend calling these recorders, verified against
+#: production before this default was chosen.
+_LEGACY_BACKEND = "mem0"
+
+
+def backend_stats(days: int = 30) -> dict[str, dict[str, Any]]:
+    """Recall/store counts per memory backend.
+
+    `empty_searches` is the number that matters. A search returning a FULL
+    top-k means the CAP was reached, not that k relevant things exist -- 115 of
+    150 production searches returned exactly 5, which says nothing about
+    quality. How often a recall came back with nothing is the honest signal,
+    and it is the one KPI both backends can be compared on.
+    """
+    empty = {
+        name: {
+            "searches": 0,
+            "empty_searches": 0,
+            "stores": 0,
+            "reads": 0,
+            "last_activity": None,
+            "actors": 0,
+        }
+        for name in KNOWN_BACKENDS
+    }
+
+    try:
+        init_db()
+        with db.connect() as conn:
+            rows = conn.execute(
+                db.ph(
+                    "SELECT COALESCE(backend, ?) AS b, op, "
+                    "COUNT(*), "
+                    "SUM(CASE WHEN op = 'search' AND COALESCE(result_count, 0) = 0 "
+                    "THEN 1 ELSE 0 END), "
+                    "MAX(ts), COUNT(DISTINCT actor) "
+                    "FROM memory_events "
+                    "WHERE ts > datetime('now', ?) "
+                    "GROUP BY b, op"
+                ),
+                (_LEGACY_BACKEND, f"-{int(days)} days"),
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — a KPI panel must not break on a bad DB
+        logger.warning("memory_service.backend_stats_failed", error=str(exc))
+        return empty
+
+    for backend, op, count, empty_count, last_ts, actors in rows:
+        slot = empty.setdefault(
+            backend,
+            {
+                "searches": 0,
+                "empty_searches": 0,
+                "stores": 0,
+                "reads": 0,
+                "last_activity": None,
+                "actors": 0,
+            },
+        )
+        if op == "search":
+            slot["searches"] = int(count or 0)
+            slot["empty_searches"] = int(empty_count or 0)
+        elif op == "store":
+            slot["stores"] = int(count or 0)
+        elif op == "read":
+            slot["reads"] = int(count or 0)
+        slot["actors"] = max(slot["actors"], int(actors or 0))
+        if last_ts and (slot["last_activity"] is None or str(last_ts) > slot["last_activity"]):
+            slot["last_activity"] = str(last_ts)
+
+    return empty

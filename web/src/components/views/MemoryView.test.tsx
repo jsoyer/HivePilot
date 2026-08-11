@@ -130,7 +130,7 @@ afterEach(() => {
 })
 
 describe('MemoryView — tabs', () => {
-  it('renders exactly three tabs: Quality, Growth, Search', async () => {
+  it('renders four tabs, Sources first', async () => {
     await act(async () => {
       mount()
       await Promise.resolve()
@@ -138,7 +138,10 @@ describe('MemoryView — tabs', () => {
     })
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(['Quality', 'Growth', 'Search'])
+    // Sources leads: Quality and Growth describe the CORPUS, Sources
+    // describes the RETRIEVAL — which backend answered, how often it came
+    // back with nothing, and whether it sends work off the host.
+    expect(tabs).toEqual(['Sources', 'Quality', 'Growth', 'Search'])
   })
 
   it('defaults to the Quality tab, rendering MemoryQualityView content', async () => {

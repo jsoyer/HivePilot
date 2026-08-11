@@ -455,3 +455,67 @@ class TestMemoryGrowthEndpoint:
         resp = api_client.get("/v1/memory/growth", headers=_auth(raw))
         assert resp.status_code == 200
         assert resp.json()["total"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Per-backend memory KPIs
+# ---------------------------------------------------------------------------
+
+
+def _auth_hdr(raw: str) -> dict:
+    return {"Authorization": f"Bearer {raw}"}
+
+
+def test_memory_backends_reports_both_even_when_idle(tmp_path, monkeypatch):
+    """A backend rendered as ABSENT reads as 'not applicable'.
+
+    Rendered as zero it reads as 'measured and idle'. Only one of those is
+    true, and getting it wrong is how Obsidian looked useless while it was
+    simply uninstrumented.
+    """
+    monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+    from fastapi.testclient import TestClient
+
+    from hivepilot.config import settings
+    from hivepilot.services import api_service
+    from hivepilot.services.token_service import add_token
+
+    monkeypatch.setattr(settings, "tokens_file", tmp_path / "tokens.json")
+    raw, _ = add_token("read")
+
+    resp = TestClient(api_service.app).get("/v1/memory/backends", headers=_auth_hdr(raw))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body["backends"]) >= {"mem0", "obsidian"}
+    assert body["backends"]["obsidian"]["searches"] == 0
+
+
+def test_memory_backends_requires_a_token():
+    from fastapi.testclient import TestClient
+
+    from hivepilot.services import api_service
+
+    assert TestClient(api_service.app).get("/v1/memory/backends").status_code == 401
+
+
+def test_memory_backends_surfaces_empty_recalls(tmp_path, monkeypatch):
+    """The comparable KPI: a full top-k is the CAP, not a quality signal."""
+    monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+    from fastapi.testclient import TestClient
+
+    from hivepilot.config import settings
+    from hivepilot.services import api_service, memory_service
+    from hivepilot.services.token_service import add_token
+
+    monkeypatch.setattr(settings, "tokens_file", tmp_path / "tokens.json")
+    for count in (5, 0, 0):
+        memory_service.record_search(
+            namespace="p:t:r", query="q", result_count=count, actor="cto", backend="mem0"
+        )
+    raw, _ = add_token("read")
+
+    body = TestClient(api_service.app).get("/v1/memory/backends", headers=_auth_hdr(raw)).json()
+
+    assert body["backends"]["mem0"]["searches"] == 3
+    assert body["backends"]["mem0"]["empty_searches"] == 2
