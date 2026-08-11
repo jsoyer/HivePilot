@@ -19,6 +19,7 @@ the cut DECLARED in the text the agent sees.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -225,3 +226,63 @@ def test_oversized_file_declares_the_cut_to_the_agent(corrections_dir: Path):
 
     assert len(text) < 10_000
     assert "NOT delivered" in text
+
+
+# ---------------------------------------------------------------------------
+# Writing -- the agent records its own correction (operator's choice 1B)
+# ---------------------------------------------------------------------------
+
+
+class TestAppendCorrection:
+    """The agent commits its own corrections directly, by operator decision.
+
+    There is no review step, so the safeguards ARE the design: a bound that
+    refuses rather than truncates, a commit touching one file, and an entry
+    dated so the promote-or-delete rule is mechanical rather than a memory
+    exercise.
+    """
+
+    def test_appends_a_dated_entry(self, corrections_dir: Path):
+        cs.append_correction("cto", "Cite the file path for every claim.", commit=False)
+
+        text = (corrections_dir / "cto.md").read_text()
+        assert "Cite the file path for every claim." in text
+        # Dated: promote-or-delete needs an age, not a vibe.
+        assert re.search(r"\d{4}-\d{2}-\d{2}", text)
+
+    def test_refuses_rather_than_truncates_at_the_cap(self, corrections_dir: Path):
+        """Truncating a correction on WRITE would store half a rule forever.
+
+        On read, truncation is a last-resort safety net and it declares
+        itself. On write there is someone who can be told no.
+        """
+        (corrections_dir / "cto.md").write_text("x" * (cs._MAX_CORRECTION_CHARS - 20))
+
+        with pytest.raises(cs.CorrectionTooLarge):
+            cs.append_correction("cto", "a rule that will not fit", commit=False)
+
+        assert "a rule that will not fit" not in (corrections_dir / "cto.md").read_text()
+
+    def test_rejects_an_unsafe_role_name(self, corrections_dir: Path):
+        for bad in ("../../etc/passwd", "a/b", "", "  "):
+            with pytest.raises(ValueError):
+                cs.append_correction(bad, "text", commit=False)
+
+    def test_rejects_empty_text(self, corrections_dir: Path):
+        with pytest.raises(ValueError):
+            cs.append_correction("cto", "   ", commit=False)
+
+    def test_redacts_a_registered_secret(self, corrections_dir: Path):
+        from hivepilot.services.config_provenance import register_secret_value
+
+        register_secret_value("sk-live-appendtest-98765")
+        cs.append_correction("cto", "the token sk-live-appendtest-98765 broke it", commit=False)
+
+        assert "sk-live-appendtest-98765" not in (corrections_dir / "cto.md").read_text()
+
+    def test_new_file_gets_the_promote_or_delete_rule(self, corrections_dir: Path):
+        """The rule has to live where the file is read, not only in a README."""
+        cs.append_correction("newrole", "something", commit=False)
+
+        text = (corrections_dir / "newrole.md").read_text().lower()
+        assert "promote" in text and "delete" in text

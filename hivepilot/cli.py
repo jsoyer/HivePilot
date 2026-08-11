@@ -38,7 +38,9 @@ app.add_typer(schedule_app, name="schedule")
 tokens_app = typer.Typer(help="Manage API tokens")
 app.add_typer(tokens_app, name="tokens")
 config_app = typer.Typer(help="Config repo sync")
+corrections_app = typer.Typer(help="Standing corrections injected into a role's prompts")
 app.add_typer(config_app, name="config")
+app.add_typer(corrections_app, name="corrections")
 project_app = typer.Typer(help="Manage projects.yaml entries")
 app.add_typer(project_app, name="project")
 task_app = typer.Typer(help="Manage tasks.yaml entries")
@@ -1200,6 +1202,54 @@ def tokens_remove(
         typer.echo("Token removed.")
     else:
         typer.echo("Token not found.")
+
+
+@corrections_app.command("add")
+def corrections_add(
+    role: str = typer.Option(..., "--role", "-r", help="Role key, e.g. cto"),
+    text: str = typer.Option(..., "--text", "-t", help="The correction, one rule"),
+    author: str = typer.Option("agent", "--author", help="Who is recording it"),
+    no_commit: bool = typer.Option(False, "--no-commit", help="Write without committing"),
+) -> None:
+    """Record one standing correction for a role.
+
+    Committed directly and unreviewed, by operator decision. The entry is
+    dated and the file is bounded: past the cap this REFUSES rather than
+    truncating, because half a rule stored forever is worse than a rejected
+    write.
+    """
+    from hivepilot.services import corrections_service
+
+    try:
+        path = corrections_service.append_correction(
+            role, text, commit=not no_commit, author=author
+        )
+    except corrections_service.CorrectionTooLarge as exc:
+        typer.echo(f"Refused: {exc}", err=True)
+        raise typer.Exit(2)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Recorded for '{role}' in {path}")
+
+
+@corrections_app.command("show")
+def corrections_show(
+    role: str = typer.Argument(..., help="Role key"),
+) -> None:
+    """Print exactly what this role receives, cap applied.
+
+    Reads through the same path the runner does, so what is printed is what
+    the agent gets -- not what the file on disk happens to contain.
+    """
+    from hivepilot.services import corrections_service
+
+    text = corrections_service.load_corrections(role)
+    if not text:
+        typer.echo(f"No corrections for '{role}'.")
+        return
+    typer.echo(text)
+    typer.echo(f"\n({len(text)} chars of {corrections_service._MAX_CORRECTION_CHARS})")
 
 
 @config_app.command("sync")
