@@ -6797,6 +6797,10 @@ class Orchestrator:
                         or effective_debate.review_target == "github_pr"
                     ),
                     confidence_threshold=effective_debate.confidence_threshold,
+                    # The PIPELINE run id: every stage's full output is
+                    # recorded against it, which is where a blocked gate finds
+                    # the reasoning it has to put on the PR.
+                    run_id=run_id,
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)

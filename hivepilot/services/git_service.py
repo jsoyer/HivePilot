@@ -392,6 +392,7 @@ def perform_git_actions(
     verdict: "Verdict | None" = None,
     judge_gate_enabled: bool = False,
     confidence_threshold: float = 0.0,
+    run_id: int | None = None,
 ) -> None:
     """Perform the configured git actions for a completed task/stage.
 
@@ -434,6 +435,20 @@ def perform_git_actions(
     blocked = _agent_verdict_blocked(task_result)
     if judge_gate_enabled:
         blocked = blocked or is_blocking(verdict, confidence_threshold)
+    if blocked:
+        # The gate has refused to promote. Say WHY, on the PR, where the person
+        # who has to act will look -- see post_blocked_report for what the
+        # silence cost.
+        post_blocked_report(
+            forge=resolve_forge(project),
+            project=project,
+            branch=branch,
+            run_id=run_id,
+            # per_role_stance is role -> stance straight from the judge; the
+            # free-text summary is the fallback when the judge did not supply
+            # one. Both are parsed the same way downstream.
+            verdict_summary=_verdict_role_summary(verdict, task_result),
+        )
     if git.promote_pr:
         if blocked:
             logger.warning("git.promote_skipped_blocked", project=project_name, branch=branch)
@@ -677,3 +692,70 @@ def merge_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
     the actionable autonomous step in a solo workflow is the merge itself.
     """
     resolve_forge(project).merge_pr(project=project, branch=branch, git=git)
+
+
+def _verdict_role_summary(verdict: "Verdict | None", task_result: str | None) -> str | None:
+    """`role: STATUS` pairs for the report, from the judge or the stage output.
+
+    Prefers the judge's structured `per_role_stance` and falls back to the
+    stage's own `status:` line, so a run with no judge still explains itself.
+    """
+    stance = getattr(verdict, "per_role_stance", None) if verdict is not None else None
+    if isinstance(stance, dict) and stance:
+        return "; ".join(f"{role}: {value}" for role, value in stance.items())
+    if not task_result:
+        return None
+    from hivepilot.services.agent_report import parse_agent_report
+
+    status = parse_agent_report(task_result).status.strip().upper()
+    return f"stage: {status}" if status else None
+
+
+def post_blocked_report(
+    *,
+    forge: Any,
+    project: Any,
+    branch: str,
+    run_id: int | None,
+    verdict_summary: str | None,
+    post: Any = None,
+) -> str | None:
+    """Put the gate's reasoning on the pull request when it blocks.
+
+    `create_pr` already runs on a blocked gate specifically "so a human can see
+    the review report on the PR itself" -- but nothing ever wrote one. Measured
+    on PR #428: 0 reviews, 0 comments, and a 43-character body, while the
+    reviewer, CISO and QA had produced 31 KB of findings between them.
+
+    Returns the posted body, or ``None`` when nothing blocked. Never raises:
+    a comment that cannot be delivered must not take down the git actions that
+    matter, and the gate has already done its job by refusing to promote.
+    """
+    if run_id is None:
+        return None
+
+    from hivepilot.services import pr_verdict_report
+
+    try:
+        body = pr_verdict_report.build_report(run_id=run_id, verdict_summary=verdict_summary)
+    except Exception as exc:  # noqa: BLE001 - reporting must not break the run
+        logger.warning("git.blocked_report_failed", branch=branch, error=str(exc))
+        return None
+
+    if not body:
+        return None
+
+    sink = post
+    if sink is None:
+        if forge is None:
+            return None
+
+        def sink(text: str) -> None:  # type: ignore[misc]
+            forge.comment_pr(project=project, branch=branch, body=text)
+
+    try:
+        sink(body)
+        logger.info("git.blocked_report_posted", branch=branch, run_id=run_id, chars=len(body))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("git.blocked_report_post_failed", branch=branch, error=str(exc))
+    return body
