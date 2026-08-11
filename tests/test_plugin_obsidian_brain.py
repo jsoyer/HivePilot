@@ -320,3 +320,131 @@ class TestStoreAppendsRunEntry:
             obsidian_module.store(payload=payload, role="developer", output="x")
 
         assert mock_logger.warning.called
+
+
+# ---------------------------------------------------------------------------
+# Corpus selection -- the scan cap decided WHICH notes exist, not just how many
+# ---------------------------------------------------------------------------
+
+
+class TestRecallReachesRecentNotes:
+    """Measured on the production vault: 2035 notes against a 500 cap, sorted
+    alphabetically. The 500 scanned were 24 Inbox + 476 Journal notes; the
+    agent artifacts start at index 1796 and were NEVER read.
+
+    So recall searched a corpus that structurally excluded every note the
+    agents themselves had written -- and returned May journal entries for an
+    August review step. A relevance heuristic cannot fix a corpus that does
+    not contain the answer.
+    """
+
+    def _vault(self, tmp_path, count=40):
+        import os
+        import time
+
+        vault = tmp_path / "vault"
+        # Alphabetically FIRST and oldest: the decoys.
+        (vault / "00 - Inbox").mkdir(parents=True)
+        for i in range(count):
+            note = vault / "00 - Inbox" / f"old-{i:03d}.md"
+            note.write_text(f"# Old note {i}\ncto review of something ancient\n")
+            os.utime(note, (1_000_000, 1_000_000))
+        # Alphabetically LAST and newest: what recall should actually find.
+        (vault / "13 - Artifacts" / "cto").mkdir(parents=True)
+        recent = vault / "13 - Artifacts" / "cto" / "2026-08-09-run425-cto-review.md"
+        recent.write_text(
+            "---\nrole: cto\nstage: cto review\nrun_id: 425\n---\n"
+            "The execution_plan and product_spec are empty; status BLOCKED.\n"
+        )
+        os.utime(recent, (time.time(), time.time()))
+        return vault, recent
+
+    def test_newest_note_survives_the_scan_cap(self, tmp_path, monkeypatch, obsidian_module):
+        obsidian = obsidian_module
+        vault, recent = self._vault(tmp_path)
+        monkeypatch.setattr(obsidian, "_MAX_NOTES_SCANNED", 10)
+
+        hits = obsidian._search_vault(vault, ["cto review", "cto"])
+
+        assert any(p == recent for p, _ in hits), (
+            "the newest note must be reachable; an alphabetical cap made the "
+            "agents' own artifacts invisible in production"
+        )
+
+    def test_frontmatter_role_outranks_a_generic_term_match(self, tmp_path, obsidian_module):
+        obsidian = obsidian_module
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        # Mentions the term far more often, but is not this role's work.
+        noise = vault / "plan.md"
+        noise.write_text("# Plan\n" + "cto cto cto cto cto cto cto cto\n" * 6)
+        owned = vault / "review.md"
+        owned.write_text("---\nrole: cto\n---\nstatus BLOCKED, spec empty\n")
+
+        hits = obsidian._search_vault(vault, ["cto"], role="cto")
+
+        assert hits[0][0] == owned, "a frontmatter role match is scoping, not a keyword hit"
+
+    def test_no_frontmatter_still_works(self, tmp_path, obsidian_module):
+        """Vaults without agent-written frontmatter must behave as before."""
+        obsidian = obsidian_module
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "n.md").write_text("# Note\nsome cto content here\n")
+
+        assert obsidian._search_vault(vault, ["cto"], role="cto")
+
+
+class TestExcerptSkipsFrontmatter:
+    """Scoping by frontmatter made the frontmatter the top keyword match.
+
+    Once notes carried `role: cto`, the first line containing "cto" WAS that
+    line -- so recall injected five copies of `role: cto` and none of the
+    review. Right notes, empty payload: the fix for one layer created the
+    defect in the next.
+    """
+
+    def test_excerpt_comes_from_the_body(self, tmp_path, obsidian_module):
+        obsidian = obsidian_module
+        note = tmp_path / "n.md"
+        note.write_text(
+            "---\nrole: cto\nstage: cto review\nrun_id: 425\n---\n"
+            "The execution_plan and product_spec are empty; status BLOCKED.\n"
+        )
+
+        excerpt = obsidian._first_matching_excerpt(note.read_text(), ["cto"])
+
+        assert "role:" not in excerpt
+        assert "BLOCKED" in excerpt
+
+    def test_frontmatter_only_note_yields_nothing_useful_not_a_crash(
+        self, tmp_path, obsidian_module
+    ):
+        obsidian = obsidian_module
+        excerpt = obsidian._first_matching_excerpt("---\nrole: cto\n---\n", ["cto"])
+
+        assert "role:" not in excerpt
+
+
+def test_recent_note_wins_a_score_tie(tmp_path, obsidian_module):
+    """Among a role's own notes, ranking by term count favours the longest.
+
+    Measured after the scoping fix: the CTO step got three notes from 26 July
+    ahead of the run from 8 August, because the older ones were wordier. For a
+    memory, "what happened last" beats "what said it most".
+    """
+    import os
+
+    obsidian = obsidian_module
+    vault = tmp_path / "v"
+    vault.mkdir()
+    old = vault / "old.md"
+    old.write_text("---\nrole: cto\n---\n" + "cto review said things. " * 40)
+    os.utime(old, (1_000_000, 1_000_000))
+    new = vault / "new.md"
+    new.write_text("---\nrole: cto\n---\ncto review: status BLOCKED\n")
+    os.utime(new, (2_000_000_000, 2_000_000_000))
+
+    hits = obsidian._search_vault(vault, ["cto review", "cto"], role="cto")
+
+    assert hits[0][0] == new, "the newest of a role's own notes must come first"

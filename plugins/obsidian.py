@@ -319,6 +319,7 @@ _SECRET_REF_RE = re.compile(r"\$\{secret:([A-Za-z0-9_.\-]+)\}")
 # cheap and the injected block small, both enforced regardless of how many
 # notes actually match.
 _MAX_NOTES_SCANNED = 500
+
 _MAX_RESULTS = 5
 _EXCERPT_CHARS = 400
 
@@ -334,9 +335,28 @@ def _strip_secret_refs(text: str) -> str:
     return _SECRET_REF_RE.sub("[secret-ref-omitted]", text)
 
 
+def _strip_frontmatter(text: str) -> str:
+    """Return *text* without a leading YAML frontmatter block.
+
+    Excerpting has to happen on the body. Once notes carried `role: cto`,
+    that line became the first line containing the query term, so recall
+    injected five copies of `role: cto` and none of the actual review --
+    the scoping fix created the defect one layer down.
+    """
+    if not text.startswith("---"):
+        return text
+    parts = text.split("\n")
+    for index in range(1, min(len(parts), 40)):
+        if parts[index].strip() == "---":
+            return "\n".join(parts[index + 1 :])
+    return text
+
+
 def _first_matching_excerpt(text: str, terms: list[str]) -> str:
-    """Return the first line of *text* containing any (lowercased) *terms*,
-    else the note's first non-empty line. Capped to `_EXCERPT_CHARS`."""
+    """Return the first BODY line of *text* containing any (lowercased)
+    *terms*, else the body's first non-empty line. Capped to
+    `_EXCERPT_CHARS`."""
+    text = _strip_frontmatter(text)
     for line in text.splitlines():
         lower = line.lower()
         if any(term in lower for term in terms):
@@ -355,26 +375,74 @@ def _first_matching_excerpt(text: str, terms: list[str]) -> str:
 _MAX_NOTE_READ_BYTES = 64 * 1024
 
 
-def _search_vault(vault: Path, query_terms: list[str]) -> list[tuple[Path, str]]:
-    """Simple ranked grep over the vault's `.md` notes for *query_terms*.
+def _safe_mtime(note: Path) -> float:
+    """Modification time, or 0.0 for a note that vanished mid-scan."""
+    try:
+        return note.stat().st_mtime
+    except OSError:
+        return 0.0
 
-    v1 relevance heuristic: filename matches are weighted higher (x3) than
-    body matches; body score is the raw occurrence count of each
-    (lowercased) term. Notes that fail to read (permission error, non-UTF8
-    binary blob, etc.) are skipped, never raised. Scans at most
-    `_MAX_NOTES_SCANNED` notes and returns at most `_MAX_RESULTS`
-    `(path, excerpt)` pairs, highest score first.
+
+def _note_role(text: str) -> str | None:
+    """Read `role:` out of a note's YAML frontmatter, if it has one.
+
+    Deliberately a 5-line scan rather than a YAML parse: the frontmatter is
+    the only structure this needs, it is always at the top, and a malformed
+    note must degrade to "no role" instead of raising inside a recall hook.
+
+    This is the generic contract -- `role:`/`stage:` in frontmatter -- not a
+    directory convention. A tenant's folder layout (`13 - Artifacts/...`)
+    belongs to that tenant's vault, never to the engine.
+    """
+    if not text.startswith("---"):
+        return None
+    for line in text.split("\n", 12)[1:12]:
+        if line.strip() == "---":
+            break
+        if line.lower().startswith("role:"):
+            return line.split(":", 1)[1].strip().lower() or None
+    return None
+
+
+def _search_vault(
+    vault: Path, query_terms: list[str], role: str | None = None
+) -> list[tuple[Path, str]]:
+    """Ranked search over the vault's `.md` notes for *query_terms*.
+
+    **Candidates are taken newest-first, not alphabetically.** That ordering
+    is the whole fix: on the production vault this scanned
+    `sorted(rglob("*.md"))[:500]` over 2035 notes, so the 500 it read were 24
+    Inbox notes and 476 Journal notes, and the agent-written artifacts --
+    starting at index 1796 -- were never opened at all. Recall answered an
+    August review step with May journal entries because the corpus it searched
+    structurally excluded every note the agents had produced. No relevance
+    heuristic can rescue a corpus that does not contain the answer.
+
+    When *role* is given, notes whose frontmatter declares that same role are
+    scoped in ahead of everything else. That is what makes this comparable to
+    a keyed memory store: a `cto` step should read the CTO's prior work, not
+    whichever note happens to contain the string "cto" most often.
+
+    Filename matches still weigh x3 over body matches. Notes that fail to read
+    are skipped, never raised. At most `_MAX_NOTES_SCANNED` notes are read and
+    at most `_MAX_RESULTS` `(path, excerpt)` pairs come back, best first.
     """
     terms = [t.lower() for t in query_terms if t]
     if not terms:
         return []
 
     try:
-        candidates = sorted(vault.rglob("*.md"))[:_MAX_NOTES_SCANNED]
+        # Newest first. `st_mtime` is one stat() per note, far cheaper than
+        # reading them, and it is what keeps the cap from selecting by name.
+        candidates = sorted(vault.rglob("*.md"), key=lambda n: _safe_mtime(n), reverse=True)[
+            :_MAX_NOTES_SCANNED
+        ]
     except OSError:
         return []
 
-    scored: list[tuple[int, Path, str]] = []
+    # (role_match, score, mtime) -- see the sort below for why these are kept
+    # apart instead of folded into one number.
+    scored: list[tuple[int, int, float, Path, str]] = []
     for note in candidates:
         try:
             # Bounded read (see _MAX_NOTE_READ_BYTES): only pull enough of the
@@ -387,12 +455,27 @@ def _search_vault(vault: Path, query_terms: list[str]) -> list[tuple[Path, str]]
         text_lower = text.lower()
         score = sum(3 for term in terms if term in name_lower)
         score += sum(text_lower.count(term) for term in terms)
-        if score <= 0:
+        role_match = 1 if role and _note_role(text) == role.lower() else 0
+        if score <= 0 and not role_match:
             continue
-        scored.append((score, note, _first_matching_excerpt(text, terms)))
+        scored.append(
+            (role_match, score, _safe_mtime(note), note, _first_matching_excerpt(text, terms))
+        )
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [(path, excerpt) for _, path, excerpt in scored[:_MAX_RESULTS]]
+    # Three separate keys, in this order, on purpose:
+    #
+    # 1. `role_match` is SCOPING. A note carrying `role: cto` is the CTO's own
+    #    prior work; a note that merely says "cto" a lot is not. No amount of
+    #    term frequency should promote the second above the first.
+    # 2. `mtime` ranks within that scope. Term frequency here favours the
+    #    WORDIEST note, and measured on the real vault that put three chatty
+    #    reviews from 26 July ahead of the actual last run on 8 August. For a
+    #    memory, what happened last beats what said it most.
+    # 3. `score` only orders what is left -- notes with no role frontmatter at
+    #    all, where a keyword count is the only signal available.
+    scored.sort(key=lambda item: (item[0], item[2], item[1]) if item[0] else (0, 0, item[1]))
+    scored.reverse()
+    return [(path, excerpt) for _, _, _, path, excerpt in scored[:_MAX_RESULTS]]
 
 
 def recall(**kwargs: Any) -> None:
@@ -442,7 +525,7 @@ def recall(**kwargs: Any) -> None:
         task_name = getattr(payload, "task_name", None) or ""
         terms = [term for term in (task_name, role, step_name) if term]
 
-        results = _search_vault(vault, terms)
+        results = _search_vault(vault, terms, role=role)
         # Mark this metadata dict as recalled-for regardless of outcome —
         # the scan already ran; a later step's before_step call must not
         # re-scan.
