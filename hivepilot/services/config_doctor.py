@@ -2353,6 +2353,7 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
         findings.extend(_run_check("state_db_liveness", doctor_liveness.check_state_db_liveness))
         findings.extend(_run_check("vault_liveness", doctor_liveness.check_vault_liveness))
         findings.extend(_run_check("cache_amortisation", doctor_liveness.check_cache_amortisation))
+        findings.extend(_run_check("lessons_learn", doctor_liveness.check_lessons_learn))
         findings.extend(
             _run_check(
                 "registered_hooks",

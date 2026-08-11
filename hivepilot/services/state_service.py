@@ -782,6 +782,37 @@ def get_steps_for_run(run_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def interaction_role(interaction_id: int | None) -> str | None:
+    """Return the role KEY an interaction was recorded under, or ``None``.
+
+    `interactions.actor` holds a human-facing label ("Hugo (CISO)") built from
+    a role's display name and title. Parsing it back would bake a tenant's
+    persona naming into the engine, so the machine key travels in `metadata`
+    instead, alongside `pipeline`/`stage_index`.
+
+    Returns ``None`` for a missing row, absent metadata, unparseable JSON, or
+    a row written before the key existed -- attribution is a nice-to-have on
+    a diagnostic path and must never raise into a run.
+    """
+    if not interaction_id:
+        return None
+    try:
+        with db.connect() as conn:
+            row = conn.execute(
+                db.ph("SELECT metadata FROM interactions WHERE id = ?"), (interaction_id,)
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if not row or not row[0]:
+        return None
+    try:
+        meta = json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+    role = meta.get("role") if isinstance(meta, dict) else None
+    return role.strip() if isinstance(role, str) and role.strip() else None
+
+
 def record_interaction(
     actor: str,
     action: str,

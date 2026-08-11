@@ -556,3 +556,68 @@ class TestOrchestratorWiringGating:
 
         assert len(results) == 1
         assert results[0].success is True
+
+
+# ---------------------------------------------------------------------------
+# Attribution
+# ---------------------------------------------------------------------------
+
+
+class TestLessonRoleAttribution:
+    """263 of 268 production lessons carried no role.
+
+    The pipeline path distills one batch for a run that spans many roles, so
+    it passed `role=None` for all of them -- defensible per batch, useless per
+    lesson. A lesson nobody can attribute can never be replayed to the role
+    that needs it, which is most of why the loop writes without learning.
+
+    Each lesson cites the interaction it came from, and each interaction
+    belongs to a stage that has a role. Attribution is per lesson, from its
+    own source, falling back to the batch role.
+    """
+
+    def test_interaction_metadata_carries_the_role_key(self, tmp_path, monkeypatch):
+        """`actor` is a display label ("Hugo (CISO)"); the KEY goes in metadata.
+
+        Parsing the label back would bake a tenant's persona naming into the
+        engine. The role key is available where the label is built and was
+        simply discarded.
+        """
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import state_service
+
+        iid = state_service.record_interaction(
+            actor="Hugo (CISO)",
+            action="completed stage",
+            target=None,
+            summary="did a thing",
+            metadata={"pipeline": "analysis", "stage_index": 3, "role": "ciso"},
+        )
+
+        assert state_service.interaction_role(iid) == "ciso"
+
+    def test_missing_metadata_role_is_none_not_a_crash(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import state_service
+
+        iid = state_service.record_interaction(
+            actor="x", action="a", target=None, summary="s", metadata={"pipeline": "p"}
+        )
+
+        assert state_service.interaction_role(iid) is None
+        assert state_service.interaction_role(999_999) is None
+
+    def test_unparseable_metadata_is_none_not_a_crash(self, tmp_path, monkeypatch):
+        """Old rows predate the key and some carry no metadata at all."""
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import db, state_service
+
+        iid = state_service.record_interaction(
+            actor="x", action="a", target=None, summary="s", metadata=None
+        )
+        with db.connect() as conn:
+            conn.execute(
+                db.ph("UPDATE interactions SET metadata = ? WHERE id = ?"), ("not json{", iid)
+            )
+
+        assert state_service.interaction_role(iid) is None

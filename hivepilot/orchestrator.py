@@ -2784,10 +2784,17 @@ class Orchestrator:
             result=result, verdicts=verdicts, interactions=interactions
         )
         for lesson in lessons:
+            # Attribute per LESSON, not per batch. A pipeline run spans many
+            # roles, so the batch-level `role` is None for all of them --
+            # defensible per batch, useless per lesson, and the reason 263 of
+            # 268 production lessons could never be replayed to anyone. Each
+            # lesson cites the interaction it came from, and that interaction
+            # knows its stage's role.
+            lesson_role = state_service.interaction_role(lesson.source_interaction_id) or role
             lesson_id = state_service.record_lesson(
                 run_id=run_id,
                 project=project.path.name,
-                role=role,
+                role=lesson_role,
                 task=task_name,
                 source_verdict_id=lesson.source_verdict_id,
                 source_interaction_id=lesson.source_interaction_id,
@@ -2877,6 +2884,17 @@ class Orchestrator:
                 max(genuine_accept_confidences) if genuine_accept_confidences else None
             ),
         )
+
+    def _stage_role(self, stage: PipelineStage) -> str | None:
+        """The role KEY behind a stage, or ``None``.
+
+        `_agent_name` below resolves exactly this to build its display label
+        and then discards it. Keeping the key is what lets a lesson be
+        attributed later: `actor` is a persona name that belongs to the
+        tenant, while the key is the engine's own identifier.
+        """
+        task = self.tasks.tasks.get(stage.task)
+        return task.role if task and task.role else None
 
     def _agent_name(self, stage: PipelineStage) -> str:
         """Human-facing agent name for a stage (FR theme), falling back to stage name."""
@@ -4364,7 +4382,14 @@ class Orchestrator:
                     summary=stage_output,
                     timestamp=datetime.now(tz=timezone.utc).isoformat(),
                     run_id=run_id,
-                    metadata={"pipeline": pipeline_name, "stage_index": stage_idx},
+                    metadata={
+                        "pipeline": pipeline_name,
+                        "stage_index": stage_idx,
+                        # The machine key beside the display label in `actor`.
+                        # Without it a lesson distilled from this interaction
+                        # cannot be attributed, and 263 of 268 were not.
+                        "role": self._stage_role(stage),
+                    },
                 )
             )
             notification_service.stream_agent_turn(
