@@ -37,6 +37,7 @@ as soon as it is saved.
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 import structlog
@@ -158,3 +159,153 @@ def load_corrections(role_key: str | None) -> str:
     body = "\n\n".join(blocks)
     logger.info("corrections.applied", role=role_key, chars=len(body))
     return f"{_HEADER}\n\n{body}"
+
+
+# ---------------------------------------------------------------------------
+# Writing
+# ---------------------------------------------------------------------------
+
+#: Header written into a corrections file the first time one is created.
+#: The promote-or-delete rule lives HERE, not only in a README, because this
+#: is the file someone actually opens when it has grown too long.
+_FILE_PREAMBLE = (
+    "# Standing corrections\n\n"
+    "One rule per entry, newest last. These are injected verbatim into every\n"
+    "call this role makes, so they are billed on each one.\n\n"
+    "**Promote or delete.** A correction that has held for a while belongs in\n"
+    "the role's prompt, not here; one that stopped being true should be\n"
+    "deleted. Nothing in this file is meant to live forever -- the size cap\n"
+    "exists so that pruning happens on a schedule rather than never.\n"
+)
+
+
+class CorrectionTooLarge(RuntimeError):
+    """Appending would push the file past `_MAX_CORRECTION_CHARS`.
+
+    Raised instead of truncating. On READ, truncation is a last-resort safety
+    net and it declares the cut in the text the agent sees. On WRITE there is
+    a caller who can be told no, and half a rule stored forever is worse than
+    a refused write.
+    """
+
+
+def _write_path(role_key: str) -> Path:
+    """Where a correction is WRITTEN.
+
+    With a config repo configured this is the clone, so the entry can be
+    committed and reaches every host. Without one it falls back to wherever
+    the read chain resolves, so a local-only deployment can still record a
+    correction instead of writing it somewhere nothing will ever read.
+
+    A write has exactly one destination either way -- picking the read chain
+    unconditionally would let an entry land on an XDG copy that is never
+    committed and silently diverges.
+    """
+    if settings.config_repo:
+        from hivepilot.services import config_service
+
+        return config_service._config_dir() / "prompts" / "corrections" / f"{role_key}.md"
+    return _corrections_path(role_key)
+
+
+def append_correction(
+    role_key: str,
+    text: str,
+    *,
+    commit: bool = True,
+    author: str = "agent",
+) -> Path:
+    """Append one dated correction for *role_key* and (by default) commit it.
+
+    The operator chose to let the agent write these directly rather than
+    propose them for review, so the safeguards replace that review:
+
+    - the entry is DATED, so promote-or-delete is mechanical;
+    - the file is bounded and this REFUSES rather than truncates;
+    - the commit touches exactly one path (the config-repo clone routinely
+      has unrelated dirt in it, and `config_service.push` would sweep it up
+      with `git add -A`);
+    - the text is redacted, because a correction is often written straight
+      out of an error message.
+
+    Returns the written path. Raises `ValueError` for an unusable role or
+    empty text, and `CorrectionTooLarge` when the bound would be exceeded.
+    """
+    role_key = (role_key or "").strip()
+    if not role_key or not _ROLE_RE.match(role_key):
+        raise ValueError(f"unusable role key for a corrections file: {role_key!r}")
+
+    from hivepilot.services.config_provenance import redact_text
+
+    body = redact_text((text or "").strip())
+    if not body:
+        raise ValueError("refusing to record an empty correction")
+
+    path = _write_path(role_key)
+    existing = ""
+    if path.exists():
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(f"cannot read {path}: {exc}") from exc
+    else:
+        existing = _FILE_PREAMBLE
+
+    entry = f"\n- {date.today().isoformat()} ({author}) {body}\n"
+    updated = existing.rstrip("\n") + "\n" + entry
+
+    if len(updated) > _MAX_CORRECTION_CHARS:
+        raise CorrectionTooLarge(
+            f"{path.name} would reach {len(updated)} chars, over the "
+            f"{_MAX_CORRECTION_CHARS} cap. Promote a standing rule into the role "
+            f"prompt or delete one that no longer holds, then retry."
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+    logger.info(
+        "corrections.appended",
+        role=role_key,
+        author=author,
+        chars=len(updated),
+        path=str(path),
+    )
+
+    if commit and settings.config_repo:
+        _commit_one(path, role_key, body)
+    return path
+
+
+def _commit_one(path: Path, role_key: str, body: str) -> None:
+    """Commit and push exactly *path*.
+
+    Deliberately narrow. An agent-initiated commit that nobody reviews must
+    not carry anything the author did not intend, and the clone is routinely
+    dirty with untracked run output.
+    """
+    from git import GitCommandError, Repo
+
+    from hivepilot.services import config_service
+
+    try:
+        repo = Repo(config_service._config_dir())
+    except Exception as exc:  # noqa: BLE001 - git layout problems are not fatal here
+        logger.warning("corrections.commit_skipped", error=str(exc))
+        return
+
+    summary = body.splitlines()[0][:60]
+    message = (
+        f"chore(corrections): {role_key} -- {summary}\n\n"
+        "Written by an agent, unreviewed by design (operator decision).\n"
+        "Revert this commit to drop the rule."
+    )
+    try:
+        repo.git.add("--", str(path))
+        repo.git.commit("-m", message)
+        repo.git.push("origin", settings.config_branch)
+        logger.info("corrections.committed", role=role_key)
+    except GitCommandError as exc:
+        # A correction that is on disk but unpushed still applies locally; the
+        # loud failure belongs to whoever runs `config status`, not to the run
+        # that produced the correction.
+        logger.warning("corrections.push_failed", role=role_key, error=str(exc))
