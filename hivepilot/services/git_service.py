@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import subprocess
 import threading
 import uuid
@@ -383,6 +384,69 @@ def _agent_verdict_blocked(task_result: str | None) -> bool:
     return status in _BLOCKING_VERDICTS
 
 
+# Characters git refuses in a ref, plus whitespace. A project name is
+# operator-supplied and lands directly in a branch name.
+_REF_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+#: Forges truncate or reject long titles; cut deliberately instead.
+_MAX_PR_TITLE = 120
+
+
+def build_pr_title(*, branch: str, commit_subjects: list[str]) -> str:
+    """Describe the PR from the commits it actually contains.
+
+    ``HivePilot: pipeline implementation`` told a reviewer nothing. The branch
+    deliberately carries no description -- see `build_branch_name` -- so the
+    title is the only place a human learns what a PR is for. Unlike the branch
+    it is built AFTER the commits exist, so it can be accurate rather than
+    aspirational.
+
+    A PR with several commits says so: titling a three-commit change after one
+    of them hides the other two.
+    """
+    subjects = [s.strip() for s in commit_subjects if s and s.strip()]
+    if not subjects:
+        return f"HivePilot: {branch}"
+
+    title = subjects[0]
+    extra = len(subjects) - 1
+    if extra:
+        title = f"{title} (+{extra} more)"
+    if len(title) > _MAX_PR_TITLE:
+        title = title[: _MAX_PR_TITLE - 1].rstrip() + "…"
+    return title
+
+
+def build_branch_name(*, prefix: str, project_name: str, run_id: int | None) -> str:
+    """``<prefix>/<project>/<run_id>`` -- one branch, and one PR, per run.
+
+    A single perpetual ``<prefix>/<project>`` branch made every review
+    cumulative: a run pushed into the PR an earlier run had opened
+    (``git.pr_already_open``), the body was never refreshed, and the reviewer
+    of the newest run was implicitly reviewing every run before it. One
+    production PR carried three runs from three separate days.
+
+    **No slug.** This name is built before any code exists, so a descriptive
+    part could only restate an intention -- and the objective is not persisted
+    anywhere to restate. A descriptive name that is wrong is worse than a
+    neutral one. The run id is the key to the verdicts, lessons, costs and the
+    blocked-gate report, so a branch resolves to the whole record in one step.
+    The description belongs in the PR title, which is written after the work
+    exists and can be accurate.
+
+    Falls back to the old ``<prefix>/<project>`` when no run is in scope, so
+    callers outside a run keep working rather than inventing an id that
+    resolves to nothing.
+    """
+    safe_project = _REF_UNSAFE.sub("-", project_name)
+    # git rejects a ref containing "..", and the dot itself is legal, so the
+    # character class above lets a traversal through untouched.
+    safe_project = re.sub(r"\.{2,}", ".", safe_project).strip("-.") or "project"
+    base = f"{prefix}/{safe_project}"
+    return f"{base}/{run_id}" if run_id else base
+
+
 def perform_git_actions(
     *,
     project_name: str,
@@ -411,7 +475,7 @@ def perform_git_actions(
     superset of the legacy gate, never a relaxation of it.
     """
     repo = ensure_repo(project.path)
-    branch = f"{git.branch_prefix}/{project_name}"
+    branch = build_branch_name(prefix=git.branch_prefix, project_name=project_name, run_id=run_id)
     if git.commit or git.push:
         checkout_branch(project.path, branch)
         # The agent (e.g. claude) may have already committed its work; only commit
@@ -607,6 +671,36 @@ def pr_urls_since(
     )
 
 
+def _derived_pr_title(*, project: ProjectConfig, branch: str) -> str | None:
+    """Title from the commits this branch adds over its base.
+
+    Best-effort: a title is a nicety and must never stop a PR from opening.
+    Returns ``None`` on any git trouble so the forge falls back to its own
+    default.
+    """
+    base = getattr(project, "default_branch", None) or "main"
+    try:
+        repo = Repo(str(project.path))
+        # `Commit.message` is typed `str | bytes`; normalise before splitting
+        # so a bytes message cannot silently produce bytes subjects.
+        subjects: list[str] = []
+        for commit in repo.iter_commits(f"origin/{base}..{branch}", max_count=20):
+            message = commit.message
+            if isinstance(message, bytes):
+                message = message.decode("utf-8", errors="replace")
+            first_line = message.splitlines()[0].strip() if message.strip() else ""
+            if first_line:
+                subjects.append(first_line)
+    except Exception as exc:  # noqa: BLE001 - never block opening a PR
+        logger.debug("git.pr_title_derive_failed", branch=branch, error=str(exc))
+        return None
+    if not subjects:
+        return None
+    # iter_commits walks newest-first; the oldest commit is the one that
+    # introduced the change, and reads best as the headline.
+    return build_pr_title(branch=branch, commit_subjects=list(reversed(subjects)))
+
+
 def create_pr(
     *, project: ProjectConfig, branch: str, git: GitActions, task_result: str | None = None
 ) -> str | None:
@@ -654,9 +748,16 @@ def create_pr(
         # `body_path` is None when `pr_body_file` was never declared -- leave
         # `git` untouched so every forge's own "no custom body" default stays
         # byte-identical (see resolve_pr_body_file's docstring).
-        effective_git = (
-            git if body_path is None else git.model_copy(update={"pr_body_file": str(body_path)})
-        )
+        updates: dict[str, Any] = {}
+        if body_path is not None:
+            updates["pr_body_file"] = str(body_path)
+        # Only fill a title the operator did not set. An explicit `pr_title`
+        # is a deliberate choice and must win over anything derived here.
+        if not git.pr_title:
+            derived = _derived_pr_title(project=project, branch=branch)
+            if derived:
+                updates["pr_title"] = derived
+        effective_git = git.model_copy(update=updates) if updates else git
         raw_url = resolve_forge(project).open_pr(project=project, branch=branch, git=effective_git)
     _publish_pr_ready_best_effort(project, branch, "opened")
     # A provider written against the PRE-widening `-> None` signature (an
