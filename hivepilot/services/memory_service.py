@@ -94,6 +94,11 @@ def init_db() -> None:
         from hivepilot.services.state_service import _add_column_if_missing
 
         _add_column_if_missing(conn, "memory_events", "backend TEXT")
+        # The run a recall served. Without it the table records THAT a search
+        # happened and never what the step did with it, so "does memory change
+        # the output" cannot be asked of the data -- which makes every choice
+        # between memory backends a preference dressed as a decision.
+        _add_column_if_missing(conn, "memory_events", "run_id INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_memory_events_tenant_ts ON memory_events(tenant, ts)"
         )
@@ -149,6 +154,7 @@ def record_search(
     actor: str | None,
     tenant: str = "default",
     backend: str | None = None,
+    run_id: int | None = None,
     freshness_seconds: float | None = None,
 ) -> None:
     """Record a memory search event. Best-effort: NEVER raises."""
@@ -159,10 +165,19 @@ def record_search(
                 db.ph(
                     "INSERT INTO memory_events "
                     "(tenant, op, namespace, query_or_key, result_count, "
-                    "freshness_seconds, actor, backend) "
-                    "VALUES (?, 'search', ?, ?, ?, ?, ?, ?)"
+                    "freshness_seconds, actor, backend, run_id) "
+                    "VALUES (?, 'search', ?, ?, ?, ?, ?, ?, ?)"
                 ),
-                (tenant, namespace, query, result_count, freshness_seconds, actor, backend),
+                (
+                    tenant,
+                    namespace,
+                    query,
+                    result_count,
+                    freshness_seconds,
+                    actor,
+                    backend,
+                    run_id,
+                ),
             )
     except Exception as exc:  # noqa: BLE001 — instrumentation must never break the caller
         logger.warning("memory_service.record_search_failed", error=str(exc))
@@ -176,6 +191,7 @@ def record_read(
     actor: str | None,
     tenant: str = "default",
     backend: str | None = None,
+    run_id: int | None = None,
     freshness_seconds: float | None = None,
 ) -> None:
     """Record a memory read (fetch-by-key) event. Best-effort: NEVER raises."""
@@ -186,10 +202,19 @@ def record_read(
                 db.ph(
                     "INSERT INTO memory_events "
                     "(tenant, op, namespace, query_or_key, found, freshness_seconds, "
-                    "actor, backend) "
-                    "VALUES (?, 'read', ?, ?, ?, ?, ?, ?)"
+                    "actor, backend, run_id) "
+                    "VALUES (?, 'read', ?, ?, ?, ?, ?, ?, ?)"
                 ),
-                (tenant, namespace, key, int(bool(found)), freshness_seconds, actor, backend),
+                (
+                    tenant,
+                    namespace,
+                    key,
+                    int(bool(found)),
+                    freshness_seconds,
+                    actor,
+                    backend,
+                    run_id,
+                ),
             )
     except Exception as exc:  # noqa: BLE001 — instrumentation must never break the caller
         logger.warning("memory_service.record_read_failed", error=str(exc))
@@ -202,6 +227,7 @@ def record_store(
     actor: str | None,
     tenant: str = "default",
     backend: str | None = None,
+    run_id: int | None = None,
 ) -> None:
     """Record a memory store (write) event. Best-effort: NEVER raises."""
     try:
@@ -210,10 +236,10 @@ def record_store(
             conn.execute(
                 db.ph(
                     "INSERT INTO memory_events "
-                    "(tenant, op, namespace, query_or_key, actor, backend) "
-                    "VALUES (?, 'store', ?, ?, ?, ?)"
+                    "(tenant, op, namespace, query_or_key, actor, backend, run_id) "
+                    "VALUES (?, 'store', ?, ?, ?, ?, ?)"
                 ),
-                (tenant, namespace, key, actor, backend),
+                (tenant, namespace, key, actor, backend, run_id),
             )
     except Exception as exc:  # noqa: BLE001 — instrumentation must never break the caller
         logger.warning("memory_service.record_store_failed", error=str(exc))
@@ -614,3 +640,36 @@ def backend_stats(days: int = 30) -> dict[str, dict[str, Any]]:
             slot["last_activity"] = str(last_ts)
 
     return empty
+
+
+def searches_for_run(run_id: int) -> list[dict[str, Any]]:
+    """Every memory search recorded against *run_id*, oldest first.
+
+    This is the join that was missing. It makes the only question worth asking
+    answerable: for a given step, which backend answered, with how many
+    results, and what did that step then produce.
+    """
+    try:
+        init_db()
+        with db.connect() as conn:
+            rows = conn.execute(
+                db.ph(
+                    "SELECT ts, backend, namespace, actor, result_count "
+                    "FROM memory_events WHERE op = 'search' AND run_id = ? ORDER BY id"
+                ),
+                (run_id,),
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — analysis must not break a caller
+        logger.warning("memory_service.searches_for_run_failed", run_id=run_id, error=str(exc))
+        return []
+
+    return [
+        {
+            "ts": str(r[0]) if r[0] else None,
+            "backend": r[1] or _LEGACY_BACKEND,
+            "namespace": r[2],
+            "actor": r[3],
+            "result_count": int(r[4] or 0),
+        }
+        for r in rows
+    ]

@@ -420,3 +420,66 @@ def test_both_backends_tag_their_writes(tmp_path, monkeypatch):
     for name in ("mem0", "obsidian"):
         source = (plugins_dir / f"{name}.py").read_text(encoding="utf-8")
         assert f'backend="{name}"' in source, f"{name} does not tag its memory writes"
+
+
+class TestRecallCanBeCorrelatedWithItsRun:
+    """The gate on every memory decision, honcho included.
+
+    `memory_events` records that a recall happened and how many results came
+    back. It records nothing about the step that recall FED, so the one
+    question that matters -- does a memory search change the output? -- cannot
+    be asked of the data at all.
+
+    Without it, choosing between mem0, Obsidian, honcho or anything else is a
+    preference dressed as a decision. The 2026-08-04 honcho evaluation made
+    exactly this the entry condition and it was never built.
+    """
+
+    def test_a_search_records_the_run_it_served(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import memory_service
+
+        memory_service.record_search(
+            namespace="p:t:cto",
+            query="q",
+            result_count=5,
+            actor="cto",
+            backend="mem0",
+            run_id=455,
+        )
+
+        rows = memory_service.searches_for_run(455)
+        assert len(rows) == 1
+        assert rows[0]["backend"] == "mem0"
+        assert rows[0]["result_count"] == 5
+
+    def test_a_search_with_no_run_still_records(self, tmp_path, monkeypatch):
+        """Recall happens outside pipelines too; a missing run must not drop
+        the row, only leave it uncorrelatable."""
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import memory_service
+
+        memory_service.record_search(
+            namespace="p:t:cto", query="q", result_count=0, actor="cto", backend="obsidian"
+        )
+
+        assert memory_service.backend_stats()["obsidian"]["searches"] == 1
+        assert memory_service.searches_for_run(999) == []
+
+    def test_both_backends_are_visible_per_run(self, tmp_path, monkeypatch):
+        """The comparison this exists for: same run, same step, two backends."""
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import memory_service
+
+        for backend, count in (("mem0", 5), ("obsidian", 0)):
+            memory_service.record_search(
+                namespace="p:t:cto",
+                query="q",
+                result_count=count,
+                actor="cto",
+                backend=backend,
+                run_id=455,
+            )
+
+        rows = memory_service.searches_for_run(455)
+        assert {r["backend"] for r in rows} == {"mem0", "obsidian"}

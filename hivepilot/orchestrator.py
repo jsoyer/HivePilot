@@ -6350,6 +6350,11 @@ class Orchestrator:
                             payload=replace(payload, secrets={}),
                             dry_run=dry_run,
                             role=task.role,
+                            # after_step already carried this; before_step did
+                            # not, so a RECALL could never be tied to the step
+                            # it fed -- and "does memory change the output"
+                            # was unanswerable from the data.
+                            run_id=run_id,
                         )
                         if simulate:
                             logger.info(

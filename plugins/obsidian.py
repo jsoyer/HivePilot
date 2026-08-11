@@ -489,7 +489,9 @@ def _memory_namespace(payload: Any, role: str | None) -> str:
     return f"{project}:{task}:{role}" if role else f"{project}:{task}"
 
 
-def _record_recall(payload: Any, role: str | None, terms: list[str], count: int) -> None:
+def _record_recall(
+    payload: Any, role: str | None, terms: list[str], count: int, run_id: int | None = None
+) -> None:
     """Best-effort instrumentation. Never raises into a recall."""
     try:
         from hivepilot.services import memory_service
@@ -500,6 +502,7 @@ def _record_recall(payload: Any, role: str | None, terms: list[str], count: int)
             result_count=count,
             actor=role or "system",
             backend="obsidian",
+            run_id=run_id,
         )
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
         logger.warning("plugin.obsidian.record_recall_failed", error=str(exc))
@@ -572,7 +575,7 @@ def recall(**kwargs: Any) -> None:
         # existed, `memory_events` held mem0 rows only -- so any comparison of
         # the two backends showed Obsidian at zero, and a zero that means
         # "never measured" is indistinguishable from one that means "useless".
-        _record_recall(payload, role, terms, len(results))
+        _record_recall(payload, role, terms, len(results), kwargs.get("run_id"))
         # Mark this metadata dict as recalled-for regardless of outcome —
         # the scan already ran; a later step's before_step call must not
         # re-scan.
