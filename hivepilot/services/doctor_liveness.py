@@ -644,3 +644,89 @@ def check_cache_amortisation() -> list[DoctorFinding]:
             "that step.",
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# Lessons -- a table that grows is not a loop that learns
+# ---------------------------------------------------------------------------
+
+_CHECK_LESSONS = "lessons_learn"
+
+# Below this share of attributed lessons, replay is impossible for most of the
+# corpus. Not zero-tolerance: a single-task run legitimately has no role.
+_MAX_UNATTRIBUTED_SHARE = 0.5
+
+
+def _lesson_stats() -> dict[str, int]:
+    """Count, unattributed count, and how many DISTINCT scores exist."""
+    from hivepilot.services import db
+
+    try:
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN role IS NULL OR role = '' THEN 1 ELSE 0 END), "
+                "COUNT(DISTINCT score) "
+                "FROM lessons"
+            ).fetchone()
+    except Exception:  # noqa: BLE001 - a diagnostic must not break `config doctor`
+        return {"total": 0, "no_role": 0, "distinct_scores": 0}
+    if not row:
+        return {"total": 0, "no_role": 0, "distinct_scores": 0}
+    return {
+        "total": int(row[0] or 0),
+        "no_role": int(row[1] or 0),
+        "distinct_scores": int(row[2] or 0),
+    }
+
+
+def check_lessons_learn() -> list[DoctorFinding]:
+    """Report a lessons corpus that cannot be replayed or ranked.
+
+    Two failures hide behind a healthy-looking row count, and both were live
+    here: 263 of 268 lessons had no role, so nothing could ever be replayed to
+    the role that needed it; and 264 shared one score -- 0.5, the value
+    assigned when the only signal is "the run finished", which the scoring
+    code's own comment calls "almost nothing".
+
+    Silent on an empty table: distillation is opt-in, and nothing written is
+    not the same as nothing learned.
+    """
+    stats = _lesson_stats()
+    total = stats["total"]
+    if total <= 0:
+        return []
+
+    findings: list[DoctorFinding] = []
+
+    if stats["no_role"] > total * _MAX_UNATTRIBUTED_SHARE:
+        findings.append(
+            _mk(
+                "warning",
+                _CHECK_LESSONS,
+                f"{stats['no_role']} of {total} lessons carry no role",
+                "a lesson nobody can attribute can never be replayed to the role that "
+                "needs it, so the corpus grows without any of it coming back -- which "
+                "reads exactly like a loop that writes but does not learn",
+                "lessons distilled from a pipeline are attributed per lesson from the "
+                "interaction they cite; rows written before that are unattributed for "
+                "good and can be left to age out",
+            )
+        )
+
+    if total > 20 and stats["distinct_scores"] <= 1:
+        findings.append(
+            _mk(
+                "warning",
+                _CHECK_LESSONS,
+                f"all {total} lessons share a single score",
+                "scoring exists to rank one lesson above another; one value across the "
+                "whole corpus means no judged signal is reaching validation and every "
+                "lesson is being admitted on 'the run finished' alone",
+                "check that verdicts carry a numeric confidence -- validate_lesson "
+                "scores from the outcome signal, and with no judged signal it falls "
+                "back to the run-success default for everything",
+            )
+        )
+
+    return findings

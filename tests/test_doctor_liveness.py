@@ -528,3 +528,40 @@ class TestCacheAmortisation:
 
         assert findings
         assert "terrible" in " ".join(f.message for f in findings)
+
+
+class TestLessonsLearn:
+    """A lessons table that grows is not a loop that learns.
+
+    Production: 268 lessons, 263 with no role, and 264 sharing one score --
+    0.5, the value `validate_lesson` assigns when the ONLY signal is "the run
+    finished", which its own comment calls "almost nothing". Both conditions
+    are invisible from a row count, and a row count is what everything showed.
+    """
+
+    def _run(self, monkeypatch, rows):
+        from hivepilot.services import doctor_liveness
+
+        monkeypatch.setattr(doctor_liveness, "_lesson_stats", lambda: rows)
+        return doctor_liveness.check_lessons_learn()
+
+    def test_flags_unattributed_lessons(self, monkeypatch):
+        findings = self._run(monkeypatch, {"total": 268, "no_role": 263, "distinct_scores": 2})
+
+        assert findings
+        text = " ".join(f.message for f in findings)
+        assert "263" in text
+
+    def test_flags_a_single_score_across_the_corpus(self, monkeypatch):
+        """One distinct score means nothing is being discriminated."""
+        findings = self._run(monkeypatch, {"total": 200, "no_role": 0, "distinct_scores": 1})
+
+        assert findings
+        assert "score" in " ".join(f.message for f in findings).lower()
+
+    def test_silent_when_healthy(self, monkeypatch):
+        assert self._run(monkeypatch, {"total": 200, "no_role": 2, "distinct_scores": 9}) == []
+
+    def test_empty_table_is_not_a_failure(self, monkeypatch):
+        """Distillation is opt-in; no lessons means nobody turned it on."""
+        assert self._run(monkeypatch, {"total": 0, "no_role": 0, "distinct_scores": 0}) == []
