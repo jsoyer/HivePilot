@@ -563,8 +563,13 @@ def backend_stats(days: int = 30) -> dict[str, dict[str, Any]]:
     quality. How often a recall came back with nothing is the honest signal,
     and it is the one KPI both backends can be compared on.
     """
-    empty = {
-        name: {
+
+    # Annotated explicitly: inferred from the literal alone this is
+    # `dict[str, int | None]`, and assigning a timestamp string to
+    # `last_activity` below is then a type error rather than the intended
+    # mixed-value row.
+    def _blank() -> dict[str, Any]:
+        return {
             "searches": 0,
             "empty_searches": 0,
             "stores": 0,
@@ -572,8 +577,8 @@ def backend_stats(days: int = 30) -> dict[str, dict[str, Any]]:
             "last_activity": None,
             "actors": 0,
         }
-        for name in KNOWN_BACKENDS
-    }
+
+    empty: dict[str, dict[str, Any]] = {name: _blank() for name in KNOWN_BACKENDS}
 
     try:
         init_db()
@@ -596,17 +601,7 @@ def backend_stats(days: int = 30) -> dict[str, dict[str, Any]]:
         return empty
 
     for backend, op, count, empty_count, last_ts, actors in rows:
-        slot = empty.setdefault(
-            backend,
-            {
-                "searches": 0,
-                "empty_searches": 0,
-                "stores": 0,
-                "reads": 0,
-                "last_activity": None,
-                "actors": 0,
-            },
-        )
+        slot = empty.setdefault(backend, _blank())
         if op == "search":
             slot["searches"] = int(count or 0)
             slot["empty_searches"] = int(empty_count or 0)
