@@ -428,11 +428,20 @@ def _apply_sandbox(
         return argv, run_env
 
     sandbox_mode = getattr(settings_obj, "dev_sandbox", "none")
-    if sandbox_mode != "bwrap":
-        return argv, run_env
 
     try:
         # --- env scrub ---
+        # UNCONDITIONAL. This used to be gated on dev_sandbox == "bwrap", so
+        # on a host without bwrap it never ran: measured in production, the
+        # agent subprocess carried eight secrets (Slack/Telegram/Discord bot
+        # tokens, the 1Password service-account token, the mem0 key and the
+        # HivePilot admin API token). That made the non-root migration's
+        # central claim false -- it stopped the agent reading shared.env off
+        # disk, and the contents arrived through the environment anyway.
+        #
+        # Filtering the environment and confining the filesystem are separate
+        # properties. There is no reason to hand an agent every credential
+        # because a filesystem sandbox happens to be unavailable.
         # Start from a clean scrub of the host environment, then layer only the
         # intentional project/role/secrets overrides on top.  intentional_env
         # must NOT include os.environ (use gather_overrides, not merge_environments).
@@ -441,6 +450,12 @@ def _apply_sandbox(
         base_env.update(intentional_env)
 
         # --- bwrap wrap ---
+        # Still conditional: filesystem confinement needs the binary, and its
+        # absence must not cost us the env scrub above.
+        if sandbox_mode != "bwrap":
+            logger.info("sandbox.env_scrubbed", permission_mode=permission_mode, bwrap=False)
+            return argv, base_env
+
         workdir = cwd or str(Path.cwd())
         wrapped_argv = wrap_bwrap(argv, workdir=workdir)
 

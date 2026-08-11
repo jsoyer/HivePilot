@@ -374,3 +374,35 @@ class TestHealthTellsTheTruth:
 
         for vendor_number in ("97.9", "80%", "83%", "78.3"):
             assert vendor_number not in detail
+
+
+def test_config_dir_is_writable_by_the_service_user(tmp_path, monkeypatch):
+    """`base_dir / "token-savior"` resolved to `/token-savior` in production.
+
+    `base_dir` is the process cwd, and the services run with
+    `WorkingDirectory=/`, so every stage logged
+    `Permission denied: '/token-savior/<project>.mcp.json'` and the plugin was
+    inert for the whole run. Generated per-install files belong in
+    XDG_DATA_HOME, beside the plugin files and the config-repo clone, which is
+    owned by the service user.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "token_savior_dir_test", Path(__file__).parent.parent / "plugins" / "token_savior.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["token_savior_dir_test"] = module
+    spec.loader.exec_module(module)
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "base_dir", Path("/"), raising=False)
+
+    resolved = module._config_dir()
+
+    assert Path("/token-savior") != resolved, "still anchored to the process cwd"
+    assert str(resolved).startswith(str(tmp_path / "data"))

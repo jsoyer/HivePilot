@@ -71,9 +71,21 @@ _MCP_BOOTSTRAP_TOOL = "WaitForMcpServers"
 
 
 def _config_dir() -> Path:
+    """Where the generated MCP stanza is written.
+
+    XDG_DATA_HOME, not `base_dir`. `base_dir` is the process cwd and the
+    services run with `WorkingDirectory=/`, so this resolved to
+    `/token-savior` and every stage of a real run logged
+    `Permission denied: '/token-savior/<project>.mcp.json'` -- the plugin was
+    inert for the entire pipeline and said so only in a warning nobody reads.
+
+    A generated per-install file belongs beside the other generated
+    per-install state (plugin files, the config-repo clone), in a directory
+    the service user owns.
+    """
     from hivepilot.config import settings as _settings
 
-    return Path(_settings.base_dir) / "token-savior"
+    return Path(_settings.xdg_data_home) / "token-savior"
 
 
 def _resolve_binary() -> str | None:
