@@ -37,7 +37,9 @@ def test_unprobed_plugin_is_not_measurable() -> None:
 
 def test_probed_plugins_are_the_documented_two() -> None:
     """Adding a name here requires the sole-writer proof in the docstring."""
-    assert plugin_activity.probed_plugins() == frozenset({"headroom", "mem0"})
+    # obsidian joined once its recalls were instrumented and the
+    # memory_events attribution moved onto a backend column.
+    assert plugin_activity.probed_plugins() == frozenset({"headroom", "mem0", "obsidian"})
 
 
 # ---------------------------------------------------------------------------
@@ -109,36 +111,52 @@ def test_mem0_counts_memory_events() -> None:
 
     assert activity is not None
     assert activity.events == 2
-    assert activity.evidence == "memory_events"
+    # The evidence string names the FILTER, not just the table: two
+    # backends write here and the reading is only meaningful scoped.
+    assert activity.evidence == "memory_events (backend=mem0)"
 
 
-def test_only_mem0_records_memory_events() -> None:
-    """Guard for an attribution that rests on a call-site fact, not a column.
+def test_memory_event_writers_are_all_attributed_by_backend() -> None:
+    """The successor to a tripwire that fired exactly as designed.
 
-    `memory_events` has no backend column, so `plugin_activity` attributes the
-    whole table to `mem0` purely because `plugins/mem0.py` is its only writer.
-    If a second memory plugin (obsidian is the obvious candidate) starts
-    recording, mem0's activity row would silently absorb the other plugin's
-    work and read as busier than it is.
+    This used to assert mem0 was the SOLE writer of `memory_events`, because
+    `plugin_activity` attributed the whole table to it on that call-site fact
+    alone. Its docstring said the fix, when a second writer appeared, was to
+    add a backend column and filter on it -- not to relax the assertion.
 
-    This test fails the moment that happens. When it does, the fix is to add a
-    backend column to `memory_events` and filter on it -- not to relax this
-    assertion.
+    Obsidian was then instrumented, the test failed, and the column and filter
+    landed. What must hold now is stronger: every plugin writing to that table
+    has a probe, and every such probe filters by backend. A writer without one
+    would silently inflate whichever plugin's row it landed in.
     """
     plugins_dir = Path(__file__).resolve().parent.parent / "plugins"
     recorders = {"record_search", "record_store", "record_read"}
 
     writers = {
-        path.name
+        path.stem
         for path in plugins_dir.glob("*.py")
         if any(call in path.read_text(encoding="utf-8") for call in recorders)
     }
 
-    assert writers == {"mem0.py"}, (
-        f"memory_events gained writers beyond mem0: {sorted(writers - {'mem0.py'})}. "
-        "plugin_activity attributes that whole table to mem0 -- add a backend "
-        "column and filter on it before landing this."
+    from hivepilot.services import plugin_activity
+
+    unprobed = writers - plugin_activity.probed_plugins()
+    assert not unprobed, (
+        f"memory_events writers with no activity probe: {sorted(unprobed)}. "
+        "Their events would be attributed to whichever plugin's probe does not "
+        "filter them out -- add a probe with backend=<name>."
     )
+
+    source = (
+        Path(plugin_activity.__file__).read_text(encoding="utf-8")
+        if hasattr(plugin_activity, "__file__") and plugin_activity.__file__
+        else ""
+    )
+    for name in writers:
+        assert f'backend="{name}"' in source, (
+            f"probe for {name!r} does not filter memory_events by backend; "
+            "its row would absorb the other backend's recalls"
+        )
 
 
 # ---------------------------------------------------------------------------

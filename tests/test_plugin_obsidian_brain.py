@@ -448,3 +448,36 @@ def test_recent_note_wins_a_score_tie(tmp_path, obsidian_module):
     hits = obsidian._search_vault(vault, ["cto review", "cto"], role="cto")
 
     assert hits[0][0] == new, "the newest of a role's own notes must come first"
+
+
+def test_recall_is_recorded_like_mem0(tmp_path, monkeypatch, obsidian_module):
+    """Until this existed, `memory_events` held mem0 rows only.
+
+    Any comparison of the two backends therefore showed Obsidian at zero, and
+    a zero meaning "never measured" is indistinguishable from one meaning
+    "useless" -- which is exactly the wrong conclusion to hand an operator.
+    """
+    monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+    from hivepilot.services import memory_service
+
+    vault = tmp_path / "v"
+    vault.mkdir()
+    (vault / "n.md").write_text("---\nrole: cto\n---\nsomething about the review\n")
+
+    class Payload:
+        project_name = "p"
+        task_name = "t"
+        step = None
+        metadata: dict = {}
+
+    payload = Payload()
+    payload.metadata = {}
+    monkeypatch.setattr(obsidian_module, "_resolve_vault", lambda *a, **k: vault)
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "obsidian_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "obsidian_recall_enabled", True, raising=False)
+
+    obsidian_module.recall(payload=payload, role="cto", step=None)
+
+    assert memory_service.backend_stats()["obsidian"]["searches"] == 1

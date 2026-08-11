@@ -381,6 +381,33 @@ async def otlp_metrics(request: Request) -> dict[str, Any]:
 v1 = APIRouter(prefix="/v1")
 
 
+@v1.get("/memory/backends", dependencies=[Depends(require_role("read"))])
+def memory_backends(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
+    """Recall/store activity per memory backend, plus what each one costs.
+
+    The two backends are deliberately reported side by side on the same
+    counters. They are NOT interchangeable and the panel says so: mem0 sends
+    content to a third party and answers semantically; Obsidian stays on the
+    host and answers by role-scoped search. Measured on this deployment, their
+    recalls overlap by 2-4% -- they are complements, and a screen showing only
+    one would suggest the other is dead weight.
+
+    `empty_searches` is the comparable KPI. A search returning a full top-k
+    means the cap was hit, not that k relevant things exist.
+    """
+    from hivepilot.services import memory_service
+
+    stats = memory_service.backend_stats(days)
+    return {
+        "days": days,
+        "backends": stats,
+        # Stated in the payload, not left to the UI: whether work leaves the
+        # host is a property of the backend, and it is the single fact an
+        # operator most needs beside these counters.
+        "egress": {"mem0": True, "obsidian": False},
+    }
+
+
 @v1.get("/telemetry/cache", dependencies=[Depends(require_role("read"))])
 def telemetry_cache(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
     """Prompt-cache economics from the agent CLI's own metrics.

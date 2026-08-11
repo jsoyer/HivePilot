@@ -22,14 +22,12 @@ when exactly one plugin writes to it:
 
 - ``headroom_compressions`` / ``headroom_skips`` — written solely by
   `plugins/headroom.py` via `hivepilot.services.headroom_metrics`.
-- ``memory_events`` — written solely by `plugins/mem0.py` via
-  `hivepilot.services.memory_service`. This table carries **no backend
-  column**, so the attribution rests on that call-site fact alone. If a second
-  memory plugin (e.g. `obsidian`) ever started recording, mem0's row here would
-  silently absorb the other plugin's activity.
-  `tests/test_plugin_activity.py::test_only_mem0_records_memory_events` fails
-  the moment that happens, so the assumption breaks loudly instead of quietly
-  producing a wrong reading.
+- ``memory_events`` — written by `plugins/mem0.py` AND `plugins/obsidian.py`
+  via `hivepilot.services.memory_service`, and attributed by its ``backend``
+  column rather than by a call-site assumption. It used to rest on mem0 being
+  the sole writer; a tripwire test guarded that and fired the moment Obsidian
+  was instrumented, which is exactly what it was for. A NULL backend counts as
+  mem0: every row predating the column was written by it.
 
 **Tenant-scoped.** Both source tables are tenant-partitioned. ``tenant=None``
 means unscoped (admin), matching the `_analytics_tenant` convention in
@@ -90,6 +88,7 @@ def _probe(
     evidence: str,
     tenant: str | None,
     window_days: int,
+    backend: str | None = None,
 ) -> PluginActivity:
     """Aggregate ``MAX(ts)`` and a windowed count across *tables*.
 
@@ -97,12 +96,25 @@ def _probe(
     ``UNION ALL`` keeps a plugin whose record is split across several tables
     (headroom writes successes and declines separately) reading as one plugin
     rather than two half-answers.
+
+    *backend* filters on a ``backend`` column when the table has one. It exists
+    because ``memory_events`` now has two writers: without it, mem0's row would
+    absorb Obsidian's recalls and read as busier than it is. A NULL backend
+    counts as mem0 -- every row predating the column was written by it, which
+    was the only instrumented backend.
     """
-    where = " WHERE tenant = ?" if tenant is not None else ""
-    params: tuple[Any, ...] = (tenant,) if tenant is not None else ()
+    conditions: list[str] = []
+    params: tuple[Any, ...] = ()
+    if tenant is not None:
+        conditions.append("tenant = ?")
+        params += (tenant,)
+    if backend is not None:
+        conditions.append("COALESCE(backend, 'mem0') = ?")
+        params += (backend,)
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
     union = " UNION ALL ".join(f"SELECT ts FROM {table}{where}" for table in tables)
-    # The tenant placeholder repeats once per UNION branch.
+    # Placeholders repeat once per UNION branch.
     all_params = params * len(tables)
 
     with db.connect() as conn:
@@ -149,9 +161,23 @@ def _mem0_activity(*, tenant: str | None, window_days: int) -> PluginActivity:
     memory_service.init_db()
     return _probe(
         tables=("memory_events",),
-        evidence="memory_events",
+        evidence="memory_events (backend=mem0)",
         tenant=tenant,
         window_days=window_days,
+        backend="mem0",
+    )
+
+
+def _obsidian_activity(*, tenant: str | None, window_days: int) -> PluginActivity:
+    from hivepilot.services import memory_service
+
+    memory_service.init_db()
+    return _probe(
+        tables=("memory_events",),
+        evidence="memory_events (backend=obsidian)",
+        tenant=tenant,
+        window_days=window_days,
+        backend="obsidian",
     )
 
 
@@ -162,6 +188,7 @@ def _mem0_activity(*, tenant: str | None, window_days: int) -> PluginActivity:
 _PROBES: dict[str, Callable[..., PluginActivity]] = {
     "headroom": _headroom_activity,
     "mem0": _mem0_activity,
+    "obsidian": _obsidian_activity,
 }
 
 

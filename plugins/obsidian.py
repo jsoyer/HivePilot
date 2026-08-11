@@ -478,6 +478,48 @@ def _search_vault(
     return [(path, excerpt) for _, _, _, path, excerpt in scored[:_MAX_RESULTS]]
 
 
+def _memory_namespace(payload: Any, role: str | None) -> str:
+    """`project:task[:role]` — the same key shape mem0 records under.
+
+    Identical shape on purpose: the two backends are meant to be compared, and
+    a panel cannot compare rows keyed differently.
+    """
+    project = getattr(payload, "project_name", None) or "unknown"
+    task = getattr(payload, "task_name", None) or "unknown"
+    return f"{project}:{task}:{role}" if role else f"{project}:{task}"
+
+
+def _record_recall(payload: Any, role: str | None, terms: list[str], count: int) -> None:
+    """Best-effort instrumentation. Never raises into a recall."""
+    try:
+        from hivepilot.services import memory_service
+
+        memory_service.record_search(
+            namespace=_memory_namespace(payload, role),
+            query=" ".join(terms)[:200],
+            result_count=count,
+            actor=role or "system",
+            backend="obsidian",
+        )
+    except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
+        logger.warning("plugin.obsidian.record_recall_failed", error=str(exc))
+
+
+def _record_store(payload: Any, role: str | None) -> None:
+    """Best-effort instrumentation for the write side."""
+    try:
+        from hivepilot.services import memory_service
+
+        memory_service.record_store(
+            namespace=_memory_namespace(payload, role),
+            key=_memory_namespace(payload, role),
+            actor=role or "system",
+            backend="obsidian",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("plugin.obsidian.record_store_failed", error=str(exc))
+
+
 def recall(**kwargs: Any) -> None:
     """Search the vault for notes relevant to this step and append bounded
     excerpts to ``extra_prompt`` — mirrors `plugins/mem0.py`'s
@@ -526,6 +568,11 @@ def recall(**kwargs: Any) -> None:
         terms = [term for term in (task_name, role, step_name) if term]
 
         results = _search_vault(vault, terms, role=role)
+        # Instrumented like mem0's recall, into the same table. Until this
+        # existed, `memory_events` held mem0 rows only -- so any comparison of
+        # the two backends showed Obsidian at zero, and a zero that means
+        # "never measured" is indistinguishable from one that means "useless".
+        _record_recall(payload, role, terms, len(results))
         # Mark this metadata dict as recalled-for regardless of outcome —
         # the scan already ran; a later step's before_step call must not
         # re-scan.
@@ -622,6 +669,7 @@ def store(**kwargs: Any) -> None:
 
         svc = ObsidianService(vault, dry_run=bool(kwargs.get("dry_run", False)))
         svc.append_daily(entry)
+        _record_store(payload, kwargs.get("role"))
     except Exception as exc:  # noqa: BLE001 — a hook must never crash a run
         logger.warning("plugin.obsidian.store_failed", error=str(exc))
 

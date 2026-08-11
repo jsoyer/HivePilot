@@ -335,3 +335,73 @@ class TestRecordNeverRaises:
         # contract holds even for malformed callers.
         memory_service.record_evaluation(namespace=None, useful="yes", actor=None)  # type: ignore[arg-type]
         memory_service.record_search(namespace=None, query=None, result_count=None, actor=None)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Backend attribution
+# ---------------------------------------------------------------------------
+
+
+class TestBackendAttribution:
+    """Two memory backends now write here, and `namespace` is the same
+    `project:task:role` key for both -- so without this column a panel could
+    not tell mem0's recalls from Obsidian's.
+
+    Rows written before the column exists are mem0's: it was the only
+    instrumented backend, which is exactly why Obsidian looked idle.
+    """
+
+    def test_search_records_its_backend(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import memory_service
+
+        memory_service.record_search(
+            namespace="p:t:r", query="q", result_count=3, actor="cto", backend="obsidian"
+        )
+
+        stats = memory_service.backend_stats()
+        assert stats["obsidian"]["searches"] == 1
+
+    def test_legacy_rows_count_as_mem0(self, tmp_path, monkeypatch):
+        """A NULL backend is not 'unknown' -- it is mem0, verifiably."""
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import db, memory_service
+
+        memory_service.record_search(namespace="p:t:r", query="q", result_count=1, actor="cto")
+        with db.connect() as conn:
+            conn.execute("UPDATE memory_events SET backend = NULL")
+
+        assert memory_service.backend_stats()["mem0"]["searches"] == 1
+
+    def test_empty_recalls_are_counted_separately(self, tmp_path, monkeypatch):
+        """The honest signal.
+
+        A search returning a FULL top-k means the cap was hit, not that five
+        relevant things exist -- 115 of 150 production searches returned
+        exactly 5. What actually says whether memory works is how often a
+        recall came back with nothing.
+        """
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import memory_service
+
+        for count in (5, 5, 0, 0, 0):
+            memory_service.record_search(
+                namespace="p:t:r", query="q", result_count=count, actor="cto", backend="mem0"
+            )
+
+        stats = memory_service.backend_stats()["mem0"]
+        assert stats["searches"] == 5
+        assert stats["empty_searches"] == 3
+
+    def test_absent_backend_reports_zeros_not_missing(self, tmp_path, monkeypatch):
+        """A backend nobody used must render as measured-and-idle, not absent.
+
+        Rendering 'no data' identically to 'not instrumented' is how Obsidian
+        would have looked useless while simply being unmeasured.
+        """
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import memory_service
+
+        stats = memory_service.backend_stats()
+        assert stats["obsidian"]["searches"] == 0
+        assert stats["mem0"]["searches"] == 0
