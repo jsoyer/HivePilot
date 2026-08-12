@@ -518,6 +518,14 @@ def init_db() -> None:
             )
             """
         )
+        # The PIPELINE run a verdict belongs to. `run_id` keeps pointing at
+        # whatever produced it -- sometimes a task, sometimes the pipeline --
+        # and changing that meaning would silently reinterpret existing rows.
+        # Without this column `LEFT JOIN approvals x verdicts ON run_id`
+        # returns nothing, because approvals are pipeline-level and half the
+        # verdicts are not: the agreement rate the autonomy ladder needs was
+        # not blocked on volume, it was blocked on the join.
+        _add_column_if_missing(conn, "verdicts", "pipeline_run_id INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_telemetry_lookup "
             "ON agent_telemetry (metric, session_id, recorded_at)"
@@ -874,6 +882,7 @@ def list_recent_interactions(limit: int = 50, run_id: int | None = None) -> list
 def record_verdict(
     *,
     run_id: int | None,
+    pipeline_run_id: int | None = None,
     project: str | None,
     task: str | None,
     role: str | None,
@@ -905,10 +914,21 @@ def record_verdict(
             conn,
             db.ph(
                 "INSERT INTO verdicts "
-                "(run_id, project, task, role, kind, decision, confidence, summary) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                "(run_id, project, task, role, kind, decision, confidence, summary, "
+                "pipeline_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
-            (run_id, project, task, role, kind, decision, confidence, summary),
+            (
+                run_id,
+                project,
+                task,
+                role,
+                kind,
+                decision,
+                confidence,
+                summary,
+                pipeline_run_id,
+            ),
         )
         logger.info(
             "state.verdict",
@@ -1730,3 +1750,66 @@ def list_pending_swarm_events(
     with db.connect() as conn:
         rows = conn.execute(db.ph(sql), tuple(params)).fetchall()
     return [dict(row) for row in rows]
+
+
+def verdicts_for_pipeline_run(pipeline_run_id: int) -> list[dict[str, Any]]:
+    """Every verdict recorded against *pipeline_run_id*, oldest first."""
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            db.ph(
+                "SELECT id, run_id, role, kind, decision, confidence, summary "
+                "FROM verdicts WHERE pipeline_run_id = ? ORDER BY id"
+            ),
+            (pipeline_run_id,),
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "run_id": r[1],
+            "role": r[2],
+            "kind": r[3],
+            "decision": r[4],
+            "confidence": r[5],
+            "summary": r[6],
+        }
+        for r in rows
+    ]
+
+
+def agreement_rows(limit: int = 500) -> list[dict[str, Any]]:
+    """What the agents decided beside what the human then did.
+
+    The join the autonomy ladder is built on, and which returned zero rows
+    until verdicts carried a pipeline run id: approvals are pipeline-level and
+    half the verdicts were not.
+
+    A row per verdict that belongs to a run a human also acted on. Rows where
+    nobody acted are excluded -- an unanswered approval is not a disagreement,
+    and counting it as one would flatter or damn the agents arbitrarily.
+    """
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            db.ph(
+                "SELECT v.id, v.pipeline_run_id, v.role, v.decision, v.confidence, "
+                "a.status, a.approved_by "
+                "FROM verdicts v "
+                "JOIN approvals a ON a.run_id = v.pipeline_run_id "
+                "WHERE v.decision IS NOT NULL AND a.status IS NOT NULL "
+                "ORDER BY v.id DESC LIMIT ?"
+            ),
+            (int(limit),),
+        ).fetchall()
+    return [
+        {
+            "verdict_id": r[0],
+            "pipeline_run_id": r[1],
+            "role": r[2],
+            "decision": r[3],
+            "confidence": r[4],
+            "human": r[5],
+            "approved_by": r[6],
+        }
+        for r in rows
+    ]

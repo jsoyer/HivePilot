@@ -1017,3 +1017,86 @@ class TestRunRecencyOrdering:
         runs = state_service.list_recent_runs()
         tied = [r for r in runs if r["id"] in (run_a, run_b)]
         assert [r["id"] for r in tied] == [run_b, run_a]
+
+
+class TestVerdictsCanBeJoinedToApprovals:
+    """`LEFT JOIN approvals × verdicts ON run_id` returns ZERO rows.
+
+    Both tables carry a `run_id`, but at different levels: verdict 26 points at
+    run 467 (`noxys-cos-pr-approval`, a TASK), verdicts 23-25 at run 455 (the
+    PIPELINE), and every approval at a pipeline run. So the agreement rate the
+    autonomy ladder needs cannot be computed — not for want of volume, which is
+    what I wrongly reported, but because nothing joins.
+
+    A new column rather than a changed meaning: `run_id` keeps pointing at
+    whatever produced the verdict, and `pipeline_run_id` is what the join uses.
+    Changing the existing column's semantics would silently reinterpret 26 rows
+    of history.
+    """
+
+    def test_a_verdict_records_its_pipeline_run(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import state_service
+
+        state_service.record_verdict(
+            run_id=467,
+            project="noxys",
+            task="noxys",
+            role="review",
+            kind="review",
+            decision="BLOCKED",
+            confidence=1.0,
+            summary="s",
+            pipeline_run_id=455,
+        )
+
+        rows = state_service.verdicts_for_pipeline_run(455)
+        assert len(rows) == 1
+        assert rows[0]["decision"] == "BLOCKED"
+        assert rows[0]["run_id"] == 467
+
+    def test_a_verdict_outside_a_pipeline_still_records(self, tmp_path, monkeypatch):
+        """A standalone review has no pipeline; dropping it would trade one
+        blind spot for another."""
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import state_service
+
+        state_service.record_verdict(
+            run_id=99,
+            project="p",
+            task="t",
+            role="review",
+            kind="review",
+            decision="ACCEPT",
+            confidence=0.8,
+            summary="s",
+        )
+
+        assert state_service.verdicts_for_pipeline_run(455) == []
+
+    def test_the_agreement_join_now_returns_rows(self, tmp_path, monkeypatch):
+        """The whole point: an agent verdict beside what the human then did."""
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import state_service
+
+        run = state_service.record_run_start("noxys", "noxys")
+        state_service.record_verdict(
+            run_id=run + 1,
+            project="noxys",
+            task="noxys",
+            role="review",
+            kind="review",
+            decision="BLOCKED",
+            confidence=1.0,
+            summary="s",
+            pipeline_run_id=run,
+        )
+        state_service.record_approval_request(
+            run_id=run, project="noxys", task="noxys", metadata={}
+        )
+        state_service.update_approval(run, "approved", approver="operator")
+
+        rows = state_service.agreement_rows()
+
+        assert rows and rows[0]["decision"] == "BLOCKED"
+        assert rows[0]["human"] == "approved"

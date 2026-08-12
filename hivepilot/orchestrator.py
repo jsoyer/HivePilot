@@ -2130,6 +2130,9 @@ class Orchestrator:
         try:
             state_service.record_verdict(
                 run_id=run_id,
+                # The pipeline this verdict belongs to, so it can be joined to
+                # the human decision on the same run -- see agreement_rows.
+                pipeline_run_id=self._pipeline_run_id,
                 project=project.path.name,
                 task=None,
                 role="review",
@@ -3584,6 +3587,9 @@ class Orchestrator:
         try:
             state_service.record_verdict(
                 run_id=run_id,
+                # The pipeline this verdict belongs to, so it can be joined to
+                # the human decision on the same run -- see agreement_rows.
+                pipeline_run_id=self._pipeline_run_id,
                 project=project.path.name,
                 task=None,
                 role=target_agent_name,
@@ -3830,6 +3836,9 @@ class Orchestrator:
             try:
                 state_service.record_verdict(
                     run_id=run_id,
+                    # The pipeline this verdict belongs to, so it can be joined to
+                    # the human decision on the same run -- see agreement_rows.
+                    pipeline_run_id=self._pipeline_run_id,
                     project=project.path.name,
                     task=None,
                     role="review",
@@ -5667,6 +5676,9 @@ class Orchestrator:
             try:
                 state_service.record_verdict(
                     run_id=run_id,
+                    # The pipeline this verdict belongs to, so it can be joined to
+                    # the human decision on the same run -- see agreement_rows.
+                    pipeline_run_id=self._pipeline_run_id,
                     project=project.path.name,
                     task=task_name,
                     role=role_name,
