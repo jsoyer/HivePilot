@@ -107,6 +107,38 @@ def _resolve_real_path(file: str, base_dir: Path | None) -> tuple[Path, Path]:
     return real_path, real_path.parent
 
 
+def _scratch_asset_sources(containing_dir: Path) -> list[Path]:
+    """Roots to copy `plugins/` and `skills/` from, in priority order.
+
+    `containing_dir` first, because a self-contained config directory is the
+    common case and must keep behaving exactly as before.
+
+    Then the RESOLVED search roots. Populating only from siblings assumes a
+    single-directory layout; production is split -- config in XDG_CONFIG,
+    plugins in XDG_DATA, skills in the config-repo clone -- so the siblings do
+    not exist, the scratch copy is empty, and every `skills:` reference
+    false-positives. `hivepilot project add` refused every write on that box.
+
+    The existing tests all build a single-directory layout, so they validated
+    the assumption instead of testing it.
+    """
+    roots: list[Path] = [containing_dir]
+    try:
+        from hivepilot.config import settings
+
+        for candidate in (
+            settings.xdg_data_home,
+            settings.xdg_config_home,
+            settings._config_repo_local_path(),
+            settings.base_dir,
+        ):
+            if candidate and Path(candidate) not in roots:
+                roots.append(Path(candidate))
+    except Exception:  # noqa: BLE001 - a wider search must never break the write gate
+        pass
+    return roots
+
+
 def _validate_prospective(file: str, mutated_text: str, containing_dir: Path) -> list[str]:
     """Run validate_config() against a scratch copy of containing_dir with
     *file* replaced by *mutated_text*, so a bad mutation is caught before it
@@ -140,9 +172,13 @@ def _validate_prospective(file: str, mutated_text: str, containing_dir: Path) ->
         # real, active config would false-positive as "unknown skill" here,
         # purely because the scratch dir doesn't have its own plugins/ --
         # mirrors the `prompts/` copy immediately above for the same reason.
-        plugins_src = containing_dir / "plugins"
-        if plugins_src.exists():
-            shutil.copytree(plugins_src, tmp_dir / "plugins")
+        # First root that actually has the directory wins -- see
+        # `_scratch_asset_sources` for why siblings alone are not enough.
+        for root in _scratch_asset_sources(containing_dir):
+            plugins_src = root / "plugins"
+            if plugins_src.exists():
+                shutil.copytree(plugins_src, tmp_dir / "plugins")
+                break
         # Same reason, for the OTHER skill source: `skills/<name>/SKILL.md`
         # directories (`hivepilot/skill_dirs.py`). A config dir that ships its
         # skills as directories (the config-repo case) would otherwise have
@@ -153,9 +189,11 @@ def _validate_prospective(file: str, mutated_text: str, containing_dir: Path) ->
         # `skill_dirs`' containment check still rejects it here instead of
         # `copytree` dereferencing it into a real in-scratch file and
         # silently validating something the live tree would refuse.
-        skills_src = containing_dir / "skills"
-        if skills_src.exists():
-            shutil.copytree(skills_src, tmp_dir / "skills", symlinks=True)
+        for root in _scratch_asset_sources(containing_dir):
+            skills_src = root / "skills"
+            if skills_src.exists():
+                shutil.copytree(skills_src, tmp_dir / "skills", symlinks=True)
+                break
 
         (tmp_dir / file).write_text(mutated_text, encoding="utf-8")
 
