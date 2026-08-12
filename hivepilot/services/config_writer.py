@@ -125,7 +125,6 @@ def _scratch_asset_sources(containing_dir: Path) -> list[Path]:
     roots: list[Path] = [containing_dir]
     try:
         from hivepilot.config import settings
-
         from hivepilot.services import config_service
 
         for candidate in (
