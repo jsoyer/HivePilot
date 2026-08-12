@@ -270,6 +270,19 @@ _PATH_FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("logs_dir", "logs_dir", "HIVEPILOT_LOGS_DIR", False),
 )
 
+# Paths that are NOT `Settings` attributes and so cannot appear in the table
+# above, but resolve through `base_dir` exactly like the ones that are. Each is
+# (label, resolver) -- the resolver takes no arguments and reads live settings,
+# so a monkeypatched `base_dir` moves it, as an operator's pin does.
+#
+# `.hivepilot/feedback` is here because it was invisible to this check for the
+# same reason it was hardest to fix: it was a module-level constant in
+# `knowledge_service`, keyed by nothing the doctor could enumerate. It is the
+# log the agent prompt's "last five feedback entries" is built from.
+_DERIVED_PATHS: tuple[tuple[str, Callable[[], Path]], ...] = (
+    ("feedback_dir", lambda: settings.resolve_path(Path(".hivepilot") / "feedback")),
+)
+
 
 def _base_dir_pinned() -> bool:
     """True if the operator explicitly pinned ``base_dir`` via env (the
@@ -319,6 +332,8 @@ def describe_resolved_paths() -> list[str]:
             resolved = settings.resolve_path(raw_path)
         lines.append(f"{label:<17}: {resolved}")
     lines.append(f"topics registry  : {_topics_registry_path()}")
+    for label, resolve in _DERIVED_PATHS:
+        lines.append(f"{label:<17}: {resolve()}")
     return lines
 
 
@@ -356,6 +371,26 @@ def check_cwd_relative_paths() -> list[DoctorFinding]:
                 "field specifically",
             )
         )
+
+    # The derived paths have no per-field override to check -- only the
+    # `HIVEPILOT_BASE_DIR` pin moves them, so that pin is the whole condition.
+    if not _base_dir_pinned():
+        for label, resolve in _DERIVED_PATHS:
+            findings.append(
+                _finding(
+                    "warning",
+                    "cwd_relative_path",
+                    f"'{label}' resolves relative to the process's cwd at startup "
+                    f"(base_dir={settings.base_dir!s}, no HIVEPILOT_BASE_DIR pin) "
+                    f"-> {resolve()}",
+                    "a service started at cwd=/ and a CLI run from an operator's home "
+                    "directory resolve this to two DIFFERENT files -- and this one feeds "
+                    "the 'last five feedback entries' block of every agent prompt, so the "
+                    "divergence reaches the model rather than only the disk",
+                    "set HIVEPILOT_BASE_DIR=<absolute path> in the shared env every "
+                    "service sources",
+                )
+            )
     return findings
 
 

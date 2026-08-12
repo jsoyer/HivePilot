@@ -54,9 +54,9 @@ def test_build_context_truncates_large_files(tmp_path: Path) -> None:
 
 
 def test_append_feedback_then_included_in_context(tmp_path: Path, monkeypatch) -> None:
-    fb = tmp_path / "fb"
-    fb.mkdir()
-    monkeypatch.setattr(ks, "FEEDBACK_DIR", fb)
+    # Patch base_dir, not a module constant: the path is now resolved on every
+    # call, which is the whole point -- a constant could not follow a pin.
+    monkeypatch.setattr(ks.settings, "base_dir", tmp_path)
     (tmp_path / "README.md").write_text("doc", encoding="utf-8")
     ks.append_feedback(tmp_path, "task-x", "did a thing")
     ctx = ks.build_context(tmp_path, [Path("README.md")])
@@ -67,9 +67,10 @@ def test_append_feedback_then_included_in_context(tmp_path: Path, monkeypatch) -
 def test_append_feedback_redacts_registered_secret(tmp_path: Path, monkeypatch) -> None:
     """A resolved ${secret:NAME} value echoed into a task's result detail must
     never reach the vault feedback log on disk."""
-    fb = tmp_path / "fb"
-    fb.mkdir()
-    monkeypatch.setattr(ks, "FEEDBACK_DIR", fb)
+    # Patch base_dir, not a module constant: the path is now resolved on every
+    # call, which is the whole point -- a constant could not follow a pin.
+    monkeypatch.setattr(ks.settings, "base_dir", tmp_path)
+    fb = tmp_path / ".hivepilot" / "feedback"
     marker = "FEEDBACK-MARKER-do-not-leak"
     config_provenance.clear_secret_values()
     config_provenance.register_secret_value(marker)

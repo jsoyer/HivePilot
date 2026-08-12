@@ -25,9 +25,31 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-FEEDBACK_DIR = settings.base_dir / ".hivepilot" / "feedback"
-FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
-EMBED_DIR = settings.base_dir / ".hivepilot" / "embeddings"
+
+def feedback_dir() -> Path:
+    """Where per-project feedback logs live, resolved at CALL time.
+
+    This was a module-level constant built from ``settings.base_dir``, which
+    defaults to ``Path.cwd()`` at process start. Two consequences, both real:
+
+    * A service started at ``cwd=/`` and a CLI run from an operator's home
+      directory wrote two different logs, and the agent prompt built from "the
+      last five feedback entries" read whichever one matched the directory the
+      command happened to be typed from. That is incident #1 exactly.
+    * Being a constant, it was frozen at IMPORT -- pinning
+      ``HIVEPILOT_BASE_DIR`` fixed every other path and left this one where it
+      already was.
+
+    A function resolves through ``settings.resolve_path`` each time, so the pin
+    works and the value cannot outlive the configuration it came from.
+    """
+    return settings.resolve_path(Path(".hivepilot") / "feedback")
+
+
+def embeddings_dir() -> Path:
+    """FAISS index directory, resolved at call time for the same reason."""
+    return settings.resolve_path(Path(".hivepilot") / "embeddings")
+
 
 # Cap per-file content in the plain-read path to keep prompts bounded.
 _MAX_CHARS_PER_FILE = 4000
@@ -57,7 +79,9 @@ def append_feedback(project_path: Path, task_name: str, summary: str) -> None:
     from hivepilot.services.config_provenance import redact_text
 
     summary = redact_text(summary)
-    log_path = FEEDBACK_DIR / f"{project_path.name}.jsonl"
+    directory = feedback_dir()
+    directory.mkdir(parents=True, exist_ok=True)  # on write, never on import
+    log_path = directory / f"{project_path.name}.jsonl"
     entry = {
         "task": task_name,
         "summary": summary,
@@ -100,10 +124,11 @@ def _embedding_context(project_path: Path, files: list[Path]) -> list[str] | Non
         return None
 
     try:
-        EMBED_DIR.mkdir(parents=True, exist_ok=True)
+        embed_dir = embeddings_dir()
+        embed_dir.mkdir(parents=True, exist_ok=True)
         embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
         digest = _hash_files(project_path, files)
-        vector_path = EMBED_DIR / f"{project_path.name}-{digest}"
+        vector_path = embed_dir / f"{project_path.name}-{digest}"
         if vector_path.exists():
             logger.info("knowledge.cache_hit", project=str(project_path))
             vectors = FAISS.load_local(
@@ -128,7 +153,7 @@ def _embedding_context(project_path: Path, files: list[Path]) -> list[str] | Non
 
 
 def _latest_feedback(project_path: Path, limit: int = 5) -> list[str]:
-    log_path = FEEDBACK_DIR / f"{project_path.name}.jsonl"
+    log_path = feedback_dir() / f"{project_path.name}.jsonl"
     if not log_path.exists():
         return []
     lines = log_path.read_text(encoding="utf-8").splitlines()
