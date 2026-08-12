@@ -230,3 +230,51 @@ class TestGatePostsTheReport:
             verdict_summary="ciso: BLOCKED",
             post=boom,
         )
+
+
+class TestAStageBlockNamesTheRealRole:
+    """Posted on a real PR and carried no reasoning at all:
+
+        | `stage` | 🚫 BLOCK |
+        _This role blocked, but its output was not recorded for this run_
+
+    When the block comes from the STAGE's own `status:` line rather than a
+    judge verdict, the summary fell back to the literal string "stage". No
+    interaction is recorded under that name, so the report quoted nothing —
+    which is exactly the "you cannot just say BLOCKED" this feature exists to
+    prevent.
+
+    The stage's role is known at the call site; using it makes the output
+    findable.
+    """
+
+    def test_the_stage_role_is_used_so_its_output_is_found(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HIVEPILOT_STATE_DB", str(tmp_path / "s.db"))
+        from hivepilot.services import pr_verdict_report, state_service
+
+        run_id = state_service.record_run_start("p", "t")
+        state_service.record_interaction(
+            actor="Victor (Reviewer)",
+            action="completed stage",
+            target=None,
+            summary="status: REQUEST_CHANGES\nThe grant path never checks isAdmin.",
+            run_id=run_id,
+            metadata={"role": "reviewer"},
+        )
+
+        report = pr_verdict_report.build_report(
+            run_id=run_id, verdict_summary="reviewer: REQUEST_CHANGES"
+        )
+
+        assert "never checks isAdmin" in report
+        assert "was not recorded" not in report
+
+    def test_a_summary_naming_stage_is_a_smell_we_no_longer_emit(self):
+        """`stage` is not a role and never will be findable."""
+        from hivepilot.services import git_service
+
+        summary = git_service._verdict_role_summary(None, "status: BLOCK", role="reviewer")
+
+        assert summary is not None
+        assert summary.startswith("reviewer:")
+        assert "stage:" not in summary
