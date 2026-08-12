@@ -557,3 +557,137 @@ def test_registry_invalidation_persisted_second_call_does_not_reuse_dead_id(
 
     # Simulate a new process: reload from disk from scratch.
     assert ns._load_topics().get("gustave") is None
+
+
+# ---------------------------------------------------------------------------
+# Topic creation is capped, whatever the root cause
+# ---------------------------------------------------------------------------
+
+
+class TestTopicCreationIsBounded:
+    """Four topics all correctly named "Gustave (Developer)" appeared in the
+    operator's group, and cleaning them up is manual and tedious.
+
+    The naming defects were fixed and tested earlier; this is a DIFFERENT
+    failure — the name was right, so the key resolved, and the registry lookup
+    still missed four times running. The root cause is not proven.
+
+    So the cap comes first: it bounds the damage without depending on a
+    diagnosis. At most ONE creation per role per process; beyond that, stop
+    creating and say so. The operator goes from "four topics and it will
+    happen again" to "at worst one duplicate, once, and an alert".
+    """
+
+    def _telegram(self, monkeypatch, ns, thread_id=900):
+        monkeypatch.setattr(ns.settings, "telegram_bot_token", "t", raising=False)
+        monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", "-100123", raising=False)
+
+        class Resp:
+            def json(self):
+                return {"ok": True, "result": {"message_thread_id": thread_id}}
+
+        monkeypatch.setattr(ns.requests, "post", lambda *a, **k: Resp())
+
+    def test_a_second_creation_for_the_same_role_is_refused(self, tmp_path, monkeypatch):
+        from hivepilot.services import notification_service as ns
+
+        registry = tmp_path / "t.json"
+        registry.write_text("{}")
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+        monkeypatch.setattr(ns, "_register_topic", lambda *a, **k: None)  # write never lands
+        ns._reset_topic_creation_budget()
+        self._telegram(monkeypatch, ns)
+
+        first = ns._ensure_topic_thread("developer", "Gustave (Developer)")
+        second = ns._ensure_topic_thread("developer", "Gustave (Developer)")
+
+        assert first == 900
+        assert second is None, "a failing registry write must not mean unbounded creation"
+
+    def test_a_different_role_is_unaffected(self, tmp_path, monkeypatch):
+        """The cap is per role, not global — one bad key must not silence the
+        whole fleet."""
+        from hivepilot.services import notification_service as ns
+
+        registry = tmp_path / "t.json"
+        registry.write_text("{}")
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+        monkeypatch.setattr(ns, "_register_topic", lambda *a, **k: None)
+        ns._reset_topic_creation_budget()
+        self._telegram(monkeypatch, ns)
+
+        ns._ensure_topic_thread("developer", "Gustave (Developer)")
+        ns._ensure_topic_thread("developer", "Gustave (Developer)")
+        other = ns._ensure_topic_thread("ciso", "Hugo (CISO)")
+
+        assert other == 900
+
+    def test_a_registered_topic_is_still_reused_forever(self, tmp_path, monkeypatch):
+        """The cap must never break the normal path: a topic in the registry is
+        returned every time, without counting against anything."""
+        from hivepilot.services import notification_service as ns
+
+        registry = tmp_path / "t.json"
+        registry.write_text('{"developer": 330}')
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+        ns._reset_topic_creation_budget()
+        # Telegram must be configured: `_ensure_topic_thread` returns early
+        # without a token, BEFORE it ever consults the registry. Without this
+        # the test passed locally purely because the dev environment happens to
+        # carry a token, and failed in CI which does not.
+        self._telegram(monkeypatch, ns)
+
+        for _ in range(5):
+            assert ns._ensure_topic_thread("developer", "Gustave (Developer)") == 330
+
+    def test_hitting_the_cap_is_logged(self, tmp_path, monkeypatch, caplog):
+        """A silent cap is the same disease one level down."""
+        from hivepilot.services import notification_service as ns
+
+        registry = tmp_path / "t.json"
+        registry.write_text("{}")
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+        monkeypatch.setattr(ns, "_register_topic", lambda *a, **k: None)
+        ns._reset_topic_creation_budget()
+        self._telegram(monkeypatch, ns)
+
+        ns._ensure_topic_thread("developer", "Gustave (Developer)")
+        with caplog.at_level("WARNING"):
+            ns._ensure_topic_thread("developer", "Gustave (Developer)")
+
+        assert "topics.creation_capped" in caplog.text
+
+
+class TestRegisterTopicVerifiesItsWrite:
+    """The registry file had not changed since 8 August while topics were
+    being created after that date.
+
+    Never proven, but it is the one signal pointing at writes that do not
+    land — and a write nobody checks is exactly the failure this codebase
+    keeps producing. Verifying turns a silent drift into a loud, single event.
+    """
+
+    def test_a_landed_write_is_silent(self, tmp_path, monkeypatch):
+        from hivepilot.services import notification_service as ns
+
+        registry = tmp_path / "t.json"
+        registry.write_text("{}")
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+
+        assert ns._register_topic("developer", 330) is True
+        assert '"developer"' in registry.read_text()
+
+    def test_a_write_that_does_not_land_is_reported(self, tmp_path, monkeypatch, caplog):
+        from hivepilot.services import notification_service as ns
+
+        registry = tmp_path / "t.json"
+        registry.write_text("{}")
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
+        # The write silently does nothing — the suspected production shape.
+        monkeypatch.setattr(ns, "_write_topics", lambda *a, **k: None)
+
+        with caplog.at_level("WARNING"):
+            landed = ns._register_topic("developer", 330)
+
+        assert landed is False
+        assert "topics.registry_write_lost" in caplog.text

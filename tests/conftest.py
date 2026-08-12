@@ -414,3 +414,20 @@ def _isolate_governance_config(monkeypatch):
     default = Settings.model_fields["governance_files"].default_factory()  # type: ignore[misc]
     monkeypatch.setattr(settings, "governance_files", list(default))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_topic_creation_budget():
+    """Clear the per-process topic-creation budget between tests.
+
+    The budget is module-level state by design — it bounds creations for the
+    life of a service process. That makes it leak across tests: an unrelated
+    test creating a topic for `cto` would make the next one's first creation
+    look like a second. Reset before each test rather than making every test
+    author remember.
+    """
+    from hivepilot.services import notification_service
+
+    notification_service._reset_topic_creation_budget()
+    yield
+    notification_service._reset_topic_creation_budget()
