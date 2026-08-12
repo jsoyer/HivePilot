@@ -316,3 +316,43 @@ def test_prompt_or_refuse_returns_selection_when_tty(monkeypatch) -> None:
 def test_no_safe_dump_used_in_module() -> None:
     source = Path(config_writer.__file__).read_text(encoding="utf-8")
     assert "safe_dump" not in source
+
+
+class TestValidationFindsSkillsOnASplitLayout:
+    """`hivepilot project add` refused every write on the production box.
+
+        Error: Task 'noxys-designer-agent' references unknown skill
+               'frontend-design' (searched: /tmp/hivepilot-config-writer-.../
+               plugins, .../skills)
+
+    The scratch copy is populated from the SIBLING directories of the mutated
+    YAML. That assumes a single-directory layout. Production is split: config
+    in XDG_CONFIG, plugins in XDG_DATA, skills in the config-repo clone. The
+    siblings do not exist, the copy is empty, and every `skills:` reference
+    false-positives.
+
+    The existing tests all build a single-directory layout, so they validate
+    the assumption instead of testing it — which is why the previous fix for
+    this looked sufficient.
+    """
+
+    def test_skills_outside_the_config_dir_are_still_found(self, tmp_path, monkeypatch):
+        from hivepilot.services import config_writer
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        # skills live somewhere else entirely — the split layout
+        skills_root = tmp_path / "data"
+        skill = skills_root / "skills" / "frontend-design"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: frontend-design\n---\nbody\n")
+
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "base_dir", skills_root, raising=False)
+
+        copied = config_writer._scratch_asset_sources(config_dir)
+
+        assert any((root / "skills").exists() for root in copied), (
+            "the resolved skills directory was not offered to the scratch copy"
+        )
