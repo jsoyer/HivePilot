@@ -126,9 +126,17 @@ def _scratch_asset_sources(containing_dir: Path) -> list[Path]:
     try:
         from hivepilot.config import settings
 
+        from hivepilot.services import config_service
+
         for candidate in (
             settings.xdg_data_home,
             settings.xdg_config_home,
+            # The config-repo CLONE. Measured on the production box: skills
+            # ship as directories inside the clone, and neither xdg_data_home
+            # nor base_dir contains them -- so leaving this out left the
+            # scratch copy without a single skill and `project add` still
+            # refused every write.
+            config_service._config_dir(),
             settings._config_repo_local_path(),
             settings.base_dir,
         ):
