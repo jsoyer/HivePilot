@@ -408,3 +408,45 @@ class TestPrTitleDescribesTheWork:
         title = build_pr_title(branch="b", commit_subjects=["x" * 500])
 
         assert len(title) <= 120
+
+
+class TestBranchIsStableAcrossAPipeline:
+    """#500 wired the branch to the wrong run id and broke the first pipeline
+    that used it.
+
+    `record_run_start` mints a run id per TASK, so `<prefix>/<project>/<run_id>`
+    produced one branch per STAGE. Measured on the greenfield run: the
+    developer committed to `.../473` and the documentation stage to `.../477`.
+    The reviewer — the stage carrying `create_pr: true` — ran on a branch with
+    no commits, so no PR was opened, no adversarial review ran, no verdict was
+    recorded, and the release manager had nothing to promote.
+
+    Ten stages reported success and the chain between them was severed. The
+    branch must be stable for the whole pipeline run, which was the intent all
+    along.
+    """
+
+    def test_pipeline_run_id_wins_over_the_task_run_id(self):
+        from hivepilot.orchestrator import Orchestrator
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._pipeline_run_id = 468
+
+        assert orch._branch_run_id(473) == 468
+
+    def test_falls_back_to_the_task_run_outside_a_pipeline(self):
+        """A standalone task run has no pipeline; its own id is the right one."""
+        from hivepilot.orchestrator import Orchestrator
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._pipeline_run_id = None
+
+        assert orch._branch_run_id(473) == 473
+
+    def test_no_id_at_all_is_none_not_a_crash(self):
+        from hivepilot.orchestrator import Orchestrator
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._pipeline_run_id = None
+
+        assert orch._branch_run_id(None) is None
