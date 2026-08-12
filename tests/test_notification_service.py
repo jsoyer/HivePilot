@@ -631,6 +631,11 @@ class TestTopicCreationIsBounded:
         registry.write_text('{"developer": 330}')
         monkeypatch.setattr(ns, "_topics_registry_path", lambda: registry)
         ns._reset_topic_creation_budget()
+        # Telegram must be configured: `_ensure_topic_thread` returns early
+        # without a token, BEFORE it ever consults the registry. Without this
+        # the test passed locally purely because the dev environment happens to
+        # carry a token, and failed in CI which does not.
+        self._telegram(monkeypatch, ns)
 
         for _ in range(5):
             assert ns._ensure_topic_thread("developer", "Gustave (Developer)") == 330
