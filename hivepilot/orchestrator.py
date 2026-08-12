@@ -1968,6 +1968,13 @@ class Orchestrator:
         # run_task/run_pipeline/run_debate call never leaks into this one.
         self._verdict_lock = threading.Lock()
         self._governing_verdict: Verdict | None = None
+        # The PIPELINE run's id, held for the duration of that run so every
+        # stage lands on the SAME branch. #500 wired the branch name to the
+        # per-task run id instead -- `record_run_start` mints one per task --
+        # and produced one branch per stage: the developer committed to
+        # `.../473`, the documentation stage to `.../477`, and the reviewer
+        # (the stage that opens the PR) ran on a branch with no commits.
+        self._pipeline_run_id: int | None = None
 
     def _load(self) -> None:
         self.projects = load_projects()
@@ -2036,6 +2043,16 @@ class Orchestrator:
         if entering_outermost:
             with self._verdict_lock:
                 self._governing_verdict = None
+            self._pipeline_run_id = None
+
+    def _branch_run_id(self, task_run_id: int | None) -> int | None:
+        """The run id a branch name should carry.
+
+        The PIPELINE run when there is one, so every stage of that pipeline
+        commits, pushes and reviews on a single branch. A standalone task has
+        no pipeline and its own id is the right one.
+        """
+        return self._pipeline_run_id or task_run_id
 
     def _effective_debate(
         self,
@@ -4720,6 +4737,10 @@ class Orchestrator:
         run id or already resolved) -- callers should translate that into a
         4xx, never let it surface as a 500.
         """
+        # Held for the whole pipeline so every stage's git actions land on ONE
+        # branch -- see `_branch_run_id`.
+        self._pipeline_run_id = run_id
+
         approval = state_service.get_approval(run_id)
         if not approval or approval.get("status") != "pending":
             logger.warning(
@@ -6802,10 +6823,10 @@ class Orchestrator:
                         or effective_debate.review_target == "github_pr"
                     ),
                     confidence_threshold=effective_debate.confidence_threshold,
-                    # The PIPELINE run id: every stage's full output is
-                    # recorded against it, which is where a blocked gate finds
-                    # the reasoning it has to put on the PR.
-                    run_id=run_id,
+                    # The PIPELINE run when there is one: it names the branch
+                    # every stage shares, and it is where a blocked gate finds
+                    # the per-role reasoning it must put on the PR.
+                    run_id=self._branch_run_id(run_id),
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)
