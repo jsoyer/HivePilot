@@ -6852,6 +6852,9 @@ class Orchestrator:
                     # every stage shares, and it is where a blocked gate finds
                     # the per-role reasoning it must put on the PR.
                     run_id=self._branch_run_id(run_id),
+                    # So a stage-level block names the role that blocked, and
+                    # its recorded output can actually be quoted on the PR.
+                    role=task.role,
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)

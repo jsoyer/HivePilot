@@ -464,6 +464,7 @@ def perform_git_actions(
     judge_gate_enabled: bool = False,
     confidence_threshold: float = 0.0,
     run_id: int | None = None,
+    role: str | None = None,
 ) -> None:
     """Perform the configured git actions for a completed task/stage.
 
@@ -531,7 +532,7 @@ def perform_git_actions(
             # per_role_stance is role -> stance straight from the judge; the
             # free-text summary is the fallback when the judge did not supply
             # one. Both are parsed the same way downstream.
-            verdict_summary=_verdict_role_summary(verdict, task_result),
+            verdict_summary=_verdict_role_summary(verdict, task_result, role),
         )
     if git.promote_pr:
         if blocked:
@@ -815,7 +816,9 @@ def merge_pr(*, project: ProjectConfig, branch: str, git: GitActions) -> None:
     resolve_forge(project).merge_pr(project=project, branch=branch, git=git)
 
 
-def _verdict_role_summary(verdict: "Verdict | None", task_result: str | None) -> str | None:
+def _verdict_role_summary(
+    verdict: "Verdict | None", task_result: str | None, role: str | None = None
+) -> str | None:
     """`role: STATUS` pairs for the report, from the judge or the stage output.
 
     Prefers the judge's structured `per_role_stance` and falls back to the
@@ -829,7 +832,13 @@ def _verdict_role_summary(verdict: "Verdict | None", task_result: str | None) ->
     from hivepilot.services.agent_report import parse_agent_report
 
     status = parse_agent_report(task_result).status.strip().upper()
-    return f"stage: {status}" if status else None
+    if not status:
+        return None
+    # The STAGE'S ROLE, never the literal "stage". No interaction is recorded
+    # under "stage", so a report built from it quotes nothing -- which is
+    # exactly the bare "BLOCKED" this feature exists to replace. Seen on a real
+    # PR before this line existed.
+    return f"{role or 'stage'}: {status}"
 
 
 def post_blocked_report(
