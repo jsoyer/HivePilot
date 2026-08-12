@@ -309,7 +309,16 @@ def commit_vault(
     # Scope every operation to the vault pathspec so we never stage/commit/push
     # unrelated changes that happen to be in the enclosing repo's index.
     pathspec = str(vault_path)
-    repo.git.add("-A", "--", pathspec)
+    # `--sparse` because the vault may be a cone checkout that excludes the
+    # very directories HivePilot writes to. The operator's cone holds their own
+    # notes; `HivePilot/` and `Artifacts/` were never in it, so `git add`
+    # refused all 93 paths of run 507 and raised -- three days of run records on
+    # disk and in no commit, behind one warning.
+    #
+    # This is not a cone override: nothing here changes the sparse definition.
+    # It stages the files HivePilot itself wrote one line earlier, which is what
+    # git's own hint recommends. A vault with no sparse checkout is unaffected.
+    repo.git.add("-A", "--sparse", "--", pathspec)
     if not repo.git.diff("--cached", "--name-only", "--", pathspec).strip():
         return False  # nothing changed under the vault
     repo.git.commit("-m", message, "--", pathspec)  # commit only the vault's paths
