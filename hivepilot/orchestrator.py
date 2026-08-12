@@ -2045,6 +2045,28 @@ class Orchestrator:
                 self._governing_verdict = None
             self._pipeline_run_id = None
 
+    def _open_pipeline_run(self, run_id: int | None, pipeline_name: str) -> int:
+        """Record (or adopt) the pipeline's run row AND remember its id.
+
+        One function on purpose. #504 assigned `self._pipeline_run_id` from a
+        `run_id` that was still None -- the CLI passes none and the row is
+        created here -- so the branch silently fell back to the per-task id and
+        every stage got its own branch. Ten stages reported success and nothing
+        connected them.
+
+        Creating the row and remembering it are the same fact; splitting them
+        let them drift. A unit test on the resolver passed while the wiring was
+        broken, because the bug was an ORDER, not a value.
+        """
+        if run_id is None:
+            run_id = state_service.record_run_start(
+                pipeline_name,
+                pipeline_name,
+                status=RunStatus.RUNNING.value,
+            )
+        self._pipeline_run_id = run_id
+        return run_id
+
     def _branch_run_id(self, task_run_id: int | None) -> int | None:
         """The run id a branch name should carry.
 
@@ -4035,12 +4057,7 @@ class Orchestrator:
         )
 
         # Open (or resume) a state-service run record (RUNNING)
-        if run_id is None:
-            run_id = state_service.record_run_start(
-                pipeline_name,
-                pipeline_name,
-                status=RunStatus.RUNNING.value,
-            )
+        run_id = self._open_pipeline_run(run_id, pipeline_name)
 
         # Bring the vault forward BEFORE any agent reads from it.
         #
@@ -4737,10 +4754,6 @@ class Orchestrator:
         run id or already resolved) -- callers should translate that into a
         4xx, never let it surface as a 500.
         """
-        # Held for the whole pipeline so every stage's git actions land on ONE
-        # branch -- see `_branch_run_id`.
-        self._pipeline_run_id = run_id
-
         approval = state_service.get_approval(run_id)
         if not approval or approval.get("status") != "pending":
             logger.warning(

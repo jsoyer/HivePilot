@@ -179,10 +179,16 @@ _FILE_PREAMBLE = (
 )
 
 
-#: Identity for the unattended commit. systemd units have no HOME, so there is
-#: no ~/.gitconfig to fall back on.
-_COMMIT_NAME = "HivePilot"
-_COMMIT_EMAIL = "hivepilot@localhost"
+#: Identity for the unattended commit, shared with every other automated
+#: commit path -- see `git_service.COMMIT_IDENTITY_NAME`. Two copies drifting
+#: is how one call site got fixed in #491 and the ordinary commit path stayed
+#: broken until a freshly cloned repo exposed it.
+from hivepilot.services.git_service import (  # noqa: E402
+    COMMIT_IDENTITY_EMAIL as _COMMIT_EMAIL,
+)
+from hivepilot.services.git_service import (  # noqa: E402
+    COMMIT_IDENTITY_NAME as _COMMIT_NAME,
+)
 
 
 class CorrectionTooLarge(RuntimeError):

@@ -426,6 +426,37 @@ class TestBranchIsStableAcrossAPipeline:
     along.
     """
 
+    def test_opening_a_pipeline_run_remembers_its_id(self, monkeypatch):
+        """The bug #504 shipped was an ORDER, not a value.
+
+        `self._pipeline_run_id = run_id` sat BEFORE the row was created, so it
+        stored None, the branch fell back to the per-task id, and a resolver
+        unit test passed while the wiring was broken. Recording the row and
+        remembering its id are now the same call, so they cannot drift.
+        """
+        from hivepilot import orchestrator as orch_mod
+        from hivepilot.orchestrator import Orchestrator
+
+        monkeypatch.setattr(orch_mod.state_service, "record_run_start", lambda *a, **k: 479)
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._pipeline_run_id = None
+
+        returned = orch._open_pipeline_run(None, "greenfield")
+
+        assert returned == 479
+        assert orch._pipeline_run_id == 479
+        # And the branch then follows the pipeline, not the task.
+        assert orch._branch_run_id(484) == 479
+
+    def test_an_adopted_run_id_is_remembered_too(self):
+        from hivepilot.orchestrator import Orchestrator
+
+        orch = Orchestrator.__new__(Orchestrator)
+        orch._pipeline_run_id = None
+
+        assert orch._open_pipeline_run(1234, "p") == 1234
+        assert orch._pipeline_run_id == 1234
+
     def test_pipeline_run_id_wins_over_the_task_run_id(self):
         from hivepilot.orchestrator import Orchestrator
 
@@ -450,3 +481,59 @@ class TestBranchIsStableAcrossAPipeline:
         orch._pipeline_run_id = None
 
         assert orch._branch_run_id(None) is None
+
+
+class TestUnattendedCommitsCarryAnIdentity:
+    """A freshly cloned repo has no `user.name`, and systemd units have no HOME.
+
+    Measured: the developer stage of a real greenfield run died on
+
+        *** Please tell me who you are
+
+    The `noxys` checkout happens to carry a LOCAL git identity, which is why
+    every earlier run committed fine and this defect stayed invisible until a
+    repo was cloned fresh.
+
+    #491 fixed exactly this for the corrections path and did not generalise it.
+    An unattended commit cannot depend on ambient git configuration, wherever
+    it runs.
+    """
+
+    def test_the_commit_passes_name_and_email(self, monkeypatch, tmp_path):
+        from hivepilot.models import GitActions, ProjectConfig
+        from hivepilot.services import git_service
+
+        calls: list[tuple] = []
+
+        class Git:
+            def add(self, *a, **k):
+                calls.append(("add", a))
+
+            def commit(self, *a, **k):
+                calls.append(("commit", a))
+
+            def checkout(self, *a, **k):
+                pass
+
+        class Repo:
+            def __init__(self, *a, **k):
+                self.git = Git()
+
+            def is_dirty(self, **k):
+                return True
+
+        monkeypatch.setattr(git_service, "Repo", Repo)
+        monkeypatch.setattr(git_service, "checkout_branch", lambda *a, **k: None)
+        monkeypatch.setattr(git_service, "push", lambda *a, **k: None)
+
+        git_service.perform_git_actions(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            git=GitActions(commit=True, push=False, create_pr=False),
+            run_id=479,
+        )
+
+        commit = next(c for c in calls if c[0] == "commit")
+        joined = " ".join(str(x) for x in commit[1])
+        assert "user.name=" in joined, "commit ran without an author identity"
+        assert "user.email=" in joined

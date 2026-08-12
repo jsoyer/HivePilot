@@ -327,6 +327,13 @@ def commit_vault(
 # PASS, APPROVE, APPROVED, CLEARED, ADVISORY, OK, and absent/empty/unparseable
 # output -- means "proceed", so promote/merge run. NEEDS_HUMAN is blocking: it
 # defers to a human, so the PR must stay a draft until that human acts.
+#: Author identity for every unattended commit HivePilot makes. An automated
+#: commit cannot depend on ambient git configuration: a freshly cloned repo has
+#: no `user.name`, and systemd units run without HOME so `~/.gitconfig` is
+#: invisible. Shared with the corrections writer, which learned this first.
+COMMIT_IDENTITY_NAME = "HivePilot"
+COMMIT_IDENTITY_EMAIL = "hivepilot@localhost"
+
 _BLOCKING_VERDICTS: frozenset[str] = frozenset(
     {
         "BLOCK",
@@ -484,7 +491,20 @@ def perform_git_actions(
         if git.commit and repo.is_dirty(untracked_files=True):
             repo.git.add("-A")
             message = git.commit_message or f"chore({project_name}): automated task run"
-            repo.git.commit("-m", message)
+            # Explicit identity. A freshly cloned repo has no `user.name` and
+            # systemd units have no HOME, so `git commit` dies with "Please
+            # tell me who you are" -- which killed the developer stage of a
+            # real greenfield run. The `noxys` checkout happens to carry a
+            # LOCAL identity, which is why every earlier run committed fine and
+            # this stayed invisible until a repo was cloned fresh.
+            repo.git.commit(
+                "-c",
+                f"user.name={COMMIT_IDENTITY_NAME}",
+                "-c",
+                f"user.email={COMMIT_IDENTITY_EMAIL}",
+                "-m",
+                message,
+            )
         if git.push:
             push(project.path, "origin", branch)
     if git.create_pr:
