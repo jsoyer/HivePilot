@@ -49,8 +49,13 @@ def test_commit_vault_commits_and_pushes(tmp_path: Path, monkeypatch) -> None:
     fake.active_branch.name = "main"
     monkeypatch.setattr(git_service, "Repo", lambda *a, **k: fake)
     assert git_service.commit_vault(tmp_path, "msg", push=True) is True
-    # add/commit scoped to the vault pathspec; push explicit remote+branch
-    fake.git.add.assert_called_with("-A", "--", str(tmp_path))
+    # add/commit scoped to the vault pathspec; push explicit remote+branch.
+    # `--sparse` staged: a vault on a cone checkout excludes the directories
+    # HivePilot writes to, and without it `git add` refuses them and raises.
+    # See tests/test_vault_sparse_checkout.py, which drives a real repository --
+    # a MagicMock answers `add` the same whatever the cone says, which is why
+    # this assertion could pin the broken shape for three days.
+    fake.git.add.assert_called_with("-A", "--sparse", "--", str(tmp_path))
     fake.git.commit.assert_called_with("-m", "msg", "--", str(tmp_path))
     fake.git.push.assert_called_once_with("origin", "main")
 
