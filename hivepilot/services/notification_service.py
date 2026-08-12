@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+import threading
 import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
@@ -521,7 +522,7 @@ def _save_topics(mapping: dict[str, int]) -> None:
     _write_topics(_topics_registry_path(), mapping)
 
 
-def _register_topic(agent_key: str, thread_id: int) -> None:
+def _register_topic(agent_key: str, thread_id: int) -> bool:
     """Add one agent_key -> thread_id entry, preserving concurrent writes.
 
     `_ensure_topic_thread` loads the registry, calls Telegram, then saves —
@@ -543,6 +544,28 @@ def _register_topic(agent_key: str, thread_id: int) -> None:
     on_disk[agent_key] = thread_id
     _write_topics(path, on_disk)
     _mirror_topic(agent_key, thread_id)
+
+    # Verify it LANDED. The production registry had not changed since 8 August
+    # while topics were being created after that date -- never proven, but a
+    # write nobody checks is exactly the failure this codebase keeps
+    # producing, and an unlanded write here means the next message creates
+    # ANOTHER topic. Loud and once, rather than silent and repeatedly.
+    try:
+        landed = json.loads(path.read_text(encoding="utf-8")).get(agent_key) == thread_id
+    except Exception as exc:  # noqa: BLE001 - verification must not raise into a send
+        logger.warning("topics.registry_verify_failed", agent_key=agent_key, error=str(exc))
+        return False
+    if not landed:
+        logger.warning(
+            "topics.registry_write_lost",
+            agent_key=agent_key,
+            message_thread_id=thread_id,
+            path=str(path),
+            detail="the topic was created but the registry does not reflect it; the "
+            "next message would create another one. Creation is capped, so it will "
+            "not.",
+        )
+    return landed
 
 
 def _invalidate_topic(agent_key: str) -> int | None:
@@ -641,6 +664,42 @@ def _canonical_topic_title(agent_key: str, fallback: str | None = None) -> str:
     return fallback or agent_key
 
 
+# ---------------------------------------------------------------------------
+# Topic creation budget
+# ---------------------------------------------------------------------------
+
+#: How many topics this process may create for one role key. ONE.
+#:
+#: Four topics all correctly named "Gustave (Developer)" appeared in the
+#: operator's group and had to be cleaned up by hand. The naming defects were
+#: fixed and tested earlier; this was different -- the name was right, so the
+#: key resolved, and the registry lookup still missed four times running. The
+#: root cause is NOT proven.
+#:
+#: So the cap does not depend on the diagnosis. Whatever makes the lookup miss,
+#: the damage is now one duplicate and a warning instead of one per message.
+_MAX_TOPIC_CREATIONS_PER_KEY = 1
+
+_topic_creations: dict[str, int] = {}
+_topic_creations_lock = threading.Lock()
+
+
+def _reset_topic_creation_budget() -> None:
+    """Clear the per-process creation budget (tests, and a fresh run scope)."""
+    with _topic_creations_lock:
+        _topic_creations.clear()
+
+
+def _claim_topic_creation(agent_key: str) -> bool:
+    """Whether this process may still create a topic for *agent_key*."""
+    with _topic_creations_lock:
+        used = _topic_creations.get(agent_key, 0)
+        if used >= _MAX_TOPIC_CREATIONS_PER_KEY:
+            return False
+        _topic_creations[agent_key] = used + 1
+        return True
+
+
 def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
     """Return the message_thread_id for *agent_key*, creating it if absent.
 
@@ -655,6 +714,20 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
     registry = _load_topics()
     if agent_key in registry:
         return registry[agent_key]
+
+    # Bounded, whatever makes the lookup miss. A registry write that never
+    # lands would otherwise create one topic per message -- which is what the
+    # operator had to clean up by hand.
+    if not _claim_topic_creation(agent_key):
+        logger.warning(
+            "topics.creation_capped",
+            agent_key=agent_key,
+            detail="already created a topic for this role in this process and the "
+            "registry still does not resolve it; refusing to create another. "
+            "Messages fall back to the general thread.",
+            registry_path=str(_topics_registry_path()),
+        )
+        return None
 
     try:
         url = f"https://api.telegram.org/bot{token}/createForumTopic"
