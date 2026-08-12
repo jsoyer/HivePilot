@@ -43,6 +43,8 @@ topics_app = typer.Typer(help="Telegram forum topics: inspect the registry, prun
 app.add_typer(config_app, name="config")
 app.add_typer(corrections_app, name="corrections")
 app.add_typer(topics_app, name="topics")
+autonomy_app = typer.Typer(help="Autonomy ladder: measured agreement between agents and operator")
+app.add_typer(autonomy_app, name="autonomy")
 project_app = typer.Typer(help="Manage projects.yaml entries")
 app.add_typer(project_app, name="project")
 task_app = typer.Typer(help="Manage tasks.yaml entries")
@@ -1252,6 +1254,27 @@ def corrections_show(
         return
     typer.echo(text)
     typer.echo(f"\n({len(text)} chars of {corrections_service._MAX_CORRECTION_CHARS})")
+
+
+@autonomy_app.command("report")
+def autonomy_report(
+    limit: int = typer.Option(500, help="Maximum joined rows to consider"),
+) -> None:
+    """How often each role's verdict matched what the operator then decided.
+
+    Reports only. Granting a role more autonomy stays an operator action --
+    an authority increase driven by a self-reported score has no outside check.
+
+    When there is nothing to measure it says WHY, rather than printing a 0%
+    that reads like a judgement on the agents. On the production database the
+    join is empty because verdicts and approvals have never occurred on the
+    same run, which no join key can fix.
+    """
+    from hivepilot.services import autonomy_service
+
+    report = autonomy_service.agreement_report(limit=limit)
+    for line in autonomy_service.render_report(report):
+        typer.echo(line)
 
 
 @topics_app.command("list")
