@@ -41,6 +41,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,13 +61,53 @@ _MAX_OUTPUT_CHARS = 8_000
 DEFAULT_TIMEOUT_SECONDS = 300
 
 
+#: Check-run conclusions that mean "nothing here objects". Everything else --
+#: failure, cancelled, timed_out, action_required, and any conclusion added to
+#: the forge after this was written -- blocks. A whitelist, because a blacklist
+#: would pass a conclusion nobody had considered yet.
+PASSING_CI_CONCLUSIONS: frozenset[str] = frozenset({"success", "skipped", "neutral"})
+
+#: How often to re-poll the forge while runs are still going.
+_CI_POLL_SECONDS = 15
+
+
 @dataclass(frozen=True)
-class Check:
-    """One deterministic check: a name for the report, a command to run."""
+class CheckRun:
+    """One check run as the forge reports it."""
 
     name: str
-    command: str
+    status: str  # queued | in_progress | completed
+    conclusion: str | None
+
+    @property
+    def finished(self) -> bool:
+        return self.status == "completed"
+
+    @property
+    def passing(self) -> bool:
+        return self.finished and (self.conclusion or "").lower() in PASSING_CI_CONCLUSIONS
+
+
+@dataclass(frozen=True)
+class Check:
+    """One deterministic check.
+
+    Either a ``command`` run in the project's tree, or ``ci=True`` to consult
+    the forge's check runs for the branch. Exactly one -- a check declaring
+    both would silently honour one and skip the other, and a check declaring
+    neither verifies nothing while looking configured.
+    """
+
+    name: str
+    command: str | None = None
+    ci: bool = False
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+
+    def __post_init__(self) -> None:
+        if bool(self.command) == bool(self.ci):
+            raise ValueError(
+                f"check {self.name!r} must declare exactly one of `command` or `ci: true`"
+            )
 
 
 @dataclass(frozen=True)
@@ -138,6 +179,82 @@ def _bounded(text: str) -> str:
     )
 
 
+def _run_ci(
+    check: Check,
+    *,
+    probe: Callable[[], Sequence[CheckRun]] | None,
+    sleep: Callable[[float], None],
+) -> CheckResult:
+    """Consult the forge's check runs. Fail-closed on every ambiguity.
+
+    The case that matters most: **no check run reported is not a pass.** A
+    repository with no workflow, a workflow that did not trigger, a branch the
+    forge never saw -- all produce silence, and silence has been read as
+    success here before (`gh pr checks | tail -3` once hid a mypy failure and
+    put two red pull requests on the trunk). So an empty result blocks, and
+    EVERY run is read, never a subset.
+    """
+    started = time.monotonic()
+
+    def errored(detail: str) -> CheckResult:
+        logger.warning("verification.ci_errored", check=check.name, detail=detail)
+        return CheckResult(
+            name=check.name,
+            outcome="errored",
+            exit_code=None,
+            output=_bounded(detail),
+            duration_seconds=time.monotonic() - started,
+        )
+
+    if probe is None:
+        return errored(
+            "this check consults the forge, but nothing here can reach one, so nothing was verified"
+        )
+
+    while True:
+        try:
+            runs = list(probe())
+        except Exception as exc:  # noqa: BLE001 - a forge that cannot answer verifies nothing
+            return errored(f"the forge could not be consulted: {exc}")
+
+        if not runs:
+            return errored(
+                "no check run was reported for this branch -- nothing verified it. "
+                "An absent result is not a passing one"
+            )
+
+        pending = [run for run in runs if not run.finished]
+        if not pending:
+            break
+        if time.monotonic() - started >= check.timeout_seconds:
+            names = ", ".join(f"{run.name} ({run.status})" for run in pending)
+            return errored(
+                f"still running after {check.timeout_seconds}s: {names}. Waiting is not passing"
+            )
+        sleep(_CI_POLL_SECONDS)
+
+    failures = [run for run in runs if not run.passing]
+    if failures:
+        names = ", ".join(f"{run.name}: {run.conclusion or 'no conclusion'}" for run in failures)
+        logger.info("verification.ci_blocked", check=check.name, failures=len(failures))
+        return CheckResult(
+            name=check.name,
+            outcome="failed",
+            exit_code=None,
+            output=_bounded(f"{len(failures)} of {len(runs)} forge check(s) did not pass: {names}"),
+            duration_seconds=time.monotonic() - started,
+        )
+
+    logger.info("verification.ci_passed", check=check.name, runs=len(runs))
+    return CheckResult(
+        name=check.name,
+        outcome="passed",
+        exit_code=None,
+        output=_bounded(f"{len(runs)} forge check(s) passed: " + ", ".join(r.name for r in runs)),
+        duration_seconds=time.monotonic() - started,
+    )
+
+
 def _run_one(check: Check, *, cwd: Path, env: dict[str, str] | None) -> CheckResult:
     started = time.monotonic()
 
@@ -201,6 +318,8 @@ def run_checks(
     *,
     cwd: Path,
     env: dict[str, str] | None = None,
+    ci_probe: Callable[[], Sequence[CheckRun]] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> VerificationReport:
     """Run every check and report. Never raises.
 
@@ -210,7 +329,12 @@ def run_checks(
     """
     if not checks:
         return VerificationReport(results=())
-    results = [_run_one(check, cwd=cwd, env=env) for check in checks]
+    results = [
+        _run_ci(check, probe=ci_probe, sleep=sleep)
+        if check.ci
+        else _run_one(check, cwd=cwd, env=env)
+        for check in checks
+    ]
     report = VerificationReport(results=tuple(results))
     logger.info(
         "verification.report",

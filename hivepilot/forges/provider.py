@@ -143,6 +143,13 @@ class ForgeProvider(Protocol):
 
     def pr_status(self, *, project: ProjectConfig, branch: str) -> str: ...
 
+    #: Every check run the forge reports for a branch. Backs the `ci:`
+    #: verification check. A provider that cannot answer must RAISE, never
+    #: return `[]`: an empty list means "the forge reported nothing", which
+    #: blocks for a different reason than "the forge is unreachable", and
+    #: conflating them would hide an outage as a missing workflow.
+    def check_runs(self, *, project: ProjectConfig, branch: str) -> list[dict]: ...
+
     def merge_pr(self, *, project: ProjectConfig, branch: str, git: GitActions) -> None: ...
 
 

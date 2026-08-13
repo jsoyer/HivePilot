@@ -294,6 +294,19 @@ class ForgejoForge:
         self._request("POST", url, project=project, json_body={"body": body})
         logger.info("forgejo.pr_commented", project=project.path.name, branch=branch)
 
+    def check_runs(self, *, project: ProjectConfig, branch: str) -> list[dict]:
+        """Not implemented for this forge.
+
+        Raises rather than returning `[]`: an empty list means "the forge
+        reported no checks", which blocks for a different reason than "this
+        forge cannot report checks at all". A `ci:` check declared against this
+        provider must fail loudly, not look like a repository without a
+        workflow.
+        """
+        raise NotImplementedError(
+            "`ci:` verification checks are not implemented for this forge provider"
+        )
+
     def pr_status(self, *, project: ProjectConfig, branch: str) -> str:
         slug = project.owner_repo
         index = self._pr_index_for_branch(project, branch)
