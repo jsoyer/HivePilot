@@ -18,6 +18,7 @@ from hivepilot.config import settings
 from hivepilot.forges import resolve_forge
 from hivepilot.models import GitActions, ProjectConfig
 from hivepilot.services.pr_body import resolve_pr_body_file
+from hivepilot.services.verification_service import Check, run_checks
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -27,8 +28,36 @@ if TYPE_CHECKING:
     # circular import. `is_blocking` below duck-types on the verdict's
     # `.decision`/`.confidence` attributes at runtime instead.
     from hivepilot.orchestrator import Verdict
+    from hivepilot.services.verification_service import Check, VerificationReport
 
 logger = get_logger(__name__)
+
+
+def _render_verification(report: "VerificationReport") -> str:
+    """The deterministic half of a blocked-gate report.
+
+    Quotes each failing check's own output rather than describing it: the
+    output IS the evidence, and a paraphrase would put a model back in the one
+    place this feature exists to keep models out of.
+    """
+    lines = [
+        "## HivePilot release gate: **deterministic check failed**",
+        "",
+        report.summary,
+        "",
+    ]
+    for result in report.results:
+        if not result.blocking:
+            continue
+        code = "no exit code" if result.exit_code is None else f"exit {result.exit_code}"
+        lines.append(f"### `{result.name}` — {result.outcome} ({code})")
+        lines.append("")
+        lines.append("```")
+        lines.append(result.output or "(no output)")
+        lines.append("```")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
 
 # Explicit APPROVE whitelist for the fail-closed judge/arbiter PR gate (Debate
 # Judge & Consensus PRD, Sprint 3). Unlike `_BLOCKING_VERDICTS` below (a
@@ -474,6 +503,7 @@ def perform_git_actions(
     confidence_threshold: float = 0.0,
     run_id: int | None = None,
     role: str | None = None,
+    checks: "list[Check] | None" = None,
 ) -> None:
     """Perform the configured git actions for a completed task/stage.
 
@@ -529,6 +559,17 @@ def perform_git_actions(
     blocked = _agent_verdict_blocked(task_result)
     if judge_gate_enabled:
         blocked = blocked or is_blocking(verdict, confidence_threshold)
+
+    # The one input to this gate that is not an opinion. Both LLM paths above
+    # fail OPEN by design -- an unparseable verdict must not freeze every
+    # pipeline -- so on the A/B where six review outputs missed a raw ESC byte
+    # in the produced tool, a gate wired only to prose would have promoted it.
+    # `run_checks` fails CLOSED, and its veto is additive: a green check never
+    # rescues something an agent refused, it only ever adds a reason to refuse.
+
+    verification = run_checks(list(checks or []), cwd=project.path)
+    blocked = blocked or verification.blocking
+
     if blocked:
         # The gate has refused to promote. Say WHY, on the PR, where the person
         # who has to act will look -- see post_blocked_report for what the
@@ -542,6 +583,7 @@ def perform_git_actions(
             # free-text summary is the fallback when the judge did not supply
             # one. Both are parsed the same way downstream.
             verdict_summary=_verdict_role_summary(verdict, task_result, role),
+            verification=verification,
         )
     if git.promote_pr:
         if blocked:
@@ -857,6 +899,7 @@ def post_blocked_report(
     branch: str,
     run_id: int | None,
     verdict_summary: str | None,
+    verification: "VerificationReport | None" = None,
     post: Any = None,
 ) -> str | None:
     """Put the gate's reasoning on the pull request when it blocks.
@@ -870,16 +913,23 @@ def post_blocked_report(
     a comment that cannot be delivered must not take down the git actions that
     matter, and the gate has already done its job by refusing to promote.
     """
-    if run_id is None:
-        return None
-
     from hivepilot.services import pr_verdict_report
 
-    try:
-        body = pr_verdict_report.build_report(run_id=run_id, verdict_summary=verdict_summary)
-    except Exception as exc:  # noqa: BLE001 - reporting must not break the run
-        logger.warning("git.blocked_report_failed", branch=branch, error=str(exc))
-        return None
+    body = ""
+    # The agent half needs a run id, because it reads each role's recorded
+    # output back out of `interactions`. The deterministic half does not: a
+    # failing check carries its own output, so a refusal is never left without
+    # its reason merely because no run was recorded.
+    if run_id is not None:
+        try:
+            body = (
+                pr_verdict_report.build_report(run_id=run_id, verdict_summary=verdict_summary) or ""
+            )
+        except Exception as exc:  # noqa: BLE001 - reporting must not break the run
+            logger.warning("git.blocked_report_failed", branch=branch, error=str(exc))
+
+    if verification is not None and verification.blocking:
+        body = (body + "\n\n" if body else "") + _render_verification(verification)
 
     if not body:
         return None
