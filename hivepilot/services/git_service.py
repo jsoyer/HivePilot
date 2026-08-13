@@ -225,6 +225,33 @@ def checkout_branch(path: Path, branch: str) -> None:
         raise RuntimeError(f"Failed to checkout {branch}: {exc}") from exc
 
 
+def checkout_for_reading(path: Path, branch: str) -> None:
+    """Put *branch*'s EXISTING content in the tree, moving no branch pointer.
+
+    ``checkout_branch`` above uses ``git checkout -B``, which RESETS the branch
+    to current HEAD. That is right when a stage is about to commit onto it, and
+    destructive when the point is to READ what is already there.
+
+    Measured on forage run 535: the release gate called the ``-B`` form from a
+    clone sitting on the trunk, which rewound the local branch, and the
+    deterministic checks then verified an empty tree -- reporting "no tests
+    collected" on a commit whose tests had passed one stage earlier.
+
+    So: detached HEAD, and the remote-tracking ref first, because a local
+    pointer may already have been moved by exactly that bug.
+    """
+    repo = Repo(path)
+    errors: list[str] = []
+    for ref in (f"origin/{branch}", branch):
+        try:
+            repo.git.checkout("--detach", ref)
+            logger.info("git.checked_out_for_reading", branch=branch, ref=ref)
+            return
+        except Exception as exc:  # noqa: BLE001 - try the next ref
+            errors.append(f"{ref}: {exc}")
+    raise RuntimeError(f"could not check out {branch} for reading: {'; '.join(errors)}")
+
+
 def push(path: Path, remote: str, branch: str) -> None:
     repo = ensure_repo(path)
     try:
@@ -576,8 +603,13 @@ def perform_git_actions(
         # `tests` pass, and the gate a minute later saw exit 5, "no tests
         # collected", on the same commit. That turns the gate into a
         # false-block machine, which is how people learn to override gates.
+        #
+        # `checkout_for_reading`, never `checkout_branch`: the latter's `-B`
+        # RESETS the branch to HEAD, which on run 535 rewound the branch and
+        # made the checks verify an empty tree -- the very fault this is here
+        # to remove, reintroduced by the fix for it.
         try:
-            checkout_branch(project.path, branch)
+            checkout_for_reading(project.path, branch)
         except Exception as exc:  # noqa: BLE001 - checks still run, still fail closed
             logger.warning("git.checks_checkout_failed", branch=branch, error=str(exc))
 
