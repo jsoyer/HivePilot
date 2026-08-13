@@ -1717,3 +1717,51 @@ export interface MemoryBackendsResponse {
 export function fetchMemoryBackends(days = 30): Promise<MemoryBackendsResponse> {
   return apiFetch<MemoryBackendsResponse>(`/v1/memory/backends?days=${days}`)
 }
+
+/** One agent's turn in a run's conversation. */
+export interface ConversationMessage {
+  interaction_id: number
+  actor: string
+  role: string | null
+  action: string
+  body: string
+  at: string | null
+}
+
+export interface ConversationThread {
+  run_id: number
+  roles: string[]
+  messages: ConversationMessage[]
+}
+
+export interface ConversationRun {
+  run_id: number
+  project: string | null
+  started_at: string | null
+  message_count: number
+  roles: string[]
+}
+
+export interface ConversationRunsResponse {
+  runs: ConversationRun[]
+}
+
+export function fetchConversationRuns(limit = 25): Promise<ConversationRunsResponse> {
+  return apiFetch<ConversationRunsResponse>(`/v1/conversations?limit=${limit}`)
+}
+
+export function fetchConversationThread(runId: number): Promise<ConversationThread> {
+  return apiFetch<ConversationThread>(`/v1/conversations/${runId}`)
+}
+
+/** Record an operator instruction for a role, feeding its NEXT run.
+ *
+ * Not a message to a running agent — by the time a thread is readable its
+ * agents have exited. This appends to the role's corrections file, attributed
+ * to the operator. */
+export function replyToRole(role: string, text: string): Promise<{ role: string; written_to: string }> {
+  return apiFetch<{ role: string; written_to: string }>('/v1/conversations/reply', {
+    method: 'POST',
+    body: JSON.stringify({ role, text }),
+  })
+}
