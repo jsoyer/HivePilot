@@ -177,8 +177,13 @@ class TestTheChecksSeeTheCodeUnderReview:
 
     def test_a_gate_only_stage_checks_out_the_branch_first(self, gate, tmp_path, monkeypatch):
         seen: list[str] = []
+        # `checkout_for_reading`, not `checkout_branch`: the latter's `-B` would
+        # reset the branch and hand the checks an empty tree again.
         monkeypatch.setattr(
-            git_service, "checkout_branch", lambda path, branch: seen.append(branch), raising=False
+            git_service,
+            "checkout_for_reading",
+            lambda path, branch: seen.append(branch),
+            raising=False,
         )
 
         git_service.perform_git_actions(
@@ -223,3 +228,56 @@ class TestTheChecksSeeTheCodeUnderReview:
         )
 
         assert seen == []
+
+
+class TestReadingACommitNeverMovesABranch:
+    """The fix for the empty-tree bug reintroduced the empty-tree bug.
+
+    `checkout_branch` uses `git checkout -B`, which RESETS the branch to the
+    current HEAD. Called from a clone sitting on the trunk, it rewound the
+    branch, and the checks then verified nothing -- run 535 reported "no tests
+    collected" on a commit whose tests had passed one stage earlier.
+    """
+
+    def _repo(self, tmp_path):
+        import subprocess
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True
+            ).stdout
+
+        git("init", "-q", "-b", "trunk")
+        git("config", "user.name", "T")
+        git("config", "user.email", "t@e.invalid")
+        (tmp_path / "seed.md").write_text("seed\n")
+        git("add", "-A")
+        git("commit", "-qm", "initial")
+        git("checkout", "-q", "-b", "work")
+        (tmp_path / "code.py").write_text("print('hello')\n")
+        git("add", "-A")
+        git("commit", "-qm", "the work")
+        git("checkout", "-q", "trunk")
+        return git
+
+    def test_the_work_appears_in_the_tree(self, tmp_path):
+        self._repo(tmp_path)
+
+        git_service.checkout_for_reading(tmp_path, "work")
+
+        assert (tmp_path / "code.py").exists()
+
+    def test_the_branch_still_points_at_the_work(self, tmp_path):
+        """The whole defect: `-B` would have moved `work` back onto the trunk."""
+        git = self._repo(tmp_path)
+        before = git("rev-parse", "work").strip()
+
+        git_service.checkout_for_reading(tmp_path, "work")
+
+        assert git("rev-parse", "work").strip() == before
+
+    def test_an_unknown_branch_raises_rather_than_inventing_one(self, tmp_path):
+        self._repo(tmp_path)
+
+        with pytest.raises(RuntimeError):
+            git_service.checkout_for_reading(tmp_path, "no-such-branch")
