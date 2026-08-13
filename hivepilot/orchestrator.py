@@ -2094,7 +2094,12 @@ class Orchestrator:
         pipeline = getattr(self, "_current_pipeline", None)
         declared = list(getattr(pipeline, "checks", None) or [])
         return [
-            Check(name=c.name, command=c.command, timeout_seconds=c.timeout_seconds)
+            Check(
+                name=c.name,
+                command=c.command,
+                ci=c.ci,
+                timeout_seconds=c.timeout_seconds,
+            )
             for c in declared
         ]
 

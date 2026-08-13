@@ -593,7 +593,35 @@ pipelines:
 - `command` — run via `bash -lc` in the project path, exactly like a declared shell step.
   **Operator-declared only**: agent output is never interpolated into it, because the whole
   value of a check is that no model can influence its verdict.
-- `timeout_seconds` (default `300`)
+- `ci: true` — consult the **forge's own check runs** for the branch instead of running a
+  command. Exactly one of `command` or `ci` per entry.
+- `timeout_seconds` (default `300`) — for `ci:`, how long to wait for the runs to finish.
+
+#### `command:` or `ci:` — which, and why both exist
+
+```yaml
+    checks:
+      - name: suite          # the heavy product suite, where it already runs correctly
+        ci: true
+        timeout_seconds: 1800
+      - name: hostile-input  # the adversarial probe, where the agent cannot reach it
+        command: ./scripts/probe-hostile-input.sh
+```
+
+Use `ci:` for the product test suite. The environment already exists and is correct, and
+running it on the box would mean two copies that drift apart — and would execute
+agent-written code beside the secrets, the state database and the vault, instead of in an
+ephemeral container.
+
+Keep `command:` for the adversarial probes. CI runs whatever `.github/workflows` contains,
+and **the agent can write that file**: a control the subject can weaken is not a control.
+Local operator-declared checks are out of its reach, and the cheap probes need no toolchain.
+
+`ci:` fails closed on every ambiguity, and one case above all: **no check run reported is
+not a pass.** A repository with no workflow, a workflow that did not trigger, a branch the
+forge never saw — all produce silence. Every run is read, never a subset. Runs still going
+at `timeout_seconds` block: waiting is not passing. Only `success`, `skipped` and `neutral`
+pass, as a whitelist, so a conclusion nobody has considered yet cannot slip through.
 
 A failing check blocks promotion and merge **even when every agent approved**, and the pull
 request carries the check's own output. A passing check is never a permission: it cannot

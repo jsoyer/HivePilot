@@ -11,6 +11,7 @@ byte-identical to before this module existed.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -326,6 +327,35 @@ class GitHubForge:
             logger.info("git.pr_commented", project=project.path.name, branch=branch)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Failed to comment on PR for {project.path.name}: {exc}") from exc
+
+    def check_runs(self, *, project: ProjectConfig, branch: str) -> list[dict]:
+        """Every check run the forge reports for *branch*, as raw dicts.
+
+        EVERY run, never a subset: `gh pr checks | tail -3` once hid a mypy
+        failure and put two red pull requests on the trunk. An empty list is
+        returned as an empty list -- the caller treats silence as a block, and
+        must not be handed a fabricated success here.
+        """
+        cmd = [
+            _settings.gh_command,
+            "pr",
+            "view",
+            branch,
+            "--json",
+            "statusCheckRollup",
+            "-q",
+            ".statusCheckRollup",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(project.path), check=True, text=True, capture_output=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"Failed to fetch check runs for {project.path.name}: {exc}"
+            ) from exc
+        payload = json.loads(result.stdout.strip() or "[]")
+        return list(payload or [])
 
     def pr_status(self, *, project: ProjectConfig, branch: str) -> str:
         """Return *branch*'s PR `state` (OPEN/CLOSED/MERGED) via `gh pr view`."""

@@ -729,7 +729,10 @@ class VerificationCheck(BaseModel):
     """
 
     name: str
-    command: str
+    #: A command run in the project's tree, OR `ci: true` to consult the
+    #: forge's check runs. Exactly one -- see `verification_service.Check`.
+    command: str | None = None
+    ci: bool = False
     timeout_seconds: int = 300
 
 

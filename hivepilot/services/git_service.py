@@ -225,6 +225,55 @@ def checkout_branch(path: Path, branch: str) -> None:
         raise RuntimeError(f"Failed to checkout {branch}: {exc}") from exc
 
 
+def _ci_probe_for(project: ProjectConfig, branch: str) -> Any:
+    """A callable returning the forge's check runs for *branch*.
+
+    Translates the forge's shape into `CheckRun` here rather than in
+    `verification_service`, so that module stays free of forge vocabulary and
+    testable without one.
+
+    Nothing is swallowed: a forge that cannot answer raises, and the caller
+    treats that as a block. Returning `[]` on error would turn an unreachable
+    forge into "no checks reported", which is a different -- and also blocking
+    -- finding, but conflating them would hide an outage as a missing workflow.
+    """
+    from hivepilot.services.verification_service import CheckRun
+
+    def probe() -> list[CheckRun]:
+        forge = resolve_forge(project)
+        raw = forge.check_runs(project=project, branch=branch)
+        runs: list[CheckRun] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            # GitHub reports two shapes: CheckRun (status/conclusion) and
+            # StatusContext (state). Normalise both, and never invent a
+            # conclusion for a shape this does not recognise.
+            name = str(entry.get("name") or entry.get("context") or "unnamed")
+            if "state" in entry and "status" not in entry:
+                state = str(entry.get("state") or "").lower()
+                runs.append(
+                    CheckRun(
+                        name=name,
+                        status="completed" if state in {"success", "failure", "error"} else state,
+                        conclusion=state,
+                    )
+                )
+                continue
+            runs.append(
+                CheckRun(
+                    name=name,
+                    status=str(entry.get("status") or "").lower(),
+                    conclusion=(
+                        str(entry["conclusion"]).lower() if entry.get("conclusion") else None
+                    ),
+                )
+            )
+        return runs
+
+    return probe
+
+
 def checkout_for_reading(path: Path, branch: str) -> None:
     """Put *branch*'s EXISTING content in the tree, moving no branch pointer.
 
@@ -613,7 +662,11 @@ def perform_git_actions(
         except Exception as exc:  # noqa: BLE001 - checks still run, still fail closed
             logger.warning("git.checks_checkout_failed", branch=branch, error=str(exc))
 
-    verification = run_checks(resolved_checks, cwd=project.path)
+    verification = run_checks(
+        resolved_checks,
+        cwd=project.path,
+        ci_probe=_ci_probe_for(project, branch) if any(c.ci for c in resolved_checks) else None,
+    )
     blocked = blocked or verification.blocking
 
     if blocked:
