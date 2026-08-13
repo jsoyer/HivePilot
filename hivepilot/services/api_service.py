@@ -916,6 +916,13 @@ class ApprovalAction(BaseModel):
     reason: str | None = None
 
 
+class ConversationReply(BaseModel):
+    """An operator instruction addressed to a role, not to a running agent."""
+
+    role: str
+    text: str
+
+
 @v1.post("/approvals/{run_id}")
 @app.post("/approvals/{run_id}")
 def handle_approval(
@@ -1706,6 +1713,83 @@ def analytics_summary(
             return _csv_response(rows, _SUMMARY_CSV_FIELDS)
         return _pdf_response(rows, "Analytics Summary", _SUMMARY_CSV_FIELDS)
     return data
+
+
+@v1.get("/conversations")
+@app.get("/conversations")
+def conversations_runs(
+    limit: int = 25,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    """Runs that carry agent messages, newest first.
+
+    A reader over `interactions`, which has been recording every stage's output
+    with its role key all along -- this adds no capture, only a surface.
+    """
+    from hivepilot.services import conversations_service
+
+    return {
+        "runs": [
+            {
+                "run_id": r.run_id,
+                "project": r.project,
+                "started_at": r.started_at,
+                "message_count": r.message_count,
+                "roles": r.roles,
+            }
+            for r in conversations_service.recent_runs(limit=limit)
+        ]
+    }
+
+
+@v1.get("/conversations/{run_id}")
+@app.get("/conversations/{run_id}")
+def conversations_thread(
+    run_id: int,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    """One run's thread, oldest message first. An unknown run is empty, not 404
+    -- a stale id in an open tab must not break the page."""
+    from hivepilot.services import conversations_service
+
+    found = conversations_service.thread(run_id)
+    return {
+        "run_id": found.run_id,
+        "roles": found.roles,
+        "messages": [
+            {
+                "interaction_id": m.interaction_id,
+                "actor": m.actor,
+                "role": m.role,
+                "action": m.action,
+                "body": m.body,
+                "at": m.at,
+            }
+            for m in found.messages
+        ],
+    }
+
+
+@v1.post("/conversations/reply")
+@app.post("/conversations/reply")
+def conversations_reply(
+    payload: ConversationReply,
+    caller: token_service.TokenEntry = Depends(require_role("write")),
+):
+    """Record an operator instruction for a role, feeding its NEXT run.
+
+    Not a message to a running agent: by the time a thread is readable its
+    agents have exited. This appends to the role's corrections file, attributed
+    to the operator -- a corpus that files an operator's instruction as the
+    agent's own self-correction starts believing its own output.
+    """
+    from hivepilot.services import conversations_service
+
+    try:
+        path = conversations_service.reply(role=payload.role, text=payload.text)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"role": payload.role, "written_to": path}
 
 
 @v1.get("/analytics/trends")

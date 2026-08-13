@@ -194,6 +194,8 @@ const GROUPED_TAB_ORDER = [
   // 1.7M tokens of unread cache creation behind an 85% hit rate.
   'Cache',
   'Agents',
+  // The agents' exchanges as threads, beside the roster of who ran.
+  'Conversations',
   'Graph',
 ]
 

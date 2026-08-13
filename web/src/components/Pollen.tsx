@@ -17,6 +17,7 @@ import {
   Workflow,
   Zap,
   Gauge,
+  MessagesSquare,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -31,6 +32,7 @@ import { LanguageToggle } from './nav/LanguageToggle'
 import { SidebarNav } from './nav/SidebarNav'
 import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
+import { ConversationsView } from './views/ConversationsView'
 import { AgentsView } from './views/AgentsView'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
@@ -86,6 +88,11 @@ const BUILTIN_TABS = [
   // token, grouped with Health/Graph under "System" in nav-config.ts's
   // NAV_GROUP_ORDER (an observability surface over the fleet's roles).
   { value: 'agents', labelKey: 'nav.agents', Panel: AgentsView, Icon: Users },
+  // The agents' exchanges, read as conversations. Adds no capture: every
+  // stage's output has been persisted as an `interactions` row carrying its
+  // role key all along, and nothing ever presented it as a thread. Replying
+  // addresses the ROLE, not the finished run -- see ConversationsView.
+  { value: 'conversations', labelKey: 'nav.conversations', Panel: ConversationsView, Icon: MessagesSquare },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
   // and memory-quality built-ins merged into ONE `memory` item, plus a
   // new Growth tab (`/v1/memory/growth`) — see `MemoryView`'s own
