@@ -2045,6 +2045,22 @@ class Orchestrator:
                 self._governing_verdict = None
             self._pipeline_run_id = None
 
+    def _pipeline_checks(self) -> list[Any]:
+        """The running pipeline's declared deterministic checks, if any.
+
+        Returns an empty list outside a pipeline (a bare `run` on one task) and
+        for every pipeline that declares none -- byte-identical to the gate's
+        pre-existing behaviour in both cases.
+        """
+        from hivepilot.services.verification_service import Check
+
+        pipeline = getattr(self, "_current_pipeline", None)
+        declared = list(getattr(pipeline, "checks", None) or [])
+        return [
+            Check(name=c.name, command=c.command, timeout_seconds=c.timeout_seconds)
+            for c in declared
+        ]
+
     def _open_pipeline_run(self, run_id: int | None, pipeline_name: str) -> int:
         """Record (or adopt) the pipeline's run row AND remember its id.
 
@@ -3994,6 +4010,9 @@ class Orchestrator:
         if pipeline_name not in self.pipelines.pipelines:
             raise ValueError(f"Unknown pipeline: {pipeline_name}")
         pipeline = self.pipelines.pipelines[pipeline_name]
+        # Remembered so the release gate can reach the pipeline's declared
+        # deterministic checks without threading them through every stage.
+        self._current_pipeline = pipeline
         validate_pipeline(pipeline, self.tasks)
 
         # Fail-closed guard (plugin-arch-overhaul PRD, Sprint 01): a pipeline
@@ -6855,6 +6874,9 @@ class Orchestrator:
                     # So a stage-level block names the role that blocked, and
                     # its recorded output can actually be quoted on the PR.
                     role=task.role,
+                    # The gate's one non-LLM input. Empty for every pipeline
+                    # that declares none, which is byte-identical to before.
+                    checks=self._pipeline_checks(),
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)

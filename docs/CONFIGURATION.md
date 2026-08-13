@@ -560,9 +560,47 @@ Fields:
 - `mode` — `"cli"` | `"api"` (default `"cli"`)
 - `model`
 - `effort`
+- `checks: list[VerificationCheck]` (default empty)
 - `stages: list[PipelineStage]`
 - `debate: DebateConfig | None`
 - `lessons: LessonsConfig | None`
+
+### `VerificationCheck` — the release gate's non-LLM input
+
+Every other input to the release gate is an agent's prose: `_agent_verdict_blocked` parses a
+`status:` line out of a review, and the optional judge verdict is another model. Both fail
+**open** on purpose, so a broken parser cannot freeze every pipeline.
+
+A `checks:` entry runs a command in the project's working tree and takes its verdict from
+the **process exit code**, not from anything a model wrote. It fails **closed**: a check that
+timed out, whose binary was missing, or that could not start has verified nothing, and is
+treated as a block.
+
+```yaml
+pipelines:
+  greenfield:
+    description: …
+    checks:
+      - name: tests
+        command: python3 -m pytest -q
+      - name: hostile-input
+        command: ./scripts/probe-hostile-input.sh
+        timeout_seconds: 120
+    stages: …
+```
+
+- `name` — shown on the pull request when the gate blocks
+- `command` — run via `bash -lc` in the project path, exactly like a declared shell step.
+  **Operator-declared only**: agent output is never interpolated into it, because the whole
+  value of a check is that no model can influence its verdict.
+- `timeout_seconds` (default `300`)
+
+A failing check blocks promotion and merge **even when every agent approved**, and the pull
+request carries the check's own output. A passing check is never a permission: it cannot
+promote something an agent refused, it only ever adds a reason to refuse.
+
+Declaring no checks is byte-identical to previous behaviour — but the gate reports it as
+*"nothing was verified"*, never as a pass.
 
 ### `PipelineStage`
 

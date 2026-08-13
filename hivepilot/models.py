@@ -673,6 +673,20 @@ class PipelineStage(BaseModel):
         return v
 
 
+class VerificationCheck(BaseModel):
+    """One deterministic check the release gate must pass.
+
+    ``command`` is operator-declared configuration, run the same way a declared
+    shell step is run -- same trust level, deliberately. Agent output is never
+    interpolated into it: the entire value of a check is that no model can
+    influence its verdict.
+    """
+
+    name: str
+    command: str
+    timeout_seconds: int = 300
+
+
 class PipelineConfig(BaseModel):
     description: str
     # Pipeline-wide default execution mode for agent runners. `cli` (the
@@ -689,6 +703,16 @@ class PipelineConfig(BaseModel):
     # binding / runner-default for.
     model: str | None = None
     effort: EffortLevel | None = None
+    # Deterministic checks the release gate must pass, run in the project's
+    # working tree after the stages. The one gate input that is not an LLM
+    # opinion: measured on the memory A/B, six review outputs totalling ~62 000
+    # characters missed a raw ESC byte in the produced tool that a five-line
+    # probe caught instantly.
+    #
+    # Empty (the default) is BYTE-IDENTICAL to pre-existing behaviour -- no
+    # check runs and the gate is governed by the agent verdict alone. But an
+    # empty list is reported as "nothing was verified", never as a pass.
+    checks: list[VerificationCheck] = Field(default_factory=list)
     stages: list[PipelineStage] = Field(default_factory=list)
     # Pipeline-wide debate/consensus override (debate-judge-pipeline-yaml PRD,
     # Sprint 1). None -- dormant, byte-identical when absent. A stage's own
