@@ -957,6 +957,12 @@ class Settings(BaseSettings):
     # flags-off path is byte-identical to pre-Sprint-1 behaviour (templated
     # decision, majority-stance fallback in DebateService untouched).
     # env: HIVEPILOT_ENABLE_DEBATE_JUDGE
+    # Deployment-wide PERMISSION for Chief-of-Staff team composition -- not a
+    # default. Composition removes stages, so unlike every other block here it
+    # resolves with an AND: this must allow it AND the pipeline must ask for
+    # it. Setting this alone changes nothing. See `resolve_composition_config`.
+    allow_team_composition: bool = False
+
     enable_debate_judge: bool = False
     # Runner kind used for the ONE judge `capture_definition` call (see
     # `Orchestrator._adjudicate`). env: HIVEPILOT_JUDGE_RUNNER

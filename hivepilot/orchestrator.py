@@ -27,6 +27,7 @@ from hivepilot.models import (
     RunnerDefinition,
     TaskConfig,
     TaskStep,
+    resolve_composition_config,
     resolve_debate_config,
     resolve_effort,
     resolve_lessons_config,
@@ -2045,6 +2046,42 @@ class Orchestrator:
                 self._governing_verdict = None
             self._pipeline_run_id = None
 
+    def _stage_facts(self, pipeline: Any) -> list[Any]:
+        """What the composition policy needs to know about each stage.
+
+        `can_block` has been descriptive metadata read nowhere in the execution
+        path; this is the first code that reads it, and it reads it to make a
+        role UNREMOVABLE. A stage whose role cannot be resolved is treated as
+        blocking -- an unknown role is not a droppable one.
+        """
+        from hivepilot.roles import get_role
+        from hivepilot.services.team_composition import StageFacts
+
+        facts = []
+        for stage in pipeline.stages:
+            task = self.tasks.tasks.get(stage.task)
+            role_key = task.role if task is not None else None
+            can_block = True  # fail closed: unknown role -> not removable
+            if role_key:
+                try:
+                    can_block = bool(getattr(get_role(role_key), "can_block", False))
+                except Exception:  # noqa: BLE001 - an unresolvable role stays
+                    can_block = True
+            git = getattr(task, "git", None) if task is not None else None
+            release_gate = bool(
+                git is not None
+                and (getattr(git, "promote_pr", False) or getattr(git, "merge_pr", False))
+            )
+            facts.append(
+                StageFacts(
+                    name=stage.name,
+                    role=role_key,
+                    can_block=can_block,
+                    is_release_gate=release_gate,
+                )
+            )
+        return facts
+
     def _pipeline_checks(self) -> list[Any]:
         """The running pipeline's declared deterministic checks, if any.
 
@@ -4013,6 +4050,14 @@ class Orchestrator:
         # Remembered so the release gate can reach the pipeline's declared
         # deterministic checks without threading them through every stage.
         self._current_pipeline = pipeline
+
+        # Team composition. Resolved ONCE per pipeline: both the deployment
+        # floor and the pipeline must say yes (an AND, unlike every other block
+        # here -- see `resolve_composition_config`). `_composition_decision`
+        # stays None until a selector actually proposes a smaller roster, so
+        # every pipeline that does not use this runs byte-identically.
+        _composition = resolve_composition_config(floor=settings, pipeline=pipeline)
+        _composition_decision: Any = None
         validate_pipeline(pipeline, self.tasks)
 
         # Fail-closed guard (plugin-arch-overhaul PRD, Sprint 01): a pipeline
@@ -4161,6 +4206,35 @@ class Orchestrator:
             # distinguishable in the run record from both success and
             # failure (success=True, skipped=True — never counted as a
             # failure, never confused with a real completed stage).
+            # Team composition, applied. The guards already ran inside
+            # `team_composition.decide` -- a `can_block` role or the release
+            # gate is never in `dropped`, so this cannot silently remove a
+            # security review. `_composition_decision` is None unless a
+            # selector actually proposed a smaller roster.
+            if _composition_decision is not None and stage.name in _composition_decision.dropped:
+                logger.info(
+                    "pipeline.stage_skipped_by_composition",
+                    pipeline=pipeline_name,
+                    stage=stage.name,
+                    reason=_composition_decision.reason,
+                )
+                state_service.record_step(
+                    run_id=run_id,
+                    step=f"skip:{stage.name}",
+                    status="skipped",
+                    detail=f"composition: {_composition_decision.reason}",
+                )
+                results.append(
+                    RunResult(
+                        project=", ".join(selected_components),
+                        target=stage.task,
+                        success=True,
+                        skipped=True,
+                        detail=f"skipped by team composition: {_composition_decision.reason}",
+                    )
+                )
+                continue
+
             if _stage_should_skip(stage, group_tags, selected_components):
                 target_components = sorted(_resolve_stage_target_components(stage, group_tags))
                 skip_detail = (
@@ -4452,6 +4526,35 @@ class Orchestrator:
                 _agent if stage.name.lower() in _agent.lower() else f"{_agent} ({stage.name})"
             )
             prior_chunks.append(f"## {_heading}\n{stage_output}")
+
+            # Team composition: the selector has just spoken. Resolve its
+            # proposal ONCE, here, through the guarded policy -- never inline,
+            # so no path can reach a roster that skipped the guards.
+            if _composition.enabled and stage.name == _composition.selector_stage:
+                from hivepilot.services import team_composition as _tc
+
+                _decision = _tc.decide(
+                    stages=self._stage_facts(pipeline),
+                    selector_output=stage_output,
+                    selector_stage=stage.name,
+                )
+                _composition_decision = _decision if _decision.applied else None
+                state_service.record_interaction(
+                    actor="HivePilot",
+                    action="composed the team",
+                    target=pipeline_name,
+                    summary=_decision.reason,
+                    run_id=self._pipeline_run_id,
+                    metadata={"pipeline": pipeline_name, "composition": True},
+                )
+                logger.info(
+                    "composition.applied" if _decision.applied else "composition.full_roster",
+                    pipeline=pipeline_name,
+                    dropped=list(_decision.dropped),
+                    kept_despite=list(_decision.kept_despite),
+                    unknown=list(_decision.unknown),
+                )
+
             write_stage_artifact(
                 vault_path=vault_path,
                 run_id=run_id,

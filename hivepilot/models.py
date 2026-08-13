@@ -673,6 +673,52 @@ class PipelineStage(BaseModel):
         return v
 
 
+class CompositionConfig(BaseModel):
+    """Per-pipeline opt-in for Chief-of-Staff team composition.
+
+    ``selector_stage`` names the stage whose output carries the ``TEAM:``
+    directive. Without one, nothing ever proposes a team, so ``enabled`` would
+    be a lie -- and a lie that reads as "a smaller team was chosen" rather than
+    "nobody chose". Composition therefore resolves OFF when it is absent.
+    """
+
+    enabled: bool | None = None
+    selector_stage: str | None = None
+
+
+@dataclass(frozen=True)
+class EffectiveCompositionConfig:
+    enabled: bool
+    selector_stage: str | None
+
+
+def resolve_composition_config(
+    *,
+    floor: Any = None,
+    pipeline: "PipelineConfig | None",
+) -> EffectiveCompositionConfig:
+    """Resolve team composition. **AND**, not the usual strengthen-only OR.
+
+    Every other per-pipeline block here (``debate:``, ``lessons:``) can only ADD
+    gating, so OR-ing the layers is fail-closed and correct. Composition
+    inverts that: it REMOVES stages, and "enabled" is the permissive state. An
+    OR would let a single layer switch off the CISO for a pipeline, and the
+    config repo is writable by the very runs this would govern.
+
+    So the floor is a PERMISSION rather than a default, and both layers must
+    say yes: the deployment allows it, and the pipeline asks for it. Either one
+    silent, and the full roster runs.
+    """
+    allowed = bool(getattr(floor, "allow_team_composition", False))
+    block = getattr(pipeline, "composition", None) if pipeline is not None else None
+    requested = bool(block is not None and block.enabled)
+    selector = block.selector_stage if block is not None else None
+    return EffectiveCompositionConfig(
+        enabled=allowed and requested and bool(selector),
+        selector_stage=selector,
+    )
+
+
 class VerificationCheck(BaseModel):
     """One deterministic check the release gate must pass.
 
@@ -713,6 +759,10 @@ class PipelineConfig(BaseModel):
     # check runs and the gate is governed by the agent verdict alone. But an
     # empty list is reported as "nothing was verified", never as a pass.
     checks: list[VerificationCheck] = Field(default_factory=list)
+    # Chief-of-Staff team composition. Absent (the default) means the full
+    # roster runs, and it takes BOTH this and the deployment floor to enable --
+    # see `resolve_composition_config` for why this one is an AND.
+    composition: CompositionConfig | None = None
     stages: list[PipelineStage] = Field(default_factory=list)
     # Pipeline-wide debate/consensus override (debate-judge-pipeline-yaml PRD,
     # Sprint 1). None -- dormant, byte-identical when absent. A stage's own

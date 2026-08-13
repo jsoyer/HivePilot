@@ -162,3 +162,64 @@ class TestAPassingCheckPromotesAndSaysSo:
         )
 
         assert gate.promoted is True
+
+
+class TestTheChecksSeeTheCodeUnderReview:
+    """Measured on the first forage run: the implementation stage saw `tests`
+    pass, and the release gate a minute later saw exit 5, "no tests collected",
+    on the same commit.
+
+    The gate stage neither commits nor pushes, so nothing checked the branch
+    out, and the checks ran against a tree that did not hold the code. They
+    failed closed -- correctly, and vacuously. A gate that blocks regardless of
+    quality is how people learn to override gates.
+    """
+
+    def test_a_gate_only_stage_checks_out_the_branch_first(self, gate, tmp_path, monkeypatch):
+        seen: list[str] = []
+        monkeypatch.setattr(
+            git_service, "checkout_branch", lambda path, branch: seen.append(branch), raising=False
+        )
+
+        git_service.perform_git_actions(
+            project_name="p",
+            project=_project(tmp_path),
+            git=GitActions(create_pr=False, promote_pr=True),  # neither commit nor push
+            task_result="status: APPROVE",
+            checks=[Check(name="tests", command=_py("pass"))],
+        )
+
+        assert seen, "the gate ran checks without putting the branch in the tree"
+
+    def test_a_stage_that_pushed_is_not_checked_out_again(self, gate, tmp_path, monkeypatch):
+        """It is already on the branch; a second checkout would be noise."""
+        seen: list[str] = []
+        monkeypatch.setattr(
+            git_service, "checkout_branch", lambda path, branch: seen.append(branch), raising=False
+        )
+        monkeypatch.setattr(git_service, "push", lambda *a, **k: None, raising=False)
+
+        git_service.perform_git_actions(
+            project_name="p",
+            project=_project(tmp_path),
+            git=GitActions(push=True, create_pr=True),
+            task_result="status: APPROVE",
+            checks=[Check(name="tests", command=_py("pass"))],
+        )
+
+        assert len(seen) == 1  # the pre-existing commit/push checkout, not a second one
+
+    def test_declaring_no_checks_never_checks_anything_out(self, gate, tmp_path, monkeypatch):
+        seen: list[str] = []
+        monkeypatch.setattr(
+            git_service, "checkout_branch", lambda path, branch: seen.append(branch), raising=False
+        )
+
+        git_service.perform_git_actions(
+            project_name="p",
+            project=_project(tmp_path),
+            git=GitActions(create_pr=False, promote_pr=True),
+            task_result="status: APPROVE",
+        )
+
+        assert seen == []

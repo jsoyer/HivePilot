@@ -567,7 +567,21 @@ def perform_git_actions(
     # `run_checks` fails CLOSED, and its veto is additive: a green check never
     # rescues something an agent refused, it only ever adds a reason to refuse.
 
-    verification = run_checks(list(checks or []), cwd=project.path)
+    resolved_checks = list(checks or [])
+    if resolved_checks and not (git.commit or git.push):
+        # The release-gate stage neither commits nor pushes, so nothing above
+        # checked the branch out -- and a check run against a tree that does
+        # not hold the code under review verifies NOTHING while failing closed.
+        # Measured on the first forage run: the implementation stage saw
+        # `tests` pass, and the gate a minute later saw exit 5, "no tests
+        # collected", on the same commit. That turns the gate into a
+        # false-block machine, which is how people learn to override gates.
+        try:
+            checkout_branch(project.path, branch)
+        except Exception as exc:  # noqa: BLE001 - checks still run, still fail closed
+            logger.warning("git.checks_checkout_failed", branch=branch, error=str(exc))
+
+    verification = run_checks(resolved_checks, cwd=project.path)
     blocked = blocked or verification.blocking
 
     if blocked:
