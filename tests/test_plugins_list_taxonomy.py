@@ -18,11 +18,13 @@ Covers:
       (both flags default False -- opt-in, dormant) and present once their
       flags are flipped True.
   (c) the Agent Runners table reflects real `RUNNER_MAP` membership for the
-      built-in agent kinds (`claude`/`vibe`/`openrouter` -- `codex`/`cursor`
-      moved to gated plugins in the codex-cursor-plugins migration), not
-      just a hardcoded "active" status -- a built-in kind that is absent
-      from `RUNNER_MAP` (flag off) now renders `inactive` with its
-      `HIVEPILOT_<KIND>_ENABLED` flag, exactly like a plugin agent kind.
+      built-in agent kinds (`claude`/`openrouter` -- `codex`/`cursor` moved
+      to gated plugins in the codex-cursor-plugins migration, and `vibe`
+      moved the same way in the later vibe migration; see
+      tests/test_vibe.py), not just a hardcoded "active" status -- a
+      built-in kind that is absent from `RUNNER_MAP` (flag off) now renders
+      `inactive` with its `HIVEPILOT_<KIND>_ENABLED` flag, exactly like a
+      plugin agent kind.
 """
 
 from __future__ import annotations
@@ -183,7 +185,7 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         assert "API-only" in result.output
 
     def test_builtin_kind_disabled_renders_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Simulates `vibe_enabled=False` by removing `vibe` from the real
+        """Simulates `claude_enabled=False` by removing `claude` from the real
         `RUNNER_MAP` -- exactly the state `_BUILTIN_RUNNERS`' own gate would
         produce at process start with the flag off (the registration loop
         itself only runs once at import time, so a test toggles the
@@ -192,15 +194,20 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         fixture restores `RUNNER_MAP` to its pristine baseline after this
         test, so this mutation never leaks to any other test.
 
-        Uses `vibe` (not `codex`) as the tested built-in kind: the
-        codex-cursor-plugins migration moved `codex` OUT of
-        `_BUILTIN_RUNNERS` into a gated plugin (`plugins/codex.py`) -- see
-        `TestAgentRunnersTableReflectsEnabledFlags`'s sibling coverage isn't
-        affected since it never asserted codex's builtin-ness, but this test
-        specifically needs a kind that is still genuinely unconditional in
-        `_BUILTIN_RUNNERS`."""
-        assert "vibe" in RUNNER_MAP
-        monkeypatch.delitem(RUNNER_MAP, "vibe")
+        Uses `claude` (not `codex`/`cursor`/`vibe`) as the tested built-in
+        kind: the codex-cursor-plugins migration moved `codex`/`cursor` OUT
+        of `_BUILTIN_RUNNERS` into gated plugins (`plugins/codex.py` /
+        `plugins/cursor.py`), and the vibe migration later moved `vibe` OUT
+        the same way, into `plugins/vibe.py` (see tests/test_vibe.py) --
+        `claude` and `openrouter` are now the only two agent kinds left
+        genuinely unconditional in `_BUILTIN_RUNNERS`. `openrouter` already
+        has its own dedicated regression coverage below
+        (`test_openrouter_disabled_renders_inactive_not_api_only`, which
+        specifically exercises its API-only-status branch), so `claude` is
+        the kind that covers this generic "disabled builtin renders
+        inactive" case."""
+        assert "claude" in RUNNER_MAP
+        monkeypatch.delitem(RUNNER_MAP, "claude")
 
         mock_orch = MagicMock()
         mock_orch.plugins.loaded = []
@@ -212,15 +219,16 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         assert result.exit_code == 0, result.output
         # Row-scoped: a bare `"inactive" in output` would also pass on the
         # uninstalled optional-plugin agent kinds (gemini/ollama/...), which
-        # legitimately render `inactive` too -- so isolate vibe's own row
-        # (lowercase "vibe" appears only in that row's kind cell; the enable
-        # flag uses uppercase HIVEPILOT_VIBE_ENABLED) and assert IT flipped.
-        vibe_rows = [line for line in result.output.splitlines() if "vibe" in line]
-        assert vibe_rows, f"vibe row not found in Agent Runners table:\n{result.output}"
-        assert any("inactive" in line for line in vibe_rows), (
-            f"vibe row did not render 'inactive':\n{vibe_rows}"
+        # legitimately render `inactive` too -- so isolate claude's own row
+        # (lowercase "claude" appears only in that row's kind cell; the
+        # enable flag uses uppercase HIVEPILOT_CLAUDE_ENABLED) and assert IT
+        # flipped.
+        claude_rows = [line for line in result.output.splitlines() if "claude" in line]
+        assert claude_rows, f"claude row not found in Agent Runners table:\n{result.output}"
+        assert any("inactive" in line for line in claude_rows), (
+            f"claude row did not render 'inactive':\n{claude_rows}"
         )
-        assert "HIVEPILOT_VIBE_ENABLED" in result.output
+        assert "HIVEPILOT_CLAUDE_ENABLED" in result.output
 
     def test_openrouter_disabled_renders_inactive_not_api_only(
         self, monkeypatch: pytest.MonkeyPatch

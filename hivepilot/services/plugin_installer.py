@@ -115,6 +115,10 @@ AGENT_CLI_PLUGINS: frozenset[str] = frozenset(
         "opencode",
         "pi",
         "qwen_code",
+        # vibe migration: `vibe` moved OUT of _BUILTIN_RUNNERS into a
+        # default-on, PATH-gated plugin (plugins/vibe.py), same pattern as
+        # codex/cursor above -- see tests/test_vibe.py.
+        "vibe",
     }
 )
 

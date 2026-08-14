@@ -64,33 +64,35 @@ class TestBuiltinRunnersGate:
         # codex-cursor-plugins migration: codex/cursor moved OUT of
         # _BUILTIN_RUNNERS into gated plugins (see TestAgentRunnerKindsSingleSourceOfTruth
         # / tests/test_codex.py / tests/test_cursor.py for their own gating
-        # coverage) -- the built-in agent set this class exercises is now
-        # exactly {claude, vibe, openrouter}.
+        # coverage). The vibe migration moved `vibe` OUT the same way, into
+        # plugins/vibe.py -- see tests/test_vibe.py. The built-in agent set
+        # this class exercises is now exactly {claude, openrouter}.
         s = Settings(
             _env_file=None,  # type: ignore[call-arg]
             claude_enabled=False,
-            vibe_enabled=False,
             openrouter_enabled=False,
         )
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
-        for disabled in ("claude", "vibe", "openrouter"):
+        for disabled in ("claude", "openrouter"):
             assert disabled not in active
         # infra kinds carry no `<kind>_enabled` flag -> getattr(..., True) default wins
         for infra in ("shell", "terraform", "kubectl", "helm"):
             assert infra in active
 
     def test_gate_keeps_all_agents_active_by_default(self) -> None:
+        # vibe migration: `vibe` dropped out of this loop -- it is no longer
+        # unconditionally present in _BUILTIN_RUNNERS (see plugins/vibe.py
+        # and tests/test_vibe.py).
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
-        for agent in ("claude", "vibe", "openrouter"):
+        for agent in ("claude", "openrouter"):
             assert agent in active
 
     def test_only_claude_disabled_excludes_only_claude(self) -> None:
         s = Settings(_env_file=None, claude_enabled=False)  # type: ignore[call-arg]
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
         assert "claude" not in active
-        for agent in ("vibe", "openrouter"):
-            assert agent in active
+        assert "openrouter" in active
 
 
 # ---------------------------------------------------------------------------

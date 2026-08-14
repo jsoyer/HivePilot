@@ -19,7 +19,6 @@ from hivepilot.runners.kustomize_runner import KustomizeRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
 from hivepilot.runners.openrouter_runner import OpenRouterRunner
 from hivepilot.runners.packer_runner import PackerRunner
-from hivepilot.runners.prompt_cli_runner import VibeRunner
 from hivepilot.runners.puppet_runner import PuppetRunner
 from hivepilot.runners.salt_runner import SaltRunner
 from hivepilot.runners.shell_runner import ShellRunner
@@ -88,6 +87,12 @@ _OPTIONAL_AGENT_PLUGIN_KINDS: Dict[str, tuple[str, str]] = {
     # / plugins/cursor.py), same pattern as gemini/opencode/ollama above.
     # `cursor`'s CLI binary is `cursor-agent` (NOT `cursor`) — matches
     # `CursorRunner.command_name` and `AGENT_INSTALL_SPECS["cursor"]`.
+    # `vibe` was the LAST third-party agent CLI still hardcoded in
+    # `_BUILTIN_RUNNERS`. Migrated out for the same reason as the rest: a
+    # deployment that does not use it should not carry it. Built-in agent
+    # kinds are now exactly {claude, openrouter} -- the reference agent,
+    # and the API-only one with no binary to gate on.
+    "vibe": ("vibe_enabled", "vibe"),
     "codex": ("codex_enabled", "codex"),
     "cursor": ("cursor_enabled", "cursor-agent"),
 }
@@ -247,7 +252,6 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "langchain": LangChainRunner,
     "internal": InternalRunner,
     "container": ContainerRunner,
-    "vibe": VibeRunner,
     # Sprint 2 (runner-defaults-plugins-mode PRD): the only NEW built-in
     # agent kind — API-only, no CLI binary. gemini/opencode/ollama moved OUT
     # of this dict into gated plugins (plugins/gemini.py / opencode.py /

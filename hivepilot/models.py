@@ -75,7 +75,11 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "langchain",
     "internal",
     "container",
-    "vibe",
+    # `vibe` removed for the same reason as codex/cursor/gemini/opencode/
+    # ollama: it moved OUT of RUNNER_MAP's built-in registration into a
+    # default-on, PATH-gated plugin (plugins/vibe.py), so it is no longer
+    # unconditionally present in RUNNER_MAP and listing it here would
+    # violate this tuple's own invariant. See tests/test_vibe.py.
     # Sprint 2 (runner-defaults-plugins-mode PRD): the only new built-in
     # agent kind (API-only). gemini/opencode/ollama were removed from this
     # tuple — they moved OUT of RUNNER_MAP's built-in registration and into
