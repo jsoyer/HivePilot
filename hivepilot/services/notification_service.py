@@ -1123,6 +1123,17 @@ def _send_one_chunk(
         _send_telegram(
             chunk, chat_id=chat_id, message_thread_id=message_thread_id, parse_mode=parse_mode
         )
+        # Log the SUCCESS, not only the failures. A delivered message recorded
+        # nothing, so an empty log was compatible with both "the roles are
+        # speaking" and "the roles are mute" -- and I read that same silence as
+        # absence three times in one session before instrumenting the call.
+        # `chars` rather than the text: the body is agent output.
+        logger.info(
+            "stream.telegram.sent",
+            agent_key=agent_key,
+            message_thread_id=message_thread_id,
+            chars=len(chunk),
+        )
         return message_thread_id
     except _NotConfigured:
         raise
