@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from hivepilot.registry import RUNNER_MAP, RunnerRegistry
-from hivepilot.runners.prompt_cli_runner import VibeRunner
 
 
-def test_vibe_kind_is_registered() -> None:
-    assert RUNNER_MAP.get("vibe") is VibeRunner
+def test_vibe_not_in_builtin_runners() -> None:
+    # vibe migration: `vibe` moved OUT of _BUILTIN_RUNNERS into a
+    # default-on, PATH-gated plugin (plugins/vibe.py) -- it is no longer
+    # unconditionally present in RUNNER_MAP the way a hardcoded builtin is.
+    # See tests/test_vibe.py for its register()/health() gating coverage
+    # via the plugin module directly.
+    from hivepilot.registry import _BUILTIN_RUNNERS
+
+    assert "vibe" not in _BUILTIN_RUNNERS
 
 
 def test_known_kinds_returns_frozenset_of_builtins() -> None:
@@ -18,20 +24,21 @@ def test_known_kinds_returns_frozenset_of_builtins() -> None:
     # tests/test_agent_plugin_migration.py for the migrated-kind coverage.
     # codex-cursor-plugins migration: codex/cursor moved OUT of
     # _BUILTIN_RUNNERS the same way — no longer unconditionally present
-    # here either. See tests/test_codex.py / tests/test_cursor.py.
+    # here either. See tests/test_codex.py / tests/test_cursor.py. The
+    # vibe migration later moved `vibe` OUT the same way too — see
+    # tests/test_vibe.py.
     builtins = {
         "claude",
         "shell",
         "langchain",
         "internal",
         "container",
-        "vibe",
         "openrouter",
     }
     known = RunnerRegistry.known_kinds()
     assert isinstance(known, frozenset)
     assert builtins <= known
-    for migrated_kind in ("gemini", "opencode", "ollama", "codex", "cursor"):
+    for migrated_kind in ("gemini", "opencode", "ollama", "codex", "cursor", "vibe"):
         assert migrated_kind not in builtins
 
 
@@ -59,7 +66,7 @@ def test_capture_definition_falls_back_to_local_on_worker_failure(monkeypatch) -
 
     from hivepilot import registry as reg
     from hivepilot.models import RunnerDefinition
-    from hivepilot.registry import RUNNER_MAP, RunnerRegistry
+    from hivepilot.registry import RunnerRegistry
 
     monkeypatch.setattr(reg.settings, "worker_fallback_local", True, raising=False)
 
@@ -98,7 +105,7 @@ def test_capture_definition_clears_stash_so_earlier_captures_dont_leak_into_late
     from unittest.mock import MagicMock
 
     from hivepilot.models import RunnerDefinition
-    from hivepilot.registry import RUNNER_MAP, RunnerRegistry
+    from hivepilot.registry import RunnerRegistry
     from hivepilot.runners.base import UsageInfo, pop_last_usage, set_last_usage
 
     class ClaudeLikeRunner:

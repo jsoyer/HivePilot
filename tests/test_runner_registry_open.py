@@ -93,20 +93,21 @@ def test_known_kinds_returns_frozenset_with_builtins() -> None:
     # tests/test_agent_plugin_migration.py for the migrated-kind coverage.
     # codex-cursor-plugins migration: codex/cursor moved OUT of
     # _BUILTIN_RUNNERS the same way — no longer unconditionally present
-    # here either. See tests/test_codex.py / tests/test_cursor.py.
+    # here either. See tests/test_codex.py / tests/test_cursor.py. The
+    # vibe migration later moved `vibe` OUT the same way too — see
+    # tests/test_vibe.py.
     builtins = {
         "claude",
         "shell",
         "langchain",
         "internal",
         "container",
-        "vibe",
         "openrouter",
     }
     known = RunnerRegistry.known_kinds()
     assert isinstance(known, frozenset)
     assert builtins <= known
-    for migrated_kind in ("gemini", "opencode", "ollama", "codex", "cursor"):
+    for migrated_kind in ("gemini", "opencode", "ollama", "codex", "cursor", "vibe"):
         assert migrated_kind not in builtins
 
 
