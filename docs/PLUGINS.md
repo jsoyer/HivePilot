@@ -297,7 +297,12 @@ hivepilot plugins install <name>... [--enable/--no-enable] [--ref REF] [--yes]
 
 Fetches one or more curated built-in example plugins into the managed plugins dir and, by default, persists each `<NAME>_ENABLED=true`. See "Installing built-in example plugins" below for the full walkthrough.
 
-There is no CLI subcommand to enable or disable an ALREADY-INSTALLED plugin directly — toggle via `plugins tui` or by editing `HIVEPILOT_PLUGINS_DISABLED`/`HIVEPILOT_<NAME>_ENABLED` in `.env`. (`plugins install` is the exception for a plugin it just fetched — see `--enable`/`--no-enable` above.)
+For the optional **agent-CLI plugin kinds** (`codex`, `cursor`, `gemini`, `opencode`, `ollama`, `pi`, `qwen-code`, `kimi-cli`, `antigravity`, `vibe` — `_OPTIONAL_AGENT_PLUGIN_KINDS` in `hivepilot/registry.py`), `plugins enable <kind>`/`plugins disable <kind>` toggle them directly: `enable` installs the CLI binary if missing (with consent), places the plugin file, sets the `<KIND>_ENABLED` flag, and verifies the kind actually resolves; `disable` only flips the flag off. For everything else — the CURATED example plugins `plugins install` fetches (`rtk`, `herdr`, `mem0`, …) — there is still no dedicated enable/disable subcommand once installed: toggle via `plugins tui` or by editing `HIVEPILOT_PLUGINS_DISABLED`/`HIVEPILOT_<NAME>_ENABLED` in `.env`, or set the flag at fetch time with `plugins install --enable`/`--no-enable` (see above).
+
+```bash
+hivepilot plugins enable codex      # installs the codex CLI if missing, places plugins/codex.py, sets CODEX_ENABLED=true, verifies it resolves
+hivepilot plugins disable codex     # flips CODEX_ENABLED=false — does not uninstall the codex binary
+```
 
 ## Installing built-in example plugins
 

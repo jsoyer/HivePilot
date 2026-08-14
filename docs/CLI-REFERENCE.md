@@ -305,6 +305,8 @@ hivepilot api serve --host 0.0.0.0 --port 8080 --workers 2
 | Command | Purpose | Mutating? |
 | --- | --- | --- |
 | `list` | Table of loaded plugins/runners/notifiers/secrets providers/health. | No |
+| `enable <kind>` | Install + enable an agent plugin kind (codex/cursor/gemini/...); verifies it resolves. | **Yes** |
+| `disable <kind>` | Disable an agent plugin kind's flag; does not uninstall its binary. | **Yes** |
 | `health` | Health-check plugins; exits non-zero if any check errors (CI-friendly). | No |
 | `verify` | For each curated example plugin, attempt the actual import/binary check its code needs (not just `pip list`); reports the platform tag (musl/Alpine has no wheel for several extras) and flags a pip-vs-import mismatch. Exits non-zero on any mismatch. | No |
 | `tui` | Interactive plugin manager. Requires `HIVEPILOT_ENABLE_TEXTUAL_UI`. | Depends on actions taken inside |
