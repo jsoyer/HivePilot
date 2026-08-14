@@ -4652,6 +4652,45 @@ def plugins_install(
     )
 
 
+@plugins_app.command("enable")
+def plugins_enable(
+    kind: str = typer.Argument(
+        ...,
+        help="Agent plugin kind to enable, e.g. codex, cursor, gemini (see `hivepilot plugins list`)",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+) -> None:
+    """Enable an agent plugin kind: installs its CLI binary if missing (with
+    consent), places its plugin file, sets its enable flag, and verifies the
+    kind actually resolves afterwards. Enabling IS installing — there is no
+    separate step."""
+    from hivepilot.services import plugin_enable
+
+    confirm = None if yes else (lambda prompt: typer.confirm(prompt, default=False))
+    result = plugin_enable.enable(kind, assume_yes=yes, confirm=confirm)
+    if not result.ok:
+        typer.echo(f"plugins enable: {result.detail}", err=True)
+        raise typer.Exit(1)
+    typer.echo(result.detail)
+
+
+@plugins_app.command("disable")
+def plugins_disable(
+    kind: str = typer.Argument(
+        ..., help="Agent plugin kind to disable (flag only — does not uninstall the CLI binary)"
+    ),
+) -> None:
+    """Turn off an agent plugin kind's enable flag. Does NOT uninstall its
+    CLI binary — removing software is a different act."""
+    from hivepilot.services import plugin_enable
+
+    result = plugin_enable.disable(kind)
+    if not result.ok:
+        typer.echo(f"plugins disable: {result.detail}", err=True)
+        raise typer.Exit(1)
+    typer.echo(result.detail)
+
+
 @skills_app.command("list")
 def skills_list() -> None:
     """List every registered plugin-contributed skill (skill-plugin-type PRD,
