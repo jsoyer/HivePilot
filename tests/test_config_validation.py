@@ -228,7 +228,10 @@ def test_dangling_input_warns_in_full_mode_but_does_not_fail_validate(
 
     assert problems == [], f"Unexpected hard problems in full mode: {problems}"
     assert any("Stage B" in str(w.message) for w in record)
-    assert any("dangling input" in str(w.message) for w in record)
+    # Wording deliberately changed: "dangling input" read as a configuration
+    # mistake, but a pipeline may legitimately omit the producing role
+    # (forage has no CTO by design). The message now names the CONSEQUENCE.
+    assert any("will run WITHOUT" in str(w.message) for w in record)
 
 
 def test_clean_config_has_no_dangling_input_finding(tmp_path: Path) -> None:
@@ -252,7 +255,7 @@ def test_clean_config_has_no_dangling_input_finding(tmp_path: Path) -> None:
         warnings.simplefilter("always")
         problems = config_validation.validate_config(base_dir=tmp_path)
 
-    dangling_warnings = [w for w in record if "dangling input" in str(w.message)]
+    dangling_warnings = [w for w in record if "WITHOUT" in str(w.message)]
     assert dangling_warnings == [], f"Unexpected dangling-input warnings: {dangling_warnings}"
     assert problems == [], f"Unexpected problems: {problems}"
 
@@ -278,7 +281,7 @@ def test_dangling_input_is_hard_error_in_keyed_mode(tmp_path: Path, monkeypatch)
 
     problems = config_validation.validate_config(base_dir=tmp_path)
 
-    assert any("out2" in p and "dangling input" in p for p in problems), (
+    assert any("out2" in p and "WITHOUT" in p for p in problems), (
         f"Expected a dangling-input problem for 'out2', got: {problems}"
     )
 
@@ -321,7 +324,7 @@ def test_optional_input_not_flagged_as_dangling_in_keyed_mode(tmp_path: Path, mo
     assert not any("design_spec" in p for p in problems), (
         f"optional_inputs key must never be flagged as dangling, got: {problems}"
     )
-    assert any("dangling_required" in p and "dangling input" in p for p in problems), (
+    assert any("dangling_required" in p and "WITHOUT" in p for p in problems), (
         f"A genuinely dangling REQUIRED input must still error, got: {problems}"
     )
 

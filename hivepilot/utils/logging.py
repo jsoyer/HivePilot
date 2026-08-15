@@ -68,7 +68,16 @@ def configure_logging() -> None:
     global _configured
     if _configured:
         return
-    settings.logs_dir.mkdir(parents=True, exist_ok=True)
+    # Resolved, never raw. `logs_dir` defaults to the RELATIVE `runs/logs`, so
+    # a bare `.mkdir()` anchors it to the process CWD instead of `base_dir` --
+    # which every other path in this codebase is anchored to. That survived
+    # only because the units run with `WorkingDirectory=/` and `/runs` happened
+    # to exist; moving that directory to its proper home broke logging outright
+    # (81 PermissionError in three minutes, event log frozen, all five units
+    # still reporting "active"). Fourth instance of the shape already
+    # documented for state.db, the plugin install dir and the .env.
+    log_dir = settings.resolve_path(settings.logs_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
     # WatchedFileHandler, not FileHandler: it re-opens the path when the
     # inode changes, which is what makes EXTERNAL rotation safe.
     #
@@ -91,9 +100,7 @@ def configure_logging() -> None:
         format="%(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.handlers.WatchedFileHandler(
-                settings.logs_dir / "hivepilot.log", encoding="utf-8"
-            ),
+            logging.handlers.WatchedFileHandler(log_dir / "hivepilot.log", encoding="utf-8"),
         ],
     )
     structlog.configure(

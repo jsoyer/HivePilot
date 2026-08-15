@@ -491,6 +491,28 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
     }
     keyed_mode = settings.context_routing_mode == "keyed"
     for pipeline_name, pipeline in (pipelines_data.get("pipelines") or {}).items():
+        # Everything ANY stage of this pipeline produces, regardless of order.
+        # This is what separates the two cases the check used to conflate:
+        #
+        #   producer absent from the pipeline  -> a composition choice. `forage`
+        #       has no CTO because it IS the pipeline without a planning phase;
+        #       calling that a "dangling input" reads as a config mistake and
+        #       trains the operator to ignore the message.
+        #   producer present but ordered LATER -> a real ordering fault, and the
+        #       severity below is right for it.
+        #
+        # `optional_inputs` already exists, but on the ROLE: marking
+        # `technical_spec` optional there would silence it in `noxys` too, where
+        # the CTO does run and the input genuinely should be present. The
+        # distinction has to be per pipeline.
+        produced_anywhere: set[str] = set()
+        for _stage in pipeline.get("stages") or []:
+            _task = (tasks_data.get("tasks") or {}).get(_stage.get("task"))
+            _role = _task.get("role") if isinstance(_task, dict) else None
+            _rdef = role_by_name.get(_role) if _role else None
+            if _rdef:
+                produced_anywhere.update(_rdef.get("outputs") or [])
+
         available_outputs: set[str] = set()
         for stage in pipeline.get("stages") or []:
             task_ref = stage.get("task")
@@ -504,15 +526,41 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
                 if input_key in optional_inputs:
                     continue
                 if input_key not in available_outputs:
-                    message = (
-                        f"Pipeline '{pipeline_name}' stage '{stage.get('name', '?')}' "
-                        f"input '{input_key}' is not produced by any earlier stage's outputs "
-                        "(dangling input)"
-                    )
-                    if keyed_mode:
-                        problems.append(message)
+                    stage_name = stage.get("name", "?")
+                    if input_key in produced_anywhere:
+                        # The pipeline HAS a producer and runs it too late.
+                        message = (
+                            f"Pipeline '{pipeline_name}' stage '{stage_name}' consumes "
+                            f"'{input_key}', but the stage producing it runs LATER in this "
+                            "pipeline -- reorder them"
+                        )
+                        if keyed_mode:
+                            problems.append(message)
+                        else:
+                            warnings.warn(f"[config validate] {message}", stacklevel=2)
                     else:
-                        warnings.warn(f"[config validate] {message}", stacklevel=2)
+                        # No stage in this pipeline produces it at all. Say what
+                        # that MEANS for the run rather than labelling the config
+                        # broken; a pipeline may legitimately omit the producer
+                        # (`forage` has no CTO by design).
+                        #
+                        # But the SEVERITY still depends on the routing mode, and
+                        # softening that was a mistake in the first attempt: in
+                        # `keyed` mode `_route_prior_context` narrows a stage to
+                        # its declared keys, so an input nobody produces really
+                        # does degrade that stage to the whole-blob fallback.
+                        # Absent-producer is benign only in `full` mode, where
+                        # prior context is built from every prior chunk anyway.
+                        message = (
+                            f"Pipeline '{pipeline_name}' stage '{stage_name}' will run "
+                            f"WITHOUT '{input_key}': no stage in this pipeline produces "
+                            "it. Intentional if this pipeline deliberately omits that "
+                            "role"
+                        )
+                        if keyed_mode:
+                            problems.append(message)
+                        else:
+                            warnings.warn(f"[config validate] {message}", stacklevel=2)
             available_outputs.update(role_def.get("outputs") or [])
 
     # -----------------------------------------------------------------------
