@@ -15,6 +15,13 @@ from dataclasses import dataclass
 
 # Type: tuple[str, ...]. Kept without an inline annotation so the invariant
 # grep (`MANDATORY_AGENTS\s*=\s*\(?['"]claude['"]`) matches literally.
+# Read as "at least ONE of these", which is what the only consumer says
+# (`doctor`: "HivePilot needs at least one of: ..."), not "all of these are
+# required". `codex` and `vibe` becoming gated plugins (#234, #520) therefore
+# does NOT remove them here: an install carrying only codex does have a
+# dispatchable agent, and shrinking this tuple would tell that operator they
+# have none. `claude` stays first because it is the primary prerequisite and
+# `claude_ok` is reported separately.
 MANDATORY_AGENTS = ("claude", "codex", "vibe")
 
 # Canonical set of "agent" runner kinds — the SINGLE source of truth shared by

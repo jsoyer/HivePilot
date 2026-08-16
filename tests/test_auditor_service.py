@@ -1,4 +1,13 @@
-"""Tests for auditor_service — Henri, the external auditor (Mistral/vibe)."""
+"""Tests for auditor_service — Henri, the external auditor.
+
+Henri used to be hardwired to the `vibe` runner. `vibe` became an
+optional, PATH-gated plugin (#520), so on a stock install every pipeline
+cycle ended on an auditor error naming a runner nobody had chosen
+(measured on run 635). The runner is now `settings.auditor_runner`, so
+these tests pin the CONFIGURED kind rather than a literal — the point was
+never that Henri speaks Mistral, it is that Henri speaks through one
+declared, dispatchable runner.
+"""
 
 from __future__ import annotations
 
@@ -24,7 +33,9 @@ def _registry(output: str) -> MagicMock:
     return reg
 
 
-def test_observe_runs_henri_via_vibe(_vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_observe_runs_henri_via_the_configured_runner(
+    _vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         auditor_service.state_service,
         "list_recent_interactions",
@@ -37,7 +48,10 @@ def test_observe_runs_henri_via_vibe(_vault: Path, monkeypatch: pytest.MonkeyPat
     assert "clean hand-offs" in out
     reg.capture_definition.assert_called_once()
     rdef = reg.capture_definition.call_args.args[0]
-    assert rdef.kind == "vibe"  # Henri runs on Mistral via the vibe runner
+    # The configured runner, not a literal: a deployment that wants the
+    # outside opinion back sets HIVEPILOT_AUDITOR_RUNNER=openrouter.
+    assert rdef.kind == auditor_service.settings.auditor_runner
+    assert reg.capture_definition.call_args.args[1].step.runner == rdef.kind
 
 
 def test_observe_passes_interactions_as_context(_vault: Path, monkeypatch) -> None:
@@ -60,7 +74,7 @@ def test_audit_proposes_and_returns_text(_vault: Path, monkeypatch) -> None:
     out = auditor_service.audit(project=ProjectConfig(path=_vault), registry=reg, dry_run=True)
     assert "Proposal" in out
     rdef = reg.capture_definition.call_args.args[0]
-    assert rdef.kind == "vibe"
+    assert rdef.kind == auditor_service.settings.auditor_runner
 
 
 # ---------------------------------------------------------------------------

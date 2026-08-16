@@ -527,6 +527,20 @@ class Settings(BaseSettings):
     auditor_auto: bool = (
         True  # run Henri (external auditor) automatically after each pipeline cycle
     )
+    # env: HIVEPILOT_AUDITOR_RUNNER — which agent runner Henri speaks through.
+    # This used to be `vibe`, hardcoded in `auditor_service`. `vibe` became an
+    # optional, PATH-gated plugin (#520), so every pipeline cycle on a stock
+    # install ended with an auditor error naming a runner the operator never
+    # chose — measured on run 635, where the pipeline itself asked only for
+    # `claude`.
+    #
+    # The default is a builtin, so the auditor is always dispatchable. Note the
+    # tradeoff this makes explicit: Henri exists to be an OUTSIDE opinion on
+    # work the pipeline's own agent produced, and a default of `claude` audits
+    # Claude with Claude. A deployment that wants the outsider back sets this
+    # to `openrouter` (any non-Claude model) or re-enables the vibe plugin —
+    # a config decision, not an engine one.
+    auditor_runner: str = "claude"
     container_runtime: str = "docker"  # container runtime for the container runner: docker | podman
     auto_commit_vault: bool = False  # git add/commit/push the Obsidian vault after a pipeline run
     event_webhook_url: str | None = None  # POST pipeline lifecycle events here (n8n, etc.)
