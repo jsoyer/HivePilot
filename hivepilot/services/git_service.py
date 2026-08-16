@@ -398,6 +398,57 @@ def _push_with_rebase_retry(repo: Any, branch: str) -> None:
     logger.info("vault.pushed_after_rebase", branch=branch)
 
 
+def commit_all(path: Path, message: str, *, pathspec: str | None = None) -> None:
+    """Commit with HivePilot's identity, whatever the repo's own config says.
+
+    Identity travels as GIT_AUTHOR_*/GIT_COMMITTER_* environment variables, NOT
+    as `-c` flags. The first attempt used argv:
+
+        repo.git.commit("-c", "user.name=...", "-m", message)
+
+    GitPython places every argument AFTER the subcommand, so that ran
+    `git commit -c user.name=... -m ...` -- and after `commit`, `-c` is that
+    command's own `--reedit-message` flag. Git refused with "options '-m' and
+    '-c' cannot be used together", so HivePilot's commit failed EVERY time.
+
+    It stayed invisible because the agent usually commits its own work first:
+    the branch carries those commits, push and PR proceed, and only a run where
+    the agent left the tree dirty exposed it -- three forage runs in a row,
+    marked failed with an empty step detail.
+
+    Environment rather than corrected argv placement: an env var cannot be
+    mis-ordered, and this is the second time the identity has been the thing
+    that broke a commit (systemd units have no HOME, so ~/.gitconfig is
+    invisible and a freshly cloned repo has no user.name at all).
+    """
+    repo = Repo(path, search_parent_directories=True)
+    # Identity through GIT_AUTHOR_*/GIT_COMMITTER_*, which sit at the TOP of
+    # git's precedence. Two earlier attempts failed for two different reasons,
+    # both worth recording:
+    #
+    #   repo.git.commit("-c", "user.name=...", "-m", msg)
+    #       GitPython puts every argument AFTER the subcommand, so `-c` became
+    #       commit's own --reedit-message flag: "options '-m' and '-c' cannot
+    #       be used together". HivePilot's commit failed every time.
+    #
+    #   git -c user.name=... -c user.email=... commit -m msg
+    #       Correct placement, and STILL wrong: a `GIT_AUTHOR_EMAIL` in the
+    #       environment outranks `-c user.email`. Measured -- the commit came
+    #       out as "HivePilot <jeromesoyer@gmail.com>", name taken and email
+    #       ignored, which is the worst kind of half-applied identity.
+    #
+    # `update_environment` also keeps the call as `repo.git.commit(...)`, which
+    # the existing mock-driven vault tests observe.
+    repo.git.update_environment(
+        GIT_AUTHOR_NAME=COMMIT_IDENTITY_NAME,
+        GIT_AUTHOR_EMAIL=COMMIT_IDENTITY_EMAIL,
+        GIT_COMMITTER_NAME=COMMIT_IDENTITY_NAME,
+        GIT_COMMITTER_EMAIL=COMMIT_IDENTITY_EMAIL,
+    )
+    args = ["-m", message] + (["--", pathspec] if pathspec else [])
+    repo.git.commit(*args)
+
+
 def commit_vault(
     vault_path: Path, message: str = "HivePilot: update Obsidian notes", *, push: bool = True
 ) -> bool:
@@ -426,7 +477,9 @@ def commit_vault(
     repo.git.add("-A", "--sparse", "--", pathspec)
     if not repo.git.diff("--cached", "--name-only", "--", pathspec).strip():
         return False  # nothing changed under the vault
-    repo.git.commit("-m", message, "--", pathspec)  # commit only the vault's paths
+    # Same identity path as every other commit: a vault clone may carry no
+    # user.name either, and a service has no HOME to find one in.
+    commit_all(vault_path, message, pathspec=pathspec)
     if push:
         if repo.head.is_detached:
             logger.warning("vault.detached_head_no_push", path=pathspec)
@@ -613,14 +666,7 @@ def perform_git_actions(
             # real greenfield run. The `noxys` checkout happens to carry a
             # LOCAL identity, which is why every earlier run committed fine and
             # this stayed invisible until a repo was cloned fresh.
-            repo.git.commit(
-                "-c",
-                f"user.name={COMMIT_IDENTITY_NAME}",
-                "-c",
-                f"user.email={COMMIT_IDENTITY_EMAIL}",
-                "-m",
-                message,
-            )
+            commit_all(project.path, message)
         if git.push:
             push(project.path, "origin", branch)
     if git.create_pr:

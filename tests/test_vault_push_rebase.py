@@ -42,7 +42,10 @@ class _Git:
         self._push_failures = pushes_before_success
 
     def __getattr__(self, name: str):
-        def _call(*args):
+        # kwargs too: `commit_all` calls `repo.git.update_environment(
+        # GIT_AUTHOR_NAME=...)`, and a fake that only models positional args
+        # stops modelling the object it stands in for.
+        def _call(*args, **kwargs):
             self.calls.append((name, args))
             if name == "push" and self._push_failures > 0:
                 self._push_failures -= 1
