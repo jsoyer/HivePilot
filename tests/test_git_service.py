@@ -517,6 +517,9 @@ class TestUnattendedCommitsCarryAnIdentity:
             def commit(self, *a, **k):
                 calls.append(("commit", a))
 
+            def update_environment(self, **k):
+                calls.append(("env", tuple(sorted(k.items()))))
+
             def checkout(self, *a, **k):
                 pass
 
@@ -538,7 +541,16 @@ class TestUnattendedCommitsCarryAnIdentity:
             run_id=479,
         )
 
-        commit = next(c for c in calls if c[0] == "commit")
-        joined = " ".join(str(x) for x in commit[1])
-        assert "user.name=" in joined, "commit ran without an author identity"
-        assert "user.email=" in joined
+        # The identity now travels as GIT_AUTHOR_*/GIT_COMMITTER_*, not as `-c`
+        # flags. Two earlier shapes were wrong: `-c` after the subcommand is
+        # commit's --reedit-message (git refused outright), and `-c` before it
+        # is silently outranked by a GIT_AUTHOR_EMAIL already in the
+        # environment -- measured, the commit came out with our name and the
+        # ambient email.
+        assert next((c for c in calls if c[0] == "commit"), None), "no commit ran"
+        env = next((c for c in calls if c[0] == "env"), None)
+        assert env is not None, "commit ran without an author identity"
+        joined = " ".join(f"{k}={v}" for k, v in env[1])
+        assert "GIT_AUTHOR_NAME=" in joined
+        assert "GIT_AUTHOR_EMAIL=" in joined
+        assert "GIT_COMMITTER_EMAIL=" in joined
