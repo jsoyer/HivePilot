@@ -4810,10 +4810,25 @@ class Orchestrator:
         # pipeline that otherwise succeeded.
         if settings.enable_lesson_distillation and not simulate and not dry_run:
             for result in results:
+                # A `RunResult` carries a directory name, not a project key --
+                # see `_project_for_result`. Passing it straight to `_project`
+                # raised "Unknown project" for every project keyed differently
+                # from its folder, and the best-effort wrapper below turned
+                # that into a log line nobody read.
+                _project_cfg = self._project_for_result(result.project, project_names)
+                if _project_cfg is None:
+                    logger.debug(
+                        "lessons.distill_skipped",
+                        pipeline=pipeline_name,
+                        project=result.project,
+                        run_id=run_id,
+                        reason="result does not name exactly one of this run's projects",
+                    )
+                    continue
                 try:
                     self._distill_and_persist_lessons(
                         run_id=run_id,
-                        project=self._project(result.project),
+                        project=_project_cfg,
                         role=None,
                         task_name=pipeline_name,
                         result=result,
@@ -7034,6 +7049,50 @@ class Orchestrator:
         if name not in self.projects.projects:
             raise ValueError(f"Unknown project: {name}")
         return self.projects.projects[name]
+
+    def _project_for_result(
+        self, result_project: str, project_names: Iterable[str]
+    ) -> ProjectConfig | None:
+        """Resolve a `RunResult.project` back to the config it came from.
+
+        `RunResult` carries a DIRECTORY name -- every construction in the
+        pipeline path is `RunResult(project.path.name, ...)` -- while
+        `_project` keys on the project NAME. The two coincide for `noxys` and
+        `hivepilot`, and diverge for anything keyed differently from its
+        folder. Measured on run 635: project `greenfield-forage` living in
+        `~/forage` produced
+
+            "error": "Unknown project: forage", "event": "lessons.distill_error"
+
+        so lesson distillation had never once run for such a project --
+        silently, because that call is best-effort wrapped and a broken
+        distiller must not fail a pipeline.
+
+        Returns `None` rather than raising, for three shapes that are not
+        projects at all and legitimately reach here: a comma-joined component
+        list, the pipeline's own name (both used as `RunResult.project` in the
+        stage-scoping paths), and an empty string.
+
+        The basename fallback searches only *project_names* -- the projects
+        THIS run targeted. A global scan would happily attribute a lesson to a
+        project the run never touched. And a basename shared by two of this
+        run's own projects returns `None`: filing a lesson under the wrong
+        project is worse than filing none.
+        """
+        name = (result_project or "").strip()
+        if not name:
+            return None
+        direct = self.projects.projects.get(name)
+        if direct is not None:
+            return direct
+        matches = [
+            cfg
+            for cfg in (self.projects.projects.get(n) for n in project_names)
+            if cfg is not None and cfg.path.name == name
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def _resolve_run_target(self, name: str) -> tuple[ProjectConfig, str | None]:
         """Resolve a single `run_task` target -- a plain project name or a

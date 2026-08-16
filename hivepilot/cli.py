@@ -4098,8 +4098,10 @@ def plugins_list() -> None:
     #
     # codex-cursor-plugins migration: codex/cursor moved OUT of this tuple
     # into _OPTIONAL_AGENT_PLUGIN_KINDS — they now render via the plugin loop
-    # below, not this built-in loop.
-    _builtin_agent_kinds = ("claude", "vibe", "openrouter")
+    # below, not this built-in loop. `vibe` followed them (#520) and this
+    # tuple was not updated with it, so `doctor` listed a gated plugin as a
+    # built-in and reported it against the wrong loop.
+    _builtin_agent_kinds = ("claude", "openrouter")
     # Canonical set, shared with `doctor_liveness`'s agent-CLI version check --
     # it used to be a private local here, which is why that check could not see
     # it and told the operator to install a CLI that does not exist.

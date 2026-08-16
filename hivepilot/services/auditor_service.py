@@ -83,8 +83,17 @@ def _auditor_prompt_path() -> Path:
 
 
 def _run_henri(project: ProjectConfig, context: str, registry, *, label: str) -> str:
-    """Invoke Henri (Mistral via the vibe runner) with the auditor prompt + context."""
-    step = TaskStep(name=label, runner="vibe", prompt_file=str(_auditor_prompt_path()))
+    """Invoke Henri with the auditor prompt + context, through the runner the
+    deployment configured (`HIVEPILOT_AUDITOR_RUNNER`, default `claude`).
+
+    The kind is read here rather than captured at import time so a config
+    reload takes effect without a restart, and it is read ONCE so the step and
+    the definition below cannot disagree — they are two names for one choice,
+    and a change applied to only one of them would dispatch to one runner while
+    reporting the other.
+    """
+    kind = settings.auditor_runner
+    step = TaskStep(name=label, runner=kind, prompt_file=str(_auditor_prompt_path()))
     payload = RunnerPayload(
         project_name=project.path.name,
         project=project,
@@ -93,7 +102,7 @@ def _run_henri(project: ProjectConfig, context: str, registry, *, label: str) ->
         metadata={"prior_context": context},
         secrets={},
     )
-    rdef = RunnerDefinition(name="auditor:henri", kind="vibe", command=None, model=None)
+    rdef = RunnerDefinition(name="auditor:henri", kind=kind, command=None, model=None)
     return registry.capture_definition(rdef, payload).strip()
 
 
