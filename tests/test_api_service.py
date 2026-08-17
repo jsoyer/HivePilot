@@ -1268,6 +1268,28 @@ class TestMemoriesEndpoint:
         # see `test_search_failure_never_500s`.
         assert resp.json()["configured"] is False
 
+    def test_empty_result_is_neither_an_error_nor_unconfigured(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """'Nothing matched' is a real, successful answer. Reporting it like a
+        failure is what makes an audit of the corpus untrustworthy -- the audit
+        cannot tell 'the corpus is clean' from 'the search never ran'."""
+        from hivepilot.services import api_service
+
+        class _EmptyClient:
+            def search(self, *a, **k):
+                return []
+
+        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: _EmptyClient())
+        raw, _ = add_token("admin")
+        resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["configured"] is True
+        assert body["memories"] == []
+        assert not body.get("error")
+
     def test_unconfigured_returns_graceful_200_not_500(self, api_client, tmp_tokens_file):
         """Default settings (mem0_enabled=False) — no mocking needed, this is
         the real dormant-by-default behavior."""
