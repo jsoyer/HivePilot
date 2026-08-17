@@ -1794,7 +1794,26 @@ def build_prior_context(
     if mode == "cap":
         if len(joined) <= max_chars:
             return joined
-        return "\n\n".join(_fair_share_chunks(prior_chunks, max_chars))
+        kept = _fair_share_chunks(prior_chunks, max_chars)
+        result = "\n\n".join(kept)
+        # Never cut in silence. Run 639 discarded ~67 000 of its own 75 728
+        # characters and said nothing, so the only visible consequence was a
+        # gate blocking for a clearance that had been given -- which reads as
+        # an agent problem and sends you looking in the wrong place entirely.
+        #
+        # The budget is a guess about a model whose real window the engine
+        # never consults, so it WILL be wrong for some deployment. When it is,
+        # that belongs in the log, with the numbers that let it be tuned on
+        # evidence rather than taste.
+        logger.warning(
+            "context.truncated",
+            total_chars=len(joined),
+            budget=max_chars,
+            dropped_chars=len(joined) - len(result),
+            stages=len(prior_chunks),
+            largest_stage_chars=max(len(c) for c in prior_chunks),
+        )
+        return result
     # mode == "full"
     return joined
 
@@ -1829,11 +1848,43 @@ def _fair_share_chunks(chunks: list[str], max_chars: int) -> list[str]:
 
     for i in remaining:
         share = max(budget // len(remaining), 2)
-        head = share - share // 2
-        tail = share // 2
-        out[i] = f"{chunks[i][:head]}{_CONTEXT_ELISION}{chunks[i][-tail:]}"
+        out[i] = _truncate_keeping_the_verdict(chunks[i], share)
 
     return [out[i] for i in range(len(chunks))]
+
+
+# Every role's output contract in this deployment mandates a `status:` field.
+# It is the one anchor the engine can rely on without knowing any role, and it
+# is the reason the stage ran at all -- so it is the last thing truncation may
+# drop, not the first.
+_VERDICT_MARKER = "status:"
+_VERDICT_WINDOW = 120
+
+
+def _truncate_keeping_the_verdict(chunk: str, share: int) -> str:
+    """Keep *chunk*'s head, its concluding verdict, and its tail.
+
+    Fair-share alone was not enough. Measured on run 639: the reviewer's
+    `status: REQUEST_CHANGES` sat at offset 6 134 of 8 352 characters and the
+    CISO's clearance at 7 022 of 12 289 -- both in the elided middle of their
+    share, so the release manager reported two verdicts as MISSING that had
+    in fact been given, and reached the right decision by accident.
+
+    The LAST marker wins: a report that quotes an upstream `status:` before
+    stating its own must yield its own, concluding one.
+    """
+    head = share - share // 2
+    tail = share // 2
+    truncated = f"{chunk[:head]}{_CONTEXT_ELISION}{chunk[-tail:]}"
+
+    marker = chunk.rfind(_VERDICT_MARKER)
+    if marker == -1 or marker < head or marker >= len(chunk) - tail:
+        # No verdict, or one the head/tail already carries. Nothing to rescue,
+        # and re-inserting it would show the gate the same line twice.
+        return truncated
+
+    verdict = chunk[marker : marker + _VERDICT_WINDOW]
+    return f"{chunk[:head]}{_CONTEXT_ELISION}{verdict}{_CONTEXT_ELISION}{chunk[-tail:]}"
 
 
 def _role_metadata_value(effective_lessons: Any, role: str | None) -> str | None:

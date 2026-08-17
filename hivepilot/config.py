@@ -683,7 +683,20 @@ class Settings(BaseSettings):
     # Token-saving caching (L1-L3)
     anthropic_prompt_cache: bool = True  # add cache_control to Anthropic system block (L1)
     prior_context_mode: str = "cap"  # full | synthesis | cap (L2)
-    max_prior_context_chars: int = 8000  # max chars for cap mode (L2)
+    # env: HIVEPILOT_MAX_PRIOR_CONTEXT_CHARS — the `cap` mode budget.
+    #
+    # Was 8 000, a leftover from small context windows and an order of
+    # magnitude below the pipelines it serves. Measured on run 639: eight
+    # stages, 75 728 characters (~19 000 tokens) for the whole run, against a
+    # 2 000-token budget. A single stage did not fit -- the CISO wrote 12 289
+    # characters and QA 26 374 -- so five stages were discarded outright and
+    # the release gate adjudicated on the tail of one of them.
+    #
+    # 120 000 (~30 000 tokens) holds a run of that shape whole, with headroom,
+    # and costs cents on a run costing euros. The cut becomes what it should
+    # always have been: a backstop against a runaway stage, not routine
+    # behaviour on every pipeline.
+    max_prior_context_chars: int = 120_000
     # PRD A2 Sprint 2: prior-context routing mode.
     # "full"  (default) — today's behaviour: build_prior_context() over ALL
     #          prior_chunks, for EVERY role, regardless of whether that role
