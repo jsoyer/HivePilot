@@ -77,6 +77,9 @@ from hivepilot.services import (
     scan_service,
     state_service,
 )
+from hivepilot.services import (
+    context_budget as context_budget_service,
+)
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.config_provenance import redact_text, redact_value, register_secret_value
@@ -4549,6 +4552,41 @@ class Orchestrator:
             consuming_role = (
                 ROLES.get(consuming_task.role) if consuming_task and consuming_task.role else None
             )
+            # How much history this stage may carry, computed from the model
+            # that will actually run it rather than from a constant. The
+            # constant remains the floor and the fallback for a model whose
+            # window we do not know -- and the basis is logged, because a
+            # budget silently inherited from a guess is what discarded 90% of
+            # run 639 without a word.
+            _stage_model = resolve_stage_model(pipeline, stage)
+            _effective_model = _stage_model
+            if consuming_task and consuming_task.role:
+                from hivepilot.roles import resolve_stage_dispatch
+
+                try:
+                    # No policy here: `role_overrides` is per-project and a
+                    # stage can span several. Skipping it can only mean we
+                    # size against the role's own model instead of an
+                    # override's -- and every model we recognise shares the
+                    # same window, so the budget is unchanged in practice.
+                    # Getting it wrong costs the derivation, never the run.
+                    _, _effective_model, _ = resolve_stage_dispatch(
+                        consuming_task.role, None, stage_model=_stage_model
+                    )
+                except Exception:  # noqa: BLE001
+                    # An unresolvable role must not stop the stage; it only
+                    # costs us the derivation, and the fallback still applies.
+                    _effective_model = _stage_model
+            _context_budget, _budget_basis = context_budget_service.resolve_context_budget(
+                _effective_model, fallback=settings.max_prior_context_chars
+            )
+            logger.debug(
+                "context.budget",
+                stage=stage.name,
+                model=_effective_model,
+                basis=_budget_basis,
+                budget_chars=_context_budget,
+            )
             stage_results = self.run_task(
                 project_names=targets,
                 task_name=stage.task,
@@ -4573,7 +4611,7 @@ class Orchestrator:
                     outputs_by_key=outputs_by_key,
                     routing_mode=settings.context_routing_mode,
                     prior_context_mode=settings.prior_context_mode,
-                    max_chars=settings.max_prior_context_chars,
+                    max_chars=_context_budget,
                     stage_name=stage.name,
                 ),
                 # debate-judge-pipeline-yaml PRD, Sprint 2: thread the raw
