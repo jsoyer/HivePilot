@@ -776,6 +776,12 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_KMS_ENABLED
     kms_enabled: bool = True
     obsidian_enabled: bool = True
+    # env: HIVEPILOT_HONCHO_ENABLED — the honcho memory backend
+    # (plugins/honcho.py). OFF by default like every optional backend: the
+    # engine imposes no memory, the deployment chooses. honcho models a ROLE
+    # over time and returns derived Representations, which is a different job
+    # from mem0's fact store -- so the two compose rather than duplicate.
+    honcho_enabled: bool = False
     onepassword_enabled: bool = True
     rtk_enabled: bool = True
     sample_enabled: bool = False

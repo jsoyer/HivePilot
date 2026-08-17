@@ -148,6 +148,23 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
         prereq_kind="binary",
         prereq_detail="the `rtk` binary on PATH",
     ),
+    "honcho": ExamplePluginSpec(
+        name="honcho",
+        description=(
+            "Memory backend that models a ROLE over time (honcho.dev) and returns "
+            "derived Representations rather than stored facts -- a different job "
+            "from mem0's fact store, so the two compose instead of duplicating."
+        ),
+        env_flag="HIVEPILOT_HONCHO_ENABLED",
+        prereq_kind="pip",
+        # `honcho-ai`, NOT `honcho`: the latter is an unrelated Procfile runner
+        # on PyPI, and installing it would leave `import honcho` resolving to
+        # something else entirely -- a plugin silently inert.
+        prereq_detail=(
+            "the `honcho-ai` package (NOT `honcho`), plus either a hosted "
+            "credential or a self-hosted endpoint -- see plugins/honcho.py"
+        ),
+    ),
     "herdr": ExamplePluginSpec(
         name="herdr",
         description=(
