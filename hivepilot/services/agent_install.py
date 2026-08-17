@@ -50,9 +50,27 @@ class InstallSpec:
     vendor: str
     docs_url: str
     command: str | None = None
+    # "binary" -- the command drops an executable on PATH, which is every
+    # coding-agent CLI and every terminal multiplexer here.
+    #
+    # "service" -- the tool is not a PATH entry at all. Orca is an AppImage
+    # plus a systemd unit plus an update job plus a pairing step, and calling
+    # that a binary install would let `plugins enable` report success over a
+    # service that is not running. `_install_binary` declines these on
+    # purpose; a service needs its own installer, and until that exists an
+    # honest refusal beats a false success.
+    kind: str = "binary"
 
 
 AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
+    # Not a coding agent, but a plugin prerequisite that `plugins enable` must
+    # be able to satisfy: enabling a plugin and then telling the operator its
+    # prerequisite is missing is not an install path. Registered here so both
+    # go through ONE vetted execution route (`propose_install`, TTY-gated).
+    #
+    # herdr is registered per-ARCHITECTURE below (see `_HERDR_BY_ARCH`) rather
+    # than here, because its release assets are per-arch and this table holds
+    # one command per kind. `get_install_spec("herdr")` resolves it.
     # Source: https://code.claude.com/docs/en/quickstart
     # ("Native Install (Recommended)" tab, macOS/Linux/WSL). Fetched 2026-07-19.
     "claude": InstallSpec(
@@ -168,9 +186,107 @@ def is_on_path(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
+# herdr ships static-pie release binaries, one per architecture — verified
+# against `gh release view --repo ogulcancelik/herdr` on 2026-08-17 (v0.8.0,
+# assets: herdr-linux-x86_64, herdr-linux-aarch64, herdr-macos-*). Apache-2.0,
+# homepage https://herdr.dev.
+#
+# NOT brew: the operator's Debian box has no brew, and herdr was already
+# installed there by hand (0.7.5) — a package manager we would have to install
+# first is not an install path. A static-pie binary has no dependencies, which
+# is exactly what a server wants.
+#
+# One vetted constant PER ARCH rather than one command with `$(uname -m)` in
+# it: `propose_install` executes these as shell pipelines, and this module's
+# rule is that nothing dynamic is ever concatenated into a command. Python
+# picks among constants; the string that runs is always one we reviewed.
+# Prerequisites that are NOT coding agents. Kept out of AGENT_INSTALL_SPECS
+# because that registry is a closed set guarded by a test -- and rightly so:
+# `doctor`, `MANDATORY_AGENTS` and the runner taxonomy all read it as "the
+# coding agents we know". A terminal multiplexer and an IDE server are neither.
+#
+# `get_install_spec` searches agents first, then here, so one lookup serves
+# both and `plugins enable` has a single install route.
+_TOOL_INSTALL_SPECS: dict[str, InstallSpec] = {
+    # Source: https://www.onorca.dev/ — release channel taken from the
+    # operator's own working `update-orca.sh`, which is authoritative for this
+    # deployment: it already fetches exactly this URL, replaces the AppImage
+    # atomically, and restarts `orca-serve.service`.
+    #
+    # kind="service" because that is what Orca is. The command below is the
+    # fetch-and-place step ONLY; it is deliberately never run by the binary
+    # path, and it writes under /opt, so a service installer must own both the
+    # privilege and the unit lifecycle around it.
+    "orca": InstallSpec(
+        name="Orca",
+        binary="orca",
+        vendor="Stably AI",
+        docs_url="https://www.onorca.dev/",
+        command=(
+            "curl -fL --retry 3 --retry-delay 2 "
+            "-o /opt/orca/orca-linux.AppImage "
+            "https://github.com/stablyai/orca/releases/latest/download/orca-linux.AppImage"
+            " && chmod +x /opt/orca/orca-linux.AppImage"
+        ),
+        kind="service",
+    ),
+}
+
+
+_HERDR_URL = "https://github.com/ogulcancelik/herdr/releases/latest/download"
+_HERDR_BY_ARCH: dict[str, InstallSpec] = {
+    arch: InstallSpec(
+        name="herdr",
+        binary="herdr",
+        vendor="herdr.dev",
+        docs_url="https://herdr.dev",
+        command=(
+            f"mkdir -p ~/.local/bin && curl -fL --retry 3 --retry-delay 2 "
+            f"-o ~/.local/bin/herdr {_HERDR_URL}/herdr-{asset} "
+            f"&& chmod +x ~/.local/bin/herdr"
+        ),
+    )
+    for arch, asset in (
+        ("x86_64", "linux-x86_64"),
+        ("amd64", "linux-x86_64"),
+        ("aarch64", "linux-aarch64"),
+        ("arm64", "linux-aarch64"),
+    )
+}
+
+
 def get_install_spec(kind: str) -> InstallSpec | None:
-    """Look up the `InstallSpec` for a runner kind, or None if unknown."""
-    return AGENT_INSTALL_SPECS.get(kind)
+    """Look up the `InstallSpec` for a runner kind, or None if unknown.
+
+    `herdr` resolves per-architecture. An architecture with no published asset
+    returns None — docs-only — rather than a command that would download a
+    binary for the wrong machine and leave it on PATH, where the failure would
+    surface much later as an exec format error.
+    """
+    if kind == "herdr":
+        import platform
+
+        return _HERDR_BY_ARCH.get(platform.machine().lower())
+    spec = AGENT_INSTALL_SPECS.get(kind)
+    if spec is not None:
+        return spec
+    return _TOOL_INSTALL_SPECS.get(kind)
+
+
+def all_install_specs() -> dict[str, InstallSpec]:
+    """Every registered spec — agents, tools, and this machine's herdr.
+
+    Exists so the vetting tests (a citable source, no interpolated command)
+    cover the tool registry too. Splitting the registries must not shrink what
+    those tests see: an unvetted command is the one thing this module exists to
+    prevent.
+    """
+    specs = dict(AGENT_INSTALL_SPECS)
+    specs.update(_TOOL_INSTALL_SPECS)
+    herdr = get_install_spec("herdr")
+    if herdr is not None:
+        specs["herdr"] = herdr
+    return specs
 
 
 def missing_agents(kinds: Iterable[str]) -> list[str]:
