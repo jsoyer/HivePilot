@@ -115,6 +115,13 @@ def _install_binary(kind: str) -> bool:
     spec = agent_install.get_install_spec(kind)
     if spec is None:
         return False
+    if spec.kind != "binary":
+        # A service (Orca: AppImage + systemd unit + update job + pairing) is
+        # not a PATH drop. Running its fetch step here would report a
+        # successful install over a service that is not running -- the same
+        # class of false success as a health check that returns `ok` for a
+        # plugin doing nothing. Decline, and let the caller report the docs.
+        return False
     result = agent_install.propose_install(spec, assume_yes=True)
     return result.ran and result.exit_code == 0
 
