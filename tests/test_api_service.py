@@ -1263,6 +1263,9 @@ class TestMemoriesEndpoint:
         raw, _ = add_token("admin")
         resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
         assert resp.status_code == 200
+        # No client at all: `configured: False` is the RIGHT answer here, and
+        # stays untouched. What changed is the FAILING-search case below --
+        # see `test_search_failure_never_500s`.
         assert resp.json()["configured"] is False
 
     def test_unconfigured_returns_graceful_200_not_500(self, api_client, tmp_tokens_file):
@@ -1299,7 +1302,11 @@ class TestMemoriesEndpoint:
         assert data["configured"] is True
         assert data["memories"][0]["memory"] == "prefers dark mode"
         assert data["memories"][0]["metadata"] == {"project": "acme-api"}
-        mock_client.search.assert_called_once_with("dark mode", limit=5)
+        # `filters` is REQUIRED by mem0 v3 -- without it the real API answers
+        # 400 ("This field is required"), which is why this endpoint returned
+        # nothing at all against that version. Empty means "no restriction",
+        # matching the endpoint's documented admin-only, unpartitioned scope.
+        mock_client.search.assert_called_once_with("dark mode", limit=5, filters={})
 
     def test_search_failure_never_500s(self, api_client, tmp_tokens_file, monkeypatch):
         from hivepilot.services import api_service
@@ -1312,7 +1319,17 @@ class TestMemoriesEndpoint:
         raw, _ = add_token("admin")
         resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
         assert resp.status_code == 200
-        assert resp.json()["configured"] is False
+        # This asserted `configured is False`, which made a BROKEN search
+        # indistinguishable from an ABSENT configuration -- and that is exactly
+        # how the mem0 v3 breakage went unnoticed for a whole major version:
+        # probed live on 2026-08-17, the endpoint answered "not configured"
+        # while mem0 was configured and reachable, sending an operator to check
+        # a setting that was already correct. `configured` answers "is mem0 set
+        # up", and nothing else.
+        body = resp.json()
+        assert body["configured"] is True
+        assert body["memories"] == []
+        assert body["error"]
 
     def test_no_secret_in_response(self, api_client, tmp_tokens_file, monkeypatch):
         from unittest.mock import MagicMock

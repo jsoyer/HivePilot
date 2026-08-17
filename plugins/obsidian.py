@@ -434,11 +434,27 @@ def _search_vault(
     try:
         # Newest first. `st_mtime` is one stat() per note, far cheaper than
         # reading them, and it is what keeps the cap from selecting by name.
-        candidates = sorted(vault.rglob("*.md"), key=lambda n: _safe_mtime(n), reverse=True)[
-            :_MAX_NOTES_SCANNED
-        ]
+        all_notes = sorted(vault.rglob("*.md"), key=lambda n: _safe_mtime(n), reverse=True)
     except OSError:
         return []
+
+    # Say what the cap left out. Measured on the box: 2 125 notes against a
+    # 500 cap, so recall sees 24% of the corpus -- and until now said nothing
+    # about the other 76%. An operator asking "why did it not remember the
+    # ADR" had no way to learn the ADR was never eligible. Same defect as the
+    # run-639 context truncation, different subsystem.
+    from hivepilot.services.vault_scan import plan_scan
+
+    budget = plan_scan(total=len(all_notes), cap=_MAX_NOTES_SCANNED)
+    if budget.truncated:
+        logger.warning(
+            "plugin.obsidian.scan_truncated",
+            total=budget.total,
+            scanned=budget.scanned,
+            skipped=budget.skipped,
+            coverage=round(budget.coverage, 3),
+        )
+    candidates = all_notes[: budget.scanned]
 
     # (role_match, score, mtime) -- see the sort below for why these are kept
     # apart instead of folded into one number.
