@@ -2886,15 +2886,26 @@ def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
         }
 
     try:
-        results = client.search(query, limit=limit)
+        # `filters` is REQUIRED by mem0 v3 -- omitting it answers 400
+        # ("This field is required"), so this endpoint had never worked
+        # against that major version. An empty filter set means "no
+        # restriction", which is the scope this endpoint already documents
+        # above (admin-only, deliberately unpartitioned).
+        results = client.search(query, limit=limit, filters={})
     except Exception as exc:  # noqa: BLE001 — a mem0 client failure must never 500
         from hivepilot.utils.logging import get_logger
 
         get_logger(__name__).warning("api.memories.search_failed", error=str(exc))
+        # `configured` answers "is mem0 set up", and nothing else. Returning
+        # False here made a BROKEN search indistinguishable from an ABSENT
+        # configuration -- which is why the v3 breakage above read as an
+        # unused feature for a whole major version, and why it sent an
+        # operator to check a setting that was already correct.
         return {
-            "configured": False,
+            "configured": True,
             "memories": [],
-            "detail": "mem0 search failed",
+            "error": "mem0 search failed",
+            "detail": "mem0 is configured, but the search call failed -- see api logs",
         }
 
     memories = _extract_memory_items(results)[:limit]
