@@ -1759,10 +1759,26 @@ def build_prior_context(
     - synthesis: keep only the chunk whose header contains "Plan Synthesis"
       (case-insensitive) if found, plus the most recent chunk. If no synthesis
       chunk exists, keep only the most recent chunk.
-    - cap: join all, truncate to max_chars keeping the TAIL (most recent content),
-      prepend '…[earlier context truncated]…' if truncation occurred.
+    - cap: return everything if it fits; otherwise give every chunk a FAIR
+      SHARE of max_chars, keeping each one's head and tail with an explicit
+      elision between them.
 
     Returns None if prior_chunks is empty.
+
+    `cap` used to truncate the JOINED string and keep only its tail, so one
+    verbose stage silently evicted every stage before it. Measured on run 639:
+    QA emitted 26 374 characters against an 8 000 budget, so the release
+    manager saw the tail of QA and nothing else. It then blocked with
+    "security: MISSING -- no `clearance` verdict" while the CISO's clearance
+    sat, cleared, at offset 7 022 of an output that had been cut away
+    entirely. From where a gate sits, a truncated adjudication and an absent
+    one are the same thing.
+
+    Head AND tail per chunk because these reports lead with their structured
+    verdict (`## STATUS`, `## REVIEW_REPORT`) and conclude with their finding;
+    the old tail-only rule threw the header away. This does not promise that
+    an arbitrary mid-document field survives -- no truncation scheme can --
+    only that no stage vanishes because a later one was verbose.
     """
     if not prior_chunks:
         return None
@@ -1776,12 +1792,48 @@ def build_prior_context(
         return "\n\n".join(parts)
     joined = "\n\n".join(prior_chunks)
     if mode == "cap":
-        if len(joined) > max_chars:
-            truncated = joined[-max_chars:]
-            return "\u2026[earlier context truncated]\u2026\n\n" + truncated
-        return joined
+        if len(joined) <= max_chars:
+            return joined
+        return "\n\n".join(_fair_share_chunks(prior_chunks, max_chars))
     # mode == "full"
     return joined
+
+
+_CONTEXT_ELISION = "\u2026[truncated]\u2026"
+
+
+def _fair_share_chunks(chunks: list[str], max_chars: int) -> list[str]:
+    """Split *max_chars* across *chunks* so none is evicted outright.
+
+    Chunks that already fit their share are emitted WHOLE and hand their
+    unused budget back to the ones still over -- otherwise a run with four
+    one-line stages and one enormous one would spend four fifths of the
+    window on the short ones and starve the only chunk with content in it.
+    """
+    remaining = list(range(len(chunks)))
+    out: dict[int, str] = {}
+    budget = max_chars
+
+    # Settle the chunks that fit, re-dividing what they leave behind. Every
+    # pass either moves at least one index out of `remaining` or breaks, so
+    # this terminates.
+    while remaining:
+        share = max(budget // len(remaining), 1)
+        fitting = [i for i in remaining if len(chunks[i]) <= share]
+        if not fitting:
+            break
+        for i in fitting:
+            out[i] = chunks[i]
+            budget -= len(chunks[i])
+        remaining = [i for i in remaining if i not in out]
+
+    for i in remaining:
+        share = max(budget // len(remaining), 2)
+        head = share - share // 2
+        tail = share // 2
+        out[i] = f"{chunks[i][:head]}{_CONTEXT_ELISION}{chunks[i][-tail:]}"
+
+    return [out[i] for i in range(len(chunks))]
 
 
 def _role_metadata_value(effective_lessons: Any, role: str | None) -> str | None:

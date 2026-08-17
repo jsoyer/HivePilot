@@ -21,16 +21,24 @@ def test_build_prior_context_cap_no_truncation() -> None:
     assert result == "short"
 
 
-def test_build_prior_context_cap_truncates_and_keeps_tail() -> None:
+def test_build_prior_context_cap_gives_every_chunk_a_share() -> None:
+    """This test used to assert the OPPOSITE -- `assert "AAAA" not in result`
+    -- pinning the very behaviour that broke run 639: cap truncated the joined
+    string and kept its tail, so the first chunk was evicted outright.
+
+    On a real pipeline that meant QA's 26 374 characters pushed the reviewer
+    and the CISO out of an 8 000-character window entirely, and the release
+    manager blocked for a "missing" clearance the CISO had in fact given. The
+    contract is now that no chunk disappears; each keeps a head and a tail.
+    """
     chunks = ["AAAA", "BBBB"]
-    full = "AAAA\n\nBBBB"  # len=10
     result = build_prior_context(chunks, "cap", 6)
     assert result is not None
-    assert "…[earlier context truncated]…" in result
-    # tail of full[-6:] = "\nBBBB" -> result ends with that
-    assert result.endswith(full[-6:])
-    # head should NOT appear (was truncated)
-    assert "AAAA" not in result
+    assert "…[truncated]…" in result
+    # Both stages are still represented -- head and tail of each.
+    assert result.startswith("AA")
+    assert "BB" in result
+    assert result.endswith("B")
 
 
 def test_build_prior_context_synthesis_picks_synthesis_plus_last() -> None:
