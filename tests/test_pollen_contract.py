@@ -346,7 +346,12 @@ class TestMemoriesContract:
             ]
         }
         monkeypatch.setattr(api_service, "_get_mem0_client", lambda: mock_client)
-        resp = api_client.get("/v1/memories?query=dark+mode", headers=_auth(admin_token))
+        # mem0 v3 requires a non-empty filter, so the Pollen contract carries
+        # a `user_id` -- probed live: no filter answers 400 "This field is
+        # required", `filters={}` answers 400 "filters cannot be empty".
+        resp = api_client.get(
+            "/v1/memories?query=dark+mode&user_id=acme", headers=_auth(admin_token)
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert set(data.keys()) >= {"configured", "memories"}

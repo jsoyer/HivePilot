@@ -1282,7 +1282,7 @@ class TestMemoriesEndpoint:
 
         monkeypatch.setattr(api_service, "_get_mem0_client", lambda: _EmptyClient())
         raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
+        resp = api_client.get("/v1/memories?query=hello&user_id=acme", headers=_auth(raw))
 
         assert resp.status_code == 200
         body = resp.json()
@@ -1318,17 +1318,21 @@ class TestMemoriesEndpoint:
         }
         monkeypatch.setattr(api_service, "_get_mem0_client", lambda: mock_client)
         raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=dark+mode&limit=5", headers=_auth(raw))
+        resp = api_client.get(
+            "/v1/memories?query=dark+mode&limit=5&user_id=acme", headers=_auth(raw)
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["configured"] is True
         assert data["memories"][0]["memory"] == "prefers dark mode"
         assert data["memories"][0]["metadata"] == {"project": "acme-api"}
-        # `filters` is REQUIRED by mem0 v3 -- without it the real API answers
-        # 400 ("This field is required"), which is why this endpoint returned
-        # nothing at all against that version. Empty means "no restriction",
-        # matching the endpoint's documented admin-only, unpartitioned scope.
-        mock_client.search.assert_called_once_with("dark mode", limit=5, filters={})
+        # mem0 v3 requires a NON-EMPTY filter: no `filters` answers 400
+        # "This field is required", and `filters={}` answers 400 "filters
+        # cannot be empty" -- both probed against the live API. The caller
+        # supplies the same `user_id` key plugins/mem0.py stores under.
+        mock_client.search.assert_called_once_with(
+            "dark mode", limit=5, filters={"user_id": "acme"}
+        )
 
     def test_search_failure_never_500s(self, api_client, tmp_tokens_file, monkeypatch):
         from hivepilot.services import api_service
@@ -1339,7 +1343,7 @@ class TestMemoriesEndpoint:
 
         monkeypatch.setattr(api_service, "_get_mem0_client", lambda: _BoomClient())
         raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
+        resp = api_client.get("/v1/memories?query=hello&user_id=acme", headers=_auth(raw))
         assert resp.status_code == 200
         # This asserted `configured is False`, which made a BROKEN search
         # indistinguishable from an ABSENT configuration -- and that is exactly
