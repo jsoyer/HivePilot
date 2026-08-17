@@ -2847,7 +2847,7 @@ def _extract_memory_items(results: Any) -> list[dict[str, Any]]:
 
 @v1.get("/memories", dependencies=[Depends(require_role("admin"))])
 @app.get("/memories", dependencies=[Depends(require_role("admin"))])
-def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
+def list_memories(query: str, limit: int = 20, user_id: str | None = None) -> dict[str, Any]:
     """Pollen Mem0 view — semantic search proxy over mem0.
 
     **Scope/tenant safety (investigated, Sprint 1 — the key risk this
@@ -2885,13 +2885,29 @@ def list_memories(query: str, limit: int = 20) -> dict[str, Any]:
             "installed, or the mem0 client could not be built)",
         }
 
+    # mem0 v3 REQUIRES a non-empty `filters`. Probed against the live API on
+    # 2026-08-17: omitting it answers 400 "This field is required", and
+    # `filters={}` answers 400 "filters cannot be empty". So this endpoint had
+    # never worked against that major version.
+    #
+    # There is no documented "match everything" filter, and inventing one would
+    # be a guess dressed as a fix. `plugins/mem0.py` uses
+    # `filters={"user_id": <task identity>}`, so the caller supplies the same
+    # key here. Without it, say exactly what is missing rather than forwarding
+    # an opaque 400 -- an operator cannot act on "search failed".
+    if not user_id:
+        return {
+            "configured": True,
+            "memories": [],
+            "error": "user_id required",
+            "detail": (
+                "mem0 v3 requires a non-empty filter; pass ?user_id=<identity> "
+                "(the same key plugins/mem0.py stores under)"
+            ),
+        }
+
     try:
-        # `filters` is REQUIRED by mem0 v3 -- omitting it answers 400
-        # ("This field is required"), so this endpoint had never worked
-        # against that major version. An empty filter set means "no
-        # restriction", which is the scope this endpoint already documents
-        # above (admin-only, deliberately unpartitioned).
-        results = client.search(query, limit=limit, filters={})
+        results = client.search(query, limit=limit, filters={"user_id": user_id})
     except Exception as exc:  # noqa: BLE001 — a mem0 client failure must never 500
         from hivepilot.utils.logging import get_logger
 
