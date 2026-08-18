@@ -375,6 +375,50 @@ async def otlp_metrics(request: Request) -> dict[str, Any]:
     return {"partialSuccess": {}}
 
 
+@app.post("/otlp/v1/logs")
+async def otlp_logs(request: Request) -> dict[str, Any]:
+    """Accept an OTLP/JSON LOG batch from a local agent CLI.
+
+    Why this exists: the box had `CLAUDE_CODE_ENABLE_TELEMETRY=1` and
+    `OTEL_METRICS_EXPORTER=otlp` but no `OTEL_LOGS_EXPORTER` -- and it is an
+    EVENT, `claude_code.api_request`, that carries `cost_usd_micros`, the token
+    breakdown, the model and `agent.name`. The precise half of the cost had
+    never been exported, and setting the exporter without this route would have
+    posted every event into a 404 with nobody looking.
+
+    Same guards and same posture as `/otlp/v1/metrics`: loopback only,
+    unauthenticated on purpose (a bearer token in `OTEL_EXPORTER_OTLP_HEADERS`
+    would hand a credential to the sandboxed agent subprocess), body capped,
+    and ALWAYS 200 past the guards -- an error here makes the exporter retry
+    and log against the very process being measured.
+    """
+    if not settings.otel_ingest_enabled:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    if not _is_loopback(request):
+        raise HTTPException(status_code=403, detail="OTLP ingest accepts loopback only")
+
+    body = await request.body()
+    if len(body) > _MAX_OTLP_BODY:
+        logger.warning("otlp ingest: dropping %d-byte log body over cap", len(body))
+        return {"partialSuccess": {}}
+
+    try:
+        from hivepilot.services.otlp_events import parse_otlp_events
+
+        payload = json.loads(body or b"{}")
+        events = parse_otlp_events(payload)
+        if events:
+            # Count what arrived, per model, so "no cost data" and "the
+            # exporter is not sending" stop looking alike -- the whole reason
+            # this endpoint exists.
+            telemetry_service.record_api_request_events(events)
+    except Exception:  # noqa: BLE001 - never fail the thing being measured
+        logger.exception("otlp ingest: unreadable log batch dropped")
+
+    return {"partialSuccess": {}}
+
+
 # ---------------------------------------------------------------------------
 # /v1/ versioned router (Phase 14b)
 # ---------------------------------------------------------------------------
