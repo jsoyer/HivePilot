@@ -716,37 +716,6 @@ class ClaudeRunner(BaseRunner):
         """
         return resolve_runner_effort(self.definition, payload.step)
 
-    def _role_resource_attributes(self, payload: Any) -> dict[str, str]:
-        """Tell the telemetry which ROLE this call belongs to.
-
-        Claude Code cannot: `agent.name` is its SUBAGENT type and a headless
-        top-level run has none -- measured on the box, every telemetry row came
-        back with `query_source` of `main` or `auxiliary`, naming a subsystem
-        rather than a role. A cost we cannot attribute is an aggregate, and an
-        aggregate hides the case that matters.
-
-        `OTEL_RESOURCE_ATTRIBUTES` is OTel's documented channel for exactly
-        this, and `OTEL_*` already crosses the sandbox allowlist.
-
-        Existing operator value is PRESERVED, not replaced: a deployment may
-        already carry `department=` / `team.id=` there, and clobbering it to add
-        our own key would trade one attribution for another.
-
-        The role is sanitised: the format is comma-separated `k=v` pairs, so a
-        role containing a comma or an equals sign would silently corrupt every
-        pair after it.
-        """
-        import os as _os
-
-        role = (payload.metadata or {}).get("role") if hasattr(payload, "metadata") else None
-        if not isinstance(role, str) or not role.strip():
-            return {}
-        safe = role.strip().replace(",", "_").replace("=", "_").replace(" ", "_")
-
-        existing = (_os.environ.get("OTEL_RESOURCE_ATTRIBUTES") or "").strip().strip(",")
-        pair = f"hivepilot.role={safe}"
-        return {"OTEL_RESOURCE_ATTRIBUTES": f"{existing},{pair}" if existing else pair}
-
     def _effort_env_overlay(self, payload: RunnerPayload) -> dict[str, str]:
         """Return `{"MAX_THINKING_TOKENS": "<tokens>"}` when *payload* resolves
         to a known effort level, else `{}` (no-op — nothing injected). Uses
@@ -1028,7 +997,6 @@ class ClaudeRunner(BaseRunner):
         env_overlay = {
             **gather_overrides(payload.project.env, self.definition.env, payload.secrets),
             **self._effort_env_overlay(payload),
-            **self._role_resource_attributes(payload),
         }
         argv, run_env = _apply_sandbox(
             argv,
@@ -1103,7 +1071,6 @@ class ClaudeRunner(BaseRunner):
         env_overlay = {
             **gather_overrides(payload.project.env, self.definition.env, payload.secrets),
             **self._effort_env_overlay(payload),
-            **self._role_resource_attributes(payload),
         }
         argv, run_env = _apply_sandbox(
             argv,
