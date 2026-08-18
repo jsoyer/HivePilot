@@ -2039,6 +2039,116 @@ def efficiency_endpoint(
 # ---------------------------------------------------------------------------
 
 
+def _agent_surface_run(argv: list[str], **kwargs: Any) -> Any:
+    """Execute an agent-surface command. Seam so tests never spawn a process.
+
+    argv only, never a shell string: the text carried here is operator- or
+    agent-authored and will contain metacharacters.
+    """
+    import subprocess  # nosec B404 - argv built by hivepilot.services.agent_surface, never a shell
+
+    return subprocess.run(  # nosec B603
+        argv, capture_output=True, text=True, timeout=kwargs.get("timeout", 15)
+    )
+
+
+def _resolve_agent_surface() -> tuple[Any | None, str]:
+    """`(driver, detail)`. A `None` driver always comes with a reason.
+
+    "Not configured" and "configured but unreachable" are different answers and
+    an operator acts on them differently -- collapsing them is the defect this
+    whole series has been closing.
+    """
+    from hivepilot.services import agent_surface
+
+    backend = (settings.agent_surface_backend or "").strip()
+    if not backend:
+        return None, (
+            "no agent surface configured -- set HIVEPILOT_AGENT_SURFACE_BACKEND "
+            "to 'herdr' or 'orca'"
+        )
+    try:
+        return agent_surface.resolve_driver(backend), ""
+    except ValueError as exc:
+        return None, str(exc)
+
+
+@v1.get("/agents/live", dependencies=[Depends(require_role("read"))])
+@app.get("/agents/live", dependencies=[Depends(require_role("read"))])
+def agents_live_endpoint(caller: Any = None) -> dict[str, Any]:
+    """Per-role LIVE state, or `unknown` with a reason -- never a fabricated
+    idle.
+
+    `GET /v1/agents` answers what a role has DONE. This answers what it is
+    doing right now, which is the question asked in front of the screen.
+    """
+    from hivepilot.services.agent_surface import AgentState
+
+    driver, detail = _resolve_agent_surface()
+    role_names = [r.name for r in roles.list_roles()]
+
+    if driver is None:
+        return {
+            "configured": False,
+            "detail": detail,
+            "agents": [{"role": n, "state": AgentState.UNKNOWN.value} for n in role_names],
+        }
+
+    known = {s.value for s in AgentState}
+    agents: list[dict[str, Any]] = []
+    for name in role_names:
+        state = AgentState.UNKNOWN.value
+        try:
+            result = _agent_surface_run(driver.read_argv(name, limit=1))
+            if getattr(result, "returncode", 1) == 0:
+                candidate = (getattr(result, "stdout", "") or "").strip().lower()
+                # An unrecognised string must NOT reach the UI as a state: a
+                # backend that changes its vocabulary would otherwise smuggle
+                # something we do not model into the dashboard.
+                state = candidate if candidate in known else AgentState.UNKNOWN.value
+        except Exception as exc:  # noqa: BLE001 - a probe must never 500 the roster
+            from hivepilot.utils.logging import get_logger as _gl
+
+            _gl(__name__).warning("api.agents_live.probe_failed", role=name, error=str(exc))
+        agents.append({"role": name, "state": state})
+
+    return {"configured": True, "detail": "", "agents": agents}
+
+
+@v1.post("/agents/{role}/message", dependencies=[Depends(require_role("run"))])
+@app.post("/agents/{role}/message", dependencies=[Depends(require_role("run"))])
+def agent_message_endpoint(
+    role: str, payload: dict[str, Any], caller: Any = None
+) -> dict[str, Any]:
+    """Inject text into a live agent.
+
+    Gated on `run`, not `read`: this makes something happen.
+
+    Reports `dispatched`, never `delivered`. The send is fire-and-forget at
+    this layer, and claiming the agent received it would be a claim we cannot
+    make.
+    """
+    text = str((payload or {}).get("text") or "").strip()
+    if not text:
+        return {"dispatched": False, "detail": "empty message"}
+
+    driver, detail = _resolve_agent_surface()
+    if driver is None:
+        return {"dispatched": False, "detail": detail}
+
+    try:
+        result = _agent_surface_run(driver.send_argv(role, text))
+    except Exception as exc:  # noqa: BLE001
+        from hivepilot.utils.logging import get_logger as _gl
+
+        _gl(__name__).warning("api.agent_message.failed", role=role, error=str(exc))
+        return {"dispatched": False, "detail": "the agent surface command failed"}
+
+    if getattr(result, "returncode", 1) != 0:
+        return {"dispatched": False, "detail": "the agent surface command failed"}
+    return {"dispatched": True, "role": role}
+
+
 @v1.get("/agents")
 @app.get("/agents")
 def agents_endpoint(

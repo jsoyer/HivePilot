@@ -1224,6 +1224,144 @@ class TestPluginsHealthEndpoint:
         assert secret not in result.status
 
 
+class TestAgentsLiveEndpoint:
+    """Live per-role state, and a channel to talk to a role.
+
+    `GET /v1/agents` answers what a role has DONE. These answer what it is
+    doing right now, and let the operator say something to it -- the point of
+    the herdr/Orca surface, unreachable without an endpoint.
+
+    The honesty contract matters more than the plumbing: with no backend, or a
+    failing probe, the answer is `unknown` WITH a reason. A dashboard showing
+    every agent idle because it cannot see them is worse than one admitting it
+    cannot see them.
+    """
+
+    def test_no_backend_reports_unknown_with_a_reason(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/agents/live", headers=_auth(raw))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["configured"] is False
+        assert body["detail"]
+        assert all(a["state"] == "unknown" for a in body["agents"])
+
+    def test_an_unknown_backend_name_is_named_not_guessed(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "agent_surface_backend", "tmux", raising=False)
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/agents/live", headers=_auth(raw)).json()
+
+        assert body["configured"] is False
+        assert "tmux" in body["detail"]
+
+    def test_a_failing_probe_is_unknown_not_idle(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(settings, "agent_surface_backend", "herdr", raising=False)
+
+        class _R:
+            returncode = 127
+            stdout = ""
+
+        monkeypatch.setattr(api_service, "_agent_surface_run", lambda *a, **k: _R())
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/agents/live", headers=_auth(raw)).json()
+
+        assert body["configured"] is True
+        assert all(a["state"] == "unknown" for a in body["agents"])
+
+    def test_an_unrecognised_state_string_becomes_unknown(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """A backend that changes its vocabulary must not smuggle a state we do
+        not model into the dashboard."""
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(settings, "agent_surface_backend", "herdr", raising=False)
+
+        class _R:
+            returncode = 0
+            stdout = "reticulating-splines"
+
+        monkeypatch.setattr(api_service, "_agent_surface_run", lambda *a, **k: _R())
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/agents/live", headers=_auth(raw)).json()
+
+        assert all(a["state"] == "unknown" for a in body["agents"])
+
+    def test_sending_a_message_requires_run_not_read(self, api_client, tmp_tokens_file):
+        """It makes something happen, so `read` must not be enough."""
+        raw, _ = add_token("read")
+
+        resp = api_client.post(
+            "/v1/agents/reviewer/message", json={"text": "hi"}, headers=_auth(raw)
+        )
+
+        assert resp.status_code == 403
+
+    def test_a_message_is_dispatched_never_claimed_delivered(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """Fire-and-forget here; claiming the agent received it would be a
+        claim we cannot make."""
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(settings, "agent_surface_backend", "herdr", raising=False)
+        sent: list = []
+
+        class _R:
+            returncode = 0
+            stdout = ""
+
+        def _run(argv, **k):
+            sent.append(list(argv))
+            return _R()
+
+        monkeypatch.setattr(api_service, "_agent_surface_run", _run)
+        raw, _ = add_token("run")
+
+        body = api_client.post(
+            "/v1/agents/reviewer/message", json={"text": "run the tests"}, headers=_auth(raw)
+        ).json()
+
+        assert body["dispatched"] is True
+        assert "delivered" not in body
+        assert "run the tests" in sent[-1]
+        # argv, never a shell string: the text is agent- or operator-authored.
+        assert "-c" not in sent[-1]
+
+    def test_an_empty_message_is_refused_without_dispatching(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(settings, "agent_surface_backend", "herdr", raising=False)
+        monkeypatch.setattr(
+            api_service,
+            "_agent_surface_run",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not dispatch")),
+        )
+        raw, _ = add_token("run")
+
+        body = api_client.post(
+            "/v1/agents/reviewer/message", json={"text": "   "}, headers=_auth(raw)
+        ).json()
+
+        assert body["dispatched"] is False
+
+
 class TestMemoriesEndpoint:
     def test_requires_auth(self, api_client):
         resp = api_client.get("/v1/memories?query=hello")

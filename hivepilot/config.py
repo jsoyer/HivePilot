@@ -541,6 +541,18 @@ class Settings(BaseSettings):
     # to `openrouter` (any non-Claude model) or re-enables the vibe plugin —
     # a config decision, not an engine one.
     auditor_runner: str = "claude"
+    # env: HIVEPILOT_AGENT_SURFACE_BACKEND — which live-agent surface Pollen
+    # and the CLI talk to: "herdr", "orca", or empty.
+    #
+    # EMPTY BY DEFAULT, and that is the honest default: with no backend there
+    # is nothing to see, and the API says so rather than rendering every role
+    # as idle. A dashboard that shows agents idle because it cannot reach them
+    # is worse than one that admits it cannot reach them.
+    agent_surface_backend: str = ""
+    # How many lines of a live pane a read may pull. Bounded because an
+    # unbounded read of a working agent is how a 26 000-character report ends
+    # up back inside a prompt (measured, run 639).
+    agent_surface_read_lines: int = 200
     container_runtime: str = "docker"  # container runtime for the container runner: docker | podman
     auto_commit_vault: bool = False  # git add/commit/push the Obsidian vault after a pipeline run
     event_webhook_url: str | None = None  # POST pipeline lifecycle events here (n8n, etc.)

@@ -1,6 +1,8 @@
 import { AlertTriangle } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Drawer } from '@/components/ui/drawer'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -18,8 +20,10 @@ import {
   type VerdictRoleAggregation,
   type VerdictsResponse,
   fetchAgents,
+  fetchAgentsLive,
   fetchLessons,
   fetchVerdicts,
+  sendAgentMessage,
 } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
@@ -685,6 +689,94 @@ function AgentDetailPanel({ role, displayName, onClose }: AgentDetailPanelProps)
  *  - every free-text field (lesson `text`, verdict `summary`, role
  *    `display_name`/`title`) renders via plain JSX interpolation only.
  */
+
+/** Live state per role, and a line to talk to one.
+ *
+ * `GET /v1/agents` answers what a role has DONE; this answers what it is
+ * doing NOW. The two are deliberately separate components: historical
+ * activity is always available, a live surface may not be configured at all,
+ * and collapsing them would make an unconfigured deployment look broken.
+ *
+ * When `configured` is false the REASON is rendered, not a row of `unknown`
+ * badges. An operator seeing every agent unknown without an explanation reads
+ * a bug in the dashboard; seeing "no agent surface configured" reads a
+ * setting they can change.
+ */
+function LiveAgentsPanel() {
+  const t = useT()
+  const live = useAsyncData(() => fetchAgentsLive(), [])
+  const [role, setRole] = useState('')
+  const [text, setText] = useState('')
+  const [outcome, setOutcome] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  if (live.status !== 'success') return null
+  const { configured, detail, agents } = live.data
+
+  async function send(event: React.FormEvent) {
+    event.preventDefault()
+    if (!role || !text.trim() || busy) return
+    setBusy(true)
+    setOutcome(null)
+    try {
+      const res = await sendAgentMessage(role, text)
+      // "dispatched", never "delivered": the API cannot know the agent read it.
+      setOutcome(res.dispatched ? t('agents.live.dispatched') : (res.detail ?? t('agents.live.refused')))
+      if (res.dispatched) setText('')
+    } catch {
+      setOutcome(t('agents.live.refused'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card data-testid="live-agents">
+      <CardHeader>
+        <CardTitle>{t('agents.live.title')}</CardTitle>
+        {!configured && <CardDescription>{detail}</CardDescription>}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-2">
+          {agents.map((a) => (
+            <Badge key={a.role} data-testid={`live-state-${a.role}`} variant="outline">
+              {a.role} · {a.state}
+            </Badge>
+          ))}
+        </div>
+        {configured && (
+          <form className="flex flex-wrap items-center gap-2" onSubmit={send}>
+            <select
+              aria-label={t('agents.live.roleLabel')}
+              className="rounded-md border bg-transparent px-2 py-1 text-sm"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+            >
+              <option value="">{t('agents.live.roleLabel')}</option>
+              {agents.map((a) => (
+                <option key={a.role} value={a.role}>
+                  {a.role}
+                </option>
+              ))}
+            </select>
+            <Input
+              aria-label={t('agents.live.messageLabel')}
+              className="min-w-[16rem] flex-1"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={t('agents.live.messageLabel')}
+            />
+            <Button type="submit" disabled={busy || !role || !text.trim()}>
+              {t('agents.live.send')}
+            </Button>
+            {outcome && <span className="text-sm text-[var(--color-muted-foreground)]">{outcome}</span>}
+          </form>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function AgentsView() {
   const t = useT()
   const agentsState = useAsyncData(() => fetchAgents(), [])
@@ -721,6 +813,7 @@ export function AgentsView() {
 
   return (
     <div className="flex flex-col gap-4">
+      <LiveAgentsPanel />
       <Card>
         <CardHeader>
           <CardTitle>{t('agents.title')}</CardTitle>
