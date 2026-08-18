@@ -140,3 +140,43 @@ class TestItHandlesRealBatchShapes:
         merged = {"resourceLogs": one["resourceLogs"] + two["resourceLogs"]}
 
         assert [e.cost_usd_micros for e in parse_otlp_events(merged)] == [1, 2]
+
+
+class TestRoleAttributionComesFromUs:
+    """`agent.name` is NOT the answer, measured on a real run.
+
+    The docs define it as the SUBAGENT type, and a headless top-level run has
+    no subagent -- so every row came back with `query_source` = `main` or
+    `auxiliary` and nothing naming the role. A cost we cannot attribute is an
+    aggregate, and an aggregate hides the case that matters.
+
+    HivePilot knows the role at dispatch, so it states it: OTel's documented
+    `OTEL_RESOURCE_ATTRIBUTES` rides on the batch as RESOURCE attributes, one
+    level above the log record. The parser has to look there too, or the value
+    we just took the trouble to inject is dropped on arrival.
+    """
+
+    def test_a_resource_attribute_reaches_the_event(self):
+        payload = _event(**{"event.name": "claude_code.api_request", "cost_usd_micros": 5})
+        payload["resourceLogs"][0]["resource"] = {
+            "attributes": [{"key": "hivepilot.role", "value": {"stringValue": "reviewer"}}]
+        }
+
+        assert parse_otlp_events(payload)[0].role == "reviewer"
+
+    def test_a_record_attribute_wins_over_the_resource(self):
+        """The record is the more specific statement; a resource attribute is a
+        default for the whole batch."""
+        payload = _event(**{"event.name": "claude_code.api_request", "hivepilot.role": "ciso"})
+        payload["resourceLogs"][0]["resource"] = {
+            "attributes": [{"key": "hivepilot.role", "value": {"stringValue": "reviewer"}}]
+        }
+
+        assert parse_otlp_events(payload)[0].role == "ciso"
+
+    def test_no_role_anywhere_is_none_not_a_guess(self):
+        """`main` is a subsystem, not a role. Writing it into the role column
+        would make every cost look attributed while none of it is."""
+        payload = _event(**{"event.name": "claude_code.api_request", "query_source": "main"})
+
+        assert parse_otlp_events(payload)[0].role is None
