@@ -208,7 +208,12 @@ def record_api_request_events(events: list) -> int:
         common = {
             "session_id": event.session_id,
             "model": event.model,
-            "query_source": event.agent_name,
+            # OUR role first. `agent.name` is Claude Code's SUBAGENT type and
+            # is empty for a headless top-level run -- measured, every row came
+            # back `main`/`auxiliary`. `query_source` names a subsystem, not a
+            # role, and writing it here would make every cost look attributed
+            # while none of it was.
+            "query_source": event.role or event.agent_name,
         }
         if event.cost_usd_micros is not None:
             points.append(
