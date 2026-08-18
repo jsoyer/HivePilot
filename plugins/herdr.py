@@ -267,15 +267,22 @@ class HerdrRunner:
         pattern. `--timeout` is never omitted -- herdr's own help says it
         otherwise waits indefinitely.
         """
+        # PANE_ID FIRST, despite the help printing
+        # `[OPTIONS] <--match <TEXT>> <PANE_ID>`. Probed on the box against
+        # 0.8.0: with the id last, every form answers `unknown option: <the
+        # VALUE>` -- the parser consumes the flag and then treats its argument
+        # as another option. With the id first it answers a proper
+        # `{"code":"timeout"}`. The documented order does not work; this one
+        # does.
         return [
             "herdr",
             "pane",
             "wait-output",
+            pane_id,
             "--match",
             sentinel,
             "--timeout",
             str(timeout_ms),
-            pane_id,
         ]
 
     def _wait_idle(self, payload: RunnerPayload, pane_id: str, sentinel: str) -> None:

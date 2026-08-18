@@ -217,7 +217,9 @@ class TestCaptureDrivesFullCliSequence:
         # `pane wait-output --match <sentinel>` is what 0.8.0 has, and the pane
         # id is POSITIONAL and last, not argv[3].
         assert wait_argv[:3] == ["herdr", "pane", "wait-output"]
-        assert wait_argv[-1] == pane_id
+        # PANE_ID first: herdr's own help says otherwise and does not honour
+        # it -- with the id last, 0.8.0 answers `unknown option: <the VALUE>`.
+        assert wait_argv[3] == pane_id
         assert "--match" in wait_argv
         assert wait_argv[wait_argv.index("--match") + 1].startswith("HIVEPILOT_DONE_")
         assert "--timeout" in wait_argv
