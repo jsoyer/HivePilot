@@ -33,6 +33,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from hivepilot.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 # kind -> the exact env var name(s) its runner class documents as its ONLY
 # auth mechanism (no interactive CLI login involved) — derived from each
 # runner's own docstring in hivepilot/runners/prompt_cli_runner.py, not
@@ -147,14 +151,30 @@ def _place_plugin_file(kind: str) -> Path | None:
 
     filename = _plugin_filename(kind)
     source = settings.base_dir / "plugins" / filename
-    if not source.exists():
-        return None
+    if source.exists():
+        # A developer's own edit must win over the published file, or local
+        # iteration on a plugin is impossible.
+        dest_dir = plugin_installer.installed_plugins_dir()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / filename
+        shutil.copy2(source, dest)
+        return dest
 
-    dest_dir = plugin_installer.installed_plugins_dir()
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / filename
-    shutil.copy2(source, dest)
-    return dest
+    # No source checkout: this is the production case. The box installs from a
+    # wheel, `plugins/*.py` does not ship in it, and this used to return None
+    # -- so the flag was written over nothing and `vibe.py` had to be
+    # hand-copied onto the box.
+    #
+    # `fetch_plugin` is the path `plugins install` already uses, with its own
+    # trust boundary: curated names only, bounded body, no dynamic URL. Reuse
+    # it rather than teaching this module to download.
+    try:
+        return plugin_installer.fetch_plugin(filename.removesuffix(".py"))
+    except Exception as exc:  # noqa: BLE001 - unknown name, offline, HTTP error
+        # Return None so the CALLER reports it. Swallowing this into a written
+        # flag is the exact silence being fixed.
+        logger.warning("plugin.enable.fetch_failed", kind=kind, error=str(exc))
+        return None
 
 
 def _write_target_caveat(flag_path: "Path") -> str:
