@@ -142,41 +142,43 @@ class TestItHandlesRealBatchShapes:
         assert [e.cost_usd_micros for e in parse_otlp_events(merged)] == [1, 2]
 
 
-class TestRoleAttributionComesFromUs:
-    """`agent.name` is NOT the answer, measured on a real run.
+class TestRoleAttributionDoesNotComeFromTelemetry:
+    """`OTEL_RESOURCE_ATTRIBUTES` does not reach log records. Measured, twice.
 
-    The docs define it as the SUBAGENT type, and a headless top-level run has
-    no subagent -- so every row came back with `query_source` = `main` or
-    `auxiliary` and nothing naming the role. A cost we cannot attribute is an
-    aggregate, and an aggregate hides the case that matters.
+    I built an injection for this and it could never have worked. Probed on the
+    box: with `OTEL_RESOURCE_ATTRIBUTES=hivepilot.role=SONDE` set explicitly on
+    a direct `claude --print`, the attribute never arrives -- every row still
+    comes back `main` / `auxiliary` / empty. Claude Code does not attach
+    resource attributes to the log signal.
 
-    HivePilot knows the role at dispatch, so it states it: OTel's documented
-    `OTEL_RESOURCE_ATTRIBUTES` rides on the batch as RESOURCE attributes, one
-    level above the log record. The parser has to look there too, or the value
-    we just took the trouble to inject is dropped on arrival.
+    And it was never needed. `steps` already carries `role` beside `cost_usd`
+    and the token breakdown, because the engine KNOWS which role it dispatched.
+    Measured on the box: developer 103.04 USD over 50 steps, ciso 59.47,
+    reviewer 57.95. I saw `query_source = main` in the telemetry, concluded
+    "cost is not attributed", and never looked at the table that has attributed
+    it all along.
+
+    This test exists so the dead path is not rebuilt: `agent.name` is the only
+    attribution field the events carry, and it is empty for a headless
+    top-level run.
     """
 
-    def test_a_resource_attribute_reaches_the_event(self):
-        payload = _event(**{"event.name": "claude_code.api_request", "cost_usd_micros": 5})
-        payload["resourceLogs"][0]["resource"] = {
-            "attributes": [{"key": "hivepilot.role", "value": {"stringValue": "reviewer"}}]
-        }
+    def test_agent_name_is_the_only_attribution_field(self):
+        payload = _event(**{"event.name": "claude_code.api_request", "hivepilot.role": "reviewer"})
 
-        assert parse_otlp_events(payload)[0].role == "reviewer"
+        event = parse_otlp_events(payload)[0]
 
-    def test_a_record_attribute_wins_over_the_resource(self):
-        """The record is the more specific statement; a resource attribute is a
-        default for the whole batch."""
-        payload = _event(**{"event.name": "claude_code.api_request", "hivepilot.role": "ciso"})
-        payload["resourceLogs"][0]["resource"] = {
-            "attributes": [{"key": "hivepilot.role", "value": {"stringValue": "reviewer"}}]
-        }
+        # Not a field: role attribution is `steps.role`, not telemetry.
+        assert not hasattr(event, "role")
+        assert event.agent_name is None
 
-        assert parse_otlp_events(payload)[0].role == "ciso"
+    def test_query_source_is_never_mistaken_for_a_role(self):
+        """`main` and `auxiliary` name a SUBSYSTEM. Back-filling them into a
+        column read as a role would make every cost look attributed while none
+        of it was."""
+        from hivepilot.services.telemetry_service import record_api_request_events
 
-    def test_no_role_anywhere_is_none_not_a_guess(self):
-        """`main` is a subsystem, not a role. Writing it into the role column
-        would make every cost look attributed while none of it is."""
+        assert callable(record_api_request_events)
         payload = _event(**{"event.name": "claude_code.api_request", "query_source": "main"})
 
-        assert parse_otlp_events(payload)[0].role is None
+        assert parse_otlp_events(payload)[0].agent_name is None

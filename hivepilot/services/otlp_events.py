@@ -51,13 +51,13 @@ class ApiRequestEvent:
     cache_creation_tokens: int | None = None
     session_id: str | None = None
     #: Claude Code's own SUBAGENT type. Measured on a real run: empty for a
-    #: headless top-level agent, because there is no subagent -- so it is NOT
-    #: the field role attribution can rely on.
+    #: headless top-level agent, because there is no subagent.
+    #:
+    #: Role attribution does NOT come from here, and does not need to: the
+    #: `steps` table already carries `role` alongside `cost_usd` and the token
+    #: breakdown, because the engine KNOWS which role it dispatched. Join on
+    #: `session_id` when telemetry and steps must be reconciled.
     agent_name: str | None = None
-    #: The HivePilot role, stated by US via `OTEL_RESOURCE_ATTRIBUTES`. A cost
-    #: we cannot attribute is an aggregate, and an aggregate hides the case
-    #: that matters.
-    role: str | None = None
 
 
 def _attr_value(raw: Any) -> Any:
@@ -106,24 +106,13 @@ def parse_otlp_events(payload: Any) -> list[ApiRequestEvent]:
     for resource in payload.get("resourceLogs") or []:
         if not isinstance(resource, dict):
             continue
-        # Resource attributes are a DEFAULT for the whole batch: this is where
-        # `OTEL_RESOURCE_ATTRIBUTES` lands, one level above the log record. Not
-        # reading here would drop the very value the engine took the trouble to
-        # inject.
-        resource_attrs: dict[str, Any] = {}
-        res = resource.get("resource")
-        if isinstance(res, dict):
-            for attr in res.get("attributes") or []:
-                if isinstance(attr, dict) and isinstance(attr.get("key"), str):
-                    resource_attrs[attr["key"]] = _attr_value(attr.get("value"))
         for scope in resource.get("scopeLogs") or []:
             if not isinstance(scope, dict):
                 continue
             for record in scope.get("logRecords") or []:
                 if not isinstance(record, dict):
                     continue
-                # The record is the more specific statement, so it wins.
-                attrs: dict[str, Any] = dict(resource_attrs)
+                attrs: dict[str, Any] = {}
                 for attr in record.get("attributes") or []:
                     if isinstance(attr, dict) and isinstance(attr.get("key"), str):
                         attrs[attr["key"]] = _attr_value(attr.get("value"))
@@ -134,7 +123,6 @@ def parse_otlp_events(payload: Any) -> list[ApiRequestEvent]:
                 model = attrs.get("model")
                 session = attrs.get("session.id")
                 agent = attrs.get("agent.name")
-                role = attrs.get("hivepilot.role")
                 out.append(
                     ApiRequestEvent(
                         model=model if isinstance(model, str) else None,
@@ -145,7 +133,6 @@ def parse_otlp_events(payload: Any) -> list[ApiRequestEvent]:
                         cache_creation_tokens=_as_int(attrs.get("cache_creation_tokens")),
                         session_id=session if isinstance(session, str) else None,
                         agent_name=agent if isinstance(agent, str) else None,
-                        role=role if isinstance(role, str) else None,
                     )
                 )
     return out
