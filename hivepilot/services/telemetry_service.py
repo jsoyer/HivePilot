@@ -185,6 +185,62 @@ def parse_otlp_metrics(payload: dict[str, Any]) -> list[MetricPoint]:
     return points
 
 
+def record_api_request_events(events: list) -> int:
+    """Fan `claude_code.api_request` events out into the SAME rows a metric
+    batch produces, and persist them.
+
+    Deliberately not a new table. The event carries exactly what the
+    `claude_code.cost.usage` / `token.usage` METRICS carry, just per request and
+    with integer micros instead of a float -- so it lands in the machinery that
+    already reads `agent_telemetry` rather than beside it.
+
+    `metric` names mirror the OTel metric names so existing queries see both
+    sources; `kind` reuses the metric vocabulary (`input`/`output`/`cacheRead`/
+    `cacheCreation`). `query_source` carries `agent.name`, which is how a cost
+    lands on a ROLE rather than in a total.
+
+    A field the exporter did not send is SKIPPED, never written as zero: zero
+    means "this request cost nothing", absent means "we were not told", and
+    collapsing them is how a cost table quietly under-reports.
+    """
+    points: list[MetricPoint] = []
+    for event in events:
+        common = {
+            "session_id": event.session_id,
+            "model": event.model,
+            "query_source": event.agent_name,
+        }
+        if event.cost_usd_micros is not None:
+            points.append(
+                MetricPoint(
+                    metric="claude_code.cost.usage",
+                    # Stored in dollars so it is comparable with the metric
+                    # source; the integer micros are what crossed the wire, so
+                    # the division happens once, here, and never accumulates.
+                    value=event.cost_usd_micros / 1_000_000,
+                    unit="USD",
+                    **common,
+                )
+            )
+        for kind, value in (
+            ("input", event.input_tokens),
+            ("output", event.output_tokens),
+            ("cacheRead", event.cache_read_tokens),
+            ("cacheCreation", event.cache_creation_tokens),
+        ):
+            if value is not None:
+                points.append(
+                    MetricPoint(
+                        metric="claude_code.token.usage",
+                        value=float(value),
+                        unit="tokens",
+                        kind=kind,
+                        **common,
+                    )
+                )
+    return record_metrics(points)
+
+
 def record_metrics(points: list[MetricPoint]) -> int:
     """Persist parsed points.  Returns how many rows were written."""
     if not points:
