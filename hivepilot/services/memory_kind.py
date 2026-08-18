@@ -38,10 +38,25 @@ from enum import Enum
 class RecallSemantics(str, Enum):
     """What a backend's `recall` does to a field another backend may own."""
 
-    #: Appends; never overwrites. Composes with anything (obsidian).
+    #: Appends to the CURRENT value; never overwrites. Composes with anything
+    #: (obsidian: `f"{existing}\n\n{block}"`).
     ADDITIVE = "additive"
-    #: Replaces the field wholesale. Composes with no other exclusive backend.
+    #: Replaces the field wholesale. Composes with no other recalling backend.
     EXCLUSIVE = "exclusive"
+    #: Appends to a SNAPSHOT taken before its own recall, not to the current
+    #: value — so it silently discards anything written in between.
+    #:
+    #: mem0 is this, and reading its code says otherwise: line 546 is
+    #: `f"{original_extra_prompt}\n\n{block}"`, which looks additive, while
+    #: `original_extra_prompt` was captured at line 491. Declared ADDITIVE by a
+    #: maintainer reading that line, mem0 + obsidian would be permitted and
+    #: obsidian's block would vanish — the check missing the only real case it
+    #: exists for. Additive in form, overwriting in effect.
+    #:
+    #: This state describes the ENGINE's current wiring, not mem0 forever. Once
+    #: the snapshot is taken once, before the recall phase, and offered to every
+    #: store, ordering stops mattering and such a backend is plainly additive.
+    SNAPSHOT = "snapshot"
 
 
 @dataclass(frozen=True)
@@ -77,6 +92,17 @@ def describe_conflict(a: MemoryBackend, b: MemoryBackend) -> str | None:
     Returns None for a safe pair so callers stay silent when nothing is wrong:
     a notice printed on every enable teaches people to ignore notices.
     """
+    snapshots = [x for x in (a, b) if x.semantics is RecallSemantics.SNAPSHOT]
+    if snapshots:
+        taker = snapshots[0]
+        other = b if taker is a else a
+        return (
+            f"{taker.name} appends to a SNAPSHOT of `extra_prompt` taken before its own "
+            f"recall, not to the current value, so it discards whatever {other.name} wrote "
+            f"in between -- silently, and only when {taker.name} happens to run second. "
+            f"Enable one of them. This lifts once the engine takes the snapshot itself, "
+            f"once, before the recall phase."
+        )
     if a.semantics is RecallSemantics.EXCLUSIVE and b.semantics is RecallSemantics.EXCLUSIVE:
         return (
             f"{a.name} and {b.name} both replace `extra_prompt` on recall, so whichever "
@@ -98,10 +124,20 @@ def resolve_composition(backends: list[MemoryBackend]) -> CompositionDecision:
     combination — an unreadable list is not actionable, and resolving the named
     pair re-runs the check.
     """
-    exclusive = sorted(
-        (b for b in backends if b.semantics is RecallSemantics.EXCLUSIVE),
-        key=lambda b: b.name,
-    )
+    by_name = sorted(backends, key=lambda b: b.name)
+
+    # A snapshot backend cannot share the field with ANY other recaller,
+    # additive included -- that is exactly the pairing a two-state check
+    # wrongly permitted. Checked first because it is the strictest rule.
+    snapshot = next((b for b in by_name if b.semantics is RecallSemantics.SNAPSHOT), None)
+    if snapshot is not None:
+        other = next((b for b in by_name if b is not snapshot), None)
+        if other is not None:
+            reason = describe_conflict(snapshot, other)
+            return CompositionDecision(allowed=False, reason=reason or "")
+        return CompositionDecision(allowed=True)
+
+    exclusive = [b for b in by_name if b.semantics is RecallSemantics.EXCLUSIVE]
     if len(exclusive) < 2:
         return CompositionDecision(allowed=True)
 
