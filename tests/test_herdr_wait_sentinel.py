@@ -104,10 +104,16 @@ class TestTheWaitCall:
         assert "HIVEPILOT_DONE_abc" in argv
         assert "--regex" not in argv
 
-    def test_the_pane_id_is_positional_and_last(self):
+    def test_the_pane_id_comes_first_despite_the_help(self):
+        """herdr prints `[OPTIONS] <--match <TEXT>> <PANE_ID>` and does not
+        honour it. Probed against 0.8.0: with the id LAST, every form answers
+        `unknown option: <the VALUE>` -- the parser consumes the flag then
+        treats its argument as another option. With the id FIRST it answers a
+        proper timeout. The documented order does not work."""
         argv = _herdr().HerdrRunner._wait_argv("w1:p1", "S", 1000)
 
-        assert argv[-1] == "w1:p1"
+        assert argv[3] == "w1:p1"
+        assert argv.index("w1:p1") < argv.index("--match")
 
     @pytest.mark.parametrize("timeout", [1000, 300_000])
     def test_a_timeout_is_always_passed(self, timeout):
