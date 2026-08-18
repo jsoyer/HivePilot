@@ -287,16 +287,52 @@ class HerdrRunner:
 
     @staticmethod
     def _extract_pane_id(data: Any) -> str | None:
+        """Find a pane id, searching `result` BEFORE the top level.
+
+        herdr answers in a JSON-RPC envelope whose top-level `id` is the
+        REQUEST id -- measured against 0.7.5 on 2026-08-18::
+
+            {"id": "cli:pane:split",
+             "result": {"type": "pane_split", "pane": {"pane_id": ...}}}
+
+        `_PANE_ID_KEYS` starts with `"id"`, so searching the top level first
+        returned `"cli:pane:split"` and the next call failed with
+        `pane_not_found` -- reading as though herdr had lost the pane it had
+        just created. Only a live server shows this.
+
+        The top-level fallback stays: an older or future protocol may answer
+        with a bare id, and this is also called on nested `pane` objects. It is
+        simply no longer consulted first. When `result` exists but holds
+        nothing recognisable, the envelope id is NOT used as a consolation
+        prize -- returning None makes the caller raise with the raw JSON, and a
+        parse failure must not become a confident call against a pane that does
+        not exist.
+        """
         if isinstance(data, str):
             return data or None
-        if isinstance(data, dict):
+        if not isinstance(data, dict):
+            return None
+
+        result = data.get("result")
+        if isinstance(result, dict):
+            pane = result.get("pane")
+            if isinstance(pane, dict):
+                found = HerdrRunner._extract_pane_id(pane)
+                if found:
+                    return found
             for key in _PANE_ID_KEYS:
-                value = data.get(key)
+                value = result.get(key)
                 if isinstance(value, str) and value:
                     return value
-            pane = data.get("pane")
-            if isinstance(pane, dict):
-                return HerdrRunner._extract_pane_id(pane)
+            return None
+
+        for key in _PANE_ID_KEYS:
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value
+        pane = data.get("pane")
+        if isinstance(pane, dict):
+            return HerdrRunner._extract_pane_id(pane)
         return None
 
     # -- env -> pane (argv-safe) -------------------------------------------
