@@ -200,6 +200,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from hivepilot.plugins import HealthStatus
+from hivepilot.services.memory_kind import RecallSemantics
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -215,6 +216,11 @@ except ImportError:  # mem0ai is optional — never installed by this plugin
 # memories are injected. Deliberately extra_prompt, not prior_context — see
 # the "Recall injection field" note in the module docstring.
 _RECALL_FIELD = "extra_prompt"
+
+#: Read by the engine's composition check. ADDITIVE rather than SNAPSHOT
+#: because the engine now captures the pre-recall value itself (see `recall`),
+#: so the append below can no longer discard another backend's block.
+RECALL_SEMANTICS = RecallSemantics.ADDITIVE
 
 # Private marker set on a task's shared `metadata` dict once `recall` has run
 # for it — see the "Idempotency" note in the module docstring. `_`-prefixed
@@ -486,9 +492,18 @@ def recall(**kwargs: Any) -> None:
         if client is None:
             return
 
-        # Snapshot the pre-mutation value so `store` can persist the
-        # original ask instead of mem0's own recalled-memories block.
-        original_extra_prompt = metadata.get(_RECALL_FIELD)
+        # Prefer the ENGINE's snapshot, taken before ANY backend recalled.
+        # Capturing here instead meant the value already contained whatever
+        # obsidian had appended first, so the append below would drop it --
+        # which is why mem0 had to be declared a SNAPSHOT backend and refused
+        # alongside every other recaller. Falling back to a local capture keeps
+        # a direct/test invocation working, where no engine ran.
+        from hivepilot.services.memory_kind import input_snapshot
+
+        engine_snapshot = input_snapshot(metadata)
+        original_extra_prompt = (
+            engine_snapshot if engine_snapshot is not None else metadata.get(_RECALL_FIELD)
+        )
         metadata[_ORIGINAL_EXTRA_PROMPT_KEY] = original_extra_prompt
 
         role = kwargs.get("role")

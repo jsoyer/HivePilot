@@ -80,6 +80,9 @@ from hivepilot.services import (
 from hivepilot.services import (
     context_budget as context_budget_service,
 )
+from hivepilot.services import (
+    memory_kind as _memory_kind,
+)
 from hivepilot.services.agent_report import parse_agent_report, parse_agent_requests
 from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.config_provenance import redact_text, redact_value, register_secret_value
@@ -6673,6 +6676,20 @@ class Orchestrator:
                         # sink — nothing reads it externally before the
                         # runner does, so redacting it buys no security value
                         # here in exchange for that regression.
+                        # Capture `extra_prompt` as it stood BEFORE any
+                        # backend recalls, once per task. mem0 used to do this
+                        # itself at the top of its own recall so its `store`
+                        # would persist the real ask -- but taken when MEM0
+                        # runs, the snapshot already held whatever obsidian
+                        # appended first, so mem0 wrote `snapshot + its own
+                        # block` and obsidian's recall vanished. Captured here,
+                        # recall ORDER stops mattering.
+                        #
+                        # Safe on the shared dict: this is the same object the
+                        # hooks mutate in place (see the note above on why no
+                        # copy is made), and `capture_input_snapshot` is
+                        # idempotent per dict.
+                        _memory_kind.capture_input_snapshot(payload.metadata)
                         self.plugins.run_hook(
                             "before_step",
                             allowed_plugins=self._allowed_plugins(pipeline),

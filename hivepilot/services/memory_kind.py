@@ -143,3 +143,45 @@ def resolve_composition(backends: list[MemoryBackend]) -> CompositionDecision:
 
     reason = describe_conflict(exclusive[0], exclusive[1])
     return CompositionDecision(allowed=False, reason=reason or "")
+
+
+# The pre-recall value of `extra_prompt`, captured by the ENGINE once per task
+# before any `before_step` hook fires.
+#
+# `plugins/mem0.py` used to capture this itself, at the top of its own recall,
+# so its `store` could persist the task's real ask instead of re-persisting
+# mem0's own recalled block. Right instinct, wrong moment: taken when MEM0
+# runs, the snapshot already contains whatever another backend appended first,
+# so mem0 would write `snapshot + its own block` and obsidian's recall would be
+# gone. That is what made mem0 a SNAPSHOT backend, refused alongside every
+# other recaller -- including obsidian, the combination this deployment runs.
+#
+# Captured up here instead, ordering stops being load-bearing and such a
+# backend is plainly additive again.
+#
+# `_`-prefixed so it reads as private; `ClaudeRunner._build_prompt` reads only
+# `extra_prompt`/`prior_context` and never iterates the dict, so it is never
+# rendered into a prompt.
+INPUT_SNAPSHOT_KEY = "_memory_input_snapshot"
+
+
+def capture_input_snapshot(metadata: dict) -> None:
+    """Record `extra_prompt` as it stood BEFORE any backend recalled.
+
+    Idempotent per dict: `Orchestrator._execute_task` builds ONE metadata dict
+    per task and reuses it for every step, so re-capturing on step two would
+    snapshot step one's recalled memories -- the exact feedback loop this
+    exists to close.
+
+    An absent `extra_prompt` records `None`, not `""`. A store reads those
+    differently: "there was no ask" versus "the ask was empty", and collapsing
+    them would persist a blank as if it were content.
+    """
+    if INPUT_SNAPSHOT_KEY in metadata:
+        return
+    metadata[INPUT_SNAPSHOT_KEY] = metadata.get("extra_prompt")
+
+
+def input_snapshot(metadata: dict) -> str | None:
+    """The engine's pre-recall snapshot, or None if it was never captured."""
+    return metadata.get(INPUT_SNAPSHOT_KEY)
