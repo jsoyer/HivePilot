@@ -176,7 +176,7 @@ class TestCaptureDrivesFullCliSequence:
                 return _split_result(pane_id)
             if argv[:3] == ["herdr", "pane", "run"]:
                 return _ok_result()
-            if argv[:3] == ["herdr", "wait", "agent-status"]:
+            if argv[:3] == ["herdr", "pane", "wait-output"]:
                 return _ok_result()
             if argv[:3] == ["herdr", "pane", "read"]:
                 return _ok_result(stdout="pane output text")
@@ -209,10 +209,18 @@ class TestCaptureDrivesFullCliSequence:
         assert run_argv[:3] == ["herdr", "pane", "run"]
         assert run_argv[3] == pane_id
 
-        assert wait_argv[:3] == ["herdr", "wait", "agent-status"]
-        assert wait_argv[3] == pane_id
-        assert "--status" in wait_argv
-        assert wait_argv[wait_argv.index("--status") + 1] == "idle"
+        # `herdr wait agent-status` was called here since #140 and exists in
+        # NEITHER 0.7.5 nor 0.8.0 -- probed on both, herdr answers
+        # `unknown command: wait`. So this runner had never completed a step
+        # against a real server; the old assertion pinned a mock.
+        #
+        # `pane wait-output --match <sentinel>` is what 0.8.0 has, and the pane
+        # id is POSITIONAL and last, not argv[3].
+        assert wait_argv[:3] == ["herdr", "pane", "wait-output"]
+        assert wait_argv[-1] == pane_id
+        assert "--match" in wait_argv
+        assert wait_argv[wait_argv.index("--match") + 1].startswith("HIVEPILOT_DONE_")
+        assert "--timeout" in wait_argv
 
         assert read_argv[:3] == ["herdr", "pane", "read"]
         assert read_argv[3] == pane_id
@@ -424,7 +432,7 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
                 # permissions it actually had while live.
                 env_file_snapshot["mode"] = oct(os.stat(env_file_path).st_mode & 0o777)
                 return _ok_result()
-            if argv[:3] == ["herdr", "wait", "agent-status"]:
+            if argv[:3] == ["herdr", "pane", "wait-output"]:
                 return _ok_result()
             if argv[:3] == ["herdr", "pane", "read"]:
                 return _ok_result(stdout="done")

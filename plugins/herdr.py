@@ -177,11 +177,13 @@ class HerdrRunner:
         env_file = self._write_env_file(payload)
         try:
             project_path = shlex.quote(str(payload.project.path))
+            sentinel = self._completion_sentinel()
+            inner = self._wrap_with_sentinel(command_str, sentinel)
             wrapped_cmd = (
-                f"cd {project_path}; set -a; source {shlex.quote(env_file)}; set +a; {command_str}"
+                f"cd {project_path}; set -a; source {shlex.quote(env_file)}; set +a; {inner}"
             )
             self._pane_run(payload, pane_id, wrapped_cmd)
-            self._wait_idle(payload, pane_id)
+            self._wait_idle(payload, pane_id, sentinel)
             output = self._pane_read(payload, pane_id)
         finally:
             self._cleanup_env_file(env_file)
@@ -222,28 +224,74 @@ class HerdrRunner:
                 f"pane {pane_id} (exit {result.returncode}): {err}"
             )
 
-    def _wait_idle(self, payload: RunnerPayload, pane_id: str) -> None:
+    @staticmethod
+    def _completion_sentinel() -> str:
+        """A unique end-of-command marker.
+
+        Unique per call on purpose: a second step in the same pane would
+        otherwise match the FIRST one's marker and read output that is not its
+        own. No shell metacharacters -- it is interpolated into a command and
+        passed to `--match`.
+        """
+        import uuid
+
+        return f"HIVEPILOT_DONE_{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _wrap_with_sentinel(command_str: str, sentinel: str) -> str:
+        """Run the command, then announce completion UNCONDITIONALLY.
+
+        `;` and not `&&`: a failing command must still print the marker.
+        Otherwise it hangs to the timeout and the operator is told "timed out"
+        about something that finished in a second -- a wrong diagnosis, not
+        merely a slow one.
+
+        `$?` is captured before the echo and re-raised after it, so the step's
+        own exit status is not replaced by the echo's.
+        """
+        return f"{command_str}; __hp_rc=$?; echo {sentinel}; (exit $__hp_rc)"
+
+    @staticmethod
+    def _wait_argv(pane_id: str, sentinel: str, timeout_ms: int) -> list[str]:
+        """`pane wait-output`, which is what 0.8.0 actually has.
+
+        NOT `herdr wait agent-status`: that command exists in neither 0.7.5 nor
+        0.8.0 -- probed on both -- and the plugin had been calling it since
+        #140, so this runner had never completed a step against a real server.
+
+        NOT `agent wait` either: it needs an AGENT target, and a pane running a
+        shell command is not one (`agent_not_found`, probed). We are waiting
+        for a COMMAND to finish, not for an agent to stop thinking.
+
+        `--match` is a literal substring; `--regex` would turn a marker into a
+        pattern. `--timeout` is never omitted -- herdr's own help says it
+        otherwise waits indefinitely.
+        """
+        return [
+            "herdr",
+            "pane",
+            "wait-output",
+            "--match",
+            sentinel,
+            "--timeout",
+            str(timeout_ms),
+            pane_id,
+        ]
+
+    def _wait_idle(self, payload: RunnerPayload, pane_id: str, sentinel: str) -> None:
         timeout_ms = payload.step.metadata.get("herdr_wait_timeout_ms") or (
             self.settings.herdr_wait_timeout_ms
         )
-        argv = [
-            "herdr",
-            "wait",
-            "agent-status",
-            pane_id,
-            "--status",
-            "idle",
-            "--timeout",
-            str(timeout_ms),
-        ]
+        argv = self._wait_argv(pane_id, sentinel, timeout_ms)
         result = subprocess.run(argv, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             # Fail-closed: blocked / unknown / timed-out are ALL treated as a
             # step failure — there is no path here that silently succeeds.
             err = (result.stderr or result.stdout or "").strip()[-2000:]
             raise RuntimeError(
-                f"herdr runner step '{payload.step.name}': pane {pane_id} did not "
-                f"reach 'idle' within {timeout_ms}ms (exit {result.returncode}): {err}"
+                f"herdr runner step '{payload.step.name}': pane {pane_id} never printed "
+                f"its completion marker within {timeout_ms}ms "
+                f"(exit {result.returncode}): {err}"
             )
 
     def _pane_read(self, payload: RunnerPayload, pane_id: str) -> str:
