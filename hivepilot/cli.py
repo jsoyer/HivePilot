@@ -4178,6 +4178,70 @@ def plugins_health() -> None:
         raise typer.Exit(1)
 
 
+@plugins_app.command("check")
+def plugins_check() -> None:
+    """Compare each INSTALLED plugin against its source, and exit non-zero if
+    any is stale or absent.
+
+    Why this exists: `pip install` upgrades HivePilot but never touches
+    `$XDG_DATA_HOME/hivepilot/plugins/*.py`, which is where the runtime loads
+    plugins from. Measured on 2026-08-18 -- a merged, deployed fix to
+    `plugins/herdr.py` sat unused for nine days because the box kept executing
+    the copy installed on 9 August, and nothing compared the two. Two runs were
+    spent debugging a defect that had already been fixed.
+
+    `unknown` (the source could not be fetched) does NOT fail the command: it
+    means the check could not be made, not that the plugin is wrong, and
+    failing on it would train people to ignore the statuses that matter.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from hivepilot.services import plugin_installer
+    from hivepilot.services.plugin_freshness import Freshness, compare_plugin
+
+    console = Console(width=200)
+    installed_dir = plugin_installer.installed_plugins_dir()
+    files = sorted(installed_dir.glob("*.py")) if installed_dir.exists() else []
+
+    if not files:
+        console.print(f"No installed plugins under {installed_dir}")
+        return
+
+    table = Table(title="Plugin Freshness")
+    for column in ("plugin", "status", "detail"):
+        table.add_column(column)
+
+    actionable = False
+    for path in files:
+        name = path.stem
+        try:
+            installed_text: str | None = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            installed_text = None
+            console.print(f"[yellow]{name}: could not read installed copy: {exc}[/yellow]")
+
+        source_text: str | None = None
+        try:
+            # Fetch into a scratch dir: `plugins check` must never overwrite
+            # the very file it is inspecting.
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as scratch:
+                fetched = plugin_installer.fetch_plugin(name, dest_dir=Path(scratch))
+                source_text = fetched.read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001 - unknown name, offline, HTTP error
+            source_text = None
+
+        result = compare_plugin(name=name, installed_text=installed_text, source_text=source_text)
+        actionable = actionable or Freshness.needs_action(result.status)
+        table.add_row(name, result.status.value, result.detail)
+
+    console.print(table)
+    if actionable:
+        raise typer.Exit(1)
+
+
 @plugins_app.command("verify")
 def plugins_verify() -> None:
     """For every curated example plugin, attempt the ACTUAL import/binary
