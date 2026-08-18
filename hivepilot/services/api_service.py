@@ -2039,6 +2039,22 @@ def efficiency_endpoint(
 # ---------------------------------------------------------------------------
 
 
+#: A live state read is local socket I/O, so it is bounded like one. The
+#: previous 15s default was a pipeline timeout wearing a dashboard's clothes.
+_AGENT_PROBE_TIMEOUT_S = 2
+#: Ceiling for the WHOLE roster probe. 22 roles x a per-call timeout is what
+#: turns a hung backend into a blocked HTTP worker, and Pollen polls this view;
+#: bounding each call is not bounding the request.
+_AGENT_PROBE_BUDGET_S = 5.0
+
+
+def _agent_surface_clock() -> float:
+    """Monotonic seconds. A seam so the budget is testable without sleeping."""
+    import time
+
+    return time.monotonic()
+
+
 def _agent_surface_run(argv: list[str], **kwargs: Any) -> Any:
     """Execute an agent-surface command. Seam so tests never spawn a process.
 
@@ -2048,7 +2064,10 @@ def _agent_surface_run(argv: list[str], **kwargs: Any) -> Any:
     import subprocess  # nosec B404 - argv built by hivepilot.services.agent_surface, never a shell
 
     return subprocess.run(  # nosec B603
-        argv, capture_output=True, text=True, timeout=kwargs.get("timeout", 15)
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=kwargs.get("timeout", _AGENT_PROBE_TIMEOUT_S),
     )
 
 
@@ -2096,10 +2115,21 @@ def agents_live_endpoint(caller: Any = None) -> dict[str, Any]:
 
     known = {s.value for s in AgentState}
     agents: list[dict[str, Any]] = []
+    started = _agent_surface_clock()
+    truncated = False
     for name in role_names:
         state = AgentState.UNKNOWN.value
+        if truncated or _agent_surface_clock() - started >= _AGENT_PROBE_BUDGET_S:
+            # Budget spent: the rest report `unknown`, the same honest answer
+            # as any other probe failure -- and the caller is told why below
+            # rather than being handed a roster that looks merely quiet.
+            truncated = True
+            agents.append({"role": name, "state": state})
+            continue
         try:
-            result = _agent_surface_run(driver.read_argv(name, limit=1))
+            result = _agent_surface_run(
+                driver.read_argv(name, limit=1), timeout=_AGENT_PROBE_TIMEOUT_S
+            )
             if getattr(result, "returncode", 1) == 0:
                 candidate = (getattr(result, "stdout", "") or "").strip().lower()
                 # An unrecognised string must NOT reach the UI as a state: a
@@ -2112,7 +2142,12 @@ def agents_live_endpoint(caller: Any = None) -> dict[str, Any]:
             _gl(__name__).warning("api.agents_live.probe_failed", role=name, error=str(exc))
         agents.append({"role": name, "state": state})
 
-    return {"configured": True, "detail": "", "agents": agents}
+    detail_out = (
+        f"probe stopped after {_AGENT_PROBE_BUDGET_S:g}s; the remaining roles are unknown"
+        if truncated
+        else ""
+    )
+    return {"configured": True, "detail": detail_out, "agents": agents}
 
 
 @v1.post("/agents/{role}/message", dependencies=[Depends(require_role("run"))])

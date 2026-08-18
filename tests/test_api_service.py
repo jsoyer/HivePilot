@@ -1299,6 +1299,48 @@ class TestAgentsLiveEndpoint:
 
         assert all(a["state"] == "unknown" for a in body["agents"])
 
+    def test_the_whole_probe_is_bounded_not_just_each_call(
+        self, api_client, tmp_tokens_file, monkeypatch
+    ):
+        """22 roles x a 15s per-call timeout is 330 seconds of a blocked HTTP
+        worker on a hung backend -- and Pollen polls this view. Bounding each
+        call is not bounding the request.
+
+        Past the budget the remaining roles report `unknown`, which is the same
+        honest answer as any other probe failure."""
+        from hivepilot.config import settings
+        from hivepilot.services import api_service
+
+        monkeypatch.setattr(settings, "agent_surface_backend", "herdr", raising=False)
+        calls: list = []
+
+        class _R:
+            returncode = 0
+            stdout = "idle"
+
+        def _slow(argv, **k):
+            calls.append(argv)
+            return _R()
+
+        monkeypatch.setattr(api_service, "_agent_surface_run", _slow)
+        # start=0, first check under budget (one probe runs), then spent.
+        ticks = iter([0.0, 0.0] + [999.0] * 200)
+        monkeypatch.setattr(api_service, "_agent_surface_clock", lambda: next(ticks))
+        raw, _ = add_token("read")
+
+        body = api_client.get("/v1/agents/live", headers=_auth(raw)).json()
+
+        assert len(calls) == 1, "the probe kept going after its budget was spent"
+        assert body["agents"][-1]["state"] == "unknown"
+        assert body["detail"], "a truncated probe must say why the rest is unknown"
+
+    def test_each_probe_call_is_short(self):
+        """A state read is local socket I/O. A 15s per-call timeout is a
+        pipeline timeout, not a dashboard one."""
+        from hivepilot.services import api_service
+
+        assert api_service._AGENT_PROBE_TIMEOUT_S <= 3
+
     def test_sending_a_message_requires_run_not_read(self, api_client, tmp_tokens_file):
         """It makes something happen, so `read` must not be enough."""
         raw, _ = add_token("read")
