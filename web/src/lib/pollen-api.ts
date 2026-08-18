@@ -1408,6 +1408,40 @@ export interface AgentsResponse {
 /** `days`/`project`/`task` all default to unbounded/unfiltered — a roster
  * view is a lifetime/overview surface, not a rolling window, exactly like
  * the backend's own `agents_summary(days=None)` default. */
+/** Per-role LIVE state from the herdr/Orca surface (`GET /v1/agents/live`).
+ *
+ * `configured: false` carries a `detail` saying WHY — no backend set, or a
+ * name we do not know. Render that reason: an agent shown as `unknown`
+ * without one reads as a bug in the dashboard rather than a deployment that
+ * has no agent surface configured.
+ *
+ * `state` is one of herdr's five (`idle`/`working`/`blocked`/`done`/
+ * `unknown`); anything the backend returns that we do not model arrives as
+ * `unknown` rather than reaching the UI as a state of its own. */
+export interface AgentLiveResponse {
+  configured: boolean
+  detail: string
+  agents: { role: string; state: string }[]
+}
+
+export function fetchAgentsLive(): Promise<AgentLiveResponse> {
+  return apiFetch<AgentLiveResponse>('/v1/agents/live', { on403: 'forbidden' })
+}
+
+/** Send text to a live agent (`POST /v1/agents/{role}/message`).
+ *
+ * Resolves with `dispatched`, never `delivered`: the send is fire-and-forget
+ * at the API layer, and the UI must not claim the agent received it. */
+export function sendAgentMessage(
+  role: string,
+  text: string,
+): Promise<{ dispatched: boolean; detail?: string }> {
+  return apiFetch<{ dispatched: boolean; detail?: string }>(
+    `/v1/agents/${encodeURIComponent(role)}/message`,
+    { method: 'POST', body: JSON.stringify({ text }), on403: 'forbidden' },
+  )
+}
+
 export function fetchAgents(days?: number, project?: string, task?: string): Promise<AgentsResponse> {
   const params = new URLSearchParams()
   if (days != null) params.set('days', String(days))

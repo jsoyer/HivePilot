@@ -752,6 +752,12 @@ export const fr: Record<TranslationKey, string> = {
     "skipped signifie que la tâche n'a jamais démarré parce qu'un prérequis a échoué — enregistrée délibérément comme skipped et non comme failed.",
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
+  'agents.live.title': 'Agents en direct',
+  'agents.live.roleLabel': 'Rôle',
+  'agents.live.messageLabel': 'Dire quelque chose à cet agent',
+  'agents.live.send': 'Envoyer',
+  'agents.live.dispatched': 'Envoyé — rien ne dit encore que l’agent l’a lu',
+  'agents.live.refused': 'Non envoyé',
   'agents.title': 'Agents',
   'agents.description':
     'Ce que coûte chaque rôle et à quelle fréquence il réussit. Sélectionnez un rôle pour ses leçons et ses verdicts.',

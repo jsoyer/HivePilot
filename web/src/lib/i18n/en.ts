@@ -746,6 +746,12 @@ export const en = {
     'skipped means the task never ran because a prerequisite failed — deliberately recorded as skipped and not as failed.',
 
   // ---- Agents view (Mirador Agent Panels backend sprint frontend) ------
+  'agents.live.title': 'Live agents',
+  'agents.live.roleLabel': 'Role',
+  'agents.live.messageLabel': 'Say something to this agent',
+  'agents.live.send': 'Send',
+  'agents.live.dispatched': 'Dispatched — the agent has not necessarily read it yet',
+  'agents.live.refused': 'Not dispatched',
   'agents.title': 'Agents',
   'agents.description': 'What each role costs and how often it succeeds. Select a role for its lessons and verdicts.',
   'agents.colRole': 'Role',
