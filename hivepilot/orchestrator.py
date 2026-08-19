@@ -2039,6 +2039,36 @@ def _classify_stage_failure(stage_results: list[RunResult]) -> RunStatus:
     return RunStatus.INFRASTRUCTURE_FAILURE
 
 
+def _flag_enabled(settings_obj: Any, name: str) -> bool:
+    """A feature flag is on only when it is literally `True`.
+
+    `is True`, not truthiness, and the reason is not pedantry. Found on the
+    operator's machine: 18 workspaces had accumulated in their live herdr,
+    every one pointing at a deleted pytest temp directory, because
+    `bool(MagicMock().herdr_workspace_per_run)` is **True**. Every test that
+    mocks `settings` wholesale was running with the pane surface enabled and
+    reaching a real server.
+
+    A feature that is off in production and on under a mock is not off. Costs
+    nothing real -- pydantic guarantees a bool here -- and closes the class
+    rather than the two tests that happened to surface it.
+    """
+    return getattr(settings_obj, name, False) is True
+
+
+def _int_setting(settings_obj: Any, name: str, default: int = 0) -> int:
+    """A count is only a count when it is an `int` -- and `bool` is not one.
+
+    `True` IS an int in Python, so a flag written where a count belongs would
+    otherwise mean "keep one" silently. A MagicMock is neither, and reads as
+    the default rather than as something enabled.
+    """
+    value = getattr(settings_obj, name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return max(0, value)
+
+
 class Orchestrator:
     def __init__(self, plugins: PluginManager | None = None) -> None:
         # Phase 26b — optional shared PluginManager injection. Default
@@ -6336,8 +6366,8 @@ class Orchestrator:
                     "into its own task or a pipeline stage with pause_before."
                 )
 
-        _keep_failed = max(0, int(getattr(settings, "keep_failed_runs", 0) or 0))
-        if _keep_failed and getattr(settings, "herdr_workspace_per_run", False):
+        _keep_failed = _int_setting(settings, "keep_failed_runs")
+        if _keep_failed and _flag_enabled(settings, "herdr_workspace_per_run"):
             # Pruned HERE, at the start of a run, rather than by a background
             # sweeper: the thing that creates these is best placed to notice
             # there are too many, and a daemon would be a second moving part to
@@ -6357,7 +6387,7 @@ class Orchestrator:
             # one that is missing. Yields None (and calls herdr not at all)
             # when the flag is off.
             herdr_run_workspace(
-                enabled=bool(getattr(settings, "herdr_workspace_per_run", False)),
+                enabled=_flag_enabled(settings, "herdr_workspace_per_run"),
                 repo=str(project.path),
                 exec_path=str(_exec_path),
                 # The label is what `workspace_retention` reads to order and
