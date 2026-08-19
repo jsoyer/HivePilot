@@ -854,6 +854,29 @@ def session_costs(
     return {"sessions": ordered, "total_sessions": len(sessions)}
 
 
+def _cost_basis(*, tenant: str | None) -> dict[str, Any]:
+    """Envelope vs OTel, with their windows. Never raises.
+
+    A failure to read is reported as both bases unmeasured rather than as
+    zeros: a panel that shows a confident 0.00 for a query it could not run is
+    the defect this whole surface exists to remove.
+    """
+    from hivepilot.services.cost_basis import compare_cost_bases
+    from hivepilot.services.state_service import cost_basis_rows
+
+    try:
+        envelope, otel = cost_basis_rows(tenant=tenant or "default")
+    except Exception as exc:  # noqa: BLE001
+        # A local logger: this module has none, and mypy caught the reference
+        # rather than a test -- the line only runs when the query has already
+        # failed, which is exactly when the message is wanted.
+        from hivepilot.utils.logging import get_logger
+
+        get_logger(__name__).warning("analytics.cost_basis_unavailable", error=str(exc))
+        envelope, otel = None, None
+    return compare_cost_bases(envelope=envelope, otel=otel)
+
+
 def cost_summary(
     tenant: str | None = None,
     days: int | None = 30,
@@ -955,6 +978,17 @@ def cost_summary(
         "by_role": role_summary,
         "by_role_note": _BY_ROLE_NOTE,
         "unpriced_models": unpriced_models,
+        # Which BASIS each figure came from. Everything above is the envelope
+        # -- `steps.cost_usd`, self-reported by the agent. OTel exports the
+        # same spend independently, per API request, and the two must never be
+        # added: that would double-count.
+        #
+        # Reported with their coverage windows because they do not cover the
+        # same period. Measured on the box: envelope from 2026-07-26, otel only
+        # from 2026-08-10, which puts a 2.4x gap between two totals that are
+        # both correct. Side by side without the windows, that reads as
+        # catastrophic telemetry loss.
+        "basis": _cost_basis(tenant=tenant),
     }
 
 

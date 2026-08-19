@@ -119,6 +119,11 @@ export const fr: Record<TranslationKey, string> = {
   'analytics.actionedApprovals': 'Approbations traitées',
 
   // ---- Cost view -----------------------------------------------------
+  'cost.basisEnvelope': "enveloppe",
+  'cost.basisOtel': "otel",
+  'cost.basisNotMeasured': "non mesuré",
+  'cost.basisNotComparable': "Ces deux mesures lisent la MÊME dépense par des chemins différents et ne couvrent pas la même période — ne les additionnez jamais, et ne lisez pas l’écart comme une perte.",
+  'cost.basisDivergence': "Même période, les deux chemins : {{pct}} % d’écart.",
   'cost.sessionsTitle': 'Coût par session',
   'cost.sessionsDescription':
     "Où est passé l'argent, pas combien de tokens ont circulé. Les lectures de cache sont volumineuses et bon marché ; la sortie est petite et chère — lire les deux comme un seul chiffre dirige l'optimisation vers le mauvais paramètre.",
