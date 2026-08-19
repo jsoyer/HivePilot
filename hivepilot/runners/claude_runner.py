@@ -24,6 +24,7 @@ from hivepilot.runners.base import (
     resolve_runner_effort,
     set_last_usage,
 )
+from hivepilot.runners.pane_exec import run_in_pane
 from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.corrections_service import load_corrections
 from hivepilot.services.obsidian_vault_resolver import resolve_prompt_vault
@@ -1045,6 +1046,56 @@ class ClaudeRunner(BaseRunner):
                 shutil.rmtree(scratch_dir, ignore_errors=True)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
+    def _dispatch(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        timeout: float | None,
+    ) -> subprocess.CompletedProcess:
+        """Run one agent invocation and return what it produced.
+
+        Both of `capture()`'s branches go through here so the pane mode is one
+        decision rather than two, and so everything downstream -- the usage
+        envelope, the cost, the permission-denial reporting, the failure
+        context and its hints -- keeps consuming the same
+        `CompletedProcess` and never learns which way the process ran.
+
+        Default OFF. This changes how every step executes, and a box with no
+        herdr server must keep working exactly as before rather than fail on a
+        missing binary. `run()` is deliberately NOT routed through here: it
+        streams to the parent's inherited descriptors on purpose, and capturing
+        it to a file to gain a pane would take away the live visibility that is
+        its entire reason for existing.
+        """
+        if not bool(getattr(self.settings, "claude_pane_mode", False)):
+            return subprocess.run(
+                argv,
+                cwd=cwd,
+                env=env,
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+
+        capture_dir = getattr(self.settings, "claude_pane_capture_dir", "") or os.path.join(
+            tempfile.gettempdir(), "hivepilot-panes"
+        )
+        # 0700: the step's environment lands here as a sourceable file for the
+        # length of the call, and it carries the step's secrets.
+        os.makedirs(capture_dir, mode=0o700, exist_ok=True)
+        return run_in_pane(
+            argv,
+            capture_dir=capture_dir,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            split_direction=self.settings.herdr_split_direction,
+        )
+
     def capture(self, payload: RunnerPayload) -> str:
         """Run claude and return its stdout (so the agent's output can be surfaced
         in the interaction log / live stream, not just discarded)."""
@@ -1088,16 +1139,7 @@ class ClaudeRunner(BaseRunner):
         try:
             if capture_usage:
                 json_argv = _insert_output_format_json(argv)
-                json_result = subprocess.run(
-                    json_argv,
-                    cwd=cwd,
-                    env=run_env,
-                    check=False,
-                    text=True,
-                    capture_output=True,
-                    timeout=timeout,
-                    stdin=subprocess.DEVNULL,
-                )
+                json_result = self._dispatch(json_argv, cwd=cwd, env=run_env, timeout=timeout)
                 if json_result.returncode != 0:
                     # Do NOT retry without the flag: a non-zero exit here can
                     # happen AFTER the agent already did real work (mid-run
@@ -1214,16 +1256,7 @@ class ClaudeRunner(BaseRunner):
                 )
                 return json_result.stdout
 
-            result = subprocess.run(
-                argv,
-                cwd=cwd,
-                env=run_env,
-                check=False,
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-                stdin=subprocess.DEVNULL,
-            )
+            result = self._dispatch(argv, cwd=cwd, env=run_env, timeout=timeout)
             if result.returncode != 0:
                 stderr_text = (result.stderr or result.stdout or "").strip()
                 context = self._runner_failure_context(

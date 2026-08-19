@@ -687,6 +687,24 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_HERDR_SPLIT_DIRECTION
     herdr_split_direction: str = "right"
 
+    # Run the `claude` process INSIDE a herdr pane instead of as a bare child
+    # process, so the operator can watch a step work rather than only read what
+    # it left behind. The invocation is unchanged -- same argv, same prompt,
+    # same allowed_tools, same hooks; only where the process lives changes.
+    #
+    # Default OFF, and it stays that way: this alters how every step executes,
+    # and a box with no herdr server must keep working exactly as before rather
+    # than fail on a missing binary. Applies to `capture()` only; the streaming
+    # `run()` path keeps its inherited descriptors.
+    # env: HIVEPILOT_CLAUDE_PANE_MODE
+    claude_pane_mode: bool = False
+    # Where the pane writes back the step's stdout, stderr and exit status.
+    # Empty uses a `hivepilot-panes` directory under the system temp dir, made
+    # 0700 -- the step's environment lands there as a sourceable file for the
+    # length of the call, and carries its secrets.
+    # env: HIVEPILOT_CLAUDE_PANE_CAPTURE_DIR
+    claude_pane_capture_dir: str = ""
+
     # Database backend — None keeps SQLite at state_db (default); set to
     # "postgresql://..." to switch to Postgres (requires psycopg[binary]).
     # env: HIVEPILOT_DATABASE_URL
