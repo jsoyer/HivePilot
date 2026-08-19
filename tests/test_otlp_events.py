@@ -10,11 +10,17 @@ Worse, adding the exporter alone would have made it silent rather than
 working: HivePilot's OTLP receiver only serves `/otlp/v1/metrics`. Events would
 have posted to `/otlp/v1/logs` and taken a 404 with nobody looking.
 
-Why this matters beyond tidiness: cost comes from the JSON envelope on stdout
-of `--print` mode today. The moment an agent runs inside a herdr pane that
-stdout is gone. Until events carry cost, putting an agent in a pane means
-making it invisible in the figures -- the exact hole the ORCA-1 PRD called
-blocking.
+Why this matters beyond tidiness: cost otherwise comes from ONE place, the JSON
+envelope on stdout of `--print`, which is a single point of failure for the
+money. Events are a second, independent path -- per API request rather than per
+step, and alive on the streaming `run()` path, which captures no envelope at
+all and has therefore never reported a cost.
+
+Written originally as the BLOCKER for running an agent in a pane, on the
+grounds that a pane's stdout belongs to the terminal. That is no longer true
+and the correction belongs here rather than in a commit nobody re-reads:
+`pane_capture` redirects the envelope to a file and reads it back, so the
+accounting never depended on this module landing first.
 
 `cost_usd_micros` is preferred over `cost_usd` deliberately: integer millionths
 sum without float drift, and these are summed across thousands of requests.

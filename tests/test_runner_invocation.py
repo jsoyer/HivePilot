@@ -7,6 +7,7 @@ launch an interactive UI and hang on a real run.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -92,3 +93,84 @@ def test_claude_uses_print_flag(tmp_path: Path) -> None:
     args = m.call_args.args[0]
     assert args[0] == "claude"
     assert "--print" in args
+
+
+class TestPaneModeIsAChoice:
+    """The pane flag changes where every step's process lives, so the case that
+    matters is the one where it must NOT reach for herdr.
+
+    A box without a herdr server has to keep working exactly as before. A test
+    that only checked "flag on -> pane" would pass just as well against a
+    runner that always used a pane, which is the failure the operator would
+    actually hit.
+    """
+
+    @staticmethod
+    def _runner():
+        return ClaudeRunner(
+            RunnerDefinition(name="claude", kind="claude", command="claude"), settings
+        )
+
+    @staticmethod
+    def _ok():
+        return subprocess.CompletedProcess(["claude"], 0, "envelope", "")
+
+    def test_off_by_default_never_touches_a_pane(self, tmp_path: Path) -> None:
+        with (
+            patch("hivepilot.runners.claude_runner.subprocess.run") as direct,
+            patch("hivepilot.runners.claude_runner.run_in_pane") as pane,
+        ):
+            direct.return_value = self._ok()
+            self._runner().capture(_payload(tmp_path))
+
+        assert direct.called
+        assert not pane.called
+
+    def test_on_runs_the_agent_in_a_pane_instead(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+
+        with (
+            patch("hivepilot.runners.claude_runner.subprocess.run") as direct,
+            patch("hivepilot.runners.claude_runner.run_in_pane") as pane,
+        ):
+            pane.return_value = self._ok()
+            self._runner().capture(_payload(tmp_path))
+
+        assert pane.called
+        assert not direct.called
+
+    def test_the_invocation_itself_is_unchanged(self, tmp_path: Path, monkeypatch) -> None:
+        """Same argv, same prompt, same flags. The pane changes where the
+        process lives, not what is dispatched -- an argv that drifted between
+        the two paths would make every pane run a different experiment."""
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as direct:
+            direct.return_value = self._ok()
+            self._runner().capture(_payload(tmp_path))
+        direct_argv = direct.call_args.args[0]
+
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+        with patch("hivepilot.runners.claude_runner.run_in_pane") as pane:
+            pane.return_value = self._ok()
+            self._runner().capture(_payload(tmp_path))
+        pane_argv = pane.call_args.args[0]
+
+        assert pane_argv == direct_argv
+
+    def test_the_pane_receives_the_environment_the_subprocess_would_have(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The pane inherits the herdr SERVER's environment. Handed anything
+        less than the runner's own scrubbed, overlaid env, the agent loses its
+        API key and its OTel destination."""
+        with patch("hivepilot.runners.claude_runner.subprocess.run") as direct:
+            direct.return_value = self._ok()
+            self._runner().capture(_payload(tmp_path))
+        direct_env = direct.call_args.kwargs["env"]
+
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+        with patch("hivepilot.runners.claude_runner.run_in_pane") as pane:
+            pane.return_value = self._ok()
+            self._runner().capture(_payload(tmp_path))
+
+        assert pane.call_args.kwargs["env"] == direct_env
+        assert pane.call_args.kwargs["cwd"] == direct.call_args.kwargs["cwd"]

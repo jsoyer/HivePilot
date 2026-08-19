@@ -11,10 +11,18 @@ Adding the exporter alone would have been worse than doing nothing: the OTLP
 receiver only served `/otlp/v1/metrics`, so events would have posted to
 `/otlp/v1/logs` and taken a 404 with nobody looking. Silence, not failure.
 
-Why it matters beyond neatness: today cost comes from the JSON envelope on
-stdout of `--print` mode. The moment an agent runs inside a herdr pane that
-stdout is gone. Until events carry cost, putting an agent in a pane means
-making it invisible in the figures -- the hole the ORCA-1 PRD called blocking.
+Why it matters beyond neatness: cost otherwise comes from ONE place, the JSON
+envelope on stdout of `--print` mode, and that is a single point of failure for
+the money. Events are a second, independent path -- per API request rather than
+per step, and alive on the streaming `run()` path, which captures no envelope
+at all and has therefore never reported a cost.
+
+This was originally written as the BLOCKER for running an agent in a pane: a
+pane's stdout belongs to the terminal, so the envelope would be gone. That
+justification no longer holds, and saying so matters more than the tidiness of
+leaving it -- `pane_capture` redirects the envelope to a file and reads it
+back, precisely so the accounting does not depend on this module having landed
+first. The independent second path is the reason to keep it; the pane is not.
 
 This module parses; it records nothing. Same split as `parse_otlp_metrics`, and
 it keeps the shape-handling testable without a database.
