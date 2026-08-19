@@ -705,6 +705,18 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_CLAUDE_PANE_CAPTURE_DIR
     claude_pane_capture_dir: str = ""
 
+    # Open a herdr workspace for the duration of each run, over the tree the
+    # run actually works in (`isolated_worktree`'s, or the project directory
+    # when it fell back). It is what makes a run a place the operator can look
+    # at, and what lets each step's pane land in ITS run rather than in
+    # whatever workspace happens to be focused.
+    #
+    # Default OFF, and a failure to open one never fails a run: this surface is
+    # watched, not consulted -- the opposite polarity from `checks:` and the
+    # review gate, where an unavailable input must block.
+    # env: HIVEPILOT_HERDR_WORKSPACE_PER_RUN
+    herdr_workspace_per_run: bool = False
+
     # Database backend — None keeps SQLite at state_db (default); set to
     # "postgresql://..." to switch to Postgres (requires psycopg[binary]).
     # env: HIVEPILOT_DATABASE_URL

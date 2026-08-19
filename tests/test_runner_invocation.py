@@ -156,6 +156,35 @@ class TestPaneModeIsAChoice:
 
         assert pane_argv == direct_argv
 
+    def test_the_pane_lands_in_the_run_s_workspace_when_there_is_one(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Otherwise the step splits `--current` -- whatever workspace the
+        operator happens to be looking at."""
+        from hivepilot.services import herdr_workspace
+
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+        token = herdr_workspace._CURRENT_PANE.set("w9:p1")
+        try:
+            with patch("hivepilot.runners.claude_runner.run_in_pane") as pane:
+                pane.return_value = self._ok()
+                self._runner().capture(_payload(tmp_path))
+        finally:
+            herdr_workspace._CURRENT_PANE.reset(token)
+
+        assert pane.call_args.kwargs["target_pane"] == "w9:p1"
+
+    def test_with_no_workspace_it_targets_nothing(self, tmp_path: Path, monkeypatch) -> None:
+        """The discriminating case. A run without a workspace must keep
+        working, and passing an empty target would address nothing."""
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+
+        with patch("hivepilot.runners.claude_runner.run_in_pane") as pane:
+            pane.return_value = self._ok()
+            self._runner().capture(_payload(tmp_path))
+
+        assert pane.call_args.kwargs["target_pane"] is None
+
     def test_the_pane_receives_the_environment_the_subprocess_would_have(
         self, tmp_path: Path, monkeypatch
     ) -> None:

@@ -389,3 +389,99 @@ class TestExecuteTaskWorkingSubdir:
                 )
 
         mock_wt.assert_not_called()
+
+
+class TestTheHerdrWorkspaceRidesTheWorktree:
+    """The run's herdr workspace is opened over the tree the run WORKS in.
+
+    Nested inside `isolated_worktree`, so it sees `_exec_path` -- the worktree
+    when isolation is on, the project directory when it fell back or is off.
+    Showing the operator any other tree would be a display that lies rather
+    than one that is missing.
+
+    The flag-off case is the one that matters: this surface must be
+    indistinguishable from not existing on a box with no herdr server, and a
+    failure to open one must never fail a run (it is watched, not consulted --
+    the opposite polarity from `checks:` and the review gate).
+    """
+
+    def _run(self, tmp_path: Path, *, herdr_on: bool, isolation: bool):
+        from contextlib import contextmanager
+
+        helper = TestExecuteTaskWorktreeGating()
+        repo = _init_git_repo(tmp_path / "repo")
+        project = helper._make_project(repo)
+        task = helper._make_task(commit=True)
+
+        fake_wt_path = tmp_path / "fake-worktree"
+        fake_wt_path.mkdir()
+
+        @contextmanager
+        def _fake_wt(repo_path, base_ref=None):
+            yield fake_wt_path
+
+        @contextmanager
+        def _spy(**kwargs):
+            calls.append(kwargs)
+            yield None
+
+        calls: list[dict] = []
+        with (
+            patch("hivepilot.orchestrator.settings") as mock_settings,
+            patch("hivepilot.orchestrator.isolated_worktree") as mock_wt,
+            patch("hivepilot.orchestrator.herdr_run_workspace", _spy),
+            patch("hivepilot.orchestrator.perform_git_actions"),
+            # A run_id makes the body record step rows; the mocked settings
+            # give sqlite a MagicMock to bind. The rows are not what these
+            # tests are about.
+            patch("hivepilot.orchestrator.state_service"),
+            patch.object(
+                __import__("hivepilot.orchestrator", fromlist=["Orchestrator"]).Orchestrator,
+                "_capture_or_execute",
+                return_value="output",
+            ),
+        ):
+            mock_settings.worktree_isolation = isolation
+            mock_settings.stage_cache_enabled = False
+            mock_settings.herdr_workspace_per_run = herdr_on
+            mock_wt.side_effect = _fake_wt
+
+            orch = helper._make_orchestrator(tmp_path)
+            orch._execute_task(
+                project=project,
+                task_name="test-task",
+                task=task,
+                extra_prompt=None,
+                auto_git=True,
+                simulate=False,
+                run_id=742,
+            )
+        return calls, repo, fake_wt_path
+
+    def test_off_it_is_still_entered_but_asks_for_nothing(self, tmp_path: Path) -> None:
+        """The scope is always entered -- it is what guarantees the ambient is
+        reset -- but with `enabled=False` it makes no herdr call at all."""
+        calls, _, _ = self._run(tmp_path, herdr_on=False, isolation=True)
+
+        assert len(calls) == 1
+        assert calls[0]["enabled"] is False
+
+    def test_on_it_opens_over_the_worktree_not_the_project(self, tmp_path: Path) -> None:
+        calls, repo, wt = self._run(tmp_path, herdr_on=True, isolation=True)
+
+        assert calls[0]["enabled"] is True
+        assert calls[0]["exec_path"] == str(wt)
+        assert calls[0]["repo"] == str(repo)
+
+    def test_without_isolation_it_opens_over_the_project(self, tmp_path: Path) -> None:
+        """`isolated_worktree` was never entered, so the run works in place and
+        there is no tree to adopt."""
+        calls, repo, _ = self._run(tmp_path, herdr_on=True, isolation=False)
+
+        assert calls[0]["exec_path"] == str(repo)
+
+    def test_the_label_carries_the_run_id(self, tmp_path: Path) -> None:
+        """It is how the operator finds this run among the workspaces."""
+        calls, _, _ = self._run(tmp_path, herdr_on=True, isolation=True)
+
+        assert "742" in calls[0]["label"]

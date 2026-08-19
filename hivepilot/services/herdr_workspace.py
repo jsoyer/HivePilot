@@ -29,12 +29,34 @@ import json
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+#: The run's root pane, for the runner to split from.
+#:
+#: An ambient rather than a `RunnerPayload` field: payloads are built at a
+#: dozen sites and a display concern has no business in all of them.
+#:
+#: NO `adopt` pairing, unlike `hivepilot.outward` and
+#: `hivepilot.pr_attribution`. Those are set on the SUBMITTING thread and read
+#: on a pool worker, so they must be captured and re-adopted across the
+#: boundary. This one is set inside `_execute_task_body` -- already on the
+#: worker -- and read downstream in the same `with` block on the same thread.
+#: `TestTheSameThreadInvariant` pins that, so hoisting the workspace up to
+#: `run_pipeline` fails a test rather than silently falling back to
+#: `pane split --current`.
+_CURRENT_PANE: ContextVar[str | None] = ContextVar("hivepilot_herdr_pane", default=None)
+
+
+def current_pane() -> str | None:
+    """The pane the current run's steps should split from, if any."""
+    return _CURRENT_PANE.get()
 
 
 class WorkspaceError(RuntimeError):
@@ -287,8 +309,16 @@ def run_workspace(
         logger.warning("herdr_workspace.unavailable", path=exec_path, error=str(exc))
         workspace = None
 
+    # Only a workspace that actually reported a pane sets the ambient. An
+    # empty string would be sent to `--pane` verbatim and addressed nothing.
+    token = _CURRENT_PANE.set(
+        workspace.root_pane_id if workspace and workspace.root_pane_id else None
+    )
     try:
         yield workspace
     finally:
+        # Reset before closing: a leaked pane id would send the NEXT run's
+        # steps at a workspace that no longer exists.
+        _CURRENT_PANE.reset(token)
         if workspace is not None:
             close_run_workspace(workspace, run_cli=run_cli)
