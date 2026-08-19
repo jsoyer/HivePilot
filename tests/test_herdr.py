@@ -424,8 +424,11 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
             if argv[:3] == ["herdr", "pane", "run"]:
                 # Peek at the env file BEFORE the runner cleans it up.
                 wrapped_cmd = argv[-1]
-                match = re.search(r"source\s+([^\s;]+)", wrapped_cmd)
-                assert match, f"expected a 'source <path>' in wrapped command: {wrapped_cmd!r}"
+                match = re.search(r"(?:^|;)\s*\.\s+([^\s;]+)", wrapped_cmd)
+                # `.`, never `source`: the pane dispatches through /bin/sh,
+                # which on Debian is dash and has no `source` builtin.
+                assert "source " not in wrapped_cmd, wrapped_cmd
+                assert match, f"expected a '. <path>' in wrapped command: {wrapped_cmd!r}"
                 env_file_path = match.group(1).strip("'\"")
                 env_file_snapshot["content"] = Path(env_file_path).read_text()
                 env_file_snapshot["path"] = env_file_path
@@ -473,7 +476,8 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
                 return _split_result(pane_id)
             if argv[:3] == ["herdr", "pane", "run"]:
                 wrapped_cmd = argv[-1]
-                match = re.search(r"source\s+([^\s;]+)", wrapped_cmd)
+                match = re.search(r"(?:^|;)\s*\.\s+([^\s;]+)", wrapped_cmd)
+                assert "source " not in wrapped_cmd, wrapped_cmd
                 assert match
                 env_file_snapshot["content"] = Path(match.group(1).strip("'\"")).read_text()
                 return _ok_result()
@@ -508,7 +512,7 @@ class TestEnvFileValueEscaping:
         env_file_path = runner._write_env_file(payload)
         try:
             result = subprocess.run(
-                ["bash", "-c", f'source {shlex.quote(env_file_path)}; printf %s "$NASTY_VAR"'],
+                ["/bin/sh", "-c", f'. {shlex.quote(env_file_path)}; printf %s "$NASTY_VAR"'],
                 cwd=str(tmp_path),
                 capture_output=True,
                 text=True,
@@ -535,7 +539,7 @@ class TestEnvFileValueEscaping:
         env_file_path = runner._write_env_file(payload)
         try:
             result = subprocess.run(
-                ["bash", "-c", f'source {shlex.quote(env_file_path)}; printf %s "$DOLLAR_VAR"'],
+                ["/bin/sh", "-c", f'. {shlex.quote(env_file_path)}; printf %s "$DOLLAR_VAR"'],
                 cwd=str(tmp_path),
                 capture_output=True,
                 text=True,
