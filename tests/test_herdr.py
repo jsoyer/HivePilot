@@ -59,6 +59,21 @@ REPO_ROOT = Path(__file__).parent.parent
 HERDR_PLUGIN_PATH = REPO_ROOT / "plugins" / "herdr.py"
 
 
+def _materialise_rc(wrapped_cmd: str, code: int = 0) -> None:
+    """Write the status file the real shell would leave behind.
+
+    The runner now READS the step's own exit status -- it never did before,
+    which is why a command exiting 5 was recorded as a success. A fake that
+    does not write it is a pane that died, and the runner is right to refuse
+    it; these fakes model a command that RAN, so they must leave its status.
+    """
+    # `[^\s;]+` and not `\S+`: the redirection is followed by a `;`,
+    # which a greedy match swallows into the filename.
+    m = re.search(r"echo \$__hp_rc > ([^\s;]+)", wrapped_cmd)
+    if m:
+        Path(m.group(1).strip("'\"")).write_text(f"{code}\n")
+
+
 def _load_herdr_module() -> ModuleType:
     """Load plugins/herdr.py by file path — same mechanism
     `hivepilot.plugins._scan_local_plugins` uses (no dependency on `plugins`
@@ -175,6 +190,7 @@ class TestCaptureDrivesFullCliSequence:
             if argv[:3] == ["herdr", "pane", "split"]:
                 return _split_result(pane_id)
             if argv[:3] == ["herdr", "pane", "run"]:
+                _materialise_rc(argv[-1])
                 return _ok_result()
             if argv[:3] == ["herdr", "pane", "wait-output"]:
                 return _ok_result()
@@ -242,6 +258,7 @@ class TestCaptureDrivesFullCliSequence:
             if argv[:3] == ["herdr", "pane", "split"]:
                 return _split_result(pane_id)
             if argv[:3] == ["herdr", "pane", "run"]:
+                _materialise_rc(argv[-1])
                 captured["wrapped_cmd"] = argv[-1]
                 return _ok_result()
             return _ok_result()
@@ -266,6 +283,8 @@ class TestCaptureDrivesFullCliSequence:
             calls.append(list(argv))
             if argv[:3] == ["herdr", "pane", "split"]:
                 return _split_result(pane_id)
+            if argv[:3] == ["herdr", "pane", "run"]:
+                _materialise_rc(argv[-1])
             return _ok_result()
 
         custom_settings = Settings(  # type: ignore[call-arg]
@@ -422,6 +441,7 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
             if argv[:3] == ["herdr", "pane", "split"]:
                 return _split_result(pane_id)
             if argv[:3] == ["herdr", "pane", "run"]:
+                _materialise_rc(argv[-1])
                 # Peek at the env file BEFORE the runner cleans it up.
                 wrapped_cmd = argv[-1]
                 match = re.search(r"(?:^|;)\s*\.\s+([^\s;]+)", wrapped_cmd)
@@ -475,6 +495,7 @@ class TestEnvSecretsReachPaneWithoutArgvLeak:
             if argv[:3] == ["herdr", "pane", "split"]:
                 return _split_result(pane_id)
             if argv[:3] == ["herdr", "pane", "run"]:
+                _materialise_rc(argv[-1])
                 wrapped_cmd = argv[-1]
                 match = re.search(r"(?:^|;)\s*\.\s+([^\s;]+)", wrapped_cmd)
                 assert "source " not in wrapped_cmd, wrapped_cmd
@@ -656,3 +677,147 @@ class TestThePluginRunnerHonoursTheRunWorkspace:
 
         assert "--current" in argv
         assert "--pane" not in argv
+
+
+class TestTheStepsOwnExitStatus:
+    """Every step this runner has ever run reported success.
+
+    Proof, from run 685 on the box rather than from reading: the step ran
+    `python3 -m unittest discover -q` against a repo containing only markdown.
+    That command exits **5** ("NO TESTS RAN"), and the step was recorded
+    `status: success`.
+
+    The cause is the one `pane_capture` was written against: `herdr pane run`
+    reports whether HERDR worked, not whether the command did. Every
+    `returncode` check in this file is on a herdr CLI invocation -- the split,
+    the run, the wait, the read. The command's own status was never read.
+
+    The module docstring made it worse by describing a status mapping from
+    `herdr wait agent-status --status idle`, a command that does not exist in
+    0.8.0 and was replaced by `pane wait-output` two fixes ago. It documented
+    fail-closed behaviour for a mechanism that had been removed.
+
+    The wrapper already computes `__hp_rc`. It just never wrote it down.
+    """
+
+    def test_the_status_is_written_where_it_can_be_read_back(self, herdr_module):
+        wrapped = herdr_module.HerdrRunner._wrap_with_sentinel(
+            "false", "HIVEPILOT_DONE_abc", rc_path="/tmp/hp/x.rc"
+        )
+
+        assert "> /tmp/hp/x.rc" in wrapped
+
+    def test_it_is_captured_before_anything_can_clobber_it(self, herdr_module):
+        wrapped = herdr_module.HerdrRunner._wrap_with_sentinel(
+            "false", "HIVEPILOT_DONE_abc", rc_path="/tmp/hp/x.rc"
+        )
+
+        assert wrapped.index("__hp_rc=$?") < wrapped.index("/tmp/hp/x.rc")
+
+    def test_a_failing_command_is_reported_as_a_failure(self, herdr_module, tmp_path):
+        """The whole point. Run the composed line through a real shell and read
+        back what the runner would."""
+        import subprocess
+
+        rc_path = tmp_path / "step.rc"
+        # `(exit 5)` and not a bare `exit 5`: the latter is a builtin that
+        # would terminate the wrapper's own shell before it writes anything.
+        # A real step runs a program, which is what this models.
+        wrapped = herdr_module.HerdrRunner._wrap_with_sentinel(
+            "(exit 5)", "HIVEPILOT_DONE_abc", rc_path=str(rc_path)
+        )
+        subprocess.run(["/bin/sh", "-c", wrapped], capture_output=True, check=False)
+
+        assert herdr_module.HerdrRunner._read_status(str(rc_path)) == 5
+
+    def test_a_successful_command_still_reads_zero(self, herdr_module, tmp_path):
+        import subprocess
+
+        rc_path = tmp_path / "step.rc"
+        wrapped = herdr_module.HerdrRunner._wrap_with_sentinel(
+            "true", "HIVEPILOT_DONE_abc", rc_path=str(rc_path)
+        )
+        subprocess.run(["/bin/sh", "-c", wrapped], capture_output=True, check=False)
+
+        assert herdr_module.HerdrRunner._read_status(str(rc_path)) == 0
+
+    def test_an_unreadable_status_is_not_a_success(self, herdr_module, tmp_path):
+        """The pane died before the shell reached the end of its line. Reading
+        that as zero is how a lost step becomes a clean one."""
+        assert herdr_module.HerdrRunner._read_status(str(tmp_path / "never")) is None
+
+    def test_a_step_whose_command_failed_raises(self, herdr_module, tmp_path):
+        """The end-to-end case, through `capture()`. Run 685's shape: the
+        command ran, the pane worked, and the command returned non-zero."""
+        from unittest.mock import patch
+
+        pane_id = "w1:p9"
+
+        def fake_run(argv, **kw):
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return _split_result(pane_id)
+            if argv[:3] == ["herdr", "pane", "run"]:
+                _materialise_rc(argv[-1], code=5)
+            return _ok_result()
+
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        with (
+            patch.object(herdr_module.shutil, "which", return_value="/usr/local/bin/herdr"),
+            patch.object(herdr_module.subprocess, "run", side_effect=fake_run),
+            pytest.raises(RuntimeError, match="exited 5"),
+        ):
+            runner.capture(_payload(tmp_path))
+
+    def test_a_step_whose_command_succeeded_returns_its_output(self, herdr_module, tmp_path):
+        """The discriminating half: a gate that always blocks passes every
+        blocking test."""
+        from unittest.mock import patch
+
+        pane_id = "w1:p9"
+
+        def fake_run(argv, **kw):
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return _split_result(pane_id)
+            if argv[:3] == ["herdr", "pane", "run"]:
+                _materialise_rc(argv[-1], code=0)
+            return _ok_result()
+
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        with (
+            patch.object(herdr_module.shutil, "which", return_value="/usr/local/bin/herdr"),
+            patch.object(herdr_module.subprocess, "run", side_effect=fake_run),
+        ):
+            assert runner.capture(_payload(tmp_path)) is not None
+
+    def test_a_pane_that_left_no_status_is_a_failure_not_a_success(self, herdr_module, tmp_path):
+        """The case a mutation caught and no test did.
+
+        No status file means the shell never reached the end of its line: the
+        pane was killed, the server dropped it, the box rebooted. Treating that
+        as zero is the same fail-open this whole change removes, one layer up
+        -- and it is the shape that hides, because the step looks clean.
+        """
+        from unittest.mock import patch
+
+        pane_id = "w1:p9"
+
+        def fake_run(argv, **kw):
+            if argv[:3] == ["herdr", "pane", "split"]:
+                return _split_result(pane_id)
+            # Deliberately writes NO status file.
+            return _ok_result()
+
+        runner = herdr_module.HerdrRunner(RunnerDefinition(name="herdr", kind="herdr"), settings)
+        with (
+            patch.object(herdr_module.shutil, "which", return_value="/usr/local/bin/herdr"),
+            patch.object(herdr_module.subprocess, "run", side_effect=fake_run),
+            pytest.raises(RuntimeError, match="no exit status"),
+        ):
+            runner.capture(_payload(tmp_path))
+
+    def test_no_rc_path_keeps_the_old_shape(self, herdr_module):
+        """The wrapper is still used where no status file is wanted."""
+        wrapped = herdr_module.HerdrRunner._wrap_with_sentinel("true", "S")
+
+        assert ".rc" not in wrapped
+        assert "__hp_rc=$?" in wrapped
