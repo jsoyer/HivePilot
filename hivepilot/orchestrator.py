@@ -88,6 +88,7 @@ from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.config_provenance import redact_text, redact_value, register_secret_value
 from hivepilot.services.diff_filter import summarise_with_report
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
+from hivepilot.services.herdr_workspace import run_workspace as herdr_run_workspace
 from hivepilot.services.interaction_service import (
     Interaction,
     InteractionService,
@@ -6324,7 +6325,20 @@ class Orchestrator:
 
         _wt_ctx = isolated_worktree(project.path) if _use_worktree else nullcontext(project.path)
 
-        with _wt_ctx as _exec_path:
+        with (
+            _wt_ctx as _exec_path,
+            # Nested INSIDE the worktree context on purpose: `_exec_path` is
+            # the tree the agent will actually work in, and showing the
+            # operator any other one would be a display that lies rather than
+            # one that is missing. Yields None (and calls herdr not at all)
+            # when the flag is off.
+            herdr_run_workspace(
+                enabled=bool(getattr(settings, "herdr_workspace_per_run", False)),
+                repo=str(project.path),
+                exec_path=str(_exec_path),
+                label=f"{project.path.name} run {run_id}" if run_id else project.path.name,
+            ),
+        ):
             # Build a shallow copy of the project with the worktree path so both
             # git actions and (a plain, non-module run's) runner CWD operate
             # there (branches/commits live in the shared .git; the real

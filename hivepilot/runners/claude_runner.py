@@ -27,6 +27,7 @@ from hivepilot.runners.base import (
 from hivepilot.runners.pane_exec import run_in_pane
 from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.corrections_service import load_corrections
+from hivepilot.services.herdr_workspace import current_pane
 from hivepilot.services.obsidian_vault_resolver import resolve_prompt_vault
 from hivepilot.services.profile_service import load_claude_profiles
 from hivepilot.services.repo_instructions import build_repo_instructions_section
@@ -1094,6 +1095,11 @@ class ClaudeRunner(BaseRunner):
             env=env,
             timeout=timeout,
             split_direction=self.settings.herdr_split_direction,
+            # The run's own workspace when it has one, so the step lands where
+            # the run lives rather than in whatever workspace the operator
+            # happens to be looking at. `None` keeps the `--current` fallback,
+            # which is what a run without a workspace needs.
+            target_pane=current_pane(),
         )
 
     def capture(self, payload: RunnerPayload) -> str:
