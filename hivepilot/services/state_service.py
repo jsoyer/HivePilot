@@ -1471,6 +1471,46 @@ def list_audit_log(limit: int = 100) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def cost_basis_rows(*, tenant: str = "default") -> tuple[dict | None, dict | None]:
+    """`(envelope, otel)` totals with their coverage windows, or None each.
+
+    None means NOT MEASURED -- no step ever reported, or the exporter never
+    ran. Zero dollars is a different statement: a period in which nothing was
+    spent. A dead exporter must not read as a free week.
+
+    Each carries its own window because the two do not cover the same period,
+    and that is the whole reason this is a panel rather than a number. Measured
+    on the box: envelope from 2026-07-26, otel only from 2026-08-10, which puts
+    a 2.4x gap between two totals that are both correct.
+    """
+    init_db()
+    with db.connect() as conn:
+        env = conn.execute(
+            "SELECT ROUND(SUM(s.cost_usd), 4), COUNT(*), MIN(date(r.started_at)), "
+            "MAX(date(r.started_at)) FROM steps s JOIN runs r ON r.id = s.run_id "
+            "WHERE s.cost_usd IS NOT NULL AND r.tenant = ?",
+            (tenant,),
+        ).fetchone()
+        otel = conn.execute(
+            "SELECT ROUND(SUM(value), 4), COUNT(*), MIN(date(recorded_at)), "
+            "MAX(date(recorded_at)) FROM agent_telemetry "
+            "WHERE metric = ? AND unit = ?",
+            ("claude_code.cost.usage", "USD"),
+        ).fetchone()
+
+    def _shape(row: Any) -> dict | None:
+        if not row or not row[1]:
+            return None
+        return {
+            "total_usd": float(row[0] or 0.0),
+            "count": int(row[1]),
+            "first": row[2],
+            "last": row[3],
+        }
+
+    return _shape(env), _shape(otel)
+
+
 def agent_telemetry_freshness() -> tuple[int, str | None]:
     """`(row count, newest timestamp)` for agent telemetry.
 

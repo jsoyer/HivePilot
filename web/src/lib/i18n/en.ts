@@ -123,6 +123,11 @@ export const en = {
   'analytics.actionedApprovals': 'Actioned approvals',
 
   // ---- Cost view -----------------------------------------------------
+  'cost.basisEnvelope': "envelope",
+  'cost.basisOtel': "otel",
+  'cost.basisNotMeasured': "not measured",
+  'cost.basisNotComparable': "These two read the SAME spend by different paths and cover different periods — never add them, and do not read the gap as loss.",
+  'cost.basisDivergence': "Same period, both paths: {{pct}}% apart.",
   'cost.sessionsTitle': 'Cost by session',
   'cost.sessionsDescription':
     'Where the money went, not how many tokens moved. Cache reads are voluminous and cheap; output is small and expensive — reading the two as one number points optimisation at the wrong parameter.',

@@ -268,6 +268,14 @@ class TestAnalyticsCostContract:
             "by_role",
             "by_role_note",
             "unpriced_models",
+            # Additive again, and the one key here that is not a figure: it
+            # says which BASIS the figures came from. Everything else on this
+            # endpoint is the envelope (`steps.cost_usd`, self-reported by the
+            # agent); OTel exports the same spend independently, per API
+            # request. `basis` reports both with their coverage windows and
+            # offers NO combined total -- adding two readings of one number
+            # double-counts it.
+            "basis",
         }
         assert set(data["overall"].keys()) == _COST_ACCUMULATION_KEYS
         assert "unpriced_steps" in data["overall"]

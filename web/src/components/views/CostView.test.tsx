@@ -282,3 +282,84 @@ describe('CostView', () => {
     expect(container.textContent).toContain('Coût total')
   })
 })
+
+describe('CostView — which basis the money came from', () => {
+  // Two readings of the SAME spend. Everything else on this view is the
+  // envelope (`steps.cost_usd`, self-reported); OTel exports the same money
+  // independently, per API request.
+
+  function withBasis(basis: unknown) {
+    mocks.fetchAnalyticsCost.mockResolvedValue({ ...cost, basis })
+  }
+
+  it('never shows a combined total', async () => {
+    // The single most dangerous thing this panel could do. Adding the two
+    // double-counts, and a confident single number assembled from both is
+    // worse than showing neither.
+    withBasis({
+      envelope: { total_usd: 404.51, count: 357, first: '2026-07-26', last: '2026-08-19' },
+      otel: { total_usd: 169.13, count: 1929, first: '2026-08-10', last: '2026-08-19' },
+      comparable: false,
+      divergence_pct: null,
+    })
+    await act(async () => { mount(); await Promise.resolve() })
+    const panel = container.querySelector('[data-testid="cost-basis"]')?.textContent ?? ''
+
+    expect(panel).toContain('404.51')
+    expect(panel).toContain('169.13')
+    expect(panel).not.toContain('573.64')  // 404.51 + 169.13
+  })
+
+  it('shows the coverage window with each figure', async () => {
+    // Without the dates, a 2.4x gap between two correct totals reads as
+    // catastrophic telemetry loss.
+    withBasis({
+      envelope: { total_usd: 404.51, count: 357, first: '2026-07-26', last: '2026-08-19' },
+      otel: { total_usd: 169.13, count: 1929, first: '2026-08-10', last: '2026-08-19' },
+      comparable: false,
+      divergence_pct: null,
+    })
+    await act(async () => { mount(); await Promise.resolve() })
+    const panel = container.querySelector('[data-testid="cost-basis"]')?.textContent ?? ''
+
+    expect(panel).toContain('2026-07-26')
+    expect(panel).toContain('2026-08-10')
+  })
+
+  it('says the two are not comparable rather than printing a ratio', async () => {
+    withBasis({
+      envelope: { total_usd: 404.51, count: 357, first: '2026-07-26', last: '2026-08-19' },
+      otel: { total_usd: 169.13, count: 1929, first: '2026-08-10', last: '2026-08-19' },
+      comparable: false,
+      divergence_pct: null,
+    })
+    await act(async () => { mount(); await Promise.resolve() })
+    const note = container.querySelector('[data-testid="cost-basis-note"]')?.textContent ?? ''
+
+    expect(note).not.toEqual('')
+    expect(note).not.toMatch(/\d+(\.\d+)?%/)
+  })
+
+  it('reports an absent basis as not measured, never as zero', async () => {
+    // Zero dollars is a measurement — a period in which nothing was spent.
+    // Absent means the exporter never ran, and a dead exporter must not read
+    // as a free week.
+    withBasis({
+      envelope: { total_usd: 404.51, count: 357, first: '2026-07-26', last: '2026-08-19' },
+      otel: null,
+      comparable: false,
+      divergence_pct: null,
+    })
+    await act(async () => { mount(); await Promise.resolve() })
+    const panel = container.querySelector('[data-testid="cost-basis"]')?.textContent ?? ''
+
+    expect(panel).not.toContain('$0.00')
+  })
+
+  it('survives a server too old to send the field', async () => {
+    withBasis(undefined)
+    await act(async () => { mount(); await Promise.resolve() })
+
+    expect(container.querySelector('[data-testid="cost-basis"]')).toBeNull()
+  })
+})

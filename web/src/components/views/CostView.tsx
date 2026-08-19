@@ -6,7 +6,12 @@ import { Button } from '@/components/ui/button'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { useT } from '@/lib/i18n'
-import { fetchAnalyticsCost, fetchSessionCosts } from '@/lib/pollen-api'
+import {
+  fetchAnalyticsCost,
+  fetchSessionCosts,
+  type CostBasisFigure,
+  type CostBasisReport,
+} from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
 import { AsyncSection } from './AsyncSection'
@@ -66,6 +71,63 @@ function WindowSelector({ value, onChange }: WindowSelectorProps) {
 }
 
 /**
+ * Which BASIS each cost figure came from.
+ *
+ * Everything else on this view is the ENVELOPE — `steps.cost_usd`,
+ * self-reported by the agent in `--print` mode. OTel exports the same spend
+ * independently, per API request. They are two readings of one number, so
+ * there is deliberately no combined total: adding them double-counts.
+ *
+ * And they are shown with their WINDOWS, because on the box today they do not
+ * cover the same period — envelope from 2026-07-26, OTel only from 2026-08-10.
+ * That is a 2.4x gap between two totals that are both correct, and side by
+ * side without the dates it reads as catastrophic telemetry loss.
+ */
+function CostBasisPanel({ basis }: { basis: CostBasisReport | null | undefined }) {
+  const t = useT()
+
+  // `undefined` as well as `null`: a server older than this field omits it,
+  // and crashing here would take the view down over a stale payload.
+  if (!basis) return null
+
+  function figure(label: string, value: CostBasisFigure | null) {
+    if (!value) {
+      // NOT "$0.00". Absent means nothing ever reported; zero means a period
+      // in which nothing was spent, and a dead exporter must not read as a
+      // free week.
+      return (
+        <span className="text-muted-foreground">
+          {label}: {t('cost.basisNotMeasured')}
+        </span>
+      )
+    }
+    return (
+      <span>
+        {label}: ${value.total_usd.toFixed(2)}{' '}
+        <span className="text-muted-foreground">
+          ({value.count}, {value.first ?? '?'} → {value.last ?? '?'})
+        </span>
+      </span>
+    )
+  }
+
+  return (
+    <div data-testid="cost-basis" className="flex flex-col gap-1 text-xs">
+      <div className="flex flex-wrap gap-4">
+        {figure(t('cost.basisEnvelope'), basis.envelope)}
+        {figure(t('cost.basisOtel'), basis.otel)}
+      </div>
+      <p className="text-muted-foreground" data-testid="cost-basis-note">
+        {basis.comparable
+          ? t('cost.basisDivergence', { pct: basis.divergence_pct ?? 0 })
+          : t('cost.basisNotComparable')}
+      </p>
+    </div>
+  )
+}
+
+
+/**
  * Cost tab (Mirador Spend section rebuild) — `GET /v1/analytics/cost`:
  * total spend, per-model and per-project breakdowns, and an unpriced-models
  * coverage banner. Rebuilt from the old "broken/monotone" version: no fake
@@ -96,6 +158,7 @@ export function CostView() {
           <AsyncSection state={cost} isEmpty={(data) => data.overall.total_steps === 0} emptyMessage={t('cost.noCost')}>
             {(data) => (
               <>
+                <CostBasisPanel basis={data.basis} />
                 {data.unpriced_models.length > 0 && (
                   <div
                     data-testid="cost-unpriced-banner"

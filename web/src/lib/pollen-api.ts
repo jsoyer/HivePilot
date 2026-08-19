@@ -209,6 +209,11 @@ export interface AnalyticsCost {
   by_role: null
   by_role_note: string
   unpriced_models: string[]
+  /** Which BASIS the figures came from. Everything else here is the envelope
+   * (`steps.cost_usd`, self-reported by the agent). OTel exports the same
+   * spend independently, per API request — the two are NEVER added, which
+   * would double-count. Optional: a server older than this field omits it. */
+  basis?: CostBasisReport | null
 }
 
 export function fetchAnalyticsCost(days = 30): Promise<AnalyticsCost> {
@@ -459,6 +464,30 @@ export interface OtelProbe {
 
 export async function fetchHealthProbes(): Promise<HealthProbes> {
   return apiFetch<HealthProbes>('/v1/health/probes', { on403: 'forbidden' })
+}
+
+/** Two readings of the SAME spend, kept apart. There is deliberately no
+ * combined total: adding them double-counts. */
+export interface CostBasisReport {
+  /** `null` means NOT MEASURED — no step ever reported. Zero dollars is a
+   * different statement: a period in which nothing was spent. */
+  envelope: CostBasisFigure | null
+  otel: CostBasisFigure | null
+  /** False whenever the two windows differ or either is unknown. On the box
+   * today the envelope starts 2026-07-26 and OTel only 2026-08-10, which puts
+   * a 2.4x gap between two totals that are both correct. */
+  comparable: boolean
+  /** `null` unless the windows match — a ratio across different periods is a
+   * number that means nothing and invites the wrong conclusion. Zero is a
+   * finding: the two paths agree. */
+  divergence_pct: number | null
+}
+
+export interface CostBasisFigure {
+  total_usd: number
+  count: number
+  first: string | null
+  last: string | null
 }
 
 export interface TruncationEfficiency {
