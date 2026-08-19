@@ -106,6 +106,32 @@ def write_env_file(path: str, env: dict[str, str]) -> None:
             handle.write(f"export {key}={shlex.quote(str(value))}\n")
 
 
+def _sentinel_halves(sentinel: str) -> tuple[str, str]:
+    """Split the marker so the whole of it exists only in the OUTPUT.
+
+    `pane run` TYPES the command into the shell, and the shell echoes it. A
+    marker written literally into that command is therefore on screen the
+    instant the step is dispatched -- so `wait-output --match` matched the echo,
+    returned immediately, and the caller read a status file that did not exist
+    yet. A step still running was reported as lost and its pane closed under it.
+
+    Measured on the box against 0.8.0, with a command sleeping 6s before
+    printing its marker:
+
+        marker written literally into the command : wait returned in 0.0s
+        marker assembled by the shell at runtime  : wait returned in 6.0s
+
+    No trivial probe can see this. `/bin/echo` finishes before the wait polls,
+    so the file is already there and the race is invisible; only something slow
+    -- an agent -- separates the two.
+
+    The two halves sit in the same echoed line, but with `; __hp_s2=` between
+    them, so the concatenation appears nowhere until the shell performs it.
+    """
+    cut = max(1, len(sentinel) - 8)
+    return sentinel[:cut], sentinel[cut:]
+
+
 def _with_environment(argv: list[str], env_file: str | None) -> str:
     """Quote `argv`, and give it exactly the environment we chose -- no more.
 
@@ -161,7 +187,11 @@ def build_pane_command(
     for `pane wait-output` to see it. Sent into a file, the wait would run to
     its timeout while the output it was waiting on sat complete on disk.
 
-    And the environment REPLACES rather than overlays -- see `_with_environment`
+    And it is never written WHOLE into the command -- see `_sentinel_halves`,
+    which is the difference between waiting for the agent and not waiting at
+    all.
+
+    The environment REPLACES rather than overlays -- see `_with_environment`
     for why that distinction is the security-relevant one.
     """
     prefix = ""
@@ -171,11 +201,14 @@ def build_pane_command(
         # Set before the exec below, because a working directory survives one.
         prefix += f"cd {shlex.quote(cwd)}; "
 
+    head, tail = _sentinel_halves(sentinel)
+    prefix += f"__hp_s1={head}; __hp_s2={tail}; "
+
     command = _with_environment(argv, env_file)
     out = shlex.quote(paths.stdout)
     err = shlex.quote(paths.stderr)
     rc = shlex.quote(paths.rc)
     return (
         f"{prefix}{command} > {out} 2> {err}; __hp_rc=$?; "
-        f"echo $__hp_rc > {rc}; echo {sentinel}; (exit $__hp_rc)"
+        f'echo $__hp_rc > {rc}; echo "$__hp_s1$__hp_s2"; (exit $__hp_rc)'
     )

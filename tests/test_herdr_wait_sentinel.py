@@ -70,7 +70,28 @@ class TestTheWrappedCommand:
         wrapped = h.HerdrRunner._wrap_with_sentinel("pytest -q", "HIVEPILOT_DONE_abc")
 
         assert "pytest -q" in wrapped
-        assert wrapped.index("pytest -q") < wrapped.index("HIVEPILOT_DONE_abc")
+        assert wrapped.index("pytest -q") < wrapped.index('echo "$__hp_s1$__hp_s2"')
+
+    def test_the_marker_is_never_written_whole_into_the_command(self):
+        """`pane run` types the command and the shell echoes it, so a literal
+        marker is on screen before the step starts -- `wait-output --match`
+        matched that echo and returned immediately, and every step this runner
+        has ever executed was read back before it finished. Measured on the box
+        against 0.8.0: 0.0s against a command that takes 6s."""
+        wrapped = _herdr().HerdrRunner._wrap_with_sentinel("sleep 6", "HIVEPILOT_DONE_deadbeef00")
+
+        assert "HIVEPILOT_DONE_deadbeef00" not in wrapped
+
+    def test_the_shell_still_prints_the_whole_marker(self):
+        """The other half: the wait must still have something to match."""
+        import subprocess
+
+        wrapped = _herdr().HerdrRunner._wrap_with_sentinel("true", "HIVEPILOT_DONE_deadbeef00")
+        printed = subprocess.run(
+            ["/bin/sh", "-c", wrapped], capture_output=True, text=True, check=False
+        ).stdout
+
+        assert "HIVEPILOT_DONE_deadbeef00" in printed
 
     def test_it_is_echoed_even_when_the_command_fails(self):
         """A failing command must still announce completion. Otherwise it hangs

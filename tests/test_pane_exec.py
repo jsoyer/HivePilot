@@ -132,6 +132,27 @@ class TestAMissingStatusIsNotASuccess:
 
         assert "status" in result.stderr.lower()
 
+    def test_the_sentinel_is_not_readable_as_a_signal_death(self, tmp_path):
+        """A NEGATIVE exit code means "killed by signal N" by convention, and
+        the runner's failure context reads it that way. With a negative
+        sentinel it reported `signal: SIG1024` and told the operator "an
+        INFRASTRUCTURE failure (the OS terminated it)" -- every word invented
+        by the sentinel itself. The real reason belongs in stderr, where it can
+        be read, not encoded in a number that means something else."""
+        from hivepilot.runners.claude_runner import classify_signal_exit
+
+        result = _run(tmp_path, FakeHerdr(rc=None))
+
+        assert result.returncode > 0
+        assert classify_signal_exit(result.returncode) is None
+
+    def test_the_sentinel_cannot_collide_with_a_real_exit_status(self, tmp_path):
+        """POSIX allows 0-255. A sentinel inside that range would make some
+        genuine failure indistinguishable from a lost pane."""
+        result = _run(tmp_path, FakeHerdr(rc=None))
+
+        assert result.returncode > 255
+
 
 class TestTheEnvironmentAndItsSecrets:
     def test_the_environment_reaches_the_pane(self, tmp_path):
@@ -194,10 +215,23 @@ class TestItTalksToHerdrCorrectly:
         herdr = FakeHerdr()
 
         _run(tmp_path, herdr)
+        _run(tmp_path, herdr)
+
+        markers = [c[c.index("--match") + 1] for c in herdr.calls if c[2] == "wait-output"]
+        assert len(set(markers)) == len(markers)
+
+    def test_the_marker_is_absent_from_the_command_it_waits_on(self, tmp_path):
+        """`pane run` types the command and the shell echoes it, so a marker
+        written literally into the command is on screen before the step starts
+        -- the wait would match the echo and return immediately. Measured on
+        the box: 0.0s against a command that takes 6s."""
+        herdr = FakeHerdr()
+
+        _run(tmp_path, herdr)
 
         wait = next(c for c in herdr.calls if c[2] == "wait-output")
         run = next(c for c in herdr.calls if c[2] == "run")
-        assert wait[wait.index("--match") + 1] in run[-1]
+        assert wait[wait.index("--match") + 1] not in run[-1]
 
     def test_the_wait_is_always_bounded(self, tmp_path):
         """herdr's own help says an omitted timeout waits forever, which would
