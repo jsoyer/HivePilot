@@ -198,16 +198,32 @@ class HerdrRunner:
         )
         return output
 
+    @staticmethod
+    def _split_argv(direction: str) -> list[str]:
+        """Open a pane, in the RUN's workspace when it has one.
+
+        `--current` means whatever workspace the operator is looking at. Found
+        on the box, not by a test: run 684 opened workspace `wA` over the run's
+        tree and this runner then reported `pane_id: w1:p0` -- the step landed
+        in the focused workspace while its own sat empty beside it. #552 wired
+        the ambient into `claude_runner`; this is a second runner with its own
+        split, and it was still asking for `--current`.
+
+        No unit test here could have caught it. They cover this runner's argv,
+        and `--current` WAS this runner's argv; the defect was that a second
+        runner existed at all.
+
+        `--current` stays as the fallback, so a run without a workspace keeps
+        working rather than making the flag all-or-nothing.
+        """
+        from hivepilot.services.herdr_workspace import current_pane
+
+        pane = current_pane()
+        where = ["--pane", pane] if pane else ["--current"]
+        return ["herdr", "pane", "split", *where, "--direction", direction, "--no-focus"]
+
     def _split_pane(self, payload: RunnerPayload) -> str:
-        argv = [
-            "herdr",
-            "pane",
-            "split",
-            "--current",
-            "--direction",
-            self.settings.herdr_split_direction,
-            "--no-focus",
-        ]
+        argv = self._split_argv(self.settings.herdr_split_direction)
         result = subprocess.run(argv, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()[-2000:]
