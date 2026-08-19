@@ -1,5 +1,6 @@
 import { Layers, Terminal, Zap } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Gauge } from '@/components/dashboard/Gauge'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { Sparkline } from '@/components/dashboard/Sparkline'
@@ -8,7 +9,7 @@ import { Sparkline } from '@/components/dashboard/Sparkline'
 const MIN_TREND_POINTS = 2
 import { useT } from '@/lib/i18n'
 import { fetchEfficiency, type CacheEfficiency, type HeadroomEfficiency,
-  type ProxyEfficiency, type RtkEfficiency } from '@/lib/pollen-api'
+  type ProxyEfficiency, type RtkEfficiency, type TruncationEfficiency } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 
@@ -131,6 +132,86 @@ function HeadroomPanel({ headroom }: { headroom: HeadroomEfficiency }) {
  * because one lucky run that read 326 696 tokens lifted the sum over the
  * floor while nine runs out of ten paid double.
  */
+/**
+ * Context truncation — the panel that would have made run 639 a one-day
+ * diagnosis instead of a one-week one.
+ *
+ * `cap` mode had kept the TAIL of the joined prior context, so ~90% of the run
+ * vanished along with both verdicts the release gate needed, and the gate then
+ * refused a release on a clearance that HAD been given. The only trace was a
+ * `logger.warning` in a file nobody opens until something is already wrong.
+ *
+ * THREE states, and collapsing any two of them is the defect this exists to
+ * expose:
+ *
+ *   the field is absent, or the query failed  -> "not measured"
+ *   `recorded: 0`                             -> "nothing was written down",
+ *                                                 which is NOT "nothing was
+ *                                                 truncated"
+ *   `recorded > 0`                            -> the numbers
+ */
+function TruncationPanel({
+  truncation,
+}: {
+  truncation: TruncationEfficiency | null | undefined
+}) {
+  const t = useT()
+
+  // `undefined` as well as `null`: a server older than this field omits it,
+  // and crashing here would take the whole view down over a payload that is
+  // merely out of date.
+  if (!truncation || truncation.recorded === null) {
+    return (
+      <p data-testid="efficiency-truncation-unavailable" className="text-sm text-muted-foreground">
+        {t('efficiency.truncationNotMeasured')}
+      </p>
+    )
+  }
+
+  if (truncation.recorded === 0) {
+    return (
+      <p data-testid="efficiency-truncation-empty" className="text-sm text-muted-foreground">
+        {t('efficiency.truncationNoneRecorded')}
+      </p>
+    )
+  }
+
+  const basis = Object.entries(truncation.by_basis ?? {})
+
+  return (
+    <div data-testid="efficiency-truncation-section" className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <MetricReadout
+          label={t('efficiency.truncationEvents')}
+          value={String(truncation.recorded)}
+        />
+        <MetricReadout
+          label={t('efficiency.truncationDropped')}
+          value={formatTokens(truncation.dropped_chars ?? 0)}
+          sub={t('efficiency.truncationDroppedSub')}
+        />
+        <MetricReadout
+          label={t('efficiency.truncationWorstStage')}
+          value={formatTokens(truncation.worst_stage_chars ?? 0)}
+          // The WORST single stage, never an average: naming the one stage
+          // whose output blows the budget is the whole point, and an average
+          // is exactly the statistic that hides it.
+          sub={truncation.worst_role ?? t('efficiency.truncationNoRole')}
+        />
+      </div>
+      {basis.length > 0 && (
+        <div data-testid="efficiency-truncation-basis" className="flex flex-wrap gap-2">
+          {basis.map(([name, count]) => (
+            <Badge key={name} variant={name === 'derived' ? 'secondary' : 'outline'}>
+              {t(`efficiency.truncationBasis.${name}`, { defaultValue: name })}: {count}
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CachePanel({ cache }: { cache: CacheEfficiency | null | undefined }) {
   const t = useT()
 
@@ -344,6 +425,15 @@ export function EfficiencyView() {
                   <h3 className="mb-2 text-sm font-semibold">{t('efficiency.cacheTitle')}</h3>
                   <p className="mb-3 text-xs text-muted-foreground">{t('efficiency.cacheDescription')}</p>
                   <CachePanel cache={data.cache} />
+                </div>
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold">
+                    {t('efficiency.truncationTitle')}
+                  </h3>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    {t('efficiency.truncationDescription')}
+                  </p>
+                  <TruncationPanel truncation={data.truncation} />
                 </div>
               </div>
             )}

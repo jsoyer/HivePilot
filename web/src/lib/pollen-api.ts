@@ -417,6 +417,63 @@ export interface EfficiencySummary {
    * full price ten times behind a healthy-looking 85% aggregate. Optional:
    * a server older than this field omits it. */
   cache?: CacheEfficiency | null
+  /** Context truncation, which existed only as a `logger.warning` until now.
+   * Run 639: `cap` mode kept the TAIL of the joined prior context, ~90% of the
+   * run vanished with both verdicts the release gate needed, and the gate then
+   * refused a release on a clearance that HAD been given — a week to diagnose,
+   * because nothing surfaced it. Optional: a server older than this field
+   * omits it. */
+  truncation?: TruncationEfficiency | null
+}
+
+/** Recorded context truncations. `recorded: 0` means nothing was WRITTEN
+ * DOWN — never that nothing was truncated, and the view must say so in those
+ * words. `null` on every field means the query itself failed, which is a third
+ * state again. */
+/** Two probes for the things that fail by GOING QUIET. `/plugins/health`
+ * reports what loaded; these report whether two systems that produce
+ * continuously are still producing. */
+export interface HealthProbes {
+  agent_surface: AgentSurfaceProbe
+  otel: OtelProbe
+}
+
+export interface AgentSurfaceProbe {
+  /** `not_configured` is the DEFAULT and is not a fault — a red badge on every
+   * deployment that never asked for a live agent surface teaches people to
+   * ignore the badge. `unreachable` is the state worth acting on. */
+  state: 'not_configured' | 'ok' | 'unreachable' | 'unknown_backend' | 'unknown'
+  backend: string | null
+}
+
+export interface OtelProbe {
+  /** `never_arrived` points at configuration; `stale` points at an exporter
+   * that used to work and stopped. Different investigations, so different
+   * answers. */
+  state: 'never_arrived' | 'ok' | 'stale' | 'unknown'
+  /** Healthy forever once an exporter has ever worked — which is exactly why
+   * it is not the figure to trust. */
+  rows: number | null
+  age_hours: number | null
+}
+
+export async function fetchHealthProbes(): Promise<HealthProbes> {
+  return apiFetch<HealthProbes>('/v1/health/probes', { on403: 'forbidden' })
+}
+
+export interface TruncationEfficiency {
+  recorded: number | null
+  dropped_chars: number | null
+  /** The WORST single stage, never an average: the point of this figure is to
+   * name the one stage whose output is blowing the budget, and an average is
+   * exactly the statistic that hides it. */
+  worst_stage_chars: number | null
+  /** Whose output to go and read. A row with no role never wins it. */
+  worst_role: string | null
+  /** `derived` from the model's real window vs `fallback` to a configured
+   * constant vs `unknown` for rows written before the basis was recorded — a
+   * gap, not a guess. */
+  by_basis: Record<string, number>
 }
 
 export function fetchEfficiency(days = 30): Promise<EfficiencySummary> {

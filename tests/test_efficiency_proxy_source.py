@@ -50,6 +50,15 @@ class TestProxySummary:
         assert efficiency_service.proxy_summary(timeout=0.25) is None
 
 
+#: What the view composes into a savings picture. Summing anything outside
+#: this set would overstate what was avoided.
+SAVINGS_SOURCES = {"headroom", "rtk", "proxy", "cache"}
+
+#: Measured on the same view, and deliberately NOT summable with the above:
+#: these say what was LOST, not what was saved.
+LOSS_SURFACES = {"truncation"}
+
+
 class TestEfficiencySummaryShape:
     def test_it_names_every_savings_source(self) -> None:
         """headroom and rtk were the whole story until the proxy landed, and
@@ -67,7 +76,20 @@ class TestEfficiencySummaryShape:
         """
         result = efficiency_service.efficiency_summary(days=30)
 
-        assert set(result) == {"headroom", "rtk", "proxy", "cache"}
+        assert set(result) == SAVINGS_SOURCES | LOSS_SURFACES
+
+    def test_truncation_is_a_loss_surface_not_a_savings_source(self) -> None:
+        """It sits on the same view and is NOT part of the savings total.
+
+        Every other key here answers "what did we avoid paying". `truncation`
+        answers "what did we throw away" -- run 639's ~90% of a run, both
+        verdicts the release gate needed, and a release refused on a clearance
+        that had been given. Summing it into savings would read a loss as a
+        gain, and the two sets are kept apart here so that cannot happen by
+        someone adding one key to one list.
+        """
+        assert "truncation" in LOSS_SURFACES
+        assert "truncation" not in SAVINGS_SOURCES
 
     def test_headroom_is_still_never_null(self) -> None:
         """Unchanged contract: headroom is a local DB read, always real."""

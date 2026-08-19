@@ -296,6 +296,33 @@ def init_db() -> None:
             )
             """
         )
+        # Context truncation, made visible instead of only logged. Run 639 is
+        # why: `cap` mode kept the TAIL of the joined prior context, ~90% of the
+        # run vanished with both verdicts the gate needed, and the gate then
+        # refused a release on a clearance that HAD been given. The only trace
+        # was a `logger.warning` in a file nobody opens until it is too late.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS context_truncations (
+                id {pk},
+                run_id INTEGER,
+                project TEXT,
+                role TEXT,
+                total_chars INTEGER,
+                budget INTEGER,
+                dropped_chars INTEGER,
+                stages INTEGER,
+                largest_stage_chars INTEGER,
+                -- 'derived' from the model's real window, or 'fallback' to a
+                -- configured constant. The warning this replaces never carried
+                -- it, and it is the field that says whether the budget is a
+                -- measurement or a guess.
+                budget_basis TEXT,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         # Phase 20 D2: persist IaC drift-scan results (history + baseline).
         conn.execute(
             f"""
@@ -1442,6 +1469,104 @@ def list_audit_log(limit: int = 100) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Drift-scan persistence (Phase 20 D2)
 # ---------------------------------------------------------------------------
+
+
+def agent_telemetry_freshness() -> tuple[int, str | None]:
+    """`(row count, newest timestamp)` for agent telemetry.
+
+    Both halves, because the count alone is the misleading one: it stays
+    healthy forever once an exporter has ever worked, and only the age of the
+    newest row says whether it still does.
+    """
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute("SELECT COUNT(*), MAX(recorded_at) FROM agent_telemetry").fetchone()
+    if not row:
+        return 0, None
+    return int(row[0] or 0), row[1]
+
+
+def record_context_truncation(
+    *,
+    run_id: int | None,
+    project: str | None,
+    role: str | None,
+    total_chars: int,
+    budget: int,
+    dropped_chars: int,
+    stages: int,
+    largest_stage_chars: int,
+    budget_basis: str | None,
+    tenant: str = "default",
+) -> int:
+    """Persist one truncation, so it stops being findable only in a log file.
+
+    Run 639 took a week to diagnose because the only trace of it was a
+    `logger.warning`: `cap` mode had kept the TAIL of the joined prior context,
+    ~90% of the run vanished along with both verdicts the release gate needed,
+    and the gate then refused a release on a clearance that HAD been given.
+
+    `budget_basis` is the field the warning never carried -- `derived` from the
+    model's real window, or `fallback` to a configured constant. Without it a
+    budget figure cannot be told apart from a guess, and the number that
+    matters here is exactly the one somebody will want to tune.
+
+    No free text is stored. Every column is a count or a fixed token, so this
+    table cannot become a way for prompt content to reach a dashboard.
+    """
+    init_db()
+    with db.connect() as conn:
+        row_id = db.insert_returning_id(
+            conn,
+            "INSERT INTO context_truncations "
+            "(run_id, project, role, total_chars, budget, dropped_chars, stages, "
+            "largest_stage_chars, budget_basis, tenant) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                project,
+                role,
+                total_chars,
+                budget,
+                dropped_chars,
+                stages,
+                largest_stage_chars,
+                budget_basis,
+                tenant,
+            ),
+        )
+    return row_id
+
+
+def context_truncations(*, tenant: str = "default", limit: int = 200) -> list[dict]:
+    """Recent truncation rows, newest first.
+
+    An empty list means nothing was RECORDED -- never that nothing was
+    truncated. `summarise_truncations` keeps that distinction in the numbers it
+    reports; this function only has to avoid destroying it.
+    """
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT run_id, project, role, total_chars, budget, dropped_chars, "
+            "stages, largest_stage_chars, budget_basis, recorded_at "
+            "FROM context_truncations WHERE tenant = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (tenant, int(limit)),
+        ).fetchall()
+    keys = (
+        "run_id",
+        "project",
+        "role",
+        "total_chars",
+        "budget",
+        "dropped_chars",
+        "stages",
+        "largest_stage_chars",
+        "budget_basis",
+        "recorded_at",
+    )
+    return [dict(zip(keys, row, strict=False)) for row in rows]
 
 
 def record_drift_scan(result: "DriftResult", *, tenant: str = "default") -> int:

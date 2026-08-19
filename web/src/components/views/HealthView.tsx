@@ -7,6 +7,7 @@ import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
 import { formatAge, formatTimestamp } from '@/lib/format-time'
 import {
+  fetchHealthProbes,
   fetchPluginsHealth,
   togglePlugin,
   type PluginHealthEntry,
@@ -234,6 +235,68 @@ function ActivityChip({ state }: { state: ActivityState }) {
  * "disable pending" badge -- the bottom "Disabled plugins" section is only
  * for names that are `plugins_disabled` AND not currently loaded.
  */
+
+/**
+ * Two probes for the things that fail by GOING QUIET.
+ *
+ * The plugin table below reports what LOADED. These report whether two systems
+ * that produce continuously are still producing — the failure mode nothing
+ * else on this page can see, because an absence looks exactly like a healthy
+ * zero.
+ *
+ * `not_configured` is deliberately NOT a fault. A red badge on every
+ * deployment that never asked for a live agent surface teaches people to
+ * ignore the badge, and the badge that matters is `unreachable`.
+ *
+ * `never_arrived` and `stale` are likewise different answers: the first points
+ * at configuration, the second at an exporter that used to work and stopped.
+ */
+function SystemProbes() {
+  const t = useT()
+  // Isolated on purpose. A probe panel must never be able to take down the
+  // page it observes -- and it nearly did: an endpoint this view had not seen
+  // before made `useAsyncData` call `.then` on an undefined, and the whole
+  // plugin table went with it. Health surfaces that can break the thing they
+  // report on are worse than no surface.
+  const probes = useAsyncData(
+    () =>
+      Promise.resolve()
+        .then(() => fetchHealthProbes())
+        .catch(() => null),
+    [],
+  )
+
+  return (
+    <AsyncSection state={probes} isEmpty={(d) => !d}>
+      {(data) =>
+        data ? (
+        <div data-testid="health-probes" className="mb-6 flex flex-wrap gap-2">
+          <Badge
+            data-testid="health-probe-surface"
+            variant={data.agent_surface.state === 'unreachable' ? 'destructive' : 'outline'}
+          >
+            {t(`health.probeSurface.${data.agent_surface.state}`, {
+              defaultValue: data.agent_surface.state,
+              backend: data.agent_surface.backend ?? '',
+            })}
+          </Badge>
+          <Badge
+            data-testid="health-probe-otel"
+            variant={data.otel.state === 'stale' ? 'destructive' : 'outline'}
+          >
+            {t(`health.probeOtel.${data.otel.state}`, {
+              defaultValue: data.otel.state,
+              rows: data.otel.rows ?? 0,
+              hours: data.otel.age_hours ?? 0,
+            })}
+          </Badge>
+        </div>
+        ) : null
+      }
+    </AsyncSection>
+  )
+}
+
 export function HealthView() {
   const t = useT()
   const { can } = useRole()
@@ -256,6 +319,7 @@ export function HealthView() {
         </CardDescription>
       </CardHeader>
       <CardContent>
+        <SystemProbes />
         <AsyncSection
           state={health}
           // `denied` and `not_installed` count as content. Without them, a

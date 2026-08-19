@@ -6,7 +6,7 @@ import math
 import subprocess
 import tempfile
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1761,6 +1761,7 @@ def build_prior_context(
     prior_chunks: list[str],
     mode: str,
     max_chars: int,
+    on_truncate: "Callable[[dict[str, int]], None] | None" = None,
 ) -> str | None:
     """Build the prior_context string to pass to the next stage.
 
@@ -1815,14 +1816,27 @@ def build_prior_context(
         # never consults, so it WILL be wrong for some deployment. When it is,
         # that belongs in the log, with the numbers that let it be tuned on
         # evidence rather than taste.
-        logger.warning(
-            "context.truncated",
-            total_chars=len(joined),
-            budget=max_chars,
-            dropped_chars=len(joined) - len(result),
-            stages=len(prior_chunks),
-            largest_stage_chars=max(len(c) for c in prior_chunks),
-        )
+        _facts = {
+            "total_chars": len(joined),
+            "budget": max_chars,
+            "dropped_chars": len(joined) - len(result),
+            "stages": len(prior_chunks),
+            "largest_stage_chars": max(len(c) for c in prior_chunks),
+        }
+        logger.warning("context.truncated", **_facts)
+        if on_truncate is not None:
+            # A CALLBACK, not a database call: this function is pure and
+            # heavily tested, and the caller is the only one that knows the
+            # run, the project, the role and the budget's BASIS. Persistence
+            # belongs where that context is.
+            #
+            # Never allowed to fail the step. Truncation is already a
+            # degradation; losing the run because we could not write it down
+            # would be a second, worse one.
+            try:
+                on_truncate(_facts)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("context.truncation_record_failed", error=str(exc))
         return result
     # mode == "full"
     return joined
@@ -1933,6 +1947,7 @@ def _route_prior_context(
     prior_context_mode: str,
     max_chars: int,
     stage_name: str,
+    on_truncate: "Callable[[dict[str, int]], None] | None" = None,
 ) -> str | None:
     """Compute the prior_context string for the stage about to run (PRD A2 Sprint 2).
 
@@ -1983,7 +1998,12 @@ def _route_prior_context(
             stage=stage_name,
             missing_keys=missing,
         )
-    return build_prior_context(prior_chunks, mode=prior_context_mode, max_chars=max_chars)
+    return build_prior_context(
+        prior_chunks,
+        mode=prior_context_mode,
+        max_chars=max_chars,
+        on_truncate=on_truncate,
+    )
 
 
 @dataclass
@@ -2067,6 +2087,39 @@ def _int_setting(settings_obj: Any, name: str, default: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return default
     return max(0, value)
+
+
+def _truncation_recorder(
+    *,
+    run_id: int | None,
+    project: str | None,
+    role: str | None,
+    budget_basis: str | None,
+) -> Callable[[dict[str, int]], None]:
+    """A callback that persists one truncation, and returns nothing.
+
+    A named function rather than a lambda because the recorder returns a row
+    id, and a callback whose value is silently discarded should say so in its
+    own signature rather than in the caller's type error.
+    """
+
+    def _record(facts: dict[str, int]) -> None:
+        # Named explicitly rather than `**facts`: a dict[str, int] proves
+        # nothing about which keys it carries, and the whole point of this
+        # table is that its columns mean what they say.
+        state_service.record_context_truncation(
+            run_id=run_id,
+            project=project,
+            role=role,
+            budget_basis=budget_basis,
+            total_chars=facts["total_chars"],
+            budget=facts["budget"],
+            dropped_chars=facts["dropped_chars"],
+            stages=facts["stages"],
+            largest_stage_chars=facts["largest_stage_chars"],
+        )
+
+    return _record
 
 
 class Orchestrator:
@@ -4660,6 +4713,22 @@ class Orchestrator:
                     prior_context_mode=settings.prior_context_mode,
                     max_chars=_context_budget,
                     stage_name=stage.name,
+                    # Persist what was lost, with the budget's BASIS -- the
+                    # field the log line never carried, and the one that says
+                    # whether the number is a measurement or a guess. Run 639
+                    # took a week to find because this only ever existed as a
+                    # `logger.warning`.
+                    on_truncate=_truncation_recorder(
+                        run_id=self._pipeline_run_id,
+                        # A pipeline stage can span several projects, so a
+                        # single name would be a guess. Recorded only when
+                        # unambiguous, None otherwise -- the same rule
+                        # `_project_for_result` uses, and for the same reason:
+                        # a wrong attribution is worse than a missing one.
+                        project=project_names[0] if len(project_names) == 1 else None,
+                        role=getattr(consuming_role, "name", None),
+                        budget_basis=_budget_basis,
+                    ),
                 ),
                 # debate-judge-pipeline-yaml PRD, Sprint 2: thread the raw
                 # stage/pipeline through to `_execute_task_body`'s
