@@ -108,7 +108,9 @@ def is_blocking(verdict: "Verdict | None", threshold: float) -> bool:
 
 
 @contextmanager
-def isolated_worktree(repo_path: Path, base_ref: str | None = None) -> Iterator[Path]:
+def isolated_worktree(
+    repo_path: Path, base_ref: str | None = None, keep_on_error: bool = False
+) -> Iterator[Path]:
     """Create a throwaway git worktree for `repo_path`, yield its Path, then remove it.
 
     The worktree is placed under `<repo_path>/.hivepilot-wt/<uuid>` (never under
@@ -156,19 +158,37 @@ def isolated_worktree(repo_path: Path, base_ref: str | None = None) -> Iterator[
         return
 
     logger.info("worktree.created", path=str(wt_path), repo=str(repo_path))
+    failed = False
     try:
         yield wt_path
+    except BaseException:
+        # `keep_on_error` retains the tree so a failed run can still be opened
+        # and poked at. A commit of work-in-progress would preserve the FILES;
+        # it preserves nothing about the environment or the ability to re-run
+        # the command that failed, in place, where it failed.
+        #
+        # `BaseException`: a KeyboardInterrupt during a run is exactly when
+        # somebody is watching and wants what is on screen to stay there.
+        failed = True
+        raise
     finally:
-        try:
-            subprocess.run(
-                ["git", "-C", str(repo_path), "worktree", "remove", "--force", str(wt_path)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            logger.info("worktree.removed", path=str(wt_path))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("worktree.remove_failed", path=str(wt_path), error=str(exc))
+        if failed and keep_on_error:
+            # Left on disk deliberately. The bound that stops these
+            # accumulating lives in `workspace_retention` and is applied at the
+            # START of a later run -- keeping one here and pruning elsewhere is
+            # what avoids a daemon.
+            logger.info("worktree.kept_after_failure", path=str(wt_path), repo=str(repo_path))
+        else:
+            try:
+                subprocess.run(
+                    ["git", "-C", str(repo_path), "worktree", "remove", "--force", str(wt_path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                logger.info("worktree.removed", path=str(wt_path))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("worktree.remove_failed", path=str(wt_path), error=str(exc))
 
 
 def ensure_repo(path: Path) -> Repo:

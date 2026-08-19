@@ -88,6 +88,9 @@ from hivepilot.services.artifact_service import ArtifactManager
 from hivepilot.services.config_provenance import redact_text, redact_value, register_secret_value
 from hivepilot.services.diff_filter import summarise_with_report
 from hivepilot.services.git_service import isolated_worktree, perform_git_actions
+from hivepilot.services.herdr_workspace import (
+    prune_kept_workspaces as herdr_prune_kept_workspaces,
+)
 from hivepilot.services.herdr_workspace import run_workspace as herdr_run_workspace
 from hivepilot.services.interaction_service import (
     Interaction,
@@ -6333,7 +6336,18 @@ class Orchestrator:
                     "into its own task or a pipeline stage with pause_before."
                 )
 
-        _wt_ctx = isolated_worktree(project.path) if _use_worktree else nullcontext(project.path)
+        _keep_failed = max(0, int(getattr(settings, "keep_failed_runs", 0) or 0))
+        if _keep_failed and getattr(settings, "herdr_workspace_per_run", False):
+            # Pruned HERE, at the start of a run, rather than by a background
+            # sweeper: the thing that creates these is best placed to notice
+            # there are too many, and a daemon would be a second moving part to
+            # keep alive. Never raises -- see `prune_kept_workspaces`.
+            herdr_prune_kept_workspaces(keep=_keep_failed)
+        _wt_ctx = (
+            isolated_worktree(project.path, keep_on_error=_keep_failed > 0)
+            if _use_worktree
+            else nullcontext(project.path)
+        )
 
         with (
             _wt_ctx as _exec_path,
@@ -6346,7 +6360,10 @@ class Orchestrator:
                 enabled=bool(getattr(settings, "herdr_workspace_per_run", False)),
                 repo=str(project.path),
                 exec_path=str(_exec_path),
+                # The label is what `workspace_retention` reads to order and
+                # prune these, so the run id has to be in it.
                 label=f"{project.path.name} run {run_id}" if run_id else project.path.name,
+                keep_on_error=_keep_failed > 0,
             ),
         ):
             # Build a shallow copy of the project with the worktree path so both
