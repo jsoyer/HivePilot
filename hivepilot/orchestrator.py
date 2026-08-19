@@ -2192,6 +2192,16 @@ class Orchestrator:
             )
         return facts
 
+    def _pipeline_verdict_required(self) -> bool:
+        """Whether the running pipeline owes an agent verdict before promoting.
+
+        True outside a pipeline and for every pipeline that says nothing --
+        byte-identical to the gate's pre-existing behaviour in both cases. A
+        bare `run` on one task must never inherit an opt-out it never declared.
+        """
+        pipeline = getattr(self, "_current_pipeline", None)
+        return bool(getattr(pipeline, "verdict_required", True))
+
     def _pipeline_checks(self) -> list[Any]:
         """The running pipeline's declared deterministic checks, if any.
 
@@ -7172,6 +7182,7 @@ class Orchestrator:
                     # The gate's one non-LLM input. Empty for every pipeline
                     # that declares none, which is byte-identical to before.
                     checks=self._pipeline_checks(),
+                    verdict_required=self._pipeline_verdict_required(),
                 )
 
         logger.info("task.end", project=project.path.name, task=task_name)
