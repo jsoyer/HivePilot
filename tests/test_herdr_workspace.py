@@ -34,8 +34,8 @@ from hivepilot.services.herdr_workspace import (
     RunWorkspace,
     WorkspaceError,
     close_run_workspace,
-    create_run_workspace,
-    run_branch_name,
+    open_run_workspace,
+    workspace_for_path,
 )
 
 CREATED = {
@@ -68,106 +68,6 @@ class FakeHerdr:
         return next(c for c in self.calls if verb in c)
 
 
-def _create(herdr, **kw):
-    kw.setdefault("repo", "/srv/noxys")
-    kw.setdefault("branch", "hivepilot/noxys/742")
-    kw.setdefault("label", "noxys run 742")
-    return create_run_workspace(run_cli=herdr, **kw)
-
-
-class TestTheRunGetsItsOwnWorktree:
-    def test_the_workspace_id_comes_back(self):
-        """Without it there is nothing to route later panes into, and nothing
-        to close at the end of the run."""
-        assert _create(FakeHerdr()).workspace_id == "w3"
-
-    def test_the_root_pane_comes_back(self):
-        """The workspace arrives with a pane already. The first role does not
-        need a split."""
-        assert _create(FakeHerdr()).root_pane_id == "w3:p1"
-
-    def test_the_checkout_path_comes_back(self):
-        """herdr chooses where the worktree lands, so the step's cwd is this
-        path -- NOT the project path it would have used without a worktree."""
-        ws = _create(FakeHerdr())
-
-        assert ws.checkout_path.endswith("hivepilot-noxys-742")
-
-    def test_no_workspace_is_created_beforehand(self):
-        """`worktree create` makes one and names it. A separate `workspace
-        create` would add a call and a failure mode and change nothing."""
-        herdr = FakeHerdr()
-
-        _create(herdr)
-
-        assert not any("workspace" in c and "create" in c for c in herdr.calls)
-
-    def test_the_label_carries_the_run_identity(self):
-        """It is how the operator finds this run among the workspaces."""
-        herdr = FakeHerdr()
-
-        _create(herdr, label="noxys run 742")
-
-        argv = herdr.argv_for("create")
-        assert argv[argv.index("--label") + 1] == "noxys run 742"
-
-    def test_the_base_ref_is_always_stated(self):
-        """Omitted, the worktree forks from whatever HEAD happens to be, which
-        on a box that just ran another agent is not main."""
-        herdr = FakeHerdr()
-
-        _create(herdr, base="main")
-
-        argv = herdr.argv_for("create")
-        assert argv[argv.index("--base") + 1] == "main"
-
-
-class TestItRefusesToGuess:
-    def test_a_failed_create_raises(self):
-        with pytest.raises(WorkspaceError):
-            _create(FakeHerdr(returncode=1))
-
-    def test_a_response_naming_no_workspace_raises(self):
-        """Never fall back to the focused workspace: the panes would land in
-        another run, which is the exact failure this file exists to prevent."""
-        payload = {"result": {"root_pane": {"pane_id": "w3:p1"}}}
-
-        with pytest.raises(WorkspaceError):
-            _create(FakeHerdr(payload=payload))
-
-    def test_a_response_naming_no_checkout_raises(self):
-        """A worktree whose path we do not know is a step that would run in
-        the wrong tree -- silently, because the command would still succeed."""
-        payload = {
-            "result": {
-                "workspace": {"workspace_id": "w3"},
-                "root_pane": {"pane_id": "w3:p1"},
-            }
-        }
-
-        with pytest.raises(WorkspaceError):
-            _create(FakeHerdr(payload=payload))
-
-
-class TestTheBranchName:
-    def test_it_follows_the_house_convention(self):
-        """`hivepilot/<project>/<run_id>`, no slug -- the description belongs
-        in the PR title, and one branch per run is what the merge tooling
-        already assumes."""
-        assert run_branch_name("noxys", 742) == "hivepilot/noxys/742"
-
-    def test_a_project_name_cannot_break_out_of_the_namespace(self):
-        """Project names come from config, and a `..` or a leading slash would
-        produce a ref that resolves somewhere else entirely."""
-        name = run_branch_name("../../evil", 1)
-
-        assert ".." not in name
-        assert name.startswith("hivepilot/")
-
-    def test_two_runs_never_collide(self):
-        assert run_branch_name("noxys", 1) != run_branch_name("noxys", 2)
-
-
 class TestClosingIt:
     def test_the_workspace_is_closed_by_id(self):
         herdr = FakeHerdr()
@@ -181,4 +81,146 @@ class TestClosingIt:
         worth losing a finished run's results over."""
         close_run_workspace(
             RunWorkspace("w3", "w3:p1", "/co", "b"), run_cli=FakeHerdr(returncode=1)
+        )
+
+
+OPENED = {
+    "id": "cli:worktree:open",
+    "result": {
+        "type": "worktree_opened",
+        "already_open": False,
+        "root_pane": {"pane_id": "w9:p1", "cwd": "/srv/noxys/.hivepilot-wt/abc"},
+        "workspace": {"workspace_id": "w9", "label": "noxys run 742"},
+        "worktree": {"path": "/srv/noxys/.hivepilot-wt/abc", "is_detached": True},
+    },
+}
+
+
+class TestAdoptingTheWorktreeTheEngineAlreadyMade:
+    """HivePilot does not need herdr to CREATE a worktree. It already makes one
+    per run -- `git_service.isolated_worktree`, at `<repo>/.hivepilot-wt/<uuid>`,
+    with `git worktree add --detach`.
+
+    Detached is the whole reason there is no collision with the
+    `hivepilot/<project>/<run_id>` branch that `perform_git_actions` checks out
+    in the project directory. I described that collision as blocking before
+    reading this function; it came from a design I had invented, not from the
+    code. Two branches cannot share a worktree -- but a detached worktree
+    claims no branch.
+
+    So herdr ADOPTS the existing tree rather than making a second one, and
+    HivePilot keeps sole ownership of creating and removing it.
+
+    Probed on the box against 0.8.0: `worktree open` is contextual. It answers
+    `not_git_worktree` unless the CALLING workspace is inside a git work tree,
+    so `--cwd <repo>` selects that context and `--path <worktree>` names the
+    tree. `--path` alone fails.
+    """
+
+    @staticmethod
+    def _open(herdr, **kw):
+        kw.setdefault("repo", "/srv/noxys")
+        kw.setdefault("worktree_path", "/srv/noxys/.hivepilot-wt/abc")
+        kw.setdefault("label", "noxys run 742")
+        return open_run_workspace(run_cli=herdr, **kw)
+
+    def test_it_adopts_rather_than_creating(self):
+        herdr = FakeHerdr(payload=OPENED)
+
+        self._open(herdr)
+
+        assert herdr.calls[0][:3] == ["herdr", "worktree", "open"]
+        assert not any("create" in c for c in herdr.calls)
+
+    def test_both_the_context_and_the_path_are_sent(self):
+        """`--path` alone answers `not_git_worktree` -- the command is
+        contextual on the calling workspace, not on the path."""
+        herdr = FakeHerdr(payload=OPENED)
+
+        self._open(herdr)
+
+        argv = herdr.calls[0]
+        assert argv[argv.index("--cwd") + 1] == "/srv/noxys"
+        assert argv[argv.index("--path") + 1] == "/srv/noxys/.hivepilot-wt/abc"
+
+    def test_the_workspace_and_root_pane_come_back(self):
+        ws = self._open(FakeHerdr(payload=OPENED))
+
+        assert ws.workspace_id == "w9"
+        assert ws.root_pane_id == "w9:p1"
+
+    def test_the_checkout_is_the_tree_the_engine_made(self):
+        """Not a path herdr chose. The step already runs there."""
+        ws = self._open(FakeHerdr(payload=OPENED))
+
+        assert ws.checkout_path == "/srv/noxys/.hivepilot-wt/abc"
+
+    def test_a_refusal_raises_rather_than_falling_back(self):
+        """Falling back to the focused workspace would put a live agent in
+        another run's tree, and the run would never know."""
+        with pytest.raises(WorkspaceError):
+            self._open(FakeHerdr(payload={"error": {"code": "not_git_worktree"}}, returncode=1))
+
+    def test_no_branch_is_named(self):
+        """The tree is DETACHED. Naming a branch would either fail or, worse,
+        move one."""
+        herdr = FakeHerdr(payload=OPENED)
+
+        self._open(herdr)
+
+        assert "--branch" not in herdr.calls[0]
+
+
+class TestARunWithNoWorktree:
+    """The engine's worktree is CONDITIONAL: `worktree_isolation`, not
+    simulating, `auto_git`, the task actually commits or pushes, and a git
+    repo. A run failing any of those works in the project directory and has no
+    tree to adopt."""
+
+    def test_a_plain_workspace_is_created_over_the_project(self):
+        payload = {"result": {"workspace": {"workspace_id": "w4"}}}
+        herdr = FakeHerdr(payload=payload)
+
+        ws = workspace_for_path(path="/srv/noxys", label="run 9", run_cli=herdr)
+
+        assert herdr.calls[0][:3] == ["herdr", "workspace", "create"]
+        assert ws.workspace_id == "w4"
+
+    def test_no_worktree_is_invented_for_it(self):
+        """A new worktree would have to claim a branch, and the only sensible
+        branch is the one `perform_git_actions` checks out in the project
+        directory -- which git refuses to have in two worktrees at once."""
+        herdr = FakeHerdr(payload={"result": {"workspace": {"workspace_id": "w4"}}})
+
+        workspace_for_path(path="/srv/noxys", label="run 9", run_cli=herdr)
+
+        assert not any("worktree" in c for c in herdr.calls)
+        assert not any("--branch" in c for c in herdr.calls)
+
+    def test_it_refuses_rather_than_guessing(self):
+        with pytest.raises(WorkspaceError):
+            workspace_for_path(path="/srv/noxys", label="l", run_cli=FakeHerdr(returncode=1))
+
+
+class TestBranchNamingHasOneSource:
+    """The test that should have existed before I wrote a second namer.
+
+    `git_service.build_branch_name` already builds `<prefix>/<project>/<run_id>`
+    from the CONFIGURED `git.branch_prefix`. I added a `run_branch_name` here
+    that hardcoded `hivepilot/` -- not merely duplication, a divergence: a
+    deployment with a custom prefix would get two different names depending on
+    which function was called, and one of them would be the branch nobody
+    pushes.
+    """
+
+    def test_this_module_does_not_name_branches(self):
+        import hivepilot.services.herdr_workspace as mod
+
+        assert not [n for n in dir(mod) if "branch_name" in n]
+
+    def test_the_one_namer_honours_the_configured_prefix(self):
+        from hivepilot.services.git_service import build_branch_name
+
+        assert (
+            build_branch_name(prefix="acme", project_name="noxys", run_id=742) == "acme/noxys/742"
         )
