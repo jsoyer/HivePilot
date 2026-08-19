@@ -5,15 +5,16 @@ import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { PluginsHealthResponse } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchPluginsHealth, togglePlugin, useRoleMock } = vi.hoisted(() => ({
+const { fetchPluginsHealth, togglePlugin, useRoleMock, fetchHealthProbes } = vi.hoisted(() => ({
   fetchPluginsHealth: vi.fn(),
   togglePlugin: vi.fn(),
   useRoleMock: vi.fn(),
+  fetchHealthProbes: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchPluginsHealth, togglePlugin }
+  return { ...actual, fetchPluginsHealth, togglePlugin, fetchHealthProbes }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -725,5 +726,82 @@ describe('HealthView', () => {
     expect(container.textContent).toContain('rtk')
     expect(container.textContent).not.toMatch(/not loaded/i)
     expect(container.textContent).not.toMatch(/not installed/i)
+  })
+})
+
+describe('HealthView — the probes for things that go quiet', () => {
+  // The plugin table reports what LOADED. These report whether two systems
+  // that produce continuously still are — the failure nothing else here can
+  // see, because an absence looks exactly like a healthy zero.
+
+  beforeEach(() => {
+    // The plugin table's own fetch, which these tests are not about. Left
+    // unmocked it returns undefined and `useAsyncData` calls `.then` on it —
+    // the same fragility the probe panel was just isolated against, on the
+    // other fetch.
+    fetchPluginsHealth.mockResolvedValue(health)
+    useRoleMock.mockReturnValue({ role: 'admin' as Role, can: () => true })
+  })
+
+  function probeFixture(over: Record<string, unknown> = {}) {
+    return {
+      agent_surface: { state: 'not_configured', backend: null },
+      otel: { state: 'ok', rows: 10882, age_hours: 0.2 },
+      ...over,
+    }
+  }
+
+  async function badges(fixture: Record<string, unknown>) {
+    fetchHealthProbes.mockResolvedValue(fixture)
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+    return {
+      surface: container.querySelector('[data-testid="health-probe-surface"]')?.textContent ?? '',
+      otel: container.querySelector('[data-testid="health-probe-otel"]')?.textContent ?? '',
+    }
+  }
+
+  it('says an unconfigured surface is unconfigured, not broken', async () => {
+    // Asserted on the TEXT, not the CSS class: the Badge component's own base
+    // classes mention `destructive`, so a class check passes in every state
+    // and proves nothing. What matters is what the operator reads.
+    //
+    // A red badge on every deployment that never asked for a live agent
+    // surface teaches people to ignore the badge.
+    const { surface } = await badges(probeFixture())
+
+    expect(surface).not.toEqual('')
+    expect(surface.toLowerCase()).not.toContain('not respond')
+  })
+
+  it('names the backend that is not answering', async () => {
+    const { surface } = await badges(
+      probeFixture({ agent_surface: { state: 'unreachable', backend: 'herdr' } }),
+    )
+
+    expect(surface).toContain('herdr')
+  })
+
+  it('says telemetry STOPPED when rows exist but stopped coming', async () => {
+    // The count still looks healthy — 10882 rows — and only the AGE says the
+    // exporter died. That is the plausible zero this probe exists to catch.
+    const { otel } = await badges(
+      probeFixture({ otel: { state: 'stale', rows: 10882, age_hours: 72 } }),
+    )
+
+    expect(otel).not.toEqual('')
+    expect(otel).toContain('72')
+  })
+
+  it('says telemetry never arrived, which is a different problem', async () => {
+    // Points at configuration rather than at an exporter that used to work.
+    const { otel } = await badges(
+      probeFixture({ otel: { state: 'never_arrived', rows: 0, age_hours: null } }),
+    )
+
+    expect(otel).not.toEqual('')
+    expect(otel).not.toContain('72')
   })
 })

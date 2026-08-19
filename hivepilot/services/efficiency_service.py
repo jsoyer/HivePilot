@@ -199,4 +199,37 @@ def efficiency_summary(*, tenant: str | None = "default", days: int | None = 30)
         # self-report -- and the one that found a step paying full price
         # nineteen times behind a healthy-looking 85% aggregate.
         "cache": cache_summary(tenant=tenant),
+        # Context truncation, which until now existed only as a
+        # `logger.warning`. Run 639: `cap` mode kept the TAIL of the joined
+        # prior context, ~90% of the run vanished with both verdicts the
+        # release gate needed, and the gate refused a release on a clearance
+        # that HAD been given. A week to diagnose, because the only trace was
+        # in a log file nobody opens until it is already too late.
+        #
+        # `recorded: 0` means nothing was WRITTEN DOWN -- never that nothing
+        # was truncated. The view must say so in those words.
+        "truncation": truncation_summary(tenant=tenant),
     }
+
+
+def truncation_summary(*, tenant: str | None = "default") -> dict[str, Any]:
+    """Recorded context truncations, summarised. Never raises.
+
+    Same rule as every other panel here: a failure to read is reported as
+    unknown, not as zero. A dashboard that shows a confident zero for a table
+    it could not query is the shape of the defect this panel exists to expose.
+    """
+    from hivepilot.services.state_service import context_truncations
+    from hivepilot.services.truncation_report import summarise_truncations
+
+    try:
+        return summarise_truncations(context_truncations(tenant=tenant or "default"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("efficiency.truncation_unavailable", error=str(exc))
+        return {
+            "recorded": None,
+            "dropped_chars": None,
+            "worst_stage_chars": None,
+            "worst_role": None,
+            "by_basis": {},
+        }

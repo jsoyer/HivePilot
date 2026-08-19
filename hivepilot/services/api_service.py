@@ -2620,6 +2620,62 @@ def _plugin_activity_payload(name: str, *, tenant: str | None) -> dict[str, Any]
     return activity.as_dict() if activity is not None else None
 
 
+@v1.get("/health/probes", dependencies=[Depends(require_role("read"))])
+@app.get("/health/probes", dependencies=[Depends(require_role("read"))])
+def health_probes_endpoint() -> dict[str, Any]:
+    """Two probes for the things that fail by GOING QUIET.
+
+    `/plugins/health` reports what loaded. These report whether two systems
+    that produce continuously are still producing -- the failure mode nothing
+    else here can see, because an absence looks exactly like a healthy zero.
+
+    `agent_surface`: is a live-agent backend configured, and does it answer?
+    Empty is the default and is reported as `not_configured`, never as a
+    fault -- a red badge on every deployment that never asked for the feature
+    teaches people to ignore the badge.
+
+    `otel`: is telemetry still ARRIVING? The row count stays healthy forever
+    once an exporter has ever worked; only the age of the newest row says
+    whether it still does. `never_arrived` and `stale` are different answers
+    on purpose -- the first points at configuration, the second at something
+    that used to work.
+
+    Never raises. A probe that can 500 a dashboard panel is worse than one
+    that reports `unknown`.
+    """
+    import subprocess
+
+    from hivepilot.services import system_probes
+    from hivepilot.utils.logging import get_logger
+
+    # A LOCAL structlog logger: the module-level `logger` here is the stdlib
+    # one and takes no keyword fields, which mypy caught rather than a test.
+    probe_logger = get_logger(__name__)
+
+    def _run(argv: list[str]) -> int:
+        return subprocess.run(
+            argv, capture_output=True, text=True, check=False, timeout=5
+        ).returncode
+
+    try:
+        surface = system_probes.probe_agent_surface(
+            backend=getattr(settings, "agent_surface_backend", "") or "",
+            run_cli=_run,
+        )
+    except Exception as exc:  # noqa: BLE001
+        probe_logger.warning("health.agent_surface_probe_failed", error=str(exc))
+        surface = {"state": "unknown", "backend": None}
+
+    try:
+        rows, newest = state_service.agent_telemetry_freshness()
+        otel = system_probes.probe_otel_arrival(rows=rows, newest=newest)
+    except Exception as exc:  # noqa: BLE001
+        probe_logger.warning("health.otel_probe_failed", error=str(exc))
+        otel = {"state": "unknown", "rows": None, "age_hours": None}
+
+    return {"agent_surface": surface, "otel": otel}
+
+
 @v1.get("/plugins/health")
 @app.get("/plugins/health")
 def plugins_health_endpoint(

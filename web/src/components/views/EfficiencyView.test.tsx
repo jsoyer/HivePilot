@@ -401,3 +401,63 @@ describe('EfficiencyView — prompt cache', () => {
     expect(note?.textContent).toContain('3')
   })
 })
+
+describe('EfficiencyView — context truncation', () => {
+  // Three states, and collapsing any two is the defect this panel exists to
+  // expose. Run 639: `cap` mode kept the tail of the joined prior context,
+  // ~90% of the run vanished with both verdicts the release gate needed, and
+  // the gate then refused a release on a clearance that HAD been given. The
+  // only trace was a log line, which is why it took a week.
+
+  it('says nothing was RECORDED rather than showing a confident zero', async () => {
+    // The distinction that matters: "no run has written one down" is a fact
+    // about whether anyone was looking. "Nothing was truncated" is a fact
+    // about the runs. A dashboard that reports the second when it means the
+    // first is the shape of the original defect.
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      truncation: { recorded: 0, dropped_chars: 0, worst_stage_chars: null, worst_role: null, by_basis: {} },
+    })
+    await act(async () => { mount(); await Promise.resolve() })
+
+    expect(container.querySelector('[data-testid="efficiency-truncation-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="efficiency-truncation-section"]')).toBeNull()
+  })
+
+  it('distinguishes a failed query from an empty one', async () => {
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      truncation: { recorded: null, dropped_chars: null, worst_stage_chars: null, worst_role: null, by_basis: {} },
+    })
+    await act(async () => { mount(); await Promise.resolve() })
+
+    expect(container.querySelector('[data-testid="efficiency-truncation-unavailable"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="efficiency-truncation-empty"]')).toBeNull()
+  })
+
+  it('shows the numbers and names the worst role when there are events', async () => {
+    mocks.fetchEfficiency.mockResolvedValue({
+      ...efficiency,
+      truncation: {
+        recorded: 3,
+        dropped_chars: 120000,
+        worst_stage_chars: 55000,
+        worst_role: 'ciso',
+        by_basis: { derived: 2, fallback: 1 },
+      },
+    })
+    await act(async () => { mount(); await Promise.resolve() })
+
+    expect(container.querySelector('[data-testid="efficiency-truncation-section"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="efficiency-truncation-basis"]')).not.toBeNull()
+    expect(container.textContent).toContain('ciso')
+  })
+
+  it('survives a server too old to send the field at all', async () => {
+    const { truncation: _omitted, ...withoutTruncation } = { ...efficiency, truncation: undefined }
+    mocks.fetchEfficiency.mockResolvedValue(withoutTruncation)
+    await act(async () => { mount(); await Promise.resolve() })
+
+    expect(container.querySelector('[data-testid="efficiency-truncation-unavailable"]')).not.toBeNull()
+  })
+})
