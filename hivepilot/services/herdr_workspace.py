@@ -26,7 +26,6 @@ two times I recalled instead this week, I was wrong both times (`kill` for
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -34,10 +33,6 @@ from typing import Any, Callable
 import structlog
 
 logger = structlog.get_logger(__name__)
-
-#: What survives in a branch name. Project names come from config, and a `..`
-#: or a leading slash would produce a ref that resolves somewhere else.
-_UNSAFE_REF = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class WorkspaceError(RuntimeError):
@@ -62,49 +57,51 @@ class RunWorkspace:
     branch: str
 
 
-def run_branch_name(project: str, run_id: int | str) -> str:
-    """`hivepilot/<project>/<run_id>`, the house convention.
-
-    No slug: the description belongs in the PR title, and one branch per run is
-    what the merge tooling already assumes.
-    """
-    safe = _UNSAFE_REF.sub("-", str(project)).strip("-.") or "project"
-    return f"hivepilot/{safe}/{run_id}"
-
-
 def _default_run_cli(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, check=False)
 
 
-def create_run_workspace(
+def open_run_workspace(
     *,
     repo: str,
-    branch: str,
+    worktree_path: str,
     label: str,
-    base: str = "main",
     run_cli: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> RunWorkspace:
-    """Open a git worktree for this run and return where it lives.
+    """Adopt the worktree HivePilot already made for this run.
 
-    `--base` is always sent. Omitted, the worktree forks from whatever HEAD
-    happens to be, and on a box that just finished another agent's run that is
-    not the trunk.
+    `git_service.isolated_worktree` creates one per run at
+    `<repo>/.hivepilot-wt/<uuid>` with `git worktree add --detach`, and removes
+    it on exit. herdr does not need to make a second one -- it needs to SHOW
+    that one.
 
-    `--no-focus` so starting a run does not yank the operator's screen away
-    from whatever they were reading.
+    Detached is also why there is no collision with the
+    `hivepilot/<project>/<run_id>` branch `perform_git_actions` checks out in
+    the project directory. Two worktrees cannot share a branch; a detached
+    worktree claims none. I called that collision blocking before reading
+    `isolated_worktree` -- it came from a design I had invented rather than
+    from the code.
+
+    Ownership stays with HivePilot, and the order matters: closing the
+    workspace leaves the git worktree intact (probed), so the engine's own
+    `finally` still removes it. Close the workspace FIRST, or panes are left
+    sitting in a directory being deleted.
+
+    `worktree open` is CONTEXTUAL, probed against 0.8.0: with `--path` alone it
+    answers `not_git_worktree` -- "Herdr worktree actions require a workspace
+    inside a Git work tree". `--cwd <repo>` selects that context; `--path`
+    names the tree. Both are required.
     """
     cli = run_cli or _default_run_cli
     result = cli(
         [
             "herdr",
             "worktree",
-            "create",
+            "open",
             "--cwd",
             repo,
-            "--branch",
-            branch,
-            "--base",
-            base,
+            "--path",
+            worktree_path,
             "--label",
             label,
             "--no-focus",
@@ -112,7 +109,7 @@ def create_run_workspace(
     )
     if result.returncode != 0:
         raise WorkspaceError(
-            f"herdr worktree create failed for {branch} (exit {result.returncode}): "
+            f"herdr worktree open failed for {worktree_path} (exit {result.returncode}): "
             f"{_tail(result.stderr or result.stdout)}"
         )
 
@@ -121,33 +118,68 @@ def create_run_workspace(
     body = body if isinstance(body, dict) else {}
 
     workspace_id = _dig(body, "workspace", "workspace_id")
-    root_pane_id = _dig(body, "root_pane", "pane_id")
-    checkout = _dig(body, "worktree", "path") or _dig(
-        body, "workspace", "worktree", "checkout_path"
-    )
-
     if not workspace_id:
+        # Never fall back to the focused workspace: a live agent would land in
+        # another run's tree and the run would never know.
         raise WorkspaceError(
-            f"herdr worktree create named no workspace for {branch}: {_tail(result.stdout)}"
-        )
-    if not checkout:
-        # A worktree whose path we do not know is a step that would run in the
-        # wrong tree -- silently, because the command itself succeeded.
-        raise WorkspaceError(
-            f"herdr worktree create named no checkout path for {branch}: {_tail(result.stdout)}"
+            f"herdr worktree open named no workspace for {worktree_path}: {_tail(result.stdout)}"
         )
 
     logger.info(
-        "herdr_workspace.created",
+        "herdr_workspace.opened",
         workspace=workspace_id,
-        branch=branch,
-        checkout=checkout,
+        checkout=worktree_path,
+        already_open=body.get("already_open"),
     )
     return RunWorkspace(
         workspace_id=workspace_id,
-        root_pane_id=root_pane_id or "",
-        checkout_path=checkout,
-        branch=branch,
+        root_pane_id=_dig(body, "root_pane", "pane_id") or "",
+        # The tree the ENGINE made, not one herdr chose.
+        checkout_path=_dig(body, "worktree", "path") or worktree_path,
+        branch="",
+    )
+
+
+def workspace_for_path(
+    *,
+    path: str,
+    label: str,
+    run_cli: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> RunWorkspace:
+    """A workspace over a plain directory, for a run with no worktree.
+
+    The engine's worktree is CONDITIONAL -- `worktree_isolation`, not
+    simulating, `auto_git`, the task actually commits or pushes, and the
+    project is a git repo. A run failing any of those works directly in the
+    project directory, and there is no tree to adopt.
+
+    A NEW worktree is deliberately not created for that case. It would have to
+    claim a branch, and the only branch that makes sense is the one
+    `perform_git_actions` checks out in the project directory -- which git
+    refuses to have in two worktrees at once. A plain workspace gives the same
+    visibility with nothing to collide with.
+    """
+    cli = run_cli or _default_run_cli
+    result = cli(["herdr", "workspace", "create", "--cwd", path, "--label", label])
+    if result.returncode != 0:
+        raise WorkspaceError(
+            f"herdr workspace create failed for {path} (exit {result.returncode}): "
+            f"{_tail(result.stderr or result.stdout)}"
+        )
+    payload = _loads(result.stdout)
+    body = payload.get("result") if isinstance(payload, dict) else None
+    body = body if isinstance(body, dict) else {}
+    workspace_id = _dig(body, "workspace", "workspace_id") or _dig(body, "workspace_id")
+    if not workspace_id:
+        raise WorkspaceError(
+            f"herdr workspace create named no workspace for {path}: {_tail(result.stdout)}"
+        )
+    logger.info("herdr_workspace.created_plain", workspace=workspace_id, path=path)
+    return RunWorkspace(
+        workspace_id=workspace_id,
+        root_pane_id=_dig(body, "root_pane", "pane_id") or "",
+        checkout_path=path,
+        branch="",
     )
 
 
