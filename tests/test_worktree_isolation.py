@@ -573,3 +573,63 @@ class TestTheTreeSurvivesAFailureWhenAskedTo:
             seen.append(wt)
 
         assert not seen[0].exists()
+
+
+class TestAMockedSettingsObjectDoesNotEnableIt:
+    """Found on the operator's own machine, not by a test.
+
+    18 workspaces named `repo` had accumulated in their live herdr, every one
+    of them pointing at a deleted pytest temp directory:
+
+        /tmp/pytest-of-.../garbage-<uuid>/test_working_subdir_*/repo (deleted)
+
+    The cause is that `bool(MagicMock().herdr_workspace_per_run)` is **True**,
+    and `int(MagicMock().keep_failed_runs or 0)` is **1**. So every test that
+    mocks `settings` wholesale ran with the pane surface ENABLED and retention
+    ON -- reaching a real herdr server, and keeping what it made.
+
+    A feature that is off in production and on under a mock is not off. The
+    guard is now strict about the TYPE rather than the truthiness, which costs
+    nothing real (pydantic guarantees a bool) and closes the whole class rather
+    than the two tests that happened to surface it.
+    """
+
+    def test_a_magicmock_settings_object_leaves_it_disabled(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock
+
+        from hivepilot.orchestrator import _flag_enabled
+
+        assert _flag_enabled(MagicMock(), "herdr_workspace_per_run") is False
+
+    def test_a_real_true_still_enables_it(self) -> None:
+        from hivepilot.config import Settings
+        from hivepilot.orchestrator import _flag_enabled
+
+        s = Settings()
+        object.__setattr__(s, "herdr_workspace_per_run", True)
+        assert _flag_enabled(s, "herdr_workspace_per_run") is True
+
+    def test_a_magicmock_settings_object_keeps_nothing(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock
+
+        from hivepilot.orchestrator import _int_setting
+
+        assert _int_setting(MagicMock(), "keep_failed_runs") == 0
+
+    def test_a_real_int_is_honoured(self) -> None:
+        from hivepilot.config import Settings
+        from hivepilot.orchestrator import _int_setting
+
+        s = Settings()
+        object.__setattr__(s, "keep_failed_runs", 5)
+        assert _int_setting(s, "keep_failed_runs") == 5
+
+    def test_a_bool_is_not_read_as_a_count(self) -> None:
+        """`True` is an int in Python. A flag mistakenly written where a count
+        belongs must not silently mean "keep one"."""
+        from hivepilot.config import Settings
+        from hivepilot.orchestrator import _int_setting
+
+        s = Settings()
+        object.__setattr__(s, "keep_failed_runs", True)
+        assert _int_setting(s, "keep_failed_runs") == 0
