@@ -17,6 +17,7 @@ from hivepilot import pr_attribution
 from hivepilot.config import settings
 from hivepilot.forges import resolve_forge
 from hivepilot.models import GitActions, ProjectConfig
+from hivepilot.services.gate_policy import may_promote_without_verdict
 from hivepilot.services.pr_body import resolve_pr_body_file
 from hivepilot.services.verification_service import Check, run_checks
 from hivepilot.utils.logging import get_logger
@@ -633,6 +634,12 @@ def perform_git_actions(
     run_id: int | None = None,
     role: str | None = None,
     checks: "list[Check] | None" = None,
+    # True (the default) is byte-identical to every call that predates this:
+    # an absent verdict blocks and no green check can rescue it. False is a
+    # pipeline saying "I declare no verdict-producing stage, my checks ARE my
+    # gate" -- see `gate_policy.may_promote_without_verdict`, which still
+    # requires that checks were declared and that every one passed.
+    verdict_required: bool = True,
 ) -> None:
     """Perform the configured git actions for a completed task/stage.
 
@@ -678,9 +685,32 @@ def perform_git_actions(
     # stage's own verdict (see _agent_verdict_blocked above). create_pr is NOT
     # gated: opening (or keeping) the draft PR must still happen even when the
     # gate blocks, so a human can see the review report on the PR itself.
-    blocked = _agent_verdict_blocked(task_result)
+    _agent_refused = _agent_verdict_blocked(task_result)
+    blocked = _agent_refused
     if judge_gate_enabled:
         blocked = blocked or is_blocking(verdict, confidence_threshold)
+
+    # Whether the ONLY thing standing in the way is a verdict that no stage was
+    # ever configured to produce. Computed here, before the checks are joined
+    # with `or` below, because afterwards a failed check and an absent verdict
+    # are the same boolean.
+    #
+    # Three things it deliberately excludes, each of which would be a
+    # fail-open if it slipped in:
+    #
+    #   an agent that REFUSED (`_agent_refused`) -- an explicit blocking
+    #   `status:` is a decision, not an absence, and no pipeline setting may
+    #   overrule a role that said no;
+    #
+    #   a verdict that EXISTS but does not approve, or approves below the
+    #   confidence threshold -- `verdict is None` is required, so only a
+    #   genuine absence qualifies;
+    #
+    #   a run where the judge gate is off entirely -- then nothing was blocking
+    #   on a verdict in the first place and there is nothing to lift.
+    _blocked_only_by_an_absent_verdict = (
+        not _agent_refused and judge_gate_enabled and verdict is None and blocked
+    )
 
     # The one input to this gate that is not an opinion. Both LLM paths above
     # fail OPEN by design -- an unparseable verdict must not freeze every
@@ -714,6 +744,37 @@ def perform_git_actions(
         ci_probe=_ci_probe_for(project, branch) if any(c.ci for c in resolved_checks) else None,
     )
     blocked = blocked or verification.blocking
+
+    # The one case where a green check may REMOVE a block rather than only add
+    # one, and it is narrow on purpose. Config PR #73 removed forage's release
+    # manager -- rightly, rather than teach one to rubber-stamp -- and wrote
+    # that a clean run would then promote. It never did: nothing could tell the
+    # engine that no verdict was owed. This is that, opt-in per pipeline.
+    #
+    # `_blocked_only_by_a_verdict_nobody_owes` is read, NOT `blocked`: after
+    # the `or` above, a failed check and an absent verdict are the same value,
+    # and lifting the second must never lift the first.
+    if (
+        _blocked_only_by_an_absent_verdict
+        and not verification.blocking
+        and may_promote_without_verdict(
+            verdict_required=verdict_required,
+            checks_declared=len(resolved_checks),
+            # `outcome == "passed"`, not `not r.blocking`: `blocking` is the
+            # negation of passed, so the two agree today -- but counting the
+            # thing the gate is named after keeps this readable if `errored`
+            # ever stops being blocking. `CheckResult` has no `passed`
+            # attribute; assuming one would have raised only at gate time.
+            checks_passed=sum(1 for r in verification.results if r.outcome == "passed"),
+        )
+    ):
+        logger.info(
+            "git.gate_satisfied_by_checks",
+            project=project_name,
+            branch=branch,
+            checks=len(resolved_checks),
+        )
+        blocked = False
 
     if blocked:
         # The gate has refused to promote. Say WHY, on the PR, where the person

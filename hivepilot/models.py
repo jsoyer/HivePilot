@@ -766,6 +766,27 @@ class PipelineConfig(BaseModel):
     # check runs and the gate is governed by the agent verdict alone. But an
     # empty list is reported as "nothing was verified", never as a pass.
     checks: list[VerificationCheck] = Field(default_factory=list)
+    # Whether an agent verdict is REQUIRED before a PR may be promoted.
+    #
+    # True (the default) is byte-identical to pre-existing behaviour: a
+    # missing, empty, unparseable or low-confidence verdict blocks, and no
+    # green check can rescue it -- the checks are joined with `or`, so they
+    # only ever ADD a reason to refuse.
+    #
+    # False says something narrow and deliberate: *this pipeline declares no
+    # verdict-producing stage, and its `checks` ARE its gate*. That is not the
+    # same statement as "a verdict was expected and did not arrive", which
+    # keeps blocking. Config PR #73 made exactly this choice for `forage` --
+    # removing the release manager rather than teaching one to rubber-stamp --
+    # and wrote that a clean run would then promote. Measured on run 693 five
+    # days later, it did not: the engine had no way to be told. This is that
+    # way, and it stays inert until a pipeline writes it down.
+    #
+    # It does NOT promote on its own. `may_promote_without_verdict` also
+    # requires that checks were declared and that every one passed: a pipeline
+    # that opts out of the verdict and declares nothing has removed its gate,
+    # not replaced it.
+    verdict_required: bool = True
     # Chief-of-Staff team composition. Absent (the default) means the full
     # roster runs, and it takes BOTH this and the deployment floor to enable --
     # see `resolve_composition_config` for why this one is an AND.
