@@ -35,6 +35,7 @@ from hivepilot.services.herdr_workspace import (
     WorkspaceError,
     close_run_workspace,
     open_run_workspace,
+    run_workspace,
     workspace_for_path,
 )
 
@@ -224,3 +225,97 @@ class TestBranchNamingHasOneSource:
         assert (
             build_branch_name(prefix="acme", project_name="noxys", run_id=742) == "acme/noxys/742"
         )
+
+
+class TestTheRunScope:
+    """The context manager the orchestrator nests inside `isolated_worktree`.
+
+    It yields the workspace (or None) and always closes it -- the workspace,
+    never the tree. `isolated_worktree`'s own `finally` removes the tree, and
+    closing first is what stops panes sitting in a directory being deleted.
+    """
+
+    def test_off_by_default_it_calls_herdr_at_all(self):
+        """The discriminating case. A box with no herdr server must behave
+        exactly as before -- and a display surface must never be able to fail
+        a run."""
+        herdr = FakeHerdr(payload=OPENED)
+
+        with run_workspace(
+            enabled=False, repo="/srv/n", exec_path="/srv/n", label="l", run_cli=herdr
+        ) as ws:
+            assert ws is None
+
+        assert herdr.calls == []
+
+    def test_on_it_adopts_the_exec_path_not_the_project_path(self):
+        """The exec path IS the worktree when isolation is on. Opening the
+        project path instead would show the operator a tree the agent is not
+        working in."""
+        herdr = FakeHerdr(payload=OPENED)
+
+        with run_workspace(
+            enabled=True,
+            repo="/srv/n",
+            exec_path="/srv/n/.hivepilot-wt/abc",
+            label="l",
+            run_cli=herdr,
+        ) as ws:
+            assert ws is not None
+
+        argv = herdr.calls[0]
+        assert argv[argv.index("--path") + 1] == "/srv/n/.hivepilot-wt/abc"
+
+    def test_a_run_without_a_worktree_gets_a_plain_workspace(self):
+        """`isolated_worktree` yields the repo path itself when it falls back,
+        and there is then no tree to adopt."""
+        herdr = FakeHerdr(payload={"result": {"workspace": {"workspace_id": "w4"}}})
+
+        with run_workspace(
+            enabled=True, repo="/srv/n", exec_path="/srv/n", label="l", run_cli=herdr
+        ) as ws:
+            assert ws is not None
+
+        assert herdr.calls[0][:3] == ["herdr", "workspace", "create"]
+
+    def test_it_closes_the_workspace_on_the_way_out(self):
+        herdr = FakeHerdr(payload=OPENED)
+
+        with run_workspace(
+            enabled=True,
+            repo="/srv/n",
+            exec_path="/srv/n/.hivepilot-wt/a",
+            label="l",
+            run_cli=herdr,
+        ):
+            pass
+
+        assert herdr.calls[-1][:3] == ["herdr", "workspace", "close"]
+
+    def test_it_closes_even_when_the_run_raises(self):
+        """Otherwise every failed run leaks a workspace, and failures are
+        exactly when the operator wants to look at one."""
+        herdr = FakeHerdr(payload=OPENED)
+
+        with pytest.raises(ValueError):
+            with run_workspace(
+                enabled=True,
+                repo="/srv/n",
+                exec_path="/srv/n/.hivepilot-wt/a",
+                label="l",
+                run_cli=herdr,
+            ):
+                raise ValueError("step blew up")
+
+        assert herdr.calls[-1][:3] == ["herdr", "workspace", "close"]
+
+    def test_a_herdr_failure_does_not_fail_the_run(self):
+        """Deliberate polarity, and the opposite of the security gates: this
+        surface exists to be WATCHED, not to decide anything. A dead herdr
+        server must cost visibility, never a run."""
+        herdr = FakeHerdr(returncode=1)
+
+        with run_workspace(
+            enabled=True, repo="/srv/n", exec_path="/srv/n", label="l", run_cli=herdr
+        ) as ws:
+            assert ws is None

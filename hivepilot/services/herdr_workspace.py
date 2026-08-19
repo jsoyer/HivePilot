@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -231,3 +233,62 @@ def _loads(raw: str) -> Any:
 
 def _tail(text: str | None) -> str:
     return (text or "").strip()[-2000:]
+
+
+@contextmanager
+def run_workspace(
+    *,
+    enabled: bool,
+    repo: str,
+    exec_path: str,
+    label: str,
+    run_cli: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> Iterator[RunWorkspace | None]:
+    """Give one run a workspace for its lifetime, or nothing at all.
+
+    Nests inside `isolated_worktree`, so `exec_path` is the tree the agent will
+    actually work in -- the worktree when isolation is on, the repo itself when
+    it fell back. Opening the project path instead would show the operator a
+    tree the agent is not in.
+
+    Two polarities, and they point opposite ways on purpose.
+
+    OFF is the default and must be indistinguishable from this code not
+    existing: no herdr call at all. A box with no herdr server keeps working.
+
+    And when it IS on, a herdr failure does NOT fail the run. This surface
+    exists to be watched, not to decide anything -- unlike `checks:` or the
+    review gate, where an unavailable input must block. A dead herdr server
+    costs visibility; it must never cost a run. That is why every failure here
+    yields `None` rather than raising.
+
+    Closing happens on the way out including on an exception -- failures are
+    exactly when an operator wants to look at the workspace, so leaking one per
+    failed run would leave the most interesting ones unreclaimable. The
+    WORKSPACE is closed, never the tree: `isolated_worktree`'s own `finally`
+    removes that, and closing first is what stops panes sitting in a directory
+    being deleted.
+    """
+    if not enabled:
+        yield None
+        return
+
+    workspace: RunWorkspace | None = None
+    try:
+        if exec_path != repo:
+            workspace = open_run_workspace(
+                repo=repo, worktree_path=exec_path, label=label, run_cli=run_cli
+            )
+        else:
+            # `isolated_worktree` fell back in place, or isolation is off:
+            # there is no tree to adopt.
+            workspace = workspace_for_path(path=exec_path, label=label, run_cli=run_cli)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("herdr_workspace.unavailable", path=exec_path, error=str(exc))
+        workspace = None
+
+    try:
+        yield workspace
+    finally:
+        if workspace is not None:
+            close_run_workspace(workspace, run_cli=run_cli)
