@@ -183,13 +183,33 @@ class HerdrRunner:
         try:
             project_path = shlex.quote(str(payload.project.path))
             sentinel = self._completion_sentinel()
-            inner = self._wrap_with_sentinel(command_str, sentinel)
+            rc_path = f"{env_file}.rc"
+            inner = self._wrap_with_sentinel(command_str, sentinel, rc_path=rc_path)
             wrapped_cmd = f"cd {project_path}; set -a; . {shlex.quote(env_file)}; set +a; {inner}"
             self._pane_run(payload, pane_id, wrapped_cmd)
             self._wait_idle(payload, pane_id, sentinel)
             output = self._pane_read(payload, pane_id)
+            status = self._read_status(rc_path)
         finally:
             self._cleanup_env_file(env_file)
+            self._cleanup_env_file(rc_path)
+
+        # The step's OWN status, which nothing here read until now. Every
+        # `returncode` check in this file is on a herdr CLI call -- the split,
+        # the run, the wait, the read -- so a command that failed inside the
+        # pane was reported as a success. Run 685 recorded `success` for
+        # `unittest discover` exiting 5 against a repo with no tests.
+        #
+        # `None` is NOT zero: the shell never reached the end of its line, so
+        # the pane was lost. Reading that as success is how a lost step becomes
+        # a clean one, which is the same fail-open this runner has had all
+        # along, one layer up.
+        if status != 0:
+            reason = f"exited {status}" if status is not None else "left no exit status behind"
+            raise RuntimeError(
+                f"herdr runner step '{payload.step.name}': the command {reason} "
+                f"in pane {pane_id}. Last pane output:\n{output[-2000:]}"
+            )
         logger.info(
             "herdr_runner.end",
             project=payload.project_name,
@@ -257,7 +277,25 @@ class HerdrRunner:
         return f"HIVEPILOT_DONE_{uuid.uuid4().hex}"
 
     @staticmethod
-    def _wrap_with_sentinel(command_str: str, sentinel: str) -> str:
+    def _read_status(path: str) -> int | None:
+        """The step's own exit status, or None if it was never written.
+
+        None is NOT zero. An absent file means the shell never reached the end
+        of its line -- the pane was killed, the server dropped it -- and
+        reading that as success is how a lost step becomes a clean one.
+        """
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                raw = fh.read().strip()
+        except OSError:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _wrap_with_sentinel(command_str: str, sentinel: str, rc_path: str | None = None) -> str:
         """Run the command, then announce completion UNCONDITIONALLY.
 
         `;` and not `&&`: a failing command must still print the marker.
@@ -283,9 +321,14 @@ class HerdrRunner:
         """
         cut = max(1, len(sentinel) - 8)
         head, tail = sentinel[:cut], sentinel[cut:]
+        # `$?` is written down, not merely re-raised. `herdr pane run` reports
+        # whether HERDR worked, never whether the command did -- so without
+        # this file the step's own status is simply lost, and run 685 recorded
+        # `success` for a command that exited 5.
+        record = f"echo $__hp_rc > {shlex.quote(rc_path)}; " if rc_path else ""
         return (
             f"__hp_s1={head}; __hp_s2={tail}; {command_str}; __hp_rc=$?; "
-            f'echo "$__hp_s1$__hp_s2"; (exit $__hp_rc)'
+            f'{record}echo "$__hp_s1$__hp_s2"; (exit $__hp_rc)'
         )
 
     @staticmethod
