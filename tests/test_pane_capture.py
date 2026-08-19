@@ -34,6 +34,7 @@ import pytest
 from hivepilot.runners.pane_capture import (
     build_pane_command,
     capture_paths,
+    completion_sentinel,
     write_env_file,
 )
 
@@ -60,9 +61,12 @@ class TestTheCommandKeepsTheEnvelope:
         assert "'say ; rm -rf /'" in cmd
 
     def test_the_sentinel_is_echoed_after_the_command(self):
-        cmd = _cmd(sentinel="S_abc")
+        """It announces completion, so it must come after the thing it
+        announces. The echo is of the two halves, never of a literal -- see
+        TestTheMarkerIsNotInTheCommandLine."""
+        cmd = _cmd()
 
-        assert cmd.index("claude") < cmd.index("S_abc")
+        assert cmd.index("claude") < cmd.index('echo "$__hp_s1$__hp_s2"')
 
     def test_the_sentinel_is_echoed_even_on_failure(self):
         """Otherwise a failing agent hangs to the timeout and is reported as
@@ -83,12 +87,77 @@ class TestTheCommandKeepsTheEnvelope:
     def test_the_sentinel_reaches_the_terminal_not_the_capture_file(self):
         """It must be visible to `pane wait-output`. Redirecting it into the
         capture file would make the wait time out while the file grew."""
-        paths = capture_paths("/tmp/hp")
-
-        cmd = _cmd(paths=paths, sentinel="S_marker")
-        clause = cmd.split("echo S_marker", 1)[1]
+        cmd = _cmd()
+        clause = cmd.split('echo "$__hp_s1$__hp_s2"', 1)[1]
 
         assert ">" not in clause
+
+
+class TestTheMarkerIsNotInTheCommandLine:
+    """The bug that made this whole path silently wrong.
+
+    `pane run` TYPES the command into the shell, and the shell echoes it. A
+    marker written literally in that command is therefore visible in the pane
+    the instant it is dispatched -- so `wait-output --match` matched the ECHO,
+    returned immediately, and the caller read a status file that did not exist
+    yet. A step still running was reported as lost, and its pane was closed
+    under it.
+
+    Measured on the box against 0.8.0, with a command that sleeps 6s before
+    printing its marker:
+
+        marker written literally in the command : wait returned in 0.0s
+        marker assembled by the shell at runtime: wait returned in 6.0s
+
+    Nothing in the earlier probes could see this: `/bin/echo` finishes before
+    the wait polls, so the file is already there and the race is invisible.
+    Only a slow command -- an agent -- separates the two.
+
+    The fix is that the full marker exists ONLY in the output: the command
+    carries two halves, and the shell joins them.
+    """
+
+    def test_the_full_marker_never_appears_in_the_command(self):
+        cmd = _cmd(sentinel="HIVEPILOT_DONE_deadbeefcafe")
+
+        assert "HIVEPILOT_DONE_deadbeefcafe" not in cmd
+
+    def test_neither_half_is_the_whole_marker(self):
+        """Splitting is pointless if one part still contains the match."""
+        sentinel = "HIVEPILOT_DONE_deadbeefcafe"
+        cmd = _cmd(sentinel=sentinel)
+
+        for token in cmd.split():
+            assert sentinel not in token
+
+    def test_the_shell_still_prints_the_whole_marker(self, tmp_path):
+        """The half that matters: the wait must still have something to see."""
+        paths = capture_paths(str(tmp_path))
+        sentinel = "HIVEPILOT_DONE_deadbeefcafe"
+        cmd = build_pane_command(argv=["/bin/true"], paths=paths, sentinel=sentinel)
+
+        import subprocess
+
+        printed = subprocess.run(
+            ["/bin/sh", "-c", cmd], capture_output=True, text=True, check=False
+        ).stdout
+
+        assert sentinel in printed
+
+    def test_it_holds_for_a_generated_marker_too(self, tmp_path):
+        """Not just the hand-written one in the tests above."""
+        sentinel = completion_sentinel()
+        paths = capture_paths(str(tmp_path))
+        cmd = build_pane_command(argv=["/bin/true"], paths=paths, sentinel=sentinel)
+
+        import subprocess
+
+        printed = subprocess.run(
+            ["/bin/sh", "-c", cmd], capture_output=True, text=True, check=False
+        ).stdout
+
+        assert sentinel not in cmd
+        assert sentinel in printed
 
 
 class TestTheExitStatusIsWrittenDown:
@@ -213,7 +282,8 @@ class TestTheEnvironmentTravelsToThePane:
         before the agent ever started."""
         cmd = _cmd(env_file=None)
 
-        assert cmd.startswith("claude ")
+        assert "env -i" not in cmd
+        assert ". /" not in cmd
 
     def test_the_working_directory_is_entered_first(self):
         """The pane starts wherever the server was launched. `state.db`, the

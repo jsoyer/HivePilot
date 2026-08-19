@@ -38,10 +38,16 @@ logger = structlog.get_logger(__name__)
 #: nobody is watching -- so a bound is always sent, even a generous one.
 _DEFAULT_TIMEOUT_S = 3600
 
-#: Returned when the step's own status could never be read. Distinct from any
-#: status a process can exit with (POSIX allows 0-255), so "we lost the step"
-#: is never confused with "the step failed this way".
-_STATUS_UNKNOWN = -1024
+#: Returned when the step's own status could never be read. Outside the range a
+#: process can exit with (POSIX allows 0-255), so "we lost the step" is never
+#: confused with "the step failed this way".
+#:
+#: POSITIVE on purpose. A NEGATIVE exit code means "killed by signal N" by
+#: convention, and `_runner_failure_context` reads it that way -- with -1024 it
+#: reported `signal: SIG1024` and told the operator "an INFRASTRUCTURE failure
+#: (the OS terminated it)". Every word of that was invented by the sentinel.
+#: The real reason is in `stderr`, stated plainly, where it can be read.
+_STATUS_UNKNOWN = 1024
 
 #: Keys herdr has been observed to name a pane with.
 _PANE_ID_KEYS = ("pane_id", "paneId", "id")

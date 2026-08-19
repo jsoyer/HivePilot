@@ -248,8 +248,26 @@ class HerdrRunner:
 
         `$?` is captured before the echo and re-raised after it, so the step's
         own exit status is not replaced by the echo's.
+
+        And the sentinel is never written WHOLE into the command. `pane run`
+        TYPES it into the shell, which echoes it, so a literal marker is on
+        screen the instant the step is dispatched -- `wait-output --match` then
+        matched that echo and returned immediately, and every step here has
+        been read back before it finished. Measured on the box against 0.8.0,
+        with a command sleeping 6s before printing its marker:
+
+            marker written literally into the command : wait returned in 0.0s
+            marker assembled by the shell at runtime  : wait returned in 6.0s
+
+        The halves sit in one echoed line but with `; __hp_s2=` between them,
+        so the concatenation exists nowhere until the shell performs it.
         """
-        return f"{command_str}; __hp_rc=$?; echo {sentinel}; (exit $__hp_rc)"
+        cut = max(1, len(sentinel) - 8)
+        head, tail = sentinel[:cut], sentinel[cut:]
+        return (
+            f"__hp_s1={head}; __hp_s2={tail}; {command_str}; __hp_rc=$?; "
+            f'echo "$__hp_s1$__hp_s2"; (exit $__hp_rc)'
+        )
 
     @staticmethod
     def _wait_argv(pane_id: str, sentinel: str, timeout_ms: int) -> list[str]:
