@@ -276,6 +276,34 @@ class TestItTalksToHerdrCorrectly:
 
         assert [c[2] for c in herdr.calls].count("close") == 1
 
+    def test_a_target_pane_is_split_instead_of_the_focused_one(self, tmp_path):
+        """`--current` means *whatever workspace the operator is looking at*.
+        With one workspace that is indistinguishable from correct; with one per
+        run it puts a step in another run's workspace, and merely focusing a
+        different tab moves where agents appear.
+
+        Measured on the box against TWO workspaces -- the only arrangement in
+        which the right answer and `--current` differ: `pane split --pane <ID>`
+        lands in <ID>'s workspace while the operator is focused elsewhere."""
+        herdr = FakeHerdr()
+
+        _run(tmp_path, herdr, target_pane="w6:p1")
+
+        split = next(c for c in herdr.calls if c[2] == "split")
+        assert split[split.index("--pane") + 1] == "w6:p1"
+        assert "--current" not in split
+
+    def test_without_a_target_it_still_splits_the_current_one(self, tmp_path):
+        """A run with no workspace of its own -- the step-2 behaviour -- must
+        keep working, or turning worktrees on becomes all-or-nothing."""
+        herdr = FakeHerdr()
+
+        _run(tmp_path, herdr)
+
+        split = next(c for c in herdr.calls if c[2] == "split")
+        assert "--current" in split
+        assert "--pane" not in split
+
     def test_the_split_direction_is_one_herdr_accepts(self, tmp_path):
         """`--direction` takes `right` or `down` -- probed. Anything else
         fails the split, which fails the whole step."""

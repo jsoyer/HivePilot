@@ -79,6 +79,7 @@ def run_in_pane(
     env: dict[str, str] | None = None,
     timeout: float | None = None,
     split_direction: str = "right",
+    target_pane: str | None = None,
     run_cli: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run `argv` in a fresh pane and return what a subprocess would have.
@@ -96,7 +97,7 @@ def run_in_pane(
         write_env_file(env_file, env)
 
     try:
-        pane_id = _split_pane(cli, split_direction)
+        pane_id = _split_pane(cli, split_direction, target_pane)
         command = build_pane_command(
             argv=argv, paths=paths, sentinel=sentinel, cwd=cwd, env_file=env_file
         )
@@ -116,8 +117,27 @@ def run_in_pane(
         _unlink(paths.rc)
 
 
-def _split_pane(cli: Callable[..., subprocess.CompletedProcess], direction: str) -> str:
-    result = cli(["herdr", "pane", "split", "--current", "--direction", direction, "--no-focus"])
+def _split_pane(
+    cli: Callable[..., subprocess.CompletedProcess],
+    direction: str,
+    target_pane: str | None = None,
+) -> str:
+    """Open a pane, in a NAMED workspace when one was given.
+
+    `--current` means *whatever workspace the operator is looking at*. With a
+    single workspace that is indistinguishable from correct; with one per run
+    it puts a step in another run's workspace, and merely focusing a different
+    tab moves where agents appear.
+
+    `--pane <ID>` was measured against TWO workspaces -- the only arrangement
+    in which the right answer and `--current` differ -- and lands in the target
+    workspace while the operator is focused elsewhere.
+
+    `--current` remains the fallback so a run without a workspace of its own
+    keeps working, rather than making worktrees all-or-nothing.
+    """
+    where = ["--pane", target_pane] if target_pane else ["--current"]
+    result = cli(["herdr", "pane", "split", *where, "--direction", direction, "--no-focus"])
     if result.returncode != 0:
         raise PaneExecutionError(
             f"herdr pane split failed (exit {result.returncode}): "
