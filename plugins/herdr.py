@@ -50,7 +50,12 @@ secret VALUE on the argv of our own `herdr pane run` subprocess for the
 lifetime of that process — `ps`/`/proc/<pid>/cmdline` visible to any other
 local user/process. Instead: the overlay is written to a private (mode
 0600) temp file as `export KEY=<shlex.quote(value)>` lines, and the command
-sent to the pane is prefixed with `set -a; source <path>; set +a; `. Only
+sent to the pane is prefixed with `set -a; . <path>; set +a; `. `.` and
+NOT `source`: `pane run` dispatches through `/bin/sh`, which on Debian is
+dash, where `source` is not a builtin. Every step this runner ever ran
+answered `/bin/sh: 1: source: not found` and continued WITHOUT the
+environment -- invisibly, because the wait returned before the message was
+even printed. Only
 the file *path* (never a value) ever appears on any argv. The file is
 removed immediately after the pane finishes the step (in a `finally`), and
 is scoped to ONLY the intentional overlay (`gather_overrides`, NOT the full
@@ -179,9 +184,7 @@ class HerdrRunner:
             project_path = shlex.quote(str(payload.project.path))
             sentinel = self._completion_sentinel()
             inner = self._wrap_with_sentinel(command_str, sentinel)
-            wrapped_cmd = (
-                f"cd {project_path}; set -a; source {shlex.quote(env_file)}; set +a; {inner}"
-            )
+            wrapped_cmd = f"cd {project_path}; set -a; . {shlex.quote(env_file)}; set +a; {inner}"
             self._pane_run(payload, pane_id, wrapped_cmd)
             self._wait_idle(payload, pane_id, sentinel)
             output = self._pane_read(payload, pane_id)
