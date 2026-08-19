@@ -621,3 +621,38 @@ class TestPluginManagerDiscoversHerdr:
 
         # register() early-returned {} → contributes no runner kind.
         assert "herdr" not in RUNNER_MAP
+
+
+class TestThePluginRunnerHonoursTheRunWorkspace:
+    """Found by a real run on the box, not by a test — which is the point.
+
+    #552 wired the run's workspace into `claude_runner`. This runner is a
+    separate one with its own `_split_pane`, and it still asked for
+    `--current`: run 684 opened workspace `wA` over the run's tree and then
+    reported `pane_id: w1:p0`. The step landed in whatever workspace the
+    operator happened to be focused on, while its own sat empty beside it.
+
+    Nothing in the unit tests could have caught that. They cover this runner's
+    argv, and `--current` IS this runner's argv — the defect was that a second
+    runner existed at all.
+    """
+
+    def test_it_splits_into_the_run_workspace_when_there_is_one(self, herdr_module):
+        from hivepilot.services import herdr_workspace
+
+        token = herdr_workspace._CURRENT_PANE.set("wA:p1")
+        try:
+            argv = herdr_module.HerdrRunner._split_argv("right")
+        finally:
+            herdr_workspace._CURRENT_PANE.reset(token)
+
+        assert argv[argv.index("--pane") + 1] == "wA:p1"
+        assert "--current" not in argv
+
+    def test_without_one_it_still_splits_the_current(self, herdr_module):
+        """The discriminating case: a run with no workspace must keep working
+        exactly as before."""
+        argv = herdr_module.HerdrRunner._split_argv("right")
+
+        assert "--current" in argv
+        assert "--pane" not in argv
