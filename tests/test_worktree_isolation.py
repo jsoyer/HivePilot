@@ -135,7 +135,7 @@ class TestExecuteTaskWorktreeGating:
         from contextlib import contextmanager
 
         @contextmanager
-        def _fake_wt(repo_path, base_ref=None):
+        def _fake_wt(repo_path, base_ref=None, keep_on_error=False):
             yield fake_wt_path
 
         with (
@@ -405,7 +405,7 @@ class TestTheHerdrWorkspaceRidesTheWorktree:
     the opposite polarity from `checks:` and the review gate).
     """
 
-    def _run(self, tmp_path: Path, *, herdr_on: bool, isolation: bool):
+    def _run(self, tmp_path: Path, *, herdr_on: bool, isolation: bool, keep_failed: int = 0):
         from contextlib import contextmanager
 
         helper = TestExecuteTaskWorktreeGating()
@@ -417,7 +417,7 @@ class TestTheHerdrWorkspaceRidesTheWorktree:
         fake_wt_path.mkdir()
 
         @contextmanager
-        def _fake_wt(repo_path, base_ref=None):
+        def _fake_wt(repo_path, base_ref=None, keep_on_error=False):
             yield fake_wt_path
 
         @contextmanager
@@ -444,6 +444,7 @@ class TestTheHerdrWorkspaceRidesTheWorktree:
             mock_settings.worktree_isolation = isolation
             mock_settings.stage_cache_enabled = False
             mock_settings.herdr_workspace_per_run = herdr_on
+            mock_settings.keep_failed_runs = keep_failed
             mock_wt.side_effect = _fake_wt
 
             orch = helper._make_orchestrator(tmp_path)
@@ -457,6 +458,15 @@ class TestTheHerdrWorkspaceRidesTheWorktree:
                 run_id=742,
             )
         return calls, repo, fake_wt_path
+
+    def test_retention_prunes_at_run_start_when_it_is_on(self, tmp_path: Path) -> None:
+        """Pruning at the START of a later run is what avoids a daemon."""
+        from unittest.mock import patch
+
+        with patch("hivepilot.orchestrator.herdr_prune_kept_workspaces") as prune:
+            self._run(tmp_path, herdr_on=True, isolation=True, keep_failed=5)
+
+        assert prune.call_args.kwargs["keep"] == 5
 
     def test_off_it_is_still_entered_but_asks_for_nothing(self, tmp_path: Path) -> None:
         """The scope is always entered -- it is what guarantees the ambient is
@@ -480,8 +490,86 @@ class TestTheHerdrWorkspaceRidesTheWorktree:
 
         assert calls[0]["exec_path"] == str(repo)
 
+    def test_retention_reaches_the_workspace_not_just_the_tree(self, tmp_path: Path) -> None:
+        """Caught by a mutation, not by a test.
+
+        Keeping the worktree while closing the workspace keeps the files and
+        loses the terminal -- which is the half that a commit could not have
+        given us, and the only reason retention exists at all. They are kept
+        together or not at all."""
+        calls, _, _ = self._run(tmp_path, herdr_on=True, isolation=True, keep_failed=5)
+
+        assert calls[0]["keep_on_error"] is True
+
+    def test_without_retention_the_workspace_is_not_asked_to_stay(self, tmp_path: Path) -> None:
+        calls, _, _ = self._run(tmp_path, herdr_on=True, isolation=True, keep_failed=0)
+
+        assert calls[0]["keep_on_error"] is False
+
+    def test_nothing_is_pruned_while_nothing_is_kept(self, tmp_path: Path) -> None:
+        """The default. With `keep_failed_runs: 0` there is nothing retained,
+        so a pruner running at every run start would be pure noise -- and a
+        call that lists and closes workspaces is not something to make on a box
+        that never asked for retention."""
+        from unittest.mock import patch
+
+        with patch("hivepilot.orchestrator.herdr_prune_kept_workspaces") as prune:
+            self._run(tmp_path, herdr_on=True, isolation=True)
+
+        assert not prune.called
+
     def test_the_label_carries_the_run_id(self, tmp_path: Path) -> None:
         """It is how the operator finds this run among the workspaces."""
         calls, _, _ = self._run(tmp_path, herdr_on=True, isolation=True)
 
         assert "742" in calls[0]["label"]
+
+
+class TestTheTreeSurvivesAFailureWhenAskedTo:
+    """A failed run is the one an operator wants to open.
+
+    Closing it was the wrong default, defended with an accumulation cost that
+    had been asserted rather than measured. Measured afterwards on the box:
+    7-10 failed runs a day, 233 in a month -- real, which argues for the bound
+    in `workspace_retention`, not for destroying the evidence.
+
+    What a commit cannot replace: it preserves FILES. It preserves nothing
+    about the environment, or the ability to re-run the failing command in
+    place.
+    """
+
+    def test_off_by_default_a_failure_still_removes_the_tree(self, tmp_path: Path):
+        """The discriminating case. Every existing caller passes nothing, and
+        must keep behaving exactly as before."""
+        repo = _init_git_repo(tmp_path / "repo")
+        seen: list[Path] = []
+
+        with pytest.raises(ValueError):
+            with isolated_worktree(repo) as wt:
+                seen.append(wt)
+                raise ValueError("step blew up")
+
+        assert not seen[0].exists()
+
+    def test_asked_to_keep_it_survives_a_failure(self, tmp_path: Path):
+        repo = _init_git_repo(tmp_path / "repo")
+        seen: list[Path] = []
+
+        with pytest.raises(ValueError):
+            with isolated_worktree(repo, keep_on_error=True) as wt:
+                seen.append(wt)
+                raise ValueError("step blew up")
+
+        assert seen[0].exists()
+
+    def test_asked_to_keep_it_still_removes_on_SUCCESS(self, tmp_path: Path):
+        """`keep_on_error` is not `keep`. A run that worked leaves nothing
+        worth opening, and retaining those is how the disk fills with trees
+        nobody will ever look at."""
+        repo = _init_git_repo(tmp_path / "repo")
+        seen: list[Path] = []
+
+        with isolated_worktree(repo, keep_on_error=True) as wt:
+            seen.append(wt)
+
+        assert not seen[0].exists()

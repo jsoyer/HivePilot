@@ -36,6 +36,7 @@ from hivepilot.services.herdr_workspace import (
     close_run_workspace,
     current_pane,
     open_run_workspace,
+    prune_kept_workspaces,
     run_workspace,
     workspace_for_path,
 )
@@ -441,3 +442,94 @@ class TestTheSameThreadInvariant:
             "a fresh thread must NOT inherit the pane -- if this ever passes, "
             "the ambient is being set somewhere that needs an explicit adopt"
         )
+
+
+class TestKeepingAFailedRunOpen:
+    """The default stays "close always"; keeping is opt-in and only on
+    failure. A successful run leaves nothing worth opening."""
+
+    def _run(self, herdr, *, keep, raises):
+        ctx = run_workspace(
+            enabled=True,
+            repo="/srv/n",
+            exec_path="/srv/n/.hivepilot-wt/a",
+            label="n run 7",
+            keep_on_error=keep,
+            run_cli=herdr,
+        )
+        if raises:
+            with pytest.raises(ValueError), ctx:
+                raise ValueError("step blew up")
+        else:
+            with ctx:
+                pass
+        return [c for c in herdr.calls if c[:3] == ["herdr", "workspace", "close"]]
+
+    def test_off_by_default_a_failure_still_closes(self):
+        """Every existing caller passes nothing and must be unchanged."""
+        assert self._run(FakeHerdr(payload=OPENED), keep=False, raises=True)
+
+    def test_asked_to_keep_a_failure_stays_open(self):
+        assert not self._run(FakeHerdr(payload=OPENED), keep=True, raises=True)
+
+    def test_asked_to_keep_a_SUCCESS_still_closes(self):
+        """`keep_on_error` is not `keep`."""
+        assert self._run(FakeHerdr(payload=OPENED), keep=True, raises=False)
+
+    def test_the_pane_is_still_cleared_when_one_is_kept(self):
+        """The ambient must not outlive the run even when its workspace does,
+        or the NEXT run's steps would split into this one."""
+        with pytest.raises(ValueError):
+            with run_workspace(
+                enabled=True,
+                repo="/srv/n",
+                exec_path="/srv/n/.hivepilot-wt/a",
+                label="n run 7",
+                keep_on_error=True,
+                run_cli=FakeHerdr(payload=OPENED),
+            ):
+                raise ValueError("boom")
+
+        assert current_pane() is None
+
+
+LISTED = {
+    "result": {
+        "workspaces": [
+            {"workspace_id": "w1", "label": "hivepilot"},
+            {"workspace_id": "w5", "label": "noxys run 5"},
+            {"workspace_id": "w9", "label": "noxys run 9"},
+            {"workspace_id": "w7", "label": "noxys run 7"},
+        ]
+    }
+}
+
+
+class TestPruningTheKeptOnes:
+    """Applied at the START of a later run, which is what avoids needing a
+    daemon to do it."""
+
+    def test_it_closes_the_oldest_beyond_the_bound(self):
+        herdr = FakeHerdr(payload=LISTED)
+
+        prune_kept_workspaces(keep=2, run_cli=herdr)
+
+        closed = [c[3] for c in herdr.calls if c[:3] == ["herdr", "workspace", "close"]]
+        assert closed == ["w5"]
+
+    def test_it_never_touches_a_workspace_it_did_not_mint(self):
+        """`w1` is labelled `hivepilot` -- the operator's own. Closing
+        somebody else's workspace by a bound they never opted into is the one
+        outcome worse than keeping too many."""
+        herdr = FakeHerdr(payload=LISTED)
+
+        prune_kept_workspaces(keep=0, run_cli=herdr)
+
+        closed = [c[3] for c in herdr.calls if c[:3] == ["herdr", "workspace", "close"]]
+        assert "w1" not in closed
+        assert set(closed) == {"w5", "w7", "w9"}
+
+    def test_a_listing_failure_is_not_fatal(self):
+        """Pruning runs at the start of somebody else's run. It must never be
+        the reason that run does not happen."""
+        prune_kept_workspaces(keep=1, run_cli=FakeHerdr(returncode=1))

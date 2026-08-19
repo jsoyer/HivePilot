@@ -264,6 +264,7 @@ def run_workspace(
     repo: str,
     exec_path: str,
     label: str,
+    keep_on_error: bool = False,
     run_cli: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> Iterator[RunWorkspace | None]:
     """Give one run a workspace for its lifetime, or nothing at all.
@@ -314,11 +315,88 @@ def run_workspace(
     token = _CURRENT_PANE.set(
         workspace.root_pane_id if workspace and workspace.root_pane_id else None
     )
+    failed = False
     try:
         yield workspace
+    except BaseException:
+        # A failed run is the one an operator actually wants to open: the
+        # agent's scrollback, its environment, the ability to re-run the
+        # failing command in place. Committing work-in-progress would preserve
+        # the FILES and none of that.
+        #
+        # `BaseException`: a KeyboardInterrupt mid-run is precisely when
+        # somebody is watching and wants the screen to stay.
+        failed = True
+        raise
     finally:
         # Reset before closing: a leaked pane id would send the NEXT run's
         # steps at a workspace that no longer exists.
         _CURRENT_PANE.reset(token)
         if workspace is not None:
-            close_run_workspace(workspace, run_cli=run_cli)
+            if failed and keep_on_error:
+                # Kept together with its tree or not at all -- a workspace
+                # whose worktree was removed points at a deleted directory,
+                # which is worse than having closed it. The bound that stops
+                # these accumulating is applied at the START of a later run;
+                # see `workspace_retention`.
+                logger.info(
+                    "herdr_workspace.kept_after_failure",
+                    workspace=workspace.workspace_id,
+                    label=label,
+                )
+            else:
+                close_run_workspace(workspace, run_cli=run_cli)
+
+
+def prune_kept_workspaces(
+    *,
+    keep: int,
+    run_cli: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> None:
+    """Close retained failure workspaces beyond the bound.
+
+    Called at the START of a run rather than by a daemon: the thing that
+    creates these is the thing best placed to notice there are too many, and a
+    background sweeper would be a second moving part to keep alive.
+
+    Never raises. This runs at the beginning of somebody else's run, and must
+    never be the reason that run does not happen -- a workspace too many costs
+    a workspace; a pruner that throws costs the run.
+
+    Only workspaces this engine minted are considered. `run_id_from_label`
+    returns None for everything else, and closing an operator's own workspace
+    by a bound they never opted into is the one outcome worse than keeping too
+    many.
+    """
+    from hivepilot.services.workspace_retention import (
+        run_id_from_label,
+        workspaces_to_close,
+    )
+
+    cli = run_cli or _default_run_cli
+    try:
+        result = cli(["herdr", "workspace", "list"])
+        if result.returncode != 0:
+            logger.warning(
+                "herdr_workspace.prune_list_failed",
+                detail=_tail(result.stderr or result.stdout),
+            )
+            return
+        payload = _loads(result.stdout)
+        body = payload.get("result") if isinstance(payload, dict) else None
+        listed = (body or {}).get("workspaces") if isinstance(body, dict) else None
+
+        ours: list[tuple[str, int]] = []
+        for entry in listed or []:
+            if not isinstance(entry, dict):
+                continue
+            workspace_id = entry.get("workspace_id")
+            run_id = run_id_from_label(str(entry.get("label") or ""))
+            if isinstance(workspace_id, str) and workspace_id and run_id is not None:
+                ours.append((workspace_id, run_id))
+
+        for workspace_id in workspaces_to_close(ours, keep=keep):
+            logger.info("herdr_workspace.pruned", workspace=workspace_id)
+            cli(["herdr", "workspace", "close", workspace_id])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("herdr_workspace.prune_failed", error=str(exc))

@@ -717,6 +717,25 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_HERDR_WORKSPACE_PER_RUN
     herdr_workspace_per_run: bool = False
 
+    # How many FAILED runs keep their workspace and their worktree open, so an
+    # operator can still open them: the scrollback, the environment, and the
+    # ability to re-run the command that failed where it failed. Committing
+    # work-in-progress preserves the FILES and none of that -- the two are
+    # complements.
+    #
+    # 0 (the default) is today's behaviour: everything closes, always.
+    #
+    # Bounded rather than unlimited because the cost is real and was measured
+    # rather than assumed: 7-10 failed runs a day on this box, 233 in a month.
+    # At 5 that leaves about half a day of failures open, which is the window
+    # in which anyone actually looks. Pruning happens at the START of a later
+    # run, so there is no daemon to keep alive.
+    #
+    # The workspace and its worktree are kept together or not at all: a
+    # workspace pointing at a removed directory is worse than a closed one.
+    # env: HIVEPILOT_KEEP_FAILED_RUNS
+    keep_failed_runs: int = 0
+
     # Database backend — None keeps SQLite at state_db (default); set to
     # "postgresql://..." to switch to Postgres (requires psycopg[binary]).
     # env: HIVEPILOT_DATABASE_URL
