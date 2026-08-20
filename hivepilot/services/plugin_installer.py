@@ -361,6 +361,7 @@ def fetch_plugin(
     ref: str | None = None,
     dest_dir: Path | None = None,
     timeout: int = _FETCH_TIMEOUT_SECONDS,
+    allow_agent_cli: bool = False,
 ) -> Path:
     """Fetch `plugins/<name>.py` from the configured (or overridden) source
     repo/ref and write it VERBATIM into `dest_dir` (default:
@@ -387,8 +388,24 @@ def fetch_plugin(
     AFTER a full `requests.get(...).text` read would already have buffered
     the oversized body in memory, defeating the point of the cap).
     """
-    if name not in KNOWN_EXAMPLE_PLUGINS:
-        available = ", ".join(sorted(KNOWN_EXAMPLE_PLUGINS))
+    # Agent CLIs are NOT in `KNOWN_EXAMPLE_PLUGINS` on purpose -- two install
+    # paths for one thing eventually disagree, so `plugins install codex` must
+    # keep refusing. But `agents install codex` has to be able to place the
+    # file, and before this flag nothing could: the URL construction below
+    # works for any name, and this guard rejected the name first.
+    #
+    # A flag rather than a widened allowlist, so the CLI's `plugins install`
+    # (which never passes it) is unchanged. Still an allowlist either way:
+    # both sets are curated in-repo constants, never caller input.
+    # `set(...)` on the left: KNOWN_EXAMPLE_PLUGINS is a DICT of specs, not a
+    # set, so `dict | frozenset` is a type error. mypy caught it; no test could
+    # -- `name not in <dict>` checks keys and works either way, so all 21 passed
+    # over an expression that cannot evaluate.
+    allowed: set[str] = set(KNOWN_EXAMPLE_PLUGINS)
+    if allow_agent_cli:
+        allowed |= set(AGENT_CLI_PLUGINS)
+    if name not in allowed:
+        available = ", ".join(sorted(allowed))
         raise ValueError(f"plugins install: unknown plugin {name!r}. Available: {available}")
 
     resolved_repo = (repo or settings.plugins_source_repo).rstrip("/")

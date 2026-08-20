@@ -166,3 +166,57 @@ class TestDeliveringIt:
         """It runs at the end of an install that has already succeeded.
         Raising here would turn a working binary into a failed command."""
         deliver_plugin_for("codex", fetch=lambda n, **kw: (_ for _ in ()).throw(OSError("disk")))
+
+
+class TestTheGateStaysShutOnTheOtherPath:
+    """`agents install` may fetch these; `plugins install` still may not.
+
+    The installer's own comment is explicit: "two install paths for one thing
+    eventually disagree; there is one". Widening the allowlist outright would
+    have created exactly the second path it refuses, so the door opens only for
+    the caller that passes the flag.
+    """
+
+    def test_plugins_install_still_refuses_an_agent_cli(self):
+        import pytest as _pytest
+
+        from hivepilot.services.plugin_installer import fetch_plugin
+
+        with _pytest.raises(ValueError, match="unknown plugin"):
+            fetch_plugin("codex")
+
+    def test_the_refusal_does_not_advertise_what_it_will_not_install(self):
+        """Listing agent CLIs as "available" would send the operator down a
+        path that refuses them a second time."""
+        import pytest as _pytest
+
+        from hivepilot.services.plugin_installer import fetch_plugin
+
+        with _pytest.raises(ValueError) as exc:
+            fetch_plugin("codex")
+
+        assert "cursor" not in str(exc.value)
+
+    def test_the_agent_path_is_the_one_that_opens_it(self):
+        """Asserts the network was REACHED, not merely that one message was
+        absent.
+
+        My first version caught any exception and checked only that it did not
+        say "unknown plugin". The implementation was broken -- it evaluated
+        `dict | frozenset` and raised TypeError -- and that message does not
+        contain "unknown plugin" either, so the test passed over code that
+        could not run. mypy found it; this assertion would not have.
+        """
+        from unittest.mock import patch
+
+        from hivepilot.services.plugin_installer import fetch_plugin
+
+        with patch("hivepilot.services.plugin_installer.requests.get") as get:
+            get.side_effect = RuntimeError("reached the network")
+            with pytest.raises(Exception, match="reached the network"):
+                fetch_plugin("codex", allow_agent_cli=True)
+
+            # The URL is the point: the name passed validation and the fetch
+            # was actually attempted for `plugins/codex.py`.
+            assert get.call_count == 1
+            assert "plugins/codex.py" in get.call_args.args[0]

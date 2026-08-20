@@ -103,7 +103,7 @@ def deliver_plugin_for(
         fetcher = fetch_plugin
 
     try:
-        path = fetcher(kind)
+        path = fetcher(kind, allow_agent_cli=True)
     except Exception as exc:  # noqa: BLE001
         # Named with the manual fix. An operator reading this should not have
         # to work out that the file can be fetched by hand.
