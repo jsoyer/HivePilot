@@ -4996,6 +4996,28 @@ def agents_install(
     if result.ran and result.exit_code not in (0, None):
         raise typer.Exit(result.exit_code or 1)
 
+    # The binary is on PATH; its PLUGIN is not, and nothing else puts it there.
+    # `plugins/*.py` is absent from the wheel and agent CLIs are excluded from
+    # the curated `plugins install` registry -- so before this, the file only
+    # reached a box if somebody copied it by hand, which is exactly what
+    # happened to `vibe` after #520. Measured before writing it: `vibe.py`
+    # present and hand-dated, `codex`/`cursor`/`gemini`/`opencode`/`ollama`
+    # absent.
+    #
+    # Only runs after a SUCCESSFUL install -- a failed binary owes no plugin --
+    # and never raises. But it is never silent either: a binary without its
+    # plugin looks completely healthy from outside while the runner simply does
+    # not exist, and that silence is the defect.
+    if result.ran and result.exit_code in (0, None):
+        from hivepilot.services.agent_plugin_delivery import deliver_plugin_for
+
+        delivery = deliver_plugin_for(name)
+        if delivery["state"] == "placed":
+            typer.echo(delivery["message"])
+        elif delivery["state"] == "failed":
+            typer.echo(delivery["message"], err=True)
+            raise typer.Exit(1)
+
 
 # ---------------------------------------------------------------------------
 # self-update: venv-targeted git+https pip install (HivePilot is NOT on
