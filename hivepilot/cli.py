@@ -4228,7 +4228,19 @@ def plugins_check() -> None:
             import tempfile
 
             with tempfile.TemporaryDirectory() as scratch:
-                fetched = plugin_installer.fetch_plugin(name, dest_dir=Path(scratch))
+                # `allow_agent_cli=True`: `agents install` now delivers
+                # codex/cursor/vibe and the rest, and without this they all
+                # scored `unknown` -- a deployment path shipped without its
+                # staleness check, which is precisely how `herdr.py` ran nine
+                # days out of date with a merged fix inert the whole time.
+                #
+                # This does NOT reopen the second install path the installer
+                # refuses: `check` installs nothing. It fetches into a scratch
+                # directory, compares, and throws it away. Comparing is not
+                # installing.
+                fetched = plugin_installer.fetch_plugin(
+                    name, dest_dir=Path(scratch), allow_agent_cli=True
+                )
                 source_text = fetched.read_text(encoding="utf-8")
         except Exception:  # noqa: BLE001 - unknown name, offline, HTTP error
             source_text = None
