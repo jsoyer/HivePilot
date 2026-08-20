@@ -253,6 +253,10 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_VERDICT_PARSE_DEBUG
     verdict_parse_debug: bool = False
     gh_command: str = "gh"
+    #: Record what a human did with a pull request the gate had already judged
+    #: -- the autonomy ladder's first measurable input. Off by default: it
+    #: costs a forge call per unresolved pull request at the start of a run.
+    record_pr_decisions: bool = False
     git_command: str = "git"
     # Auto-clone of a missing project repo (PR B): when a project's `path`
     # doesn't exist and it has an `owner_repo`, orchestrator.run_task clones

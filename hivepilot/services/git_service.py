@@ -811,6 +811,30 @@ def perform_git_actions(
             verdict_summary=_verdict_role_summary(verdict, task_result, role),
             verification=verification,
         )
+    # The gate's half of the autonomy ladder's only measurable input. Recorded
+    # whenever a pull request exists to be judged -- the human's half arrives
+    # later, when that pull request is next observed.
+    #
+    # Never allowed to fail the git actions: this is a MEASUREMENT, and losing
+    # a release because a metrics row would not write is the wrong trade in
+    # every direction.
+    if git.create_pr or git.promote_pr:
+        try:
+            # Local import: `state_service` is not imported at module level
+            # here, and a top-level one risks the circular chain this module
+            # has stayed out of. Caught by reading, not by mypy -- it is the
+            # fourth name-in-an-except-branch slip today.
+            from hivepilot.services import state_service
+
+            state_service.record_pr_gate_outcome(
+                run_id=run_id,
+                project=project_name,
+                branch=branch,
+                gate_blocked=blocked,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("git.gate_outcome_record_failed", branch=branch, error=str(exc))
+
     if git.promote_pr:
         if blocked:
             logger.warning("git.promote_skipped_blocked", project=project_name, branch=branch)

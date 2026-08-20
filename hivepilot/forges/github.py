@@ -357,6 +357,69 @@ class GitHubForge:
         payload = json.loads(result.stdout.strip() or "[]")
         return list(payload or [])
 
+    def viewer_login(self, *, project: ProjectConfig) -> str | None:
+        """The account THIS engine acts as, or None if it cannot be read.
+
+        Asked rather than configured, on purpose. `git.merge_pr` runs
+        `gh pr merge` under whatever token `gh` is authenticated with, so the
+        answer here is the account that would appear as `mergedBy` on the
+        engine's own merges -- by construction, with no second value to drift
+        out of step with it.
+
+        None means "could not determine", NEVER "there is nothing to exclude".
+        Callers must treat it as a reason to defer, not as an empty exclusion:
+        conflating the two would let the engine's own merges be recorded as
+        human decisions, which is the loop this measurement exists to avoid
+        closing.
+        """
+        try:
+            result = subprocess.run(
+                [_settings.gh_command, "api", "user", "--jq", ".login"],
+                cwd=str(project.path),
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+        except Exception:  # noqa: BLE001 - unauthenticated, absent, offline
+            return None
+        return (result.stdout or "").strip() or None
+
+    def pr_outcome(self, *, project: ProjectConfig, branch: str) -> tuple[str, str | None]:
+        """`(state, actor)` for *branch*'s pull request.
+
+        `actor` is who MERGED it, and is None for anything else. `gh pr view`
+        exposes `mergedBy` and nothing equivalent for a close -- which is
+        survivable because the engine has no close path at all, so a closed
+        pull request is necessarily a person's doing. See
+        `pr_decision.classify_pr_decision`, where that asymmetry is pinned.
+
+        A bot merge reports its login like any other, so the caller compares
+        against the engine's own account rather than trusting `is_bot`: a
+        deployment may merge under a human PAT.
+
+        Returns `("", None)` rather than raising. This runs to record a
+        MEASUREMENT, and a forge that will not answer must not become the
+        reason a run fails.
+        """
+        cmd = [
+            _settings.gh_command,
+            "pr",
+            "view",
+            branch,
+            "--json",
+            "state,mergedBy",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(project.path), check=True, text=True, capture_output=True
+            )
+            payload = json.loads(result.stdout or "{}")
+        except Exception:  # noqa: BLE001 - no PR, no network, bad JSON
+            return "", None
+        merged_by = payload.get("mergedBy") or {}
+        login = merged_by.get("login") if isinstance(merged_by, dict) else None
+        return str(payload.get("state") or ""), login or None
+
     def pr_status(self, *, project: ProjectConfig, branch: str) -> str:
         """Return *branch*'s PR `state` (OPEN/CLOSED/MERGED) via `gh pr view`."""
         cmd = [_settings.gh_command, "pr", "view", branch, "--json", "state", "-q", ".state"]

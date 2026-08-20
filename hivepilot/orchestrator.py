@@ -6442,6 +6442,23 @@ class Orchestrator:
             # there are too many, and a daemon would be a second moving part to
             # keep alive. Never raises -- see `prune_kept_workspaces`.
             herdr_prune_kept_workspaces(keep=_keep_failed)
+
+        if _flag_enabled(settings, "record_pr_decisions"):
+            # Same placement rationale as the pruner above: the thing that
+            # opens these pull requests notices they were answered, instead of
+            # a daemon nobody keeps alive. Never raises -- a measurement must
+            # not be why somebody else's run fails to start.
+            try:
+                from hivepilot.forges import resolve_forge
+                from hivepilot.services.pr_decision import resolve_open_decisions
+
+                resolve_open_decisions(
+                    project_name=getattr(project, "name", None),
+                    project=project,
+                    forge=resolve_forge(project),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("pr_decision.sweep_failed", error=str(exc))
         _wt_ctx = (
             isolated_worktree(project.path, keep_on_error=_keep_failed > 0)
             if _use_worktree
