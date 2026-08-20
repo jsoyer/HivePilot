@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
@@ -203,3 +205,78 @@ class TestPaneModeIsAChoice:
 
         assert pane.call_args.kwargs["env"] == direct_env
         assert pane.call_args.kwargs["cwd"] == direct.call_args.kwargs["cwd"]
+
+    def test_a_pane_it_cannot_open_still_runs_the_step(self, tmp_path: Path, monkeypatch) -> None:
+        """Found by the first run with every flag on, not by a test.
+
+        A pane is a place to WATCH a step from. Being unable to open one is not
+        a reason to skip the step -- and on run 704 it was: the auditor stage
+        runs outside any run workspace, `--current` needs HERDR_PANE_ID, and a
+        systemd unit has none, so the whole stage died.
+
+        Same polarity `run_workspace` already had and this did not: a dead
+        herdr costs visibility, never a run.
+        """
+        from hivepilot.runners.pane_exec import PaneExecutionError
+
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+
+        with (
+            patch("hivepilot.runners.claude_runner.run_in_pane") as pane,
+            patch("hivepilot.runners.claude_runner.subprocess.run") as direct,
+        ):
+            pane.side_effect = PaneExecutionError("no pane to split from")
+            direct.return_value = self._ok()
+            out = self._runner().capture(_payload(tmp_path))
+
+        assert direct.called, "the step must still run"
+        assert out == "envelope"
+
+    def test_an_agent_that_fails_inside_a_pane_is_not_retried_directly(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The discriminating case, and the dangerous one.
+
+        Only pane INFRASTRUCTURE failures fall back. An agent that ran and
+        exited non-zero comes back as a CompletedProcess -- re-running it
+        directly would dispatch the same prompt twice, and for a developer role
+        that means committing and pushing the work a second time.
+        """
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+
+        with (
+            patch("hivepilot.runners.claude_runner.run_in_pane") as pane,
+            patch("hivepilot.runners.claude_runner.subprocess.run") as direct,
+        ):
+            pane.return_value = subprocess.CompletedProcess(["claude"], 1, "", "boom")
+            with pytest.raises(Exception):
+                self._runner().capture(_payload(tmp_path))
+
+        assert not direct.called, "a failed agent must never be re-dispatched"
+
+    def test_an_unknown_failure_inside_the_pane_is_not_retried_either(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The case that decides how BROAD the except clause may be, and a
+        mutation showed nothing pinned it.
+
+        `PaneExecutionError` means "we could not run it in a pane" -- the agent
+        provably never started. Any OTHER exception is ambiguous: a timeout, a
+        bug mid-read, an OSError after the process launched. The agent may well
+        have run, committed and pushed. Falling back would dispatch the same
+        prompt a second time.
+
+        Ambiguity resolves to NOT re-running. A step that fails once is a
+        problem; a developer role that commits its work twice is a worse one.
+        """
+        monkeypatch.setattr(settings, "claude_pane_mode", True)
+
+        with (
+            patch("hivepilot.runners.claude_runner.run_in_pane") as pane,
+            patch("hivepilot.runners.claude_runner.subprocess.run") as direct,
+        ):
+            pane.side_effect = TimeoutError("read timed out after the agent started")
+            with pytest.raises(TimeoutError):
+                self._runner().capture(_payload(tmp_path))
+
+        assert not direct.called, "an ambiguous failure must never be re-dispatched"

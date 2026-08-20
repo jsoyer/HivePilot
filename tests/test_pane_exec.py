@@ -313,3 +313,44 @@ class TestItTalksToHerdrCorrectly:
 
         split = next(c for c in herdr.calls if c[2] == "split")
         assert split[split.index("--direction") + 1] in {"right", "down"}
+
+
+class TestAPaneItCannotOpenMustNotCostTheStep:
+    """Found by the first run with every flag on at once, not by a test.
+
+    `--current` means "the pane the operator is looking at", and herdr resolves
+    it from `HERDR_PANE_ID`. In a systemd unit that variable is empty, so the
+    split answers `exit 2: --current requires HERDR_PANE_ID` -- and the step
+    died. Measured on run 704: the auditor stage, which runs outside the run's
+    workspace scope, failed for exactly this.
+
+    The fallback I kept "so a run without a workspace keeps working" did not
+    work in the one place it was needed: a headless box.
+
+    And the polarity was inconsistent with my own rule. `run_workspace` already
+    fails OPEN -- a dead herdr costs visibility, never a run. `run_in_pane` did
+    not. A pane is a place to WATCH a step from; being unable to open one is
+    not a reason to skip the step.
+
+    `PaneExecutionError` is exactly the right thing to catch: it is raised only
+    when the pane infrastructure fails. An agent that runs and exits non-zero
+    comes back as a CompletedProcess and still fails the step, as it must.
+    """
+
+    def test_it_names_the_missing_variable_rather_than_the_raw_exit(self, tmp_path):
+        """`exit 2` alone sends the reader to herdr's source. The cause is a
+        missing environment variable and the message should say so."""
+        herdr = FakeHerdr()
+        herdr.split_returncode = 2
+
+        with pytest.raises(PaneExecutionError, match="HERDR_PANE_ID|no pane to split"):
+            _run(tmp_path, herdr)
+
+    def test_the_error_is_distinguishable_from_an_agent_failure(self, tmp_path):
+        """The caller falls back on one and not the other, so they must not be
+        the same exception."""
+        herdr = FakeHerdr(rc="1")
+
+        result = _run(tmp_path, herdr)
+
+        assert result.returncode == 1  # the agent failed; no exception raised
