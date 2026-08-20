@@ -261,6 +261,13 @@ disable_error_code = ["import-untyped"]
 # the roots listed in mypy_path rather than treating bare filenames as roots too.
 explicit_package_bases = true
 namespace_packages = true
+# Local artefact trees that duplicate the package. `mypy .` (what the
+# end-of-turn hook runs) otherwise type-checks TWO copies of every module and
+# reports 20 errors of the form "expected build.lib.hivepilot.Verdict, got
+# hivepilot.Verdict" -- pure noise, and noise that hides a real error the next
+# time there is one. CI runs `mypy hivepilot tests`, so it never saw these;
+# this makes the local command agree with CI instead of crying wolf.
+exclude = "^(build|dist|\\.worktrees|\\.venv)/"
 mypy_path = "."
 
 [tool.bandit]
