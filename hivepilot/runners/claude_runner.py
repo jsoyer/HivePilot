@@ -24,7 +24,7 @@ from hivepilot.runners.base import (
     resolve_runner_effort,
     set_last_usage,
 )
-from hivepilot.runners.pane_exec import run_in_pane
+from hivepilot.runners.pane_exec import PaneExecutionError, run_in_pane
 from hivepilot.services.config_provenance import redact_text, register_secret_value
 from hivepilot.services.corrections_service import load_corrections
 from hivepilot.services.herdr_workspace import current_pane
@@ -1088,19 +1088,52 @@ class ClaudeRunner(BaseRunner):
         # 0700: the step's environment lands here as a sourceable file for the
         # length of the call, and it carries the step's secrets.
         os.makedirs(capture_dir, mode=0o700, exist_ok=True)
-        return run_in_pane(
-            argv,
-            capture_dir=capture_dir,
-            cwd=cwd,
-            env=env,
-            timeout=timeout,
-            split_direction=self.settings.herdr_split_direction,
-            # The run's own workspace when it has one, so the step lands where
-            # the run lives rather than in whatever workspace the operator
-            # happens to be looking at. `None` keeps the `--current` fallback,
-            # which is what a run without a workspace needs.
-            target_pane=current_pane(),
-        )
+        try:
+            return run_in_pane(
+                argv,
+                capture_dir=capture_dir,
+                cwd=cwd,
+                env=env,
+                timeout=timeout,
+                split_direction=self.settings.herdr_split_direction,
+                # The run's own workspace when it has one, so the step lands where
+                # the run lives rather than in whatever workspace the operator
+                # happens to be looking at. `None` keeps the `--current` fallback,
+                # which is what a run without a workspace needs.
+                target_pane=current_pane(),
+            )
+        except PaneExecutionError as exc:
+            # A pane is a place to WATCH a step from. Being unable to open one
+            # is not a reason to skip the step -- and it was: on run 704 the
+            # auditor stage, which runs outside any run workspace, died on
+            # `--current requires HERDR_PANE_ID`, which is every
+            # non-interactive host.
+            #
+            # Same polarity `run_workspace` already had and this did not: a
+            # dead herdr costs visibility, never a run. Loud, though -- losing
+            # the pane silently would leave an operator watching a workspace
+            # nothing will ever appear in.
+            #
+            # ONLY `PaneExecutionError`, which is raised for pane
+            # infrastructure alone. An agent that ran and exited non-zero comes
+            # back as a CompletedProcess and still fails the step: re-running
+            # it here would dispatch the same prompt twice, and for a developer
+            # role that means committing and pushing the work again.
+            # No `payload` here: `_dispatch` takes argv/cwd/env/timeout and
+            # nothing else. Referencing it was the same slip as the truncation
+            # recorder earlier today -- a name from the caller's scope used in
+            # a branch that only runs when something has already gone wrong.
+            logger.warning("claude_runner.pane_unavailable", error=str(exc))
+            return subprocess.run(
+                argv,
+                cwd=cwd,
+                env=env,
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
 
     def capture(self, payload: RunnerPayload) -> str:
         """Run claude and return its stdout (so the agent's output can be surfaced

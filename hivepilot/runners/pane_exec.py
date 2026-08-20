@@ -139,9 +139,21 @@ def _split_pane(
     where = ["--pane", target_pane] if target_pane else ["--current"]
     result = cli(["herdr", "pane", "split", *where, "--direction", direction, "--no-focus"])
     if result.returncode != 0:
+        detail = _tail(result.stderr or result.stdout)
+        hint = ""
+        if not target_pane:
+            # `--current` means "the pane the operator is looking at", and
+            # herdr resolves it from HERDR_PANE_ID. In a systemd unit that
+            # variable is empty, so this fallback cannot work on the one kind
+            # of host it was kept for. Measured on run 704: `exit 2:
+            # --current requires HERDR_PANE_ID`, from the auditor stage, which
+            # runs outside any run workspace.
+            hint = (
+                " -- no pane to split from: this run has no workspace of its own "
+                "and HERDR_PANE_ID is unset, which is every non-interactive host"
+            )
         raise PaneExecutionError(
-            f"herdr pane split failed (exit {result.returncode}): "
-            f"{_tail(result.stderr or result.stdout)}"
+            f"herdr pane split failed (exit {result.returncode}): {detail}{hint}"
         )
     pane_id = _extract_pane_id(_loads(result.stdout))
     if not pane_id:
