@@ -323,6 +323,37 @@ def init_db() -> None:
             )
             """
         )
+        # The autonomy ladder's only measurable input. Verdicts and approvals
+        # have never co-occurred on a run (10 approvals, 0 paired verdicts), so
+        # the human decision that DOES pair with a gate outcome is what happens
+        # to the pull request afterwards.
+        #
+        # Written in two halves: the gate's own verdict at promote time, then
+        # the human's, whenever the pull request is next observed. A row with a
+        # NULL `decision` is an OPEN question, never an agreement.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS pr_gate_outcomes (
+                id {pk},
+                run_id INTEGER,
+                project TEXT,
+                branch TEXT NOT NULL,
+                -- what the gate said
+                gate_blocked INTEGER NOT NULL,
+                -- what the human then did: 'override' | 'agreed', or NULL
+                -- while the pull request is still open. `gate_blocked` stays
+                -- beside it because both disagreements read 'override' and
+                -- they are opposite failures.
+                decision TEXT,
+                pr_state TEXT,
+                actor TEXT,
+                resolved_at TIMESTAMP,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (branch, tenant)
+            )
+            """
+        )
         # Phase 20 D2: persist IaC drift-scan results (history + baseline).
         conn.execute(
             f"""
@@ -1509,6 +1540,86 @@ def cost_basis_rows(*, tenant: str = "default") -> tuple[dict | None, dict | Non
         }
 
     return _shape(env), _shape(otel)
+
+
+def record_pr_gate_outcome(
+    *,
+    run_id: int | None,
+    project: str | None,
+    branch: str,
+    gate_blocked: bool,
+    tenant: str = "default",
+) -> None:
+    """Record what the GATE decided about this branch's pull request.
+
+    Half of a pair. The human's half arrives later, when the pull request is
+    next observed -- see `resolve_pr_gate_outcome`.
+
+    Idempotent per branch: one run, one branch, one pull request. Re-running a
+    stage must not create a second row that would count the same decision
+    twice. A re-record before resolution updates the gate's verdict, because
+    the last thing the gate said about that branch is the one the human
+    actually saw.
+    """
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO pr_gate_outcomes (run_id, project, branch, gate_blocked, tenant) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (branch, tenant) DO UPDATE SET "
+            "gate_blocked = excluded.gate_blocked, run_id = excluded.run_id "
+            # Never reopen a decision already taken: the human acted on what
+            # they saw, and a later run must not rewrite that history.
+            "WHERE pr_gate_outcomes.decision IS NULL",
+            (run_id, project, branch, int(bool(gate_blocked)), tenant),
+        )
+
+
+def unresolved_pr_gate_outcomes(
+    *, project: str | None = None, tenant: str = "default"
+) -> list[dict]:
+    """Branches whose gate verdict is recorded and whose human half is not.
+
+    These are OPEN questions. A NULL `decision` never reads as agreement --
+    that distinction is the whole reason the column is nullable.
+    """
+    init_db()
+    sql = (
+        "SELECT run_id, project, branch, gate_blocked FROM pr_gate_outcomes "
+        "WHERE decision IS NULL AND tenant = ?"
+    )
+    params: list = [tenant]
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
+    with db.connect() as conn:
+        rows = conn.execute(sql + " ORDER BY id DESC LIMIT 200", tuple(params)).fetchall()
+    keys = ("run_id", "project", "branch", "gate_blocked")
+    return [dict(zip(keys, row, strict=False)) for row in rows]
+
+
+def resolve_pr_gate_outcome(
+    *,
+    branch: str,
+    decision: str,
+    pr_state: str,
+    actor: str,
+    tenant: str = "default",
+) -> None:
+    """Record the HUMAN half, once and only once.
+
+    `WHERE decision IS NULL` is not an optimisation: a decision already taken
+    must never be rewritten by a later observation. The operator acted on what
+    the gate said at the time, and that is the pairing the ladder measures.
+    """
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE pr_gate_outcomes SET decision = ?, pr_state = ?, actor = ?, "
+            "resolved_at = CURRENT_TIMESTAMP "
+            "WHERE branch = ? AND tenant = ? AND decision IS NULL",
+            (decision, pr_state, actor, branch, tenant),
+        )
 
 
 def agent_telemetry_freshness() -> tuple[int, str | None]:
