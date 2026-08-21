@@ -492,6 +492,30 @@ class ClaudeRunner(BaseRunner):
     # scrub. This is the only runner that has ever applied either.
     honoured_controls: ClassVar[frozenset[str]] = frozenset({"permission_mode", "allowed_tools"})
 
+    # ── the flags that DIFFER between claude-shaped CLIs ───────────────────
+    #
+    # `claude`, `cursor-agent` and `grok` share one headless shape — a
+    # print/single flag, a model flag, a permission mode and a tool allow-list
+    # — and disagree only on the spelling. Naming them here is what lets grok
+    # (and, next, cursor) INHERIT this runner rather than subclass
+    # `PromptCliRunner`, which applies neither `permission_mode` nor
+    # `allowed_tools` and would silently drop both.
+    #
+    # `"claude"` appears nowhere as a literal in this module — the command
+    # already comes from `definition.command or settings.claude_command` — so
+    # these three are the whole of what a sibling needs to override.
+    #
+    # Verified 2026-08-21 against the installed binaries:
+    #   claude       --print          --allowed-tools   --permission-mode
+    #   cursor-agent --print          (sandbox/deny)    --sandbox
+    #   grok         -p / --single    --allow           --permission-mode
+    #                                 (alias --allowedTools)
+    #   grok also has --prompt-file, which claude lacks and which removes the
+    #   MAX_ARG_STRLEN failure class entirely.
+    print_flag: ClassVar[str] = "--print"
+    allowed_tools_flag: ClassVar[str] = "--allowed-tools"
+    permission_mode_flag: ClassVar[str] = "--permission-mode"
+
     def _assemble_prompt(self, payload: RunnerPayload) -> str:
         """Load the step's prompt file and build the full agent prompt.
 
@@ -550,7 +574,7 @@ class ClaudeRunner(BaseRunner):
         if not command:
             raise ValueError("Claude command not configured.")
         prompt = self._assemble_prompt(payload)
-        args = [command, "--print"]
+        args = [command, self.print_flag]
         model = self._resolve_model(payload)
         # Stated BEFORE dispatch, so a step that fails still records what it
         # was about to run on. The orchestrator prefers the CLI's own
@@ -619,7 +643,7 @@ class ClaudeRunner(BaseRunner):
         # for every tool name it does not enumerate.
         allowed_tools = self._resolve_allowed_tools(payload)
         if allowed_tools:
-            args.append("--allowed-tools")
+            args.append(self.allowed_tools_flag)
             args.extend(allowed_tools)
         # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
         # agent actually write code in headless --print mode. Without it claude
@@ -631,7 +655,7 @@ class ClaudeRunner(BaseRunner):
             or self.settings.claude_permission_mode
         )
         if permission_mode:
-            args.extend(["--permission-mode", permission_mode])
+            args.extend([self.permission_mode_flag, permission_mode])
         # `--` is the standard end-of-options separator: it tells claude's
         # arg parser to stop treating subsequent tokens as option values, so
         # the prompt is unambiguously positional. UNCONDITIONALLY emitted

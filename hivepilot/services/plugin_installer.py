@@ -110,6 +110,7 @@ AGENT_CLI_PLUGINS: frozenset[str] = frozenset(
         "codex",
         "cursor",
         "gemini",
+        "grok",
         "kimi_cli",
         "ollama",
         "opencode",
