@@ -46,6 +46,19 @@ def _pg_settings(monkeypatch):
         settings, "database_url", os.environ["HIVEPILOT_DATABASE_URL"], raising=False
     )
 
+    # A real server keeps its rows between runs, unlike the fresh SQLite file
+    # every other test gets. Without this the second local run of this module
+    # fails -- the branch it records is already resolved from the first -- and
+    # CI hides it, because each job gets a brand-new container. "Green in CI,
+    # red on your machine" is a bad way to learn that a test assumed an empty
+    # table.
+    from hivepilot.services import db
+    from hivepilot.services.state_service import init_db
+
+    init_db()
+    with db.connect() as conn:
+        conn.execute("TRUNCATE pr_gate_outcomes, verdicts, approvals RESTART IDENTITY CASCADE")
+
 
 class TestTheSchemaActuallyBuilds:
     def test_init_db_creates_every_table(self):
@@ -148,3 +161,42 @@ class TestInsertReturningIdWorksOnTheServer:
         run_id = record_run_start(project="pg", task="portability probe")
 
         assert isinstance(run_id, int) and run_id > 0
+
+
+class TestRowsAreReadByName:
+    """Postgres rows are dicts (psycopg's `dict_row`); SQLite rows are
+    `sqlite3.Row`. They agree on `row["col"]` and on nothing else -- iterating
+    a dict yields KEYS, and indexing one with `0` raises `KeyError`. Both
+    mistakes were live in this codebase and neither could fail on SQLite."""
+
+    def test_the_ledger_returns_values_not_column_names(self):
+        """`dict(zip(keys, row))` returned `{"branch": "branch", ...}` here:
+        a plausible non-empty list in which every value was the name of its
+        own column. Nothing raised."""
+        from hivepilot.services.state_service import (
+            init_db,
+            record_pr_gate_outcome,
+            unresolved_pr_gate_outcomes,
+        )
+
+        init_db()
+        branch = "hivepilot/pgtest/names"
+        record_pr_gate_outcome(run_id=42, project="pg", branch=branch, gate_blocked=True)
+
+        row = next(r for r in unresolved_pr_gate_outcomes(project="pg") if r["branch"] == branch)
+
+        assert row["run_id"] == 42
+        assert row["project"] == "pg"
+        assert bool(row["gate_blocked"]) is True
+
+    def test_a_count_query_reads_its_column(self):
+        """`fetchone()[0]` raises `KeyError: 0` on a dict row -- and
+        `autonomy_service` catches every exception and reports "the tables
+        could not be read", so on Postgres it would have said that forever
+        while the tables were fine."""
+        from hivepilot.services import autonomy_service
+        from hivepilot.services.state_service import init_db
+
+        init_db()
+
+        assert "could not be read" not in autonomy_service._diagnose_empty()

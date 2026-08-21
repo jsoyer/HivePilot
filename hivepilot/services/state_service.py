@@ -1632,7 +1632,12 @@ def unresolved_pr_gate_outcomes(
     with db.connect() as conn:
         rows = conn.execute(ph(sql + " ORDER BY id DESC LIMIT 200"), tuple(params)).fetchall()
     keys = ("run_id", "project", "branch", "gate_blocked")
-    return [dict(zip(keys, row, strict=False)) for row in rows]
+    # By NAME, never `zip(keys, row)`. Postgres rows are dicts (psycopg's
+    # `dict_row`), and zipping over a dict iterates its KEYS -- so this
+    # returned `{"branch": "branch", ...}`, every value the name of its own
+    # column, and the caller saw a plausible non-empty list of nonsense.
+    # `sqlite3.Row` iterates values, which is why it looked correct for months.
+    return [{k: row[k] for k in keys} for row in rows]
 
 
 def resolve_pr_gate_outcome(
@@ -1758,7 +1763,8 @@ def context_truncations(*, tenant: str = "default", limit: int = 200) -> list[di
         "budget_basis",
         "recorded_at",
     )
-    return [dict(zip(keys, row, strict=False)) for row in rows]
+    # By name -- see `unresolved_pr_gate_outcomes` above.
+    return [{k: row[k] for k in keys} for row in rows]
 
 
 def record_drift_scan(result: "DriftResult", *, tenant: str = "default") -> int:

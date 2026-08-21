@@ -41,7 +41,10 @@ jobs:
           cache: pip
 
       - name: Install project + dev extras
-        run: pip install -e ".[dev]"
+        # `postgres` too: without psycopg installed mypy treats the entire
+        # Postgres branch of db.py as Any and checks none of it. It found a
+        # real assignment conflict there the moment it could see the types.
+        run: pip install -e ".[dev,postgres]"
 
       - name: mypy
         run: python -m mypy hivepilot tests
