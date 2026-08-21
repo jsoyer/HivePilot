@@ -22,6 +22,7 @@ from hivepilot.runners.base import (
     classify_signal_exit,
     prompt_file_not_found_message,
     resolve_runner_effort,
+    set_last_resolved_model,
     set_last_usage,
 )
 from hivepilot.runners.pane_exec import PaneExecutionError, run_in_pane
@@ -546,6 +547,12 @@ class ClaudeRunner(BaseRunner):
         prompt = self._assemble_prompt(payload)
         args = [command, "--print"]
         model = self._resolve_model(payload)
+        # Stated BEFORE dispatch, so a step that fails still records what it
+        # was about to run on. The orchestrator prefers the CLI's own
+        # self-report when there is one; this is the floor beneath it, and it
+        # is what stops a config ALIAS ("sonnet", or worse "latest") from being
+        # stamped as though it were the model.
+        set_last_resolved_model(model)
         if model:
             args.extend(["--model", model])
         if self.definition.agent:
@@ -1346,6 +1353,7 @@ class ClaudeRunner(BaseRunner):
         """
         prompt = self._assemble_prompt(payload)
         model = self._resolve_model(payload)
+        set_last_resolved_model(model)
         if not model:
             raise RuntimeError(
                 "Claude API mode requires a model (set the runner model, step "

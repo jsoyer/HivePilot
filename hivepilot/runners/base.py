@@ -279,6 +279,46 @@ def pop_last_usage() -> UsageInfo | None:
     return usage
 
 
+# ── the model a runner ACTUALLY dispatched with ────────────────────────────────
+#
+# Separate from `_LAST_USAGE` on purpose, not for symmetry's sake: callers test
+# `if usage:` to mean "did this step report token usage", and folding a model
+# into an otherwise-empty UsageInfo would make that question answer True for
+# every step.
+#
+# The problem it solves: `steps.model` carried TWO vocabularies. The
+# orchestrator guesses from config (`runner_def.model` -> `"sonnet"`) while the
+# runner separately resolves (profile / settings default -> `"claude-sonnet-5"`),
+# and only the second is the truth. Measured on the box before this existed:
+# 346 rows resolved, 76 rows a bare alias, 320 rows NULL out of 742. An alias is
+# not an answer -- six months on, "this run used sonnet" does not say which one,
+# and `model: latest` would have recorded the word "latest".
+#
+# So the runner states what it dispatched with, and the orchestrator prefers, in
+# order: what the CLI self-reported (usage.model), else what the runner resolved
+# (here), else the configured string. Same per-thread ContextVar discipline as
+# the usage stash above, and the same read-and-clear so a step that never
+# dispatched cannot inherit the previous step's model.
+_LAST_RESOLVED_MODEL: ContextVar[str | None] = ContextVar("_LAST_RESOLVED_MODEL", default=None)
+
+
+def set_last_resolved_model(model: str | None) -> None:
+    """Record the model this runner is about to dispatch with.
+
+    Called by a runner once it has resolved a model and before it invokes
+    anything -- so the value survives a dispatch that fails, where usage never
+    arrives but the model used is still a fact worth recording.
+    """
+    _LAST_RESOLVED_MODEL.set(model)
+
+
+def pop_last_resolved_model() -> str | None:
+    """Read-and-clear the model stashed by the last dispatch."""
+    model = _LAST_RESOLVED_MODEL.get()
+    _LAST_RESOLVED_MODEL.set(None)
+    return model
+
+
 # Live incident (explicit-failure-logs follow-up): a `developer` stage ran
 # headless with `--permission-mode acceptEdits`, the agent replied "I need
 # your approval to run shell commands in this session... Should I proceed?",

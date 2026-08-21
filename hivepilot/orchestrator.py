@@ -65,6 +65,7 @@ from hivepilot.runners.base import (
     apply_skill_if_supported,
     classify_signal_exit,
     detect_noop_permission_response,
+    pop_last_resolved_model,
     pop_last_usage,
     validate_runner_mode,
 )
@@ -826,6 +827,7 @@ def _record_step_success(
     model: str | None,
     usage: UsageInfo | None,
     role: str | None = None,
+    resolved_model: str | None = None,
 ) -> None:
     """Call ``state_service.record_step`` for a successful step, threading
     captured usage (Phase 24b.2a — opt-in usage capture) when present.
@@ -847,9 +849,15 @@ def _record_step_success(
     ``state_service.record_step`` as their own fields rather than being
     silently dropped or folded into the base counts.
     """
+    # Precedence, and the reason for it: what the CLI SELF-REPORTED wins,
+    # because it is the only witness to what actually answered. Failing that,
+    # what the runner RESOLVED (`set_last_resolved_model`) -- still a fact.
+    # Only then the configured string, which may be an alias like "sonnet" and
+    # would be the word "latest" once that is allowed.
+    _stamp = (usage.model if usage else None) or resolved_model or model
     if usage is None:
         state_service.record_step(
-            run_id, step_name, "success", provider=provider, model=model, role=role
+            run_id, step_name, "success", provider=provider, model=_stamp, role=role
         )
         return
     state_service.record_step(
@@ -857,7 +865,7 @@ def _record_step_success(
         step_name,
         "success",
         provider=provider,
-        model=usage.model or model,
+        model=_stamp,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         cost_usd=usage.cost_usd,
@@ -876,6 +884,7 @@ def _record_step_failure(
     model: str | None,
     usage: UsageInfo | None,
     role: str | None = None,
+    resolved_model: str | None = None,
 ) -> None:
     """The failure-path twin of ``_record_step_success``.
 
@@ -895,9 +904,13 @@ def _record_step_failure(
     before — no new None-valued columns, and no invented zero. A step whose
     cost is genuinely unknown must read as unknown, not as free.
     """
+    # Same precedence as the success twin -- a step that FAILED still ran on a
+    # model, and `set_last_resolved_model` is stated before dispatch precisely
+    # so this path has an answer when no usage ever arrived.
+    _stamp = (usage.model if usage else None) or resolved_model or model
     if usage is None:
         state_service.record_step(
-            run_id, step_name, "failed", detail, provider=provider, model=model, role=role
+            run_id, step_name, "failed", detail, provider=provider, model=_stamp, role=role
         )
         return
     state_service.record_step(
@@ -906,7 +919,7 @@ def _record_step_failure(
         "failed",
         detail,
         provider=provider,
-        model=usage.model or model,
+        model=_stamp,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         cost_usd=usage.cost_usd,
@@ -4082,6 +4095,7 @@ class Orchestrator:
                         role_model,
                         pop_last_usage(),
                         role=role_name,
+                        resolved_model=pop_last_resolved_model(),
                     )
 
                 output = redact_text(output) if output else output
@@ -7036,7 +7050,13 @@ class Orchestrator:
                                 else (None, None)
                             )
                             _record_step_success(
-                                run_id, step.name, _provider, _model, _usage, role=task.role
+                                run_id,
+                                step.name,
+                                _provider,
+                                _model,
+                                _usage,
+                                role=task.role,
+                                resolved_model=pop_last_resolved_model(),
                             )
                         # Observability-only signal (does NOT fail the step —
                         # some legit steps write nothing, e.g. a pure review):
@@ -7170,6 +7190,7 @@ class Orchestrator:
                                 model=_model,
                                 usage=_failed_usage,
                                 role=task.role,
+                                resolved_model=pop_last_resolved_model(),
                             )
                         if step.allow_failure:
                             logger.warning("step.failure_allowed", step=step.name, error=str(exc))
