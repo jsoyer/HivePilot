@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import state_service
+from hivepilot.services.db import ph
 from hivepilot.services.schedule_service import due_schedules, run_entry
 
 if TYPE_CHECKING:
@@ -327,8 +328,10 @@ class SchedulerDaemon:
         with sqlite3.connect(state_service.DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM retry_queue "
-                "WHERE status='pending' AND next_retry_at <= ? AND context IS NOT NULL",
+                ph(
+                    "SELECT * FROM retry_queue "
+                    "WHERE status='pending' AND next_retry_at <= ? AND context IS NOT NULL"
+                ),
                 (now_iso,),
             ).fetchall()
 
@@ -410,17 +413,17 @@ class SchedulerDaemon:
         with sqlite3.connect(state_service.DB_PATH) as conn:
             if attempt is not None and next_retry_at is not None:
                 conn.execute(
-                    "UPDATE retry_queue SET status=?, attempt=?, next_retry_at=? WHERE id=?",
+                    ph("UPDATE retry_queue SET status=?, attempt=?, next_retry_at=? WHERE id=?"),
                     (status, attempt, next_retry_at.isoformat(), row_id),
                 )
             elif attempt is not None:
                 conn.execute(
-                    "UPDATE retry_queue SET status=?, attempt=? WHERE id=?",
+                    ph("UPDATE retry_queue SET status=?, attempt=? WHERE id=?"),
                     (status, attempt, row_id),
                 )
             else:
                 conn.execute(
-                    "UPDATE retry_queue SET status=? WHERE id=?",
+                    ph("UPDATE retry_queue SET status=? WHERE id=?"),
                     (status, row_id),
                 )
             conn.commit()

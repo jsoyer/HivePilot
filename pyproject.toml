@@ -51,6 +51,14 @@ langchain = [
   "sentence-transformers>=2.2,<4.0",
   "torch>=2.0,<3.0",
 ]
+# Postgres backend for `HIVEPILOT_DATABASE_URL=postgresql://...`.
+# `hivepilot/services/db.py` has always lazy-imported psycopg and raised a
+# helpful ImportError without it -- but the package was declared nowhere, so
+# the Postgres path could not actually be installed, and nothing ever ran it.
+# Optional: a default install is unchanged and still uses SQLite.
+postgres = [
+  "psycopg[binary]>=3.1,<4.0",
+]
 langgraph = [
   "langgraph>=0.0.59,<1.0",
 ]

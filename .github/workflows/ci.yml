@@ -67,6 +67,56 @@ jobs:
       - name: pytest
         run: python -m pytest -q
 
+  postgres:
+    name: Test (postgres dialect)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: hivepilot
+          POSTGRES_DB: hivepilot_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project + postgres extra
+        run: pip install -e ".[dev,postgres]"
+
+      - name: pytest (postgres dialect)
+        env:
+          HIVEPILOT_DATABASE_URL: postgresql://postgres:hivepilot@localhost:5432/hivepilot_test
+        # `--no-skips`: the whole point of this job is that these tests RUN.
+        # They skip themselves without a live server, so a job that silently
+        # stopped providing one would go green having proven nothing -- the
+        # exact "plausible zero" this job exists to end.
+        run: |
+          # `pipefail`: without it `$?` is tee's, so a FAILING pytest would
+          # exit 0 and this job would go green having caught nothing.
+          set -o pipefail
+          python -m pytest tests/test_postgres_dialect.py -q -p no:randomly -rs \
+            | tee /tmp/pg.txt
+          # A skip is not a pass. These tests skip themselves without a live
+          # server, so a job that quietly stopped providing one would prove
+          # nothing while looking green -- the plausible zero this job exists
+          # to end. `N skipped` only ever appears in pytest's summary line.
+          if grep -qE "[0-9]+ skipped" /tmp/pg.txt; then
+            echo "::error::postgres dialect tests SKIPPED - no live server reached"
+            exit 1
+          fi
+
   public-safe:
     name: Public-safe prompts
     runs-on: ubuntu-latest

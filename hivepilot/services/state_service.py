@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
 from hivepilot.services import db
+from hivepilot.services.db import ph
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -595,14 +596,16 @@ def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                """
+            ph(
+                db.ph(
+                    """
             INSERT INTO workers (name, url, status, detail, last_seen)
             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(name) DO UPDATE SET
                 url=excluded.url, status=excluded.status,
                 detail=excluded.detail, last_seen=CURRENT_TIMESTAMP
             """
+                )
             ),
             (name, url, status, detail),
         )
@@ -706,12 +709,14 @@ def record_step(
         role = None
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                "INSERT INTO steps "
-                "(run_id, step, status, detail, provider, model, "
-                "input_tokens, output_tokens, cost_usd, role, "
-                "cache_read_tokens, cache_creation_tokens, turns) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ph(
+                db.ph(
+                    "INSERT INTO steps "
+                    "(run_id, step, status, detail, provider, model, "
+                    "input_tokens, output_tokens, cost_usd, role, "
+                    "cache_read_tokens, cache_creation_tokens, turns) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
             ),
             (
                 run_id,
@@ -782,9 +787,11 @@ def attach_run_artifacts(run_id: int, artifacts_path: str) -> None:
     pointer = redact_text(f"artifacts: {artifacts_path}")
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                "UPDATE runs SET detail=? WHERE id=? "
-                "AND (detail IS NULL OR detail='')"  # never clobber a failure message
+            ph(
+                db.ph(
+                    "UPDATE runs SET detail=? WHERE id=? "
+                    "AND (detail IS NULL OR detail='')"  # never clobber a failure message
+                )
             ),
             (pointer, run_id),
         )
@@ -798,7 +805,11 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
     detail = redact_text(detail) if detail is not None else detail
     with db.connect() as conn:
         conn.execute(
-            db.ph("UPDATE runs SET status=?, detail=?, finished_at=CURRENT_TIMESTAMP WHERE id=?"),
+            ph(
+                db.ph(
+                    "UPDATE runs SET status=?, detail=?, finished_at=CURRENT_TIMESTAMP WHERE id=?"
+                )
+            ),
             (status, detail, run_id),
         )
     logger.info("state.run_complete", run_id=run_id, status=status)
@@ -818,7 +829,7 @@ def get_run(run_id: int) -> dict[str, Any] | None:
     """
     init_db()
     with db.connect() as conn:
-        row = conn.execute(db.ph("SELECT * FROM runs WHERE id=?"), (run_id,)).fetchone()
+        row = conn.execute(ph(db.ph("SELECT * FROM runs WHERE id=?")), (run_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -827,14 +838,16 @@ def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[st
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                db.ph(
-                    "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC LIMIT ?"
+                ph(
+                    db.ph(
+                        "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC LIMIT ?"
+                    )
                 ),
                 (tenant, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                db.ph("SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?"), (limit,)
+                ph(db.ph("SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?")), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
 
@@ -843,7 +856,7 @@ def get_steps_for_run(run_id: int) -> list[dict[str, Any]]:
     init_db()
     with db.connect() as conn:
         rows = conn.execute(
-            db.ph("SELECT * FROM steps WHERE run_id=? ORDER BY timestamp"), (run_id,)
+            ph(db.ph("SELECT * FROM steps WHERE run_id=? ORDER BY timestamp")), (run_id,)
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -865,7 +878,7 @@ def interaction_role(interaction_id: int | None) -> str | None:
     try:
         with db.connect() as conn:
             row = conn.execute(
-                db.ph("SELECT metadata FROM interactions WHERE id = ?"), (interaction_id,)
+                ph(db.ph("SELECT metadata FROM interactions WHERE id = ?")), (interaction_id,)
             ).fetchone()
     except sqlite3.Error:
         return None
@@ -927,12 +940,12 @@ def list_recent_interactions(limit: int = 50, run_id: int | None = None) -> list
     with db.connect() as conn:
         if run_id is not None:
             rows = conn.execute(
-                db.ph("SELECT * FROM interactions WHERE run_id=? ORDER BY id DESC LIMIT ?"),
+                ph(db.ph("SELECT * FROM interactions WHERE run_id=? ORDER BY id DESC LIMIT ?")),
                 (run_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                db.ph("SELECT * FROM interactions ORDER BY id DESC LIMIT ?"), (limit,)
+                ph(db.ph("SELECT * FROM interactions ORDER BY id DESC LIMIT ?")), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
 
@@ -1018,10 +1031,12 @@ def list_failed_steps(run_id: int, limit: int = 50) -> list[dict[str, Any]]:
     init_db()
     with db.connect() as conn:
         rows = conn.execute(
-            db.ph(
-                "SELECT step, role, status, detail, provider, model FROM steps "
-                "WHERE run_id=? AND status NOT IN ('success', 'skipped') "
-                "ORDER BY id ASC LIMIT ?"
+            ph(
+                db.ph(
+                    "SELECT step, role, status, detail, provider, model FROM steps "
+                    "WHERE run_id=? AND status NOT IN ('success', 'skipped') "
+                    "ORDER BY id ASC LIMIT ?"
+                )
             ),
             (run_id, limit),
         ).fetchall()
@@ -1034,12 +1049,12 @@ def list_recent_verdicts(limit: int = 50, run_id: int | None = None) -> list[dic
     with db.connect() as conn:
         if run_id is not None:
             rows = conn.execute(
-                db.ph("SELECT * FROM verdicts WHERE run_id=? ORDER BY id DESC LIMIT ?"),
+                ph(db.ph("SELECT * FROM verdicts WHERE run_id=? ORDER BY id DESC LIMIT ?")),
                 (run_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                db.ph("SELECT * FROM verdicts ORDER BY id DESC LIMIT ?"), (limit,)
+                ph(db.ph("SELECT * FROM verdicts ORDER BY id DESC LIMIT ?")), (limit,)
             ).fetchall()
     return [dict(row) for row in rows]
 
@@ -1244,7 +1259,7 @@ def mark_lesson_used(lesson_id: int) -> None:
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph("UPDATE lessons SET use_count = use_count + 1 WHERE id=?"),
+            ph(db.ph("UPDATE lessons SET use_count = use_count + 1 WHERE id=?")),
             (lesson_id,),
         )
 
@@ -1268,7 +1283,7 @@ def update_lesson_validation(lesson_id: int, *, validated: bool, score: float) -
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph("UPDATE lessons SET validated=?, score=? WHERE id=?"),
+            ph(db.ph("UPDATE lessons SET validated=?, score=? WHERE id=?")),
             (int(validated), score, lesson_id),
         )
     logger.info("state.lesson_validated", lesson_id=lesson_id, validated=validated, score=score)
@@ -1328,7 +1343,7 @@ def get_schedule_last_run(name: str) -> datetime | None:
     init_db()
     with db.connect() as conn:
         row = conn.execute(
-            db.ph("SELECT last_run FROM schedule_runs WHERE name=?"), (name,)
+            ph(db.ph("SELECT last_run FROM schedule_runs WHERE name=?")), (name,)
         ).fetchone()
     if row and row["last_run"]:
         dt = datetime.fromisoformat(row["last_run"])
@@ -1347,11 +1362,13 @@ def update_schedule_run(name: str) -> None:
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                """
+            ph(
+                db.ph(
+                    """
             INSERT INTO schedule_runs (name, last_run) VALUES (?, CURRENT_TIMESTAMP)
             ON CONFLICT(name) DO UPDATE SET last_run=CURRENT_TIMESTAMP
             """
+                )
             ),
             (name,),
         )
@@ -1367,11 +1384,13 @@ def record_approval_request(
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                """
+            ph(
+                db.ph(
+                    """
             INSERT OR REPLACE INTO approvals (run_id, project, task, metadata, status, tenant)
             VALUES (?, ?, ?, ?, 'pending', ?)
             """
+                )
             ),
             (run_id, project, task, json.dumps(metadata), tenant),
         )
@@ -1382,8 +1401,10 @@ def get_pending_approvals(tenant: str | None = None) -> list[dict[str, Any]]:
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                db.ph(
-                    "SELECT * FROM approvals WHERE status='pending' AND tenant=? ORDER BY requested_at"
+                ph(
+                    db.ph(
+                        "SELECT * FROM approvals WHERE status='pending' AND tenant=? ORDER BY requested_at"
+                    )
                 ),
                 (tenant,),
             ).fetchall()
@@ -1397,7 +1418,9 @@ def get_pending_approvals(tenant: str | None = None) -> list[dict[str, Any]]:
 def get_approval(run_id: int) -> dict[str, Any] | None:
     init_db()
     with db.connect() as conn:
-        row = conn.execute(db.ph("SELECT * FROM approvals WHERE run_id=?"), (run_id,)).fetchone()
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM approvals WHERE run_id=?")), (run_id,)
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -1405,12 +1428,14 @@ def update_approval(run_id: int, status: str, approver: str | None = None) -> No
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                """
+            ph(
+                db.ph(
+                    """
             UPDATE approvals
             SET status=?, approved_by=?, approved_at=CURRENT_TIMESTAMP
             WHERE run_id=?
             """
+                )
             ),
             (status, approver, run_id),
         )
@@ -1421,7 +1446,7 @@ def update_approval_metadata(run_id: int, metadata: dict[str, Any]) -> None:
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph("UPDATE approvals SET metadata=? WHERE run_id=?"),
+            ph(db.ph("UPDATE approvals SET metadata=? WHERE run_id=?")),
             (json.dumps(metadata), run_id),
         )
 
@@ -1430,7 +1455,11 @@ def store_token(entry) -> None:
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph("INSERT OR REPLACE INTO tokens (token, role, note, tenant) VALUES (?, ?, ?, ?)"),
+            ph(
+                db.ph(
+                    "INSERT OR REPLACE INTO tokens (token, role, note, tenant) VALUES (?, ?, ?, ?)"
+                )
+            ),
             (entry.token, entry.role, entry.note, getattr(entry, "tenant", "default")),
         )
 
@@ -1438,13 +1467,13 @@ def store_token(entry) -> None:
 def delete_token(token: str) -> None:
     init_db()
     with db.connect() as conn:
-        conn.execute(db.ph("DELETE FROM tokens WHERE token=?"), (token,))
+        conn.execute(ph(db.ph("DELETE FROM tokens WHERE token=?")), (token,))
 
 
 def get_token(token: str) -> dict[str, Any] | None:
     init_db()
     with db.connect() as conn:
-        row = conn.execute(db.ph("SELECT * FROM tokens WHERE token=?"), (token,)).fetchone()
+        row = conn.execute(ph(db.ph("SELECT * FROM tokens WHERE token=?")), (token,)).fetchone()
     return dict(row) if row else None
 
 
@@ -1462,7 +1491,7 @@ def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
-                db.ph("SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC"),
+                ph(db.ph("SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC")),
                 (tenant,),
             ).fetchall()
         else:
@@ -1481,8 +1510,10 @@ def record_audit(
     init_db()
     with db.connect() as conn:
         conn.execute(
-            db.ph(
-                "INSERT INTO audit_log (token_hash, role, endpoint, method, result, tenant) VALUES (?,?,?,?,?,?)"
+            ph(
+                db.ph(
+                    "INSERT INTO audit_log (token_hash, role, endpoint, method, result, tenant) VALUES (?,?,?,?,?,?)"
+                )
             ),
             (token_hash, role, endpoint, method, result, tenant),
         )
@@ -1492,7 +1523,7 @@ def list_audit_log(limit: int = 100) -> list[dict[str, Any]]:
     init_db()
     with db.connect() as conn:
         rows = conn.execute(
-            db.ph("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?"), (limit,)
+            ph(db.ph("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?")), (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1517,15 +1548,19 @@ def cost_basis_rows(*, tenant: str = "default") -> tuple[dict | None, dict | Non
     init_db()
     with db.connect() as conn:
         env = conn.execute(
-            "SELECT ROUND(SUM(s.cost_usd), 4), COUNT(*), MIN(date(r.started_at)), "
-            "MAX(date(r.started_at)) FROM steps s JOIN runs r ON r.id = s.run_id "
-            "WHERE s.cost_usd IS NOT NULL AND r.tenant = ?",
+            ph(
+                "SELECT ROUND(SUM(s.cost_usd), 4), COUNT(*), MIN(date(r.started_at)), "
+                "MAX(date(r.started_at)) FROM steps s JOIN runs r ON r.id = s.run_id "
+                "WHERE s.cost_usd IS NOT NULL AND r.tenant = ?"
+            ),
             (tenant,),
         ).fetchone()
         otel = conn.execute(
-            "SELECT ROUND(SUM(value), 4), COUNT(*), MIN(date(recorded_at)), "
-            "MAX(date(recorded_at)) FROM agent_telemetry "
-            "WHERE metric = ? AND unit = ?",
+            ph(
+                "SELECT ROUND(SUM(value), 4), COUNT(*), MIN(date(recorded_at)), "
+                "MAX(date(recorded_at)) FROM agent_telemetry "
+                "WHERE metric = ? AND unit = ?"
+            ),
             ("claude_code.cost.usage", "USD"),
         ).fetchone()
 
@@ -1564,13 +1599,15 @@ def record_pr_gate_outcome(
     init_db()
     with db.connect() as conn:
         conn.execute(
-            "INSERT INTO pr_gate_outcomes (run_id, project, branch, gate_blocked, tenant) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT (branch, tenant) DO UPDATE SET "
-            "gate_blocked = excluded.gate_blocked, run_id = excluded.run_id "
-            # Never reopen a decision already taken: the human acted on what
-            # they saw, and a later run must not rewrite that history.
-            "WHERE pr_gate_outcomes.decision IS NULL",
+            ph(
+                "INSERT INTO pr_gate_outcomes (run_id, project, branch, gate_blocked, tenant) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT (branch, tenant) DO UPDATE SET "
+                "gate_blocked = excluded.gate_blocked, run_id = excluded.run_id "
+                # Never reopen a decision already taken: the human acted on what
+                # they saw, and a later run must not rewrite that history.
+                "WHERE pr_gate_outcomes.decision IS NULL"
+            ),
             (run_id, project, branch, int(bool(gate_blocked)), tenant),
         )
 
@@ -1615,9 +1652,11 @@ def resolve_pr_gate_outcome(
     init_db()
     with db.connect() as conn:
         conn.execute(
-            "UPDATE pr_gate_outcomes SET decision = ?, pr_state = ?, actor = ?, "
-            "resolved_at = CURRENT_TIMESTAMP "
-            "WHERE branch = ? AND tenant = ? AND decision IS NULL",
+            ph(
+                "UPDATE pr_gate_outcomes SET decision = ?, pr_state = ?, actor = ?, "
+                "resolved_at = CURRENT_TIMESTAMP "
+                "WHERE branch = ? AND tenant = ? AND decision IS NULL"
+            ),
             (decision, pr_state, actor, branch, tenant),
         )
 
@@ -1699,10 +1738,12 @@ def context_truncations(*, tenant: str = "default", limit: int = 200) -> list[di
     init_db()
     with db.connect() as conn:
         rows = conn.execute(
-            "SELECT run_id, project, role, total_chars, budget, dropped_chars, "
-            "stages, largest_stage_chars, budget_basis, recorded_at "
-            "FROM context_truncations WHERE tenant = ? "
-            "ORDER BY id DESC LIMIT ?",
+            ph(
+                "SELECT run_id, project, role, total_chars, budget, dropped_chars, "
+                "stages, largest_stage_chars, budget_basis, recorded_at "
+                "FROM context_truncations WHERE tenant = ? "
+                "ORDER BY id DESC LIMIT ?"
+            ),
             (tenant, int(limit)),
         ).fetchall()
     keys = (
@@ -1802,9 +1843,11 @@ def get_drift_baseline(project: str, *, tenant: str = "default") -> dict[str, An
     init_db()
     with db.connect() as conn:
         row = conn.execute(
-            db.ph(
-                "SELECT * FROM drift_scans WHERE project=? AND tenant=? AND status='ok' "
-                "ORDER BY checked_at DESC, id DESC LIMIT 1"
+            ph(
+                db.ph(
+                    "SELECT * FROM drift_scans WHERE project=? AND tenant=? AND status='ok' "
+                    "ORDER BY checked_at DESC, id DESC LIMIT 1"
+                )
             ),
             (project, tenant),
         ).fetchone()
@@ -1829,11 +1872,13 @@ def insert_swarm_event(event: Any) -> bool:
     init_db()
     with db.connect() as conn:
         cur = conn.execute(
-            db.ph(
-                "INSERT INTO swarm_events "
-                "(id, type, payload, tenant, origin_instance, sig, status, ts) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) "
-                "ON CONFLICT(id) DO NOTHING"
+            ph(
+                db.ph(
+                    "INSERT INTO swarm_events "
+                    "(id, type, payload, tenant, origin_instance, sig, status, ts) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?) "
+                    "ON CONFLICT(id) DO NOTHING"
+                )
             ),
             (
                 event.id,
@@ -1860,7 +1905,9 @@ def get_swarm_event(event_id: str) -> dict[str, Any] | None:
     """Return the single `swarm_events` row for *event_id*, or `None`."""
     init_db()
     with db.connect() as conn:
-        row = conn.execute(db.ph("SELECT * FROM swarm_events WHERE id=?"), (event_id,)).fetchone()
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM swarm_events WHERE id=?")), (event_id,)
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -1881,9 +1928,11 @@ def claim_swarm_event(event_id: str, *, claimed_by: str) -> bool:
     init_db()
     with db.connect() as conn:
         cur = conn.execute(
-            db.ph(
-                "UPDATE swarm_events SET status='claimed', claimed_by=?, "
-                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'"
+            ph(
+                db.ph(
+                    "UPDATE swarm_events SET status='claimed', claimed_by=?, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'"
+                )
             ),
             (claimed_by, event_id),
         )
@@ -1916,9 +1965,11 @@ def mark_swarm_event_running(event_id: str, *, claimed_by: str) -> bool:
     init_db()
     with db.connect() as conn:
         cur = conn.execute(
-            db.ph(
-                "UPDATE swarm_events SET status='running', updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='claimed' AND claimed_by=?"
+            ph(
+                db.ph(
+                    "UPDATE swarm_events SET status='running', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='claimed' AND claimed_by=?"
+                )
             ),
             (event_id, claimed_by),
         )
@@ -1939,9 +1990,11 @@ def mark_swarm_event_done(event_id: str) -> bool:
     init_db()
     with db.connect() as conn:
         cur = conn.execute(
-            db.ph(
-                "UPDATE swarm_events SET status='done', updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='running'"
+            ph(
+                db.ph(
+                    "UPDATE swarm_events SET status='done', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='running'"
+                )
             ),
             (event_id,),
         )
@@ -1967,9 +2020,11 @@ def mark_swarm_event_failed(event_id: str) -> bool:
     init_db()
     with db.connect() as conn:
         cur = conn.execute(
-            db.ph(
-                "UPDATE swarm_events SET status='failed', updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='running'"
+            ph(
+                db.ph(
+                    "UPDATE swarm_events SET status='failed', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='running'"
+                )
             ),
             (event_id,),
         )
@@ -1989,9 +2044,11 @@ def mark_swarm_event_skipped(event_id: str) -> bool:
     init_db()
     with db.connect() as conn:
         cur = conn.execute(
-            db.ph(
-                "UPDATE swarm_events SET status='skipped', updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status='pending'"
+            ph(
+                db.ph(
+                    "UPDATE swarm_events SET status='skipped', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='pending'"
+                )
             ),
             (event_id,),
         )
@@ -2033,9 +2090,11 @@ def verdicts_for_pipeline_run(pipeline_run_id: int) -> list[dict[str, Any]]:
     init_db()
     with db.connect() as conn:
         rows = conn.execute(
-            db.ph(
-                "SELECT id, run_id, role, kind, decision, confidence, summary "
-                "FROM verdicts WHERE pipeline_run_id = ? ORDER BY id"
+            ph(
+                db.ph(
+                    "SELECT id, run_id, role, kind, decision, confidence, summary "
+                    "FROM verdicts WHERE pipeline_run_id = ? ORDER BY id"
+                )
             ),
             (pipeline_run_id,),
         ).fetchall()
@@ -2067,13 +2126,15 @@ def agreement_rows(limit: int = 500) -> list[dict[str, Any]]:
     init_db()
     with db.connect() as conn:
         rows = conn.execute(
-            db.ph(
-                "SELECT v.id, v.pipeline_run_id, v.role, v.decision, v.confidence, "
-                "a.status, a.approved_by "
-                "FROM verdicts v "
-                "JOIN approvals a ON a.run_id = v.pipeline_run_id "
-                "WHERE v.decision IS NOT NULL AND a.status IS NOT NULL "
-                "ORDER BY v.id DESC LIMIT ?"
+            ph(
+                db.ph(
+                    "SELECT v.id, v.pipeline_run_id, v.role, v.decision, v.confidence, "
+                    "a.status, a.approved_by "
+                    "FROM verdicts v "
+                    "JOIN approvals a ON a.run_id = v.pipeline_run_id "
+                    "WHERE v.decision IS NOT NULL AND a.status IS NOT NULL "
+                    "ORDER BY v.id DESC LIMIT ?"
+                )
             ),
             (int(limit),),
         ).fetchall()
