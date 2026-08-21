@@ -16,13 +16,14 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 import hivepilot.graph_sources  # noqa: F401 - side-effect import, registers built-ins
 from hivepilot import graph as graph_module
 from hivepilot.config import settings
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_PLUGIN_PATH = _REPO_ROOT / "plugins" / "drift_graph_source.py"
+_PLUGIN_PATH = BUNDLED_PLUGINS / "drift_graph_source.py"
 
 _spec = importlib.util.spec_from_file_location(
     "hivepilot_test_drift_graph_source_plugin", _PLUGIN_PATH

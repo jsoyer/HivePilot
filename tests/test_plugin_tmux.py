@@ -46,13 +46,14 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 
 REPO_ROOT = Path(__file__).parent.parent
-TMUX_PLUGIN_PATH = REPO_ROOT / "plugins" / "tmux.py"
+TMUX_PLUGIN_PATH = BUNDLED_PLUGINS / "tmux.py"
 
 
 def _load_tmux_module() -> ModuleType:

@@ -431,3 +431,90 @@ def _reset_topic_creation_budget():
     notification_service._reset_topic_creation_budget()
     yield
     notification_service._reset_topic_creation_budget()
+
+
+# ─── Where first-party plugins live ────────────────────────────────────────
+#
+# ONE definition, imported by every test that loads a plugin by file path.
+# Twenty-one sites each recomputed `<repo root> / "plugins"` before these
+# moved into the wheel, so relocating the directory meant editing all of them.
+#
+# Anchored to the PACKAGE, not to the repo root. Not merely tidier: tests run
+# from a worktree against an editable install have silently read a stale tree
+# here before, and `hivepilot.__file__` always points at the code under test.
+#
+# Deliberately does NOT call `hivepilot.plugins._bundled_plugins_dir()` -- a
+# test that locates a plugin through the resolver it is testing cannot notice
+# that resolver pointing somewhere wrong. `test_bundled_plugins_layout.py`
+# asserts the two agree.
+BUNDLED_PLUGINS = Path(hivepilot.__file__).resolve().parent / "bundled_plugins"
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_bundled_plugins(monkeypatch):
+    """Hide the in-wheel plugin directory from tests that pinned `base_dir`.
+
+    The three pre-existing tiers are ambient state that happens not to exist
+    under test: `<base_dir>/plugins` follows the `base_dir` a test pins to
+    `tmp_path`, and the config-repo and installed tiers are existence-gated on
+    paths absent in CI. Dozens of tests inherited isolation from that accident
+    and assert the loader finds exactly the one plugin they wrote.
+
+    The bundled tier is anchored to the PACKAGE, so a pinned `base_dir` no
+    longer moves it, and it would put 36 real plugins into every one of those
+    assertions.
+
+    The discriminator is `base_dir` itself, evaluated when the LOADER asks --
+    not when this fixture is set up, which is before the test has pinned
+    anything:
+
+        pinned elsewhere -> the test wants its tmp_path plugin alone;
+        left at the repo root -> the test wants the REAL plugins, and since
+        the move the bundled directory is the only place they live. Blanking
+        it unconditionally broke 20 such tests, which is how this shape was
+        found.
+
+    Production is untouched: this replaces an ambient source the suite never
+    meant to include, and only for a `base_dir` no deployment uses.
+    """
+    from hivepilot import plugins as _plugins
+    from hivepilot.config import settings as _settings
+
+    _real = _plugins._bundled_plugins_dir
+    _repo_root = Path(hivepilot.__file__).resolve().parent.parent
+
+    def _gated():
+        try:
+            pinned = Path(_settings.base_dir).resolve() != _repo_root
+        except Exception:
+            pinned = False
+        return None if pinned else _real()
+
+    monkeypatch.setattr(_plugins, "_bundled_plugins_dir", _gated)
+
+
+@pytest.fixture(autouse=True)
+def _never_write_to_the_operators_home(monkeypatch, tmp_path_factory):
+    """Point `xdg_data_home` at a throwaway directory for every test.
+
+    `fetch_plugin(name)` with no `dest_dir` writes to
+    `settings.xdg_data_home / "plugins"` -- the operator's REAL installed-
+    plugins directory. Four tests call it that way. They were harmless only
+    because the fetch was a network call that failed under test; once
+    first-party plugins started being copied out of the wheel, the same calls
+    began succeeding and left a real `codex.py` in `~/.local/share/hivepilot/
+    plugins/`.
+
+    That file then loads in every later test, and the damage surfaces as 32
+    assertion failures in unrelated modules, in RANDOM order only -- the
+    hardest shape to read. It has happened before on this machine, from
+    `plugins enable`.
+
+    So this is not a patch for those four call sites: it is the boundary that
+    stops any test from writing into the developer's home at all.
+    """
+    # Set the ENV VAR, not the attribute: `xdg_data_home` is a computed
+    # property reading `$XDG_DATA_HOME` on every access, so assigning to it
+    # raises "property has no setter" -- and a `raising=False` there would
+    # have swallowed that and left the real directory in place.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg")))

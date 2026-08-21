@@ -37,13 +37,14 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from hivepilot.config import settings
 from hivepilot.registry import SECRETS_MAP, SecretRef, SecretsRegistry
 
 REPO_ROOT = Path(__file__).parent.parent
-KMS_PLUGIN_PATH = REPO_ROOT / "plugins" / "kms.py"
+KMS_PLUGIN_PATH = BUNDLED_PLUGINS / "kms.py"
 
 # A distinctive fake plaintext used to prove the plugin NEVER leaks a decrypted
 # value into an error message.

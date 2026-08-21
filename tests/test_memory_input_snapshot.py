@@ -23,6 +23,8 @@ snapshot step one's recalled memories, which is the very loop being closed.
 
 from __future__ import annotations
 
+from conftest import BUNDLED_PLUGINS
+
 from hivepilot.services.memory_kind import (
     INPUT_SNAPSHOT_KEY,
     capture_input_snapshot,
@@ -93,9 +95,8 @@ class TestMem0NoLongerNeedsToBeASnapshotBackend:
         """With the capture lifted, mem0's append is against a value nobody
         else can have overwritten in the meantime -- so it composes."""
         import importlib.util
-        import pathlib
 
-        path = pathlib.Path(__file__).resolve().parents[1] / "plugins" / "mem0.py"
+        path = BUNDLED_PLUGINS / "mem0.py"
         spec = importlib.util.spec_from_file_location("hivepilot_test_mem0_sem", path)
         module = importlib.util.module_from_spec(spec)
         assert spec.loader is not None

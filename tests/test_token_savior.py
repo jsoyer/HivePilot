@@ -31,38 +31,46 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot import plugins as plugin_mod
 
 
-@pytest.fixture(autouse=True)
-def _no_module_leak():
-    """Undo the `plugins.*` import this file's fixture performs.
+def _load_bundled(stem: str):
+    """Load a bundled plugin BY FILE PATH, the way production does.
 
-    `importlib.import_module("plugins.token_savior")` registers `plugins` in
-    `sys.modules` for the rest of the session, and
-    `tests/test_plugins.py::test_loads_plugin_without_plugins_on_syspath`
-    asserts that module is absent. Alphabetically this file sorts after that
-    one, so the suite passes — by luck, not by correctness. Any reordering
-    (pytest-randomly, a new filename, running a subset) turns it red in a
-    file with nothing in its own source to explain why.
+    `importlib.import_module("plugins.<stem>")` worked only because a repo
+    checkout put the old top-level `plugins/` on `sys.path`. The loader itself
+    has never used that route -- `hivepilot.plugins._load_plugin_module` loads
+    by path precisely because the installed binary has no repo root on
+    `sys.path` -- so the import form tested a mechanism that does not ship.
     """
-    import sys
+    import importlib.util
 
-    before = set(sys.modules)
-    yield
-    for name in set(sys.modules) - before:
-        if name == "plugins" or name.startswith("plugins."):
-            sys.modules.pop(name, None)
+    spec = importlib.util.spec_from_file_location(
+        f"_bundled_{stem}", BUNDLED_PLUGINS / f"{stem}.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# `_no_module_leak` lived here: it stripped `plugins.*` back out of
+# `sys.modules` after every test, because `import_module("plugins.token_savior")`
+# registered it for the rest of the session and
+# `test_plugins.py::test_loads_plugin_without_plugins_on_syspath` asserts that
+# module is absent -- the suite passed on alphabetical ordering, by luck.
+# Loading by file path registers nothing, so there is nothing left to undo.
 
 
 @pytest.fixture
 def token_savior(monkeypatch, tmp_path):
     """Load the plugin module with the feature enabled and a temp config dir."""
-    import importlib
 
-    module = importlib.import_module("plugins.token_savior")
-    importlib.reload(module)
+    # No `reload`: loading by path builds a fresh module object per call, and
+    # `importlib.reload` would need it in `sys.modules`, which is exactly what
+    # this route deliberately avoids.
+    module = _load_bundled("token_savior")
     monkeypatch.setattr(module.settings, "token_savior_enabled", True)
     monkeypatch.setattr(module, "_config_dir", lambda: tmp_path)
     # The binary is not installed in CI or on a dev box, and every wiring
@@ -391,7 +399,7 @@ def test_config_dir_is_writable_by_the_service_user(tmp_path, monkeypatch):
     from pathlib import Path
 
     spec = importlib.util.spec_from_file_location(
-        "token_savior_dir_test", Path(__file__).parent.parent / "plugins" / "token_savior.py"
+        "token_savior_dir_test", BUNDLED_PLUGINS / "token_savior.py"
     )
     module = importlib.util.module_from_spec(spec)
     sys.modules["token_savior_dir_test"] = module

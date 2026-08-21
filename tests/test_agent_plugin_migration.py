@@ -33,6 +33,7 @@ from types import ModuleType
 from unittest.mock import patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS
@@ -58,7 +59,7 @@ _PLUGIN_SPECS = [
 def _load_plugin_module(stem: str) -> ModuleType:
     """Load plugins/<stem>.py by file path — same mechanism
     `hivepilot.plugins._scan_local_plugins` uses (mirrors tests/test_rtk.py)."""
-    path = REPO_ROOT / "plugins" / f"{stem}.py"
+    path = BUNDLED_PLUGINS / f"{stem}.py"
     spec = importlib.util.spec_from_file_location(f"hivepilot_plugin_{stem}_test", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

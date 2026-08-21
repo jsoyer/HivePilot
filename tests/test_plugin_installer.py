@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import requests
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.services import plugin_installer
 from hivepilot.services.plugin_installer import (
@@ -37,6 +38,23 @@ from hivepilot.services.plugin_installer import (
     is_installed,
     persist_enabled,
 )
+
+
+@pytest.fixture
+def network_source(monkeypatch):
+    """Force `fetch_plugin` down its NETWORK path.
+
+    First-party plugins are now copied out of the wheel when the resolved
+    source is the shipped default, so these tests -- which are about the
+    fetch's guards (timeout, HTTP status, the size cap, never exec'ing the
+    body) -- would otherwise never reach the code they exercise. Pointing at a
+    fork is exactly how an operator reaches it too.
+    """
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "plugins_source_repo", "https://example.com/fork", raising=False)
+    monkeypatch.setattr(settings, "plugins_source_ref", "v9", raising=False)
+
 
 # ---------------------------------------------------------------------------
 # Shared response mock — mirrors `plugin_index.py`'s `stream=True` +
@@ -72,7 +90,7 @@ def _mock_response(
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PLUGINS_DIR = REPO_ROOT / "plugins"
+PLUGINS_DIR = BUNDLED_PLUGINS
 
 
 def test_registry_is_non_empty() -> None:
@@ -213,7 +231,7 @@ def test_fetch_plugin_uses_configured_repo_and_ref_by_default(
 
 
 def test_fetch_plugin_is_idempotent_overwrites_existing_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     (tmp_path / "rtk.py").write_text("stale content", encoding="utf-8")
 
@@ -258,7 +276,7 @@ def test_fetch_plugin_defaults_to_the_managed_installed_plugins_dir(
 
 
 def test_fetch_plugin_timeout_raises_runtime_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(requests, "get", MagicMock(side_effect=requests.Timeout()))
     with pytest.raises(RuntimeError, match="timed out"):
@@ -266,7 +284,7 @@ def test_fetch_plugin_timeout_raises_runtime_error(
 
 
 def test_fetch_plugin_connection_error_raises_runtime_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(requests, "get", MagicMock(side_effect=requests.ConnectionError("boom")))
     with pytest.raises(RuntimeError):
@@ -274,7 +292,7 @@ def test_fetch_plugin_connection_error_raises_runtime_error(
 
 
 def test_fetch_plugin_http_error_status_raises_runtime_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mock_response = _mock_response(status_code=404)
     mock_response.raise_for_status = MagicMock(side_effect=requests.HTTPError("404 Client Error"))
@@ -284,7 +302,7 @@ def test_fetch_plugin_http_error_status_raises_runtime_error(
 
 
 def test_fetch_plugin_http_error_status_closes_response(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mock_response = _mock_response(status_code=404)
     mock_response.raise_for_status = MagicMock(side_effect=requests.HTTPError("404 Client Error"))
@@ -295,7 +313,7 @@ def test_fetch_plugin_http_error_status_closes_response(
 
 
 def test_fetch_plugin_never_execs_the_fetched_content(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The fetched body is malicious-looking Python -- must be written
     verbatim to disk and NEVER imported/exec'd by fetch_plugin itself."""
@@ -316,7 +334,7 @@ def test_fetch_plugin_never_execs_the_fetched_content(
 
 
 def test_fetch_plugin_rejects_oversized_response(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The size cap must abort WHILE streaming, never after the full body
     has already been buffered — that's the entire point of `stream=True` +
@@ -353,7 +371,7 @@ def test_fetch_plugin_rejects_oversized_response(
 
 
 def test_fetch_plugin_exactly_at_cap_is_allowed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    network_source, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A body whose size is exactly `MAX_PLUGIN_BYTES` (not GREATER than it)
     must succeed — the cap is a strict `>` comparison, not `>=`."""
@@ -497,7 +515,7 @@ class TestEveryPluginFileIsClassified:
     of the three sets". This test is what makes forgetting fail loudly.
     """
 
-    PLUGINS_DIR = Path(__file__).resolve().parents[1] / "plugins"
+    PLUGINS_DIR = BUNDLED_PLUGINS
 
     def _stems(self) -> set[str]:
         return {p.stem for p in self.PLUGINS_DIR.glob("*.py") if not p.stem.startswith("_")}

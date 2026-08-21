@@ -98,8 +98,12 @@ DEFAULT_GLOBS = [
     # Prompts handed to agents verbatim — the original scope.
     "prompts/**/*.md",
     # Engine code. The reason this file exists in its current form.
+    # Covers hivepilot/bundled_plugins/*.py too -- the first-party plugins moved
+    # inside the package so `pip install` would finally update them. The old
+    # top-level "plugins/**/*.py" entry is gone rather than kept "just in case":
+    # a glob matching nothing is indistinguishable from a glob that stopped
+    # matching, and this scanner exists to notice exactly that kind of silence.
     "hivepilot/**/*.py",
-    "plugins/**/*.py",
     "scripts/**/*.py",
     "workflows/**/*.py",
     # Shipped web UI.

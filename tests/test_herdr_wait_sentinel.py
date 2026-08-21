@@ -30,13 +30,13 @@ Two properties the sentinel must have, and both are failure modes:
 from __future__ import annotations
 
 import importlib.util
-import pathlib
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 
 def _herdr():
-    path = pathlib.Path(__file__).resolve().parents[1] / "plugins" / "herdr.py"
+    path = BUNDLED_PLUGINS / "herdr.py"
     spec = importlib.util.spec_from_file_location("hivepilot_test_herdr_wait", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

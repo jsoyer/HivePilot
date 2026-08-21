@@ -34,8 +34,28 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.runners.base import RunnerPayload
+
+
+def _load_bundled(stem: str):
+    """Load a bundled plugin BY FILE PATH, the way production does.
+
+    `importlib.import_module("plugins.<stem>")` worked only because a repo
+    checkout put the old top-level `plugins/` on `sys.path`. The loader itself
+    has never used that route -- `hivepilot.plugins._load_plugin_module` loads
+    by path precisely because the installed binary has no repo root on
+    `sys.path` -- so the import form tested a mechanism that does not ship.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        f"_bundled_{stem}", BUNDLED_PLUGINS / f"{stem}.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class _Recorder:
@@ -133,11 +153,10 @@ class TestSourcesApplyTheRuleThemselves:
         """mem0 stores agent output. On a reviewer prompt that is text an
         agent wrote after reading untrusted code — replaying it into the
         CISO is the laundering path, so mem0 sits this one out."""
-        import importlib
 
         from hivepilot.services import review_context
 
-        mem0 = importlib.import_module("plugins.mem0")
+        mem0 = _load_bundled("mem0")
         # Without this both tests pass for the wrong reason: mem0 is
         # opt-in, so a disabled plugin never searches and the guard under
         # test is never reached.
@@ -166,9 +185,8 @@ class TestSourcesApplyTheRuleThemselves:
 
     def test_mem0_still_recalls_on_an_ordinary_step(self, monkeypatch) -> None:
         """The guard has to be narrow, or it silently disables mem0 wholesale."""
-        import importlib
 
-        mem0 = importlib.import_module("plugins.mem0")
+        mem0 = _load_bundled("mem0")
         # Without this both tests pass for the wrong reason: mem0 is
         # opt-in, so a disabled plugin never searches and the guard under
         # test is never reached.

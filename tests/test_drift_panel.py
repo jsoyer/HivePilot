@@ -15,10 +15,12 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from conftest import BUNDLED_PLUGINS
+
 from hivepilot.config import settings
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_PLUGIN_PATH = _REPO_ROOT / "plugins" / "drift_panel.py"
+_PLUGIN_PATH = BUNDLED_PLUGINS / "drift_panel.py"
 
 _spec = importlib.util.spec_from_file_location("hivepilot_test_drift_panel_plugin", _PLUGIN_PATH)
 assert _spec and _spec.loader

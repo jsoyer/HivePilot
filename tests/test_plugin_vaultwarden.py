@@ -26,6 +26,7 @@ from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.registry import (
@@ -36,7 +37,7 @@ from hivepilot.registry import (
 )
 
 REPO_ROOT = Path(__file__).parent.parent
-VAULTWARDEN_PLUGIN_PATH = REPO_ROOT / "plugins" / "vaultwarden.py"
+VAULTWARDEN_PLUGIN_PATH = BUNDLED_PLUGINS / "vaultwarden.py"
 
 _FAKE_VALUE = "s3cr3t-value-SHOULD-NOT-LEAK-abc123"
 _FAKE_SESSION = "BW-SESSION-TOKEN-SHOULD-NOT-LEAK-xyz789"

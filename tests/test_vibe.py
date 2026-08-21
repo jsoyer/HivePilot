@@ -14,13 +14,32 @@ with `vibe` installed and enabled must resolve the kind exactly as before.
 from __future__ import annotations
 
 import pytest
+from conftest import BUNDLED_PLUGINS
+
+
+def _load_bundled(stem: str):
+    """Load a bundled plugin BY FILE PATH, the way production does.
+
+    `importlib.import_module("plugins.<stem>")` worked only because a repo
+    checkout put the old top-level `plugins/` on `sys.path`. The loader itself
+    has never used that route -- `hivepilot.plugins._load_plugin_module` loads
+    by path precisely because the installed binary has no repo root on
+    `sys.path` -- so the import form tested a mechanism that does not ship.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        f"_bundled_{stem}", BUNDLED_PLUGINS / f"{stem}.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture
 def plugin():
-    import importlib
 
-    return importlib.import_module("plugins.vibe")
+    return _load_bundled("vibe")
 
 
 class TestItRegistersOnlyWhenUsable:

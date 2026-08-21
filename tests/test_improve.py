@@ -21,9 +21,10 @@ import shutil
 from pathlib import Path
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_IMPROVE_PLUGIN = _REPO_ROOT / "plugins" / "improve.py"
+_IMPROVE_PLUGIN = BUNDLED_PLUGINS / "improve.py"
 
 
 # ---------------------------------------------------------------------------

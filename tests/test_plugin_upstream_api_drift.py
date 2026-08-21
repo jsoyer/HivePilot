@@ -22,13 +22,13 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
-PLUGINS = Path(__file__).resolve().parent.parent / "plugins"
+PLUGINS = BUNDLED_PLUGINS
 
 
 def _load(name: str) -> ModuleType:

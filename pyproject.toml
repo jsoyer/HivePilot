@@ -138,6 +138,17 @@ pdf = [
 ]
 # Pollen web UI (hivepilot/webui/) — serves the pre-built React/Vite bundle
 # committed under hivepilot/webui/static/ (see [tool.setuptools.package-data]
+# First-party plugins ship INSIDE the wheel (moved from a top-level `plugins/`).
+# Package-data, deliberately not a package: the loader imports these by FILE
+# PATH, and giving them an `__init__.py` would make every plugin importable
+# twice under two module names -- the same duplicate-module trap that made
+# `mypy .` report 20 phantom errors against `build/lib/`.
+#
+# Before this, `pip install` never updated them: they lived only in
+# `$XDG_DATA_HOME/hivepilot/plugins/`, which nothing but `plugins install`
+# writes. A merged fix to `herdr.py` ran NINE DAYS stale on the box with
+# `plugins check` reporting nothing, because there was no in-wheel copy to
+# compare against.
 # below) at GET /ui, gated by HIVEPILOT_ENABLE_WEBUI. This is a thin/marker
 # extra: StaticFiles/FileResponse come from starlette, already pulled in by
 # the `api` extra (fastapi) — no new runtime dependency. `webui` depends on
@@ -236,6 +247,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+markers = [
+    "bundled_plugins: let the loader see the in-wheel plugin directory",
+]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
 asyncio_mode = "auto"
@@ -296,4 +310,18 @@ include = ["hivepilot*"]
 # operator-editable and installer-seeded, not packaged) because
 # services/concierge_service.py requires a non-empty prompt_file on every
 # pip install. See concierge_service.py's PACKAGING NOTE.
-"hivepilot" = ["prompts/*.md"]
+# `bundled_plugins/*.py`: first-party plugins now ship INSIDE the wheel (moved
+# from a top-level `plugins/`). Package-data, deliberately NOT a package: the
+# loader imports these by FILE PATH, and an `__init__.py` would make every
+# plugin importable twice under two module names -- the duplicate-module trap
+# that had `mypy .` reporting 20 phantom errors against `build/lib/`.
+#
+# Before this, `pip install` never updated a plugin: they existed only in
+# `$XDG_DATA_HOME/hivepilot/plugins/`, which nothing but `plugins install`
+# writes. A merged fix to `herdr.py` ran NINE DAYS stale on the box while
+# `plugins check` said nothing, because there was no in-wheel copy to compare
+# against.
+#
+# ONE key per package: `"hivepilot"` appearing twice in this table is a TOML
+# duplicate -- the prompts would silently stop shipping.
+"hivepilot" = ["prompts/*.md", "bundled_plugins/*.py"]

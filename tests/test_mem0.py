@@ -62,6 +62,7 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
@@ -83,7 +84,7 @@ def _clean_secret_registry_for_leak_tests():
 
 
 REPO_ROOT = Path(__file__).parent.parent
-MEM0_PLUGIN_PATH = REPO_ROOT / "plugins" / "mem0.py"
+MEM0_PLUGIN_PATH = BUNDLED_PLUGINS / "mem0.py"
 
 
 def _load_mem0_module() -> ModuleType:

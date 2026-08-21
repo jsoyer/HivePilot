@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.services import headroom_metrics, memory_service, plugin_activity
 
@@ -129,7 +130,7 @@ def test_memory_event_writers_are_all_attributed_by_backend() -> None:
     has a probe, and every such probe filters by backend. A writer without one
     would silently inflate whichever plugin's row it landed in.
     """
-    plugins_dir = Path(__file__).resolve().parent.parent / "plugins"
+    plugins_dir = BUNDLED_PLUGINS
     recorders = {"record_search", "record_store", "record_read"}
 
     writers = {

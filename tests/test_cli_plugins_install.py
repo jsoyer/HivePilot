@@ -64,6 +64,24 @@ for _mod in _STUBS:
 import pytest  # noqa: E402
 
 from hivepilot.cli import app  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _network_source(monkeypatch):
+    """Force the NETWORK path for this module.
+
+    `plugins install <first-party>` copies from the wheel when the resolved
+    source is the shipped default, so tests asserting that a fetch happened --
+    or that its content is never exec'd -- would otherwise assert against a
+    code path they no longer reach. Pointing at a fork is how an operator
+    reaches it too.
+    """
+    from hivepilot.config import settings
+
+    monkeypatch.setattr(settings, "plugins_source_repo", "https://example.com/fork", raising=False)
+    monkeypatch.setattr(settings, "plugins_source_ref", "v9", raising=False)
+
+
 from hivepilot.services import plugin_installer  # noqa: E402
 
 # ---------------------------------------------------------------------------

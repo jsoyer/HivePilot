@@ -42,6 +42,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import Settings
 from hivepilot.plugin_capabilities import (
@@ -61,7 +62,7 @@ def _load_plugin_module(name: str) -> ModuleType:
     """Load `plugins/<name>.py` by file path — the same mechanism
     `hivepilot.plugins._scan_local_plugins` uses (no dependency on `plugins`
     being an importable package on `sys.path`)."""
-    path = REPO_ROOT / "plugins" / f"{name}.py"
+    path = BUNDLED_PLUGINS / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"hivepilot_plugin_{name}_captest", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -96,7 +97,7 @@ def _isolated_plugin_dir(name: str, tmp_path: Path) -> Path:
     """
     pdir = tmp_path / "plugins"
     pdir.mkdir(exist_ok=True)
-    shutil.copy(REPO_ROOT / "plugins" / f"{name}.py", pdir / f"{name}.py")
+    shutil.copy(BUNDLED_PLUGINS / f"{name}.py", pdir / f"{name}.py")
     return tmp_path
 
 
@@ -149,7 +150,7 @@ class TestDeclaredManifest:
         actual `subprocess.run(` in the plugin's own source. Guards against a
         future refactor dropping the shell-out while leaving a now-overstated
         manifest that operators must still allowlist."""
-        source = (REPO_ROOT / "plugins" / f"{name}.py").read_text(encoding="utf-8")
+        source = (BUNDLED_PLUGINS / f"{name}.py").read_text(encoding="utf-8")
 
         assert "import subprocess" in source
         assert "subprocess.run(" in source
