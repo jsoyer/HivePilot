@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from hivepilot.services.db import ph
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -52,7 +53,9 @@ class SqliteStageCache:
     def get(self, key: str) -> str | None:
         try:
             with sqlite3.connect(self._db_path) as conn:
-                row = conn.execute("SELECT value FROM stage_cache WHERE key = ?", (key,)).fetchone()
+                row = conn.execute(
+                    ph("SELECT value FROM stage_cache WHERE key = ?"), (key,)
+                ).fetchone()
             return row[0] if row else None
         except Exception as exc:  # noqa: BLE001
             logger.warning("stage_cache.get_failed", key=key, error=str(exc))
@@ -63,7 +66,9 @@ class SqliteStageCache:
             now = datetime.now(tz=timezone.utc).isoformat()
             with sqlite3.connect(self._db_path) as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO stage_cache (key, value, created_at) VALUES (?, ?, ?)",
+                    ph(
+                        "INSERT OR REPLACE INTO stage_cache (key, value, created_at) VALUES (?, ?, ?)"
+                    ),
                     (key, value, now),
                 )
         except Exception as exc:  # noqa: BLE001

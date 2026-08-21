@@ -148,7 +148,13 @@ def connect() -> Generator[Any, None, None]:
                 "Install it with: pip install psycopg[binary]"
             ) from None
 
-        conn = psycopg.connect(settings.database_url, row_factory=dict_row)
+        # `Any`, because the two branches of this function yield genuinely
+        # different types (psycopg `Connection[dict]` vs `sqlite3.Connection`)
+        # and mypy infers the first one for the shared name. Only visible once
+        # psycopg is actually INSTALLED -- until this PR it was declared in no
+        # extra, so CI's mypy silently treated the whole branch as Any and
+        # type-checked none of it. The CI typecheck job now installs it.
+        conn: Any = psycopg.connect(settings.database_url, row_factory=dict_row)
         try:
             yield conn
             conn.commit()

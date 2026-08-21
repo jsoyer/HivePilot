@@ -162,18 +162,18 @@ def _diagnose_empty() -> str:
     try:
         with db.connect() as conn:
             verdicts = conn.execute(
-                "SELECT COUNT(*) FROM verdicts WHERE decision IS NOT NULL"
-            ).fetchone()[0]
+                "SELECT COUNT(*) AS n FROM verdicts WHERE decision IS NOT NULL"
+            ).fetchone()["n"]
             approvals = conn.execute(
-                "SELECT COUNT(*) FROM approvals WHERE status IS NOT NULL"
-            ).fetchone()[0]
+                "SELECT COUNT(*) AS n FROM approvals WHERE status IS NOT NULL"
+            ).fetchone()["n"]
             shared = conn.execute(
-                "SELECT COUNT(*) FROM verdicts v JOIN approvals a ON a.run_id = v.pipeline_run_id"
-            ).fetchone()[0]
+                "SELECT COUNT(*) AS n FROM verdicts v JOIN approvals a ON a.run_id = v.pipeline_run_id"
+            ).fetchone()["n"]
             unlinked = conn.execute(
-                "SELECT COUNT(*) FROM verdicts "
+                "SELECT COUNT(*) AS n FROM verdicts "
                 "WHERE decision IS NOT NULL AND pipeline_run_id IS NULL"
-            ).fetchone()[0]
+            ).fetchone()["n"]
     except Exception as exc:  # noqa: BLE001 - a report must never raise
         logger.warning("autonomy.diagnose_failed", error=str(exc))
         return "the verdict and approval tables could not be read"

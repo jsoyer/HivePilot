@@ -41,6 +41,7 @@ from statistics import median
 from typing import Any
 
 from hivepilot.services import db
+from hivepilot.services.db import ph
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,7 @@ def cache_sessions(limit_days: int = 30) -> list[SessionCache]:
     _ensure_schema()
     with db.connect() as conn:
         rows = conn.execute(
-            """
+            ph("""
             SELECT session_id,
                    model,
                    SUM(CASE WHEN kind = 'cacheCreation' THEN value ELSE 0 END) AS created,
@@ -322,7 +323,7 @@ def cache_sessions(limit_days: int = 30) -> list[SessionCache]:
              GROUP BY session_id, model
              HAVING created > 0
              ORDER BY MAX(recorded_at) DESC
-            """,
+            """),
             (f"-{int(limit_days)} days",),
         ).fetchall()
 

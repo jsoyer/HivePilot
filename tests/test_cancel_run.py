@@ -507,11 +507,21 @@ class TestCancelEndpointFullAsyncFlow:
 
         # No thread left running after cancel: the background worker thread
         # (and the registry entry it owned) must be fully cleaned up.
+        #
+        # Wait on the REGISTRY, not on `threading.active_count()`. The thread
+        # count is a proxy, and a global one: under a loaded full suite other
+        # tests' threads move it, so it can drop to the baseline while THIS
+        # run's worker is still registered -- and then the very next line, the
+        # one that reads the registry, fails. Green in isolation, red in a
+        # suite, roughly one run in ten.
         deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and async_run_service.is_cancel_requested(run_id):
+            time.sleep(0.05)
+        assert async_run_service.is_cancel_requested(run_id) is False
+
         while time.monotonic() < deadline and threading.active_count() > baseline_threads:
             time.sleep(0.05)
         assert threading.active_count() <= baseline_threads
-        assert async_run_service.is_cancel_requested(run_id) is False
 
         # Re-cancelling an already-terminal run must 409, never a
         # false-success 202 (the registry entry was popped on completion).
