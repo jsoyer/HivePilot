@@ -924,6 +924,7 @@ class Settings(BaseSettings):
     # (that check scans PATH directly, unaffected by builtin-vs-plugin).
     # env: HIVEPILOT_CODEX_ENABLED / _CURSOR_ENABLED
     codex_enabled: bool = True
+    grok_enabled: bool = True
     cursor_enabled: bool = True
     # Sprint 3 (runner-defaults-plugins-mode PRD): three brand-new agent
     # kinds (never previously built-in) added directly as default-on,

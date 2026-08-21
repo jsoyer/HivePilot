@@ -89,6 +89,23 @@ AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
         docs_url="https://github.com/openai/codex",
         command="curl -fsSL https://chatgpt.com/codex/install.sh | sh",
     ),
+    # Source: https://docs.x.ai/build/overview and https://x.ai/news/grok-build-cli.
+    # Fetched 2026-08-21, and the one-liner VERIFIED by running it on the box:
+    # it is per-user (no sudo anywhere in the script) and lands the binary in
+    # `$HOME/.grok/bin`, which is NOT on the systemd units' PATH — see
+    # bundled_plugins/grok.py's health() for why that matters.
+    #
+    # Auth needs no API key: `grok login --device-auth` prints a URL to open
+    # elsewhere and writes the token locally, which is the flow a headless box
+    # needs. Proven with a scrubbed environment (`env -i`, zero XAI*/GROK_*KEY
+    # vars) returning a real answer.
+    "grok": InstallSpec(
+        name="Grok Build CLI",
+        binary="grok",
+        vendor="xAI",
+        docs_url="https://docs.x.ai/build/overview",
+        command="curl -fsSL https://x.ai/cli/install.sh | bash",
+    ),
     # Source: https://cursor.com/docs/cli/installation ("macOS and Linux"
     # section). Fetched 2026-07-19. Binary installed is `cursor-agent`
     # (matches hivepilot.runners.cursor_runner.CursorRunner.command_name).
