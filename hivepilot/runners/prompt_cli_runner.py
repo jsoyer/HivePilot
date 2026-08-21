@@ -15,6 +15,7 @@ from hivepilot.runners.base import (
     UsageInfo,
     prompt_file_not_found_message,
     resolve_runner_effort,
+    set_last_resolved_model,
     set_last_usage,
 )
 from hivepilot.utils.env import merge_environments
@@ -94,6 +95,10 @@ class PromptCliRunner(BaseRunner):
         args.extend(opts.get("cli_flags", list(self.cli_flags)))
         args.extend(self._effort_cli_flags(payload))
         model = payload.step.metadata.get("model") or self.definition.model
+        # See `set_last_resolved_model`: stated before dispatch so a failing
+        # step still records what it ran on, and so the orchestrator never has
+        # to fall back to guessing from config.
+        set_last_resolved_model(model)
         if model:
             args.extend([opts.get("model_flag", self.model_flag), model])
         prompt_flag = opts.get("prompt_flag", self.prompt_flag)
