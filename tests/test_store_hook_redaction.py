@@ -52,6 +52,7 @@ from unittest.mock import MagicMock, patch
 
 import conftest
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 import hivepilot.config as config_mod
 import hivepilot.orchestrator  # noqa: F401 — side-effect import for patch resolution
@@ -61,8 +62,8 @@ from hivepilot.services import config_provenance
 MARKER = "LESSONS-S1-SECRET-MARKER-7e2f4a91-DO-NOT-LEAK"
 
 REPO_ROOT = Path(__file__).parent.parent
-MEM0_PLUGIN_PATH = REPO_ROOT / "plugins" / "mem0.py"
-OBSIDIAN_PLUGIN_PATH = REPO_ROOT / "plugins" / "obsidian.py"
+MEM0_PLUGIN_PATH = BUNDLED_PLUGINS / "mem0.py"
+OBSIDIAN_PLUGIN_PATH = BUNDLED_PLUGINS / "obsidian.py"
 _HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
 
 

@@ -14,6 +14,7 @@ from types import ModuleType
 
 import pytest
 import yaml
+from conftest import BUNDLED_PLUGINS
 from fastapi.testclient import TestClient
 
 from hivepilot.services.token_service import add_token
@@ -1202,11 +1203,10 @@ class TestPluginsHealthEndpoint:
         `TestLoadPluginsByPath.test_loads_plugin_without_plugins_on_syspath`,
         which asserts exactly that invariant)."""
         import importlib.util
-        from pathlib import Path
 
         from hivepilot.config import settings
 
-        plugin_path = Path(__file__).resolve().parent.parent / "plugins" / "mem0.py"
+        plugin_path = BUNDLED_PLUGINS / "mem0.py"
         spec = importlib.util.spec_from_file_location(
             "hivepilot_plugin_mem0_health_test", plugin_path
         )
@@ -1671,9 +1671,8 @@ class TestMem0ClientParity:
     @staticmethod
     def _load_mem0_plugin_module() -> ModuleType:
         import importlib.util
-        from pathlib import Path
 
-        plugin_path = Path(__file__).resolve().parent.parent / "plugins" / "mem0.py"
+        plugin_path = BUNDLED_PLUGINS / "mem0.py"
         spec = importlib.util.spec_from_file_location(
             "hivepilot_plugin_mem0_parity_test", plugin_path
         )

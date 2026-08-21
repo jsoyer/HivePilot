@@ -32,6 +32,7 @@ from typing import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.registry import (
@@ -42,7 +43,7 @@ from hivepilot.registry import (
 )
 
 REPO_ROOT = Path(__file__).parent.parent
-OP_PLUGIN_PATH = REPO_ROOT / "plugins" / "onepassword.py"
+OP_PLUGIN_PATH = BUNDLED_PLUGINS / "onepassword.py"
 
 # A fake secret value used to prove the plugin NEVER leaks a fetched value into
 # an error message. Deliberately distinctive so a substring assertion is exact.

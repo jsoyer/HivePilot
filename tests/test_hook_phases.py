@@ -24,33 +24,35 @@ Plugins that declare nothing keep working and keep their relative order.
 from __future__ import annotations
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.plugins import HOOK_PHASES, order_hooks
 
+# `_no_module_leak` lived here: it stripped `plugins.*` back out of
+# `sys.modules` after every test, because importing `plugins.headroom`
+# registered it for the rest of the session and `tests/test_plugins.py`
+# asserts that module is absent -- green in isolation, red in a suite, three
+# files away. Loading by file path registers nothing, so there is nothing to
+# undo.
 
-@pytest.fixture(autouse=True)
-def _no_module_leak():
-    """Undo any `plugins.*` import this file performs.
 
-    Importing `plugins.headroom` registers `plugins` in `sys.modules` for the
-    rest of the session, and `tests/test_plugins.py` asserts that module is
-    absent. This file sorts before it, so without this the failure lands
-    three files away with nothing in its own source to explain it — green in
-    isolation, red in a suite, which is the hardest shape to debug.
+def _import_plugin(stem: str):
+    """Load a bundled plugin BY FILE PATH, the way the loader does.
+
+    `import plugins.headroom` only ever worked because a repo checkout put the
+    old top-level `plugins/` on `sys.path`; `hivepilot.plugins._load_plugin_module`
+    has always loaded by path, because the installed binary has no repo root
+    there. The import form tested a mechanism that does not ship.
     """
-    import sys
+    import importlib.util
 
-    before = set(sys.modules)
-    yield
-    for name in set(sys.modules) - before:
-        if name == "plugins" or name.startswith("plugins."):
-            sys.modules.pop(name, None)
-
-
-def _import_plugin(dotted: str):
-    import importlib
-
-    return importlib.import_module(dotted)
+    stem = stem.rpartition(".")[2]
+    spec = importlib.util.spec_from_file_location(
+        f"_bundled_{stem}", BUNDLED_PLUGINS / f"{stem}.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _hook(name: str, phase: str | None = None):

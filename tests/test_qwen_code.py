@@ -16,6 +16,8 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 
+from conftest import BUNDLED_PLUGINS
+
 from hivepilot.config import settings
 from hivepilot.runners.prompt_cli_runner import QwenCodeRunner
 
@@ -23,7 +25,7 @@ REPO_ROOT = Path(__file__).parent.parent
 
 
 def _load_plugin_module():
-    path = REPO_ROOT / "plugins" / "qwen_code.py"
+    path = BUNDLED_PLUGINS / "qwen_code.py"
     spec = importlib.util.spec_from_file_location("hivepilot_plugin_qwen_code_smoke", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

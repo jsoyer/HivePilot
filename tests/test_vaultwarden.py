@@ -18,12 +18,13 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import Settings
 from hivepilot.registry import SecretRef
 
 REPO_ROOT = Path(__file__).parent.parent
-VW_PLUGIN_PATH = REPO_ROOT / "plugins" / "vaultwarden.py"
+VW_PLUGIN_PATH = BUNDLED_PLUGINS / "vaultwarden.py"
 
 
 def _load_vaultwarden_module() -> ModuleType:

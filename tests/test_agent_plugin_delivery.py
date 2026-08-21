@@ -33,6 +33,8 @@ defect.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from hivepilot.services.agent_plugin_delivery import (
@@ -207,16 +209,20 @@ class TestTheGateStaysShutOnTheOtherPath:
         contain "unknown plugin" either, so the test passed over code that
         could not run. mypy found it; this assertion would not have.
         """
+        import tempfile
         from unittest.mock import patch
+
+        from conftest import BUNDLED_PLUGINS
 
         from hivepilot.services.plugin_installer import fetch_plugin
 
+        # First-party plugins are copied out of the wheel now, so there is no
+        # network call left to observe. The positive observable is stronger
+        # anyway: a file written, byte-identical to the source this process
+        # runs. Only a name that passed the allowlist can produce it.
         with patch("hivepilot.services.plugin_installer.requests.get") as get:
-            get.side_effect = RuntimeError("reached the network")
-            with pytest.raises(Exception, match="reached the network"):
-                fetch_plugin("codex", allow_agent_cli=True)
+            get.side_effect = AssertionError("reached the network for a bundled plugin")
+            dest = pathlib.Path(tempfile.mkdtemp())
+            written = fetch_plugin("codex", allow_agent_cli=True, dest_dir=dest)
 
-            # The URL is the point: the name passed validation and the fetch
-            # was actually attempted for `plugins/codex.py`.
-            assert get.call_count == 1
-            assert "plugins/codex.py" in get.call_args.args[0]
+        assert written.read_bytes() == (BUNDLED_PLUGINS / "codex.py").read_bytes()

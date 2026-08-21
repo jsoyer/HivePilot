@@ -27,13 +27,14 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 
 REPO_ROOT = Path(__file__).parent.parent
-HUGO_PLUGIN_PATH = REPO_ROOT / "plugins" / "hugo.py"
+HUGO_PLUGIN_PATH = BUNDLED_PLUGINS / "hugo.py"
 
 
 def _load_hugo_module() -> ModuleType:

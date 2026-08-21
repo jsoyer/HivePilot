@@ -24,6 +24,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import Settings, settings
 from hivepilot.registry import _BUILTIN_RUNNERS, active_agent_runner_kinds
@@ -34,7 +35,7 @@ from hivepilot.services.agent_checks import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PLUGINS_DIR = REPO_ROOT / "plugins"
+PLUGINS_DIR = BUNDLED_PLUGINS
 
 
 def _load_plugin_module(stem: str):

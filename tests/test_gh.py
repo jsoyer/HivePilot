@@ -29,13 +29,14 @@ from types import ModuleType
 from unittest.mock import patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 
 REPO_ROOT = Path(__file__).parent.parent
-GH_PLUGIN_PATH = REPO_ROOT / "plugins" / "gh.py"
+GH_PLUGIN_PATH = BUNDLED_PLUGINS / "gh.py"
 
 
 def _load_gh_module() -> ModuleType:

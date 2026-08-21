@@ -23,9 +23,10 @@ import shutil
 from pathlib import Path
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SHADCN_PLUGIN = _REPO_ROOT / "plugins" / "shadcn.py"
+_SHADCN_PLUGIN = BUNDLED_PLUGINS / "shadcn.py"
 
 
 # ---------------------------------------------------------------------------

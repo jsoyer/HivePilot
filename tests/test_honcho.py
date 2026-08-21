@@ -35,6 +35,7 @@ import sys
 import types
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.services.memory_kind import RecallSemantics, resolve_composition
 
@@ -82,9 +83,8 @@ def honcho_module(monkeypatch):
     monkeypatch.setenv("HIVEPILOT_HONCHO_WORKSPACE", "hivepilot-test")
 
     import importlib.util
-    import pathlib
 
-    path = pathlib.Path(__file__).resolve().parents[1] / "plugins" / "honcho.py"
+    path = BUNDLED_PLUGINS / "honcho.py"
     spec = importlib.util.spec_from_file_location("hivepilot_test_honcho", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

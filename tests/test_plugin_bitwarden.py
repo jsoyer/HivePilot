@@ -30,6 +30,7 @@ from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.registry import (
@@ -40,7 +41,7 @@ from hivepilot.registry import (
 )
 
 REPO_ROOT = Path(__file__).parent.parent
-BITWARDEN_PLUGIN_PATH = REPO_ROOT / "plugins" / "bitwarden.py"
+BITWARDEN_PLUGIN_PATH = BUNDLED_PLUGINS / "bitwarden.py"
 
 # A fake secret value + fake session token used to prove the plugin NEVER leaks
 # either into an error message, a log line, or the health detail. Deliberately

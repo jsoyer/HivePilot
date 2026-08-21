@@ -595,6 +595,25 @@ def _installed_plugins_dir() -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _bundled_plugins_dir() -> Path | None:
+    """The first-party plugins shipped inside the wheel, or `None`.
+
+    Located relative to this module rather than to `settings.base_dir`: it
+    travels with the installed package, which is the entire point. On the box
+    `base_dir` is `/`, so `base_dir/plugins` has never resolved to anything --
+    production only ever loaded plugins from the config repo clone or the
+    managed installed dir, and `pip install` writes to neither. That is how a
+    merged fix to `herdr.py` ran nine days stale with nothing reporting it.
+
+    Existence-gated like the two tiers above, and for a sharper reason here: a
+    source checkout that predates the move, or an editable install pointed at
+    one, simply has no such directory. Returning `None` keeps those working
+    instead of raising from inside the loader's scan path.
+    """
+    candidate = Path(__file__).parent / "bundled_plugins"
+    return candidate if candidate.is_dir() else None
+
+
 def plugin_scan_dirs(
     base_dir: Path | None = None, *, respect_enabled_gate: bool = True
 ) -> list[Path]:
@@ -674,6 +693,26 @@ def plugin_scan_dirs(
             dirs.append(installed_plugins)
 
     dirs.extend(extra_dirs)
+
+    # The in-wheel copy goes LAST, and that placement is the whole design.
+    #
+    # First would mean a `pip install` silently overrides a plugin an operator
+    # deliberately edited in their config repo or installed dir. Last makes it
+    # a FLOOR instead: a first-party plugin that exists nowhere else now works
+    # out of the box, and every editable copy still wins.
+    #
+    # It also makes the migration free for already-deployed hosts. Their
+    # `$XDG_DATA_HOME/plugins/*.py` are earlier in this list, so nothing they
+    # run changes -- but `plugins check` finally has an in-wheel copy to
+    # compare them against. That is the fix for the real defect: plugins were
+    # invisible to `pip install`, so a merged change to `herdr.py` ran nine
+    # days stale on the box with nothing reporting it.
+    bundled = _bundled_plugins_dir()
+    if bundled is not None:
+        already_listed = {d.resolve() for d in dirs}
+        if bundled.resolve() not in already_listed:
+            dirs.append(bundled)
+
     return dirs
 
 

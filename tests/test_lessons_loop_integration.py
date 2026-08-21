@@ -40,6 +40,7 @@ from unittest.mock import MagicMock, patch
 
 import conftest
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 import hivepilot.orchestrator  # noqa: F401 -- side-effect import for patch resolution
 from hivepilot.config import settings
@@ -58,8 +59,8 @@ from hivepilot.services.knowledge_service import build_lessons_context
 from hivepilot.services.lessons_service import retrieve_lessons
 
 REPO_ROOT = Path(__file__).parent.parent
-MEM0_PLUGIN_PATH = REPO_ROOT / "plugins" / "mem0.py"
-OBSIDIAN_PLUGIN_PATH = REPO_ROOT / "plugins" / "obsidian.py"
+MEM0_PLUGIN_PATH = BUNDLED_PLUGINS / "mem0.py"
+OBSIDIAN_PLUGIN_PATH = BUNDLED_PLUGINS / "obsidian.py"
 
 
 def _load_plugin_module(path: Path, name: str) -> ModuleType:

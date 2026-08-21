@@ -50,13 +50,14 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import Settings, settings
 from hivepilot.models import KNOWN_RUNNER_KINDS, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 
 REPO_ROOT = Path(__file__).parent.parent
-HERDR_PLUGIN_PATH = REPO_ROOT / "plugins" / "herdr.py"
+HERDR_PLUGIN_PATH = BUNDLED_PLUGINS / "herdr.py"
 
 
 def _materialise_rc(wrapped_cmd: str, code: int = 0) -> None:

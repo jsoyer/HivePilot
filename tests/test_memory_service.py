@@ -10,6 +10,7 @@ via `hivepilot.services.db` — so these tests never touch the real
 from __future__ import annotations
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.services import memory_service
 
@@ -414,9 +415,8 @@ def test_both_backends_tag_their_writes(tmp_path, monkeypatch):
     reads as "obsidian or unknown", and the distinction stops being provable
     the moment a third backend appears.
     """
-    from pathlib import Path as _Path
 
-    plugins_dir = _Path(__file__).resolve().parent.parent / "plugins"
+    plugins_dir = BUNDLED_PLUGINS
     for name in ("mem0", "obsidian"):
         source = (plugins_dir / f"{name}.py").read_text(encoding="utf-8")
         assert f'backend="{name}"' in source, f"{name} does not tag its memory writes"

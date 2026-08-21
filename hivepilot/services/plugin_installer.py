@@ -412,6 +412,38 @@ def fetch_plugin(
     resolved_ref = ref or settings.plugins_source_ref
     resolved_dest = dest_dir if dest_dir is not None else installed_plugins_dir()
 
+    # First-party plugins now ship INSIDE the wheel, so the copy this process
+    # is running with is already on disk -- no network, and no way for the two
+    # to disagree. Every name that reaches here is a registry key, and every
+    # registry key is bundled (pinned by
+    # test_bundled_plugins_layout.py::TestEveryInstallableNameIsBundled).
+    #
+    # This is the point of the move. Before it, `plugins install` fetched from
+    # `main` while `pip install` updated nothing, so the installed copy and the
+    # running engine drifted silently -- a merged fix to `herdr.py` ran nine
+    # days stale on the box. Reading from the wheel makes `plugins check`
+    # compare the installed copy against the code actually running.
+    #
+    # An explicit `repo`/`ref` override still goes to the network, and still
+    # under `plugins/<name>.py`: that path is the CONFIG-REPO convention (see
+    # `hivepilot.plugins._config_repo_plugins_dir`), which did not move.
+    # Gated on the RESOLVED source, not on the arguments. An operator who points
+    # `plugins_source_repo` at their fork means it: reading our wheel instead
+    # would silently ignore their configuration. Caught by
+    # test_fetch_plugin_uses_configured_repo_and_ref_by_default, which was
+    # right while this condition was wrong.
+    _defaults = Settings.model_fields
+    if (
+        resolved_repo == str(_defaults["plugins_source_repo"].default).rstrip("/")
+        and resolved_ref == _defaults["plugins_source_ref"].default
+    ):
+        bundled = Path(__file__).resolve().parent.parent / "bundled_plugins" / f"{name}.py"
+        if bundled.is_file():
+            resolved_dest.mkdir(parents=True, exist_ok=True)
+            target = resolved_dest / f"{name}.py"
+            target.write_bytes(bundled.read_bytes())
+            return target
+
     url = f"{resolved_repo}/{resolved_ref}/plugins/{name}.py"
 
     try:

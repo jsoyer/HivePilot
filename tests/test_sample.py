@@ -7,6 +7,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 
@@ -17,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # across the suite and break `tests/test_plugins.py`'s
 # `assert "plugins" not in sys.modules` isolation assumption. Mirrors how
 # `hivepilot/plugins.py::_scan_local_plugins` itself loads local plugins.
-_SAMPLE_PATH = Path(__file__).resolve().parent.parent / "plugins" / "sample.py"
+_SAMPLE_PATH = BUNDLED_PLUGINS / "sample.py"
 _spec = importlib.util.spec_from_file_location("hivepilot_test_sample_plugin", _SAMPLE_PATH)
 assert _spec and _spec.loader
 sample = importlib.util.module_from_spec(_spec)

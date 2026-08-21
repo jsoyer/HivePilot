@@ -27,13 +27,14 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS, ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
 
 REPO_ROOT = Path(__file__).parent.parent
-RTK_PLUGIN_PATH = REPO_ROOT / "plugins" / "rtk.py"
+RTK_PLUGIN_PATH = BUNDLED_PLUGINS / "rtk.py"
 
 
 def _load_rtk_module() -> ModuleType:

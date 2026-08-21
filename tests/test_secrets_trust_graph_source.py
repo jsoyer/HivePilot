@@ -21,13 +21,14 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from conftest import BUNDLED_PLUGINS
 
 from hivepilot import graph as graph_module
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, ProjectsFile
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_PLUGIN_PATH = _REPO_ROOT / "plugins" / "secrets_trust_graph_source.py"
+_PLUGIN_PATH = BUNDLED_PLUGINS / "secrets_trust_graph_source.py"
 
 _spec = importlib.util.spec_from_file_location(
     "hivepilot_test_secrets_trust_graph_source_plugin", _PLUGIN_PATH

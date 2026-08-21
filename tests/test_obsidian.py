@@ -14,8 +14,10 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+from conftest import BUNDLED_PLUGINS
+
 REPO_ROOT = Path(__file__).parent.parent
-OBSIDIAN_PLUGIN_PATH = REPO_ROOT / "plugins" / "obsidian.py"
+OBSIDIAN_PLUGIN_PATH = BUNDLED_PLUGINS / "obsidian.py"
 
 
 def _load_obsidian_module() -> ModuleType:

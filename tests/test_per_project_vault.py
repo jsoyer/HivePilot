@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch
 import conftest
 import pytest
 import yaml
+from conftest import BUNDLED_PLUGINS
 
 import hivepilot.config as config_mod
 from hivepilot.models import PipelineConfig, PipelineStage, ProjectConfig, TaskStep
@@ -36,7 +37,7 @@ from hivepilot.services.obsidian_vault_resolver import (
 )
 
 REPO_ROOT = Path(__file__).parent.parent
-OBSIDIAN_PLUGIN_PATH = REPO_ROOT / "plugins" / "obsidian.py"
+OBSIDIAN_PLUGIN_PATH = BUNDLED_PLUGINS / "obsidian.py"
 _HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
 _ARTIFACTS = conftest.TEST_VAULT_ARTIFACTS_FOLDER
 
