@@ -79,28 +79,6 @@ class BaseRunner(Protocol):
     # runner subclasses do NOT treat it as an instance field.
     supported_modes: ClassVar[frozenset[str]] = frozenset({"cli"})
 
-    #: Which of a ROLE's safety controls this runner actually applies to its
-    #: dispatch. Same shape as `supported_modes` above, and the same purpose:
-    #: state a capability instead of letting the caller assume one.
-    #:
-    #: Empty by default, and that default is the point. `PromptCliRunner` has
-    #: never read `permission_mode` or `allowed_tools` — 0 references, against
-    #: 38 in `claude_runner` — so ten agent CLI plugins discarded a role's tool
-    #: whitelist in silence. Worse, they passed the CLI's auto-approve flag
-    #: (`--approve`, `--auto-approve`) while dropping the restriction: on every
-    #: runner the most permissive option available was chosen.
-    #:
-    #: The binaries were never the limitation. `pi` has `--tools` /
-    #: `--exclude-tools` / `--no-tools`, `gemini` has `--allowed-tools` and
-    #: `--sandbox`, `vibe` has `--enabled-tools` / `--disabled-tools`, `codex`
-    #: has `-s/--sandbox`. We simply never passed them.
-    #:
-    #: So a runner declares what it honours, `assert_runner_honours` refuses a
-    #: role asking for more, and the operator can mix runners knowing each
-    #: combination was checked rather than assumed. Opting in without wiring
-    #: the flag is the one way to make this lie -- do not.
-    honoured_controls: ClassVar[frozenset[str]] = frozenset()
-
     def __init__(self, definition: RunnerDefinition, settings: Settings) -> None: ...
 
     def run(self, payload: RunnerPayload) -> None: ...
@@ -231,6 +209,22 @@ def validate_runner_mode(kind: str, supported_modes: frozenset[str], mode: str) 
         )
 
 
+#: The role controls a runner may declare it applies, via a class attribute:
+#:
+#:     honoured_controls: ClassVar[frozenset[str]] = frozenset({"allowed_tools"})
+#:
+#: Deliberately NOT a member of the `BaseRunner` Protocol. Adding it there
+#: makes it REQUIRED of every implementer -- including third-party plugin
+#: runners -- and buys nothing, because absence is already the safe answer:
+#: `assert_runner_honours` reads it with a `frozenset()` default, so a runner
+#: that says nothing is treated as applying nothing and a restricted role is
+#: refused. mypy found this by rejecting the test suite's own dummy runners.
+#:
+#: The declaration is a CLAIM, and the claim is the contract. Opting in without
+#: wiring the flag is the one way to make this mechanism lie.
+_ROLE_CONTROLS: tuple[str, ...] = ("permission_mode", "allowed_tools")
+
+
 class RunnerControlUnsupportedError(RuntimeError):
     """A role demands a safety control its runner cannot apply.
 
@@ -251,11 +245,9 @@ def assert_runner_honours(kind: str, runner_cls: type, options: dict[str, object
     """
     if not options:
         return
-    honoured = getattr(runner_cls, "honoured_controls", frozenset())
+    honoured: frozenset[str] = getattr(runner_cls, "honoured_controls", frozenset())
     missing = sorted(
-        control
-        for control in ("permission_mode", "allowed_tools")
-        if options.get(control) and control not in honoured
+        control for control in _ROLE_CONTROLS if options.get(control) and control not in honoured
     )
     if not missing:
         return

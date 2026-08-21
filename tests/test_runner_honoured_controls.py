@@ -129,7 +129,10 @@ class TestTheRealRunnersDeclareHonestly:
 
         from hivepilot.runners.prompt_cli_runner import PromptCliRunner
 
-        assert not PromptCliRunner.honoured_controls
+        # `getattr` with a default, because `honoured_controls` is NOT a
+        # Protocol member — a runner that says nothing is the safe, and here
+        # the correct, answer. See `_ROLE_CONTROLS` in runners/base.py.
+        assert not getattr(PromptCliRunner, "honoured_controls", frozenset())
 
         src = inspect.getsource(PromptCliRunner)
         assert "allowed_tools" not in src, (
