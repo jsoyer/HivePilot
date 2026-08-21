@@ -51,6 +51,41 @@ class TestEveryStatementIsPortable:
                     continue
                 offenders.append(f"{f.relative_to(root.parent)}:{arg.lineno}")
 
+        # SECOND blind spot, and the one that got through: SQL built by
+        # concatenation puts the `?` in a VARIABLE, so the literal scan above
+        # sees none and reports clean. `unresolved_pr_gate_outcomes` did
+        # exactly that -- `conn.execute(sql + " ORDER BY ...", params)` -- and
+        # this guard called the file portable while Postgres answered
+        # "the query has 0 placeholders but 2 parameters were passed".
+        #
+        # So: any non-literal SQL passed WITH parameters must go through
+        # `ph()`. `db.py` is exempt because the dialect branch lives there --
+        # it is the thing being called, not a caller.
+        for f in sorted(root.rglob("*.py")):
+            if f.name == "db.py":
+                continue
+            src = f.read_text(encoding="utf-8", errors="ignore")
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:  # pragma: no cover
+                continue
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "execute"
+                    and len(node.args) >= 2
+                ):
+                    continue
+                arg = node.args[0]
+                if isinstance(arg, (ast.Constant, ast.JoinedStr)):
+                    continue
+                if isinstance(arg, ast.Call) and (
+                    getattr(arg.func, "id", "") == "ph" or getattr(arg.func, "attr", "") == "ph"
+                ):
+                    continue
+                offenders.append(f"{f.relative_to(root.parent)}:{arg.lineno} (built SQL)")
+
         assert offenders == [], (
             "these pass `?` straight to the driver, which is a syntax error on "
             f"Postgres -- wrap the SQL in ph(): {offenders}"

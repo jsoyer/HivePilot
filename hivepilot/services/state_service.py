@@ -1630,7 +1630,7 @@ def unresolved_pr_gate_outcomes(
         sql += " AND project = ?"
         params.append(project)
     with db.connect() as conn:
-        rows = conn.execute(sql + " ORDER BY id DESC LIMIT 200", tuple(params)).fetchall()
+        rows = conn.execute(ph(sql + " ORDER BY id DESC LIMIT 200"), tuple(params)).fetchall()
     keys = ("run_id", "project", "branch", "gate_blocked")
     return [dict(zip(keys, row, strict=False)) for row in rows]
 

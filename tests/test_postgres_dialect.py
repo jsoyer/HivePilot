@@ -141,10 +141,10 @@ class TestInsertReturningIdWorksOnTheServer:
         """`insert_returning_id` appends `RETURNING id` on Postgres instead of
         reading `cursor.lastrowid`. The two branches share no code, so the
         SQLite tests say nothing about this one."""
-        from hivepilot.services.state_service import create_run, init_db
+        from hivepilot.services.state_service import init_db, record_run_start
 
         init_db()
 
-        run_id = create_run(project="pg", task="portability probe")
+        run_id = record_run_start(project="pg", task="portability probe")
 
         assert isinstance(run_id, int) and run_id > 0
