@@ -209,6 +209,56 @@ def validate_runner_mode(kind: str, supported_modes: frozenset[str], mode: str) 
         )
 
 
+#: The role controls a runner may declare it applies, via a class attribute:
+#:
+#:     honoured_controls: ClassVar[frozenset[str]] = frozenset({"allowed_tools"})
+#:
+#: Deliberately NOT a member of the `BaseRunner` Protocol. Adding it there
+#: makes it REQUIRED of every implementer -- including third-party plugin
+#: runners -- and buys nothing, because absence is already the safe answer:
+#: `assert_runner_honours` reads it with a `frozenset()` default, so a runner
+#: that says nothing is treated as applying nothing and a restricted role is
+#: refused. mypy found this by rejecting the test suite's own dummy runners.
+#:
+#: The declaration is a CLAIM, and the claim is the contract. Opting in without
+#: wiring the flag is the one way to make this mechanism lie.
+_ROLE_CONTROLS: tuple[str, ...] = ("permission_mode", "allowed_tools")
+
+
+class RunnerControlUnsupportedError(RuntimeError):
+    """A role demands a safety control its runner cannot apply.
+
+    Raised BEFORE dispatch, deliberately. The alternative -- running anyway --
+    is what shipped: a role restricted to `Bash(rtk git:*)`, `Read(./**)` and
+    `Glob(./**)` executing with no restriction at all, and no message.
+    """
+
+
+def assert_runner_honours(kind: str, runner_cls: type, options: dict[str, object] | None) -> None:
+    """Refuse a dispatch whose role asks for a control this runner drops.
+
+    Fail CLOSED. An unrestricted agent is not a degraded outcome, it is a
+    different one, and the operator asked for the restricted version.
+
+    Only controls actually PRESENT in *options* are checked -- a role that
+    sets neither runs anywhere, exactly as before.
+    """
+    if not options:
+        return
+    honoured: frozenset[str] = getattr(runner_cls, "honoured_controls", frozenset())
+    missing = sorted(
+        control for control in _ROLE_CONTROLS if options.get(control) and control not in honoured
+    )
+    if not missing:
+        return
+    raise RunnerControlUnsupportedError(
+        f"runner '{kind}' does not apply {', '.join(missing)} — the role asks to be "
+        f"restricted and this runner would run it unrestricted. Either give the role a "
+        f"runner that honours it, or remove the control from the role knowing what that "
+        f"means."
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class UsageInfo:
     """Token/cost/actual-model usage captured from a runner's ``capture()``

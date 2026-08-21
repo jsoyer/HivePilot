@@ -7,7 +7,7 @@ from hivepilot.config import Settings, settings
 from hivepilot.models import RunnerDefinition, RunnerKind
 from hivepilot.runners.ansible_runner import AnsibleRunner
 from hivepilot.runners.atlantis_runner import AtlantisRunner
-from hivepilot.runners.base import BaseRunner, RunnerPayload, set_last_usage
+from hivepilot.runners.base import BaseRunner, RunnerPayload, assert_runner_honours, set_last_usage
 from hivepilot.runners.chef_runner import ChefRunner
 from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
@@ -193,6 +193,7 @@ class RunnerRegistry:
                     raise
                 definition = definition.model_copy(update={"host": None})  # W3: run locally
         runner_cls = resolve_runner_class(definition.kind)
+        assert_runner_honours(definition.kind, runner_cls, definition.options)
         runner_cls(definition, settings).run(payload)
 
     @staticmethod
@@ -239,6 +240,7 @@ class RunnerRegistry:
                     raise
                 definition = definition.model_copy(update={"host": None})  # W3: run locally
         runner_cls = resolve_runner_class(definition.kind)
+        assert_runner_honours(definition.kind, runner_cls, definition.options)
         runner = runner_cls(definition, settings)
         capture = getattr(runner, "capture", None)
         if capture is None:
