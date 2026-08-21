@@ -96,10 +96,13 @@ def test_known_kinds_returns_frozenset_with_builtins() -> None:
     # here either. See tests/test_codex.py / tests/test_cursor.py. The
     # vibe migration later moved `vibe` OUT the same way too — see
     # tests/test_vibe.py.
+    # The langchain gating moved `langchain` OUT as well — see
+    # tests/test_langchain_gating.py. It is the first kind gated on a PYTHON
+    # DEPENDENCY rather than a binary, so it is only in RUNNER_MAP where the
+    # optional extra is installed.
     builtins = {
         "claude",
         "shell",
-        "langchain",
         "internal",
         "container",
         "openrouter",

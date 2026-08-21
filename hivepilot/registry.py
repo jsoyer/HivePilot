@@ -69,6 +69,15 @@ class RunnerPluginUnavailableError(RuntimeError):
 # was a hardcoded _BUILTIN_RUNNERS entry before Sprint 2 and is now
 # registered (or not) by its own plugins/<kind>.py — see that module's
 # docstring for the canonical gated-agent-plugin skeleton these all share.
+# kind -> the optional extra that provides it. The sibling of
+# `_OPTIONAL_AGENT_PLUGIN_KINDS` below, for kinds gated on a PYTHON DEPENDENCY
+# rather than a CLI binary — the message differs because the fix does
+# (`pip install`, not "put it on PATH").
+_OPTIONAL_EXTRA_KINDS: Dict[str, str] = {
+    "langchain": "langchain",
+}
+
+
 _OPTIONAL_AGENT_PLUGIN_KINDS: Dict[str, tuple[str, str]] = {
     "gemini": ("gemini_enabled", "gemini"),
     "opencode": ("opencode_enabled", "opencode"),
@@ -125,6 +134,16 @@ def resolve_runner_class(kind: str) -> Type[BaseRunner]:
                 f"{binary!r} CLI binary is not on PATH. Run `hivepilot plugins "
                 f"health` to check, or `hivepilot plugins list` to see what is "
                 f"currently registered."
+            )
+        if kind in _OPTIONAL_EXTRA_KINDS:
+            extra = _OPTIONAL_EXTRA_KINDS[kind]
+            raise RunnerPluginUnavailableError(
+                f"Runner kind {kind!r} needs the optional {extra!r} extra, which is "
+                f"not installed. Run `pip install 'hivepilot[{extra}]'`.\n\n"
+                f"It used to be registered unconditionally, so this kind resolved "
+                f"fine and failed mid-run instead — after a run row existed. It is "
+                f"now gated on the dependency actually importing, which is why you "
+                f"are reading this before anything started."
             )
         raise KeyError(f"Unknown runner kind {kind!r}; available: {sorted(RUNNER_MAP)}")
 
@@ -251,7 +270,6 @@ class RunnerRegistry:
 _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "claude": ClaudeRunner,
     "shell": ShellRunner,
-    "langchain": LangChainRunner,
     "internal": InternalRunner,
     "container": ContainerRunner,
     # Sprint 2 (runner-defaults-plugins-mode PRD): the only NEW built-in
@@ -277,6 +295,35 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     "chef": ChefRunner,
     "puppet": PuppetRunner,
 }
+
+
+# `langchain` is registered HERE rather than in the dict above, and gated,
+# because it used to lie by presence.
+#
+# Its dependency lives behind an optional extra that pulls torch, yet it was
+# registered unconditionally. Measured with langchain NOT installed: the kind
+# was still advertised and `resolve_runner_class("langchain")` still SUCCEEDED.
+# The failure then landed mid-run, after a run row existed, rather than at
+# resolution with an actionable message.
+#
+# A plugin declares availability by a CHECK — `codex` returns `{}` when its
+# binary is absent. A builtin declared it by PRESENCE IN A DICT. Two failure
+# modes for one question, and the dict's was the worse one. This is the same
+# check, in the same shape, for a Python dependency instead of a binary.
+#
+# `LangChainRunner` already imports `LLMChain` behind `try/except ImportError`
+# and leaves it None, so reading that back is exactly the test — and the two
+# can never disagree about whether the dependency is there.
+def _langchain_available() -> bool:
+    """True when the optional `langchain` extra is genuinely installed."""
+    from hivepilot.runners import langchain_runner
+
+    return langchain_runner.LLMChain is not None
+
+
+if _langchain_available():  # pragma: no cover - depends on the optional extra
+    _BUILTIN_RUNNERS["langchain"] = LangChainRunner
+
 for _kind, _cls in _BUILTIN_RUNNERS.items():
     if getattr(settings, f"{_kind}_enabled", True):
         RunnerRegistry.register(_kind, _cls)

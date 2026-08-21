@@ -72,9 +72,14 @@ def validate_effort(value: str | None) -> str | None:
 KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     "claude",
     "shell",
-    "langchain",
     "internal",
     "container",
+    # `langchain` removed for the same reason, one step further: it is gated
+    # on a PYTHON DEPENDENCY rather than a binary. It was registered
+    # unconditionally while its extra pulls torch, so the kind was advertised
+    # and resolved on hosts that could not run it, failing mid-run instead of
+    # at resolution. Listing it here would violate this tuple's own invariant
+    # -- every name must be unconditionally present in RUNNER_MAP.
     # `vibe` removed for the same reason as codex/cursor/gemini/opencode/
     # ollama: it moved OUT of RUNNER_MAP's built-in registration into a
     # default-on, PATH-gated plugin (plugins/vibe.py), so it is no longer
