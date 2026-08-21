@@ -79,6 +79,28 @@ class BaseRunner(Protocol):
     # runner subclasses do NOT treat it as an instance field.
     supported_modes: ClassVar[frozenset[str]] = frozenset({"cli"})
 
+    #: Which of a ROLE's safety controls this runner actually applies to its
+    #: dispatch. Same shape as `supported_modes` above, and the same purpose:
+    #: state a capability instead of letting the caller assume one.
+    #:
+    #: Empty by default, and that default is the point. `PromptCliRunner` has
+    #: never read `permission_mode` or `allowed_tools` — 0 references, against
+    #: 38 in `claude_runner` — so ten agent CLI plugins discarded a role's tool
+    #: whitelist in silence. Worse, they passed the CLI's auto-approve flag
+    #: (`--approve`, `--auto-approve`) while dropping the restriction: on every
+    #: runner the most permissive option available was chosen.
+    #:
+    #: The binaries were never the limitation. `pi` has `--tools` /
+    #: `--exclude-tools` / `--no-tools`, `gemini` has `--allowed-tools` and
+    #: `--sandbox`, `vibe` has `--enabled-tools` / `--disabled-tools`, `codex`
+    #: has `-s/--sandbox`. We simply never passed them.
+    #:
+    #: So a runner declares what it honours, `assert_runner_honours` refuses a
+    #: role asking for more, and the operator can mix runners knowing each
+    #: combination was checked rather than assumed. Opting in without wiring
+    #: the flag is the one way to make this lie -- do not.
+    honoured_controls: ClassVar[frozenset[str]] = frozenset()
+
     def __init__(self, definition: RunnerDefinition, settings: Settings) -> None: ...
 
     def run(self, payload: RunnerPayload) -> None: ...
@@ -207,6 +229,42 @@ def validate_runner_mode(kind: str, supported_modes: frozenset[str], mode: str) 
         raise RunnerModeUnsupportedError(
             f"'{kind}' does not support mode '{mode}' (supported: {sorted(supported_modes)})"
         )
+
+
+class RunnerControlUnsupportedError(RuntimeError):
+    """A role demands a safety control its runner cannot apply.
+
+    Raised BEFORE dispatch, deliberately. The alternative -- running anyway --
+    is what shipped: a role restricted to `Bash(rtk git:*)`, `Read(./**)` and
+    `Glob(./**)` executing with no restriction at all, and no message.
+    """
+
+
+def assert_runner_honours(kind: str, runner_cls: type, options: dict[str, object] | None) -> None:
+    """Refuse a dispatch whose role asks for a control this runner drops.
+
+    Fail CLOSED. An unrestricted agent is not a degraded outcome, it is a
+    different one, and the operator asked for the restricted version.
+
+    Only controls actually PRESENT in *options* are checked -- a role that
+    sets neither runs anywhere, exactly as before.
+    """
+    if not options:
+        return
+    honoured = getattr(runner_cls, "honoured_controls", frozenset())
+    missing = sorted(
+        control
+        for control in ("permission_mode", "allowed_tools")
+        if options.get(control) and control not in honoured
+    )
+    if not missing:
+        return
+    raise RunnerControlUnsupportedError(
+        f"runner '{kind}' does not apply {', '.join(missing)} — the role asks to be "
+        f"restricted and this runner would run it unrestricted. Either give the role a "
+        f"runner that honours it, or remove the control from the role knowing what that "
+        f"means."
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -487,6 +487,11 @@ class ClaudeRunner(BaseRunner):
     # Messages API (mode: api → `_run_api`). See BaseRunner.supported_modes.
     supported_modes: ClassVar[frozenset[str]] = frozenset({"cli", "api"})
 
+    # Both, and wired: `--allowed-tools` at _build_invocation and
+    # `--permission-mode` beside it, plus the elevated-mode sandbox and env
+    # scrub. This is the only runner that has ever applied either.
+    honoured_controls: ClassVar[frozenset[str]] = frozenset({"permission_mode", "allowed_tools"})
+
     def _assemble_prompt(self, payload: RunnerPayload) -> str:
         """Load the step's prompt file and build the full agent prompt.
 
