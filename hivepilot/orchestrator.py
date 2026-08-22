@@ -6419,13 +6419,41 @@ class Orchestrator:
                 return _cached_result or None
 
         # Determine if we should isolate this run in a git worktree
-        _use_worktree = (
-            settings.worktree_isolation
-            and not simulate
-            and auto_git
-            and (task.git.commit or task.git.push)
-            and self._is_git_repo(project.path)
-        )
+        # The `workspace:` axis (three-axes change). `"derive"` is the default
+        # and reproduces the pre-existing expression EXACTLY, so a config that
+        # does not declare it behaves identically.
+        #
+        # What the derivation actually says is "isolate because this task
+        # commits" — isolation as a side effect of `auto_git`. That is why a
+        # task which does NOT commit could never be isolated, and why
+        # step-level approval had to be refused inside a worktree by a runtime
+        # exception instead of a readable constraint: nothing declared the two
+        # incompatible because nothing declared the workspace at all.
+        #
+        # `simulate` and "is this even a git repo" stay outside the choice on
+        # purpose: they are facts about whether a worktree is POSSIBLE, not a
+        # preference about whether one is wanted. An explicit
+        # `workspace: worktree` on a non-repo must not conjure one.
+        _declared_workspace = getattr(task, "workspace", "derive")
+        if _declared_workspace == "shared":
+            _use_worktree = False
+        elif _declared_workspace == "worktree":
+            _use_worktree = not simulate and self._is_git_repo(project.path)
+        else:
+            # Written out rather than factored, and the repetition is load
+            # bearing: `and` SHORT-CIRCUITS, so `_is_git_repo` — a filesystem
+            # probe — must stay behind the cheap conjuncts. Hoisting it into a
+            # shared `_worktree_possible` made it run for every task, which two
+            # tests caught by asserting it is never called for a role with no
+            # implementation output. A design property (say it once) lost to a
+            # behavioural one (do not touch the disk you did not need).
+            _use_worktree = (
+                settings.worktree_isolation
+                and not simulate
+                and auto_git
+                and (task.git.commit or task.git.push)
+                and self._is_git_repo(project.path)
+            )
 
         # Fail-closed guard (Phase 17a-B follow-up): a step-level approval
         # gate is incompatible with git-worktree isolation. `StepApprovalPending`

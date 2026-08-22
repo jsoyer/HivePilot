@@ -195,9 +195,33 @@ class GitActions(BaseModel):
     branch_prefix: str = "hivepilot"
 
 
+#: What a task's work sees on disk. The FIRST of the three axes `runner:` used
+#: to answer alone, and the one that already existed WITHOUT A NAME.
+#:
+#: `_use_worktree` in the orchestrator derives isolation like this:
+#:
+#:     settings.worktree_isolation AND not simulate AND auto_git
+#:     AND (task.git.commit OR task.git.push) AND is_git_repo
+#:
+#: So a task runs in a throwaway worktree because it happens to COMMIT, not
+#: because anybody asked for isolation. Two consequences, both real: you cannot
+#: isolate a task that does not commit, and step-level approval had to be
+#: refused inside a worktree by a runtime exception rather than a readable
+#: constraint, because nothing declared the two were incompatible.
+#:
+#: `"derive"` is the default and reproduces that expression exactly, so every
+#: existing config behaves identically. `"shared"` and `"worktree"` say it
+#: outright. `container` is deliberately absent for now: `kind: container` is
+#: still a runner, and moving it is a separate change.
+WorkspaceKind = Literal["derive", "shared", "worktree"]
+
+
 class TaskConfig(BaseModel):
     description: str
     role: str | None = None
+    #: See `WorkspaceKind`. Default `"derive"` — byte-identical to the
+    #: pre-existing behaviour for every config that does not set it.
+    workspace: WorkspaceKind = "derive"
     engine: Literal["native", "langgraph", "crewai"] = "native"
     graph: str | None = None
     crew: str | None = None
