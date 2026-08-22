@@ -9,7 +9,12 @@ from __future__ import annotations
 from hivepilot.orchestrator import _parse_brain
 
 
-def test_runner_prefixed_brain_splits() -> None:
+def test_runner_prefixed_brain_splits(monkeypatch) -> None:
+    # claude arrives through its plugin now — inject it the way a loader would.
+    from hivepilot.registry import RUNNER_MAP
+    from hivepilot.runners.claude_runner import ClaudeRunner
+
+    monkeypatch.setitem(RUNNER_MAP, "claude", ClaudeRunner)
     assert _parse_brain("claude:claude-sonnet-4-6", "opencode") == ("claude", "claude-sonnet-4-6")
 
 

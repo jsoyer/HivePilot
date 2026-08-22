@@ -84,10 +84,16 @@ class TestBuiltinRunnersGate:
         # vibe migration: `vibe` dropped out of this loop -- it is no longer
         # unconditionally present in _BUILTIN_RUNNERS (see plugins/vibe.py
         # and tests/test_vibe.py).
+        # claude migration: `claude` dropped out of this loop too — the last
+        # vendor CLI to leave _BUILTIN_RUNNERS (bundled plugin claude.py,
+        # flag-gated, NOT PATH-gated; see tests/test_claude_plugin.py). The
+        # unconditional built-in agent set is now exactly {openrouter}.
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
-        for agent in ("claude", "openrouter"):
-            assert agent in active
+        assert "openrouter" in active
+        # ...and the plugin's own default keeps claude ON for any deployment
+        # that changes nothing, which is the same promise this test made.
+        assert s.claude_enabled is True
 
     def test_only_claude_disabled_excludes_only_claude(self) -> None:
         s = Settings(_env_file=None, claude_enabled=False)  # type: ignore[call-arg]

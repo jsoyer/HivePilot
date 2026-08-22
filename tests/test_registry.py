@@ -31,8 +31,11 @@ def test_known_kinds_returns_frozenset_of_builtins() -> None:
     # tests/test_langchain_gating.py. It is the first kind gated on a PYTHON
     # DEPENDENCY rather than a binary, so it is only in RUNNER_MAP where the
     # optional extra is installed.
+    # `claude` left too — the LAST vendor CLI to make the trip (bundled
+    # plugin claude.py, flag-gated, deliberately NOT PATH-gated because
+    # `mode: api` works with no binary). `openrouter` is the one agent
+    # kind that remains builtin: API-only, vendor-agnostic.
     builtins = {
-        "claude",
         "shell",
         "internal",
         "container",
@@ -41,7 +44,16 @@ def test_known_kinds_returns_frozenset_of_builtins() -> None:
     known = RunnerRegistry.known_kinds()
     assert isinstance(known, frozenset)
     assert builtins <= known
-    for migrated_kind in ("gemini", "opencode", "ollama", "codex", "cursor", "vibe", "langchain"):
+    for migrated_kind in (
+        "gemini",
+        "opencode",
+        "ollama",
+        "codex",
+        "cursor",
+        "vibe",
+        "langchain",
+        "claude",
+    ):
         assert migrated_kind not in builtins
 
 

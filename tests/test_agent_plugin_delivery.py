@@ -61,10 +61,13 @@ class TestWhichAgentsOweAPluginFile:
         assert plugin_file_for_agent("kimi_cli") == "kimi_cli.py"
         assert plugin_file_for_agent("qwen_code") == "qwen_code.py"
 
-    def test_claude_owes_nothing_because_it_is_built_in(self):
-        """`claude` is a builtin runner, not a plugin. Fetching a file for it
-        would 404 and report a failure for something that is working."""
-        assert plugin_file_for_agent("claude") is None
+    def test_claude_owes_its_plugin_now(self):
+        """This test used to assert None, under the premise that claude was a
+        builtin. It is the last vendor CLI to leave the core (#26), so
+        `agents install claude` now owes `claude.py` like every sibling —
+        and the fetch is an offline byte-copy from the wheel, so the old
+        would-404 concern is gone with the premise."""
+        assert plugin_file_for_agent("claude") == "claude.py"
 
     def test_a_tool_that_is_not_an_agent_owes_nothing(self):
         """`gh` and `herdr` are installed through the same guided flow but are
@@ -112,11 +115,12 @@ class TestDeliveringIt:
         assert result["state"] == "placed"
 
     def test_a_builtin_runner_asks_for_nothing(self, tmp_path):
-        """`claude` is builtin. Fetching for it would 404 and report a failure
-        for something that works."""
+        """`openrouter` inherits this exemplar from claude, which left the
+        core: it is the one agent kind still builtin — API-only, no binary,
+        nothing to deliver."""
         asked = []
 
-        result = deliver_plugin_for("claude", fetch=lambda n, **kw: asked.append(n))
+        result = deliver_plugin_for("openrouter", fetch=lambda n, **kw: asked.append(n))
 
         assert asked == []
         assert result["state"] == "not_needed"

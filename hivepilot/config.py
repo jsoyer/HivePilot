@@ -923,6 +923,10 @@ class Settings(BaseSettings):
     # stays in hivepilot.services.agent_checks.MANDATORY_AGENTS regardless
     # (that check scans PATH directly, unaffected by builtin-vs-plugin).
     # env: HIVEPILOT_CODEX_ENABLED / _CURSOR_ENABLED
+    #: The claude plugin's kill switch (env: HIVEPILOT_CLAUDE_ENABLED).
+    #: Default ON, like every vendor plugin — no deployment changes anything
+    #: to keep its claude.
+    claude_enabled: bool = True
     codex_enabled: bool = True
     grok_enabled: bool = True
     cursor_enabled: bool = True

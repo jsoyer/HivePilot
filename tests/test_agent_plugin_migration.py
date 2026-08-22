@@ -38,7 +38,6 @@ from conftest import BUNDLED_PLUGINS
 from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS
 from hivepilot.registry import RUNNER_MAP, RunnerPluginUnavailableError, resolve_runner_class
-from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.openrouter_runner import OpenRouterRunner
 from hivepilot.runners.prompt_cli_runner import (
     GeminiRunner,
@@ -86,11 +85,14 @@ class TestBuiltinReduction:
         # tests/test_cursor.py for that coverage. The vibe migration moved
         # `vibe` OUT the same way, into plugins/vibe.py -- see
         # tests/test_vibe.py::TestItIsNoLongerABuiltin for that coverage.
-        # (Test name kept for git-blame continuity.) The built-in agent set
-        # here is now exactly {claude, openrouter}.
+        # (Test name kept for git-blame continuity.) The claude migration
+        # finished the sequence — the built-in agent set is now exactly
+        # {openrouter}: API-only, vendor-agnostic, the one kind whose
+        # availability does not depend on a vendor's binary or flag. See
+        # tests/test_claude_plugin.py for claude's coverage.
         from hivepilot.registry import _BUILTIN_RUNNERS
 
-        assert _BUILTIN_RUNNERS["claude"] is ClaudeRunner
+        assert "claude" not in _BUILTIN_RUNNERS
         assert _BUILTIN_RUNNERS["openrouter"] is OpenRouterRunner
         assert "vibe" not in _BUILTIN_RUNNERS
         assert "codex" not in _BUILTIN_RUNNERS
@@ -106,11 +108,14 @@ class TestBuiltinReduction:
     def test_openrouter_in_known_runner_kinds(self) -> None:
         assert "openrouter" in KNOWN_RUNNER_KINDS
 
-    def test_claude_still_in_known_runner_kinds(self) -> None:
-        # vibe migration: `vibe` moved OUT of KNOWN_RUNNER_KINDS alongside
-        # codex/cursor below -- see test_codex_cursor_vibe_not_in_known_runner_kinds.
-        # `claude` remains the one always-present agent kind here.
-        assert "claude" in KNOWN_RUNNER_KINDS
+    def test_claude_left_known_runner_kinds_too(self) -> None:
+        """Renamed from `test_claude_still_in_known_runner_kinds`: the tuple's
+        invariant is that every name is UNCONDITIONALLY present in RUNNER_MAP,
+        and claude now arrives through its plugin."""
+        from hivepilot.models import KNOWN_RUNNER_KINDS
+
+        assert "claude" not in KNOWN_RUNNER_KINDS
+        assert "openrouter" in KNOWN_RUNNER_KINDS
 
     def test_codex_cursor_vibe_not_in_known_runner_kinds(self) -> None:
         # codex-cursor-plugins migration: codex/cursor removed from

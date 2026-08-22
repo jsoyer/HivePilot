@@ -70,7 +70,10 @@ def validate_effort(value: str | None) -> str | None:
 # live registry (RUNNER_MAP / RunnerRegistry.known_kinds()), not this tuple,
 # so it also accepts plugin-contributed kinds that aren't listed here.
 KNOWN_RUNNER_KINDS: tuple[str, ...] = (
-    "claude",
+    # `claude` removed like vibe/codex/cursor/gemini/opencode/ollama before
+    # it: it now arrives through a default-on plugin, so it is no longer
+    # UNCONDITIONALLY present in RUNNER_MAP, and this tuple's invariant is
+    # that every name is.
     "shell",
     "internal",
     "container",
