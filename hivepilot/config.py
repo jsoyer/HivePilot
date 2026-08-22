@@ -901,6 +901,11 @@ class Settings(BaseSettings):
     # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
     # (shell/terraform/kubectl/…) stay unconditional and get no flag.
     # env: HIVEPILOT_CLAUDE_ENABLED / _VIBE_ENABLED / _OPENROUTER_ENABLED
+    # `claude_enabled` is now read by the claude PLUGIN's register()
+    # (bundled_plugins/claude.py) — the last vendor CLI left _BUILTIN_RUNNERS
+    # in #26. Same flag, same default, new reader. I added a duplicate field
+    # below before finding this one; pydantic silently keeps the LAST
+    # definition, so only mypy's no-redef saw it.
     claude_enabled: bool = True
     vibe_enabled: bool = True
     openrouter_enabled: bool = True
@@ -923,10 +928,6 @@ class Settings(BaseSettings):
     # stays in hivepilot.services.agent_checks.MANDATORY_AGENTS regardless
     # (that check scans PATH directly, unaffected by builtin-vs-plugin).
     # env: HIVEPILOT_CODEX_ENABLED / _CURSOR_ENABLED
-    #: The claude plugin's kill switch (env: HIVEPILOT_CLAUDE_ENABLED).
-    #: Default ON, like every vendor plugin — no deployment changes anything
-    #: to keep its claude.
-    claude_enabled: bool = True
     codex_enabled: bool = True
     grok_enabled: bool = True
     cursor_enabled: bool = True
