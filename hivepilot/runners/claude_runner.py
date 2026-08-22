@@ -1106,7 +1106,23 @@ class ClaudeRunner(BaseRunner):
         it to a file to gain a pane would take away the live visibility that is
         its entire reason for existing.
         """
-        if not bool(getattr(self.settings, "claude_pane_mode", False)):
+        # The `surface:` axis. A task's declaration wins over the process-wide
+        # setting; `"derive"` (the default, which never reaches here because
+        # the orchestrator only forwards a DECLARED value) falls through to it,
+        # so a host that set `claude_pane_mode` is unaffected.
+        #
+        # `"inline"` is not the same as leaving it unset: it OVERRULES the
+        # setting for this task. That asymmetry is the reason a declared value
+        # is checked before the boolean rather than or-ed with it.
+        _surface = self.definition.options.get("surface")
+        if _surface == "herdr":
+            _in_pane = True
+        elif _surface == "inline":
+            _in_pane = False
+        else:
+            _in_pane = bool(getattr(self.settings, "claude_pane_mode", False))
+
+        if not _in_pane:
             return subprocess.run(
                 argv,
                 cwd=cwd,
