@@ -210,10 +210,19 @@ class GitActions(BaseModel):
 #: constraint, because nothing declared the two were incompatible.
 #:
 #: `"derive"` is the default and reproduces that expression exactly, so every
-#: existing config behaves identically. `"shared"` and `"worktree"` say it
-#: outright. `container` is deliberately absent for now: `kind: container` is
-#: still a runner, and moving it is a separate change.
-WorkspaceKind = Literal["derive", "shared", "worktree"]
+#: existing config behaves identically. The other three say it outright.
+#:
+#: `"container"` is the strongest of the three and the one with an operator
+#: cost: the image must contain whatever the step runs — the agent binary for
+#: an agent step, the tool for a tool step — because nothing here installs it.
+#: Credentials reach it as environment variables, so choosing the image is
+#: choosing who sees them. It fails CLOSED when no image is declared: running
+#: on the host because none was given is the one reading of "confine this"
+#: nobody asked for.
+#:
+#: `kind: container` keeps working and is unchanged. It becomes the shorthand
+#: for "container workspace, raw command" — which is all it ever was.
+WorkspaceKind = Literal["derive", "shared", "worktree", "container"]
 
 #: WHERE the work can be WATCHED. The second of the three axes `runner:` used
 #: to answer alone.
