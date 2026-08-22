@@ -1114,6 +1114,34 @@ class ClaudeRunner(BaseRunner):
         # `"inline"` is not the same as leaving it unset: it OVERRULES the
         # setting for this task. That asymmetry is the reason a declared value
         # is checked before the boolean rather than or-ed with it.
+        # `workspace: container` wraps the execution; `surface: herdr` wraps
+        # where it is seen. Confinement is checked FIRST and wins: a step told
+        # to be confined must not escape into a pane on the host because
+        # somebody also wanted to watch it. Watching a confined step is a real
+        # want, but it needs the pane INSIDE the container, which nothing here
+        # does yet — so this refuses to pretend by silently dropping one.
+        if self.definition.options.get("workspace") == "container":
+            from hivepilot.runners.container_exec import run_in_container
+
+            if self.definition.options.get("surface") == "herdr":
+                raise ValueError(
+                    "workspace: container with surface: herdr is not supported yet — "
+                    "the pane would run on the host, outside the confinement that was "
+                    "asked for. Drop one of the two rather than getting the weaker of "
+                    "the two silently."
+                )
+            return run_in_container(
+                argv,
+                image=self.definition.options.get("image"),
+                cwd=cwd,
+                env=env,
+                timeout=timeout,
+                runtime=self.definition.options.get("runtime")
+                or getattr(self.settings, "container_runtime", "docker"),
+                volumes=self.definition.options.get("volumes"),
+                engine_host=self.definition.options.get("engine_host"),
+            )
+
         _surface = self.definition.options.get("surface")
         if _surface == "herdr":
             _in_pane = True

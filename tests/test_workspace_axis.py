@@ -203,13 +203,20 @@ class TestTheModelRefusesNonsense:
         with pytest.raises(ValidationError):
             TaskConfig(description="x", workspace="wortkree")
 
-    def test_container_is_not_a_workspace_yet(self):
-        """`kind: container` is still a RUNNER. Accepting it here would
-        advertise an axis member that nothing implements."""
+    def test_container_is_a_workspace_but_not_a_surface(self):
+        """This test used to assert the opposite — that `container` was NOT a
+        workspace — because at the time nothing implemented it, and declaring
+        an axis member nothing implements is the lie this session keeps
+        removing. `run_in_container` now exists, so the member is real.
+
+        The vocabularies stay separate: a confinement is not a place to watch
+        from, and accepting `surface: container` would suggest they overlap."""
         from pydantic import ValidationError
 
+        assert TaskConfig(description="x", workspace="container").workspace == "container"
+
         with pytest.raises(ValidationError):
-            TaskConfig(description="x", workspace="container")
+            TaskConfig(description="x", surface="container")
 
     def test_it_travels_with_git_actions_untouched(self):
         """The field is additive: declaring a workspace says nothing about
@@ -220,3 +227,151 @@ class TestTheModelRefusesNonsense:
 
         assert task.workspace == "shared"
         assert task.git.commit is True
+
+
+class TestContainerIsAWorkspaceNow:
+    """`ContainerRunner` takes an image + a command and runs it via
+    docker/podman with a blocked-volume list. It executes no model — it is a
+    CONFINEMENT, not an executor, and it sat on the runner axis.
+
+    Moving it here is what makes `runner: terraform` + `workspace: container`
+    sayable: today you must choose between terraform's own handling and being
+    containerised. It is also the mitigation `PiRunner`'s own docstring
+    prescribes ("running pi OUTSIDE a sandboxed worktree/container is NOT
+    recommended for autonomous use") and which was, until now, inexpressible.
+    """
+
+    def test_it_is_a_valid_workspace(self):
+        assert TaskConfig(description="x", workspace="container").workspace == "container"
+
+    @pytest.mark.parametrize(
+        ("declared", "expected"),
+        [("container", "container"), ("worktree", None), ("shared", None), ("derive", None)],
+    )
+    def test_only_container_travels_to_the_runner(self, declared, expected, monkeypatch):
+        """Confinement wraps the runner's OWN execution, so it has to travel.
+        `shared`/`worktree` are decided by the orchestrator before any runner
+        exists and deliberately do NOT — a runner that could see them might
+        start acting on them, and that decision has one owner.
+
+        Driven through the real function, not by reading its source: the
+        source-string version of this test SURVIVED a mutation that disabled
+        the branch while leaving the text in place."""
+        from hivepilot import orchestrator, roles
+
+        class _Role:
+            permission_mode = None
+            allowed_tools = None
+
+        # Patched on `hivepilot.roles`, not on the orchestrator:
+        # `resolve_step_runner` imports these INSIDE the function, so a name
+        # bound on the orchestrator module is never the one it looks up.
+        monkeypatch.setattr(roles, "get_role", lambda _n: _Role())
+        monkeypatch.setattr(roles, "resolve_stage_dispatch", lambda *a, **k: ("claude", None, None))
+        monkeypatch.setattr(roles, "resolve_host", lambda *a, **k: None)
+
+        task = TaskConfig(description="x", role="dev", workspace=declared)
+        step = type("S", (), {"runner": "claude", "runner_ref": None, "name": "s"})()
+
+        class _Registry:
+            def _definition_for(self, _n):  # pragma: no cover - must not be reached
+                raise AssertionError("the role path should have been taken")
+
+        _key, definition = orchestrator.resolve_step_runner(
+            task=task, step=step, registry=_Registry()
+        )
+
+        assert definition.options.get("workspace") == expected
+
+    def test_the_other_workspace_values_do_NOT_travel(self):
+        """Deliberate. A runner that could see `worktree` might start acting
+        on it, and that decision has exactly one owner."""
+        import inspect
+
+        from hivepilot import orchestrator
+
+        src = inspect.getsource(orchestrator.resolve_step_runner)
+
+        assert 'role_options["workspace"] = "shared"' not in src
+        assert 'role_options["workspace"] = "worktree"' not in src
+
+    def test_the_runner_routes_to_the_container_primitive(self):
+        import inspect
+
+        from hivepilot.runners.claude_runner import ClaudeRunner
+
+        src = inspect.getsource(ClaudeRunner)
+
+        assert "run_in_container(" in src
+
+    @staticmethod
+    def _dispatch_with(options: dict, monkeypatch):
+        """Drive the REAL `_dispatch` with these definition options.
+
+        The first version of these tests read the source for a string. Both
+        SURVIVED a mutation that disabled the branch while leaving the text in
+        place — a test that cannot tell its two answers apart, which is the
+        exact defect this session keeps removing. These call the code."""
+        import subprocess
+
+        import hivepilot.runners.container_exec as ce
+        from hivepilot.runners.claude_runner import ClaudeRunner
+
+        runner = ClaudeRunner.__new__(ClaudeRunner)
+        runner.definition = type("D", (), {"options": options})()
+        runner.settings = type(
+            "S", (), {"claude_pane_mode": False, "container_runtime": "docker"}
+        )()
+
+        seen: dict = {}
+        monkeypatch.setattr(
+            ce,
+            "run_in_container",
+            lambda argv, **kw: (
+                seen.setdefault("container", kw)
+                or subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            ),
+        )
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda argv, **kw: (
+                seen.setdefault("host", True)
+                or subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            ),
+        )
+        runner._dispatch(["claude"], cwd=None, env=None, timeout=None)
+        return seen
+
+    def test_a_container_step_does_not_reach_the_host(self, monkeypatch):
+        """The behavioural form of "confinement wins": with the option set,
+        the host `subprocess.run` must never be what runs."""
+        seen = self._dispatch_with({"workspace": "container", "image": "i"}, monkeypatch)
+
+        assert "container" in seen
+        assert "host" not in seen
+
+    def test_without_it_the_host_path_is_used(self, monkeypatch):
+        """The discriminating half — a wrapper that always wraps proves
+        nothing."""
+        seen = self._dispatch_with({}, monkeypatch)
+
+        assert "host" in seen
+        assert "container" not in seen
+
+    def test_container_plus_herdr_RAISES_rather_than_dropping_one(self, monkeypatch):
+        """Watching a confined step is a real want — it needs the pane INSIDE
+        the container, which nothing does yet. Silently giving the weaker of
+        the two is the failure mode this whole session has been removing."""
+        with pytest.raises(ValueError, match="not supported yet"):
+            self._dispatch_with(
+                {"workspace": "container", "surface": "herdr", "image": "i"}, monkeypatch
+            )
+
+    def test_kind_container_still_exists_untouched(self):
+        """The old spelling keeps working — it is the shorthand for
+        "container workspace, raw command", which is all it ever was. The one
+        live noxys config using it must not break."""
+        from hivepilot.registry import RUNNER_MAP
+
+        assert "container" in RUNNER_MAP

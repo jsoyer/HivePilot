@@ -792,6 +792,13 @@ def resolve_step_runner(
     _surface = getattr(task, "surface", "derive")
     if _surface != "derive":
         role_options["surface"] = _surface
+    # `workspace: container` is the one workspace value the RUNNER must know
+    # about: `shared`/`worktree` are decided by the orchestrator before any
+    # runner exists, but confinement wraps the runner's own execution. The
+    # others deliberately do NOT travel — a runner that could see them might
+    # start acting on them, and the worktree decision has exactly one owner.
+    if getattr(task, "workspace", "derive") == "container":
+        role_options["workspace"] = "container"
     role_host = resolve_host(task.role, policy)
 
     if not step.runner_ref:
