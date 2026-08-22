@@ -39,6 +39,11 @@ class PromptCliRunner(BaseRunner):
     cli_subcommand: str | None = None  # e.g. codex 'exec', opencode 'run'
     cli_flags: tuple[str, ...] = ()  # e.g. ('--print',) for cursor-agent
     prompt_flag: str | None = None  # if set, prompt passed as [flag, prompt] (gemini '-p')
+    #: Emitted when the role's permission_mode is EXPLICITLY bypassPermissions.
+    bypass_flags: tuple[str, ...] = ()
+    #: Emitted otherwise — including when no mode is set at all. Safe is the
+    #: default, never the exception.
+    safe_flags: tuple[str, ...] = ()
     model_flag: str = "--model"
 
     def _load_prompt(self, payload: RunnerPayload) -> str:
@@ -93,6 +98,18 @@ class PromptCliRunner(BaseRunner):
         if subcommand:
             args.append(subcommand)
         args.extend(opts.get("cli_flags", list(self.cli_flags)))
+        # `permission_mode`, for the runners that declare flags for it (#30).
+        # `bypass_flags` fire ONLY on an explicit `bypassPermissions`;
+        # everything else — including no mode at all — emits `safe_flags`.
+        # That polarity is the point: the old shape HARDCODED the auto-approve
+        # flag in `cli_flags`, so every caller got approval-free execution
+        # whatever the role said. Empty tuples (the default) emit nothing and
+        # keep every other runner byte-identical.
+        _mode = payload.step.metadata.get("permission_mode") or self.definition.options.get(
+            "permission_mode"
+        )
+        if self.bypass_flags or self.safe_flags:
+            args.extend(self.bypass_flags if _mode == "bypassPermissions" else self.safe_flags)
         args.extend(self._effort_cli_flags(payload))
         model = payload.step.metadata.get("model") or self.definition.model
         # See `set_last_resolved_model`: stated before dispatch so a failing
@@ -587,7 +604,11 @@ class VibeRunner(PromptCliRunner):
     """
 
     command_name: str = "vibe"
-    cli_flags: tuple[str, ...] = ("--auto-approve",)
+    # `--auto-approve` used to be hardcoded; it now follows the role's
+    # permission_mode. vibe has no explicit no-approve flag — omission is its
+    # safe mode (it then prompts, which headless means refusing).
+    bypass_flags: tuple[str, ...] = ("--auto-approve",)
+    honoured_controls: ClassVar[frozenset[str]] = frozenset({"permission_mode"})
     prompt_flag: str | None = "--prompt"
 
 
@@ -612,7 +633,12 @@ class PiRunner(PromptCliRunner):
 
     command_name: str = "pi"
     prompt_flag: str | None = "-p"
-    cli_flags: tuple[str, ...] = ("--approve",)
+    # `--approve` used to be HARDCODED here — approval-free execution for
+    # every caller, whatever the role said. It now follows the role's
+    # permission_mode; `--no-approve` is pi's own safe spelling.
+    bypass_flags: tuple[str, ...] = ("--approve",)
+    safe_flags: tuple[str, ...] = ("--no-approve",)
+    honoured_controls: ClassVar[frozenset[str]] = frozenset({"permission_mode"})
 
 
 @dataclass

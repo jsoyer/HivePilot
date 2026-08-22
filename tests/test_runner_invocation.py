@@ -65,9 +65,12 @@ def test_opencode_uses_run_subcommand_and_model(tmp_path: Path) -> None:
 
 
 def test_vibe_uses_prompt_flag_and_auto_approve(tmp_path: Path) -> None:
+    """Renamed premise (#30): `--auto-approve` is no longer hardcoded — it
+    follows the role's permission_mode, and absent a mode vibe runs in its
+    safe (prompting) shape."""
     args = _cli_args(VibeRunner, "vibe", "vibe", None, tmp_path)
     assert args[0] == "vibe"
-    assert "--auto-approve" in args
+    assert "--auto-approve" not in args
     assert "--prompt" in args
     assert args[args.index("--prompt") + 1] == "do the thing"
     # vibe has no --model flag — model comes from its own config; none passed here

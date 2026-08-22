@@ -219,7 +219,10 @@ class TestPiRunnerArgv:
     def test_defaults(self) -> None:
         assert PiRunner.command_name == "pi"
         assert PiRunner.prompt_flag == "-p"
-        assert "--approve" in PiRunner.cli_flags
+        # moved to bypass_flags (#30): hardcoded auto-approval was the
+        # defect, and `--no-approve` is pi's own safe default now.
+        assert "--approve" in PiRunner.bypass_flags
+        assert PiRunner.safe_flags == ("--no-approve",)
 
     def test_built_argv_contains_prompt_model_and_approve(self, tmp_path: Path) -> None:
         call = _run_and_capture_call(PiRunner, "pi", "pi", "claude-opus-4", tmp_path)
@@ -229,7 +232,11 @@ class TestPiRunnerArgv:
         assert args[args.index("-p") + 1] == "do the thing"
         assert "--model" in args
         assert args[args.index("--model") + 1] == "claude-opus-4"
-        assert "--approve" in args
+        # no permission_mode on this dispatch -> pi's SAFE spelling. The old
+        # assertion pinned a hardcoded `--approve`, which #30 removed: the
+        # bypass flag now needs an explicit bypassPermissions.
+        assert "--no-approve" in args
+        assert "--approve" not in [a for a in args if a != "--no-approve"]
 
 
 class TestQwenCodeRunnerArgv:
