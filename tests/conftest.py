@@ -106,6 +106,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # any test (or test-triggered production code path) has run. Used by
 # `_isolate_runner_and_notifier_maps` below to reset process-global plugin
 # registration state after every test.
+# `claude` arrives through its default-on plugin in production — every entry
+# point loads plugins, so the kind is always present there. The suite runs
+# with plugins neutralised, which would leave the DEFAULT runner kind missing
+# from hundreds of flows for a reason that is pure test plumbing. Register it
+# here the way the loader would, BEFORE the baseline snapshot, so every test
+# starts the way production does — and so a plugin colliding on the kind
+# still collides. Tests that need its absence delitem it explicitly.
+from hivepilot.runners.claude_runner import ClaudeRunner  # noqa: E402
+
+RUNNER_MAP.setdefault("claude", ClaudeRunner)
 _RUNNER_MAP_BASELINE = dict(RUNNER_MAP)
 _NOTIFIER_MAP_BASELINE = dict(NOTIFIER_MAP)
 _SECRETS_MAP_BASELINE = dict(SECRETS_MAP)

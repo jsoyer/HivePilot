@@ -172,7 +172,6 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         result = runner.invoke(app, ["plugins", "list"])
 
         assert result.exit_code == 0, result.output
-        assert "claude" in RUNNER_MAP
         assert "HIVEPILOT_CLAUDE_ENABLED" in result.output
         assert "HIVEPILOT_CODEX_ENABLED" in result.output
         assert "HIVEPILOT_VIBE_ENABLED" in result.output
@@ -206,8 +205,9 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         specifically exercises its API-only-status branch), so `claude` is
         the kind that covers this generic "disabled builtin renders
         inactive" case."""
-        assert "claude" in RUNNER_MAP
-        monkeypatch.delitem(RUNNER_MAP, "claude")
+        # claude is a plugin kind now — absent on a bare import, so simulate
+        # "disabled" by ensuring it is absent rather than deleting a builtin.
+        monkeypatch.delitem(RUNNER_MAP, "claude", raising=False)
 
         mock_orch = MagicMock()
         mock_orch.plugins.loaded = []

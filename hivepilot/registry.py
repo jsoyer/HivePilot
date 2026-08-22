@@ -9,7 +9,6 @@ from hivepilot.runners.ansible_runner import AnsibleRunner
 from hivepilot.runners.atlantis_runner import AtlantisRunner
 from hivepilot.runners.base import BaseRunner, RunnerPayload, assert_runner_honours, set_last_usage
 from hivepilot.runners.chef_runner import ChefRunner
-from hivepilot.runners.claude_runner import ClaudeRunner
 from hivepilot.runners.container_runner import ContainerRunner
 from hivepilot.runners.helm_runner import HelmRunner
 from hivepilot.runners.iac_runner import OpenTofuRunner, PulumiRunner, TerraformRunner
@@ -79,6 +78,9 @@ _OPTIONAL_EXTRA_KINDS: Dict[str, str] = {
 
 
 _OPTIONAL_AGENT_PLUGIN_KINDS: Dict[str, tuple[str, str]] = {
+    # claude's plugin is not PATH-gated, so this error only ever fires with
+    # the flag off — the flag clause of the message is the operative one.
+    "claude": ("claude_enabled", "claude"),
     "gemini": ("gemini_enabled", "gemini"),
     "opencode": ("opencode_enabled", "opencode"),
     "ollama": ("ollama_enabled", "ollama"),
@@ -268,7 +270,12 @@ class RunnerRegistry:
 
 
 _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
-    "claude": ClaudeRunner,
+    # `claude` is NOT here. The last vendor CLI left the core (bundled
+    # plugin `claude.py`, default-on) — `openrouter` is the one agent kind
+    # that stays, being API-only and vendor-agnostic. Unlike the six
+    # precedents the plugin is flag-gated but NOT PATH-gated: `mode: api`
+    # works with no binary, and erasing a usable kind would be the inverse
+    # of the langchain lie.
     "shell": ShellRunner,
     "internal": InternalRunner,
     "container": ContainerRunner,

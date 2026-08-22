@@ -292,15 +292,31 @@ class TestEnabledPluginsLoaded:
 
         assert not any("'mem0'" in f.message for f in findings)
 
-    def test_builtin_runner_flags_are_never_flagged(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """claude/vibe/openrouter are built into hivepilot.registry, never a
-        plugins/*.py file -- must never be reported as 'enabled but not loaded'."""
+    def test_the_remaining_builtin_runner_flag_is_never_flagged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`openrouter` is the one agent kind still built into the registry —
+        its flag must never read as 'enabled but not loaded'."""
+        monkeypatch.setattr(settings, "openrouter_enabled", True, raising=False)
+        fake_manager = SimpleNamespace(loaded=[])
+
+        findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
+
+        assert not any("'openrouter'" in f.message for f in findings)
+
+    def test_claude_enabled_but_not_loaded_IS_flagged_now(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This test used to assert the opposite, under the premise that
+        claude was builtin. It is a plugin now, so enabled-but-not-loaded is
+        REAL drift information — the herdr.py nine-days-stale family — and
+        suppressing it would silence the exact signal the check exists for."""
         monkeypatch.setattr(settings, "claude_enabled", True, raising=False)
         fake_manager = SimpleNamespace(loaded=[])
 
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
-        assert not any("'claude'" in f.message for f in findings)
+        assert any("'claude'" in f.message for f in findings)
 
 
 # ---------------------------------------------------------------------------

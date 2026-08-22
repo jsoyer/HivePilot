@@ -107,6 +107,7 @@ class ExamplePluginSpec:
 AGENT_CLI_PLUGINS: frozenset[str] = frozenset(
     {
         "antigravity",
+        "claude",
         "codex",
         "cursor",
         "gemini",

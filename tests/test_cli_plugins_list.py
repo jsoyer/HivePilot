@@ -18,7 +18,6 @@ from unittest.mock import MagicMock
 from typer.testing import CliRunner
 
 from hivepilot.cli import app
-from hivepilot.models import KNOWN_RUNNER_KINDS
 from hivepilot.plugins import HealthStatus, PluginRecord
 from hivepilot.registry import KNOWN_SECRET_BACKENDS, RUNNER_MAP, SECRETS_MAP, SecretsRegistry
 from hivepilot.services.notification_service import NOTIFIER_MAP
@@ -137,7 +136,10 @@ def test_plugins_list_exits_zero_and_lists_builtins(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
 
     for kind in RUNNER_MAP:
-        assert kind in KNOWN_RUNNER_KINDS  # sanity: every registered kind is a known built-in here
+        # The old sanity line asserted every registered kind is a known
+        # built-in. That premise died with the claude migration: RUNNER_MAP
+        # legitimately carries plugin kinds now (conftest registers claude the
+        # way production's loader does). The output assertion is the test.
         assert kind in result.output, f"runner kind {kind!r} missing from output"
 
     for name in NOTIFIER_MAP:

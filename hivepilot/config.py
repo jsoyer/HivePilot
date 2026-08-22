@@ -901,6 +901,11 @@ class Settings(BaseSettings):
     # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
     # (shell/terraform/kubectl/…) stay unconditional and get no flag.
     # env: HIVEPILOT_CLAUDE_ENABLED / _VIBE_ENABLED / _OPENROUTER_ENABLED
+    # `claude_enabled` is now read by the claude PLUGIN's register()
+    # (bundled_plugins/claude.py) — the last vendor CLI left _BUILTIN_RUNNERS
+    # in #26. Same flag, same default, new reader. I added a duplicate field
+    # below before finding this one; pydantic silently keeps the LAST
+    # definition, so only mypy's no-redef saw it.
     claude_enabled: bool = True
     vibe_enabled: bool = True
     openrouter_enabled: bool = True
