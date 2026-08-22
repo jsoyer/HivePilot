@@ -2893,6 +2893,72 @@ def plugins_catalog_endpoint(
     return {"plugins": entries}
 
 
+@v1.get("/agents/admin")
+@app.get("/agents/admin")
+def list_agents_admin_endpoint(
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    """Every curated agent kind with its capabilities and the SERVICE's view.
+
+    `on_service_path` is THIS process's `shutil.which` — the view that decides
+    whether a runner registers. A binary "installed" by a login shell but
+    False here is the grok trap: the per-user installer landed it somewhere
+    the units' PATH does not reach.
+    """
+    from hivepilot.services import agent_admin
+
+    return {"agents": agent_admin.list_agents_admin()}
+
+
+class AgentActionRequest(BaseModel):
+    """`consent` is the button's signature on the decision — the
+    non-interactive replacement for `agent_install.py`'s TTY "yes". It must be
+    EXPLICITLY true; absent-means-no is the only safe default for a field that
+    authorises running a vendor's install pipeline."""
+
+    consent: bool = False
+
+
+@v1.post("/agents/{kind}/{action}")
+@app.post("/agents/{kind}/{action}")
+def agent_action_endpoint(
+    kind: str,
+    action: str,
+    body: AgentActionRequest,
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    """Install or update ONE agent binary, on explicit admin consent.
+
+    The REPLACEMENT for `agent_install.py`'s interactive guard, not a bypass:
+    admin role + `consent: true` + an audit row carrying the actor and the
+    version before/after. Only registry constants ever execute — the kind is
+    validated inside the service before anything runs, so no URL or command
+    can arrive from the UI. Never called by a run.
+    """
+    from hivepilot.services import agent_admin
+
+    if body.consent is not True:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                'consent is required: POST {"consent": true} to authorise the '
+                f"{action} — the button's signature on the decision."
+            ),
+        )
+    try:
+        return agent_admin.perform_agent_action(
+            kind,
+            action,
+            actor=caller.note or caller.role,
+            token_hash=caller.token[:16],
+        )
+    except agent_admin.AgentAdminError as exc:
+        # An operator mistake (unknown kind, docs-only install, no verified
+        # updater), not a server fault — the distinction decides what Pollen
+        # shows.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @v1.post("/plugins/{name}/install")
 @app.post("/plugins/{name}/install")
 def install_plugin_endpoint(

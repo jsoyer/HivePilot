@@ -14,6 +14,7 @@ import {
 } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
+import { AgentBinariesCard } from './AgentBinariesCard'
 import { AsyncSection } from './AsyncSection'
 
 /**
@@ -151,6 +152,8 @@ export function PluginsView() {
   const canAdmin = can('admin')
 
   return (
+    <div className="space-y-4">
+    <AgentBinariesCard canAdmin={canAdmin} />
     <Card>
       <CardHeader>
         <CardTitle>{t('plugins.title')}</CardTitle>
@@ -180,5 +183,6 @@ export function PluginsView() {
         </AsyncSection>
       </CardContent>
     </Card>
+    </div>
   )
 }

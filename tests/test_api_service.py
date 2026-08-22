@@ -2794,3 +2794,98 @@ class TestPluginInstallEndpoint:
 
         assert body["restart_required"] is True
         assert body["prereq_detail"]
+
+
+class TestAgentAdminEndpoints:
+    """Agent binaries admin (#29): the routes are the replacement guarantee
+    for agent_install.py's TTY-only wall — admin role + an explicit consent
+    field, with the actor and both versions in the audit row.
+
+    Lives HERE and not in tests/test_agent_admin.py: that file sorts to
+    alphabetical position 2, and importing api_service that early broke 51
+    unrelated tests (bisected). Driven as functions — the endpoint logic is
+    what's under test; route registration is asserted by introspection."""
+
+    @staticmethod
+    def _call(kind, action, consent, monkeypatch, fake=None):
+        from fastapi import HTTPException
+
+        from hivepilot.services import agent_admin as aa
+        from hivepilot.services.api_service import AgentActionRequest, agent_action_endpoint
+        from hivepilot.services.token_service import TokenEntry
+
+        if fake is not None:
+            monkeypatch.setattr(aa, "perform_agent_action", fake)
+        caller = TokenEntry(token="h" * 64, role="admin", note="jerome")
+        try:
+            return agent_action_endpoint(kind, action, AgentActionRequest(consent=consent), caller)
+        except HTTPException as exc:
+            return exc
+
+    def test_an_action_without_consent_is_refused_naming_it(self, monkeypatch):
+        """`consent: true` is the button's signature on the decision — the
+        non-interactive replacement for the TTY 'yes'. Absent or false, the
+        service is never reached."""
+        called: list = []
+        result = self._call(
+            "grok", "update", False, monkeypatch, fake=lambda *a, **k: called.append(a)
+        )
+
+        assert getattr(result, "status_code", None) == 400
+        assert "consent" in result.detail
+        assert called == []
+
+    def test_the_request_model_defaults_consent_to_false(self):
+        """Absent-means-no is the only safe default for a field that
+        authorises running a vendor's install pipeline."""
+        from hivepilot.services.api_service import AgentActionRequest
+
+        assert AgentActionRequest().consent is False
+
+    def test_a_consented_action_reaches_the_service_with_the_actor(self, monkeypatch):
+        seen: dict = {}
+
+        def _fake(kind, action, *, actor, token_hash=""):
+            seen.update(kind=kind, action=action, actor=actor, token_hash=token_hash)
+            return {"kind": kind, "action": action, "ok": True}
+
+        result = self._call("grok", "update", True, monkeypatch, fake=_fake)
+
+        assert result == {"kind": "grok", "action": "update", "ok": True}
+        assert seen["actor"] == "jerome", "the audit trail needs a who"
+        assert seen["token_hash"], "and the token hash beside it"
+
+    def test_a_service_refusal_becomes_a_400_not_a_500(self, monkeypatch):
+        """An unknown kind or a docs-only install is an operator mistake, not
+        a server fault — the distinction decides what Pollen shows."""
+        result = self._call("not-a-kind", "update", True, monkeypatch)
+
+        assert getattr(result, "status_code", None) == 400
+        assert "unknown agent kind" in result.detail
+
+    def test_both_routes_are_registered_with_admin_dependencies(self):
+        """Introspection, no request: the paths exist on the app and each
+        carries a dependency chain (the require_role gate). A route that
+        vanished — or shipped ungated — fails here without ever starting the
+        app."""
+        from hivepilot.services.api_service import app, v1
+
+        # Scanned over app ∪ v1: where a route materialises depends on
+        # include_router timing that this test has no business pinning — two
+        # separate probes of `app.routes` alone disagreed with each other.
+        # What matters is that both spellings exist somewhere real and carry
+        # their role gate.
+        by_path = {}
+        for route in list(app.routes) + list(v1.routes):
+            path = getattr(route, "path", "")
+            if path in (
+                "/agents/admin",
+                "/v1/agents/admin",
+                "/agents/{kind}/{action}",
+                "/v1/agents/{kind}/{action}",
+            ):
+                by_path[path.removeprefix("/v1")] = route
+
+        assert set(by_path) == {"/agents/admin", "/agents/{kind}/{action}"}
+        for route in by_path.values():
+            assert route.dependant.dependencies, f"{route.path} shipped without its role gate"
