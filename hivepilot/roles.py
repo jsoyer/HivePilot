@@ -269,10 +269,28 @@ def resolve_runner(
     runner = role.runner
     model = role.model or (role.models[0] if role.models else None)
     effort: EffortLevel | None = role.effort
+    override: dict = {}
     if policy is not None:
         override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
         runner = override.get("runner", runner)
-        model = override.get("model", model)
+    # `role.model_profile` reaches dispatch for the first time (#28). Before
+    # this, the field was consumed NOWHERE — every role declared one and the
+    # declaration did nothing, silently.
+    #
+    # Resolved against the FINAL runner kind (post-policy), because that is
+    # the entire point of a profile: `model_profile: architecture` lands on
+    # the right model wherever the role runs. A resolvable profile OUTRANKS
+    # the flat `model:` — declaring it means "resolve per runner", and
+    # model-first would leave the declarations dead even with the yaml
+    # present. Unresolvable falls back to `model:` with a warning from the
+    # resolver, which is byte-identical to the old behaviour except it SAYS
+    # so. Policy's own model override still outranks everything below it.
+    if role.model_profile:
+        from hivepilot.services.profile_service import resolve_profile_model
+
+        model = resolve_profile_model(role.model_profile, runner) or model
+    model = override.get("model", model)
+    if policy is not None:
         allowed = getattr(policy, "allowed_runners", None)
         # Fail-closed: an explicit empty list ([]) means "deny every runner",
         # NOT "no constraint". Only `None` (absent) means unconstrained. A plain

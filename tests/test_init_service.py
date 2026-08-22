@@ -122,7 +122,11 @@ def test_scaffold_plain_yaml_surfaces_pass_their_real_loaders(tmp_path: Path) ->
     init_service.scaffold_local(tmp_path, force=False)
 
     assert load_policies(tmp_path / "policies.yaml") is not None
-    assert load_claude_profiles(tmp_path / "model_profiles.yaml")["coding"]["model"] == "sonnet"
+    # The scaffold writes the generic per-runner shape now (#28); the legacy
+    # flat `model:` key is still READ, but no longer WRITTEN for new installs.
+    scaffolded = load_claude_profiles(tmp_path / "model_profiles.yaml")
+    assert scaffolded["coding"]["claude"] == "sonnet"
+    assert scaffolded["coding"]["grok"] == "grok-4.6"
     assert load_schedules(tmp_path / "schedules.yaml") == {}
     assert load_tokens(tmp_path / "api_tokens.yaml") == []
 

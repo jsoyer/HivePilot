@@ -3661,7 +3661,7 @@ class TestNoopPermissionResponseFailsStep:
         """No false positive: real completed work is unaffected."""
         mock_step = self._run("Implemented the feature and added the test suite.")
         mock_step.assert_called_once_with(
-            1, "s", "success", provider="claude", model=None, role="developer"
+            1, "s", "success", provider="claude", model="sonnet", role="developer"
         )
 
     def test_document_discussing_approval_workflow_is_not_a_false_positive(self) -> None:
@@ -3673,7 +3673,7 @@ class TestNoopPermissionResponseFailsStep:
             "Telegram, who can approve, deny, or challenge it."
         )
         mock_step.assert_called_once_with(
-            1, "s", "success", provider="claude", model=None, role="developer"
+            1, "s", "success", provider="claude", model="sonnet", role="developer"
         )
 
 
