@@ -1397,6 +1397,26 @@ _REVIEWER_VERDICT_TOKENS: frozenset[str] = frozenset(
 _REVIEWER_BLOCK_SEVERITY: tuple[str, ...] = ("REQUEST_CHANGES", "NEEDS_HUMAN", "BLOCKED")
 
 
+def _parse_review_escalation(text: str) -> bool:
+    """Did this reviewer ask for the judge? (`escalate: JUDGE`, #32)
+
+    A SIBLING of `_parse_reviewer_verdict`'s grammar, in its own function on
+    purpose: the verdict parsers are sacred (they have been wrongly blamed
+    before, and loosening them fabricates verdicts), so escalation never
+    touches them.
+
+    FAIL-CLOSED, both directions: only a line that IS the token triggers —
+    line-anchored, optional leading bullet like the `status:` grammar, exact
+    `JUDGE` casing (a fail-closed grammar does not guess that `judge` meant
+    the same thing). Prose mentioning the convention never summons anyone.
+    """
+    import re
+
+    if not text or not text.strip():
+        return False
+    return bool(re.search(r"^\s*-?\s*escalate:\s*JUDGE\s*$", text, re.M))
+
+
 def _review_verdict_from_tokens(tokens: "list[str | None]") -> "Verdict":
     """Derive the review's governing :class:`Verdict` from each reviewer's
     parsed ``status:`` token.
@@ -2439,6 +2459,111 @@ class Orchestrator:
             )
         except Exception as exc:  # noqa: BLE001 — never let bookkeeping break the gate
             logger.warning("verdict.persist_failed", kind="review", error=str(exc))
+
+    def _run_escalated_judge(
+        self,
+        *,
+        escalated_by: "list[str]",
+        effective,
+        reviewer_summaries: "list[str]",
+        run_id,
+        project_name: str,
+    ):
+        """Dispatch the debate block's judge because a REVIEWER asked (#32).
+
+        The dynamic half of "le juge tiers doit être poussé par le CSO s'il en
+        trouve l'utilité": the static config declares WHICH judge exists
+        (`enable_judge` + runner/model on the pipeline's debate block); a
+        reviewer's `escalate: JUDGE` line decides WHEN it is worth summoning.
+
+        Fail-closed on the missing half: an escalation with no judge
+        configured warns NAMING who asked and what is missing — a dropped
+        request is the house defect, and a fabricated verdict would be worse.
+        A crashing judge warns and returns None: escalation is an EXTRA
+        opinion, never a new failure mode for the run — the reviewers' own
+        verdicts already gate promotion.
+        """
+        from typing import cast
+
+        from hivepilot.models import RunnerDefinition, RunnerKind
+        from hivepilot.services import state_service
+
+        if not getattr(effective, "enable_judge", False) or not getattr(effective, "runner", None):
+            logger.warning(
+                "review.escalation_without_judge",
+                escalated_by=escalated_by,
+                detail=(
+                    "reviewer(s) %s asked for judge escalation but the pipeline's "
+                    "debate block configures no judge (enable_judge/runner) — "
+                    "add one or remove the escalate line from the prompt"
+                )
+                % ",".join(escalated_by),
+            )
+            return None
+
+        prompt = (
+            "You are the escalated third-party judge for an adversarial code "
+            "review. Reviewer(s) "
+            + ", ".join(escalated_by)
+            + " explicitly requested your arbitration.\n\nReviewer verdicts so far:\n"
+            + "\n".join(reviewer_summaries)
+            + "\n\nGive your independent verdict as a JSON object: "
+            '{"decision": "approve"|"request_changes", "confidence": 0.0-1.0}.'
+        )
+        judge_def = RunnerDefinition(
+            name="review:judge:escalated",
+            kind=cast(RunnerKind, effective.runner),
+            command=None,
+            model=getattr(effective, "model", None),
+            # `options={}` DELIBERATELY (the empty-options guard requires it
+            # named): the configured judge may be a runner (cursor) that
+            # honours no restriction controls — passing a whitelist it cannot
+            # apply would be refused at dispatch (#569). The judge reads a
+            # summary and answers; it edits nothing.
+            options={},
+        )
+        from hivepilot.runners.base import RunnerPayload
+
+        payload = RunnerPayload(
+            project_name=project_name,
+            project=None,
+            task_name="review:judge:escalated",
+            step=TaskStep(name="review-judge", runner=str(effective.runner)),
+            metadata={"extra_prompt": prompt, "prior_context": ""},
+            secrets={},
+        )
+        try:
+            raw = self.registry.capture_definition(judge_def, payload)
+        except Exception as exc:  # noqa: BLE001 - an extra opinion, not a failure mode
+            logger.warning(
+                "review.escalated_judge_failed",
+                escalated_by=escalated_by,
+                error=redact_text(str(exc)),
+            )
+            return None
+
+        verdict = _parse_verdict(raw or "")
+        self._register_verdict(
+            verdict, confidence_threshold=getattr(effective, "confidence_threshold", None)
+        )
+        try:
+            state_service.record_verdict(
+                run_id=run_id,
+                pipeline_run_id=self._pipeline_run_id,
+                project=project_name,
+                task=None,
+                role="judge",
+                # Distinguishable on purpose: an escalated verdict
+                # indistinguishable from a routine one would make the
+                # mechanism unmeasurable.
+                kind="review-escalation",
+                decision=verdict.decision,
+                confidence=verdict.confidence,
+                summary="escalated by: " + ", ".join(escalated_by),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("review.escalated_verdict_record_failed", error=str(exc))
+        return verdict
 
     def _register_verdict(
         self, verdict: "Verdict | None", *, confidence_threshold: float | None = None
@@ -3994,6 +4119,7 @@ class Orchestrator:
             # as the answers: they are what separates "they refused" from "we
             # could not ask", and what makes `confidence` mean something.
             reviewer_tokens: list[str | None] = []
+            escalated_by: list[str] = []
 
             for role_name in effective.reviewers:
                 try:
@@ -4120,6 +4246,11 @@ class Orchestrator:
                 output = redact_text(output) if output else output
                 token = _parse_reviewer_verdict(output or "")
                 reviewer_tokens.append(token)
+                # `escalate: JUDGE` (#32) — collected here, dispatched once
+                # after every reviewer has spoken, so the judge sees the full
+                # round rather than a partial one.
+                if _parse_review_escalation(output or ""):
+                    escalated_by.append(role_name)
                 reviewer_summaries.append(f"{role_name}: {token or 'UNPARSEABLE'}")
 
             # A refusal is a decision. This used to collapse every non-PASS
@@ -4130,6 +4261,18 @@ class Orchestrator:
             # outcome either way; strictly more information in the row.
             verdict = _review_verdict_from_tokens(reviewer_tokens)
             self._register_verdict(verdict, confidence_threshold=effective.confidence_threshold)
+            if escalated_by and not simulate:
+                # A reviewer found this round worth third-party arbitration.
+                # The judge's verdict REGISTERS like any other (a blocking one
+                # blocks), and its row is marked review-escalation so the
+                # mechanism stays measurable.
+                self._run_escalated_judge(
+                    escalated_by=escalated_by,
+                    effective=effective,
+                    reviewer_summaries=reviewer_summaries,
+                    run_id=run_id,
+                    project_name=project.path.name,
+                )
             try:
                 state_service.record_verdict(
                     run_id=run_id,
