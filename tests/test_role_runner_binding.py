@@ -190,12 +190,16 @@ class TestCursorRunnerInRegistry:
 
         assert RUNNER_MAP["cursor"] is CursorRunner
 
-    def test_cursor_runner_subclasses_prompt_cli_runner(self):
+    def test_cursor_runner_subclasses_claude_runner(self):
+        """This test used to pin `PromptCliRunner`. That base applies neither
+        `permission_mode` nor `allowed_tools`, so cursor silently dropped a
+        role's restrictions — the move to the claude-shaped path (#31) is what
+        this now pins instead."""
+        from hivepilot.runners.claude_runner import ClaudeRunner
         from hivepilot.runners.cursor_runner import CursorRunner
-        from hivepilot.runners.prompt_cli_runner import PromptCliRunner
 
-        assert issubclass(CursorRunner, PromptCliRunner), (
-            "CursorRunner must subclass PromptCliRunner"
+        assert issubclass(CursorRunner, ClaudeRunner), (
+            "CursorRunner must inherit the claude-shaped path"
         )
 
     def test_cursor_runner_command_name(self):

@@ -224,3 +224,73 @@ class TestAgainstTheRealBinary:
         assert "allowedTools" in help_text, (
             "the compat alias is why Claude-grammar rules pass through understood"
         )
+
+
+class TestTheCommandIsNotClaudes:
+    """The bug the old cursor `command_name` test exposed, fixed at the base.
+
+    A role-synthesized definition carries `command=None`, and the base's
+    fallback chain read `definition.command or settings.claude_command` — so
+    `kind: grok` on a role dispatch would have LAUNCHED CLAUDE, silently, with
+    only the resolved-model stamp to notice it by. Behavioural, argv[0] from
+    the real `_build_invocation`: the source-string version of a test like
+    this has already survived a disabled branch once this session."""
+
+    @staticmethod
+    def _argv0_for(runner_cls, tmp_path):
+        from hivepilot.config import settings
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+        from hivepilot.runners.base import RunnerPayload
+
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+            metadata={},
+            secrets={},
+        )
+        definition = RunnerDefinition(name="r", kind="claude", command=None)
+        args, _ = runner_cls(definition, settings)._build_invocation(payload)
+        return args[0]
+
+    def test_grok_with_no_command_launches_grok(self, tmp_path):
+        assert self._argv0_for(GrokRunner, tmp_path) == "grok"
+
+    def test_cursor_with_no_command_launches_cursor_agent(self, tmp_path):
+        from hivepilot.runners.cursor_runner import CursorRunner
+
+        assert self._argv0_for(CursorRunner, tmp_path) == "cursor-agent"
+
+    def test_claude_still_falls_through_to_its_setting(self, tmp_path, monkeypatch):
+        """The discriminating half: the fix must not steal claude's own
+        fallback. `command_name` is None there, so the setting still decides."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "claude_command", "claude-custom", raising=False)
+
+        assert self._argv0_for(ClaudeRunner, tmp_path) == "claude-custom"
+
+    def test_an_explicit_command_beats_the_class_default(self, tmp_path):
+        """`definition.command` stays first: an operator naming a binary wins
+        over what the class would pick."""
+        from hivepilot.config import settings
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+        from hivepilot.runners.base import RunnerPayload
+
+        pf = tmp_path / "p.md"
+        pf.write_text("x", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="claude", prompt_file=str(pf)),
+            metadata={},
+            secrets={},
+        )
+        definition = RunnerDefinition(name="r", kind="claude", command="/opt/grok-beta")
+        args, _ = GrokRunner(definition, settings)._build_invocation(payload)
+
+        assert args[0] == "/opt/grok-beta"

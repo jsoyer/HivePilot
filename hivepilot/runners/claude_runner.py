@@ -512,9 +512,26 @@ class ClaudeRunner(BaseRunner):
     #                                 (alias --allowedTools)
     #   grok also has --prompt-file, which claude lacks and which removes the
     #   MAX_ARG_STRLEN failure class entirely.
+    # `None` means "this CLI has no such flag" and the base emits nothing —
+    # NOT "use the default". cursor-agent has neither an allow-list flag nor a
+    # permission mode (its nearest kin are `--mode plan|ask`, `--sandbox` and
+    # `--force`, none of which is a drop-in), so it sets both to None and
+    # declares neither control honoured. The two mechanisms must agree: a
+    # runner that emits no flag must not claim to apply the control, or
+    # `assert_runner_honours` would wave through a role it silently ignores.
     print_flag: ClassVar[str] = "--print"
-    allowed_tools_flag: ClassVar[str] = "--allowed-tools"
-    permission_mode_flag: ClassVar[str] = "--permission-mode"
+    allowed_tools_flag: ClassVar[str | None] = "--allowed-tools"
+    permission_mode_flag: ClassVar[str | None] = "--permission-mode"
+    #: Fallback binary when the definition names no command. `None` — claude's
+    #: own value — falls through to `settings.claude_command`, unchanged.
+    #:
+    #: A sibling MUST set this. A role-synthesized definition carries
+    #: `command=None`, and without this override grok inherited the fallback
+    #: chain `definition.command or settings.claude_command` — so `kind: grok`
+    #: on a role dispatch would have LAUNCHED CLAUDE, silently, with only the
+    #: resolved-model stamp to notice it by. Found via cursor's old
+    #: `command_name` test, which pinned exactly this fallback.
+    command_name: ClassVar[str | None] = None
 
     def _assemble_prompt(self, payload: RunnerPayload) -> str:
         """Load the step's prompt file and build the full agent prompt.
@@ -570,7 +587,7 @@ class ClaudeRunner(BaseRunner):
         ).lower()
 
     def _build_invocation(self, payload: RunnerPayload) -> tuple[list[str], dict[str, str]]:
-        command = self.definition.command or self.settings.claude_command
+        command = self.definition.command or self.command_name or self.settings.claude_command
         if not command:
             raise ValueError("Claude command not configured.")
         prompt = self._assemble_prompt(payload)
@@ -642,7 +659,7 @@ class ClaudeRunner(BaseRunner):
         # or Edit. Deliberately an ALLOW-list: `--disallowedTools` fails OPEN
         # for every tool name it does not enumerate.
         allowed_tools = self._resolve_allowed_tools(payload)
-        if allowed_tools:
+        if allowed_tools and self.allowed_tools_flag:
             args.append(self.allowed_tools_flag)
             args.extend(allowed_tools)
         # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
@@ -655,7 +672,8 @@ class ClaudeRunner(BaseRunner):
             or self.settings.claude_permission_mode
         )
         if permission_mode:
-            args.extend([self.permission_mode_flag, permission_mode])
+            if self.permission_mode_flag:
+                args.extend([self.permission_mode_flag, permission_mode])
         # `--` is the standard end-of-options separator: it tells claude's
         # arg parser to stop treating subsequent tokens as option values, so
         # the prompt is unambiguously positional. UNCONDITIONALLY emitted
