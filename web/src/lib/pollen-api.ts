@@ -627,6 +627,60 @@ export interface PluginInstallResult {
 
 /** Fetch a curated plugin file onto the host and persist its enable flag.
  * Admin-only, and restricted server-side to the curated registry. */
+// ---------------------------------------------------------------------------
+// Agent binaries (box-only admin surface). The POST carries {"consent": true}
+// — the button's signature on the decision, the non-interactive replacement
+// for agent_install.py's TTY "yes". Only curated registry kinds ever execute;
+// the server validates before anything runs.
+// ---------------------------------------------------------------------------
+
+export interface AgentAdminEntry {
+  kind: string
+  name: string
+  vendor: string
+  binary: string
+  docs_url: string
+  installable: boolean
+  updatable: boolean
+  /** THIS process's shutil.which — the service's own view, the one that
+   * decides whether a runner registers. Installed-but-false is the grok trap. */
+  on_service_path: boolean
+  installed_version: string | null
+}
+
+export interface AgentsAdminResponse {
+  agents: AgentAdminEntry[]
+}
+
+export interface AgentActionResult {
+  kind: string
+  action: string
+  ok: boolean
+  exit_code?: number
+  version_before: string | null
+  version_after: string | null
+  on_service_path: boolean
+  detail?: string
+}
+
+export function fetchAgentsAdmin(): Promise<AgentsAdminResponse> {
+  return apiFetch<AgentsAdminResponse>('/v1/agents/admin')
+}
+
+export function agentAction(
+  kind: string,
+  action: 'install' | 'update',
+): Promise<AgentActionResult> {
+  return apiFetch<AgentActionResult>(
+    `/v1/agents/${encodeURIComponent(kind)}/${action}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ consent: true }),
+    },
+  )
+}
+
 export function installPlugin(name: string): Promise<PluginInstallResult> {
   return apiFetch<PluginInstallResult>(`/v1/plugins/${encodeURIComponent(name)}/install`, {
     method: 'POST',
