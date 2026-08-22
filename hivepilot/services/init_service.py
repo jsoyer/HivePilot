@@ -38,15 +38,21 @@ from hivepilot.services.agent_checks import MandatoryAgentReport, check_mandator
 # ---------------------------------------------------------------------------
 
 _MODEL_PROFILES_YAML = """\
-# HivePilot model profile bindings — maps a profile name to a concrete model.
-# Referenced by role definitions in roles.yaml (role.model_profile).
-claude_profiles:
+# HivePilot model profile bindings — maps a profile name to a model PER RUNNER,
+# so `model_profile: architecture` lands on the right model wherever the role
+# runs. Referenced by role definitions in roles.yaml (role.model_profile).
+# The legacy `claude_profiles:` key (flat `model:` entries, claude-only) is
+# still read; on a name clash the generic key below wins.
+model_profiles:
   coding:
-    model: sonnet
+    claude: sonnet
+    grok: grok-4.6
   architecture:
-    model: opus
+    claude: opus
+    grok: grok-4.6
   automation:
-    model: haiku
+    claude: haiku
+    grok: grok-4.5
 """
 
 _SCHEDULES_YAML = """\

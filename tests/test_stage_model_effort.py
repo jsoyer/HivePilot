@@ -145,7 +145,9 @@ class TestResolveStageDispatchPrecedence:
 
         runner, model, effort = resolve_stage_dispatch("developer")
         assert runner == "claude"
-        assert model is None  # developer role sets no explicit model
+        assert (
+            model == "sonnet"
+        )  # was None in the dead-profile era: the developer role's `model_profile: coding` resolves through the repo's own model_profiles.yaml now (#28)  # developer role sets no explicit model
         assert effort is None
 
     def test_stage_model_overrides_role_default(self) -> None:
@@ -702,7 +704,9 @@ class TestOrchestratorStageDispatchByteIdentical:
                 dry_run=True,
             )
         called_def = orch.registry.capture_definition.call_args.args[0]
-        assert called_def.model is None
+        assert (
+            called_def.model == "sonnet"
+        )  # the coding profile resolves now (#28) — was None in the dead-profile era
         assert called_def.effort is None
         assert called_def.kind == "claude"
 

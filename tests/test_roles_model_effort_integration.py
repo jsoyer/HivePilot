@@ -270,7 +270,10 @@ class TestNoRolesYamlFallsBackToDeveloperAndDispatches:
             roles_module.ROLES = original_roles
 
         assert runner == "claude"
-        assert model is None  # no hard-coded model on the fallback developer role
+        # No hard-coded model — but the fallback developer declares
+        # `model_profile: coding`, and since #28 that RESOLVES through the
+        # repo's own model_profiles.yaml instead of being silently ignored.
+        assert model == "sonnet"
         assert effort is None  # the generic developer declares no effort tier
 
 
