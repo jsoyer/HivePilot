@@ -63,6 +63,10 @@ class GrokRunner(ClaudeRunner):
     #: claude's `--print` is a boolean with the prompt positional. The base
     #: builder appends the prompt after the flags, which lands it in exactly
     #: the right place for both.
+    #: Without this, a role-synthesized definition (`command=None`) fell
+    #: through to `settings.claude_command` and LAUNCHED CLAUDE. The bug
+    #: shipped in #570 and was caught by cursor's old `command_name` test.
+    command_name: ClassVar[str | None] = "grok"
     print_flag: ClassVar[str] = "-p"
     #: `--allow`, whose own help calls `--allowedTools` a compat alias.
     allowed_tools_flag: ClassVar[str] = "--allow"
