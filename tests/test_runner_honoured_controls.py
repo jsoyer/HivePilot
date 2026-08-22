@@ -158,3 +158,109 @@ class TestEveryDispatchPathIsGuarded:
         # BEFORE the runner is built and called: refusing after the process
         # has started is not refusing.
         assert src.index("assert_runner_honours") < src.rindex("runner_cls(definition")
+
+
+class TestPermissionModeOnPromptCliRunners:
+    """#30's honest half. Static extraction settled the rest without probes:
+
+    `allowed_tools` stays unhonourable off the claude path — pi and vibe
+    restrict by tool NAME (`bash`), so translating `Bash(rtk git:*)` would
+    grant the whole shell: WIDER than the role asked, worse than refusing.
+    gemini's `--allowed-tools` is deprecated AND inverted ("allowed to run
+    without confirmation" — an auto-approve list). codex's `-s` is sandbox
+    confinement, a different axis.
+
+    `permission_mode` IS honourable on pi and vibe: their approve flags are
+    exactly that semantic, and until now they were hardcoded ON — the
+    engine auto-approved for every caller regardless of what the role said.
+    """
+
+    @staticmethod
+    def _args_for(runner_cls, permission_mode, tmp_path):
+        from hivepilot.config import settings
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+        from hivepilot.runners.base import RunnerPayload
+
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        options = {"permission_mode": permission_mode} if permission_mode else {}
+        definition = RunnerDefinition(name="r", kind="shell", command=None, options=options)
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="shell", prompt_file=str(pf)),
+            metadata={},
+            secrets={},
+        )
+        runner = runner_cls(definition, settings)
+        return runner._build_cli_args(payload, "do it")
+
+    def test_pi_bypass_emits_approve(self, tmp_path):
+        from hivepilot.runners.prompt_cli_runner import PiRunner
+
+        args = self._args_for(PiRunner, "bypassPermissions", tmp_path)
+
+        assert "--approve" in args
+        assert "--no-approve" not in args
+
+    def test_pi_without_bypass_emits_no_approve(self, tmp_path):
+        """The defect this ends: `--approve` was HARDCODED, so every caller
+        got auto-approval whatever the role said. `--no-approve` exists in
+        pi's help precisely for this."""
+        from hivepilot.runners.prompt_cli_runner import PiRunner
+
+        args = self._args_for(PiRunner, None, tmp_path)
+
+        assert "--no-approve" in args
+        assert "--approve" not in [a for a in args if a != "--no-approve"]
+
+    def test_vibe_bypass_emits_auto_approve(self, tmp_path):
+        from hivepilot.runners.prompt_cli_runner import VibeRunner
+
+        args = self._args_for(VibeRunner, "bypassPermissions", tmp_path)
+
+        assert "--auto-approve" in args
+
+    def test_vibe_without_bypass_omits_it(self, tmp_path):
+        """vibe has no explicit no-approve flag; omitting `--auto-approve` IS
+        the safe mode — it then prompts, which in headless means refusing
+        rather than silently acting."""
+        from hivepilot.runners.prompt_cli_runner import VibeRunner
+
+        args = self._args_for(VibeRunner, None, tmp_path)
+
+        assert "--auto-approve" not in args
+
+    def test_pi_and_vibe_now_declare_permission_mode_only(self):
+        """Half a declaration, honestly: permission_mode is wired,
+        allowed_tools is NOT (name-level flags cannot express command
+        patterns without widening the grant). #569's partial-support test
+        guarantees a role asking for both is still refused."""
+        from hivepilot.runners.prompt_cli_runner import PiRunner, VibeRunner
+
+        assert PiRunner.honoured_controls == frozenset({"permission_mode"})
+        assert VibeRunner.honoured_controls == frozenset({"permission_mode"})
+
+    def test_a_role_with_allowed_tools_is_still_refused_on_pi(self):
+        """The widening trap, pinned: `Bash(rtk git:*)` has no faithful
+        name-level translation, so the refusal must survive this change."""
+        import pytest as _p
+
+        from hivepilot.runners.base import RunnerControlUnsupportedError, assert_runner_honours
+        from hivepilot.runners.prompt_cli_runner import PiRunner
+
+        with _p.raises(RunnerControlUnsupportedError, match="allowed_tools"):
+            assert_runner_honours(
+                "pi",
+                PiRunner,
+                {"permission_mode": "bypassPermissions", "allowed_tools": ["Bash(rtk git:*)"]},
+            )
+
+    def test_other_prompt_cli_runners_are_untouched(self, tmp_path):
+        """gemini/codex/opencode keep declaring nothing — their mechanisms
+        (deprecated inverted flag; sandbox confinement) are not this control."""
+        from hivepilot.runners.prompt_cli_runner import CodexRunner, GeminiRunner
+
+        for cls in (GeminiRunner, CodexRunner):
+            assert not getattr(cls, "honoured_controls", frozenset())

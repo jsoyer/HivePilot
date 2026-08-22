@@ -44,7 +44,11 @@ def test_load_prompt_missing_file_names_task_step_and_searched_dirs(tmp_path: Pa
 
 def test_vibe_runner_defaults() -> None:
     assert VibeRunner.command_name == "vibe"
-    assert "--auto-approve" in VibeRunner.cli_flags
+    # `--auto-approve` used to be HARDCODED in cli_flags — approval-free
+    # execution for every caller, whatever the role said. It moved to
+    # bypass_flags (#30): emitted only on an explicit bypassPermissions.
+    assert "--auto-approve" in VibeRunner.bypass_flags
+    assert "--auto-approve" not in VibeRunner.cli_flags
     assert VibeRunner.prompt_flag == "--prompt"
     # vibe has no subcommand (unlike codex 'exec' / opencode 'run')
     assert VibeRunner.cli_subcommand is None
