@@ -780,6 +780,18 @@ def resolve_step_runner(
     # already states; it does not widen it.
     if _role.allowed_tools:
         role_options["allowed_tools"] = list(_role.allowed_tools)
+    # The `surface:` axis — WHERE this task can be watched. A TASK property
+    # rather than a role one, so it rides alongside the role options rather
+    # than inside `_role_runner_options`.
+    #
+    # Only a DECLARED value travels. `"derive"` deliberately sets nothing, so
+    # the runner falls through to the process-wide `claude_pane_mode` and a
+    # host that set it is unaffected. Setting `"inline"` explicitly is not the
+    # same as leaving it alone: it OVERRULES that setting for this task, which
+    # is the point of declaring it.
+    _surface = getattr(task, "surface", "derive")
+    if _surface != "derive":
+        role_options["surface"] = _surface
     role_host = resolve_host(task.role, policy)
 
     if not step.runner_ref:

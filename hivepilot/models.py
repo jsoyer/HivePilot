@@ -215,6 +215,23 @@ class GitActions(BaseModel):
 #: still a runner, and moving it is a separate change.
 WorkspaceKind = Literal["derive", "shared", "worktree"]
 
+#: WHERE the work can be WATCHED. The second of the three axes `runner:` used
+#: to answer alone.
+#:
+#: herdr is a SURFACE, not an executor: it runs a command in a pane so a human
+#: can see it, and isolates nothing — same tree, same world. `workspace:` above
+#: is the orthogonal question. "grok in a herdr pane, in a throwaway worktree"
+#: needs both, and needed neither to be expressible.
+#:
+#: The capability already exists and is already inherited: `run_in_pane` sits
+#: on `ClaudeRunner`, so `GrokRunner` got it for free from #570 — but it was
+#: reachable only through the process-wide `claude_pane_mode` bool, whose name
+#: says claude and whose scope is every step or none.
+#:
+#: `"derive"` reads that setting, so a host that set it behaves exactly as
+#: before. `"inline"` and `"herdr"` decide per task.
+SurfaceKind = Literal["derive", "inline", "herdr"]
+
 
 class TaskConfig(BaseModel):
     description: str
@@ -222,6 +239,9 @@ class TaskConfig(BaseModel):
     #: See `WorkspaceKind`. Default `"derive"` — byte-identical to the
     #: pre-existing behaviour for every config that does not set it.
     workspace: WorkspaceKind = "derive"
+    #: See `SurfaceKind`. Default `"derive"` — reads the process-wide
+    #: `claude_pane_mode`, so a host that set it is unaffected.
+    surface: SurfaceKind = "derive"
     engine: Literal["native", "langgraph", "crewai"] = "native"
     graph: str | None = None
     crew: str | None = None
