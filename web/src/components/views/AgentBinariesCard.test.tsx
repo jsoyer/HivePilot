@@ -78,14 +78,39 @@ describe('AgentBinariesCard', () => {
     expect(container.textContent).toContain('Grok Build CLI')
   })
 
-  it('shows the off-path warning — the grok trap, reported not repeated', async () => {
-    fetchAgentsAdmin.mockResolvedValue(roster([{ ...GROK, on_service_path: false }]))
+  it('a not-visible binary is NEUTRAL, never red — not installed is a choice', async () => {
+    // The regression this pins: seven never-installed kinds rendered a wall
+    // of destructive badges at the top of the Plugins page, and the operator
+    // read them as plugins in error. From the service's view "not installed"
+    // and "off the units' PATH" are the same fact; neither is a defect.
+    fetchAgentsAdmin.mockResolvedValue(
+      roster([{ ...GROK, on_service_path: false, installed_version: null, auth: 'unknown' }]),
+    )
 
     render()
     await flush()
 
-    // the badge text comes from i18n; the destructive variant is the signal
+    expect(container.querySelector('.text-destructive')).toBeFalsy()
+    // the explanation survives as a title on the neutral badge
     expect(container.querySelector('[title]')).toBeTruthy()
+  })
+
+  it('absent auth is red only when the service can SEE the binary', async () => {
+    fetchAgentsAdmin.mockResolvedValue(
+      roster([
+        { ...GROK, kind: 'grok', auth: 'absent', on_service_path: true },
+        { ...GROK, kind: 'cursor', name: 'Cursor', auth: 'absent', on_service_path: false },
+      ]),
+    )
+
+    render()
+    await flush()
+
+    const destructive = Array.from(container.querySelectorAll('.text-destructive'))
+    expect(destructive.length).toBeGreaterThan(0)
+    const rows = Array.from(container.querySelectorAll('tr'))
+    const cursorRow = rows.find((r) => r.textContent?.includes('Cursor'))
+    expect(cursorRow?.querySelector('.text-destructive')).toBeFalsy()
   })
 
   it('one click never runs anything — the confirm step IS the consent', async () => {
