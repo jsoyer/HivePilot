@@ -123,7 +123,11 @@ function AgentRow({
       <TableCell>
         {agent.auth === 'present' && <Badge variant="outline">{t('agents.auth.present')}</Badge>}
         {agent.auth === 'absent' && (
-          <Badge variant="destructive">{t('agents.auth.absent')}</Badge>
+          // Red only when actionable: the service sees the binary but no
+          // credentials. Absent auth on an invisible binary is not a defect.
+          <Badge variant={agent.on_service_path ? 'destructive' : 'outline'}>
+            {t('agents.auth.absent')}
+          </Badge>
         )}
         {agent.auth === 'unknown' && (
           <Badge variant="outline" title={t('agents.auth.unknownTitle')}>
@@ -157,7 +161,18 @@ function AgentRow({
         {agent.on_service_path ? (
           <Badge variant="outline">{t('agents.binaries.onPath')}</Badge>
         ) : (
-          <Badge variant="destructive" title={t('agents.binaries.offPathTitle')}>
+          // NOT destructive: from the service's view "not installed" and
+          // "installed off the units' PATH" are the same fact, and the common
+          // case is a kind nobody chose to install — a choice, not an error.
+          // A wall of red here made never-enabled agents read as failures.
+          // Red for path stays reserved for the one anomalous moment: an
+          // install/update just SUCCEEDED and the service still cannot see
+          // the binary (`offPathAfter`, the grok trap).
+          <Badge
+            variant="outline"
+            className="text-muted-foreground"
+            title={t('agents.binaries.offPathTitle')}
+          >
             {t('agents.binaries.offPath')}
           </Badge>
         )}

@@ -208,9 +208,9 @@ export const en = {
   'agents.binaries.colPath': 'Service PATH',
   'agents.binaries.colActions': 'Actions',
   'agents.binaries.onPath': 'visible',
-  'agents.binaries.offPath': 'NOT on service PATH',
+  'agents.binaries.offPath': 'not visible',
   'agents.binaries.offPathTitle':
-    'The binary exists for a login shell but the systemd units cannot see it — the runner will not register. Symlink it into a directory on the service PATH.',
+    'The service cannot see this binary. Usually it is simply not installed — a choice, not an error. It can also mean a login shell installed it off the units’ PATH; then the runner will not register until it is symlinked into a directory on the service PATH.',
   'agents.binaries.offPathAfter': 'still not on the service PATH',
   'agents.binaries.install': 'Install',
   'agents.binaries.confirmInstall': 'Confirm install (runs the vendor one-liner)',

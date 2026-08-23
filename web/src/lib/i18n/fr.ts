@@ -202,9 +202,9 @@ export const fr: Record<TranslationKey, string> = {
   'agents.binaries.colPath': 'PATH du service',
   'agents.binaries.colActions': 'Actions',
   'agents.binaries.onPath': 'visible',
-  'agents.binaries.offPath': 'HORS PATH du service',
+  'agents.binaries.offPath': 'non visible',
   'agents.binaries.offPathTitle':
-    'Le binaire existe pour un shell de connexion mais les unités systemd ne le voient pas — le runner ne s\'enregistrera pas. Créez un lien dans un répertoire du PATH du service.',
+    'Le service ne voit pas ce binaire. Le plus souvent il n\'est simplement pas installé — un choix, pas une erreur. Cela peut aussi vouloir dire qu\'un shell de connexion l\'a installé hors du PATH des unités ; le runner ne s\'enregistrera alors pas tant qu\'un lien n\'est pas créé dans un répertoire du PATH du service.',
   'agents.binaries.offPathAfter': 'toujours hors du PATH du service',
   'agents.binaries.install': 'Installer',
   'agents.binaries.confirmInstall': 'Confirmer l\'installation (exécute le one-liner du vendeur)',
