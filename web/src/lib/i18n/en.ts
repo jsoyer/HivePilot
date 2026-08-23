@@ -271,9 +271,6 @@ export const en = {
   'health.probes.description':
     'Systems that fail by going quiet — a healthy zero and a silence look identical, so they are probed separately.',
   'health.probes.unreachable': 'The probes could not be read.',
-  'health.agents.title': 'Agent CLIs',
-  'health.agents.description':
-    'Read-only view of the agent binaries as the service sees them — install, update and login live on the Plugins page.',
   'health.restartNote': " Enable/disable applies on the server's next restart only.",
   'health.noPlugins': 'No plugins registered.',
   'health.disabledPlugins': 'Disabled plugins',

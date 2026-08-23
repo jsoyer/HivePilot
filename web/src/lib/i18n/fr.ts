@@ -267,9 +267,6 @@ export const fr: Record<TranslationKey, string> = {
   'health.probes.description':
     'Les systèmes qui tombent en silence — un zéro sain et un silence sont identiques, donc sondés à part.',
   'health.probes.unreachable': "Les sondes n'ont pas pu être lues.",
-  'health.agents.title': 'Agents CLI',
-  'health.agents.description':
-    'Vue en lecture seule des binaires tels que le service les voit — installation, mise à jour et connexion restent sur la page Plugins.',
   'health.restartNote': " Activer/désactiver ne s'applique qu'au prochain redémarrage du serveur.",
   'health.noPlugins': 'Aucun plugin enregistré.',
   'health.disabledPlugins': 'Plugins désactivés',

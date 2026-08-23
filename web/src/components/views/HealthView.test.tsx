@@ -973,12 +973,12 @@ describe('HealthView redesign', () => {
     })
     mockRole('admin', 3)
     await mountAll()
-    expect(container.querySelector('[data-testid="health-agents"]')?.textContent).toContain(
-      'Grok Build CLI',
-    )
+    // The FULL AgentBinariesCard (install/update/login), not a read-only
+    // echo — the Plugins page keeps activation only (operator decision).
+    expect(container.textContent).toContain('Grok Build CLI')
 
     mockRole('read', 0)
     await mountAll()
-    expect(container.querySelector('[data-testid="health-agents"]')).toBeNull()
+    expect(container.textContent).not.toContain('Grok Build CLI')
   })
 })
