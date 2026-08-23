@@ -14,7 +14,6 @@ import {
 } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
-import { AgentBinariesCard } from './AgentBinariesCard'
 import { AsyncSection } from './AsyncSection'
 
 /**
@@ -151,9 +150,12 @@ export function PluginsView() {
   const catalog = useAsyncData(fetchPluginCatalog, [reloadKey])
   const canAdmin = can('admin')
 
+  // One concern per page (operator decision): this page ACTIVATES plugins —
+  // and agent CLIs are plugins like any other. The binaries card
+  // (install / update / login) lives on the Health page, where the service's
+  // view of the binaries already is.
   return (
     <div className="space-y-4">
-    <AgentBinariesCard canAdmin={canAdmin} />
     <Card>
       <CardHeader>
         <CardTitle>{t('plugins.title')}</CardTitle>

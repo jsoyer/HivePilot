@@ -2,14 +2,11 @@ import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT, type TFunction } from '@/lib/i18n'
-import { formatAge, formatTimestamp } from '@/lib/format-time'
-import { EM_DASH } from '@/lib/format-time'
+import { EM_DASH, formatAge, formatTimestamp } from '@/lib/format-time'
 import {
-  fetchAgentsAdmin,
   fetchHealthProbes,
   fetchPluginsHealth,
   fetchServiceHealth,
@@ -22,6 +19,7 @@ import {
 } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData, type AsyncState } from '@/lib/use-async-data'
+import { AgentBinariesCard } from './AgentBinariesCard'
 import { AsyncSection } from './AsyncSection'
 
 const STATUS_VARIANT: Record<PluginHealthStatus, 'secondary' | 'outline' | 'destructive'> = {
@@ -353,85 +351,6 @@ function ProbesCard({ state }: { state: AsyncState<HealthProbes | null> }) {
               </div>
             )
           }}
-        </AsyncSection>
-      </CardContent>
-    </Card>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Agent CLIs card — read-only, the service's own view (admin only)
-// ---------------------------------------------------------------------------
-
-/**
- * The #33 surface, read-only: which agent binaries the SERVICE can see, and
- * whether credentials are stored. Actions (install / update / login) stay on
- * the Plugins page — health reports, it does not operate. Rendered only for
- * admins because `GET /v1/agents/admin` is admin-gated; a viewer's page
- * simply has no section rather than a 403 card.
- */
-function AgentsHealthCard() {
-  const t = useT()
-  const agents = useAsyncData(() => fetchAgentsAdmin(), [])
-
-  return (
-    <Card data-testid="health-agents">
-      <CardHeader>
-        <CardTitle>{t('health.agents.title')}</CardTitle>
-        <CardDescription>{t('health.agents.description')}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <AsyncSection state={agents} isEmpty={(data) => data.agents.length === 0}>
-          {(data) => (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('agents.binaries.colAgent')}</TableHead>
-                  <TableHead>{t('agents.binaries.colVersion')}</TableHead>
-                  <TableHead>{t('agents.binaries.colPath')}</TableHead>
-                  <TableHead>{t('agents.auth.colAuth')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.agents.map((agent) => (
-                  <TableRow key={agent.kind}>
-                    <TableCell className="font-medium">{agent.name}</TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {agent.installed_version ?? EM_DASH}
-                    </TableCell>
-                    <TableCell>
-                      {agent.on_service_path ? (
-                        <Badge variant="outline">{t('agents.binaries.onPath')}</Badge>
-                      ) : (
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground"
-                          title={t('agents.binaries.offPathTitle')}
-                        >
-                          {t('agents.binaries.offPath')}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {agent.auth === 'present' && (
-                        <Badge variant="outline">{t('agents.auth.present')}</Badge>
-                      )}
-                      {agent.auth === 'absent' && (
-                        <Badge variant={agent.on_service_path ? 'destructive' : 'outline'}>
-                          {t('agents.auth.absent')}
-                        </Badge>
-                      )}
-                      {agent.auth === 'unknown' && (
-                        <Badge variant="outline" title={t('agents.auth.unknownTitle')}>
-                          {t('agents.auth.unknown')}
-                        </Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
         </AsyncSection>
       </CardContent>
     </Card>
@@ -904,7 +823,12 @@ export function HealthView() {
         <ServiceCard state={service} />
         <ProbesCard state={probes} />
       </div>
-      {canAdmin && <AgentsHealthCard />}
+      {/* The FULL binaries card (install / update / login), not a read-only
+        * echo: the Plugins page activates plugins — agent CLIs being plugins
+        * like any other — and this page owns the service's view of their
+        * binaries (operator decision, replacing the duplicate). Admin-gated
+        * because `GET /v1/agents/admin` is. */}
+      {canAdmin && <AgentBinariesCard canAdmin={canAdmin} />}
       <PluginsCard health={health} canAdmin={canAdmin} />
     </div>
   )
