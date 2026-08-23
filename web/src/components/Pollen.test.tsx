@@ -360,7 +360,7 @@ describe('Pollen', () => {
       await Promise.resolve()
     })
 
-    expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Plugin health')
+    expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('System probes')
   })
 
   it('switches to the real Agents view when the Agents item is clicked (reachable via the sidebar)', async () => {

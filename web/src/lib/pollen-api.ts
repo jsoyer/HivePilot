@@ -466,6 +466,20 @@ export async function fetchHealthProbes(): Promise<HealthProbes> {
   return apiFetch<HealthProbes>('/v1/health/probes', { on403: 'forbidden' })
 }
 
+/** `GET /v1/health` — the service's own vitals, distinct from plugin health:
+ * `database` ("ok" or "error: …"), `runners` ("ok (N defined)"), and one
+ * `dep:<name>` entry per OPTIONAL dependency ("available" / "not installed").
+ * A missing optional dependency is a choice, not a fault — the view must
+ * render it neutrally (the #582/#583 polarity lesson). */
+export interface ServiceHealth {
+  status: 'ok' | 'degraded'
+  checks: Record<string, string>
+}
+
+export function fetchServiceHealth(): Promise<ServiceHealth> {
+  return apiFetch<ServiceHealth>('/v1/health')
+}
+
 /** Two readings of the SAME spend, kept apart. There is deliberately no
  * combined total: adding them double-counts. */
 export interface CostBasisReport {

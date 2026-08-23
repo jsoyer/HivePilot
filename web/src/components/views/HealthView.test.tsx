@@ -5,16 +5,32 @@ import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { PluginsHealthResponse } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchPluginsHealth, togglePlugin, useRoleMock, fetchHealthProbes } = vi.hoisted(() => ({
+const {
+  fetchPluginsHealth,
+  togglePlugin,
+  useRoleMock,
+  fetchHealthProbes,
+  fetchServiceHealth,
+  fetchAgentsAdmin,
+} = vi.hoisted(() => ({
   fetchPluginsHealth: vi.fn(),
   togglePlugin: vi.fn(),
   useRoleMock: vi.fn(),
   fetchHealthProbes: vi.fn(),
+  fetchServiceHealth: vi.fn(),
+  fetchAgentsAdmin: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchPluginsHealth, togglePlugin, fetchHealthProbes }
+  return {
+    ...actual,
+    fetchPluginsHealth,
+    togglePlugin,
+    fetchHealthProbes,
+    fetchServiceHealth,
+    fetchAgentsAdmin,
+  }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -63,6 +79,16 @@ beforeEach(() => {
   fetchPluginsHealth.mockReset()
   togglePlugin.mockReset()
   useRoleMock.mockReset()
+  // Default the two auxiliary sources to "could not be read" (they are
+  // catch-to-null in the view) so every pre-existing test keeps exercising
+  // exactly the plugin surface it was written for.
+  fetchServiceHealth.mockReset()
+  fetchServiceHealth.mockRejectedValue(new Error('not mocked'))
+  fetchAgentsAdmin.mockReset()
+  // Resolved-empty rather than rejected: a rejection renders the agents
+  // card's error alert, which would become the document's FIRST
+  // `[role="alert"]` and shadow the plugin-toggle alerts older tests query.
+  fetchAgentsAdmin.mockResolvedValue({ agents: [] })
   mockRole(null, Number.NEGATIVE_INFINITY)
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -393,7 +419,7 @@ describe('HealthView', () => {
       await Promise.resolve()
     })
 
-    expect(container.textContent).toContain('État des plugins')
+    expect(container.textContent).toContain('Sondes système')
     expect(container.textContent).toContain('dégradé')
     expect(container.textContent).toContain('erreur')
     expect(container.querySelector('button[aria-label="Désactiver rtk"]')).not.toBeNull()
@@ -803,5 +829,156 @@ describe('HealthView — the probes for things that go quiet', () => {
 
     expect(otel).not.toEqual('')
     expect(otel).not.toContain('72')
+  })
+})
+
+/**
+ * The redesign (operator: "il y a que les plugins, je trouve pas ça
+ * terrible"): verdict first, then service vitals, probes, agent CLIs, and
+ * the plugin card sorted worst-first. Each decision below is pinned.
+ */
+describe('HealthView redesign', () => {
+  const okPlugins: PluginsHealthResponse = {
+    plugins: [
+      { name: 'rtk', status: 'ok', detail: '', activity_available: false, activity: null },
+    ],
+    disabled: [],
+  }
+
+  async function mountAll() {
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('verdict reads operational when nothing is broken — degraded does NOT count', async () => {
+    // Degraded is the honest resting state of a default-enabled unused
+    // plugin (#583); counting it in the verdict would repaint the noise
+    // that was just removed.
+    fetchPluginsHealth.mockResolvedValue({
+      plugins: [
+        { name: 'rtk', status: 'ok', detail: '', activity_available: false, activity: null },
+        { name: 'kms', status: 'degraded', detail: 'not usable', activity_available: false, activity: null },
+      ],
+      disabled: [],
+    })
+    fetchServiceHealth.mockResolvedValue({ status: 'ok', checks: { database: 'ok' } })
+    fetchHealthProbes.mockResolvedValue({
+      agent_surface: { state: 'not_configured', backend: null },
+      otel: { state: 'ok', rows: 10, age_hours: 1 },
+    })
+    await mountAll()
+
+    const verdict = container.querySelector('[data-testid="health-verdict"]')
+    expect(verdict?.textContent).toMatch(/operational/i)
+  })
+
+  it('verdict turns broken on a plugin error, naming the plugin', async () => {
+    fetchPluginsHealth.mockResolvedValue(health)
+    fetchServiceHealth.mockResolvedValue({ status: 'ok', checks: { database: 'ok' } })
+    fetchHealthProbes.mockResolvedValue({
+      agent_surface: { state: 'not_configured', backend: null },
+      otel: { state: 'ok', rows: 10, age_hours: 1 },
+    })
+    await mountAll()
+
+    const verdict = container.querySelector('[data-testid="health-verdict"]')
+    expect(verdict?.textContent).toMatch(/broken/i)
+    expect(verdict?.textContent).toContain('obsidian')
+  })
+
+  it('verdict turns broken on a database error', async () => {
+    fetchPluginsHealth.mockResolvedValue(okPlugins)
+    fetchServiceHealth.mockResolvedValue({
+      status: 'degraded',
+      checks: { database: 'error: locked' },
+    })
+    fetchHealthProbes.mockResolvedValue({
+      agent_surface: { state: 'not_configured', backend: null },
+      otel: { state: 'ok', rows: 10, age_hours: 1 },
+    })
+    await mountAll()
+
+    expect(
+      container.querySelector('[data-testid="health-verdict"]')?.textContent,
+    ).toMatch(/broken/i)
+  })
+
+  it('an unreadable auxiliary source is attention, never silence', async () => {
+    // fetchServiceHealth rejects by default (beforeEach): the service card
+    // must say "could not be read" and the verdict must carry a chip for
+    // it — a health page that hides what it failed to check is the worst
+    // version of itself.
+    fetchPluginsHealth.mockResolvedValue(okPlugins)
+    fetchHealthProbes.mockResolvedValue({
+      agent_surface: { state: 'not_configured', backend: null },
+      otel: { state: 'ok', rows: 10, age_hours: 1 },
+    })
+    await mountAll()
+
+    const verdict = container.querySelector('[data-testid="health-verdict"]')
+    expect(verdict?.textContent).toMatch(/attention/i)
+    expect(
+      container.querySelector('[data-testid="health-service"]')?.textContent,
+    ).toMatch(/could not be read/i)
+  })
+
+  it('plugin rows render worst-first, not alphabetically', async () => {
+    // `health` holds rtk(ok), mem0(degraded), obsidian(error): alphabetical
+    // order buries the error under healthy rows; severity order leads with it.
+    fetchPluginsHealth.mockResolvedValue(health)
+    await mountAll()
+
+    const names = Array.from(
+      container.querySelectorAll('[data-testid="health-plugins"] li .font-medium'),
+    ).map((el) => el.textContent)
+    expect(names.indexOf('obsidian')).toBeLessThan(names.indexOf('mem0'))
+    expect(names.indexOf('mem0')).toBeLessThan(names.indexOf('rtk'))
+  })
+
+  it('a missing optional dependency renders neutral, never red (#582 polarity)', async () => {
+    fetchPluginsHealth.mockResolvedValue(okPlugins)
+    fetchServiceHealth.mockResolvedValue({
+      status: 'ok',
+      checks: { database: 'ok', 'dep:docker': 'available', 'dep:langchain': 'not installed' },
+    })
+    await mountAll()
+
+    const service = container.querySelector('[data-testid="health-service"]')
+    expect(service?.textContent).toContain('docker')
+    expect(service?.textContent).toContain('langchain')
+    expect(service?.querySelector('.text-destructive')).toBeFalsy()
+  })
+
+  it('the agent-CLI card renders for admins only', async () => {
+    fetchPluginsHealth.mockResolvedValue(okPlugins)
+    fetchAgentsAdmin.mockResolvedValue({
+      agents: [
+        {
+          kind: 'grok',
+          name: 'Grok Build CLI',
+          vendor: 'xAI',
+          binary: 'grok',
+          docs_url: 'https://docs.x.ai',
+          installable: true,
+          updatable: true,
+          on_service_path: true,
+          installed_version: '1.0.5',
+          auth: 'present',
+          login_available: true,
+        },
+      ],
+    })
+    mockRole('admin', 3)
+    await mountAll()
+    expect(container.querySelector('[data-testid="health-agents"]')?.textContent).toContain(
+      'Grok Build CLI',
+    )
+
+    mockRole('read', 0)
+    await mountAll()
+    expect(container.querySelector('[data-testid="health-agents"]')).toBeNull()
   })
 })

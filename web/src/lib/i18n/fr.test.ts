@@ -19,7 +19,9 @@ describe('fr dictionary', () => {
     expect(fr['nav.memory']).toBe('Mémoire')
     expect(fr['analytics.totalRuns']).not.toBe(en['analytics.totalRuns'])
     expect(fr['cost.totalCost']).not.toBe(en['cost.totalCost'])
-    expect(fr['health.title']).not.toBe(en['health.title'])
+    // `health.title` is "Plugins" in BOTH languages (a proper noun on this
+    // page), so it can no longer prove translation — the probes card can.
+    expect(fr['health.probes.title']).not.toBe(en['health.probes.title'])
     expect(fr['graph.title']).not.toBe(en['graph.title'])
   })
 

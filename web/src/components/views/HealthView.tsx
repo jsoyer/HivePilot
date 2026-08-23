@@ -2,19 +2,26 @@ import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
-import { useT } from '@/lib/i18n'
+import { useT, type TFunction } from '@/lib/i18n'
 import { formatAge, formatTimestamp } from '@/lib/format-time'
+import { EM_DASH } from '@/lib/format-time'
 import {
+  fetchAgentsAdmin,
   fetchHealthProbes,
   fetchPluginsHealth,
+  fetchServiceHealth,
   togglePlugin,
+  type HealthProbes,
   type PluginHealthEntry,
   type PluginHealthStatus,
+  type PluginsHealthResponse,
+  type ServiceHealth,
 } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
-import { useAsyncData } from '@/lib/use-async-data'
+import { useAsyncData, type AsyncState } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 
 const STATUS_VARIANT: Record<PluginHealthStatus, 'secondary' | 'outline' | 'destructive'> = {
@@ -61,6 +68,380 @@ function contradictsStatus(plugin: PluginHealthEntry, activity: ActivityState): 
   return plugin.status === 'ok' && activity.kind === 'never'
 }
 
+/** Sort rank: the row an operator must act on comes FIRST. Alphabetical
+ * order buried `obsidian: error` under fourteen healthy rows; severity
+ * order puts the reason this page exists at the top of it. */
+function severityRank(plugin: PluginHealthEntry): number {
+  if (plugin.status === 'error') return 0
+  if (contradictsStatus(plugin, activityState(plugin))) return 1
+  if (plugin.status === 'degraded') return 2
+  return 3
+}
+
+// ---------------------------------------------------------------------------
+// Verdict banner — the one-line answer to "is everything fine?"
+// ---------------------------------------------------------------------------
+
+interface Verdict {
+  level: 'checking' | 'ok' | 'attention' | 'broken'
+  /** Human-readable reasons, worst first — each one names its subject, so
+   * the banner is actionable without scrolling. */
+  broken: string[]
+  attention: string[]
+}
+
+/**
+ * Aggregates the page's three data sources into one verdict, with the same
+ * polarity discipline as everywhere else (#582/#583): `broken` is reserved
+ * for configured-but-broken states (database error, a plugin in `error`, a
+ * configured agent surface unreachable); `attention` is for states worth a
+ * look but not a siren (telemetry stopped, ok-but-never-ran contradictions,
+ * a source this page could not read). Degraded plugins are deliberately NOT
+ * counted: degraded is the honest resting state of a default-enabled,
+ * unused plugin, and counting it would repaint the noise just removed.
+ */
+function buildVerdict(
+  service: AsyncState<ServiceHealth | null>,
+  probes: AsyncState<HealthProbes | null>,
+  health: AsyncState<{ plugins: PluginHealthEntry[] }>,
+  t: TFunction,
+): Verdict {
+  if (service.status === 'loading' || probes.status === 'loading' || health.status === 'loading') {
+    return { level: 'checking', broken: [], attention: [] }
+  }
+
+  const broken: string[] = []
+  const attention: string[] = []
+
+  if (service.status === 'success' && service.data === null) {
+    attention.push(t('health.verdict.reasonUnverifiable', { name: 'service' }))
+  } else if (service.status === 'success' && service.data) {
+    const db = service.data.checks['database'] ?? ''
+    if (db !== 'ok') broken.push(t('health.verdict.reasonDb'))
+  }
+
+  if (probes.status === 'success' && probes.data === null) {
+    attention.push(t('health.verdict.reasonUnverifiable', { name: 'probes' }))
+  } else if (probes.status === 'success' && probes.data) {
+    if (probes.data.agent_surface.state === 'unreachable') {
+      broken.push(t('health.verdict.reasonSurface'))
+    }
+    if (probes.data.otel.state === 'stale') {
+      attention.push(t('health.verdict.reasonOtel'))
+    }
+  }
+
+  if (health.status === 'error') {
+    attention.push(t('health.verdict.reasonUnverifiable', { name: 'plugins' }))
+  } else if (health.status === 'success') {
+    for (const plugin of health.data.plugins) {
+      if (plugin.status === 'error') {
+        broken.push(t('health.verdict.reasonPlugin', { name: plugin.name }))
+      } else if (contradictsStatus(plugin, activityState(plugin))) {
+        attention.push(t('health.verdict.reasonNeverRan', { name: plugin.name }))
+      }
+    }
+  }
+
+  const level = broken.length > 0 ? 'broken' : attention.length > 0 ? 'attention' : 'ok'
+  return { level, broken, attention }
+}
+
+const VERDICT_STYLE: Record<Verdict['level'], { dot: string; box: string }> = {
+  checking: { dot: 'bg-muted-foreground', box: 'border-border' },
+  ok: {
+    dot: 'bg-(--color-good) shadow-[0_0_8px_var(--color-good)] motion-safe:animate-pulse',
+    box: 'border-emerald-500/40 bg-emerald-500/5',
+  },
+  attention: { dot: 'bg-(--color-warn)', box: 'border-amber-500/40 bg-amber-500/5' },
+  broken: { dot: 'bg-(--color-crit)', box: 'border-destructive/40 bg-destructive/5' },
+}
+
+function VerdictBanner({
+  service,
+  probes,
+  health,
+}: {
+  service: AsyncState<ServiceHealth | null>
+  probes: AsyncState<HealthProbes | null>
+  health: AsyncState<{ plugins: PluginHealthEntry[] }>
+}) {
+  const t = useT()
+  const verdict = buildVerdict(service, probes, health, t)
+  const style = VERDICT_STYLE[verdict.level]
+
+  let headline: string
+  switch (verdict.level) {
+    case 'checking':
+      headline = t('health.verdict.checking')
+      break
+    case 'ok':
+      headline = t('health.verdict.ok')
+      break
+    case 'attention':
+      headline = t('health.verdict.attention', { count: verdict.attention.length })
+      break
+    case 'broken':
+      headline = t('health.verdict.broken', { count: verdict.broken.length })
+      break
+  }
+
+  return (
+    <div
+      data-testid="health-verdict"
+      className={`flex flex-col gap-2 rounded-lg border p-4 ${style.box}`}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          aria-hidden="true"
+          className={`inline-block size-2.5 shrink-0 rounded-full ${style.dot}`}
+        />
+        <span className="text-base font-semibold">{headline}</span>
+      </div>
+      {(verdict.broken.length > 0 || verdict.attention.length > 0) && (
+        <div className="flex flex-wrap gap-1.5">
+          {verdict.broken.map((reason) => (
+            <Badge key={reason} variant="destructive">
+              {reason}
+            </Badge>
+          ))}
+          {verdict.attention.map((reason) => (
+            <Badge
+              key={reason}
+              variant="outline"
+              className="border-amber-500/50 text-amber-700 dark:text-amber-500"
+            >
+              {reason}
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Service card — the API process's own vitals, from GET /v1/health
+// ---------------------------------------------------------------------------
+
+function ServiceCard({ state }: { state: AsyncState<ServiceHealth | null> }) {
+  const t = useT()
+
+  return (
+    <Card data-testid="health-service">
+      <CardHeader>
+        <CardTitle>{t('health.service.title')}</CardTitle>
+        <CardDescription>{t('health.service.description')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AsyncSection state={state} isEmpty={() => false}>
+          {(data) => {
+            if (!data) {
+              return (
+                <p className="text-sm text-muted-foreground">{t('health.service.unreachable')}</p>
+              )
+            }
+            const db = data.checks['database'] ?? ''
+            const dbOk = db === 'ok'
+            const runners = data.checks['runners'] ?? EM_DASH
+            const deps = Object.entries(data.checks)
+              .filter(([key]) => key.startsWith('dep:'))
+              .map(([key, value]) => ({ name: key.slice(4), available: value === 'available' }))
+
+            return (
+              <div className="flex flex-col gap-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{t('health.service.database')}</span>
+                  <Badge variant={dbOk ? 'secondary' : 'destructive'}>
+                    {dbOk ? t('health.status.ok') : t('health.status.error')}
+                  </Badge>
+                  {!dbOk && <span className="truncate text-muted-foreground">{db}</span>}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{t('health.service.runners')}</span>
+                  <span className="text-muted-foreground tabular-nums">{runners}</span>
+                </div>
+                {deps.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{t('health.service.deps')}</span>
+                    {/* A missing OPTIONAL dependency is a choice, not a fault
+                     * (#582/#583): available reads as a quiet chip, absent as
+                     * muted text — never red. */}
+                    {deps.map((dep) =>
+                      dep.available ? (
+                        <Badge key={dep.name} variant="outline">
+                          {dep.name}
+                        </Badge>
+                      ) : (
+                        <span
+                          key={dep.name}
+                          className="text-muted-foreground/60 line-through"
+                          title={t('health.service.depMissingTitle')}
+                        >
+                          {dep.name}
+                        </span>
+                      ),
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          }}
+        </AsyncSection>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Probes card — the things that fail by GOING QUIET
+// ---------------------------------------------------------------------------
+
+/**
+ * The plugin table reports what LOADED. These report whether two systems
+ * that produce continuously are still producing — the failure mode nothing
+ * else on this page can see, because an absence looks exactly like a healthy
+ * zero.
+ *
+ * `not_configured` is deliberately NOT a fault. A red badge on every
+ * deployment that never asked for a live agent surface teaches people to
+ * ignore the badge, and the badge that matters is `unreachable`.
+ * `never_arrived` and `stale` are likewise different answers: the first
+ * points at configuration, the second at an exporter that used to work and
+ * stopped.
+ */
+function ProbesCard({ state }: { state: AsyncState<HealthProbes | null> }) {
+  const t = useT()
+
+  return (
+    <Card data-testid="health-probes">
+      <CardHeader>
+        <CardTitle>{t('health.probes.title')}</CardTitle>
+        <CardDescription>{t('health.probes.description')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AsyncSection state={state} isEmpty={() => false}>
+          {(data) => {
+            if (!data) {
+              return (
+                <p className="text-sm text-muted-foreground">{t('health.probes.unreachable')}</p>
+              )
+            }
+            return (
+              <div className="flex flex-col gap-2">
+                <Badge
+                  data-testid="health-probe-surface"
+                  variant={data.agent_surface.state === 'unreachable' ? 'destructive' : 'outline'}
+                  className="w-fit"
+                >
+                  {t(`health.probeSurface.${data.agent_surface.state}`, {
+                    defaultValue: data.agent_surface.state,
+                    backend: data.agent_surface.backend ?? '',
+                  })}
+                </Badge>
+                <Badge
+                  data-testid="health-probe-otel"
+                  variant={data.otel.state === 'stale' ? 'destructive' : 'outline'}
+                  className="w-fit"
+                >
+                  {t(`health.probeOtel.${data.otel.state}`, {
+                    defaultValue: data.otel.state,
+                    rows: data.otel.rows ?? 0,
+                    hours: data.otel.age_hours ?? 0,
+                  })}
+                </Badge>
+              </div>
+            )
+          }}
+        </AsyncSection>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Agent CLIs card — read-only, the service's own view (admin only)
+// ---------------------------------------------------------------------------
+
+/**
+ * The #33 surface, read-only: which agent binaries the SERVICE can see, and
+ * whether credentials are stored. Actions (install / update / login) stay on
+ * the Plugins page — health reports, it does not operate. Rendered only for
+ * admins because `GET /v1/agents/admin` is admin-gated; a viewer's page
+ * simply has no section rather than a 403 card.
+ */
+function AgentsHealthCard() {
+  const t = useT()
+  const agents = useAsyncData(() => fetchAgentsAdmin(), [])
+
+  return (
+    <Card data-testid="health-agents">
+      <CardHeader>
+        <CardTitle>{t('health.agents.title')}</CardTitle>
+        <CardDescription>{t('health.agents.description')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AsyncSection state={agents} isEmpty={(data) => data.agents.length === 0}>
+          {(data) => (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('agents.binaries.colAgent')}</TableHead>
+                  <TableHead>{t('agents.binaries.colVersion')}</TableHead>
+                  <TableHead>{t('agents.binaries.colPath')}</TableHead>
+                  <TableHead>{t('agents.auth.colAuth')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.agents.map((agent) => (
+                  <TableRow key={agent.kind}>
+                    <TableCell className="font-medium">{agent.name}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {agent.installed_version ?? EM_DASH}
+                    </TableCell>
+                    <TableCell>
+                      {agent.on_service_path ? (
+                        <Badge variant="outline">{t('agents.binaries.onPath')}</Badge>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className="text-muted-foreground"
+                          title={t('agents.binaries.offPathTitle')}
+                        >
+                          {t('agents.binaries.offPath')}
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {agent.auth === 'present' && (
+                        <Badge variant="outline">{t('agents.auth.present')}</Badge>
+                      )}
+                      {agent.auth === 'absent' && (
+                        <Badge variant={agent.on_service_path ? 'destructive' : 'outline'}>
+                          {t('agents.auth.absent')}
+                        </Badge>
+                      )}
+                      {agent.auth === 'unknown' && (
+                        <Badge variant="outline" title={t('agents.auth.unknownTitle')}>
+                          {t('agents.auth.unknown')}
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </AsyncSection>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Plugins card — the original rich view, sorted worst-first
+// ---------------------------------------------------------------------------
+
 /** Per-row toggle result, tracked locally so a just-toggled row can show a
  * "restart required" badge immediately without waiting for (or requiring) a
  * live-reloading `GET /v1/plugins/health` -- the backend never live-applies
@@ -78,10 +459,10 @@ interface PluginToggleProps {
   toggled: ToggleState | undefined
   onToggled: (name: string, result: ToggleState) => void
   /** Seed the control as already-disabled (button reads "Enable" on first
-   * render) for rows sourced from `data.disabled` -- see `HealthView`'s
-   * disabled-plugins section below. Ignored once `toggled` is set (a local
-   * toggle result always wins over the seed). Defaults to `false` for the
-   * enabled-plugin rows, which start from "Disable". */
+   * render) for rows sourced from `data.disabled` -- see the disabled-plugins
+   * section below. Ignored once `toggled` is set (a local toggle result
+   * always wins over the seed). Defaults to `false` for the enabled-plugin
+   * rows, which start from "Disable". */
   initialDisabled?: boolean
 }
 
@@ -95,7 +476,7 @@ interface PluginToggleProps {
  * REGISTERED (i.e. enabled) plugins -- a plugin already disabled via
  * `settings.plugins_disabled` is never registered, so it never appears in
  * `data.plugins`. `GET /v1/plugins/health`'s `disabled` field closes that
- * gap: `HealthView` renders those names as their own seeded-disabled rows
+ * gap: those names render as their own seeded-disabled rows
  * (`initialDisabled`), so re-enabling a previously-disabled plugin (already
  * supported server-side via the union allowlist) has a row to click too.
  */
@@ -211,9 +592,9 @@ function ActivityChip({ state }: { state: ActivityState }) {
 }
 
 /**
- * Health tab -- `GET /v1/plugins/health`, one badge per plugin, plus an
- * admin-only enable/disable toggle (`POST /v1/plugins/{name}/toggle`,
- * Mirador actionable dashboard PRD, Sprint 5).
+ * The plugin card -- `GET /v1/plugins/health`, one row per plugin, sorted
+ * worst-first (error, then ok-but-never-ran, then degraded, then ok), plus
+ * an admin-only enable/disable toggle.
  *
  * **Two independent answers per plugin.** `status` says installed and
  * configured; `activity` says it has actually run. They can disagree for a
@@ -222,86 +603,22 @@ function ActivityChip({ state }: { state: ActivityState }) {
  * counts, and the `contradictsStatus` marker all exist so that state is
  * visible on screen instead of having to be discovered in the database.
  *
- * Non-admin tokens (`useRole().can('admin')` false) see the exact same
- * read-only rows Sprint 1 shipped -- no toggle control renders at all.
- *
  * **Dedupe (loaded-but-pending-disable):** `data.plugins` (currently
  * registered) and `data.disabled` (`settings.plugins_disabled`) are NOT
- * mutually exclusive -- a plugin stays registered until the next restart
- * (see `PluginToggle`'s docstring), so clicking "Disable" and reloading the
- * tab shows that plugin in BOTH lists. Rendering it in both sections would
- * contradict itself ("ok" + Disable up top, "disabled" + Enable below), so
- * any name present in both is rendered ONCE, in the health section, with a
- * "disable pending" badge -- the bottom "Disabled plugins" section is only
- * for names that are `plugins_disabled` AND not currently loaded.
+ * mutually exclusive -- a plugin stays registered until the next restart, so
+ * clicking "Disable" and reloading shows that plugin in BOTH lists. Any name
+ * present in both renders ONCE, in the health section, with a "disable
+ * pending" badge -- the bottom "Disabled plugins" section is only for names
+ * that are `plugins_disabled` AND not currently loaded.
  */
-
-/**
- * Two probes for the things that fail by GOING QUIET.
- *
- * The plugin table below reports what LOADED. These report whether two systems
- * that produce continuously are still producing — the failure mode nothing
- * else on this page can see, because an absence looks exactly like a healthy
- * zero.
- *
- * `not_configured` is deliberately NOT a fault. A red badge on every
- * deployment that never asked for a live agent surface teaches people to
- * ignore the badge, and the badge that matters is `unreachable`.
- *
- * `never_arrived` and `stale` are likewise different answers: the first points
- * at configuration, the second at an exporter that used to work and stopped.
- */
-function SystemProbes() {
+function PluginsCard({
+  health,
+  canAdmin,
+}: {
+  health: AsyncState<PluginsHealthResponse>
+  canAdmin: boolean
+}) {
   const t = useT()
-  // Isolated on purpose. A probe panel must never be able to take down the
-  // page it observes -- and it nearly did: an endpoint this view had not seen
-  // before made `useAsyncData` call `.then` on an undefined, and the whole
-  // plugin table went with it. Health surfaces that can break the thing they
-  // report on are worse than no surface.
-  const probes = useAsyncData(
-    () =>
-      Promise.resolve()
-        .then(() => fetchHealthProbes())
-        .catch(() => null),
-    [],
-  )
-
-  return (
-    <AsyncSection state={probes} isEmpty={(d) => !d}>
-      {(data) =>
-        data ? (
-        <div data-testid="health-probes" className="mb-6 flex flex-wrap gap-2">
-          <Badge
-            data-testid="health-probe-surface"
-            variant={data.agent_surface.state === 'unreachable' ? 'destructive' : 'outline'}
-          >
-            {t(`health.probeSurface.${data.agent_surface.state}`, {
-              defaultValue: data.agent_surface.state,
-              backend: data.agent_surface.backend ?? '',
-            })}
-          </Badge>
-          <Badge
-            data-testid="health-probe-otel"
-            variant={data.otel.state === 'stale' ? 'destructive' : 'outline'}
-          >
-            {t(`health.probeOtel.${data.otel.state}`, {
-              defaultValue: data.otel.state,
-              rows: data.otel.rows ?? 0,
-              hours: data.otel.age_hours ?? 0,
-            })}
-          </Badge>
-        </div>
-        ) : null
-      }
-    </AsyncSection>
-  )
-}
-
-export function HealthView() {
-  const t = useT()
-  const { can } = useRole()
-  const canAdmin = can('admin')
-  const health = useAsyncData(() => fetchPluginsHealth(), [])
   const [toggled, setToggled] = useState<Record<string, ToggleState>>({})
 
   function handleToggled(name: string, result: ToggleState) {
@@ -309,7 +626,7 @@ export function HealthView() {
   }
 
   return (
-    <Card>
+    <Card data-testid="health-plugins">
       <CardHeader>
         <CardTitle>{t('health.title')}</CardTitle>
         <CardDescription>
@@ -319,7 +636,6 @@ export function HealthView() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <SystemProbes />
         <AsyncSection
           state={health}
           // `denied` and `not_installed` count as content. Without them, a
@@ -364,6 +680,10 @@ export function HealthView() {
             const unmeasured = count('presenceOnly')
             const unreadable = count('unreadable')
 
+            const sorted = [...data.plugins].sort(
+              (a, b) => severityRank(a) - severityRank(b) || a.name.localeCompare(b.name),
+            )
+
             return (
               <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm tabular-nums text-muted-foreground">
@@ -395,7 +715,7 @@ export function HealthView() {
                   )}
                 </div>
                 <ul className="flex flex-col gap-2">
-                  {data.plugins.map((plugin) => {
+                  {sorted.map((plugin) => {
                     // Seeded from the load-time snapshot; a local toggle this
                     // session (`toggled[plugin.name]`) always overrides it, both
                     // for the button label (via `PluginToggle`'s own precedence)
@@ -542,5 +862,50 @@ export function HealthView() {
         </AsyncSection>
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * The Health page: verdict first, then the layers it was computed from.
+ *
+ * Layout rationale (the page was one plugin card and read like a component
+ * dump): an operator opens Health to answer ONE question — "is everything
+ * fine, and if not, what?". So the top line answers it, the two system
+ * cards (service vitals + going-quiet probes) cover what plugins cannot
+ * see, the agent-CLI card covers the runners' real substrate, and the
+ * plugin card keeps its full richness, now sorted worst-first.
+ *
+ * Every fetch is isolated: a failed source renders its own quiet
+ * "could not be read" line and shows up in the verdict as unverifiable —
+ * a health page that crashes on the sickness it reports would be the worst
+ * version of itself.
+ */
+export function HealthView() {
+  const { can } = useRole()
+  const canAdmin = can('admin')
+  // Catch-to-null on the two auxiliary sources: their failure is CONTENT
+  // (rendered as "could not be read" + an unverifiable chip in the verdict),
+  // never a crashed section. The plugin fetch keeps real error handling —
+  // it is the page's primary source and AsyncSection renders its failure.
+  const service = useAsyncData(() => fetchServiceHealth().catch(() => null), [])
+  const probes = useAsyncData(
+    () =>
+      Promise.resolve()
+        .then(() => fetchHealthProbes())
+        .catch(() => null),
+    [],
+  )
+  const health = useAsyncData(() => fetchPluginsHealth(), [])
+
+  return (
+    <div className="flex flex-col gap-4">
+      <VerdictBanner service={service} probes={probes} health={health} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ServiceCard state={service} />
+        <ProbesCard state={probes} />
+      </div>
+      {canAdmin && <AgentsHealthCard />}
+      <PluginsCard health={health} canAdmin={canAdmin} />
+    </div>
   )
 }
