@@ -295,9 +295,12 @@ def health(**kwargs: Any) -> HealthStatus:
     NEVER surfaces a key id or a value (Phase 19 discipline; mirrors
     ``plugins/infisical.py``'s ``health()``):
 
-    - ``error`` when NO provider SDK is importable (nothing can decrypt).
-    - ``degraded`` when a provider is configured but its SDK isn't installed,
-      or when no provider is configured yet.
+    - ``error`` when a provider is CONFIGURED but no SDK at all is importable
+      — configured-but-broken, nothing can decrypt what was asked for.
+    - ``degraded`` when no SDK is importable AND no provider is configured:
+      on a default-enabled plugin that is mere unavailability, not a failure.
+    - ``degraded`` when a provider is configured but its SDK isn't installed
+      (other SDKs are), or when no provider is configured yet.
     - ``ok`` when the configured provider's SDK is importable.
 
     Detail carries provider/lib names only. Never raises: any internal error is
@@ -312,10 +315,18 @@ def health(**kwargs: Any) -> HealthStatus:
         if _azure_crypto is not None:
             available.append("azure")
 
-        if not available:
-            return HealthStatus("error", "no KMS provider SDK installed (aws/gcp/azure)")
-
         from hivepilot.config import settings
+
+        if not available:
+            if settings.kms_provider:
+                return HealthStatus(
+                    "error",
+                    f"provider '{str(settings.kms_provider).lower()}' is configured "
+                    f"but no KMS SDK is installed (aws/gcp/azure)",
+                )
+            return HealthStatus(
+                "degraded", "not usable: no KMS provider SDK installed (aws/gcp/azure)"
+            )
 
         provider = settings.kms_provider
         if provider:

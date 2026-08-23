@@ -150,7 +150,28 @@ class TestHealth:
         assert result.status in {"ok", "degraded", "error"}
         # Never decrypts: no boto3 client call is required to report health.
 
-    def test_health_error_when_no_provider_sdk_installed(self, kms_module: ModuleType) -> None:
+    def test_health_degraded_when_no_sdk_and_no_provider_configured(
+        self, kms_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No SDK, no configured provider: mere unavailability on a
+        default-enabled plugin — degraded, never a red pill (one of five
+        permanent header errors on a box that used none of them)."""
+        monkeypatch.setattr(settings, "kms_provider", None, raising=False)
+        with (
+            patch.object(kms_module, "boto3", None),
+            patch.object(kms_module, "_gcp_kms", None),
+            patch.object(kms_module, "_azure_crypto", None),
+        ):
+            result = kms_module.health()
+        assert result.status == "degraded"
+        assert "not usable" in result.detail
+
+    def test_health_error_when_provider_configured_but_no_sdk_installed(
+        self, kms_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Configured-but-broken: someone asked for aws and nothing can
+        decrypt — the one state that deserves error."""
+        monkeypatch.setattr(settings, "kms_provider", "aws", raising=False)
         with (
             patch.object(kms_module, "boto3", None),
             patch.object(kms_module, "_gcp_kms", None),
@@ -158,6 +179,7 @@ class TestHealth:
         ):
             result = kms_module.health()
         assert result.status == "error"
+        assert "aws" in result.detail
 
     def test_health_never_raises(
         self, kms_module: ModuleType, monkeypatch: pytest.MonkeyPatch

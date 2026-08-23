@@ -211,7 +211,11 @@ def health(**kwargs: Any) -> HealthStatus:
     token value, the server URL as a secret, or a resolved secret (Phase 19
     discipline):
 
-    - `error` when the `bw` CLI is not on PATH.
+    - `error` when the provider shows configuration intent (``BW_SESSION`` set
+      or ``vaultwarden_server_url`` configured) but the `bw` CLI is not on
+      PATH — configured-but-broken.
+    - `degraded` when the `bw` CLI is missing AND nothing is configured: on a
+      default-enabled plugin, "not installed" is a choice, not a failure.
     - `degraded` ("not configured") when `bw` is present but ``BW_SESSION`` is
       unset OR ``vaultwarden_server_url`` is not configured.
     - `ok` ("configured") when `bw` is on PATH AND ``BW_SESSION`` is set AND the
@@ -222,10 +226,15 @@ def health(**kwargs: Any) -> HealthStatus:
     exception TYPE name only, matching ``PluginManager.run_health_check``.
     """
     try:
-        if shutil.which(_BW_BINARY) is None:
-            return HealthStatus("error", f"{_BW_BINARY} CLI not installed")
-
         from hivepilot.config import settings
+
+        if shutil.which(_BW_BINARY) is None:
+            if os.environ.get(_SESSION_ENV) or settings.vaultwarden_server_url:
+                return HealthStatus(
+                    "error",
+                    f"the provider is configured but the {_BW_BINARY} CLI is not installed",
+                )
+            return HealthStatus("degraded", f"not usable: {_BW_BINARY} CLI not installed")
 
         if os.environ.get(_SESSION_ENV) and settings.vaultwarden_server_url:
             return HealthStatus("ok", "configured")

@@ -141,12 +141,19 @@ class HugoRunner:
 
 
 def health(**kwargs: Any) -> HealthStatus:
-    """`ok` when `hugo` is on PATH; `error` when it isn't — unlike
-    `plugins/rtk.py`'s degraded/fallback story, this runner has no raw-command
-    fallback: without the `hugo` binary the runner cannot execute at all."""
+    """`ok` when `hugo` is on PATH; `degraded` when it isn't.
+
+    Degraded, not error: the plugin is enabled by DEFAULT, so a missing
+    binary is the common state on a box that never uses this runner — mere
+    unavailability, not a failure (this was one of five permanent red pills
+    in the Pollen header). The runner itself stays fail-closed: a task that
+    actually asks for `hugo` fails loudly at dispatch, which is the moment
+    the absence becomes an error."""
     if shutil.which("hugo"):
         return HealthStatus("ok", "hugo on PATH")
-    return HealthStatus("error", "hugo not on PATH — install Hugo to use this runner")
+    return HealthStatus(
+        "degraded", "not usable: hugo not on PATH — install Hugo to use this runner"
+    )
 
 
 def register() -> dict[str, Any]:

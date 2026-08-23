@@ -169,9 +169,15 @@ def health(**kwargs: Any) -> HealthStatus:
     """Report Bitwarden CLI CONFIGURATION status only — NEVER the BW_SESSION
     token value and NEVER a resolved secret (Phase 19 discipline):
 
-    - `error` when the `bw` CLI is not on PATH.
-    - `degraded` ("not configured") when `bw` is present but ``BW_SESSION`` is
-      unset (no unlocked-vault session).
+    - `error` when ``BW_SESSION`` is set (someone configured this) but the
+      `bw` CLI is not on PATH — configured-but-broken, the one state worth a
+      red pill.
+    - `degraded` when the `bw` CLI is missing AND nothing is configured: on a
+      default-enabled plugin that is the COMMON state, mere unavailability,
+      not a failure. Five such "errors" once painted the Pollen header red on
+      a box that used none of them.
+    - `degraded` ("not configured") when `bw` is present but ``BW_SESSION``
+      is unset (no unlocked-vault session).
     - `ok` ("configured") when `bw` is on PATH AND ``BW_SESSION`` is set.
 
     The detail carries mode names only — never the session token or a fetched
@@ -180,7 +186,11 @@ def health(**kwargs: Any) -> HealthStatus:
     """
     try:
         if shutil.which(_BW_BINARY) is None:
-            return HealthStatus("error", f"{_BW_BINARY} CLI not installed")
+            if os.environ.get(_SESSION_ENV):
+                return HealthStatus(
+                    "error", f"{_SESSION_ENV} is set but the {_BW_BINARY} CLI is not installed"
+                )
+            return HealthStatus("degraded", f"not usable: {_BW_BINARY} CLI not installed")
         if os.environ.get(_SESSION_ENV):
             return HealthStatus("ok", "configured")
         return HealthStatus("degraded", "not configured")

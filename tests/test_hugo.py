@@ -111,16 +111,21 @@ class TestHealth:
             result = hugo_module.health()
         assert result.status == "ok"
 
-    def test_error_when_hugo_not_on_path(self, hugo_module: ModuleType) -> None:
+    def test_degraded_when_hugo_not_on_path(self, hugo_module: ModuleType) -> None:
+        """Degraded, not error: the plugin is enabled by default, so a
+        missing binary is the common state on a box that never uses this
+        runner (one of five permanent red pills in the Pollen header). The
+        fail-closed moment is dispatch, where a task asking for `hugo`
+        still fails loudly."""
         with patch.object(hugo_module.shutil, "which", return_value=None):
             result = hugo_module.health()
-        assert result.status == "error"
+        assert result.status == "degraded"
         assert "not on PATH" in result.detail
 
     def test_health_is_keyword_tolerant(self, hugo_module: ModuleType) -> None:
         with patch.object(hugo_module.shutil, "which", return_value=None):
             result = hugo_module.health(project="anything")
-        assert result.status == "error"
+        assert result.status == "degraded"
 
 
 class TestBuildCommand:
