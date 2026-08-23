@@ -480,9 +480,12 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
     #     appended to `problems` -- `config validate` still exits 0/"OK".
     #   - "keyed": appended to `problems` as a hard error, because
     #     `_route_prior_context` (orchestrator.py) then actually narrows a
-    #     stage's prior context to just its declared input keys, so a
-    #     dangling input silently degrades that stage to the conservative
-    #     whole-blob fallback instead of the data it expects.
+    #     stage's prior context to just its declared input keys. A dangling
+    #     required input is absent from the store (the producer is not
+    #     allowed to invent it). If every required key is absent the stage
+    #     falls back to full prior context; if some are present it runs on
+    #     the incomplete keyed subset. Neither is the contract the role
+    #     declared.
     # This mirrors how the CLI's `config validate` command (hivepilot/cli.py)
     # only inspects the returned `problems` list -- warnings never gate it.
     # -----------------------------------------------------------------------
@@ -547,10 +550,12 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
                         # But the SEVERITY still depends on the routing mode, and
                         # softening that was a mistake in the first attempt: in
                         # `keyed` mode `_route_prior_context` narrows a stage to
-                        # its declared keys, so an input nobody produces really
-                        # does degrade that stage to the whole-blob fallback.
-                        # Absent-producer is benign only in `full` mode, where
-                        # prior context is built from every prior chunk anyway.
+                        # its declared keys, so an input nobody produces is
+                        # simply absent — or, if every required key is absent,
+                        # the stage falls back to full prior context. Neither
+                        # matches the role's contract. Absent-producer is
+                        # benign only in `full` mode, where prior context is
+                        # built from every prior chunk anyway.
                         message = (
                             f"Pipeline '{pipeline_name}' stage '{stage_name}' will run "
                             f"WITHOUT '{input_key}': no stage in this pipeline produces "
