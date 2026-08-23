@@ -63,31 +63,29 @@ describe('StatusPills', () => {
     expect(container.querySelector('[data-testid="status-pills"]')).toBeNull()
   })
 
-  it('renders one pill per plugin with its name and status', async () => {
+  it('shows ONLY active (ok) plugins — degraded and error never reach the header', async () => {
+    // The operator decision this pins: the header strip answers "what is
+    // live", nothing else. Five default-enabled-but-unused plugins once
+    // filled it with red; the full tri-state picture belongs to the Health
+    // tab, which the header never replaces.
     const data: PluginsHealthResponse = {
       plugins: [
         { name: 'store', status: 'ok', detail: '', activity_available: false, activity: null },
         { name: 'mem0', status: 'ok', detail: '', activity_available: false, activity: null },
-        { name: 'headroom', status: 'degraded', detail: 'slow', activity_available: false, activity: null },
-      ],
-      disabled: [],
-    }
-    mocks.fetchPluginsHealth.mockResolvedValue(data)
-    await mount()
-
-    const pillsContainer = container.querySelector('[data-testid="status-pills"]')
-    expect(pillsContainer).not.toBeNull()
-    expect(pillsContainer?.textContent).toContain('store')
-    expect(pillsContainer?.textContent).toContain('ok')
-    expect(pillsContainer?.textContent).toContain('headroom')
-    expect(pillsContainer?.textContent).toContain('degraded')
-  })
-
-  it('styles a plugin pill by its status (ok/degraded/error map to distinct classes)', async () => {
-    const data: PluginsHealthResponse = {
-      plugins: [
-        { name: 'store', status: 'ok', detail: '', activity_available: false, activity: null },
-        { name: 'broken', status: 'error', detail: 'down', activity_available: false, activity: null },
+        {
+          name: 'headroom',
+          status: 'degraded',
+          detail: 'slow',
+          activity_available: false,
+          activity: null,
+        },
+        {
+          name: 'broken',
+          status: 'error',
+          detail: 'down',
+          activity_available: false,
+          activity: null,
+        },
       ],
       disabled: [],
     }
@@ -96,37 +94,52 @@ describe('StatusPills', () => {
 
     const pills = Array.from(container.querySelectorAll('[data-testid="status-pill"]'))
     expect(pills).toHaveLength(2)
-    const okPill = pills.find((p) => p.textContent?.includes('store'))
-    const errorPill = pills.find((p) => p.textContent?.includes('broken'))
-    expect(okPill?.className).not.toEqual(errorPill?.className)
+    const text = container.querySelector('[data-testid="status-pills"]')?.textContent ?? ''
+    expect(text).toContain('store')
+    expect(text).toContain('mem0')
+    expect(text).not.toContain('headroom')
+    expect(text).not.toContain('broken')
   })
 
-  it('visual identity: pulses the status dot for a healthy plugin, but not for degraded/error ones', async () => {
+  it('renders nothing when no plugin is active — an empty strip, not a strip of problems', async () => {
+    const data: PluginsHealthResponse = {
+      plugins: [
+        {
+          name: 'headroom',
+          status: 'degraded',
+          detail: '',
+          activity_available: false,
+          activity: null,
+        },
+        {
+          name: 'broken',
+          status: 'error',
+          detail: '',
+          activity_available: false,
+          activity: null,
+        },
+      ],
+      disabled: [],
+    }
+    mocks.fetchPluginsHealth.mockResolvedValue(data)
+    await mount()
+    expect(container.querySelector('[data-testid="status-pills"]')).toBeNull()
+  })
+
+  it('visual identity: every rendered pill pulses its live dot and contributes no dot text', async () => {
     const data: PluginsHealthResponse = {
       plugins: [
         { name: 'store', status: 'ok', detail: '', activity_available: false, activity: null },
-        { name: 'headroom', status: 'degraded', detail: '', activity_available: false, activity: null },
-        { name: 'broken', status: 'error', detail: '', activity_available: false, activity: null },
       ],
       disabled: [],
     }
     mocks.fetchPluginsHealth.mockResolvedValue(data)
     await mount()
 
-    const dots = Array.from(container.querySelectorAll('[data-testid="status-pill-dot"]'))
-    expect(dots).toHaveLength(3)
-
-    const pills = Array.from(container.querySelectorAll('[data-testid="status-pill"]'))
-    const dotFor = (name: string) => {
-      const pill = pills.find((p) => p.textContent?.includes(name))
-      return pill?.querySelector('[data-testid="status-pill-dot"]')
-    }
-
-    expect(dotFor('store')?.className).toContain('animate-pulse')
-    expect(dotFor('headroom')?.className).not.toContain('animate-pulse')
-    expect(dotFor('broken')?.className).not.toContain('animate-pulse')
+    const dot = container.querySelector('[data-testid="status-pill-dot"]')
+    expect(dot?.className).toContain('animate-pulse')
     // The dot never contributes text content — the pill's accessible name
     // stays exactly "<name> <status>".
-    expect(dotFor('store')?.textContent).toBe('')
+    expect(dot?.textContent).toBe('')
   })
 })

@@ -130,14 +130,31 @@ class TestRegister:
 class TestHealth:
     """Plugin-health surface: `health()` reports CONFIGURATION status only —
     never the token/endpoint value or a resolved secret (Phase 19 discipline).
-    `error` if the SDK is missing, `degraded` if unconfigured, `ok` when both
-    the SDK is importable and the required config is present."""
+    `error` only when configured-but-broken (connection config exists, SDK
+    missing), `degraded` when merely unavailable or unconfigured, `ok` when
+    both the SDK is importable and the required config is present."""
 
-    def test_error_when_sdk_missing(self, infisical_module: ModuleType) -> None:
+    def test_error_when_sdk_missing_but_configured(self, infisical_module: ModuleType) -> None:
+        # Autouse `_infisical_settings` provides a fully-configured baseline,
+        # so a missing SDK here is configured-but-broken — the red state.
         with patch.object(infisical_module, "InfisicalSDKClient", None):
             result = infisical_module.health()
         assert result.status == "error"
         assert "infisicalsdk" in result.detail
+
+    def test_degraded_when_sdk_missing_and_nothing_configured(
+        self, infisical_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The common state on a default-enabled plugin: no SDK, no config.
+        Mere unavailability — degraded, never a red pill (one of five
+        permanent header errors on a box that used none of them)."""
+        monkeypatch.setattr(settings, "infisical_token", None, raising=False)
+        monkeypatch.setattr(settings, "infisical_workspace_id", None, raising=False)
+        monkeypatch.setattr(settings, "infisical_environment", None, raising=False)
+        with patch.object(infisical_module, "InfisicalSDKClient", None):
+            result = infisical_module.health()
+        assert result.status == "degraded"
+        assert "not usable" in result.detail
 
     def test_ok_when_sdk_and_config_present(self, infisical_module: ModuleType) -> None:
         # Autouse `_infisical_settings` provides a fully-configured baseline.

@@ -129,10 +129,25 @@ class TestHealth:
     def test_error_when_bw_missing(
         self, vw_module: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # The autouse baseline is fully configured, so a missing CLI here is
+        # configured-but-broken — the one state that deserves error.
         _which_absent(vw_module, monkeypatch)
         result = vw_module.health()
         assert result.status == "error"
         assert "bw" in result.detail
+
+    def test_degraded_when_bw_missing_and_nothing_configured(
+        self, vw_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No `bw`, no session, no server URL: mere unavailability on a
+        default-enabled plugin — degraded, never a red pill (one of five
+        permanent header errors on a box that used none of them)."""
+        _which_absent(vw_module, monkeypatch)
+        monkeypatch.delenv("BW_SESSION", raising=False)
+        monkeypatch.setattr(settings, "vaultwarden_server_url", None, raising=False)
+        result = vw_module.health()
+        assert result.status == "degraded"
+        assert "not usable" in result.detail
 
     def test_ok_when_bw_session_and_server_present(
         self, vw_module: ModuleType, monkeypatch: pytest.MonkeyPatch

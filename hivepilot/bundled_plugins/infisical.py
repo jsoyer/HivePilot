@@ -220,7 +220,10 @@ def health(**kwargs: Any) -> HealthStatus:
     value and NEVER a resolved secret (Phase 19 discipline; mirrors
     `plugins/mem0.py`'s `health()`):
 
-    - `error` when the `infisicalsdk` package isn't importable (lib missing).
+    - `error` when connection config exists (someone configured this) but the
+      `infisicalsdk` package isn't importable — configured-but-broken.
+    - `degraded` when the SDK is missing AND nothing is configured: on a
+      default-enabled plugin that is mere unavailability, not a failure.
     - `degraded` ("not configured") when the required connection config
       (token + workspace id + environment) is incomplete.
     - `ok` ("configured") when the SDK is importable AND that config is present.
@@ -231,10 +234,18 @@ def health(**kwargs: Any) -> HealthStatus:
     `PluginManager.run_health_check`.
     """
     try:
-        if InfisicalSDKClient is None:
-            return HealthStatus("error", "infisicalsdk not installed")
-
         from hivepilot.config import settings
+
+        if InfisicalSDKClient is None:
+            if (
+                settings.infisical_token
+                or settings.infisical_workspace_id
+                or settings.infisical_environment
+            ):
+                return HealthStatus(
+                    "error", "a connection is configured but infisicalsdk is not installed"
+                )
+            return HealthStatus("degraded", "not usable: infisicalsdk not installed")
 
         configured = bool(
             settings.infisical_token
