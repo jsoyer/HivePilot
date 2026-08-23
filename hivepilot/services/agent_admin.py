@@ -37,6 +37,7 @@ import shutil
 import subprocess  # nosec B404 - only registry constants are ever executed; see module docstring
 from typing import Any, Callable
 
+from hivepilot.services import agent_auth
 from hivepilot.services.agent_install import AGENT_INSTALL_SPECS
 from hivepilot.utils.logging import get_logger
 
@@ -122,6 +123,15 @@ def list_agents_admin() -> list[dict[str, Any]]:
                 "updatable": UPDATE_COMMANDS.get(kind) is not None,
                 "on_service_path": shutil.which(spec.binary) is not None,
                 "installed_version": _probe_version(kind),
+                # Tri-state on purpose (#33): "present"/"absent" where a store
+                # was VERIFIED, "unknown" everywhere else — never guessed. And
+                # login_available mirrors the honoured_controls doctrine: a
+                # button exists only where a headless flow was proven.
+                "auth": agent_auth.auth_state(kind),
+                "login_available": (
+                    (c := agent_auth.AUTH_CONTRACTS.get(kind)) is not None
+                    and c.login_argv is not None
+                ),
             }
         )
     return rows

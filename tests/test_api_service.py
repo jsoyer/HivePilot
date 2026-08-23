@@ -2889,3 +2889,58 @@ class TestAgentAdminEndpoints:
         assert set(by_path) == {"/agents/admin", "/agents/{kind}/{action}"}
         for route in by_path.values():
             assert route.dependant.dependencies, f"{route.path} shipped without its role gate"
+
+
+class TestAgentLoginEndpoint:
+    """#33's API half — lives HERE for the same load-bearing-location reason
+    as TestAgentAdminEndpoints above."""
+
+    @staticmethod
+    def _call(kind, consent, monkeypatch, result=None, error=None):
+        from fastapi import HTTPException
+
+        from hivepilot.services import agent_auth, state_service
+        from hivepilot.services.api_service import AgentActionRequest, agent_login_endpoint
+        from hivepilot.services.token_service import TokenEntry
+
+        audits: list = []
+        monkeypatch.setattr(state_service, "record_audit", lambda **kw: audits.append(kw))
+        if error is not None:
+            monkeypatch.setattr(
+                agent_auth,
+                "start_headless_login",
+                lambda k: (_ for _ in ()).throw(agent_auth.AgentAuthError(error)),
+            )
+        else:
+            monkeypatch.setattr(agent_auth, "start_headless_login", lambda k: result)
+        caller = TokenEntry(token="h" * 64, role="admin", note="jerome")
+        try:
+            return agent_login_endpoint(kind, AgentActionRequest(consent=consent), caller), audits
+        except HTTPException as exc:
+            return exc, audits
+
+    def test_consent_is_required(self, monkeypatch):
+        response, audits = self._call("grok", False, monkeypatch, result={"url": "x", "log": "y"})
+
+        assert response.status_code == 400 and "consent" in response.detail
+        assert audits == []
+
+    def test_it_returns_the_url_and_records_that_a_login_started(self, monkeypatch):
+        response, audits = self._call(
+            "grok",
+            True,
+            monkeypatch,
+            result={"kind": "grok", "url": "https://accounts.x.ai/a?c=1", "log": "/x.log"},
+        )
+
+        assert response["url"] == "https://accounts.x.ai/a?c=1"
+        assert audits and audits[0]["result"] == "login started"
+        assert "token" not in str(audits[0]).lower() or "token_hash" in str(audits[0])
+
+    def test_an_unverified_kind_is_a_400_naming_the_verified_ones(self, monkeypatch):
+        response, _ = self._call(
+            "codex", True, monkeypatch, error="'codex' has no verified headless login flow"
+        )
+
+        assert response.status_code == 400
+        assert "no verified headless login" in response.detail

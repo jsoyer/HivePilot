@@ -2959,6 +2959,48 @@ def agent_action_endpoint(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@v1.post("/agents/{kind}/login")
+@app.post("/agents/{kind}/login")
+def agent_login_endpoint(
+    kind: str,
+    body: AgentActionRequest,
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    """Start *kind*'s VERIFIED headless login and return the URL to open (#33).
+
+    The grok/cursor flow made one click: the login runs detached AS THE
+    SERVICE, prints its validation URL, and the token lands in the service
+    home when the operator opens it — born on the box, never transported.
+
+    Same consent shape as install/update: admin role + `consent: true`. The
+    response carries the URL ONLY — never the log's other lines (some CLIs
+    echo token material on success), and the audit row records THAT a login
+    started, never anything from the flow.
+    """
+    from hivepilot.services import agent_auth
+
+    if body.consent is not True:
+        raise HTTPException(
+            status_code=400,
+            detail='consent is required: POST {"consent": true} to start the login.',
+        )
+    try:
+        result = agent_auth.start_headless_login(kind)
+    except agent_auth.AgentAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    state_service.record_audit(
+        token_hash=caller.token[:16],
+        role=f"agent-admin:{caller.note or caller.role}",
+        endpoint=f"/v1/agents/{kind}/login",
+        method="POST",
+        result="login started",
+        tenant=caller.tenant,
+    )
+    # url may be None: the flow printed nothing URL-shaped in the window. The
+    # log path is on-box only — useful to an operator, useless to an attacker.
+    return {"kind": kind, "url": result["url"], "log": result["log"]}
+
+
 @v1.post("/plugins/{name}/install")
 @app.post("/plugins/{name}/install")
 def install_plugin_endpoint(

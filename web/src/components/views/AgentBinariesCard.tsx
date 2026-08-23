@@ -8,6 +8,7 @@ import { EM_DASH } from '@/lib/format-time'
 import { useT } from '@/lib/i18n'
 import {
   agentAction,
+  agentLogin,
   fetchAgentsAdmin,
   type AgentActionResult,
   type AgentAdminEntry,
@@ -39,6 +40,12 @@ import { AsyncSection } from './AsyncSection'
  * update button — never a greyed-out one that lies.
  */
 
+type LoginState =
+  | { kind: 'idle' }
+  | { kind: 'working' }
+  | { kind: 'url'; url: string | null; log: string }
+  | { kind: 'error'; message: string }
+
 type RowState =
   | { kind: 'idle' }
   | { kind: 'confirming'; action: 'install' | 'update' }
@@ -57,6 +64,17 @@ function AgentRow({
 }) {
   const t = useT()
   const [state, setState] = useState<RowState>({ kind: 'idle' })
+  const [login, setLogin] = useState<LoginState>({ kind: 'idle' })
+
+  const runLogin = async () => {
+    setLogin({ kind: 'working' })
+    try {
+      const result = await agentLogin(agent.kind)
+      setLogin({ kind: 'url', url: result.url, log: result.log })
+    } catch (err) {
+      setLogin({ kind: 'error', message: describeApiError(err) })
+    }
+  }
 
   const run = async (action: 'install' | 'update') => {
     setState({ kind: 'working', action })
@@ -102,6 +120,39 @@ function AgentRow({
         <div className="text-xs text-muted-foreground">{agent.vendor}</div>
       </TableCell>
       <TableCell className="font-mono text-sm">{agent.installed_version ?? EM_DASH}</TableCell>
+      <TableCell>
+        {agent.auth === 'present' && <Badge variant="outline">{t('agents.auth.present')}</Badge>}
+        {agent.auth === 'absent' && (
+          <Badge variant="destructive">{t('agents.auth.absent')}</Badge>
+        )}
+        {agent.auth === 'unknown' && (
+          <Badge variant="outline" title={t('agents.auth.unknownTitle')}>
+            {t('agents.auth.unknown')}
+          </Badge>
+        )}
+        {agent.login_available && agent.auth !== 'present' && (
+          <div className="mt-1">
+            <Button size="sm" variant="outline" disabled={!canAdmin} onClick={() => void runLogin()}>
+              {t('agents.auth.login')}
+            </Button>
+          </div>
+        )}
+        {login.kind === 'working' && (
+          <div className="text-xs text-muted-foreground">{t('agents.binaries.working')}</div>
+        )}
+        {login.kind === 'url' && (
+          <div className="text-xs" data-testid={`login-url-${agent.kind}`}>
+            {login.url ? (
+              <a href={login.url} target="_blank" rel="noreferrer" className="underline break-all">
+                {login.url}
+              </a>
+            ) : (
+              <span>{t('agents.auth.noUrl', { log: login.log })}</span>
+            )}
+          </div>
+        )}
+        {login.kind === 'error' && <div className="text-xs text-destructive">{login.message}</div>}
+      </TableCell>
       <TableCell>
         {agent.on_service_path ? (
           <Badge variant="outline">{t('agents.binaries.onPath')}</Badge>
@@ -166,6 +217,7 @@ export function AgentBinariesCard({ canAdmin }: { canAdmin: boolean }) {
                 <TableRow>
                   <TableHead>{t('agents.binaries.colAgent')}</TableHead>
                   <TableHead>{t('agents.binaries.colVersion')}</TableHead>
+                  <TableHead>{t('agents.auth.colAuth')}</TableHead>
                   <TableHead>{t('agents.binaries.colPath')}</TableHead>
                   <TableHead>{t('agents.binaries.colActions')}</TableHead>
                 </TableRow>

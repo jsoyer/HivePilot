@@ -187,6 +187,13 @@ export const fr: Record<TranslationKey, string> = {
   'cache.worst': 'Pire session',
   'cache.worstDetail': 'A créé {created} tokens de cache et n\'en a relu que {read}.',
   'cache.noTelemetry': 'Aucune télémétrie enregistrée. L\'ingestion OTLP est optionnelle — ce n\'est pas un cache sain, c\'est une absence de mesure.',
+  'agents.auth.colAuth': 'Auth',
+  'agents.auth.present': 'identifiants stockés',
+  'agents.auth.absent': 'NON authentifié',
+  'agents.auth.unknown': 'inconnu',
+  'agents.auth.unknownTitle': 'Pas de sonde vérifiée pour cet agent — inconnu est honnête, pas cassé.',
+  'agents.auth.login': 'Connexion',
+  'agents.auth.noUrl': 'Pas encore d\'URL — lire le log sur la box : {log}',
   'agents.binaries.title': 'Binaires des agents CLI',
   'agents.binaries.description':
     'Versions installées telles que le SERVICE les voit. Installation et mise à jour n\'exécutent que des commandes du registre vérifié, après confirmation explicite.',
