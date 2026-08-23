@@ -193,6 +193,13 @@ export const en = {
   'cache.worst': 'Worst session',
   'cache.worstDetail': 'Created {created} cache tokens and read back {read}.',
   'cache.noTelemetry': 'No telemetry recorded. OTLP ingest is opt-in — this is not a healthy cache, it is no measurement at all.',
+  'agents.auth.colAuth': 'Auth',
+  'agents.auth.present': 'credentials stored',
+  'agents.auth.absent': 'NOT authenticated',
+  'agents.auth.unknown': 'unknown',
+  'agents.auth.unknownTitle': 'No verified probe for this agent — unknown is honest, not broken.',
+  'agents.auth.login': 'Login',
+  'agents.auth.noUrl': 'No URL printed yet — read the log on the box: {log}',
   'agents.binaries.title': 'Agent CLI binaries',
   'agents.binaries.description':
     'Installed versions as the SERVICE sees them. Install and update run only vetted registry commands, after an explicit confirm.',

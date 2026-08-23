@@ -646,6 +646,10 @@ export interface AgentAdminEntry {
    * decides whether a runner registers. Installed-but-false is the grok trap. */
   on_service_path: boolean
   installed_version: string | null
+  /** Tri-state on purpose: present/absent where a store was VERIFIED,
+   * "unknown" everywhere else — never guessed into a boolean. */
+  auth: 'present' | 'absent' | 'unknown'
+  login_available: boolean
 }
 
 export interface AgentsAdminResponse {
@@ -665,6 +669,22 @@ export interface AgentActionResult {
 
 export function fetchAgentsAdmin(): Promise<AgentsAdminResponse> {
   return apiFetch<AgentsAdminResponse>('/v1/agents/admin')
+}
+
+export interface AgentLoginResult {
+  kind: string
+  /** The validation URL to open — the ONLY thing returned from the flow's
+   * output. null = the flow printed nothing URL-shaped in the window. */
+  url: string | null
+  log: string
+}
+
+export function agentLogin(kind: string): Promise<AgentLoginResult> {
+  return apiFetch<AgentLoginResult>(`/v1/agents/${encodeURIComponent(kind)}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ consent: true }),
+  })
 }
 
 export function agentAction(

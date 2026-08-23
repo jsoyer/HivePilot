@@ -4,14 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
 import type { AgentsAdminResponse } from '@/lib/pollen-api'
 
-const { fetchAgentsAdmin, agentAction } = vi.hoisted(() => ({
+const { fetchAgentsAdmin, agentAction, agentLogin } = vi.hoisted(() => ({
   fetchAgentsAdmin: vi.fn(),
   agentAction: vi.fn(),
+  agentLogin: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchAgentsAdmin, agentAction }
+  return { ...actual, fetchAgentsAdmin, agentAction, agentLogin }
 })
 
 import { AgentBinariesCard } from './AgentBinariesCard'
@@ -58,6 +59,8 @@ const GROK = {
   updatable: true,
   on_service_path: true,
   installed_version: '1.0.5',
+  auth: 'present',
+  login_available: true,
 }
 
 function roster(agents: object[]): AgentsAdminResponse {
@@ -165,5 +168,55 @@ describe('AgentBinariesCard', () => {
     await flush()
 
     expect(container.textContent).toMatch(/exit 1|failed|échec/i)
+  })
+})
+
+
+describe('AgentBinariesCard auth (#33)', () => {
+  it('an unauthenticated agent with a verified flow gets a Login button that shows the URL', async () => {
+    fetchAgentsAdmin.mockResolvedValue(roster([{ ...GROK, auth: 'absent' }]))
+    agentLogin.mockResolvedValue({
+      kind: 'grok',
+      url: 'https://accounts.x.ai/activate?c=1',
+      log: '/x.log',
+    })
+    render()
+    await flush()
+
+    const login = Array.from(container.querySelectorAll('button')).find((b) =>
+      /login|connexion/i.test(b.textContent ?? ''),
+    )
+    expect(login).toBeTruthy()
+    act(() => login!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(agentLogin).toHaveBeenCalledWith('grok')
+    const link = container.querySelector('a[href="https://accounts.x.ai/activate?c=1"]')
+    expect(link).toBeTruthy()
+  })
+
+  it('an already-authenticated agent gets NO login button', async () => {
+    fetchAgentsAdmin.mockResolvedValue(roster([{ ...GROK, auth: 'present' }]))
+    render()
+    await flush()
+
+    const login = Array.from(container.querySelectorAll('button')).find((b) =>
+      /login|connexion/i.test(b.textContent ?? ''),
+    )
+    expect(login).toBeFalsy()
+  })
+
+  it('unknown is a badge, never a button — no verified flow, no guess', async () => {
+    fetchAgentsAdmin.mockResolvedValue(
+      roster([{ ...GROK, kind: 'codex', auth: 'unknown', login_available: false }]),
+    )
+    render()
+    await flush()
+
+    expect(container.textContent).toMatch(/unknown|inconnu/i)
+    const login = Array.from(container.querySelectorAll('button')).find((b) =>
+      /login|connexion/i.test(b.textContent ?? ''),
+    )
+    expect(login).toBeFalsy()
   })
 })
