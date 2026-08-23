@@ -1731,40 +1731,53 @@ class TestParseOutputSections:
 
 
 class TestStageOutputsByKey:
-    """`_stage_outputs_by_key` maps a role's declared output keys to content:
-    section-extracted where present, else the whole stage_output blob
-    (coarse fallback) — every declared key always resolves to something."""
+    """`_stage_outputs_by_key` stores only keys whose `## <KEY>` section was
+    found. A declared key with no section is absent — never filled with the
+    whole blob. (The old coarse fallback made a missing `## APPROVAL` look
+    present to Colette; run 639 then blocked on a field that "arrived" as
+    the entire review report.)"""
 
-    def test_coarse_fallback_stores_whole_blob_for_key_with_no_section(self) -> None:
+    def test_no_sections_stores_nothing(self) -> None:
         from hivepilot.orchestrator import _stage_outputs_by_key
 
         stage_output = "general prose with no ## headers describing the work done"
         result = _stage_outputs_by_key(stage_output, ["implementation"])
-        assert result == {"implementation": stage_output}
+        assert result == {}
 
-    def test_multiple_outputs_no_sections_all_map_to_whole_blob(self) -> None:
-        """A role with 2 declared outputs and no matching sections in the
-        stage output maps the whole blob to each key."""
+    def test_multiple_outputs_no_sections_stores_nothing(self) -> None:
         from hivepilot.orchestrator import _stage_outputs_by_key
 
         stage_output = "plain implementation notes, no section headers"
         result = _stage_outputs_by_key(stage_output, ["implementation", "implementation_notes"])
-        assert result == {
-            "implementation": stage_output,
-            "implementation_notes": stage_output,
-        }
+        assert result == {}
 
-    def test_mixed_section_and_fallback_keys(self) -> None:
-        """One declared key has a matching section; the other falls back to
-        the whole blob."""
+    def test_mixed_section_missing_key_is_absent_not_the_blob(self) -> None:
+        """One declared key has a matching section; the other is omitted."""
         from hivepilot.orchestrator import _stage_outputs_by_key
 
         stage_output = "## DESIGN_SPEC\nthe spec body\nintro\n## OTHER\nfiller"
         result = _stage_outputs_by_key(stage_output, ["design_spec", "ui_review"])
+        assert result == {"design_spec": "the spec body\nintro"}
+        assert "ui_review" not in result
+
+    def test_approval_heading_missing_does_not_impersonate_the_report(self) -> None:
+        """Colette-shaped: reviewer emitted REVIEW_REPORT but not APPROVAL.
+        The store must not put the whole report under `approval`."""
+        from hivepilot.orchestrator import _stage_outputs_by_key
+
+        stage_output = (
+            "## REVIEW_REPORT\n"
+            "CRITICAL: none\nHIGH: none\n"
+            "I approve this change in prose, but I did not emit the heading.\n"
+        )
+        result = _stage_outputs_by_key(stage_output, ["review_report", "approval"])
         assert result == {
-            "design_spec": "the spec body\nintro",
-            "ui_review": stage_output,
+            "review_report": (
+                "CRITICAL: none\nHIGH: none\n"
+                "I approve this change in prose, but I did not emit the heading."
+            )
         }
+        assert "approval" not in result
 
 
 class TestKeyedStoreInertThisSprint:
@@ -2155,4 +2168,53 @@ class TestRoutePriorContextOptionalInputs:
         assert "irrelevant fallback chunk" not in result, (
             "must return the keyed join, not fall back to build_prior_context "
             "output — the required key 'a' IS present, so no fallback should occur"
+        )
+
+    def test_colette_does_not_receive_a_fake_approval_from_the_whole_report(self) -> None:
+        """Run 639 shape: reviewer wrote REVIEW_REPORT without ## APPROVAL.
+        Colette requires both. The store must not impersonate approval with
+        the whole blob — she gets the report, and approval is simply absent.
+        Because SOME required keys are present, routing stays keyed (no
+        full-context fallback)."""
+        from hivepilot.orchestrator import _route_prior_context, _stage_outputs_by_key
+        from hivepilot.orchestrator import settings as orchestrator_settings
+        from hivepilot.roles import Role
+
+        reviewer_output = "## REVIEW_REPORT\nline-level findings\nI approve in prose only.\n"
+        ciso_output = "## SECURITY_REPORT\nno CRITICAL\n"
+
+        store: dict[str, str] = {}
+        store.update(_stage_outputs_by_key(reviewer_output, ["review_report", "approval"]))
+        store.update(_stage_outputs_by_key(ciso_output, ["security_report", "clearance"]))
+
+        assert "approval" not in store
+        assert "clearance" not in store
+
+        colette = Role(
+            name="release_manager",
+            title="Release Manager",
+            prompt_file=Path("prompts/agents/release_manager.md"),
+            model_profile="architecture",
+            inputs=["review_report", "approval", "clearance", "security_report"],
+            outputs=["release_decision"],
+            can_block=True,
+            order=12,
+        )
+        result = _route_prior_context(
+            role=colette,
+            prior_chunks=["## Victor (Reviewer)\n" + reviewer_output],
+            outputs_by_key=store,
+            routing_mode="keyed",
+            prior_context_mode=orchestrator_settings.prior_context_mode,
+            max_chars=orchestrator_settings.max_prior_context_chars,
+            stage_name="PR Approval",
+        )
+        assert result is not None
+        assert "## REVIEW_REPORT\nline-level findings" in result
+        assert "## SECURITY_REPORT\nno CRITICAL" in result
+        assert "## APPROVAL" not in result
+        assert "## CLEARANCE" not in result
+        assert "Victor (Reviewer)" not in result, (
+            "must not fall back to the full prior_chunks blob just because "
+            "approval/clearance are missing — review_report IS present"
         )

@@ -1613,9 +1613,9 @@ def _parse_output_sections(text: str, keys: list[str]) -> dict[str, str]:
     leading/trailing blank lines stripped.
 
     Returns ``{key: section_body}`` only for keys whose section was found —
-    mirrors ``_parse_components``'s "empty when none found" style so callers
-    can fall back (here: the whole-blob coarse fallback in the stage loop,
-    see ``_stage_outputs_by_key``)."""
+    mirrors ``_parse_components``'s "empty when none found" style. Missing
+    keys stay missing; callers must not invent a value (see
+    ``_stage_outputs_by_key``)."""
     import re
 
     def _normalize(header: str) -> str:
@@ -1639,14 +1639,17 @@ def _parse_output_sections(text: str, keys: list[str]) -> dict[str, str]:
 def _stage_outputs_by_key(stage_output: str, keys: list[str]) -> dict[str, str]:
     """Map a producing stage's declared output *keys* to content for the
     run-scoped keyed store (PRD A2): section-extracted where a ``## <KEY>``
-    header is present in *stage_output*, else the whole *stage_output* blob
-    (coarse fallback) so every declared key always resolves to something.
+    header is present in *stage_output*.
 
-    Built but not consumed this sprint — see PRD A2 Sprint 1. Callers merging
-    this into a run-scoped dict across stages should let later stages
-    overwrite same-key entries from earlier stages (last producer wins)."""
-    sections = _parse_output_sections(stage_output, keys)
-    return {key: sections.get(key, stage_output) for key in keys}
+    A declared key with no matching section is **absent**, not filled with
+    the whole blob. The coarse fallback used to make every key "resolve to
+    something", which made a missing ``## APPROVAL`` look present to the
+    next stage (Colette, run 639: the entire review report arrived under
+    ``approval``, so keyed routing never fell back and the release gate
+    reported the field MISSING). Last producer still wins on same-key
+    overwrite at the call site.
+    """
+    return _parse_output_sections(stage_output, keys)
 
 
 def _resolve_stage_target_components(
@@ -4552,9 +4555,10 @@ class Orchestrator:
         results: list[RunResult] = []
         final_status = RunStatus.COMPLETE
         prior_chunks: list[str] = []  # outputs of completed stages, fed to later agents
-        # PRD A2 Sprint 1: run-scoped keyed store (output-key -> content), populated
-        # alongside prior_chunks below via section-extraction with whole-blob coarse
-        # fallback. Built but NOT consumed anywhere yet — inert this sprint.
+        # PRD A2: run-scoped keyed store (output-key -> content). Only keys
+        # whose ``## <KEY>`` section was actually emitted are stored; a
+        # declared output with no section is absent, never filled with the
+        # whole blob. Consumed by ``_route_prior_context`` in keyed mode.
         outputs_by_key: dict[str, str] = {}
         _request_budget: dict[str, int] = {"remaining": settings.max_requests_per_run}
         if seed_context:
@@ -4939,7 +4943,16 @@ class Orchestrator:
                 ROLES.get(producing_task.role) if producing_task and producing_task.role else None
             )
             if producing_role and producing_role.outputs:
-                outputs_by_key.update(_stage_outputs_by_key(stage_output, producing_role.outputs))
+                extracted = _stage_outputs_by_key(stage_output, producing_role.outputs)
+                missing_outputs = [key for key in producing_role.outputs if key not in extracted]
+                if missing_outputs:
+                    logger.warning(
+                        "pipeline.keyed_output_missing",
+                        stage=stage.name,
+                        role=producing_role.name,
+                        missing_keys=missing_outputs,
+                    )
+                outputs_by_key.update(extracted)
 
             # Declared-scope gate (only_modules follow-up), RESTRICTED to the
             # designated planning stage: only a stage explicitly flagged
