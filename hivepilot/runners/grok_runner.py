@@ -60,15 +60,33 @@ class GrokRunner(ClaudeRunner):
     honoured_controls: ClassVar[frozenset[str]] = frozenset({"permission_mode", "allowed_tools"})
 
     #: `-p` is grok's `--single`; it takes the prompt as its VALUE where
-    #: claude's `--print` is a boolean with the prompt positional. The base
-    #: builder appends the prompt after the flags, which lands it in exactly
-    #: the right place for both.
+    #: claude's `--print` is a boolean. `print_flag_takes_value` emits
+    #: `-p PROMPT` at the end of argv. Putting `-p` next to argv[0] (the
+    #: claude shape) made the next token `--model` and grok exited 2.
     #: Without this, a role-synthesized definition (`command=None`) fell
     #: through to `settings.claude_command` and LAUNCHED CLAUDE. The bug
     #: shipped in #570 and was caught by cursor's old `command_name` test.
     command_name: ClassVar[str | None] = "grok"
     print_flag: ClassVar[str] = "-p"
+    #: `-p` / `--single` takes the prompt as its value. Putting it next to
+    #: argv[0] (claude's `--print` shape) makes the next token `--model`,
+    #: and grok exits 2: "a value is required for '--single <PROMPT>'".
+    #: Measured run 717, mix preset, 2026-08-24.
+    print_flag_takes_value: ClassVar[bool] = True
     #: `--allow`, whose own help calls `--allowedTools` a compat alias.
     allowed_tools_flag: ClassVar[str] = "--allow"
+    #: `--allow <RULE>` is one rule per flag. A claude-shaped
+    #: `--allow R1 R2` makes R2 a positional prompt and collides with `-p`.
+    allowed_tools_repeat: ClassVar[bool] = True
     #: Same spelling AND the same values as claude's.
     permission_mode_flag: ClassVar[str] = "--permission-mode"
+    #: grok has an `mcp` subcommand, not `--mcp-config`. Token-savior still
+    #: wires a config path; emitting the claude flag exits 2 (run 718).
+    mcp_config_flag: ClassVar[str | None] = None
+    strict_mcp_config_flag: ClassVar[str | None] = None
+    add_dir_flag: ClassVar[str | None] = None
+    append_system_prompt_flag: ClassVar[str | None] = None
+    #: Keep the prompt out of argv. `-p <assembled prompt>` is how clap
+    #: reads a leading `---` / `--` in the text as flags (run 720: argv
+    #: looked like `grok -p` with a missing --single value).
+    prompt_file_flag: ClassVar[str | None] = "--prompt-file"

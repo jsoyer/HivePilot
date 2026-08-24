@@ -48,6 +48,7 @@ _ELEVATED_PERMISSION_MODES = frozenset({"bypassPermissions", "acceptEdits"})
 # module — not part of the public RunnerPayload/SkillSpec contract.
 _SKILL_SCRATCH_DIR_KEY = "skill_scratch_dir"
 _SKILL_SYSTEM_PROMPT_KEY = "skill_system_prompt"
+_PROMPT_FILE_KEY = "prompt_file_scratch"
 
 
 def _resolve_skill_text(text: str, catalog: dict[str, dict[str, Any]]) -> str:
@@ -156,10 +157,19 @@ def _detect_known_hint(text: str) -> str | None:
 
 def _insert_output_format_json(argv: list[str]) -> list[str]:
     """Return a copy of *argv* with ``--output-format json`` inserted right
-    after the command + ``--print`` (index 2), before any other flags and
-    before the trailing positional prompt argument. Never mutates *argv*.
+    after the command (index 1). Never mutates *argv*.
+
+    Used to insert after ``command + --print`` (index 2). That is correct
+    for Claude, whose ``--print`` is a boolean. Grok's ``--prompt-file PATH``
+    / ``-p PROMPT`` take a value as argv[1], so inserting at index 2 split
+    the flag from its value (runs 717-721: "a value is required for
+    '--single/--allow/--prompt-file'"). After the command is safe for both:
+    ``claude --output-format json --print …`` and
+    ``grok --output-format json --prompt-file PATH``.
     """
-    return [*argv[:2], "--output-format", "json", *argv[2:]]
+    if not argv:
+        return argv
+    return [argv[0], "--output-format", "json", *argv[1:]]
 
 
 def _num(value: Any) -> float | int | None:
@@ -520,8 +530,26 @@ class ClaudeRunner(BaseRunner):
     # runner that emits no flag must not claim to apply the control, or
     # `assert_runner_honours` would wave through a role it silently ignores.
     print_flag: ClassVar[str] = "--print"
+    #: Claude's `--print` is a boolean; grok's `-p` takes the prompt as its
+    #: VALUE. When True the flag is emitted immediately before the prompt
+    #: at the end of argv, not next to argv[0].
+    print_flag_takes_value: ClassVar[bool] = False
     allowed_tools_flag: ClassVar[str | None] = "--allowed-tools"
+    #: Claude's `--allowed-tools T1 T2` is variadic. Grok's `--allow` is
+    #: one rule per flag (`--allow T1 --allow T2`). When True, repeat.
+    allowed_tools_repeat: ClassVar[bool] = False
     permission_mode_flag: ClassVar[str | None] = "--permission-mode"
+    #: `None` = this CLI has no such flag; emit nothing (and log) rather
+    #: than an argv grok/cursor will reject. Claude keeps the defaults.
+    mcp_config_flag: ClassVar[str | None] = "--mcp-config"
+    strict_mcp_config_flag: ClassVar[str | None] = "--strict-mcp-config"
+    add_dir_flag: ClassVar[str | None] = "--add-dir"
+    append_system_prompt_flag: ClassVar[str | None] = "--append-system-prompt"
+    #: Grok's `--prompt-file` keeps the prompt out of argv (dash-leading
+    #: text is parsed as flags; MAX_ARG_STRLEN). Claude has no such flag.
+    prompt_file_flag: ClassVar[str | None] = None
+    #: Extra boolean flags emitted after the command (cursor `--trust`).
+    extra_headless_flags: ClassVar[tuple[str, ...]] = ()
     #: Fallback binary when the definition names no command. `None` — claude's
     #: own value — falls through to `settings.claude_command`, unchanged.
     #:
@@ -591,7 +619,9 @@ class ClaudeRunner(BaseRunner):
         if not command:
             raise ValueError("Claude command not configured.")
         prompt = self._assemble_prompt(payload)
-        args = [command, self.print_flag]
+        args = [command] if self.print_flag_takes_value else [command, self.print_flag]
+        if self.extra_headless_flags:
+            args.extend(self.extra_headless_flags)
         model = self._resolve_model(payload)
         # Stated BEFORE dispatch, so a step that fails still records what it
         # was about to run on. The orchestrator prefers the CLI's own
@@ -611,7 +641,14 @@ class ClaudeRunner(BaseRunner):
         # `.claude/skills/` is never written to, see `apply_skill`).
         skill_scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
         if skill_scratch_dir:
-            args.extend(["--add-dir", str(skill_scratch_dir)])
+            if self.add_dir_flag:
+                args.extend([self.add_dir_flag, str(skill_scratch_dir)])
+            else:
+                logger.warning(
+                    "runner.add_dir_dropped",
+                    kind=self.definition.kind,
+                    path=str(skill_scratch_dir),
+                )
         # `--append-system-prompt` (verified via `claude --help`) appends to —
         # rather than replaces — the default system prompt, and is documented
         # as the explicit way to inject context when a session is non-interactive.
@@ -620,7 +657,17 @@ class ClaudeRunner(BaseRunner):
         # agent (see Agent Notes for the full open-question-(b) rationale).
         skill_system_prompt = payload.metadata.get(_SKILL_SYSTEM_PROMPT_KEY)
         if skill_system_prompt:
-            args.extend(["--append-system-prompt", str(skill_system_prompt)])
+            if self.append_system_prompt_flag:
+                args.extend([self.append_system_prompt_flag, str(skill_system_prompt)])
+            else:
+                # Grok's `--system-prompt-override` REPLACES the default;
+                # mapping would discard grok's system prompt. Fold into the
+                # user prompt instead so the skill text is not dropped.
+                prompt = f"{str(skill_system_prompt).rstrip()}\n\n{prompt}"
+                logger.warning(
+                    "runner.append_system_prompt_folded",
+                    kind=self.definition.kind,
+                )
         # Tool availability restriction (additive — absent by default, so
         # existing invocations are byte-identical). `--tools` (verified via
         # `claude --help` on the installed CLI): "Specify the list of
@@ -645,10 +692,20 @@ class ClaudeRunner(BaseRunner):
         # servers from --mcp-config, ignoring all other MCP configurations").
         mcp_configs = self._resolve_mcp_config(payload)
         if mcp_configs:
-            args.append("--mcp-config")
-            args.extend(mcp_configs)
-            if self._resolve_bool_option(payload, "strict_mcp_config"):
-                args.append("--strict-mcp-config")
+            if self.mcp_config_flag:
+                args.append(self.mcp_config_flag)
+                args.extend(mcp_configs)
+                if (
+                    self._resolve_bool_option(payload, "strict_mcp_config")
+                    and self.strict_mcp_config_flag
+                ):
+                    args.append(self.strict_mcp_config_flag)
+            else:
+                logger.warning(
+                    "runner.mcp_config_dropped",
+                    kind=self.definition.kind,
+                    configs=mcp_configs,
+                )
         # Named-tool pre-approval. This is the piece that makes MCP usable in
         # headless mode WITHOUT `permission_mode: bypassPermissions`: a tool
         # that is available but not pre-approved still hits a permission
@@ -659,9 +716,29 @@ class ClaudeRunner(BaseRunner):
         # or Edit. Deliberately an ALLOW-list: `--disallowedTools` fails OPEN
         # for every tool name it does not enumerate.
         allowed_tools = self._resolve_allowed_tools(payload)
+        if allowed_tools and not self.mcp_config_flag:
+            # Token-savior pre-approves mcp__* + WaitForMcpServers. Those
+            # grants are for --mcp-config, which this CLI does not have.
+            kept, dropped = [], []
+            for tool in allowed_tools:
+                if tool.startswith("mcp__") or tool == "WaitForMcpServers":
+                    dropped.append(tool)
+                else:
+                    kept.append(tool)
+            if dropped:
+                logger.warning(
+                    "runner.mcp_tools_dropped",
+                    kind=self.definition.kind,
+                    dropped=dropped,
+                )
+            allowed_tools = kept
         if allowed_tools and self.allowed_tools_flag:
-            args.append(self.allowed_tools_flag)
-            args.extend(allowed_tools)
+            if self.allowed_tools_repeat:
+                for tool in allowed_tools:
+                    args.extend([self.allowed_tools_flag, tool])
+            else:
+                args.append(self.allowed_tools_flag)
+                args.extend(allowed_tools)
         # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
         # agent actually write code in headless --print mode. Without it claude
         # blocks on an interactive permission prompt it cannot show and the run
@@ -691,35 +768,51 @@ class ClaudeRunner(BaseRunner):
         # when nothing variadic precedes it — so making this unconditional
         # costs nothing on the plain/no-flags path while making every
         # variadic-flag path permanently safe against this class of bug.
-        args.append("--")
-        # The prompt travels as ONE argv element, and Linux caps a single
-        # element at MAX_ARG_STRLEN (131 072 bytes) no matter how large the
-        # total ARG_MAX is. Exceeding it raises a bare
-        # `[Errno 7] Argument list too long: 'claude'` from `subprocess.run`
-        # -- an error that names the binary and says nothing about the
-        # prompt. Run 390's lesson distillation died that way, and tracing it
-        # back to an unbounded prompt took three rounds of investigation.
-        #
-        # Checked here rather than caught below so the message names the
-        # cause and carries the size. Still a hard failure: silently trimming
-        # an agent's prompt would change what it was asked to do.
-        _prompt_bytes = len(prompt.encode())
-        if _prompt_bytes > _MAX_ARG_STRLEN:
-            context = {
-                "prompt_bytes": _prompt_bytes,
-                "limit_bytes": _MAX_ARG_STRLEN,
-                "task": payload.task_name,
-                "stage": payload.step.name,
-                "project": payload.project_name,
-            }
-            logger.error("claude_runner.prompt_too_large_for_argv", **context)
-            raise RunnerExecutionError(
-                f"prompt is {_prompt_bytes} bytes, over the {_MAX_ARG_STRLEN}-byte "
-                "single-argument limit the OS imposes on a command line "
-                "(MAX_ARG_STRLEN) -- the caller must bound what it assembles",
-                context=context,
-            )
-        args.append(prompt)
+        if self.prompt_file_flag:
+            fd, path = tempfile.mkstemp(prefix="hivepilot-prompt-", suffix=".md")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(prompt)
+            payload.metadata[_PROMPT_FILE_KEY] = path
+            args.extend([self.prompt_file_flag, path])
+        else:
+            if not self.print_flag_takes_value:
+                args.append("--")
+            # The prompt travels as ONE argv element, and Linux caps a single
+            # element at MAX_ARG_STRLEN (131 072 bytes) no matter how large the
+            # total ARG_MAX is. Exceeding it raises a bare
+            # `[Errno 7] Argument list too long: 'claude'` from `subprocess.run`
+            # -- an error that names the binary and says nothing about the
+            # prompt. Run 390's lesson distillation died that way, and tracing it
+            # back to an unbounded prompt took three rounds of investigation.
+            #
+            # Checked here rather than caught below so the message names the
+            # cause and carries the size. Still a hard failure: silently trimming
+            # an agent's prompt would change what it was asked to do.
+            _prompt_bytes = len(prompt.encode())
+            if _prompt_bytes > _MAX_ARG_STRLEN:
+                context = {
+                    "prompt_bytes": _prompt_bytes,
+                    "limit_bytes": _MAX_ARG_STRLEN,
+                    "task": payload.task_name,
+                    "stage": payload.step.name,
+                    "project": payload.project_name,
+                }
+                logger.error("claude_runner.prompt_too_large_for_argv", **context)
+                raise RunnerExecutionError(
+                    f"prompt is {_prompt_bytes} bytes, over the {_MAX_ARG_STRLEN}-byte "
+                    "single-argument limit the OS imposes on a command line "
+                    "(MAX_ARG_STRLEN) -- the caller must bound what it assembles",
+                    context=context,
+                )
+            if self.print_flag_takes_value:
+                args.extend([self.print_flag, prompt])
+            else:
+                args.append(prompt)
+        logger.info(
+            "runner.argv_flags",
+            kind=self.definition.kind,
+            flags=[a for a in args if a != prompt],
+        )
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}
         # Drop Claude Code's git instructions for roles that never touch git.
@@ -1069,7 +1162,8 @@ class ClaudeRunner(BaseRunner):
             step=payload.step.name,
             host=self.definition.host,
         )
-        scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        raw_scratch = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        scratch_dir = raw_scratch if isinstance(raw_scratch, str) else None
         try:
             subprocess.run(
                 argv, cwd=cwd, env=run_env, check=True, text=True, stdin=subprocess.DEVNULL
@@ -1095,10 +1189,7 @@ class ClaudeRunner(BaseRunner):
                 context=context,
             ) from exc
         finally:
-            # Ephemeral skill scratch (see apply_skill) must not outlive the
-            # step — removed here on BOTH success and exception.
-            if scratch_dir:
-                shutil.rmtree(scratch_dir, ignore_errors=True)
+            self._cleanup_ephemerals(payload, scratch_dir)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
     def _dispatch(
@@ -1271,7 +1362,8 @@ class ClaudeRunner(BaseRunner):
         )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         capture_usage = bool(getattr(self.settings, "claude_capture_usage", False))
-        scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        raw_scratch = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        scratch_dir = raw_scratch if isinstance(raw_scratch, str) else None
 
         try:
             if capture_usage:
@@ -1417,10 +1509,14 @@ class ClaudeRunner(BaseRunner):
                 )
             return result.stdout
         finally:
-            # Ephemeral skill scratch (see apply_skill) must not outlive the
-            # step — removed here on BOTH success and exception.
-            if scratch_dir:
-                shutil.rmtree(scratch_dir, ignore_errors=True)
+            self._cleanup_ephemerals(payload, scratch_dir)
+
+    def _cleanup_ephemerals(self, payload: RunnerPayload, scratch_dir: str | None) -> None:
+        if scratch_dir:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+        prompt_file = payload.metadata.get(_PROMPT_FILE_KEY)
+        if isinstance(prompt_file, str) and prompt_file:
+            Path(prompt_file).unlink(missing_ok=True)
 
     # ── mode: api (Anthropic Messages API) ────────────────────────────────────
 

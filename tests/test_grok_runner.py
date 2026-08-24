@@ -23,6 +23,7 @@ altered claude's argv would be far more expensive than no grok at all.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -226,6 +227,121 @@ class TestAgainstTheRealBinary:
         )
 
 
+class TestSingleTakesThePromptAsItsValue:
+    """Run 717 on mix: `grok -p --model grok-4.5 -- <prompt>` exited 2 with
+    "a value is required for '--single <PROMPT>' but none was supplied".
+
+    Claude's `--print` is a boolean, so putting it next to argv[0] is fine.
+    Grok's `-p` / `--single` takes the prompt as its VALUE. The next token
+    was `--model`, which is an option, so clap refused. Measured on the box
+    2026-08-24: `grok --model grok-4.5 -p hi` works; `grok -p --model …` does
+    not.
+
+    `--allow` is one rule per flag. `--allow Read Bash -p hi` fails with
+    "the argument '[PROMPT]' cannot be used with '--single <PROMPT>'".
+    Repeated `--allow Read --allow Bash` works. Restricted roles (Hugo,
+    Victor, Colette) would have hit this next.
+    """
+
+    @staticmethod
+    def _argv(tmp_path, *, allowed_tools: list[str] | None = None) -> list[str]:
+        from hivepilot.config import settings
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+        from hivepilot.runners.base import RunnerPayload
+
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="grok", prompt_file=str(pf)),
+            metadata={},
+            secrets={},
+        )
+        options: dict = {}
+        if allowed_tools is not None:
+            options["allowed_tools"] = allowed_tools
+        definition = RunnerDefinition(
+            name="r", kind="grok", command=None, model="grok-4.5", options=options
+        )
+        args, _ = GrokRunner(definition, settings)._build_invocation(payload)
+        return args
+
+    def test_the_prompt_travels_in_a_file_not_argv(self, tmp_path):
+        args = self._argv(tmp_path)
+        assert "-p" not in args
+        i = args.index("--prompt-file")
+        path = Path(args[i + 1])
+        try:
+            assert "do it" in path.read_text(encoding="utf-8")
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_model_is_still_on_the_command_line(self, tmp_path):
+        args = self._argv(tmp_path)
+        assert "--model" in args
+        i = args.index("--prompt-file")
+        Path(args[i + 1]).unlink(missing_ok=True)
+
+    def test_each_allow_rule_is_its_own_flag(self, tmp_path):
+        args = self._argv(tmp_path, allowed_tools=["Read(./**)", "Bash(rtk:*)"])
+        try:
+            assert args.count("--allow") == 2
+            pairs = list(zip(args, args[1:]))
+            assert ("--allow", "Read(./**)") in pairs
+            assert ("--allow", "Bash(rtk:*)") in pairs
+        finally:
+            i = args.index("--prompt-file")
+            Path(args[i + 1]).unlink(missing_ok=True)
+
+    def test_mcp_config_is_not_emitted(self, tmp_path):
+        """Run 718: token-savior wired an mcp json, grok rejected --mcp-config."""
+        from hivepilot.config import settings
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+        from hivepilot.runners.base import RunnerPayload
+
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        mcp = tmp_path / "mcp.json"
+        mcp.write_text("{}", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(
+                name="s",
+                runner="grok",
+                prompt_file=str(pf),
+                metadata={
+                    "mcp_config": [str(mcp)],
+                    "allowed_tools": ["mcp__token-savior-recall", "WaitForMcpServers"],
+                },
+            ),
+            metadata={},
+            secrets={},
+        )
+        definition = RunnerDefinition(name="r", kind="grok", command=None)
+        args, _ = GrokRunner(definition, settings)._build_invocation(payload)
+        try:
+            assert "--mcp-config" not in args
+            assert "--strict-mcp-config" not in args
+            assert "--allow" not in args
+        finally:
+            if "--prompt-file" in args:
+                Path(args[args.index("--prompt-file") + 1]).unlink(missing_ok=True)
+
+    def test_usage_capture_does_not_split_prompt_file_from_its_path(self):
+        """HIVEPILOT_CLAUDE_CAPTURE_USAGE inserts --output-format json.
+        Doing that at argv[2] turned `grok --prompt-file PATH` into
+        `grok --prompt-file --output-format json PATH` (run 721)."""
+        from hivepilot.runners.claude_runner import _insert_output_format_json
+
+        out = _insert_output_format_json(["grok", "--prompt-file", "/tmp/p.md"])
+        assert out[out.index("--prompt-file") + 1] == "/tmp/p.md"
+        assert out[out.index("--output-format") + 1] == "json"
+
+
 class TestTheCommandIsNotClaudes:
     """The bug the old cursor `command_name` test exposed, fixed at the base.
 
@@ -254,6 +370,8 @@ class TestTheCommandIsNotClaudes:
         )
         definition = RunnerDefinition(name="r", kind="claude", command=None)
         args, _ = runner_cls(definition, settings)._build_invocation(payload)
+        if "--prompt-file" in args:
+            Path(args[args.index("--prompt-file") + 1]).unlink(missing_ok=True)
         return args[0]
 
     def test_grok_with_no_command_launches_grok(self, tmp_path):
@@ -292,5 +410,8 @@ class TestTheCommandIsNotClaudes:
         )
         definition = RunnerDefinition(name="r", kind="claude", command="/opt/grok-beta")
         args, _ = GrokRunner(definition, settings)._build_invocation(payload)
-
-        assert args[0] == "/opt/grok-beta"
+        try:
+            assert args[0] == "/opt/grok-beta"
+        finally:
+            if "--prompt-file" in args:
+                Path(args[args.index("--prompt-file") + 1]).unlink(missing_ok=True)
