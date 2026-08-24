@@ -1162,7 +1162,8 @@ class ClaudeRunner(BaseRunner):
             step=payload.step.name,
             host=self.definition.host,
         )
-        scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        raw_scratch = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        scratch_dir = raw_scratch if isinstance(raw_scratch, str) else None
         try:
             subprocess.run(
                 argv, cwd=cwd, env=run_env, check=True, text=True, stdin=subprocess.DEVNULL
@@ -1361,7 +1362,8 @@ class ClaudeRunner(BaseRunner):
         )
         timeout = payload.step.timeout_seconds or self.definition.timeout_seconds
         capture_usage = bool(getattr(self.settings, "claude_capture_usage", False))
-        scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        raw_scratch = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+        scratch_dir = raw_scratch if isinstance(raw_scratch, str) else None
 
         try:
             if capture_usage:
@@ -1509,12 +1511,12 @@ class ClaudeRunner(BaseRunner):
         finally:
             self._cleanup_ephemerals(payload, scratch_dir)
 
-    def _cleanup_ephemerals(self, payload: RunnerPayload, scratch_dir: object) -> None:
+    def _cleanup_ephemerals(self, payload: RunnerPayload, scratch_dir: str | None) -> None:
         if scratch_dir:
             shutil.rmtree(scratch_dir, ignore_errors=True)
         prompt_file = payload.metadata.get(_PROMPT_FILE_KEY)
-        if prompt_file:
-            Path(str(prompt_file)).unlink(missing_ok=True)
+        if isinstance(prompt_file, str) and prompt_file:
+            Path(prompt_file).unlink(missing_ok=True)
 
     # ── mode: api (Anthropic Messages API) ────────────────────────────────────
 
