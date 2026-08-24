@@ -157,10 +157,19 @@ def _detect_known_hint(text: str) -> str | None:
 
 def _insert_output_format_json(argv: list[str]) -> list[str]:
     """Return a copy of *argv* with ``--output-format json`` inserted right
-    after the command + ``--print`` (index 2), before any other flags and
-    before the trailing positional prompt argument. Never mutates *argv*.
+    after the command (index 1). Never mutates *argv*.
+
+    Used to insert after ``command + --print`` (index 2). That is correct
+    for Claude, whose ``--print`` is a boolean. Grok's ``--prompt-file PATH``
+    / ``-p PROMPT`` take a value as argv[1], so inserting at index 2 split
+    the flag from its value (runs 717-721: "a value is required for
+    '--single/--allow/--prompt-file'"). After the command is safe for both:
+    ``claude --output-format json --print …`` and
+    ``grok --output-format json --prompt-file PATH``.
     """
-    return [*argv[:2], "--output-format", "json", *argv[2:]]
+    if not argv:
+        return argv
+    return [argv[0], "--output-format", "json", *argv[1:]]
 
 
 def _num(value: Any) -> float | int | None:

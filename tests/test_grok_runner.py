@@ -332,6 +332,17 @@ class TestSingleTakesThePromptAsItsValue:
                 Path(args[args.index("--prompt-file") + 1]).unlink(missing_ok=True)
 
 
+    def test_usage_capture_does_not_split_prompt_file_from_its_path(self):
+        """HIVEPILOT_CLAUDE_CAPTURE_USAGE inserts --output-format json.
+        Doing that at argv[2] turned `grok --prompt-file PATH` into
+        `grok --prompt-file --output-format json PATH` (run 721)."""
+        from hivepilot.runners.claude_runner import _insert_output_format_json
+
+        out = _insert_output_format_json(["grok", "--prompt-file", "/tmp/p.md"])
+        assert out[out.index("--prompt-file") + 1] == "/tmp/p.md"
+        assert out[out.index("--output-format") + 1] == "json"
+
+
 class TestTheCommandIsNotClaudes:
     """The bug the old cursor `command_name` test exposed, fixed at the base.
 
