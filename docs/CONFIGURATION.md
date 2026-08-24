@@ -888,6 +888,10 @@ role_profiles:
   ciso: deep
 ```
 
+Per-runner keys (`grok:`, `cursor:`, `codex:`) sit beside the Claude `model:` value.
+`resolve_profile_model(profile, runner_kind)` picks the key for the **resolved** runner
+(after the roster preset). Claude `model:` stays so preset `claude` is unchanged.
+
 ## api_tokens.yaml — auth tokens
 
 Not part of the config-repo sync set (kept local, per-deployment).
@@ -912,6 +916,22 @@ with its default value — use it as the reference rather than a full enumeratio
 File-path settings mirror each YAML file 1:1: `projects_file`, `tasks_file`, `roles_file`,
 `pipelines_file`, `policies_file`, `groups_file`, `schedules_file`, `model_profiles_file`,
 `api_tokens_file`, plus `state_db`, `runs_dir`, `prompts_dir`.
+
+### Roster presets (`HIVEPILOT_ROSTER_PRESET`)
+
+`roles.yaml` is the canonical Claude roster and is not rewritten to change vendor.
+`HIVEPILOT_ROSTER_PRESET` (default `claude`) loads `roster-presets/<name>.yaml` as an
+overlay of `{role: {runner, model}}` plus optional `judge:` / `lessons:` blocks.
+
+- `claude` — identity (missing file is OK).
+- `mix` — Grok CLI for restricted roles, Cursor for makers (see the operator vault note).
+- Any other name — fail closed if the file is missing.
+
+Precedence: `policy.role_overrides` > roster preset > stage > role.
+Switching back: set `HIVEPILOT_ROSTER_PRESET=claude` and restart. ClaudeRunner and
+named `claude-*` task defs stay installed.
+
+Also add a short section after model_profiles.
 
 The debate/lessons **global floor** settings live here — a per-pipeline `debate:`/`lessons:`
 block can only strengthen these, never weaken them:

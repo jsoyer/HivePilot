@@ -98,8 +98,8 @@ class TestEveryDeclaredConfigFileIsAccountedFor:
         overlap = set(DELIBERATELY_NOT_SYNCED) & CONFIG_FILES
         assert not overlap, f"listed as both synced and excluded: {sorted(overlap)}"
 
-    def test_prompts_is_still_the_only_synced_directory(self) -> None:
-        """Pins the directory side too. `skills/` deliberately is NOT copied —
+    def test_synced_directories(self) -> None:
+        """`prompts/` and `roster-presets/` are copied. `skills/` is NOT —
         it is resolved in place from the config repo (see hivepilot/skill_dirs.py),
         so adding it here would create a second, staleable copy."""
-        assert CONFIG_DIRS == {"prompts"}
+        assert CONFIG_DIRS == {"prompts", "roster-presets"}

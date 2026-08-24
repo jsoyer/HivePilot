@@ -1047,14 +1047,19 @@ def resolve_debate_config(
         or bool(pipeline_debate and pipeline_debate.enable_arbiter)
         or bool(stage_debate and stage_debate.enable_arbiter)
     )
+    from hivepilot.services.roster_preset import load_roster_preset
+
+    _preset = load_roster_preset()
     runner = (
         (stage_debate and stage_debate.runner)
         or (pipeline_debate and pipeline_debate.runner)
+        or _preset.judge_runner
         or floor.judge_runner
     )
     model = (
         (stage_debate and stage_debate.model)
         or (pipeline_debate and pipeline_debate.model)
+        or _preset.judge_model
         or floor.judge_model
     )
     confidence_threshold = (
@@ -1183,12 +1188,19 @@ def resolve_lessons_config(
     enable_semantic = bool(floor.enable_semantic_lesson_retrieval) or bool(
         pipeline_lessons and pipeline_lessons.enable_semantic
     )
+    from hivepilot.services.roster_preset import load_roster_preset
+
+    _preset = load_roster_preset()
     distill_runner = (
-        pipeline_lessons and pipeline_lessons.distill_runner
-    ) or floor.lesson_distill_runner
+        (pipeline_lessons and pipeline_lessons.distill_runner)
+        or _preset.lesson_distill_runner
+        or floor.lesson_distill_runner
+    )
     distill_model = (
-        pipeline_lessons and pipeline_lessons.distill_model
-    ) or floor.lesson_distill_model
+        (pipeline_lessons and pipeline_lessons.distill_model)
+        or _preset.lesson_distill_model
+        or floor.lesson_distill_model
+    )
     min_score = (pipeline_lessons and pipeline_lessons.min_score) or floor.lesson_min_score
     inject_limit = (pipeline_lessons and pipeline_lessons.inject_limit) or floor.lesson_inject_limit
 

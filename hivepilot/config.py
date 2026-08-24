@@ -205,6 +205,11 @@ class Settings(BaseSettings):
     tokens_file: Path = Path("api_tokens.yaml")
     default_runner: str = "claude"
     default_model: str | None = None
+    # Named roster overlay. ``claude`` (default) is identity — roles.yaml
+    # and tasks.yaml run as written. Any other name loads
+    # ``roster-presets/<name>.yaml`` (XDG → config-repo → base_dir). A
+    # missing non-claude name fails closed. env: HIVEPILOT_ROSTER_PRESET
+    roster_preset: str = "claude"
     # Default target (project or group) for direct agent orders when no @target is
     # given (Telegram /ask, /dev, … and @mention routing). Required by telegram_bot.
     default_target: str = "acme"

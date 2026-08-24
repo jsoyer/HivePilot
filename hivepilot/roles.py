@@ -269,6 +269,11 @@ def resolve_runner(
     runner = role.runner
     model = role.model or (role.models[0] if role.models else None)
     effort: EffortLevel | None = role.effort
+    from hivepilot.services.roster_preset import load_roster_preset
+
+    preset_override = load_roster_preset().override_for(role_name)
+    if preset_override.get("runner"):
+        runner = preset_override["runner"]
     override: dict = {}
     if policy is not None:
         override = (getattr(policy, "role_overrides", {}) or {}).get(role_name) or {}
@@ -285,10 +290,13 @@ def resolve_runner(
     # present. Unresolvable falls back to `model:` with a warning from the
     # resolver, which is byte-identical to the old behaviour except it SAYS
     # so. Policy's own model override still outranks everything below it.
+    # A roster preset's explicit model sits between profile and policy.
     if role.model_profile:
         from hivepilot.services.profile_service import resolve_profile_model
 
         model = resolve_profile_model(role.model_profile, runner) or model
+    if preset_override.get("model"):
+        model = preset_override["model"]
     model = override.get("model", model)
     if policy is not None:
         allowed = getattr(policy, "allowed_runners", None)

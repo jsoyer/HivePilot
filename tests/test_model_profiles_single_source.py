@@ -53,7 +53,9 @@ def test_load_claude_profiles_matches_pre_change_snapshot() -> None:
     # regardless of cwd or any XDG/config_repo override active in the env.
     data = profile_service.load_claude_profiles(path=REPO_ROOT / "model_profiles.yaml")
     for key, value in PRE_CHANGE_SNAPSHOT.items():
-        assert data.get(key) == value, f"missing/changed profile: {key}"
+        got = data.get(key) or {}
+        for field, expected in value.items():
+            assert got.get(field) == expected, f"missing/changed profile: {key}.{field}"
 
 
 def test_stray_config_copy_triggers_guard_warning_and_is_ignored(
