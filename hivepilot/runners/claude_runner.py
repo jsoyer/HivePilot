@@ -696,6 +696,22 @@ class ClaudeRunner(BaseRunner):
         # or Edit. Deliberately an ALLOW-list: `--disallowedTools` fails OPEN
         # for every tool name it does not enumerate.
         allowed_tools = self._resolve_allowed_tools(payload)
+        if allowed_tools and not self.mcp_config_flag:
+            # Token-savior pre-approves mcp__* + WaitForMcpServers. Those
+            # grants are for --mcp-config, which this CLI does not have.
+            kept, dropped = [], []
+            for tool in allowed_tools:
+                if tool.startswith("mcp__") or tool == "WaitForMcpServers":
+                    dropped.append(tool)
+                else:
+                    kept.append(tool)
+            if dropped:
+                logger.warning(
+                    "runner.mcp_tools_dropped",
+                    kind=self.definition.kind,
+                    dropped=dropped,
+                )
+            allowed_tools = kept
         if allowed_tools and self.allowed_tools_flag:
             if self.allowed_tools_repeat:
                 for tool in allowed_tools:
@@ -765,6 +781,11 @@ class ClaudeRunner(BaseRunner):
             args.extend([self.print_flag, prompt])
         else:
             args.append(prompt)
+        logger.info(
+            "runner.argv_flags",
+            kind=self.definition.kind,
+            flags=[a for a in args if a != prompt],
+        )
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}
         # Drop Claude Code's git instructions for roles that never touch git.

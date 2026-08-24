@@ -303,7 +303,10 @@ class TestSingleTakesThePromptAsItsValue:
                 name="s",
                 runner="grok",
                 prompt_file=str(pf),
-                metadata={"mcp_config": [str(mcp)]},
+                metadata={
+                    "mcp_config": [str(mcp)],
+                    "allowed_tools": ["mcp__token-savior-recall", "WaitForMcpServers"],
+                },
             ),
             metadata={},
             secrets={},
@@ -312,6 +315,7 @@ class TestSingleTakesThePromptAsItsValue:
         args, _ = GrokRunner(definition, settings)._build_invocation(payload)
         assert "--mcp-config" not in args
         assert "--strict-mcp-config" not in args
+        assert "--allow" not in args
 
 
 class TestTheCommandIsNotClaudes:
