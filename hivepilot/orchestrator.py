@@ -814,6 +814,8 @@ def resolve_step_runner(
         # override the role.
         if step.runner in state_service.NON_MODEL_PROVIDERS and step.runner != runner_kind:
             return step.runner, registry._definition_for(step.runner)
+        from hivepilot.services.roster_preset import drop_unhonoured_bypass
+
         return task.role, RunnerDefinition(
             name=f"role:{task.role}",
             kind=cast(RunnerKind, runner_kind),
@@ -821,20 +823,40 @@ def resolve_step_runner(
             model=role_model,
             effort=role_effort,
             host=role_host,
-            options=role_options,
+            options=drop_unhonoured_bypass(runner_kind, role_options),
         )
 
     declared = registry._definition_for(step.runner_ref)
+    from hivepilot.services.roster_preset import AGENT_KINDS, drop_unhonoured_bypass
+
     if declared.kind != runner_kind:
-        # A different kind entirely — the step is doing something the role's
-        # runner cannot do. Take it exactly as declared.
-        return step.runner_ref, declared
+        both_agents = declared.kind in AGENT_KINDS and runner_kind in AGENT_KINDS
+        if not both_agents:
+            # A different kind entirely — the step is doing something the
+            # role's runner cannot do (shell test suite, herdr pane, …).
+            return step.runner_ref, declared
+        # Roster preset / policy switched agent family (claude → grok/cursor).
+        # Keep the named def's options (profile, append_prompt) but drop
+        # `command: claude` so the runner class uses its own binary.
+        merged = {**declared.options, **role_options}
+        merged = drop_unhonoured_bypass(runner_kind, merged)
+        return step.runner_ref, declared.model_copy(
+            update={
+                "kind": runner_kind,
+                "command": None,
+                "model": role_model or declared.model,
+                "effort": role_effort or declared.effort,
+                "host": declared.host or role_host,
+                "options": merged,
+            }
+        )
+    merged_same = drop_unhonoured_bypass(runner_kind, {**declared.options, **role_options})
     return step.runner_ref, declared.model_copy(
         update={
             "model": role_model or declared.model,
             "effort": role_effort or declared.effort,
             "host": declared.host or role_host,
-            "options": {**declared.options, **role_options},
+            "options": merged_same,
         }
     )
 

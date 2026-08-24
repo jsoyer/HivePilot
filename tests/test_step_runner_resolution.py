@@ -117,16 +117,43 @@ def test_a_model_step_still_follows_the_roles_runner(registry: _FakeRegistry) ->
     assert runner_def.name == "role:ciso"
 
 
-def test_a_named_runners_options_survive_the_role(registry: _FakeRegistry) -> None:
+def test_a_named_runners_options_survive_the_role(
+    registry: _FakeRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`profile: automation` is the whole reason a config names a runner.
 
     Dropping it left the step running under a different Claude profile than
     the pipeline author selected, with nothing on screen to say so.
+
+    Pinned to a claude-kind role so this tests SAME-kind overlay (command
+    kept), not the roster-preset agent-family switch.
     """
+    import hivepilot.roles as roles_mod
+    from hivepilot.roles import Role
+
+    monkeypatch.setattr(
+        roles_mod,
+        "ROLES",
+        {
+            "ciso": Role(
+                name="ciso",
+                title="CISO",
+                prompt_file="ciso.md",
+                model_profile="architecture",
+                inputs=[],
+                outputs=[],
+                can_block=True,
+                order=1,
+                runner="claude",
+                model="opus",
+            )
+        },
+    )
     step = TaskStep(name="propose", runner="claude", runner_ref="claude-docs")
     _key, runner_def = _resolve(_task("ciso", [step]), step, registry)
 
     assert runner_def.options.get("profile") == "automation"
+    assert runner_def.kind == "claude"
     assert runner_def.command == "claude"
 
 

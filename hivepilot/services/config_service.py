@@ -36,7 +36,7 @@ CONFIG_FILES = {
     # this set is never copied, never reported as updated, and never noticed.
     "vault.yaml",
 }
-CONFIG_DIRS = {"prompts"}
+CONFIG_DIRS = {"prompts", "roster-presets"}
 
 
 def _require_config_repo() -> str:

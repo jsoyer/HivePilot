@@ -463,6 +463,15 @@ def doctor() -> None:
     from hivepilot.config import describe_env_file
 
     typer.echo(f"  Env file      : {describe_env_file()}")
+    from hivepilot.roles import ROLES
+    from hivepilot.services.roster_preset import load_roster_preset, resolved_roster_rows
+
+    _preset = load_roster_preset()
+    typer.echo(f"  Roster preset : {_preset.name}")
+    if _preset.roles:
+        typer.echo("\n=== Roster (resolved) ===")
+        for _role, _runner, _model in resolved_roster_rows(sorted(ROLES)):
+            typer.echo(f"  {_role:<20} {_runner:<10} {_model or '-'}")
 
     typer.echo("\n=== External binaries ===")
     for binary in [settings.claude_command, settings.gh_command, settings.git_command, "caddy"]:
