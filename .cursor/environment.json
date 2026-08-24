@@ -1,5 +1,4 @@
 {
   "name": "HivePilot",
-  "install": "python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e \".[dev,notifications]\" && cd web && npm ci",
-  "terminals": []
+  "install": "python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e \".[dev,notifications]\" && npm ci --prefix web"
 }
