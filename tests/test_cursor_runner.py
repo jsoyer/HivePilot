@@ -16,3 +16,8 @@ def test_cursor_runner_overrides_to_cli_only() -> None:
     assert CursorRunner.supported_modes == frozenset({"cli"})
     # Sanity: the parent still advertises api support — cursor overrides it.
     assert PromptCliRunner.supported_modes == frozenset({"cli", "api"})
+
+
+def test_headless_trusts_the_workspace() -> None:
+    """Run 725: cursor-agent --print stopped on Workspace Trust Required."""
+    assert CursorRunner.extra_headless_flags == ("--trust",)

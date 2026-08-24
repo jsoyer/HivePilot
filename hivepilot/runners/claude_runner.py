@@ -548,6 +548,8 @@ class ClaudeRunner(BaseRunner):
     #: Grok's `--prompt-file` keeps the prompt out of argv (dash-leading
     #: text is parsed as flags; MAX_ARG_STRLEN). Claude has no such flag.
     prompt_file_flag: ClassVar[str | None] = None
+    #: Extra boolean flags emitted after the command (cursor `--trust`).
+    extra_headless_flags: ClassVar[tuple[str, ...]] = ()
     #: Fallback binary when the definition names no command. `None` — claude's
     #: own value — falls through to `settings.claude_command`, unchanged.
     #:
@@ -618,6 +620,8 @@ class ClaudeRunner(BaseRunner):
             raise ValueError("Claude command not configured.")
         prompt = self._assemble_prompt(payload)
         args = [command] if self.print_flag_takes_value else [command, self.print_flag]
+        if self.extra_headless_flags:
+            args.extend(self.extra_headless_flags)
         model = self._resolve_model(payload)
         # Stated BEFORE dispatch, so a step that fails still records what it
         # was about to run on. The orchestrator prefers the CLI's own

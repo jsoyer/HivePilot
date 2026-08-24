@@ -74,6 +74,9 @@ class CursorRunner(ClaudeRunner):
     mcp_config_flag: ClassVar[str | None] = None
     strict_mcp_config_flag: ClassVar[str | None] = None
     append_system_prompt_flag: ClassVar[str | None] = None
+    #: Headless `cursor-agent --print` stops on "Workspace Trust Required"
+    #: (run 725, mix, Aliénor). `--trust` is this-directory, not `--yolo`.
+    extra_headless_flags: ClassVar[tuple[str, ...]] = ("--trust",)
 
     def _check_binary(self) -> None:
         """Raise a RuntimeError naming the binary, rather than letting a
