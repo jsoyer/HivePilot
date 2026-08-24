@@ -70,6 +70,10 @@ class CursorRunner(ClaudeRunner):
     #: No such flag on cursor-agent. `None` makes the base emit nothing.
     allowed_tools_flag: ClassVar[str | None] = None
     permission_mode_flag: ClassVar[str | None] = None
+    #: `mcp` subcommand / `--approve-mcps`, not `--mcp-config`.
+    mcp_config_flag: ClassVar[str | None] = None
+    strict_mcp_config_flag: ClassVar[str | None] = None
+    append_system_prompt_flag: ClassVar[str | None] = None
 
     def _check_binary(self) -> None:
         """Raise a RuntimeError naming the binary, rather than letting a

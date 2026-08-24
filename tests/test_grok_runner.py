@@ -285,6 +285,34 @@ class TestSingleTakesThePromptAsItsValue:
         assert ("--allow", "Read(./**)") in pairs
         assert ("--allow", "Bash(rtk:*)") in pairs
 
+    def test_mcp_config_is_not_emitted(self, tmp_path):
+        """Run 718: token-savior wired an mcp json, grok rejected --mcp-config."""
+        from hivepilot.config import settings
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+        from hivepilot.runners.base import RunnerPayload
+
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        mcp = tmp_path / "mcp.json"
+        mcp.write_text("{}", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(
+                name="s",
+                runner="grok",
+                prompt_file=str(pf),
+                metadata={"mcp_config": [str(mcp)]},
+            ),
+            metadata={},
+            secrets={},
+        )
+        definition = RunnerDefinition(name="r", kind="grok", command=None)
+        args, _ = GrokRunner(definition, settings)._build_invocation(payload)
+        assert "--mcp-config" not in args
+        assert "--strict-mcp-config" not in args
+
 
 class TestTheCommandIsNotClaudes:
     """The bug the old cursor `command_name` test exposed, fixed at the base.

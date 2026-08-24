@@ -529,6 +529,12 @@ class ClaudeRunner(BaseRunner):
     #: one rule per flag (`--allow T1 --allow T2`). When True, repeat.
     allowed_tools_repeat: ClassVar[bool] = False
     permission_mode_flag: ClassVar[str | None] = "--permission-mode"
+    #: `None` = this CLI has no such flag; emit nothing (and log) rather
+    #: than an argv grok/cursor will reject. Claude keeps the defaults.
+    mcp_config_flag: ClassVar[str | None] = "--mcp-config"
+    strict_mcp_config_flag: ClassVar[str | None] = "--strict-mcp-config"
+    add_dir_flag: ClassVar[str | None] = "--add-dir"
+    append_system_prompt_flag: ClassVar[str | None] = "--append-system-prompt"
     #: Fallback binary when the definition names no command. `None` — claude's
     #: own value — falls through to `settings.claude_command`, unchanged.
     #:
@@ -618,7 +624,14 @@ class ClaudeRunner(BaseRunner):
         # `.claude/skills/` is never written to, see `apply_skill`).
         skill_scratch_dir = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
         if skill_scratch_dir:
-            args.extend(["--add-dir", str(skill_scratch_dir)])
+            if self.add_dir_flag:
+                args.extend([self.add_dir_flag, str(skill_scratch_dir)])
+            else:
+                logger.warning(
+                    "runner.add_dir_dropped",
+                    kind=self.definition.kind,
+                    path=str(skill_scratch_dir),
+                )
         # `--append-system-prompt` (verified via `claude --help`) appends to —
         # rather than replaces — the default system prompt, and is documented
         # as the explicit way to inject context when a session is non-interactive.
@@ -627,7 +640,17 @@ class ClaudeRunner(BaseRunner):
         # agent (see Agent Notes for the full open-question-(b) rationale).
         skill_system_prompt = payload.metadata.get(_SKILL_SYSTEM_PROMPT_KEY)
         if skill_system_prompt:
-            args.extend(["--append-system-prompt", str(skill_system_prompt)])
+            if self.append_system_prompt_flag:
+                args.extend([self.append_system_prompt_flag, str(skill_system_prompt)])
+            else:
+                # Grok's `--system-prompt-override` REPLACES the default;
+                # mapping would discard grok's system prompt. Fold into the
+                # user prompt instead so the skill text is not dropped.
+                prompt = f"{str(skill_system_prompt).rstrip()}\n\n{prompt}"
+                logger.warning(
+                    "runner.append_system_prompt_folded",
+                    kind=self.definition.kind,
+                )
         # Tool availability restriction (additive — absent by default, so
         # existing invocations are byte-identical). `--tools` (verified via
         # `claude --help` on the installed CLI): "Specify the list of
@@ -652,10 +675,17 @@ class ClaudeRunner(BaseRunner):
         # servers from --mcp-config, ignoring all other MCP configurations").
         mcp_configs = self._resolve_mcp_config(payload)
         if mcp_configs:
-            args.append("--mcp-config")
-            args.extend(mcp_configs)
-            if self._resolve_bool_option(payload, "strict_mcp_config"):
-                args.append("--strict-mcp-config")
+            if self.mcp_config_flag:
+                args.append(self.mcp_config_flag)
+                args.extend(mcp_configs)
+                if self._resolve_bool_option(payload, "strict_mcp_config") and self.strict_mcp_config_flag:
+                    args.append(self.strict_mcp_config_flag)
+            else:
+                logger.warning(
+                    "runner.mcp_config_dropped",
+                    kind=self.definition.kind,
+                    configs=mcp_configs,
+                )
         # Named-tool pre-approval. This is the piece that makes MCP usable in
         # headless mode WITHOUT `permission_mode: bypassPermissions`: a tool
         # that is available but not pre-approved still hits a permission

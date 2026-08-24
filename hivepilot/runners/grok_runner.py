@@ -80,3 +80,9 @@ class GrokRunner(ClaudeRunner):
     allowed_tools_repeat: ClassVar[bool] = True
     #: Same spelling AND the same values as claude's.
     permission_mode_flag: ClassVar[str] = "--permission-mode"
+    #: grok has an `mcp` subcommand, not `--mcp-config`. Token-savior still
+    #: wires a config path; emitting the claude flag exits 2 (run 718).
+    mcp_config_flag: ClassVar[str | None] = None
+    strict_mcp_config_flag: ClassVar[str | None] = None
+    add_dir_flag: ClassVar[str | None] = None
+    append_system_prompt_flag: ClassVar[str | None] = None
