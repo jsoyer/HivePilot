@@ -691,7 +691,10 @@ class ClaudeRunner(BaseRunner):
             if self.mcp_config_flag:
                 args.append(self.mcp_config_flag)
                 args.extend(mcp_configs)
-                if self._resolve_bool_option(payload, "strict_mcp_config") and self.strict_mcp_config_flag:
+                if (
+                    self._resolve_bool_option(payload, "strict_mcp_config")
+                    and self.strict_mcp_config_flag
+                ):
                     args.append(self.strict_mcp_config_flag)
             else:
                 logger.warning(
