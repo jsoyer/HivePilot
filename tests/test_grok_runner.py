@@ -23,6 +23,7 @@ altered claude's argv would be far more expensive than no grok at all.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -267,23 +268,32 @@ class TestSingleTakesThePromptAsItsValue:
         args, _ = GrokRunner(definition, settings)._build_invocation(payload)
         return args
 
-    def test_dash_p_is_immediately_followed_by_the_prompt(self, tmp_path):
+    def test_the_prompt_travels_in_a_file_not_argv(self, tmp_path):
         args = self._argv(tmp_path)
-        i = args.index("-p")
-        assert args[i + 1].endswith("do it")
+        assert "-p" not in args
+        i = args.index("--prompt-file")
+        path = Path(args[i + 1])
+        try:
+            assert "do it" in path.read_text(encoding="utf-8")
+        finally:
+            path.unlink(missing_ok=True)
 
-    def test_model_is_not_between_dash_p_and_the_prompt(self, tmp_path):
+    def test_model_is_still_on_the_command_line(self, tmp_path):
         args = self._argv(tmp_path)
-        p = args.index("-p")
         assert "--model" in args
-        assert "--model" not in args[p:]
+        i = args.index("--prompt-file")
+        Path(args[i + 1]).unlink(missing_ok=True)
 
     def test_each_allow_rule_is_its_own_flag(self, tmp_path):
         args = self._argv(tmp_path, allowed_tools=["Read(./**)", "Bash(rtk:*)"])
-        assert args.count("--allow") == 2
-        pairs = list(zip(args, args[1:]))
-        assert ("--allow", "Read(./**)") in pairs
-        assert ("--allow", "Bash(rtk:*)") in pairs
+        try:
+            assert args.count("--allow") == 2
+            pairs = list(zip(args, args[1:]))
+            assert ("--allow", "Read(./**)") in pairs
+            assert ("--allow", "Bash(rtk:*)") in pairs
+        finally:
+            i = args.index("--prompt-file")
+            Path(args[i + 1]).unlink(missing_ok=True)
 
     def test_mcp_config_is_not_emitted(self, tmp_path):
         """Run 718: token-savior wired an mcp json, grok rejected --mcp-config."""
@@ -313,9 +323,13 @@ class TestSingleTakesThePromptAsItsValue:
         )
         definition = RunnerDefinition(name="r", kind="grok", command=None)
         args, _ = GrokRunner(definition, settings)._build_invocation(payload)
-        assert "--mcp-config" not in args
-        assert "--strict-mcp-config" not in args
-        assert "--allow" not in args
+        try:
+            assert "--mcp-config" not in args
+            assert "--strict-mcp-config" not in args
+            assert "--allow" not in args
+        finally:
+            if "--prompt-file" in args:
+                Path(args[args.index("--prompt-file") + 1]).unlink(missing_ok=True)
 
 
 class TestTheCommandIsNotClaudes:
@@ -346,6 +360,8 @@ class TestTheCommandIsNotClaudes:
         )
         definition = RunnerDefinition(name="r", kind="claude", command=None)
         args, _ = runner_cls(definition, settings)._build_invocation(payload)
+        if "--prompt-file" in args:
+            Path(args[args.index("--prompt-file") + 1]).unlink(missing_ok=True)
         return args[0]
 
     def test_grok_with_no_command_launches_grok(self, tmp_path):
@@ -384,5 +400,8 @@ class TestTheCommandIsNotClaudes:
         )
         definition = RunnerDefinition(name="r", kind="claude", command="/opt/grok-beta")
         args, _ = GrokRunner(definition, settings)._build_invocation(payload)
-
-        assert args[0] == "/opt/grok-beta"
+        try:
+            assert args[0] == "/opt/grok-beta"
+        finally:
+            if "--prompt-file" in args:
+                Path(args[args.index("--prompt-file") + 1]).unlink(missing_ok=True)

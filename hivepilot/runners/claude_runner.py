@@ -48,6 +48,7 @@ _ELEVATED_PERMISSION_MODES = frozenset({"bypassPermissions", "acceptEdits"})
 # module — not part of the public RunnerPayload/SkillSpec contract.
 _SKILL_SCRATCH_DIR_KEY = "skill_scratch_dir"
 _SKILL_SYSTEM_PROMPT_KEY = "skill_system_prompt"
+_PROMPT_FILE_KEY = "prompt_file_scratch"
 
 
 def _resolve_skill_text(text: str, catalog: dict[str, dict[str, Any]]) -> str:
@@ -535,6 +536,9 @@ class ClaudeRunner(BaseRunner):
     strict_mcp_config_flag: ClassVar[str | None] = "--strict-mcp-config"
     add_dir_flag: ClassVar[str | None] = "--add-dir"
     append_system_prompt_flag: ClassVar[str | None] = "--append-system-prompt"
+    #: Grok's `--prompt-file` keeps the prompt out of argv (dash-leading
+    #: text is parsed as flags; MAX_ARG_STRLEN). Claude has no such flag.
+    prompt_file_flag: ClassVar[str | None] = None
     #: Fallback binary when the definition names no command. `None` — claude's
     #: own value — falls through to `settings.claude_command`, unchanged.
     #:
@@ -748,39 +752,46 @@ class ClaudeRunner(BaseRunner):
         # when nothing variadic precedes it — so making this unconditional
         # costs nothing on the plain/no-flags path while making every
         # variadic-flag path permanently safe against this class of bug.
-        if not self.print_flag_takes_value:
-            args.append("--")
-        # The prompt travels as ONE argv element, and Linux caps a single
-        # element at MAX_ARG_STRLEN (131 072 bytes) no matter how large the
-        # total ARG_MAX is. Exceeding it raises a bare
-        # `[Errno 7] Argument list too long: 'claude'` from `subprocess.run`
-        # -- an error that names the binary and says nothing about the
-        # prompt. Run 390's lesson distillation died that way, and tracing it
-        # back to an unbounded prompt took three rounds of investigation.
-        #
-        # Checked here rather than caught below so the message names the
-        # cause and carries the size. Still a hard failure: silently trimming
-        # an agent's prompt would change what it was asked to do.
-        _prompt_bytes = len(prompt.encode())
-        if _prompt_bytes > _MAX_ARG_STRLEN:
-            context = {
-                "prompt_bytes": _prompt_bytes,
-                "limit_bytes": _MAX_ARG_STRLEN,
-                "task": payload.task_name,
-                "stage": payload.step.name,
-                "project": payload.project_name,
-            }
-            logger.error("claude_runner.prompt_too_large_for_argv", **context)
-            raise RunnerExecutionError(
-                f"prompt is {_prompt_bytes} bytes, over the {_MAX_ARG_STRLEN}-byte "
-                "single-argument limit the OS imposes on a command line "
-                "(MAX_ARG_STRLEN) -- the caller must bound what it assembles",
-                context=context,
-            )
-        if self.print_flag_takes_value:
-            args.extend([self.print_flag, prompt])
+        if self.prompt_file_flag:
+            fd, path = tempfile.mkstemp(prefix="hivepilot-prompt-", suffix=".md")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(prompt)
+            payload.metadata[_PROMPT_FILE_KEY] = path
+            args.extend([self.prompt_file_flag, path])
         else:
-            args.append(prompt)
+            if not self.print_flag_takes_value:
+                args.append("--")
+            # The prompt travels as ONE argv element, and Linux caps a single
+            # element at MAX_ARG_STRLEN (131 072 bytes) no matter how large the
+            # total ARG_MAX is. Exceeding it raises a bare
+            # `[Errno 7] Argument list too long: 'claude'` from `subprocess.run`
+            # -- an error that names the binary and says nothing about the
+            # prompt. Run 390's lesson distillation died that way, and tracing it
+            # back to an unbounded prompt took three rounds of investigation.
+            #
+            # Checked here rather than caught below so the message names the
+            # cause and carries the size. Still a hard failure: silently trimming
+            # an agent's prompt would change what it was asked to do.
+            _prompt_bytes = len(prompt.encode())
+            if _prompt_bytes > _MAX_ARG_STRLEN:
+                context = {
+                    "prompt_bytes": _prompt_bytes,
+                    "limit_bytes": _MAX_ARG_STRLEN,
+                    "task": payload.task_name,
+                    "stage": payload.step.name,
+                    "project": payload.project_name,
+                }
+                logger.error("claude_runner.prompt_too_large_for_argv", **context)
+                raise RunnerExecutionError(
+                    f"prompt is {_prompt_bytes} bytes, over the {_MAX_ARG_STRLEN}-byte "
+                    "single-argument limit the OS imposes on a command line "
+                    "(MAX_ARG_STRLEN) -- the caller must bound what it assembles",
+                    context=context,
+                )
+            if self.print_flag_takes_value:
+                args.extend([self.print_flag, prompt])
+            else:
+                args.append(prompt)
         logger.info(
             "runner.argv_flags",
             kind=self.definition.kind,
@@ -1161,10 +1172,7 @@ class ClaudeRunner(BaseRunner):
                 context=context,
             ) from exc
         finally:
-            # Ephemeral skill scratch (see apply_skill) must not outlive the
-            # step — removed here on BOTH success and exception.
-            if scratch_dir:
-                shutil.rmtree(scratch_dir, ignore_errors=True)
+            self._cleanup_ephemerals(payload, scratch_dir)
         logger.info("claude_runner.end", project=payload.project_name, step=payload.step.name)
 
     def _dispatch(
@@ -1483,10 +1491,14 @@ class ClaudeRunner(BaseRunner):
                 )
             return result.stdout
         finally:
-            # Ephemeral skill scratch (see apply_skill) must not outlive the
-            # step — removed here on BOTH success and exception.
-            if scratch_dir:
-                shutil.rmtree(scratch_dir, ignore_errors=True)
+            self._cleanup_ephemerals(payload, scratch_dir)
+
+    def _cleanup_ephemerals(self, payload: RunnerPayload, scratch_dir: object) -> None:
+        if scratch_dir:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
+        prompt_file = payload.metadata.get(_PROMPT_FILE_KEY)
+        if prompt_file:
+            Path(str(prompt_file)).unlink(missing_ok=True)
 
     # ── mode: api (Anthropic Messages API) ────────────────────────────────────
 

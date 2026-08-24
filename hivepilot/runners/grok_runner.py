@@ -86,3 +86,7 @@ class GrokRunner(ClaudeRunner):
     strict_mcp_config_flag: ClassVar[str | None] = None
     add_dir_flag: ClassVar[str | None] = None
     append_system_prompt_flag: ClassVar[str | None] = None
+    #: Keep the prompt out of argv. `-p <assembled prompt>` is how clap
+    #: reads a leading `---` / `--` in the text as flags (run 720: argv
+    #: looked like `grok -p` with a missing --single value).
+    prompt_file_flag: ClassVar[str | None] = "--prompt-file"
