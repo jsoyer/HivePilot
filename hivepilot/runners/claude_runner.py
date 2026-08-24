@@ -343,15 +343,37 @@ def extract_permission_denials(stdout: str) -> list[str]:
     return refused
 
 
+def _envelope_text(data: dict[str, Any]) -> str | None:
+    """Agent-visible text from a CLI JSON envelope.
+
+    Claude uses ``result``. Grok uses ``text`` (the spoken turn) plus
+    ``thought`` (the analysis — TEAM lines, verdicts). Requiring ``result``
+    dumped grok's whole envelope into Telegram (mix run 727: sessionId,
+    usage, stopReason). Claude stays first so its path is unchanged.
+    """
+    result = data.get("result")
+    if isinstance(result, str) and result.strip():
+        return result
+    spoken = data.get("text")
+    thought = data.get("thought")
+    parts: list[str] = []
+    if isinstance(spoken, str) and spoken.strip():
+        parts.append(spoken.strip())
+    if isinstance(thought, str) and thought.strip() and thought.strip() not in (spoken or ""):
+        parts.append(thought.strip())
+    return "\n\n".join(parts) if parts else None
+
+
 def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
     """Parse a ``claude --output-format json`` stdout envelope.
 
     Returns ``(agent_text, usage)`` on success, or ``None`` when the output
     isn't valid JSON or lacks the one field that actually matters for
-    correctness — ``result`` (the agent's own text, which becomes the step
-    output). ``usage``/``cost``/``model`` sub-fields are independently
-    None-safe: a CLI that reports the text but not, say, cost still yields a
-    usable result with ``cost_usd=None`` rather than discarding everything.
+    correctness — the agent's own text, which becomes the step output
+    (Claude: ``result``; Grok: ``text`` / ``thought``). ``usage``/``cost``/
+    ``model`` sub-fields are independently None-safe: a CLI that reports the
+    text but not, say, cost still yields a usable result with
+    ``cost_usd=None`` rather than discarding everything.
 
     Primary source: ``modelUsage`` (see ``_extract_model_usage`` for the
     parsing/attribution/cost-precedence rules) — real operator envelopes
@@ -372,7 +394,7 @@ def _parse_usage_envelope(stdout: str) -> tuple[str, UsageInfo] | None:
         return None
     if not isinstance(data, dict):
         return None
-    text = data.get("result")
+    text = _envelope_text(data)
     if not isinstance(text, str):
         return None
 

@@ -22,6 +22,7 @@ altered claude's argv would be far more expensive than no grok at all.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -340,6 +341,57 @@ class TestSingleTakesThePromptAsItsValue:
         out = _insert_output_format_json(["grok", "--prompt-file", "/tmp/p.md"])
         assert out[out.index("--prompt-file") + 1] == "/tmp/p.md"
         assert out[out.index("--output-format") + 1] == "json"
+
+
+class TestGrokEnvelopeIsProseNotJson:
+    """Mix run 727 dumped grok's --output-format json blob into Telegram.
+
+    Claude's envelope uses ``result``. Grok uses ``text`` (spoken turn) plus
+    ``thought`` (the analysis — TEAM lines, verdicts). The parser required
+    ``result``, so capture() fell back to the whole JSON as stdout.
+    """
+
+    def test_text_and_thought_become_the_step_output(self):
+        from hivepilot.runners.claude_runner import _parse_usage_envelope
+
+        envelope = json.dumps(
+            {
+                "text": "I'll read the brief next.",
+                "thought": "RATIONALE\n- docs only\nTEAM: reviewer, qa",
+                "stopReason": "cancelled",
+                "sessionId": "abc",
+                "usage": {"input_tokens": 100, "output_tokens": 20},
+                "total_cost_usd": 0.01,
+                "num_turns": 2,
+                "modelUsage": {
+                    "grok-4.6-build": {
+                        "inputTokens": 100,
+                        "outputTokens": 20,
+                        "cacheReadInputTokens": 0,
+                        "cacheCreationInputTokens": 0,
+                        "costUSD": 0.01,
+                    }
+                },
+            }
+        )
+        parsed = _parse_usage_envelope(envelope)
+        assert parsed is not None
+        text, usage = parsed
+        assert "sessionId" not in text
+        assert "I'll read the brief next." in text
+        assert "TEAM: reviewer, qa" in text
+        assert usage.cost_usd == 0.01
+        assert usage.model == "grok-4.6-build"
+        assert usage.turns == 2
+
+    def test_claude_result_is_unchanged(self):
+        from hivepilot.runners.claude_runner import _parse_usage_envelope
+
+        parsed = _parse_usage_envelope(
+            json.dumps({"result": "ok", "text": "ignored", "thought": "also ignored"})
+        )
+        assert parsed is not None
+        assert parsed[0] == "ok"
 
 
 class TestTheCommandIsNotClaudes:
