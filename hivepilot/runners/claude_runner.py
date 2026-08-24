@@ -520,7 +520,14 @@ class ClaudeRunner(BaseRunner):
     # runner that emits no flag must not claim to apply the control, or
     # `assert_runner_honours` would wave through a role it silently ignores.
     print_flag: ClassVar[str] = "--print"
+    #: Claude's `--print` is a boolean; grok's `-p` takes the prompt as its
+    #: VALUE. When True the flag is emitted immediately before the prompt
+    #: at the end of argv, not next to argv[0].
+    print_flag_takes_value: ClassVar[bool] = False
     allowed_tools_flag: ClassVar[str | None] = "--allowed-tools"
+    #: Claude's `--allowed-tools T1 T2` is variadic. Grok's `--allow` is
+    #: one rule per flag (`--allow T1 --allow T2`). When True, repeat.
+    allowed_tools_repeat: ClassVar[bool] = False
     permission_mode_flag: ClassVar[str | None] = "--permission-mode"
     #: Fallback binary when the definition names no command. `None` — claude's
     #: own value — falls through to `settings.claude_command`, unchanged.
@@ -591,7 +598,7 @@ class ClaudeRunner(BaseRunner):
         if not command:
             raise ValueError("Claude command not configured.")
         prompt = self._assemble_prompt(payload)
-        args = [command, self.print_flag]
+        args = [command] if self.print_flag_takes_value else [command, self.print_flag]
         model = self._resolve_model(payload)
         # Stated BEFORE dispatch, so a step that fails still records what it
         # was about to run on. The orchestrator prefers the CLI's own
@@ -660,8 +667,12 @@ class ClaudeRunner(BaseRunner):
         # for every tool name it does not enumerate.
         allowed_tools = self._resolve_allowed_tools(payload)
         if allowed_tools and self.allowed_tools_flag:
-            args.append(self.allowed_tools_flag)
-            args.extend(allowed_tools)
+            if self.allowed_tools_repeat:
+                for tool in allowed_tools:
+                    args.extend([self.allowed_tools_flag, tool])
+            else:
+                args.append(self.allowed_tools_flag)
+                args.extend(allowed_tools)
         # Permission mode (e.g. acceptEdits/bypassPermissions) lets the developer
         # agent actually write code in headless --print mode. Without it claude
         # blocks on an interactive permission prompt it cannot show and the run
@@ -691,7 +702,8 @@ class ClaudeRunner(BaseRunner):
         # when nothing variadic precedes it — so making this unconditional
         # costs nothing on the plain/no-flags path while making every
         # variadic-flag path permanently safe against this class of bug.
-        args.append("--")
+        if not self.print_flag_takes_value:
+            args.append("--")
         # The prompt travels as ONE argv element, and Linux caps a single
         # element at MAX_ARG_STRLEN (131 072 bytes) no matter how large the
         # total ARG_MAX is. Exceeding it raises a bare
@@ -719,7 +731,10 @@ class ClaudeRunner(BaseRunner):
                 "(MAX_ARG_STRLEN) -- the caller must bound what it assembles",
                 context=context,
             )
-        args.append(prompt)
+        if self.print_flag_takes_value:
+            args.extend([self.print_flag, prompt])
+        else:
+            args.append(prompt)
         env = merge_environments(payload.project.env, self.definition.env, payload.secrets)
         env = {**env, **self._effort_env_overlay(payload)}
         # Drop Claude Code's git instructions for roles that never touch git.

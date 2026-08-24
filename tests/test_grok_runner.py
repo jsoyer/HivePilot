@@ -226,6 +226,66 @@ class TestAgainstTheRealBinary:
         )
 
 
+class TestSingleTakesThePromptAsItsValue:
+    """Run 717 on mix: `grok -p --model grok-4.5 -- <prompt>` exited 2 with
+    "a value is required for '--single <PROMPT>' but none was supplied".
+
+    Claude's `--print` is a boolean, so putting it next to argv[0] is fine.
+    Grok's `-p` / `--single` takes the prompt as its VALUE. The next token
+    was `--model`, which is an option, so clap refused. Measured on the box
+    2026-08-24: `grok --model grok-4.5 -p hi` works; `grok -p --model …` does
+    not.
+
+    `--allow` is one rule per flag. `--allow Read Bash -p hi` fails with
+    "the argument '[PROMPT]' cannot be used with '--single <PROMPT>'".
+    Repeated `--allow Read --allow Bash` works. Restricted roles (Hugo,
+    Victor, Colette) would have hit this next.
+    """
+
+    @staticmethod
+    def _argv(tmp_path, *, allowed_tools: list[str] | None = None) -> list[str]:
+        from hivepilot.config import settings
+        from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
+        from hivepilot.runners.base import RunnerPayload
+
+        pf = tmp_path / "p.md"
+        pf.write_text("do it", encoding="utf-8")
+        payload = RunnerPayload(
+            project_name="p",
+            project=ProjectConfig(path=tmp_path),
+            task_name="t",
+            step=TaskStep(name="s", runner="grok", prompt_file=str(pf)),
+            metadata={},
+            secrets={},
+        )
+        options: dict = {}
+        if allowed_tools is not None:
+            options["allowed_tools"] = allowed_tools
+        definition = RunnerDefinition(
+            name="r", kind="grok", command=None, model="grok-4.5", options=options
+        )
+        args, _ = GrokRunner(definition, settings)._build_invocation(payload)
+        return args
+
+    def test_dash_p_is_immediately_followed_by_the_prompt(self, tmp_path):
+        args = self._argv(tmp_path)
+        i = args.index("-p")
+        assert args[i + 1].endswith("do it")
+
+    def test_model_is_not_between_dash_p_and_the_prompt(self, tmp_path):
+        args = self._argv(tmp_path)
+        p = args.index("-p")
+        assert "--model" in args
+        assert "--model" not in args[p:]
+
+    def test_each_allow_rule_is_its_own_flag(self, tmp_path):
+        args = self._argv(tmp_path, allowed_tools=["Read(./**)", "Bash(rtk:*)"])
+        assert args.count("--allow") == 2
+        pairs = list(zip(args, args[1:]))
+        assert ("--allow", "Read(./**)") in pairs
+        assert ("--allow", "Bash(rtk:*)") in pairs
+
+
 class TestTheCommandIsNotClaudes:
     """The bug the old cursor `command_name` test exposed, fixed at the base.
 
