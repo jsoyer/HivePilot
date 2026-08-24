@@ -138,7 +138,7 @@ def test_a_named_runners_options_survive_the_role(
             "ciso": Role(
                 name="ciso",
                 title="CISO",
-                prompt_file="ciso.md",
+                prompt_file=Path("ciso.md"),
                 model_profile="architecture",
                 inputs=[],
                 outputs=[],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ def _role(name: str, **kwargs: object) -> Role:
     defaults = dict(
         name=name,
         title=name,
-        prompt_file="x.md",
+        prompt_file=Path("x.md"),
         model_profile="coding",
         inputs=[],
         outputs=[],
@@ -35,7 +36,7 @@ def _role(name: str, **kwargs: object) -> Role:
 
 
 @pytest.fixture(autouse=True)
-def _clear_preset_cache() -> None:
+def _clear_preset_cache() -> Iterator[None]:
     clear_roster_preset_cache()
     yield
     clear_roster_preset_cache()
