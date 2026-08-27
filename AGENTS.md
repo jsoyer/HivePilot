@@ -20,3 +20,6 @@ Pytest is the canonical harness; create suites under `tests/` and name files/fun
 
 ## Commit & Pull Request Guidelines
 Commits follow Conventional Commit prefixes (`feat:`, `chore:`, etc.) per `git log`; keep messages imperative and scoped (`feat: expand runner ecosystem`). Pull requests must fill out `PR_BODY.md`, summarizing orchestration changes and checking only the tests you executed (`pytest`, `npm test`, bespoke shell checks). Link the owning issue or schedule entry, include the exact `hivepilot run …` command reviewers can replay, and add screenshots/log snippets when touching the dashboard or API. Double-check that secrets, tokens, and policy overrides stay redacted before requesting review.
+
+## Issue Tracking
+Work for this repository is tracked in **Linear** (team **HivePilot**), not GitHub Issues. Create or update the Linear issue *first*, then open the GitHub PR and link the two together: paste the Linear identifier (e.g. `HP-123`) in the PR body, and attach the PR link on the Linear issue. When a GitHub issue already exists, mirror it into the HivePilot Linear team rather than opening new GitHub issues. The "owning issue" referenced above is the Linear issue.
