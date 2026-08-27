@@ -174,6 +174,8 @@ import { Pollen } from './Pollen'
 // the same shell).
 const GROUPED_TAB_ORDER = [
   'Home',
+  // HP-22: the natural-language agent chat leads the Operate group.
+  'Chat',
   'Runs',
   'Approvals',
   // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions joins the Operate
