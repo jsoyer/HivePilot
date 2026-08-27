@@ -967,6 +967,18 @@ class ConversationReply(BaseModel):
     text: str
 
 
+class ConciergeAsk(BaseModel):
+    """A free-text message for the natural-language concierge (HP-22).
+
+    `conversation_id` scopes the per-session rolling memory and pending
+    follow-up offers, so a bare "yes"/"oui" resolves against what the
+    concierge just proposed — exactly the Telegram behaviour, in the web UI.
+    """
+
+    text: str
+    conversation_id: str | None = None
+
+
 @v1.post("/approvals/{run_id}")
 @app.post("/approvals/{run_id}")
 def handle_approval(
@@ -1834,6 +1846,57 @@ def conversations_reply(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"role": payload.role, "written_to": path}
+
+
+@v1.post("/concierge")
+@app.post("/concierge")
+def concierge_ask(
+    payload: ConciergeAsk,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+):
+    """Talk to the agents in natural language (HP-22) — the same concierge
+    brain the Telegram bot uses, exposed to Pollen.
+
+    Fail-closed: `concierge_service.route` never raises and never fabricates an
+    unvalidated route/action — any LLM/transport error degrades to a friendly
+    `answer`. This endpoint only CLASSIFIES and returns the decision; it does
+    not execute anything, so it is safe at the `read` role. A returned
+    `route`/`action`/`multi_route` is a PROPOSAL the UI surfaces (destructive
+    execution stays behind the existing approval/run flows).
+    """
+    from hivepilot.services import concierge_service
+
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty message")
+
+    conversation_id = payload.conversation_id or None
+    # A stable per-conversation int for the concierge's rolling memory, and the
+    # token hash as the offer owner — mirrors the Telegram (chat_id, user_id)
+    # pairing so a bare "yes" resolves only for the asker in their own session.
+    chat_id = abs(hash(conversation_id)) % (10**9) if conversation_id else None
+    decision = concierge_service.route(
+        text,
+        default_role=settings.chatops_default_role,
+        default_target=None,
+        chat_id=chat_id,
+        conversation_id=conversation_id,
+        user_id=caller.token,
+    )
+    return {
+        "kind": decision.kind,
+        "answer_text": decision.answer_text,
+        "role_key": decision.role_key,
+        "target": decision.target,
+        "order": decision.order,
+        "action": decision.action,
+        "params": decision.params,
+        "destructive": decision.destructive,
+        "dispatches": [
+            {"role_key": d.role_key, "target": d.target, "order": d.order}
+            for d in (decision.dispatches or [])
+        ],
+    }
 
 
 @v1.get("/analytics/trends")

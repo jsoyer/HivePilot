@@ -18,6 +18,7 @@ import {
   Zap,
   Gauge,
   MessagesSquare,
+  MessageCircle,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -32,6 +33,7 @@ import { LanguageToggle } from './nav/LanguageToggle'
 import { SidebarNav } from './nav/SidebarNav'
 import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
+import { ChatView } from './views/ChatView'
 import { ConversationsView } from './views/ConversationsView'
 import { AgentsView } from './views/AgentsView'
 import { AnalyticsView } from './views/AnalyticsView'
@@ -93,6 +95,9 @@ const BUILTIN_TABS = [
   // role key all along, and nothing ever presented it as a thread. Replying
   // addresses the ROLE, not the finished run -- see ConversationsView.
   { value: 'conversations', labelKey: 'nav.conversations', Panel: ConversationsView, Icon: MessagesSquare },
+  // HP-22: talk to the agents in natural language — the same concierge brain
+  // as the Telegram bot, exposed as a Grok-Bot-style chat (POST /v1/concierge).
+  { value: 'chat', labelKey: 'nav.chat', Panel: ChatView, Icon: MessageCircle },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
   // and memory-quality built-ins merged into ONE `memory` item, plus a
   // new Growth tab (`/v1/memory/growth`) — see `MemoryView`'s own
