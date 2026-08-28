@@ -132,9 +132,7 @@ class TestConciergeRunnerSelection:
         assert runner_def.env.get("OPENAI_BASE_URL") == "https://opencode.ai/zen/v1"
         assert payload.step.runner == "openai"
 
-    def test_openai_runner_omits_base_url_when_unset(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_openai_runner_omits_base_url_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(concierge_service.settings, "chatops_concierge_runner", "openai")
         monkeypatch.setattr(concierge_service.settings, "chatops_concierge_model", "gpt-x")
         monkeypatch.setattr(concierge_service.settings, "chatops_concierge_api_base", None)

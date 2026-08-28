@@ -67,7 +67,10 @@ class TestForcesOpenaiProvider:
         assert _runner().definition.options["api_provider"] == "openai"
 
     def test_api_provider_forced_even_when_caller_supplied_a_different_one(self) -> None:
-        assert _runner(options={"api_provider": "openrouter"}).definition.options["api_provider"] == "openai"
+        assert (
+            _runner(options={"api_provider": "openrouter"}).definition.options["api_provider"]
+            == "openai"
+        )
 
     def test_construction_does_not_mutate_the_original_definition(self) -> None:
         original = RunnerDefinition(name="openai", kind="openai", options={"api_model": "x"})
@@ -104,7 +107,9 @@ class TestApiModeSuccess:
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert headers.get("Authorization") == f"Bearer {_FAKE_KEY}"
 
-    def test_custom_base_url_from_env_targets_the_gateway(self, tmp_path: Path, monkeypatch) -> None:
+    def test_custom_base_url_from_env_targets_the_gateway(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", _FAKE_KEY)
         payload = _payload(tmp_path, metadata={"mode": "api"})
         # Base URL threaded via the runner definition's env (how the concierge
