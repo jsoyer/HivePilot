@@ -104,6 +104,56 @@ class TestRouteApiModeCall:
         assert runner_def.model  # some sensible non-empty default
 
 
+class TestConciergeRunnerSelection:
+    """`settings.chatops_concierge_runner` picks the runner that classifies —
+    "claude" (default) or an OpenAI-compatible endpoint via "openai" (HP-18)."""
+
+    def test_openai_runner_builds_api_call_with_base_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_runner", "openai")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_model", "glm-5.3-flash")
+        monkeypatch.setattr(
+            concierge_service.settings,
+            "chatops_concierge_api_base",
+            "https://opencode.ai/zen/v1",
+        )
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            concierge_service.route("hi", default_role="developer", default_target="acme")
+
+        runner_def, payload = orch.registry.capture_definition.call_args.args
+        assert runner_def.kind == "openai"
+        assert runner_def.model == "glm-5.3-flash"
+        assert runner_def.options.get("mode") == "api"
+        assert runner_def.options.get("api_model") == "glm-5.3-flash"
+        # Base URL threaded as env so only the API KEY need be a secret.
+        assert runner_def.env.get("OPENAI_BASE_URL") == "https://opencode.ai/zen/v1"
+        assert payload.step.runner == "openai"
+
+    def test_openai_runner_omits_base_url_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_runner", "openai")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_model", "gpt-x")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_api_base", None)
+        orch = _orch_with_capture(return_value=json.dumps({"kind": "answer", "answer_text": "ok"}))
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            concierge_service.route("hi", default_role="developer", default_target="acme")
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert "OPENAI_BASE_URL" not in runner_def.env
+
+    def test_default_runner_is_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_runner", "claude")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        orch = _orch_with_capture(return_value=json.dumps({"kind": "answer", "answer_text": "ok"}))
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            concierge_service.route("hi", default_role="developer", default_target="acme")
+        runner_def, _ = orch.registry.capture_definition.call_args.args
+        assert runner_def.kind == "claude"
+
+
 class TestConciergeModeResolution:
     """`settings.chatops_concierge_mode` ("api" | "cli") + the automatic
     api -> cli fallback when no ANTHROPIC_API_KEY is present, so the

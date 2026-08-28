@@ -1264,6 +1264,20 @@ class Settings(BaseSettings):
     # default rather than to "unbounded" — an unbounded classify would hang
     # the chat bot process, which is what the ceiling exists to prevent.
     chatops_concierge_timeout_seconds: int = 90
+    # Which runner kind classifies concierge messages. Default "claude"
+    # (Anthropic, CLI or Messages API). Set to "openai" to run the classifier
+    # on any OpenAI-compatible endpoint (OpenCode Zen, Ollama Cloud, …) — then
+    # set `chatops_concierge_model` to that endpoint's model id,
+    # `chatops_concierge_api_base` to its base URL, and provide OPENAI_API_KEY.
+    # Also accepts "openrouter" (uses OPENROUTER_API_KEY). See
+    # docs/INTEGRATIONS.md "Natural-language concierge (opt-in)".
+    chatops_concierge_runner: str = "claude"
+    # Base URL for the OpenAI-compatible endpoint when
+    # chatops_concierge_runner="openai" (e.g. "https://opencode.ai/zen/v1").
+    # None -> the openai runner's default (https://api.openai.com/v1). Threaded
+    # to the classifier call as OPENAI_BASE_URL so only the API KEY needs to be
+    # a secret.
+    chatops_concierge_api_base: str | None = None
     linear_api_key: str | None = None
     linear_team_id: str | None = None  # default team for issue creation
     linear_default_project_id: str | None = None  # default project

@@ -16,6 +16,7 @@ from hivepilot.runners.internal_runner import InternalRunner
 from hivepilot.runners.kubectl_runner import KubectlRunner
 from hivepilot.runners.kustomize_runner import KustomizeRunner
 from hivepilot.runners.langchain_runner import LangChainRunner
+from hivepilot.runners.openai_runner import OpenAiCompatRunner
 from hivepilot.runners.openrouter_runner import OpenRouterRunner
 from hivepilot.runners.packer_runner import PackerRunner
 from hivepilot.runners.puppet_runner import PuppetRunner
@@ -285,6 +286,11 @@ _BUILTIN_RUNNERS: Dict[str, Type[BaseRunner]] = {
     # ollama.py); see RunnerPluginUnavailableError above for their
     # resolution-time error and _OPTIONAL_AGENT_PLUGIN_KINDS for the mapping.
     "openrouter": OpenRouterRunner,
+    # OpenAI-compatible endpoints (OpenAI, OpenCode Zen, Ollama Cloud, vLLM,
+    # …) via `OPENAI_BASE_URL` + `OPENAI_API_KEY` — API-only, no CLI binary,
+    # same rationale as `openrouter` above. Lets the concierge classifier run
+    # on a hosted OSS model (see concierge_service.py).
+    "openai": OpenAiCompatRunner,
     # codex-cursor-plugins migration: codex/cursor moved OUT of this dict
     # into gated plugins (plugins/codex.py / plugins/cursor.py) — same
     # pattern as gemini/opencode/ollama above. Built-in agent kinds are now
