@@ -3,6 +3,15 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
+/* HP-23 POC: Astryx design system, scoped in practice to the Chat page.
+   We deliberately do NOT import Astryx's global reset here — Tailwind's
+   preflight already owns the reset, and layering a second reset app-wide is
+   exactly the cascade risk this POC is measuring. We load only the component
+   styles + a dark theme (gothic), so the rest of Pollen (shadcn/Tailwind) is
+   left untouched. */
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/theme-gothic/theme.css";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
