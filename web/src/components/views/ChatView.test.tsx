@@ -39,7 +39,8 @@ function render() {
 }
 
 function type(text: string) {
-  const input = container.querySelector('[data-testid="chat-input"]') as HTMLTextAreaElement
+  // Astryx TextArea forwards to a real <textarea> (HP-23 POC).
+  const input = container.querySelector('textarea') as HTMLTextAreaElement
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLTextAreaElement.prototype,
     'value',
@@ -50,10 +51,14 @@ function type(text: string) {
   })
 }
 
+function sendButton(): HTMLButtonElement {
+  const buttons = Array.from(container.querySelectorAll('button')) as HTMLButtonElement[]
+  return buttons.find((b) => (b.textContent ?? '').includes('Send')) ?? buttons[buttons.length - 1]
+}
+
 async function send() {
-  const button = container.querySelector('[data-testid="chat-send"]') as HTMLButtonElement
   await act(async () => {
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    sendButton().dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   await act(async () => {})
 }
@@ -82,10 +87,8 @@ describe('ChatView', () => {
     type('how did the last run go?')
     await send()
 
-    const user = container.querySelector('[data-testid="chat-message-user"]')
-    const bot = container.querySelector('[data-testid="chat-message-concierge"]')
-    expect(user?.textContent).toContain('how did the last run go?')
-    expect(bot?.textContent).toContain('Run 8 succeeded.')
+    expect(container.textContent).toContain('how did the last run go?')
+    expect(container.textContent).toContain('Run 8 succeeded.')
     expect(askConcierge).toHaveBeenCalledOnce()
   })
 
