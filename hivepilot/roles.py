@@ -192,6 +192,206 @@ def _load_roles_strict() -> dict[str, Role]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Agent Studio Phase 1 (HP-25), slice 2: store-backed roles read path.
+#
+# `refresh_roles()` becomes STORE-FIRST — if the `roles` store has entries they
+# are the mutable source of truth; otherwise it falls back to `roles.yaml`. The
+# import-time `ROLES = load_roles()` stays YAML-only (no DB access at import);
+# a daemon adopts the store by calling `seed_store_from_yaml()` + `refresh_roles()`
+# after startup (wiring lands in slice 3). YAML remains the seed + export format.
+# ---------------------------------------------------------------------------
+
+_materialized_prompts: dict[str, str] = {}
+
+
+def _materialize_prompt(name: str, text: str) -> Path:
+    """Write an inline (store-held) prompt to a cached temp file so the rest of
+    the code — which reads a role's prompt via its ``prompt_file`` Path — works
+    unchanged for Agent-Studio-created roles that carry ``prompt_text`` but no
+    file. Cached by (name, content) so repeated loads reuse the same file."""
+    import hashlib
+    import os
+    import tempfile
+
+    key = hashlib.sha256(f"{name}\0{text}".encode()).hexdigest()[:16]
+    cached = _materialized_prompts.get(key)
+    if cached and Path(cached).exists():
+        return Path(cached)
+    fd, path = tempfile.mkstemp(prefix=f"hivepilot-role-{name}-", suffix=".md")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    _materialized_prompts[key] = path
+    return Path(path)
+
+
+def _roles_from_store(tenant: str = "default") -> dict[str, Role]:
+    """Build the live role roster from the store rows. A row's prompt comes from
+    its ``prompt_file`` (resolved through the config chain) or, when absent, its
+    inline ``prompt_text`` (materialized). A row that yields no prompt or fails
+    Role validation is skipped fail-closed (an unusable role is dropped, never
+    silently broken)."""
+    from hivepilot.config import settings
+    from hivepilot.services import state_service
+
+    result: dict[str, Role] = {}
+    for row in state_service.list_role_rows(tenant):
+        prompt_file = row.get("prompt_file")
+        prompt_text = row.get("prompt_text")
+        if prompt_file:
+            path = _resolve_prompt_path(str(prompt_file), settings)
+        elif prompt_text:
+            path = _materialize_prompt(str(row["name"]), str(prompt_text))
+        else:
+            log.warning("roles.store_role_missing_prompt: %s", row.get("name"))
+            continue
+        # Drop NULL columns so Pydantic applies the model's own defaults (e.g.
+        # `optional_inputs: list[str] = []`) rather than choking on a stored
+        # NULL where a list is expected.
+        fields = {k: v for k, v in row.items() if k in Role.model_fields and v is not None}
+        fields["prompt_file"] = path
+        try:
+            role = Role(**fields)
+        except Exception as exc:  # noqa: BLE001 — one bad row must not drop the roster
+            log.warning("roles.store_role_invalid: %s (%s)", row.get("name"), type(exc).__name__)
+            continue
+        result[role.name] = role
+    return result
+
+
+def _load_roles_live() -> dict[str, Role]:
+    """Store-first source for `refresh_roles()`: use the store when it has roles,
+    else `roles.yaml`. Raises on a hard failure so `refresh_roles` keeps the
+    previous live config (never downgrades to `_DEFAULT_ROLES` on a swap)."""
+    from hivepilot.services import state_service
+
+    try:
+        has_store = state_service.roles_count() > 0
+    except Exception:  # noqa: BLE001 — a store hiccup falls back to YAML, never crashes a run
+        has_store = False
+    return _roles_from_store() if has_store else _load_roles_strict()
+
+
+def _raw_role_rows_from_yaml() -> list[dict]:
+    """Parse `roles.yaml` into store-ready row dicts: the RAW `prompt_file`
+    filename is kept and `prompt_text` is filled with that file's content, so a
+    seeded role is self-contained (Option A) yet still exports cleanly."""
+    from hivepilot.config import settings
+
+    roles_path = settings.resolve_config_path(settings.roles_file)
+    raw = yaml.safe_load(roles_path.read_text(encoding="utf-8"))
+    rows: list[dict] = []
+    for entry in raw["roles"]:
+        row = dict(entry)
+        prompt_filename = row.get("prompt_file")
+        if prompt_filename:
+            try:
+                row["prompt_text"] = _resolve_prompt_path(prompt_filename, settings).read_text(
+                    encoding="utf-8"
+                )
+            except OSError:
+                row["prompt_text"] = None
+        rows.append(row)
+    return rows
+
+
+def seed_store_from_yaml(tenant: str = "default") -> int:
+    """First-boot seed: write `roles.yaml` into the store ONLY when it is empty
+    for `tenant`. Returns the number seeded (0 if already populated or on any
+    read error). Idempotent — never clobbers live store edits."""
+    from hivepilot.services import state_service
+
+    try:
+        rows = _raw_role_rows_from_yaml()
+    except Exception as exc:  # noqa: BLE001 — a missing/bad roles.yaml just seeds nothing
+        log.warning("roles.seed_skipped: %s", type(exc).__name__)
+        return 0
+    return state_service.seed_roles(rows, tenant)
+
+
+def export_store_to_yaml(
+    tenant: str = "default",
+    roles_path: Path | None = None,
+    prompts_dir: Path | None = None,
+) -> int:
+    """GitOps export (HP-25 slice 3): write the store roster back to
+    `roles.yaml` + `prompts/agents/<file>.md`, so store edits made via the API
+    can be committed and code-reviewed. The store is authoritative: each role's
+    inline `prompt_text` is written to its prompt file (kept in sync). Returns
+    the number of roles exported; a `0` means the store is empty (nothing is
+    written — we never clobber `roles.yaml` with an empty roster)."""
+    from hivepilot.config import settings
+    from hivepilot.services import state_service
+
+    rows = state_service.list_role_rows(tenant)
+    if not rows:
+        return 0
+
+    roles_path = roles_path or settings.resolve_config_path(settings.roles_file)
+    prompts_dir = prompts_dir or (roles_path.parent / "prompts" / "agents")
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    _ORDER = [
+        "name", "display_name", "title", "command_task", "prompt_file",
+        "model_profile", "runner", "model", "models", "inputs", "outputs",
+        "optional_inputs", "allowed_tools", "can_block", "order", "host",
+        "permission_mode", "effort",
+    ]
+    entries: list[dict] = []
+    for row in sorted(rows, key=lambda r: (r.get("order") or 0, r.get("name") or "")):
+        prompt_file = Path(str(row["prompt_file"])).name if row.get("prompt_file") else f"{row['name']}.md"
+        prompt_text = row.get("prompt_text")
+        if prompt_text is not None:
+            (prompts_dir / prompt_file).write_text(str(prompt_text), encoding="utf-8")
+        entry = dict(row)
+        entry["prompt_file"] = prompt_file
+        ordered = {k: entry[k] for k in _ORDER if entry.get(k) not in (None, [], "")}
+        ordered.setdefault("name", row["name"])
+        ordered["can_block"] = bool(row.get("can_block"))
+        ordered["order"] = row.get("order")
+        entries.append(ordered)
+
+    roles_path.write_text(
+        yaml.safe_dump({"roles": entries}, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return len(entries)
+
+
+def api_roster(tenant: str = "default") -> list[dict]:
+    """The roster for `GET /v1/roles` (HP-25 slice 3): the store rows when the
+    store has been adopted (they carry the editable `prompt_text`), else the
+    live YAML-sourced roster serialized (prompt filename only, no inline text).
+    Absolute prompt paths are never exposed — only the bare filename."""
+    from hivepilot.services import state_service
+
+    rows = state_service.list_role_rows(tenant)
+    if rows:
+        out = []
+        for row in rows:
+            row = {k: v for k, v in row.items() if k != "updated_at"}
+            if row.get("prompt_file"):
+                row["prompt_file"] = Path(str(row["prompt_file"])).name
+            out.append(row)
+        return out
+    serialized = []
+    for role in list_roles():
+        data = role.model_dump()
+        data["prompt_file"] = Path(str(data["prompt_file"])).name if data.get("prompt_file") else None
+        data["prompt_text"] = None
+        serialized.append(data)
+    return sorted(serialized, key=lambda r: (r.get("order", 0), r.get("name", "")))
+
+
+def validate_role_fields(fields: dict) -> None:
+    """Raise `ValueError` if `fields` don't form a valid `Role` (schema check
+    used by the write API). Uses a placeholder prompt path so the check covers
+    every OTHER field regardless of whether the prompt is inline or a file."""
+    candidate = {k: v for k, v in fields.items() if k in Role.model_fields and v is not None}
+    candidate["prompt_file"] = Path("__validate__.md")
+    Role(**candidate)  # raises pydantic ValidationError on any bad/missing field
+
+
 def load_roles() -> dict[str, Role]:
     """Bootstrap loader — wraps ``_load_roles_strict()`` and, on ANY failure
     (missing file, parse error, validation error), logs a warning and returns
@@ -239,7 +439,7 @@ def refresh_roles() -> bool:
     """
     global ROLES  # noqa: PLW0603
     try:
-        new_roles = _load_roles_strict()
+        new_roles = _load_roles_live()  # HP-25: store-first, else roles.yaml
     except Exception as exc:  # noqa: BLE001 — a bad candidate must never touch live ROLES
         log.warning("roles.refresh_failed — keeping previous roles config: %s", type(exc).__name__)
         return False

@@ -269,6 +269,41 @@ def init_db() -> None:
             )
             """
         )
+        # Agent Studio Phase 1 (HP-25): store-backed role definitions, tenant-
+        # scoped. The mutable source of truth once seeded from roles.yaml; the
+        # Role model's list fields are JSON-encoded, `can_block` is 0/1, and
+        # `prompt_text` holds the inline prompt (Option A) with `prompt_file`
+        # kept for seed/export. `order` is stored as `role_order` (ORDER is a
+        # reserved word). Slice 1 adds only this table + CRUD; `load_roles()`
+        # still reads YAML until the store-first flip (slice 2).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS roles (
+                name TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                title TEXT,
+                display_name TEXT,
+                model_profile TEXT,
+                runner TEXT,
+                model TEXT,
+                models TEXT,
+                prompt_file TEXT,
+                prompt_text TEXT,
+                inputs TEXT,
+                outputs TEXT,
+                optional_inputs TEXT,
+                allowed_tools TEXT,
+                can_block INTEGER,
+                role_order INTEGER,
+                host TEXT,
+                permission_mode TEXT,
+                command_task TEXT,
+                effort TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (name, tenant)
+            )
+            """
+        )
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS retry_queue (
@@ -1475,6 +1510,124 @@ def get_token(token: str) -> dict[str, Any] | None:
     with db.connect() as conn:
         row = conn.execute(ph(db.ph("SELECT * FROM tokens WHERE token=?")), (token,)).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Agent Studio Phase 1 (HP-25): store-backed roles CRUD.
+# Row dicts mirror the `Role` model (see hivepilot/roles.py). List fields are
+# JSON-encoded on write and decoded on read; `can_block` is 0/1; the Role
+# model's `order` is stored as `role_order`. `upsert_role` is DELETE+INSERT
+# (dialect-safe across SQLite/Postgres, no ON CONFLICT on a composite PK).
+# ---------------------------------------------------------------------------
+
+_ROLE_LIST_FIELDS = ("models", "inputs", "outputs", "optional_inputs", "allowed_tools")
+
+
+def _decode_role_row(row: dict[str, Any]) -> dict[str, Any]:
+    for field in _ROLE_LIST_FIELDS:
+        raw = row.get(field)
+        if raw is not None:
+            try:
+                row[field] = json.loads(raw)
+            except (TypeError, ValueError):
+                row[field] = None
+    row["can_block"] = bool(row.get("can_block"))
+    if "role_order" in row:
+        row["order"] = row.pop("role_order")
+    return row
+
+
+def upsert_role(role: dict[str, Any]) -> None:
+    """Insert or replace one role. `role` keys mirror the `Role` model
+    (`order` accepted as `order`); list fields may be Python lists."""
+    init_db()
+    tenant = role.get("tenant", "default")
+
+    def _j(value: Any) -> str | None:
+        return json.dumps(value) if value is not None else None
+
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("DELETE FROM roles WHERE name=? AND tenant=?")),
+            (role["name"], tenant),
+        )
+        conn.execute(
+            ph(
+                db.ph(
+                    "INSERT INTO roles (name, tenant, title, display_name, model_profile, runner, "
+                    "model, models, prompt_file, prompt_text, inputs, outputs, optional_inputs, "
+                    "allowed_tools, can_block, role_order, host, permission_mode, command_task, "
+                    "effort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                )
+            ),
+            (
+                role["name"],
+                tenant,
+                role.get("title"),
+                role.get("display_name"),
+                role.get("model_profile"),
+                role.get("runner"),
+                role.get("model"),
+                _j(role.get("models")),
+                str(role["prompt_file"]) if role.get("prompt_file") is not None else None,
+                role.get("prompt_text"),
+                _j(role.get("inputs")),
+                _j(role.get("outputs")),
+                _j(role.get("optional_inputs")),
+                _j(role.get("allowed_tools")),
+                1 if role.get("can_block") else 0,
+                role.get("order"),
+                role.get("host"),
+                role.get("permission_mode"),
+                role.get("command_task"),
+                role.get("effort"),
+            ),
+        )
+
+
+def delete_role(name: str, tenant: str = "default") -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(ph(db.ph("DELETE FROM roles WHERE name=? AND tenant=?")), (name, tenant))
+
+
+def get_role_row(name: str, tenant: str = "default") -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM roles WHERE name=? AND tenant=?")), (name, tenant)
+        ).fetchone()
+    return _decode_role_row(dict(row)) if row else None
+
+
+def list_role_rows(tenant: str = "default") -> list[dict[str, Any]]:
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            ph(db.ph("SELECT * FROM roles WHERE tenant=? ORDER BY role_order, name")),
+            (tenant,),
+        ).fetchall()
+    return [_decode_role_row(dict(row)) for row in rows]
+
+
+def roles_count(tenant: str = "default") -> int:
+    """Number of stored roles for `tenant` (used to gate first-boot seeding).
+    Counts via `list_role_rows` to stay row-factory/dialect agnostic."""
+    return len(list_role_rows(tenant))
+
+
+def seed_roles(rows: list[dict[str, Any]], tenant: str = "default") -> int:
+    """First-boot seeding: write `rows` ONLY when the store is empty for
+    `tenant`. Returns how many were seeded (0 if the store already had roles),
+    so seeding is idempotent and never clobbers live edits."""
+    init_db()
+    if roles_count(tenant) > 0:
+        return 0
+    for row in rows:
+        entry = dict(row)
+        entry.setdefault("tenant", tenant)
+        upsert_role(entry)
+    return len(rows)
 
 
 def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:
