@@ -309,6 +309,89 @@ def seed_store_from_yaml(tenant: str = "default") -> int:
     return state_service.seed_roles(rows, tenant)
 
 
+def export_store_to_yaml(
+    tenant: str = "default",
+    roles_path: Path | None = None,
+    prompts_dir: Path | None = None,
+) -> int:
+    """GitOps export (HP-25 slice 3): write the store roster back to
+    `roles.yaml` + `prompts/agents/<file>.md`, so store edits made via the API
+    can be committed and code-reviewed. The store is authoritative: each role's
+    inline `prompt_text` is written to its prompt file (kept in sync). Returns
+    the number of roles exported; a `0` means the store is empty (nothing is
+    written — we never clobber `roles.yaml` with an empty roster)."""
+    from hivepilot.config import settings
+    from hivepilot.services import state_service
+
+    rows = state_service.list_role_rows(tenant)
+    if not rows:
+        return 0
+
+    roles_path = roles_path or settings.resolve_config_path(settings.roles_file)
+    prompts_dir = prompts_dir or (roles_path.parent / "prompts" / "agents")
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    _ORDER = [
+        "name", "display_name", "title", "command_task", "prompt_file",
+        "model_profile", "runner", "model", "models", "inputs", "outputs",
+        "optional_inputs", "allowed_tools", "can_block", "order", "host",
+        "permission_mode", "effort",
+    ]
+    entries: list[dict] = []
+    for row in sorted(rows, key=lambda r: (r.get("order") or 0, r.get("name") or "")):
+        prompt_file = Path(str(row["prompt_file"])).name if row.get("prompt_file") else f"{row['name']}.md"
+        prompt_text = row.get("prompt_text")
+        if prompt_text is not None:
+            (prompts_dir / prompt_file).write_text(str(prompt_text), encoding="utf-8")
+        entry = dict(row)
+        entry["prompt_file"] = prompt_file
+        ordered = {k: entry[k] for k in _ORDER if entry.get(k) not in (None, [], "")}
+        ordered.setdefault("name", row["name"])
+        ordered["can_block"] = bool(row.get("can_block"))
+        ordered["order"] = row.get("order")
+        entries.append(ordered)
+
+    roles_path.write_text(
+        yaml.safe_dump({"roles": entries}, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return len(entries)
+
+
+def api_roster(tenant: str = "default") -> list[dict]:
+    """The roster for `GET /v1/roles` (HP-25 slice 3): the store rows when the
+    store has been adopted (they carry the editable `prompt_text`), else the
+    live YAML-sourced roster serialized (prompt filename only, no inline text).
+    Absolute prompt paths are never exposed — only the bare filename."""
+    from hivepilot.services import state_service
+
+    rows = state_service.list_role_rows(tenant)
+    if rows:
+        out = []
+        for row in rows:
+            row = {k: v for k, v in row.items() if k != "updated_at"}
+            if row.get("prompt_file"):
+                row["prompt_file"] = Path(str(row["prompt_file"])).name
+            out.append(row)
+        return out
+    serialized = []
+    for role in list_roles():
+        data = role.model_dump()
+        data["prompt_file"] = Path(str(data["prompt_file"])).name if data.get("prompt_file") else None
+        data["prompt_text"] = None
+        serialized.append(data)
+    return sorted(serialized, key=lambda r: (r.get("order", 0), r.get("name", "")))
+
+
+def validate_role_fields(fields: dict) -> None:
+    """Raise `ValueError` if `fields` don't form a valid `Role` (schema check
+    used by the write API). Uses a placeholder prompt path so the check covers
+    every OTHER field regardless of whether the prompt is inline or a file."""
+    candidate = {k: v for k, v in fields.items() if k in Role.model_fields and v is not None}
+    candidate["prompt_file"] = Path("__validate__.md")
+    Role(**candidate)  # raises pydantic ValidationError on any bad/missing field
+
+
 def load_roles() -> dict[str, Role]:
     """Bootstrap loader — wraps ``_load_roles_strict()`` and, on ANY failure
     (missing file, parse error, validation error), logs a warning and returns

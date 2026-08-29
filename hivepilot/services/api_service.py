@@ -97,6 +97,24 @@ async def _log_startup_paths() -> None:
     log_resolved_startup_paths(settings)
 
 
+# -- Agent Studio (HP-25): adopt the store roster on boot ---------------------
+@app.on_event("startup")
+async def _adopt_store_roster() -> None:
+    """Make a restart pick up any store-backed role edits. `refresh_roles()` is
+    store-first (HP-25 slice 2): it adopts the DB roster when the store has been
+    seeded and otherwise reloads `roles.yaml` unchanged — so an untouched
+    deployment stays byte-identical, while one that used `POST/PUT/DELETE
+    /v1/roles` (which seed the store) comes back up on the edited roster.
+    Never fatal: a bad store must not stop the API from serving."""
+    from hivepilot.utils.logging import get_logger
+
+    try:
+        with _orch_lock:
+            roles.refresh_roles()
+    except Exception as exc:  # noqa: BLE001 — startup must not crash on this
+        get_logger(__name__).warning("store_roster_adopt_failed", error=str(exc))
+
+
 # -- Partition claim reconciliation (propose -> ratify -> dispatch PRD, §8) --
 @app.on_event("startup")
 async def _reconcile_partition_claims() -> None:
@@ -3124,6 +3142,128 @@ def admin_reload_endpoint(
         roles_reloaded = roles.refresh_roles()
         config_reloaded = _get_orchestrator().refresh()
     return ReloadResponse(roles_reloaded=roles_reloaded, config_reloaded=config_reloaded)
+
+
+# ---------------------------------------------------------------------------
+# Agent Studio (HP-25) — store-backed roles CRUD. The mutable roster the visual
+# builder (Phase 2) and NL authoring (Phase 3) drive. Reads are `read`-gated;
+# writes are `admin`-gated, validated against the Role schema, guarded against
+# self-granted dangerous capabilities, and applied live via `refresh_roles()`.
+# Writes first `seed_store_from_yaml()` so the store holds the WHOLE roster
+# before the first edit (never a single-role store that drops the rest).
+# ---------------------------------------------------------------------------
+
+
+class RoleWrite(BaseModel):
+    """Create/update payload for a role. A role needs either `prompt_text`
+    (inline, stored in the DB — Agent Studio default) or `prompt_file`."""
+
+    name: str
+    title: str
+    model_profile: str
+    inputs: list[str]
+    outputs: list[str]
+    can_block: bool
+    order: int
+    prompt_text: str | None = None
+    prompt_file: str | None = None
+    display_name: str | None = None
+    runner: str | None = None
+    model: str | None = None
+    models: list[str] | None = None
+    optional_inputs: list[str] | None = None
+    allowed_tools: list[str] | None = None
+    permission_mode: str | None = None
+    command_task: str | None = None
+    host: str | None = None
+    effort: str | None = None
+
+
+def _apply_role_write(payload: RoleWrite) -> dict:
+    if payload.permission_mode == "bypassPermissions" and not settings.allow_dangerous_role_capabilities:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "role with permission_mode='bypassPermissions' is refused (fail-closed) — "
+                "set HIVEPILOT_ALLOW_DANGEROUS_ROLE_CAPABILITIES=1 to permit it"
+            ),
+        )
+    if not (payload.prompt_text or payload.prompt_file):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="a role needs prompt_text or prompt_file"
+        )
+    try:
+        roles.validate_role_fields(payload.model_dump(exclude_none=True))
+    except Exception as exc:  # noqa: BLE001 — surface schema errors as 400
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"invalid role: {exc}"
+        ) from exc
+
+    from hivepilot.services import state_service
+
+    with _orch_lock:
+        roles.seed_store_from_yaml()  # adopt the full YAML roster before editing
+        row = payload.model_dump()
+        row["tenant"] = "default"
+        state_service.upsert_role(row)
+        roles.refresh_roles()
+        stored = state_service.get_role_row(payload.name)
+    result = stored or row
+    result.pop("updated_at", None)
+    return result
+
+
+@v1.get("/roles")
+@app.get("/roles")
+def list_roles_endpoint(caller: token_service.TokenEntry = Depends(require_role("read"))):
+    return {"roles": roles.api_roster()}
+
+
+@v1.get("/roles/{name}")
+@app.get("/roles/{name}")
+def get_role_endpoint(
+    name: str, caller: token_service.TokenEntry = Depends(require_role("read"))
+):
+    for row in roles.api_roster():
+        if row.get("name") == name:
+            return row
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no role '{name}'")
+
+
+@v1.post("/roles", dependencies=[Depends(require_role("admin"))])
+@app.post("/roles", dependencies=[Depends(require_role("admin"))])
+def create_role_endpoint(payload: RoleWrite) -> dict:
+    from hivepilot.services import state_service
+
+    roles.seed_store_from_yaml()
+    if state_service.get_role_row(payload.name) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"role '{payload.name}' already exists"
+        )
+    return _apply_role_write(payload)
+
+
+@v1.put("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+@app.put("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+def update_role_endpoint(name: str, payload: RoleWrite) -> dict:
+    if payload.name != name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="path name must match payload name"
+        )
+    return _apply_role_write(payload)
+
+
+@v1.delete("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+@app.delete("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+def delete_role_endpoint(name: str) -> dict:
+    from hivepilot.services import state_service
+
+    with _orch_lock:
+        roles.seed_store_from_yaml()
+        existed = state_service.get_role_row(name) is not None
+        state_service.delete_role(name)
+        roles.refresh_roles()
+    return {"deleted": existed, "name": name}
 
 
 def _get_mem0_client() -> Any | None:

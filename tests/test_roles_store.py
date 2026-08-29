@@ -175,3 +175,70 @@ class TestStoreFirstRefresh:
         finally:
             config_module.settings = original_settings
             roles_module.ROLES = original
+
+
+class TestExportStoreToYaml:
+    """Slice 3: `export_store_to_yaml()` writes the store roster back to
+    `roles.yaml` + `prompts/agents/*.md` for GitOps (the store is authoritative;
+    inline prompt text is written to files)."""
+
+    def test_empty_store_is_a_noop(self, tmp_path: Path) -> None:
+        roles_path = tmp_path / "roles.yaml"
+        assert roles_module.export_store_to_yaml(roles_path=roles_path) == 0
+        assert not roles_path.exists()  # never clobber with an empty roster
+
+    def test_export_writes_yaml_and_prompt_files(self, tmp_path: Path) -> None:
+        import yaml
+
+        state_service.upsert_role(_ciso(name="dev", order=4, prompt_file="dev.md"))
+        state_service.upsert_role(
+            _ciso(name="auditor", order=2, prompt_file=None, prompt_text="Audit inline.")
+        )
+        roles_path = tmp_path / "roles.yaml"
+        prompts_dir = tmp_path / "prompts" / "agents"
+
+        count = roles_module.export_store_to_yaml(
+            roles_path=roles_path, prompts_dir=prompts_dir
+        )
+        assert count == 2
+
+        parsed = yaml.safe_load(roles_path.read_text(encoding="utf-8"))
+        names = [r["name"] for r in parsed["roles"]]
+        assert names == ["auditor", "dev"]  # ordered by role_order
+
+        # inline-only role gets a generated prompt file named after the role
+        assert (prompts_dir / "auditor.md").read_text(encoding="utf-8") == "Audit inline."
+        # file-referencing role's text is synced to its referenced file
+        assert (prompts_dir / "dev.md").read_text(encoding="utf-8").startswith("You are the CISO")
+
+    def test_roundtrip_reloads_equivalently(self, tmp_path: Path, monkeypatch) -> None:
+        """Export then point settings at the exported files: reloading yields the
+        same roster (files are a faithful projection of the store)."""
+        import hivepilot.config as config_module
+
+        state_service.upsert_role(_ciso(name="dev", order=4, prompt_file="dev.md"))
+        roles_path = tmp_path / "roles.yaml"
+        prompts_dir = tmp_path / "prompts" / "agents"
+        assert roles_module.export_store_to_yaml(roles_path=roles_path, prompts_dir=prompts_dir) == 1
+
+        mock = type(
+            "S",
+            (),
+            {
+                "roles_file": roles_path,
+                "resolve_config_path": lambda self, f: roles_path
+                if str(f).endswith("roles.yaml")
+                else prompts_dir / Path(str(f)).name,
+            },
+        )()
+        original_settings = config_module.settings
+        original = dict(roles_module.ROLES)
+        try:
+            config_module.settings = mock
+            reloaded = roles_module._load_roles_strict()
+            assert set(reloaded) == {"dev"}
+            assert reloaded["dev"].title == "CISO"
+            assert reloaded["dev"].prompt_file.read_text(encoding="utf-8").startswith("You are the CISO")
+        finally:
+            config_module.settings = original_settings
+            roles_module.ROLES = original

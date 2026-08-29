@@ -189,6 +189,13 @@ class Settings(BaseSettings):
     roles_file: Path = Path("roles.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
     policies_file: Path = Path("policies.yaml")
+    # Agent Studio (HP-25): governance guardrail for API-authored roles. A role
+    # created/updated via `POST/PUT /v1/roles` that grants a dangerous
+    # capability — `permission_mode="bypassPermissions"` (blanket tool access on
+    # untrusted input) — is REFUSED unless this is explicitly enabled. Default
+    # False = fail-closed: the visual/NL builder can never silently mint an
+    # agent with blanket tool authority. env: HIVEPILOT_ALLOW_DANGEROUS_ROLE_CAPABILITIES
+    allow_dangerous_role_capabilities: bool = False
     groups_file: Path = Path("groups.yaml")
     schedules_file: Path = Path("schedules.yaml")
     # Obsidian vault folder taxonomy (folders / expected_folders / frozen_folders).

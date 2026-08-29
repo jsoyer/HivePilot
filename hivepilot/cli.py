@@ -1425,6 +1425,27 @@ def config_get(
     typer.echo(f"xdg_rank: {prov.xdg_rank}")
 
 
+@config_app.command("export")
+def config_export(
+    tenant: str = typer.Option("default", "--tenant", help="Roles store tenant to export."),
+) -> None:
+    """Export the store-backed role roster (Agent Studio) back to `roles.yaml`
+    + `prompts/agents/*.md` for GitOps. The store is authoritative: roles edited
+    live via `POST/PUT/DELETE /v1/roles` are written to files so the change can
+    be committed and reviewed. A no-op (exit 0) when the store is empty — the
+    deployment is still pure-YAML and `roles.yaml` is left untouched."""
+    from hivepilot import roles as roles_mod
+
+    count = roles_mod.export_store_to_yaml(tenant=tenant)
+    if count == 0:
+        typer.echo("Roles store is empty for this tenant — nothing to export (roles.yaml unchanged).")
+        return
+    from hivepilot.config import settings
+
+    roles_path = settings.resolve_config_path(settings.roles_file)
+    typer.echo(f"Exported {count} role(s) to {roles_path}")
+
+
 @config_app.command("list")
 def config_list() -> None:
     """Show every resolved Settings field with its value, source, and XDG rank.
