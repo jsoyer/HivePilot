@@ -9,6 +9,9 @@ per-test tmp file, so each test starts with an empty `roles` table.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from hivepilot import roles as roles_module
 from hivepilot.services import state_service
 
 
@@ -97,3 +100,78 @@ class TestRolesTenantScoping:
         assert state_service.get_role_row("ciso", tenant="beta") is None
         assert state_service.roles_count("acme") == 1
         assert state_service.roles_count("default") == 0
+
+
+class TestStoreFirstRefresh:
+    """Slice 2: `refresh_roles()` adopts the store when it has roles, and an
+    inline `prompt_text` (no file) is materialized so the role loads."""
+
+    def test_refresh_adopts_store_with_inline_prompt(self) -> None:
+        original = dict(roles_module.ROLES)
+        try:
+            state_service.upsert_role(
+                {
+                    "name": "auditor",
+                    "title": "Auditor",
+                    "model_profile": "architecture",
+                    "runner": "openai",
+                    "inputs": [],
+                    "outputs": ["report"],
+                    "can_block": True,
+                    "order": 2,
+                    "prompt_text": "You audit security.",  # inline, no prompt_file
+                }
+            )
+            assert roles_module.refresh_roles() is True
+            assert "auditor" in roles_module.ROLES
+            role = roles_module.ROLES["auditor"]
+            assert role.runner == "openai"
+            assert role.can_block is True
+            assert role.optional_inputs == []  # NULL column -> model default
+            # inline prompt materialized to a real file with the stored text
+            assert role.prompt_file.exists()
+            assert role.prompt_file.read_text(encoding="utf-8") == "You audit security."
+        finally:
+            roles_module.ROLES = original
+
+    def test_seed_from_yaml_then_refresh_is_idempotent(self, tmp_path: Path, monkeypatch) -> None:
+        import hivepilot.config as config_module
+
+        prompt = tmp_path / "dev.md"
+        prompt.write_text("You are the dev.", encoding="utf-8")
+        roles_yaml = tmp_path / "roles.yaml"
+        roles_yaml.write_text(
+            "roles:\n"
+            "  - name: developer\n"
+            "    title: Developer\n"
+            "    prompt_file: dev.md\n"
+            "    model_profile: coding\n"
+            "    inputs: [spec]\n"
+            "    outputs: [impl]\n"
+            "    can_block: false\n"
+            "    order: 4\n",
+            encoding="utf-8",
+        )
+        mock = type(
+            "S",
+            (),
+            {
+                "roles_file": roles_yaml,
+                "resolve_config_path": lambda self, f: roles_yaml
+                if str(f).endswith("roles.yaml")
+                else prompt,
+            },
+        )()
+        original_settings = config_module.settings
+        original = dict(roles_module.ROLES)
+        try:
+            config_module.settings = mock
+            assert roles_module.seed_store_from_yaml() == 1
+            assert state_service.roles_count() == 1
+            assert state_service.get_role_row("developer")["prompt_text"] == "You are the dev."
+            assert roles_module.seed_store_from_yaml() == 0  # idempotent
+            assert roles_module.refresh_roles() is True
+            assert set(roles_module.ROLES.keys()) == {"developer"}
+        finally:
+            config_module.settings = original_settings
+            roles_module.ROLES = original
