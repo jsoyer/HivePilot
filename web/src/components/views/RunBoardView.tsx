@@ -281,6 +281,24 @@ function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunC
         </div>
       )}
 
+      {!compact && (run.step_count !== undefined || run.last_activity_at) && (
+        <div
+          data-testid={`run-board-progress-${run.id}`}
+          className="metric-mono flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
+        >
+          {run.step_count !== undefined ? (
+            <span>{t('board.stepCount', { count: run.step_count })}</span>
+          ) : (
+            <span />
+          )}
+          {run.last_activity_at && (
+            <span title={formatTimestamp(run.last_activity_at)}>
+              {t('board.lastHeartbeat', { age: formatAge(run.last_activity_at) })}
+            </span>
+          )}
+        </div>
+      )}
+
       {!compact && reasonKey && (
         <p
           data-testid={`run-board-reason-${run.id}`}

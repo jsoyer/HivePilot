@@ -1018,6 +1018,23 @@ class TestRunRecencyOrdering:
         tied = [r for r in runs if r["id"] in (run_a, run_b)]
         assert [r["id"] for r in tied] == [run_b, run_a]
 
+    def test_list_recent_runs_carries_heartbeat_and_step_count(self) -> None:
+        """HP-43: each run row carries its `step_count` and `last_activity_at`
+        (the latest step timestamp = the run's heartbeat), additively — a run
+        with no steps reports 0 / None, never a crash."""
+        run_id = record_run_start("demo", "demo")
+        state_service.record_step(run_id, "plan", "success")
+        state_service.record_step(run_id, "build", "running")
+
+        row = next(r for r in state_service.list_recent_runs() if r["id"] == run_id)
+        assert row["step_count"] == 2
+        assert row["last_activity_at"] is not None
+
+        empty_id = record_run_start("demo", "demo")
+        empty = next(r for r in state_service.list_recent_runs() if r["id"] == empty_id)
+        assert empty["step_count"] == 0
+        assert empty["last_activity_at"] is None
+
 
 class TestVerdictsCanBeJoinedToApprovals:
     """`LEFT JOIN approvals × verdicts ON run_id` returns ZERO rows.

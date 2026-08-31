@@ -933,19 +933,35 @@ def get_run(run_id: int) -> dict[str, Any] | None:
 
 def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[str, Any]]:
     init_db()
+    # `last_activity_at` = the latest step timestamp for the run — the run's
+    # "heartbeat" (HP-43): when it last did anything, distinct from when it
+    # STARTED. `step_count` gives the board a cheap progress signal. Both are
+    # correlated subqueries (dialect-safe, no GROUP BY) so they never change the
+    # runs row set or its ordering — purely additive columns.
+    _extra = (
+        "(SELECT MAX(s.timestamp) FROM steps s WHERE s.run_id = r.id) AS last_activity_at, "
+        "(SELECT COUNT(*) FROM steps s WHERE s.run_id = r.id) AS step_count"
+    )
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
                 ph(
                     db.ph(
-                        "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC LIMIT ?"
+                        f"SELECT r.*, {_extra} FROM runs r WHERE r.tenant=? "
+                        "ORDER BY r.started_at DESC, r.id DESC LIMIT ?"
                     )
                 ),
                 (tenant, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                ph(db.ph("SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?")), (limit,)
+                ph(
+                    db.ph(
+                        f"SELECT r.*, {_extra} FROM runs r "
+                        "ORDER BY r.started_at DESC, r.id DESC LIMIT ?"
+                    )
+                ),
+                (limit,),
             ).fetchall()
     return [dict(row) for row in rows]
 
