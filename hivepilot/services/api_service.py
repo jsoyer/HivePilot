@@ -115,6 +115,22 @@ async def _adopt_store_roster() -> None:
         get_logger(__name__).warning("store_roster_adopt_failed", error=str(exc))
 
 
+# -- Agent voice (HP-49): make roles actually reply in Espaces + as subagents --
+@app.on_event("startup")
+async def _register_agent_voice() -> None:
+    """Wire the runner-backed agent voice into the Espaces dépose/relève loop
+    (HP-46) and the delegation subagent primitive (HP-48). Fail-safe — a wiring
+    error must never stop the API from serving."""
+    from hivepilot.utils.logging import get_logger
+
+    try:
+        from hivepilot.services import agent_voice
+
+        agent_voice.register()
+    except Exception as exc:  # noqa: BLE001
+        get_logger(__name__).warning("agent_voice.register_failed", error=str(exc))
+
+
 # -- Partition claim reconciliation (propose -> ratify -> dispatch PRD, §8) --
 @app.on_event("startup")
 async def _reconcile_partition_claims() -> None:
