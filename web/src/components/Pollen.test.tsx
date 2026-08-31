@@ -174,6 +174,8 @@ import { Pollen } from './Pollen'
 // the same shell).
 const GROUPED_TAB_ORDER = [
   'Home',
+  // Espaces (HP-45): conversation rooms lead the Operate group (nav-config.ts).
+  'Spaces',
   'Runs',
   'Approvals',
   // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions joins the Operate

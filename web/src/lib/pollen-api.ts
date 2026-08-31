@@ -1978,3 +1978,66 @@ export function replyToRole(role: string, text: string): Promise<{ role: string;
     body: JSON.stringify({ role, text }),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Espaces — conversation rooms (HP-45). GET /v1/spaces[/{id}[/messages]],
+// POST /v1/spaces, POST /v1/spaces/{id}/messages. Mirrors the shapes in
+// `hivepilot/services/state_service.py` + `api_service.py`.
+// ---------------------------------------------------------------------------
+
+export interface SpaceParticipant {
+  type: string
+  id?: string | null
+}
+
+export interface SpaceSummary {
+  id: number
+  kind: string
+  title?: string | null
+  participants: SpaceParticipant[]
+  message_count?: number
+  last_message_at?: string | null
+  created_at?: string
+  updated_at?: string
+  tenant?: string
+}
+
+export interface SpaceMessage {
+  id: number
+  space_id: number
+  sender_type: string
+  sender_id?: string | null
+  body: string
+  created_at: string
+}
+
+export function fetchSpaces(): Promise<SpaceSummary[]> {
+  return apiFetch<{ spaces: SpaceSummary[] }>('/v1/spaces').then((r) => r.spaces)
+}
+
+export function fetchSpaceMessages(spaceId: number, after = 0): Promise<SpaceMessage[]> {
+  return apiFetch<{ messages: SpaceMessage[] }>(
+    `/v1/spaces/${spaceId}/messages?after=${after}`,
+  ).then((r) => r.messages)
+}
+
+/** Post a human message to a space. `run`-gated server-side — a `read`-only
+ * token gets `ApiForbiddenError` (not logged out) via `on403: 'forbidden'`. */
+export function postSpaceMessage(spaceId: number, body: string): Promise<{ id: number }> {
+  return apiFetch<{ id: number }>(`/v1/spaces/${spaceId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+    on403: 'forbidden',
+  })
+}
+
+export function createSpace(
+  participants: SpaceParticipant[],
+  opts: { kind?: string; title?: string } = {},
+): Promise<SpaceSummary> {
+  return apiFetch<SpaceSummary>('/v1/spaces', {
+    method: 'POST',
+    body: JSON.stringify({ participants, kind: opts.kind ?? 'dm', title: opts.title }),
+    on403: 'forbidden',
+  })
+}
