@@ -63,7 +63,7 @@ class TestSpawnPeer:
         assert row is not None and row["status"] == "running"
 
     def test_dispatches_peer_executor(self) -> None:
-        seen = {}
+        seen: dict[str, object] = {}
         delegation.register_peer_executor(
             lambda run_id, role: seen.update(run_id=run_id, role=role)
         )
