@@ -189,6 +189,12 @@ class Settings(BaseSettings):
     roles_file: Path = Path("roles.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
     policies_file: Path = Path("policies.yaml")
+    # Delegation (HP-48): the maximum length of a handoff chain (agent A hands
+    # the conversation to B hands to C …). Bounds a runaway handoff loop —
+    # `delegation.handoff` refuses past this and posts a "limit reached" note
+    # instead of dispatching further. env: HIVEPILOT_DELEGATION_MAX_HOPS
+    delegation_max_hops: int = 4
+
     # Espaces (HP-46): when a human posts a message to a space that has a role
     # participant, dispatch a background "reply" for each such role (the
     # dépose/relève loop). The reply CONTENT is produced by a pluggable

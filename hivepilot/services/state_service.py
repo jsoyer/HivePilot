@@ -1824,6 +1824,27 @@ def list_spaces(tenant: str | None = None) -> list[dict[str, Any]]:
     return [_decode_space_row(dict(row)) for row in rows]
 
 
+def add_space_participant(
+    space_id: int, participant: dict[str, Any], tenant: str = "default"
+) -> None:
+    """Add `participant` ({type,id}) to a space if not already present (dedup by
+    type+id). Used by delegation handoff (HP-48) to bring a role into a room."""
+    init_db()
+    space = get_space(space_id, tenant=tenant)
+    if space is None:
+        return
+    parts = list(space.get("participants") or [])
+    key = (participant.get("type"), participant.get("id"))
+    if any((p.get("type"), p.get("id")) == key for p in parts):
+        return
+    parts.append(participant)
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("UPDATE spaces SET participants=? WHERE id=? AND tenant=?")),
+            (json.dumps(parts), space_id, tenant),
+        )
+
+
 def delete_space(space_id: int, tenant: str = "default") -> None:
     init_db()
     with db.connect() as conn:
