@@ -98,6 +98,7 @@ export const en = {
   'spaces.send': 'Send',
   'spaces.sending': 'Sending…',
   'spaces.typing': '{role} is working…',
+  'spaces.actionCount': '{count} actions',
   'spaces.postForbidden': 'Posting a message needs a run-rank token.',
   'spaces.readOnly': 'Read-only — a run-rank token is required to post.',
   'nav.autopilot': 'Autopilot',

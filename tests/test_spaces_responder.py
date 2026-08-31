@@ -118,6 +118,22 @@ class TestResponder:
         spaces_responder.respond_in_space(sid)
         assert state_service.list_space_messages(sid) == []
 
+    def test_generator_can_attach_an_action_trace(self) -> None:
+        """HP-47: a generator may return `{body, actions}`; the actions ride on
+        the message and round-trip decoded."""
+        sid = state_service.create_space([{"type": "role", "id": "ceo"}])
+        spaces_responder.register_reply_generator(
+            lambda space, role, thread: {
+                "body": "done",
+                "actions": [{"label": "Bash", "detail": "ls -la"}],
+            }
+        )
+        spaces_responder.respond_in_space(sid)
+
+        msg = state_service.list_space_messages(sid)[-1]
+        assert msg["body"] == "done"
+        assert msg["actions"] == [{"label": "Bash", "detail": "ls -la"}]
+
 
 class TestDeposeReleveEndToEnd:
     def test_human_message_triggers_background_reply(self, api_client, tmp_tokens_file):

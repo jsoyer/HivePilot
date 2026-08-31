@@ -88,6 +88,17 @@ class TestSpacesStore:
         assert [m["sender_type"] for m in msgs] == ["human", "role"]
         assert [m["id"] for m in state_service.list_space_messages(sid, after_id=m1)] == [m2]
 
+    def test_message_actions_round_trip(self) -> None:
+        sid = state_service.create_space([{"type": "role", "id": "ceo"}])
+        state_service.add_space_message(
+            sid, "role", "done", sender_id="ceo", actions=[{"label": "Bash", "detail": "ls"}]
+        )
+        msg = state_service.list_space_messages(sid)[-1]
+        assert msg["actions"] == [{"label": "Bash", "detail": "ls"}]
+        # a message without actions decodes to None, never a crash
+        state_service.add_space_message(sid, "human", "hi")
+        assert state_service.list_space_messages(sid)[-1]["actions"] is None
+
     def test_delete_cascades_messages(self) -> None:
         sid = state_service.create_space([{"type": "role", "id": "ceo"}])
         state_service.add_space_message(sid, "human", "hi")

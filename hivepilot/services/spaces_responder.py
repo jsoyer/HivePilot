@@ -24,8 +24,24 @@ from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-#: (space, role_id, thread_messages) -> reply text, or None to stay silent.
-ReplyGenerator = Callable[[dict, str, list[dict]], "str | None"]
+#: (space, role_id, thread_messages) -> the role's reply, or None to stay
+#: silent. The reply is either plain text, or a dict `{"body": str, "actions":
+#: [...]}` carrying a collapsible tool-action trace (HP-47).
+ReplyGenerator = Callable[[dict, str, list[dict]], "str | dict | None"]
+
+
+def _split_reply(result: "str | dict | None") -> "tuple[str | None, list[dict] | None]":
+    if isinstance(result, dict):
+        body = result.get("body")
+        actions = result.get("actions")
+        return (
+            body if isinstance(body, str) else None,
+            actions if isinstance(actions, list) else None,
+        )
+    if isinstance(result, str):
+        return result, None
+    return None, None
+
 
 _generator: ReplyGenerator | None = None
 
@@ -70,10 +86,10 @@ def respond_in_space(space_id: int, tenant: str = "default") -> None:
                 tenant=tenant,
                 payload={"space_id": space_id, "role": role},
             )
-            reply = generator(space, role, thread) if generator is not None else None
-            if reply and reply.strip():
+            body, actions = _split_reply(generator(space, role, thread) if generator else None)
+            if body and body.strip():
                 msg_id = state_service.add_space_message(
-                    space_id, "role", reply, sender_id=role, tenant=tenant
+                    space_id, "role", body, sender_id=role, tenant=tenant, actions=actions
                 )
                 events.emit(
                     "space.message",
