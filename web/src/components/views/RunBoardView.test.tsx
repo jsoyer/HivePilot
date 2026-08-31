@@ -591,4 +591,19 @@ describe('RunBoardView', () => {
     const lastCall = useEventStreamMock.mock.calls.at(-1)
     expect(lastCall?.[1]).toEqual({ enabled: false })
   })
+
+  it('shows a zone-coded status glyph on each card', async () => {
+    fetchRuns.mockResolvedValue([run({ id: 1, status: 'running' }), run({ id: 2, status: 'failed' })])
+    mockRole('run', 1)
+    await mountResolved()
+
+    const card1 = container.querySelector('[data-testid="run-board-card-1"]')
+    const card2 = container.querySelector('[data-testid="run-board-card-2"]')
+    expect(card1?.querySelector('[data-testid="status-glyph"]')?.getAttribute('data-zone')).toBe(
+      'working',
+    )
+    expect(card2?.querySelector('[data-testid="status-glyph"]')?.getAttribute('data-zone')).toBe(
+      'needs_you',
+    )
+  })
 })
