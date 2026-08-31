@@ -51,7 +51,7 @@ class TestResponder:
     def test_posts_a_reply_and_emits_typing_and_message(self) -> None:
         sid = state_service.create_space([{"type": "role", "id": "ceo"}])
         state_service.add_space_message(sid, "human", "on démarre ?")
-        seen = {}
+        seen: dict[str, object] = {}
         spaces_responder.register_reply_generator(
             lambda space, role, thread: (
                 seen.update(role=role, count=len(thread)) or f"{role}: c'est parti"
