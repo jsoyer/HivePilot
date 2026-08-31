@@ -606,4 +606,44 @@ describe('RunBoardView', () => {
       'needs_you',
     )
   })
+
+  it('shows an attention summary with per-zone counts', async () => {
+    fetchRuns.mockResolvedValue([
+      run({ id: 1, status: 'running' }),
+      run({ id: 2, status: 'failed' }),
+      run({ id: 3, status: 'failed' }),
+      run({ id: 4, status: 'success' }),
+    ])
+    mockRole('run', 1)
+    await mountResolved()
+
+    expect(container.querySelector('[data-testid="board-attention-summary"]')).not.toBeNull()
+    expect(
+      container.querySelector('[data-testid="board-attention-count-needs_you"]')?.textContent,
+    ).toBe('2')
+    expect(
+      container.querySelector('[data-testid="board-attention-count-working"]')?.textContent,
+    ).toBe('1')
+    expect(
+      container.querySelector('[data-testid="board-attention-count-ready"]')?.textContent,
+    ).toBe('1')
+  })
+
+  it('filters the board to a zone when its chip is clicked', async () => {
+    fetchRuns.mockResolvedValue([run({ id: 1, status: 'running' }), run({ id: 2, status: 'failed' })])
+    mockRole('run', 1)
+    await mountResolved()
+
+    const chip = container.querySelector(
+      '[data-testid="board-attention-zone-needs_you"]',
+    ) as HTMLButtonElement
+    await act(async () => {
+      chip.click()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="run-board-card-2"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-board-card-1"]')).toBeNull()
+    expect(chip.getAttribute('aria-pressed')).toBe('true')
+  })
 })
