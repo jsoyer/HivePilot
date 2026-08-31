@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Drawer } from '@/components/ui/drawer'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { EmptyState } from '@/components/dashboard/EmptyState'
+import { RoleAvatar } from '@/components/RoleAvatar'
+import { hasRoleAvatar } from '@/lib/role-avatars'
 import { ApiForbiddenError } from '@/lib/api'
 import { EM_DASH, formatAge } from '@/lib/format-time'
 import { useT } from '@/lib/i18n'
@@ -401,8 +403,16 @@ function avatarTone(roleName: string): string {
 }
 
 /** `aria-hidden` on purpose: the name it decorates is rendered right beside
- * it, so announcing the initial too would just stutter for a screen reader. */
+ * it, so announcing the initial too would just stutter for a screen reader.
+ *
+ * The eight first-class roles get a distinct procedural avatar (HP-20); any
+ * other (custom or renamed) persona keeps the hashed coloured-initial badge,
+ * so the generic-engine promise above still holds for tenants HivePilot knows
+ * nothing about. */
 function AgentAvatar({ roleName, label }: { roleName: string; label: string }) {
+  if (hasRoleAvatar(roleName)) {
+    return <RoleAvatar role={roleName} label={label} size={26} />
+  }
   // Spread rather than `charAt`, so an accented or non-Latin first character
   // (or an emoji) survives instead of being split mid-codepoint.
   const initial = [...label.trim()][0]?.toUpperCase() ?? '?'
@@ -604,6 +614,12 @@ function AgentDetailPanel({ role, displayName, onClose }: AgentDetailPanelProps)
       closeLabel={t('agents.closeAriaLabel')}
       onClose={onClose}
     >
+      {hasRoleAvatar(role) && (
+        <div className="mb-4 flex justify-center">
+          <RoleAvatar role={role} label={title} size={140} state="idle" />
+        </div>
+      )}
+
       <div>
         <h3 className="mb-2 text-sm font-semibold">{t('agents.lessonsTitle')}</h3>
         {lessonsForbidden ? (

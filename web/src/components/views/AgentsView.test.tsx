@@ -371,17 +371,17 @@ describe('AgentsView', () => {
   })
 
   describe('agent avatar', () => {
-    it('shows the initial of the display name beside each agent', async () => {
+    it('shows a distinct procedural avatar for a first-class role', async () => {
+      // HP-20: the eight built-in roles render the Bible Strong procedural
+      // avatar (an <svg>), not an initial badge.
       fetchAgents.mockResolvedValue(
         response([agent({ name: 'ciso', display_name: 'Hugo', title: 'CISO' })]),
       )
       await mount()
 
       const avatar = container.querySelector('[data-testid="agent-avatar-ciso"]')
-      expect(avatar?.textContent).toBe('H')
-      // The name itself is right beside it; announcing the initial too would
-      // just stutter for a screen reader.
-      expect(avatar?.getAttribute('aria-hidden')).toBe('true')
+      expect(avatar).not.toBeNull()
+      expect(avatar?.querySelector('svg')).not.toBeNull()
     })
 
     it('falls back to the role name when a persona has no display name', async () => {
@@ -398,20 +398,22 @@ describe('AgentsView', () => {
       // tint has to be derived, not looked up. Deriving it from the role
       // name (not the display name) is what keeps identity stable when an
       // org renames someone.
+      // A custom (non-built-in) persona keeps the derived hashed tint — the
+      // built-in eight use fixed per-role avatars instead (HP-20).
       fetchAgents.mockResolvedValue(
-        response([agent({ name: 'ciso', display_name: 'Hugo' })]),
+        response([agent({ name: 'groomer', display_name: 'Hugo' })]),
       )
       await mount()
       const before = container
-        .querySelector('[data-testid="agent-avatar-ciso"]')
+        .querySelector('[data-testid="agent-avatar-groomer"]')
         ?.className.match(/bg-[a-z]+-500/)?.[0]
 
       fetchAgents.mockResolvedValue(
-        response([agent({ name: 'ciso', display_name: 'Amélie' })]),
+        response([agent({ name: 'groomer', display_name: 'Amélie' })]),
       )
       await mount()
       const after = container
-        .querySelector('[data-testid="agent-avatar-ciso"]')
+        .querySelector('[data-testid="agent-avatar-groomer"]')
         ?.className.match(/bg-[a-z]+-500/)?.[0]
 
       expect(before).toBeDefined()

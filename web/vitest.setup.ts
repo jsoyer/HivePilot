@@ -41,6 +41,27 @@ for (const target of [globalThis, window]) {
   })
 }
 
+// jsdom does not implement `matchMedia`. The procedural avatar renderer
+// (`@bible-strong/avatar-react`) queries `prefers-reduced-motion` on mount, so
+// provide a minimal, always-"no-match" stub to keep it renderable under test.
+if (typeof window.matchMedia !== 'function') {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string): MediaQueryList =>
+      ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  })
+}
+
 // React 19's `act()` requires this flag in non-testing-library environments
 // (see https://react.dev/warnings/react-dom-test-utils) — without it, act()
 // still runs but React emits a spurious "not configured to support act"
