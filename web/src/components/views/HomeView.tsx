@@ -33,6 +33,7 @@ import {
   type RunSummary,
 } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
+import { FAILED_STATUSES } from '@/lib/status-contract'
 import type { AsyncState } from '@/lib/use-async-data'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
@@ -106,18 +107,11 @@ function formatAge(iso: string | null | undefined): string {
   return `${totalSeconds}s`
 }
 
-/** Canonical run failure statuses — mirrors `_FAILED_STATUSES` in
- * `hivepilot/services/analytics_service.py` (legacy `"failed"` literal +
- * `"denied"` + the formal `RunStatus` failure states) — read that before
- * changing this set. */
-const FAILURE_STATUSES = new Set([
-  'failed',
-  'denied',
-  'rate_limit',
-  'auth_expired',
-  'test_failure',
-  'security_blocker',
-])
+/** Canonical run failure statuses — the shared derived-status contract's
+ * `FAILED_STATUSES` (HP-42), the single source of truth mirrored from
+ * `hivepilot/services/status_contract.py` (itself pinned to
+ * `analytics_service._FAILED_STATUSES`). */
+const FAILURE_STATUSES = FAILED_STATUSES
 
 /** `RunSummary.status` -> `SweepRadar`'s status dot color. Mirrors
  * `hivepilot/services/state_service.py`'s `RunStatus` values (`"running"`,
