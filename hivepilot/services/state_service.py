@@ -200,6 +200,42 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_change_log_channel_id ON change_log (channel, id)"
         )
+        # Espaces (HP-45, Cycle 1 · P2): persistent conversation rooms. A space
+        # has >=1 participant, each a human OR a role, so it models both a
+        # human<->agent DM and an agent<->agent room (participants are all
+        # roles). `space_messages` is the append-only transcript; `updated_at`
+        # on the space is bumped on each message so the sidebar can order by
+        # recency. `kind` = 'dm' | 'room' (a hint for the UI, not a constraint).
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS spaces (
+                id {pk},
+                tenant TEXT NOT NULL DEFAULT 'default',
+                kind TEXT NOT NULL DEFAULT 'dm',
+                title TEXT,
+                participants TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS space_messages (
+                id {pk},
+                space_id INTEGER NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                sender_type TEXT NOT NULL,
+                sender_id TEXT,
+                body TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(space_id) REFERENCES spaces(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_space_messages_space ON space_messages (space_id, id)"
+        )
         # Idempotent migration (Phase 24b.1): persist provider/model per step.
         # Additive-only, same ALTER TABLE ... ADD COLUMN pattern as the
         # 'tenant' migrations below — safe to run against an existing DB.
@@ -1707,6 +1743,133 @@ def seed_roles(rows: list[dict[str, Any]], tenant: str = "default") -> int:
         entry.setdefault("tenant", tenant)
         upsert_role(entry)
     return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Espaces (HP-45, Cycle 1 · P2): conversation rooms + append-only transcript.
+# `participants` is JSON [{"type":"human"|"role","id":...}]; a space whose
+# participants are all roles is an agent<->agent room. `list_spaces` carries
+# per-space `message_count` + `last_message_at` (correlated subqueries, no N+1)
+# so the sidebar can order by recency and preview without extra round-trips.
+# ---------------------------------------------------------------------------
+
+
+def _decode_space_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    raw = out.get("participants")
+    if isinstance(raw, str):
+        try:
+            out["participants"] = json.loads(raw)
+        except (ValueError, TypeError):
+            out["participants"] = []
+    return out
+
+
+def create_space(
+    participants: list[dict[str, Any]],
+    *,
+    kind: str = "dm",
+    title: str | None = None,
+    tenant: str = "default",
+) -> int:
+    init_db()
+    with db.connect() as conn:
+        return db.insert_returning_id(
+            conn,
+            "INSERT INTO spaces (tenant, kind, title, participants) VALUES (?, ?, ?, ?)",
+            (tenant, kind, title, json.dumps(participants)),
+        )
+
+
+def get_space(space_id: int, tenant: str = "default") -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM spaces WHERE id=? AND tenant=?")), (space_id, tenant)
+        ).fetchone()
+    return _decode_space_row(dict(row)) if row else None
+
+
+def list_spaces(tenant: str | None = None) -> list[dict[str, Any]]:
+    init_db()
+    extra = (
+        "(SELECT COUNT(*) FROM space_messages m WHERE m.space_id = s.id) AS message_count, "
+        "(SELECT MAX(m.created_at) FROM space_messages m WHERE m.space_id = s.id) AS last_message_at"
+    )
+    # Recency ordering: `updated_at` is bumped on each message but only has
+    # SECOND resolution, so it ties for activity within the same second. The
+    # max message id (globally monotonic) is the deterministic tiebreak — a
+    # just-messaged space beats an equally-timestamped one that wasn't — with
+    # the space id (creation order) as the final tiebreak for message-less
+    # spaces.
+    order_by = (
+        "ORDER BY s.updated_at DESC, "
+        "(SELECT COALESCE(MAX(m.id), 0) FROM space_messages m WHERE m.space_id = s.id) DESC, "
+        "s.id DESC"
+    )
+    with db.connect() as conn:
+        if tenant is not None:
+            rows = conn.execute(
+                ph(db.ph(f"SELECT s.*, {extra} FROM spaces s WHERE s.tenant=? {order_by}")),
+                (tenant,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                ph(db.ph(f"SELECT s.*, {extra} FROM spaces s {order_by}")),
+            ).fetchall()
+    return [_decode_space_row(dict(row)) for row in rows]
+
+
+def delete_space(space_id: int, tenant: str = "default") -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("DELETE FROM space_messages WHERE space_id=? AND tenant=?")),
+            (space_id, tenant),
+        )
+        conn.execute(ph(db.ph("DELETE FROM spaces WHERE id=? AND tenant=?")), (space_id, tenant))
+
+
+def add_space_message(
+    space_id: int,
+    sender_type: str,
+    body: str,
+    *,
+    sender_id: str | None = None,
+    tenant: str = "default",
+) -> int:
+    """Append one message and bump the space's `updated_at` (so it rises to the
+    top of the recency-ordered sidebar). Returns the new message id."""
+    init_db()
+    with db.connect() as conn:
+        msg_id = db.insert_returning_id(
+            conn,
+            "INSERT INTO space_messages (space_id, tenant, sender_type, sender_id, body) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (space_id, tenant, sender_type, sender_id, body),
+        )
+        conn.execute(
+            ph(db.ph("UPDATE spaces SET updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant=?")),
+            (space_id, tenant),
+        )
+    return msg_id
+
+
+def list_space_messages(
+    space_id: int, tenant: str = "default", *, limit: int = 200, after_id: int = 0
+) -> list[dict[str, Any]]:
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            ph(
+                db.ph(
+                    "SELECT * FROM space_messages WHERE space_id=? AND tenant=? AND id > ? "
+                    "ORDER BY id LIMIT ?"
+                )
+            ),
+            (space_id, tenant, after_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:

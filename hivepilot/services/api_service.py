@@ -3365,6 +3365,160 @@ def delete_role_endpoint(name: str) -> dict:
     return {"deleted": existed, "name": name}
 
 
+# ---------------------------------------------------------------------------
+# Espaces (HP-45, Cycle 1 · P2) — conversation rooms. A space has >=1
+# participant, each a human or a role, so it models a human<->agent DM AND an
+# agent<->agent room. Reads are `read`-gated; creating a space or posting a
+# message is `run`-gated. Every posted message is announced on the realtime bus
+# (HP-40) so subscribers (HP-41 SSE) see it live. Tenant-scoped: a non-admin
+# only ever sees/uses its own tenant's spaces.
+# ---------------------------------------------------------------------------
+
+
+class SpaceParticipant(BaseModel):
+    type: str  # "human" | "role"
+    id: str | None = None
+
+
+class SpaceCreate(BaseModel):
+    participants: list[SpaceParticipant]
+    kind: str = "dm"
+    title: str | None = None
+
+
+class SpaceMessageCreate(BaseModel):
+    body: str
+    sender_type: str = "human"
+    sender_id: str | None = None
+
+
+def _space_tenant_or_404(space_id: int, caller: token_service.TokenEntry) -> dict:
+    from hivepilot.services import state_service
+
+    space = state_service.get_space(space_id, tenant=caller.tenant)
+    if space is None and caller.role == "admin":
+        # Admin may address any tenant's space — look it up tenant-free.
+        for candidate in state_service.list_spaces():
+            if int(candidate["id"]) == space_id:
+                space = candidate
+                break
+    if space is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no space {space_id}")
+    return space
+
+
+@v1.get("/spaces")
+@app.get("/spaces")
+def list_spaces_endpoint(caller: token_service.TokenEntry = Depends(require_role("read"))):
+    from hivepilot.services import state_service
+
+    tenant = None if caller.role == "admin" else caller.tenant
+    return {"spaces": state_service.list_spaces(tenant=tenant)}
+
+
+@v1.post("/spaces")
+@app.post("/spaces")
+def create_space_endpoint(
+    payload: SpaceCreate, caller: token_service.TokenEntry = Depends(require_role("run"))
+) -> dict:
+    from hivepilot.services import state_service
+
+    if not payload.participants:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="a space needs >=1 participant"
+        )
+    known_roles = {role.name for role in roles.list_roles()}
+    for participant in payload.participants:
+        if participant.type not in ("human", "role"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"participant type must be 'human' or 'role', got {participant.type!r}",
+            )
+        if participant.type == "role" and (participant.id or "") not in known_roles:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"unknown role participant {participant.id!r}",
+            )
+    space_id = state_service.create_space(
+        [p.model_dump() for p in payload.participants],
+        kind=payload.kind,
+        title=payload.title,
+        tenant=caller.tenant,
+    )
+    from hivepilot.services import events
+
+    events.emit(
+        "space.created", "space", space_id, tenant=caller.tenant, payload={"space_id": space_id}
+    )
+    return state_service.get_space(space_id, tenant=caller.tenant) or {"id": space_id}
+
+
+@v1.get("/spaces/{space_id}")
+@app.get("/spaces/{space_id}")
+def get_space_endpoint(
+    space_id: int, caller: token_service.TokenEntry = Depends(require_role("read"))
+) -> dict:
+    return _space_tenant_or_404(space_id, caller)
+
+
+@v1.delete("/spaces/{space_id}")
+@app.delete("/spaces/{space_id}")
+def delete_space_endpoint(
+    space_id: int, caller: token_service.TokenEntry = Depends(require_role("admin"))
+) -> dict:
+    from hivepilot.services import state_service
+
+    space = _space_tenant_or_404(space_id, caller)
+    state_service.delete_space(space_id, tenant=space.get("tenant", caller.tenant))
+    return {"deleted": True, "id": space_id}
+
+
+@v1.get("/spaces/{space_id}/messages")
+@app.get("/spaces/{space_id}/messages")
+def list_space_messages_endpoint(
+    space_id: int,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+    after: int = Query(
+        0, ge=0, description="Return messages with id > after (for incremental fetch)."
+    ),
+):
+    from hivepilot.services import state_service
+
+    space = _space_tenant_or_404(space_id, caller)
+    tenant = space.get("tenant", caller.tenant)
+    return {"messages": state_service.list_space_messages(space_id, tenant=tenant, after_id=after)}
+
+
+@v1.post("/spaces/{space_id}/messages")
+@app.post("/spaces/{space_id}/messages")
+def post_space_message_endpoint(
+    space_id: int,
+    payload: SpaceMessageCreate,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict:
+    from hivepilot.services import events, state_service
+
+    space = _space_tenant_or_404(space_id, caller)
+    tenant = space.get("tenant", caller.tenant)
+    if not payload.body.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty message")
+    msg_id = state_service.add_space_message(
+        space_id,
+        payload.sender_type,
+        payload.body,
+        sender_id=payload.sender_id,
+        tenant=tenant,
+    )
+    events.emit(
+        "space.message",
+        "space",
+        space_id,
+        tenant=tenant,
+        payload={"space_id": space_id, "message_id": msg_id, "sender_type": payload.sender_type},
+    )
+    return {"id": msg_id, "space_id": space_id}
+
+
 def _get_mem0_client() -> Any | None:
     """Build a mem0 client from Settings — mirrors `plugins/mem0.py`'s
     `_get_client()` exactly (hosted `MemoryClient` when
