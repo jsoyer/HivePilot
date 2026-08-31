@@ -65,14 +65,19 @@ def _role_participants(space: dict) -> list[str]:
     return out
 
 
-def respond_in_space(space_id: int, tenant: str = "default") -> None:
+def respond_in_space(
+    space_id: int, tenant: str = "default", *, only_role: str | None = None
+) -> None:
     """Background worker: for each role in the space, emit a typing battement,
     generate a reply, post it, and stop typing. Fail-safe per role — one role's
-    failure never blocks the others nor crashes the worker."""
+    failure never blocks the others nor crashes the worker. `only_role` (HP-48
+    handoff) restricts the reply to a single role."""
     space = state_service.get_space(space_id, tenant=tenant)
     if space is None:
         return
     roles = _role_participants(space)
+    if only_role is not None:
+        roles = [r for r in roles if r == only_role]
     if not roles:
         return
     generator = _generator
@@ -115,10 +120,11 @@ def respond_in_space(space_id: int, tenant: str = "default") -> None:
             )
 
 
-def dispatch_reply(space_id: int, tenant: str = "default") -> None:
+def dispatch_reply(space_id: int, tenant: str = "default", *, only_role: str | None = None) -> None:
     """Deposit side: fire the background reply loop when auto-reply is on and the
-    space has role participants. Returns immediately — the POST never blocks on
-    the agent's work (that is the whole point of dépose/relève)."""
+    space has role participants. `only_role` restricts it to a single role
+    (HP-48 handoff). Returns immediately — the POST never blocks on the agent's
+    work (that is the whole point of dépose/relève)."""
     if not settings.spaces_auto_reply:
         return
     space = state_service.get_space(space_id, tenant=tenant)
@@ -126,4 +132,6 @@ def dispatch_reply(space_id: int, tenant: str = "default") -> None:
         return
     from hivepilot.services import async_run_service
 
-    async_run_service.submit_background(lambda: respond_in_space(space_id, tenant))
+    async_run_service.submit_background(
+        lambda: respond_in_space(space_id, tenant, only_role=only_role)
+    )
