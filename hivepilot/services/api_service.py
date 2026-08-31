@@ -3526,6 +3526,32 @@ def post_space_message_endpoint(
     return {"id": msg_id, "space_id": space_id}
 
 
+# ---------------------------------------------------------------------------
+# Orchestrator (HP-49) — decompose a feature into a MissionPlan and surface it
+# in the project's persistent Orchestrateur Espace. `run`-gated. The plan's
+# `strategy` (HP-69) and per-role model+repli (HP-70) hang off the result.
+# ---------------------------------------------------------------------------
+
+
+class DecomposeRequest(BaseModel):
+    goal: str
+    project: str | None = None
+
+
+@v1.post("/orchestrator/decompose")
+@app.post("/orchestrator/decompose")
+def orchestrator_decompose_endpoint(
+    payload: DecomposeRequest, caller: token_service.TokenEntry = Depends(require_role("run"))
+) -> dict:
+    if not payload.goal.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty goal")
+    from hivepilot.services import orchestrator_service
+
+    return orchestrator_service.decompose_feature(
+        payload.goal, payload.project or "default", tenant=caller.tenant
+    )
+
+
 def _get_mem0_client() -> Any | None:
     """Build a mem0 client from Settings — mirrors `plugins/mem0.py`'s
     `_get_client()` exactly (hosted `MemoryClient` when
