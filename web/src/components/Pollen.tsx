@@ -18,6 +18,7 @@ import {
   Zap,
   Gauge,
   MessagesSquare,
+  Boxes,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,7 @@ import { SidebarNav } from './nav/SidebarNav'
 import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
 import { ConversationsView } from './views/ConversationsView'
+import { EspacesView } from './views/EspacesView'
 import { AgentsView } from './views/AgentsView'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
@@ -108,6 +110,10 @@ const BUILTIN_TABS = [
   // form and Stop controls inside gate themselves on useRole().can('run')
   // — see RunBoardView. Supersedes the old flat-table RunsView.
   { value: 'runs', labelKey: 'nav.runs', Panel: RunBoardView, Icon: PlayCircle },
+  // Espaces (HP-45): conversation rooms — talk to an agent, or watch two
+  // agents talk. `run`-gated posting (composer hides for a read-only token);
+  // list/read for any token. Grouped under "Operate" (nav-config.ts).
+  { value: 'spaces', labelKey: 'nav.spaces', Panel: EspacesView, Icon: Boxes },
   // Mirador Autopilot view sprint: GET /v1/autopilot (guarded objective
   // queue state — real-or-honest-empty, tenant-locked) + POST /v1/autopilot/
   // pause|resume — read-only for any token, the Pause/Resume control inside
