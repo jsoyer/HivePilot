@@ -237,6 +237,23 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_space_messages_space ON space_messages (space_id, id)"
         )
+        # Missions (HP-49): an orchestrator decomposition that spawned N runs.
+        # `runs` is a JSON {task_id: run_id} map; `synthesized` guards the
+        # once-only synthesis post when every run has finished.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS missions (
+                id {pk},
+                tenant TEXT NOT NULL DEFAULT 'default',
+                space_id INTEGER,
+                project TEXT,
+                goal TEXT,
+                runs TEXT,
+                synthesized INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         # HP-47: a message can carry a collapsible tool-action trace (JSON list
         # of {label, detail}). Additive migration for DBs created before HP-47.
         _add_column_if_missing(conn, "space_messages", "actions TEXT")
@@ -1915,6 +1932,56 @@ def list_space_messages(
             (space_id, tenant, after_id, limit),
         ).fetchall()
     return [_decode_space_message_row(dict(row)) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Missions (HP-49): a decomposition that spawned N runs, tracked so the
+# orchestrator can synthesize once every run has finished.
+# ---------------------------------------------------------------------------
+
+
+def create_mission(
+    space_id: int,
+    project: str,
+    goal: str,
+    runs: dict[str, int],
+    tenant: str = "default",
+) -> int:
+    init_db()
+    with db.connect() as conn:
+        return db.insert_returning_id(
+            conn,
+            "INSERT INTO missions (tenant, space_id, project, goal, runs) VALUES (?, ?, ?, ?, ?)",
+            (tenant, space_id, project, goal, json.dumps(runs)),
+        )
+
+
+def get_mission(mission_id: int, tenant: str = "default") -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM missions WHERE id=? AND tenant=?")), (mission_id, tenant)
+        ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    raw = out.get("runs")
+    if isinstance(raw, str):
+        try:
+            out["runs"] = json.loads(raw)
+        except (ValueError, TypeError):
+            out["runs"] = {}
+    out["synthesized"] = bool(out.get("synthesized"))
+    return out
+
+
+def mark_mission_synthesized(mission_id: int, tenant: str = "default") -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("UPDATE missions SET synthesized=1 WHERE id=? AND tenant=?")),
+            (mission_id, tenant),
+        )
 
 
 def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:

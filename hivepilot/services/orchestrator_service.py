@@ -105,8 +105,88 @@ def spawn_plan(
 
 
 def launch_mission(goal: str, project: str, tenant: str = "default") -> dict:
-    """Decompose `goal`, post the plan, and SPAWN each task as a background run.
-    Returns `{plan, space_id, runs}` (runs = task_id → run_id)."""
+    """Decompose `goal`, post the plan, SPAWN each task as a background run, and
+    persist the mission (for tracking + synthesis). Returns
+    `{plan, space_id, runs, mission_id}`."""
     plan, space_id = _decompose_and_post(goal, project, tenant)
     runs = spawn_plan(plan, project, space_id, tenant)
-    return {"plan": plan.to_dict(), "space_id": space_id, "runs": runs}
+    mission_id = state_service.create_mission(space_id, project, goal, runs, tenant)
+    return {
+        "plan": plan.to_dict(),
+        "space_id": space_id,
+        "runs": runs,
+        "mission_id": mission_id,
+    }
+
+
+def mission_status(mission: dict) -> dict:
+    """Aggregate the live status of a mission's runs (derived from each run's
+    status fact via the shared contract, HP-42). `done` is True when every run
+    has settled (succeeded / failed / cancelled)."""
+    from hivepilot.services.status_contract import DONE_STATUSES, FAILED_STATUSES
+
+    runs = mission.get("runs") or {}
+    succeeded = failed = pending = 0
+    tasks: dict[str, dict] = {}
+    for task_id, run_id in runs.items():
+        row = state_service.get_run(int(run_id)) if run_id is not None else None
+        raw = ((row or {}).get("status") or "").strip().lower()
+        if raw in DONE_STATUSES:
+            succeeded += 1
+        elif raw in FAILED_STATUSES or raw == "cancelled":
+            failed += 1
+        else:
+            pending += 1
+        tasks[task_id] = {"run_id": run_id, "status": raw or None}
+    total = len(runs)
+    return {
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "pending": pending,
+        "done": total > 0 and pending == 0,
+        "tasks": tasks,
+    }
+
+
+def _post_synthesis(mission: dict, status: dict, tenant: str) -> None:
+    space_id = mission.get("space_id")
+    if not space_id:
+        return
+    text = (
+        f"Mission terminée — {status['succeeded']}/{status['total']} réussie(s)"
+        f", {status['failed']} en échec."
+    )
+    msg_id = state_service.add_space_message(
+        int(space_id),
+        "system",
+        text,
+        tenant=tenant,
+        actions=[
+            {"label": f"{task_id} · {info['status'] or 'unknown'}"}
+            for task_id, info in status["tasks"].items()
+        ],
+    )
+    events.emit(
+        "space.message",
+        "space",
+        int(space_id),
+        tenant=tenant,
+        payload={"space_id": int(space_id), "message_id": msg_id, "sender_type": "system"},
+    )
+
+
+def check_mission(mission_id: int, tenant: str = "default") -> dict | None:
+    """Return the mission's live status and, the first time every run has
+    settled, post a one-shot synthesis into its Espace. Idempotent — the
+    synthesis is posted at most once. `None` when the mission doesn't exist."""
+    mission = state_service.get_mission(mission_id, tenant=tenant)
+    if mission is None:
+        return None
+    status = mission_status(mission)
+    synthesized = bool(mission["synthesized"])
+    if status["done"] and not synthesized:
+        _post_synthesis(mission, status, tenant)
+        state_service.mark_mission_synthesized(mission_id, tenant=tenant)
+        synthesized = True
+    return {"mission_id": mission_id, "status": status, "synthesized": synthesized}
