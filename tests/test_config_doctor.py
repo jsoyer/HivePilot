@@ -3053,6 +3053,33 @@ class TestVaultGitState:
         assert any(f.check == "vault_git_state_check_failed" for f in findings)
         assert any(f.severity == "error" for f in findings)
 
+    def test_broken_git_reported_even_when_gitpython_raises_invalid_repo(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """CI-specific regression (deterministic): some GitPython/environment
+        combinations raise `InvalidGitRepositoryError` — not a generic error —
+        for a broken `.git` at the vault. Because that vault HAS its own `.git`,
+        it must still be reported as uninspectable, never silently reclassified
+        as `vault_not_git_repo`. This is the exact path that flaked in CI while
+        passing locally (where a different exception type was raised)."""
+        _clear_path_env(monkeypatch)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / ".git").write_text("gitdir: /does/not/exist\n", encoding="utf-8")
+        monkeypatch.setattr(settings, "obsidian_vault", vault, raising=False)
+
+        import git as gitlib
+
+        def _raise_invalid(*_args: object, **_kwargs: object):
+            raise gitlib.InvalidGitRepositoryError("simulated CI condition")
+
+        monkeypatch.setattr(gitlib, "Repo", _raise_invalid)
+
+        findings = config_doctor.check_vault_git_state()
+
+        assert any(f.check == "vault_git_state_check_failed" for f in findings)
+        assert not any(f.check == "vault_not_git_repo" for f in findings)
+
 
 # ---------------------------------------------------------------------------
 # Noise-floor regression (mandatory per sprint spec): a realistic config with

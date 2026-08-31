@@ -1697,6 +1697,22 @@ def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
 # ---------------------------------------------------------------------------
 
 
+def _vault_state_uninspectable(vault_path: Path, exc: BaseException) -> list[DoctorFinding]:
+    """The 'I could not inspect the vault's git state' error finding — the
+    module's governing rule: an uninspectable checkout is reported, never
+    silently swallowed."""
+    return [
+        _finding(
+            "error",
+            "vault_git_state_check_failed",
+            f"Could not inspect the git state of the vault at {vault_path}: {type(exc).__name__}",
+            "a broken git checkout at the vault path would otherwise silently "
+            "disable this check with no output at all",
+            f"inspect the vault's git state manually, e.g. `git -C {vault_path} status`",
+        )
+    ]
+
+
 def check_vault_git_state() -> list[DoctorFinding]:
     vault_path = settings.resolve_path(settings.obsidian_vault)
     if not vault_path.is_dir():
@@ -1704,9 +1720,23 @@ def check_vault_git_state() -> list[DoctorFinding]:
 
     from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Repo
 
+    # A `.git` entry at the vault ITSELF means the vault is meant to be a repo,
+    # so open it WITHOUT parent-directory search: a broken checkout there (e.g.
+    # a `.git` file whose gitdir points nowhere) is then reported as
+    # uninspectable rather than being (a) silently reclassified as "not a repo"
+    # -- which is what `search_parent_directories=True` does when it fails to
+    # open the vault and then also finds no parent repo -- or (b) masked by a
+    # PARENT repo that the search would resolve to instead. That reclassification
+    # was environment-dependent (it hinged on whether a parent repo happened to
+    # exist above the vault), which is exactly why it flaked in CI. Only when
+    # the vault has no `.git` of its own do we search parents, so a vault
+    # deliberately nested inside a larger repo is still recognised.
+    has_own_git = (vault_path / ".git").exists()
     try:
-        repo = Repo(vault_path, search_parent_directories=True)
-    except (InvalidGitRepositoryError, NoSuchPathError):
+        repo = Repo(vault_path, search_parent_directories=not has_own_git)
+    except (InvalidGitRepositoryError, NoSuchPathError) as exc:
+        if has_own_git:
+            return _vault_state_uninspectable(vault_path, exc)
         return [
             _finding(
                 "info",
@@ -1723,17 +1753,7 @@ def check_vault_git_state() -> list[DoctorFinding]:
         ]
     except Exception as exc:  # noqa: BLE001 -- "could not inspect this" must be a
         # finding, never silence or a crash: mirrors this module's governing rule.
-        return [
-            _finding(
-                "error",
-                "vault_git_state_check_failed",
-                f"Could not inspect the git state of the vault at {vault_path}: "
-                f"{type(exc).__name__}",
-                "a broken git checkout at the vault path would otherwise silently "
-                "disable this check with no output at all",
-                f"inspect the vault's git state manually, e.g. `git -C {vault_path} status`",
-            )
-        ]
+        return _vault_state_uninspectable(vault_path, exc)
 
     try:
         porcelain = repo.git.status("--porcelain")
