@@ -59,13 +59,29 @@ export function EspacesView() {
   )
   const messages = messagesState.status === 'success' ? messagesState.data : NO_MESSAGES
 
+  // Roles currently "working…" in the open room (the dépose/relève battement,
+  // HP-46) — driven by space.typing / space.typing_stop events.
+  const [typing, setTyping] = useState<string[]>([])
+  useEffect(() => setTyping([]), [selectedId])
+
   // Live: a message in the open room refetches its thread; any space event
-  // refreshes the list (recency + counts).
+  // refreshes the list (recency + counts); typing events drive the indicator.
   useEventStream((event) => {
     if (event.entity_type !== 'space') return
+    const role = ((event.payload ?? {}) as { role?: string }).role
+    const forSelected = selectedId !== null && event.entity_id === String(selectedId)
+    if (event.kind === 'space.typing') {
+      if (forSelected && role) setTyping((t) => (t.includes(role) ? t : [...t, role]))
+      return
+    }
+    if (event.kind === 'space.typing_stop') {
+      if (forSelected && role) setTyping((t) => t.filter((r) => r !== role))
+      return
+    }
     setSpacesKey((k) => k + 1)
-    if (selectedId !== null && event.entity_id === String(selectedId)) {
+    if (forSelected) {
       setMessagesKey((k) => k + 1)
+      if (role) setTyping((t) => t.filter((r) => r !== role))
     }
   })
 
@@ -212,6 +228,14 @@ export function EspacesView() {
                       </div>
                     )
                   })
+                )}
+                {typing.length > 0 && (
+                  <div
+                    data-testid="espaces-typing"
+                    className="text-xs text-muted-foreground italic"
+                  >
+                    {t('spaces.typing', { role: typing.join(', ') })}
+                  </div>
                 )}
               </div>
 

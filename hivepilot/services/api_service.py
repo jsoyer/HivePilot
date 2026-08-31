@@ -3516,6 +3516,13 @@ def post_space_message_endpoint(
         tenant=tenant,
         payload={"space_id": space_id, "message_id": msg_id, "sender_type": payload.sender_type},
     )
+    # Dépose/relève (HP-46): a HUMAN message triggers the async agent reply loop
+    # (only human — a role's own reply must never trigger another). Returns
+    # immediately; the agents work in the background and post their battements.
+    if payload.sender_type == "human":
+        from hivepilot.services import spaces_responder
+
+        spaces_responder.dispatch_reply(space_id, tenant=tenant)
     return {"id": msg_id, "space_id": space_id}
 
 

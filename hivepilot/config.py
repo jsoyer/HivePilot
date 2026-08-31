@@ -189,6 +189,14 @@ class Settings(BaseSettings):
     roles_file: Path = Path("roles.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
     policies_file: Path = Path("policies.yaml")
+    # Espaces (HP-46): when a human posts a message to a space that has a role
+    # participant, dispatch a background "reply" for each such role (the
+    # dépose/relève loop). The reply CONTENT is produced by a pluggable
+    # generator (registered by the orchestrator, HP-49); with no generator this
+    # is a graceful no-op. Default on so the transport is live as soon as a
+    # generator exists. env: HIVEPILOT_SPACES_AUTO_REPLY
+    spaces_auto_reply: bool = True
+
     # Agent Studio (HP-25): governance guardrail for API-authored roles. A role
     # created/updated via `POST/PUT /v1/roles` that grants a dangerous
     # capability — `permission_mode="bypassPermissions"` (blanket tool access on
