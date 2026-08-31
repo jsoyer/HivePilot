@@ -11,6 +11,7 @@ import { formatAge, formatClock, formatElapsed, formatTimestamp } from '@/lib/fo
 import { useT, type TranslationKey } from '@/lib/i18n'
 import { cancelRun, fetchRuns, type RunSummary } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
+import { DONE_STATUSES, FAILED_STATUSES, type RunColumn, runColumn } from '@/lib/status-contract'
 import { useAsyncData } from '@/lib/use-async-data'
 import { useEventStream } from '@/lib/use-event-stream'
 import { usePersistedState } from '@/lib/use-persisted-state'
@@ -29,59 +30,11 @@ const POLL_INTERVAL_MS = 3000
 const RUN_LIMIT_OPTIONS = [10, 25, 50, 100, 200] as const
 const DEFAULT_RUN_LIMIT = 50
 
-// ---------------------------------------------------------------------------
-// Status -> Kanban column mapping. Mirrors `hivepilot/services/
-// analytics_service.py`'s canonical status classification (its
-// `_SUCCEEDED_STATUSES`/`_FAILED_STATUSES`/`_SKIPPED_STATUSES` sets and the
-// comment above them listing every non-terminal state) AND `state_service.
-// py`'s `RunStatus` enum + its `"pending"` legacy alias / `api_service.py`'s
-// `create_run` (which stores that literal directly). Read both before
-// changing any set below — this view NEVER invents a status the backend
-// doesn't already use.
-// ---------------------------------------------------------------------------
-
-export type RunColumn = 'queued' | 'running' | 'waitingApproval' | 'failed' | 'done' | 'other'
-
-/** Pre-execution states: the formal `RunStatus.NEW`/`RunStatus.PLANNED`
- * enum values, plus the literal `"pending"` `create_run` stores directly
- * for a require-approval initial run (see `api_service.py`) — `"pending"`
- * is ALSO `RunStatus.from_str`'s legacy alias for `NEW`. */
-const QUEUED_STATUSES = new Set(['new', 'planned', 'pending'])
-/** A human decision is needed: the formal `RunStatus.APPROVAL`/`RunStatus.
- * REVIEW` enum values, plus the literal `"awaiting_approval"` orchestrator.
- * py sets at its own approval checkpoint. */
-const WAITING_APPROVAL_STATUSES = new Set(['approval', 'awaiting_approval', 'review'])
-/** Mirrors `analytics_service.py`'s `_FAILED_STATUSES` exactly. */
-const FAILED_STATUSES = new Set([
-  'failed',
-  'denied',
-  'rate_limit',
-  'auth_expired',
-  'test_failure',
-  'security_blocker',
-])
-/** Mirrors `analytics_service.py`'s `_SUCCEEDED_STATUSES` exactly. */
-const DONE_STATUSES = new Set(['success', 'complete'])
-
-/**
- * Maps a real `RunSummary.status` to a Kanban column — faithfully, never
- * inventing a status. Anything not in one of the four sets above (`paused`
- * — an operator mid-run pause, `cancelled` — operator-stopped, `deferred`
- * — quota/backoff retry-later, or a genuinely unrecognized string) lands in
- * `'other'`: exactly the same "everything else" bucket `analytics_service.
- * py`'s own `canonical_outcome()` falls back to for these same statuses —
- * this view never asserts a stronger classification than the backend
- * itself does.
- */
-export function runColumn(status: string): RunColumn {
-  const normalised = status.trim().toLowerCase()
-  if (QUEUED_STATUSES.has(normalised)) return 'queued'
-  if (normalised === 'running') return 'running'
-  if (WAITING_APPROVAL_STATUSES.has(normalised)) return 'waitingApproval'
-  if (FAILED_STATUSES.has(normalised)) return 'failed'
-  if (DONE_STATUSES.has(normalised)) return 'done'
-  return 'other'
-}
+// Status -> column/zone classification lives in the shared derived-status
+// contract (`@/lib/status-contract`, HP-42), the single source of truth
+// mirrored from `hivepilot/services/status_contract.py`. Re-exported here so
+// existing importers of `RunBoardView` keep resolving `runColumn`/`RunColumn`.
+export { type RunColumn, runColumn }
 
 const COLUMN_ORDER: RunColumn[] = ['queued', 'running', 'waitingApproval', 'failed', 'done']
 
