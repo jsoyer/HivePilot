@@ -93,6 +93,7 @@ export const fr: Record<TranslationKey, string> = {
   'spaces.composerPlaceholder': 'Écrire à {space}…',
   'spaces.send': 'Envoyer',
   'spaces.sending': 'Envoi…',
+  'spaces.typing': '{role} travaille…',
   'spaces.postForbidden': 'Publier un message nécessite un jeton de rang run.',
   'spaces.readOnly': 'Lecture seule — un jeton de rang run est requis pour publier.',
   'nav.autopilot': 'Autopilote',

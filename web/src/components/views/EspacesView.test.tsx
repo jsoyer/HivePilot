@@ -4,14 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SpaceMessage, SpaceSummary } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchSpaces, fetchSpaceMessages, postSpaceMessage, useRoleMock, useEventStreamMock } =
-  vi.hoisted(() => ({
-    fetchSpaces: vi.fn(),
-    fetchSpaceMessages: vi.fn(),
-    postSpaceMessage: vi.fn(),
-    useRoleMock: vi.fn(),
-    useEventStreamMock: vi.fn(),
-  }))
+const {
+  fetchSpaces,
+  fetchSpaceMessages,
+  postSpaceMessage,
+  useRoleMock,
+  useEventStreamMock,
+  lastStreamHandler,
+} = vi.hoisted(() => ({
+  fetchSpaces: vi.fn(),
+  fetchSpaceMessages: vi.fn(),
+  postSpaceMessage: vi.fn(),
+  useRoleMock: vi.fn(),
+  useEventStreamMock: vi.fn(),
+  lastStreamHandler: { current: null as ((event: { entity_type: string }) => void) | null },
+}))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
@@ -71,6 +78,10 @@ beforeEach(() => {
   postSpaceMessage.mockReset()
   useRoleMock.mockReset()
   useEventStreamMock.mockReset()
+  lastStreamHandler.current = null
+  useEventStreamMock.mockImplementation((cb: (event: { entity_type: string }) => void) => {
+    lastStreamHandler.current = cb
+  })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -145,5 +156,36 @@ describe('EspacesView', () => {
     await mountResolved()
 
     expect(container.querySelector('[data-testid="espaces-empty"]')).not.toBeNull()
+  })
+
+  it('shows a typing battement while a role works, and clears it on stop', async () => {
+    fetchSpaces.mockResolvedValue([space({ id: 7 })])
+    fetchSpaceMessages.mockResolvedValue([])
+    mockRole('run')
+    await mountResolved()
+
+    await act(async () => {
+      lastStreamHandler.current?.({
+        entity_type: 'space',
+        kind: 'space.typing',
+        entity_id: '7',
+        tenant: 'default',
+        payload: { role: 'ceo' },
+      } as never)
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-testid="espaces-typing"]')?.textContent).toContain('ceo')
+
+    await act(async () => {
+      lastStreamHandler.current?.({
+        entity_type: 'space',
+        kind: 'space.typing_stop',
+        entity_id: '7',
+        tenant: 'default',
+        payload: { role: 'ceo' },
+      } as never)
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-testid="espaces-typing"]')).toBeNull()
   })
 })
