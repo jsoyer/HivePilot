@@ -225,6 +225,28 @@ export function EspacesView() {
                         >
                           {message.body}
                         </span>
+                        {message.actions && message.actions.length > 0 && (
+                          <details
+                            data-testid={`espaces-actions-${message.id}`}
+                            className="max-w-[85%] text-xs text-muted-foreground"
+                          >
+                            <summary className="cursor-pointer select-none">
+                              {t('spaces.actionCount', { count: message.actions.length })}
+                            </summary>
+                            <div className="mt-1 flex flex-col gap-1 border-l border-border pl-2">
+                              {message.actions.map((action, i) => (
+                                <div key={i} className="flex flex-col gap-0.5">
+                                  <span className="metric-mono font-medium">{action.label}</span>
+                                  {action.detail && (
+                                    <pre className="whitespace-pre-wrap text-[11px] opacity-80">
+                                      {action.detail}
+                                    </pre>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
                       </div>
                     )
                   })

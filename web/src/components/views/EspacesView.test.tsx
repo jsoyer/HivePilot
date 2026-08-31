@@ -140,6 +140,30 @@ describe('EspacesView', () => {
     expect(fetchSpaceMessages.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
+  it('renders a collapsible action trace on a message that has one', async () => {
+    fetchSpaces.mockResolvedValue([space({ id: 7 })])
+    fetchSpaceMessages.mockResolvedValue([
+      message({
+        id: 4,
+        space_id: 7,
+        sender_type: 'role',
+        body: 'done',
+        actions: [
+          { label: 'Bash', detail: 'ls -la' },
+          { label: 'Read', detail: 'App.tsx' },
+        ],
+      }),
+    ])
+    mockRole('run')
+    await mountResolved()
+
+    const trace = container.querySelector('[data-testid="espaces-actions-4"]')
+    expect(trace).not.toBeNull()
+    expect(trace?.querySelector('summary')?.textContent).toContain('2')
+    expect(trace?.textContent).toContain('Bash')
+    expect(trace?.textContent).toContain('ls -la')
+  })
+
   it('hides the composer for a read-only token', async () => {
     fetchSpaces.mockResolvedValue([space({ id: 7 })])
     fetchSpaceMessages.mockResolvedValue([])

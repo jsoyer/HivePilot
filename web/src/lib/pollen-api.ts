@@ -2002,12 +2002,19 @@ export interface SpaceSummary {
   tenant?: string
 }
 
+export interface SpaceAction {
+  label: string
+  detail?: string | null
+}
+
 export interface SpaceMessage {
   id: number
   space_id: number
   sender_type: string
   sender_id?: string | null
   body: string
+  /** Optional collapsible tool-action trace (HP-47). */
+  actions?: SpaceAction[] | null
   created_at: string
 }
 

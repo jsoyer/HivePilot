@@ -228,6 +228,7 @@ def init_db() -> None:
                 sender_type TEXT NOT NULL,
                 sender_id TEXT,
                 body TEXT,
+                actions TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(space_id) REFERENCES spaces(id) ON DELETE CASCADE
             )
@@ -236,6 +237,9 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_space_messages_space ON space_messages (space_id, id)"
         )
+        # HP-47: a message can carry a collapsible tool-action trace (JSON list
+        # of {label, detail}). Additive migration for DBs created before HP-47.
+        _add_column_if_missing(conn, "space_messages", "actions TEXT")
         # Idempotent migration (Phase 24b.1): persist provider/model per step.
         # Additive-only, same ALTER TABLE ... ADD COLUMN pattern as the
         # 'tenant' migrations below — safe to run against an existing DB.
@@ -1837,22 +1841,42 @@ def add_space_message(
     *,
     sender_id: str | None = None,
     tenant: str = "default",
+    actions: list[dict[str, Any]] | None = None,
 ) -> int:
     """Append one message and bump the space's `updated_at` (so it rises to the
-    top of the recency-ordered sidebar). Returns the new message id."""
+    top of the recency-ordered sidebar). `actions` (HP-47) is an optional
+    tool-action trace, JSON-encoded. Returns the new message id."""
     init_db()
     with db.connect() as conn:
         msg_id = db.insert_returning_id(
             conn,
-            "INSERT INTO space_messages (space_id, tenant, sender_type, sender_id, body) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (space_id, tenant, sender_type, sender_id, body),
+            "INSERT INTO space_messages (space_id, tenant, sender_type, sender_id, body, actions) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                space_id,
+                tenant,
+                sender_type,
+                sender_id,
+                body,
+                json.dumps(actions) if actions else None,
+            ),
         )
         conn.execute(
             ph(db.ph("UPDATE spaces SET updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant=?")),
             (space_id, tenant),
         )
     return msg_id
+
+
+def _decode_space_message_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    raw = out.get("actions")
+    if isinstance(raw, str):
+        try:
+            out["actions"] = json.loads(raw)
+        except (ValueError, TypeError):
+            out["actions"] = None
+    return out
 
 
 def list_space_messages(
@@ -1869,7 +1893,7 @@ def list_space_messages(
             ),
             (space_id, tenant, after_id, limit),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [_decode_space_message_row(dict(row)) for row in rows]
 
 
 def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:

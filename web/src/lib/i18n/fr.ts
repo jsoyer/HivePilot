@@ -94,6 +94,7 @@ export const fr: Record<TranslationKey, string> = {
   'spaces.send': 'Envoyer',
   'spaces.sending': 'Envoi…',
   'spaces.typing': '{role} travaille…',
+  'spaces.actionCount': '{count} actions',
   'spaces.postForbidden': 'Publier un message nécessite un jeton de rang run.',
   'spaces.readOnly': 'Lecture seule — un jeton de rang run est requis pour publier.',
   'nav.autopilot': 'Autopilote',
