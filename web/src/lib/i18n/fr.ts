@@ -466,6 +466,8 @@ export const fr: Record<TranslationKey, string> = {
   'board.listToggleLabel': 'Basculer en vue liste',
   'board.startedAgo': 'démarrée il y a {age}',
   'board.duration': 'a duré {duration}',
+  'board.stepCount': '{count} étapes',
+  'board.lastHeartbeat': 'battement il y a {age}',
   'board.kanbanScrollLabel': 'Faire défiler les colonnes horizontalement',
 
   // ---- Panneau de détail d'exécution (section Opérations de Pollen) ----

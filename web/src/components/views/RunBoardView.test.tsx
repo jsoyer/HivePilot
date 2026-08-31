@@ -646,4 +646,16 @@ describe('RunBoardView', () => {
     expect(container.querySelector('[data-testid="run-board-card-1"]')).toBeNull()
     expect(chip.getAttribute('aria-pressed')).toBe('true')
   })
+
+  it('shows step count and last heartbeat on a card when present', async () => {
+    fetchRuns.mockResolvedValue([
+      run({ id: 1, status: 'running', step_count: 3, last_activity_at: '2026-07-18T10:05:00Z' }),
+    ])
+    mockRole('run', 1)
+    await mountResolved()
+
+    const progress = container.querySelector('[data-testid="run-board-progress-1"]')
+    expect(progress).not.toBeNull()
+    expect(progress?.textContent).toContain('3')
+  })
 })

@@ -1002,6 +1002,11 @@ export interface RunSummary {
   started_at: string
   finished_at?: string | null
   tenant?: string
+  /** Latest step timestamp — the run's "heartbeat" (when it last did anything,
+   * distinct from when it started). Null for a run with no steps yet. */
+  last_activity_at?: string | null
+  /** How many steps the run has recorded so far — a cheap progress signal. */
+  step_count?: number
   /** Untrusted free text (redacted server-side, but still opaque to the
    * UI's trust model) — never render this. */
   detail?: string | null
