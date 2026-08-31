@@ -3582,6 +3582,21 @@ def orchestrator_mission_endpoint(
     )
 
 
+@v1.get("/orchestrator/missions/{mission_id}")
+@app.get("/orchestrator/missions/{mission_id}")
+def orchestrator_mission_status_endpoint(
+    mission_id: int, caller: token_service.TokenEntry = Depends(require_role("read"))
+) -> dict:
+    from hivepilot.services import orchestrator_service
+
+    result = orchestrator_service.check_mission(mission_id, tenant=caller.tenant)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"no mission {mission_id}"
+        )
+    return result
+
+
 def _get_mem0_client() -> Any | None:
     """Build a mem0 client from Settings — mirrors `plugins/mem0.py`'s
     `_get_client()` exactly (hosted `MemoryClient` when

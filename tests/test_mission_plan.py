@@ -225,3 +225,68 @@ class TestMissionEndpoint:
             ).status_code
             == 403
         )
+
+
+class TestMissionTracking:
+    def test_mission_row_round_trips(self) -> None:
+        sid = state_service.create_space([{"type": "human"}])
+        mid = state_service.create_mission(sid, "atlas", "goal", {"t1": 5, "t2": 6})
+        mission = state_service.get_mission(mid)
+        assert mission is not None
+        assert mission["runs"] == {"t1": 5, "t2": 6}
+        assert mission["synthesized"] is False
+        state_service.mark_mission_synthesized(mid)
+        assert state_service.get_mission(mid)["synthesized"] is True
+
+    def test_status_is_done_only_when_all_runs_settle(self) -> None:
+        r1 = state_service.record_run_start("atlas", "t1")
+        r2 = state_service.record_run_start("atlas", "t2")
+        state_service.complete_run(r1, "success")
+        st = orchestrator_service.mission_status({"runs": {"t1": r1, "t2": r2}})
+        assert st["succeeded"] == 1 and st["pending"] == 1 and st["done"] is False
+        state_service.complete_run(r2, "failed")
+        st2 = orchestrator_service.mission_status({"runs": {"t1": r1, "t2": r2}})
+        assert st2["done"] is True and st2["failed"] == 1
+
+    def test_check_mission_synthesizes_once(self) -> None:
+        sid = orchestrator_service.get_or_create_project_space("atlas")
+        r1 = state_service.record_run_start("atlas", "t1")
+        state_service.complete_run(r1, "success")
+        mid = state_service.create_mission(sid, "atlas", "goal", {"t1": r1})
+
+        res = orchestrator_service.check_mission(mid)
+        assert res["status"]["done"] is True and res["synthesized"] is True
+        synth = [
+            m for m in state_service.list_space_messages(sid) if "Mission terminée" in m["body"]
+        ]
+        assert len(synth) == 1
+
+        orchestrator_service.check_mission(mid)  # idempotent — no second synthesis
+        synth2 = [
+            m for m in state_service.list_space_messages(sid) if "Mission terminée" in m["body"]
+        ]
+        assert len(synth2) == 1
+
+    def test_status_endpoint_tracks_to_completion(self, api_client, tmp_tokens_file):
+        mission_plan.register_planner(
+            lambda goal, project: MissionPlan(
+                goal=goal, tasks=[MissionTask(id="t1", title="X", role="developer")]
+            )
+        )
+        raw, _ = add_token("run", tenant="acme")
+        launched = api_client.post(
+            "/v1/orchestrator/mission", json={"goal": "g", "project": "atlas"}, headers=_auth(raw)
+        ).json()
+        mid, run_id = launched["mission_id"], launched["runs"]["t1"]
+
+        st = api_client.get(f"/v1/orchestrator/missions/{mid}", headers=_auth(raw)).json()
+        assert st["status"]["done"] is False  # run still running
+
+        state_service.complete_run(run_id, "success")
+        st2 = api_client.get(f"/v1/orchestrator/missions/{mid}", headers=_auth(raw)).json()
+        assert st2["status"]["done"] is True and st2["synthesized"] is True
+
+        assert (
+            api_client.get("/v1/orchestrator/missions/999999", headers=_auth(raw)).status_code
+            == 404
+        )
