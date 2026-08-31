@@ -8,7 +8,7 @@ import threading
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from time import time
+from time import monotonic, sleep, time
 from typing import Any
 
 from fastapi import (
@@ -628,6 +628,103 @@ def list_runs(
     if caller.role == "admin":
         return state_service.list_recent_runs(limit=limit)
     return state_service.list_recent_runs(limit=limit, tenant=caller.tenant)
+
+
+# ---------------------------------------------------------------------------
+# Realtime SSE stream (HP-41, Cycle 1 · P1). Turns the durable change bus
+# (HP-40, `services/events.py`) into a browser `EventSource` feed so Pollen can
+# stop polling: each run/step lifecycle change is pushed as an SSE event whose
+# `id:` is the `change_log` id, so a dropped connection reconnects with
+# `Last-Event-ID` and replays from exactly where it left off — no gaps, no
+# dupes. Non-admin callers only see their own tenant's changes.
+# ---------------------------------------------------------------------------
+
+
+def _format_sse(row: dict[str, Any]) -> str:
+    """Render one change_log row as an SSE frame. The `id:` line drives the
+    browser's automatic `Last-Event-ID` reconnection; `event:` is the change
+    kind so clients can `addEventListener('run.completed', ...)`."""
+    data = json.dumps(
+        {
+            "id": row["id"],
+            "kind": row["kind"],
+            "entity_type": row["entity_type"],
+            "entity_id": row["entity_id"],
+            "tenant": row["tenant"],
+            "payload": row.get("payload"),
+        }
+    )
+    return f"id: {row['id']}\nevent: {row['kind']}\ndata: {data}\n\n"
+
+
+def sse_stream(
+    after_id: int | None,
+    *,
+    tenant_scope: str | None = None,
+    stop: Any | None = None,
+    poll_interval: float = 0.5,
+    heartbeat_interval: float = 15.0,
+    idle_timeout: float | None = None,
+) -> Any:
+    """Yield SSE frames for changes after `after_id` (defaults to "now"),
+    scoped to `tenant_scope` (None = admin/all). Tails the durable `change_log`
+    so it is dialect-agnostic and reconnection-safe. Emits a `: keep-alive`
+    comment every `heartbeat_interval`s of quiet so proxies don't drop the
+    idle connection; `idle_timeout` ends the stream (used by tests / to recycle
+    long-idle connections). Blocking generator — FastAPI runs it on a worker."""
+    from hivepilot.services import events
+
+    cursor = events.latest_change_id() if after_id is None else after_id
+    last_beat = monotonic()
+    last_activity = monotonic()
+    yield ": connected\n\n"  # open the stream so the client's onopen fires promptly
+    while stop is None or not stop.is_set():
+        rows = events.read_since(cursor)
+        emitted = False
+        for row in rows:
+            cursor = int(row["id"])
+            if tenant_scope is not None and row.get("tenant") != tenant_scope:
+                continue  # consumed (cursor advanced) but not visible to this caller
+            yield _format_sse(row)
+            emitted = True
+        now = monotonic()
+        if emitted:
+            last_activity = now
+            last_beat = now
+        else:
+            if now - last_beat >= heartbeat_interval:
+                yield ": keep-alive\n\n"
+                last_beat = now
+            if idle_timeout is not None and (now - last_activity) >= idle_timeout:
+                return
+        sleep(poll_interval)
+
+
+@v1.get("/events/stream")
+@app.get("/events/stream")
+def events_stream_endpoint(
+    request: Request,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+    after: int | None = Query(
+        None, description="Resume after this change_log id (else stream from now)."
+    ),
+) -> Any:
+    from fastapi.responses import StreamingResponse
+
+    tenant_scope = None if caller.role == "admin" else caller.tenant
+    start = after
+    if start is None:
+        last_event_id = request.headers.get("Last-Event-ID")
+        if last_event_id is not None:
+            try:
+                start = int(last_event_id)
+            except ValueError:
+                start = None
+    return StreamingResponse(
+        sse_stream(start, tenant_scope=tenant_scope),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------

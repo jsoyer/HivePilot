@@ -1,5 +1,5 @@
 import { Plus } from 'lucide-react'
-import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -12,6 +12,7 @@ import { useT, type TranslationKey } from '@/lib/i18n'
 import { cancelRun, fetchRuns, type RunSummary } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
+import { useEventStream } from '@/lib/use-event-stream'
 import { usePersistedState } from '@/lib/use-persisted-state'
 import { cn } from '@/lib/utils'
 import { NewRunDrawer } from './NewRunDrawer'
@@ -621,13 +622,38 @@ export function RunBoardView() {
   const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   // Poll on an interval, cleaned up on unmount (or before the next interval
-  // is registered) so a stale timer from a previous mount never leaks.
+  // is registered) so a stale timer from a previous mount never leaks. This is
+  // now a SAFETY NET behind the realtime SSE subscription below — it still
+  // catches up if the stream is unavailable (proxy, network), but the live
+  // feed is what makes status transitions appear near-instantly.
   useEffect(() => {
     const interval = window.setInterval(() => {
       setRefreshKey((key) => key + 1)
     }, POLL_INTERVAL_MS)
     return () => window.clearInterval(interval)
   }, [])
+
+  // Realtime: refresh the board the moment a run changes (HP-40 bus → HP-41
+  // SSE). Coalesced so a burst of step events triggers one refetch, not one
+  // per event. Disabled when the board itself is forbidden (a read-only token
+  // sees no runs, so there is nothing to keep live).
+  const refreshTimer = useRef<number | null>(null)
+  useEffect(() => {
+    return () => {
+      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
+    }
+  }, [])
+  useEventStream(
+    (event) => {
+      if (event.entity_type !== 'run') return
+      if (refreshTimer.current !== null) return
+      refreshTimer.current = window.setTimeout(() => {
+        refreshTimer.current = null
+        setRefreshKey((key) => key + 1)
+      }, 250)
+    },
+    { enabled: !isForbidden },
+  )
 
   // A module-level constant for the not-yet-loaded case, so `runs` keeps a
   // stable identity between renders and the memos below actually memoize.

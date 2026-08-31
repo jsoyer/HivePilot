@@ -26,6 +26,18 @@ vi.mock('@/lib/role-context', async (importOriginal) => {
   return { ...actual, useRole: useRoleMock }
 })
 
+// Capture the callback RunBoardView registers with the realtime SSE hook so a
+// test can deliver a synthetic change event and assert the board refetches.
+const { useEventStreamMock, lastStreamHandler } = vi.hoisted(() => {
+  const ref: { current: ((event: { entity_type: string }) => void) | null } = { current: null }
+  return {
+    lastStreamHandler: ref,
+    useEventStreamMock: vi.fn(),
+  }
+})
+
+vi.mock('@/lib/use-event-stream', () => ({ useEventStream: useEventStreamMock }))
+
 import { RunBoardView } from './RunBoardView'
 
 function setSelectValue(select: HTMLSelectElement, value: string) {
@@ -91,6 +103,13 @@ beforeEach(() => {
     steps: [],
   })
   useRoleMock.mockReset()
+  lastStreamHandler.current = null
+  useEventStreamMock.mockReset()
+  useEventStreamMock.mockImplementation(
+    (onEvent: (event: { entity_type: string }) => void, opts?: { enabled?: boolean }) => {
+      if (opts?.enabled !== false) lastStreamHandler.current = onEvent
+    },
+  )
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -513,5 +532,63 @@ describe('RunBoardView', () => {
     })
 
     expect(container.textContent).toContain('Exécutions')
+  })
+
+  it('refreshes the board when a run change arrives on the realtime stream', async () => {
+    fetchRuns.mockResolvedValueOnce([run({ id: 1, status: 'running' })])
+    fetchRuns.mockResolvedValue([run({ id: 1, status: 'success' }), run({ id: 2, status: 'running' })])
+    mockRole('run', 1)
+    await mountResolved()
+    expect(fetchRuns).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-testid="run-board-card-2"]')).toBeNull()
+
+    await act(async () => {
+      lastStreamHandler.current?.({
+        id: 10,
+        kind: 'step.recorded',
+        entity_type: 'run',
+        entity_id: '1',
+        tenant: 'default',
+        payload: {},
+      } as never)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await Promise.resolve()
+    })
+
+    expect(fetchRuns).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[data-testid="run-board-card-2"]')).not.toBeNull()
+  })
+
+  it('ignores non-run change events (no refetch)', async () => {
+    fetchRuns.mockResolvedValue([run({ id: 1, status: 'running' })])
+    mockRole('run', 1)
+    await mountResolved()
+    expect(fetchRuns).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      lastStreamHandler.current?.({
+        id: 5,
+        kind: 'role.updated',
+        entity_type: 'role',
+        entity_id: 'ciso',
+        tenant: 'default',
+        payload: null,
+      } as never)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    })
+
+    expect(fetchRuns).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not subscribe to the realtime stream when the board is forbidden', async () => {
+    const { ApiForbiddenError } = await import('@/lib/api')
+    fetchRuns.mockRejectedValue(new ApiForbiddenError())
+    mockRole('read', 0)
+    await mountResolved()
+
+    expect(useEventStreamMock).toHaveBeenCalled()
+    const lastCall = useEventStreamMock.mock.calls.at(-1)
+    expect(lastCall?.[1]).toEqual({ enabled: false })
   })
 })
