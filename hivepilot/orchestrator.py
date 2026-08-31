@@ -7151,23 +7151,39 @@ class Orchestrator:
                                 except Exception as _exc:
                                     _last_exc = _exc
                                     _quota_err = parse_quota_error(str(_exc))
-                                    if _quota_err is None:
-                                        raise  # non-quota error → surface immediately
-                                    # Quota error — try fallback runners
+                                    # Widen the fallback trigger beyond quota
+                                    # (HP-70 quick-win): a model that is
+                                    # unavailable for a NON-quota reason — no
+                                    # credit / bad auth / service down — should
+                                    # ALSO fail over to the next model, not
+                                    # surface immediately. Unlike quota it has
+                                    # no reset time, so on exhaustion it hard-
+                                    # fails rather than deferring.
+                                    from hivepilot.services.quota import is_provider_unavailable
+
+                                    _unavailable = _quota_err is None and is_provider_unavailable(
+                                        str(_exc)
+                                    )
+                                    if _quota_err is None and not _unavailable:
+                                        raise  # genuine error → surface immediately
+                                    # Quota OR unavailable — try fallback runners
                                     if not _fallback_runners:
-                                        if task.role == "developer":
+                                        if _quota_err is not None and task.role == "developer":
                                             from hivepilot.services.quota import QuotaDeferredError
 
                                             raise QuotaDeferredError(
                                                 str(_quota_err.raw), reset_at=_quota_err.reset_at
                                             ) from _exc
-                                        raise  # non-developer roles: surface the original exception
+                                        # Unavailable (no reset to defer to), or a
+                                        # non-developer role: surface the original.
+                                        raise
                                     _next_kind = _fallback_runners.pop(0)
                                     logger.info(
                                         "dev.fallback",
                                         from_runner=_runner_def_to_try.kind,
                                         to_runner=_next_kind,
-                                        reset_at=str(_quota_err.reset_at),
+                                        reason="quota" if _quota_err is not None else "unavailable",
+                                        reset_at=str(_quota_err.reset_at) if _quota_err else None,
                                     )
                                     if _METRICS_AVAILABLE and _metrics is not None:
                                         try:
