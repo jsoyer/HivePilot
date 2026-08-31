@@ -6,7 +6,15 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from hivepilot.services import api_service, mission_plan, orchestrator_service, state_service
+from hivepilot.services import (
+    api_service,
+    async_run_service,
+    delegation,
+    mission_plan,
+    orchestrator_service,
+    spaces_responder,
+    state_service,
+)
 from hivepilot.services.mission_plan import MissionPlan, MissionTask
 from hivepilot.services.token_service import add_token
 
@@ -14,8 +22,12 @@ from hivepilot.services.token_service import add_token
 @pytest.fixture(autouse=True)
 def _reset_planner():
     mission_plan.register_planner(None)
+    delegation.register_peer_executor(None)
+    spaces_responder.register_reply_generator(None)
     yield
     mission_plan.register_planner(None)
+    delegation.register_peer_executor(None)
+    spaces_responder.register_reply_generator(None)
 
 
 @pytest.fixture()
@@ -156,3 +168,60 @@ class TestDecomposeEndpoint:
         assert body["plan"]["goal"] == "ship the board"
         assert body["plan"]["tasks"]  # at least the fallback task
         assert isinstance(body["space_id"], int)
+
+
+class TestSpawnPlan:
+    def test_spawns_one_run_per_task_and_traces_them(self) -> None:
+        seen: list[tuple[int, str]] = []
+        delegation.register_peer_executor(lambda run_id, role: seen.append((run_id, role)))
+        plan = MissionPlan(
+            goal="g",
+            tasks=[
+                MissionTask(id="t1", title="API", role="developer"),
+                MissionTask(id="t2", title="UI", role="qa"),
+            ],
+        )
+        space_id = orchestrator_service.get_or_create_project_space("atlas")
+
+        runs = orchestrator_service.spawn_plan(plan, "atlas", space_id)
+        assert set(runs.keys()) == {"t1", "t2"}
+        assert async_run_service.wait_until_idle(5.0)
+
+        assert sorted(role for _, role in seen) == ["developer", "qa"]
+        traced = [m for m in state_service.list_space_messages(space_id) if "run #" in m["body"]]
+        assert len(traced) == 2
+
+
+class TestMissionEndpoint:
+    def test_launch_mission_spawns_and_returns_runs(self, api_client, tmp_tokens_file):
+        seen: list[tuple[int, str]] = []
+        delegation.register_peer_executor(lambda run_id, role: seen.append((run_id, role)))
+        mission_plan.register_planner(
+            lambda goal, project: MissionPlan(
+                goal=goal,
+                tasks=[
+                    MissionTask(id="t1", title="API", role="developer"),
+                    MissionTask(id="t2", title="UI", role="developer"),
+                ],
+            )
+        )
+        raw, _ = add_token("run")
+        resp = api_client.post(
+            "/v1/orchestrator/mission",
+            json={"goal": "build X", "project": "atlas"},
+            headers=_auth(raw),
+        )
+        assert resp.status_code == 200
+        assert set(resp.json()["runs"].keys()) == {"t1", "t2"}
+        assert async_run_service.wait_until_idle(5.0)
+        assert len(seen) == 2
+
+    def test_mission_requires_run(self, api_client, tmp_tokens_file):
+        assert api_client.post("/v1/orchestrator/mission", json={"goal": "x"}).status_code == 401
+        raw, _ = add_token("read")
+        assert (
+            api_client.post(
+                "/v1/orchestrator/mission", json={"goal": "x"}, headers=_auth(raw)
+            ).status_code
+            == 403
+        )
