@@ -179,6 +179,27 @@ def init_db() -> None:
             )
             """
         )
+        # Realtime change/event bus (HP-40): an append-only, ordered log of
+        # run/step lifecycle facts. Consumers tail it by watermark (SQLite /
+        # fallback) or are woken by Postgres NOTIFY and then read it. See
+        # `hivepilot/services/events.py`.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS change_log (
+                id {pk},
+                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                channel TEXT,
+                kind TEXT,
+                entity_type TEXT,
+                entity_id TEXT,
+                tenant TEXT DEFAULT 'default',
+                payload TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_change_log_channel_id ON change_log (channel, id)"
+        )
         # Idempotent migration (Phase 24b.1): persist provider/model per step.
         # Additive-only, same ALTER TABLE ... ADD COLUMN pattern as the
         # 'tenant' migrations below — safe to run against an existing DB.
@@ -671,7 +692,16 @@ def record_run_start(
             status=status,
             tenant=tenant,
         )
-        return run_id
+    from hivepilot.services import events
+
+    events.emit(
+        "run.started",
+        "run",
+        run_id,
+        tenant=tenant,
+        payload={"run_id": run_id, "project": project, "task": task, "status": status},
+    )
+    return run_id
 
 
 def record_step(
@@ -769,6 +799,12 @@ def record_step(
                 turns,
             ),
         )
+        _step_event_row = conn.execute(
+            ph(db.ph("SELECT tenant FROM runs WHERE id=?")), (run_id,)
+        ).fetchone()
+    _step_event_tenant = (
+        dict(_step_event_row).get("tenant") if _step_event_row else None
+    ) or "default"
     # Announce the step on the event stream. Until this existed the stream
     # carried a run's endpoints and never its middle -- `state.run_start`,
     # then silence for ten minutes, then `state.verdict` -- so anything
@@ -799,6 +835,18 @@ def record_step(
             _metrics.steps_total.labels(status=status).inc()
         except Exception:  # noqa: BLE001
             pass
+    # Durable realtime bus (HP-40): entity is the RUN (the board is run-centric,
+    # so a step landing means "run X advanced"); the step detail rides in the
+    # payload. Fail-safe inside `emit` — a broken event never breaks the step.
+    from hivepilot.services import events
+
+    events.emit(
+        "step.recorded",
+        "run",
+        run_id,
+        tenant=_step_event_tenant,
+        payload={"run_id": run_id, "step": step, "status": status, "role": role},
+    )
 
 
 def attach_run_artifacts(run_id: int, artifacts_path: str) -> None:
@@ -847,12 +895,27 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
             ),
             (status, detail, run_id),
         )
+        _complete_event_row = conn.execute(
+            ph(db.ph("SELECT tenant FROM runs WHERE id=?")), (run_id,)
+        ).fetchone()
+    _complete_event_tenant = (
+        dict(_complete_event_row).get("tenant") if _complete_event_row else None
+    ) or "default"
     logger.info("state.run_complete", run_id=run_id, status=status)
     if _METRICS_AVAILABLE and _metrics is not None:
         try:
             _metrics.runs_total.labels(status=status).inc()
         except Exception:  # noqa: BLE001
             pass
+    from hivepilot.services import events
+
+    events.emit(
+        "run.completed",
+        "run",
+        run_id,
+        tenant=_complete_event_tenant,
+        payload={"run_id": run_id, "status": status},
+    )
 
 
 def get_run(run_id: int) -> dict[str, Any] | None:

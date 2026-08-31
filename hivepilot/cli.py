@@ -1438,7 +1438,9 @@ def config_export(
 
     count = roles_mod.export_store_to_yaml(tenant=tenant)
     if count == 0:
-        typer.echo("Roles store is empty for this tenant — nothing to export (roles.yaml unchanged).")
+        typer.echo(
+            "Roles store is empty for this tenant — nothing to export (roles.yaml unchanged)."
+        )
         return
     from hivepilot.config import settings
 
