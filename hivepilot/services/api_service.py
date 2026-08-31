@@ -3568,6 +3568,20 @@ def orchestrator_decompose_endpoint(
     )
 
 
+@v1.post("/orchestrator/mission")
+@app.post("/orchestrator/mission")
+def orchestrator_mission_endpoint(
+    payload: DecomposeRequest, caller: token_service.TokenEntry = Depends(require_role("run"))
+) -> dict:
+    if not payload.goal.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty goal")
+    from hivepilot.services import orchestrator_service
+
+    return orchestrator_service.launch_mission(
+        payload.goal, payload.project or "default", tenant=caller.tenant
+    )
+
+
 def _get_mem0_client() -> Any | None:
     """Build a mem0 client from Settings — mirrors `plugins/mem0.py`'s
     `_get_client()` exactly (hosted `MemoryClient` when
