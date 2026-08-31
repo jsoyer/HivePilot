@@ -189,9 +189,7 @@ class TestRolesUpdate:
 
     def test_update_name_mismatch_is_400(self, api_client, tmp_tokens_file):
         raw, _ = add_token("admin")
-        resp = api_client.put(
-            "/v1/roles/auditor", json=_payload(name="other"), headers=_auth(raw)
-        )
+        resp = api_client.put("/v1/roles/auditor", json=_payload(name="other"), headers=_auth(raw))
         assert resp.status_code == 400
 
     def test_update_requires_admin(self, api_client, tmp_tokens_file):

@@ -157,9 +157,9 @@ class TestStoreFirstRefresh:
             (),
             {
                 "roles_file": roles_yaml,
-                "resolve_config_path": lambda self, f: roles_yaml
-                if str(f).endswith("roles.yaml")
-                else prompt,
+                "resolve_config_path": lambda self, f: (
+                    roles_yaml if str(f).endswith("roles.yaml") else prompt
+                ),
             },
         )()
         original_settings = config_module.settings
@@ -197,9 +197,7 @@ class TestExportStoreToYaml:
         roles_path = tmp_path / "roles.yaml"
         prompts_dir = tmp_path / "prompts" / "agents"
 
-        count = roles_module.export_store_to_yaml(
-            roles_path=roles_path, prompts_dir=prompts_dir
-        )
+        count = roles_module.export_store_to_yaml(roles_path=roles_path, prompts_dir=prompts_dir)
         assert count == 2
 
         parsed = yaml.safe_load(roles_path.read_text(encoding="utf-8"))
@@ -219,16 +217,18 @@ class TestExportStoreToYaml:
         state_service.upsert_role(_ciso(name="dev", order=4, prompt_file="dev.md"))
         roles_path = tmp_path / "roles.yaml"
         prompts_dir = tmp_path / "prompts" / "agents"
-        assert roles_module.export_store_to_yaml(roles_path=roles_path, prompts_dir=prompts_dir) == 1
+        assert (
+            roles_module.export_store_to_yaml(roles_path=roles_path, prompts_dir=prompts_dir) == 1
+        )
 
         mock = type(
             "S",
             (),
             {
                 "roles_file": roles_path,
-                "resolve_config_path": lambda self, f: roles_path
-                if str(f).endswith("roles.yaml")
-                else prompts_dir / Path(str(f)).name,
+                "resolve_config_path": lambda self, f: (
+                    roles_path if str(f).endswith("roles.yaml") else prompts_dir / Path(str(f)).name
+                ),
             },
         )()
         original_settings = config_module.settings
@@ -238,7 +238,11 @@ class TestExportStoreToYaml:
             reloaded = roles_module._load_roles_strict()
             assert set(reloaded) == {"dev"}
             assert reloaded["dev"].title == "CISO"
-            assert reloaded["dev"].prompt_file.read_text(encoding="utf-8").startswith("You are the CISO")
+            assert (
+                reloaded["dev"]
+                .prompt_file.read_text(encoding="utf-8")
+                .startswith("You are the CISO")
+            )
         finally:
             config_module.settings = original_settings
             roles_module.ROLES = original

@@ -332,14 +332,30 @@ def export_store_to_yaml(
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
     _ORDER = [
-        "name", "display_name", "title", "command_task", "prompt_file",
-        "model_profile", "runner", "model", "models", "inputs", "outputs",
-        "optional_inputs", "allowed_tools", "can_block", "order", "host",
-        "permission_mode", "effort",
+        "name",
+        "display_name",
+        "title",
+        "command_task",
+        "prompt_file",
+        "model_profile",
+        "runner",
+        "model",
+        "models",
+        "inputs",
+        "outputs",
+        "optional_inputs",
+        "allowed_tools",
+        "can_block",
+        "order",
+        "host",
+        "permission_mode",
+        "effort",
     ]
     entries: list[dict] = []
     for row in sorted(rows, key=lambda r: (r.get("order") or 0, r.get("name") or "")):
-        prompt_file = Path(str(row["prompt_file"])).name if row.get("prompt_file") else f"{row['name']}.md"
+        prompt_file = (
+            Path(str(row["prompt_file"])).name if row.get("prompt_file") else f"{row['name']}.md"
+        )
         prompt_text = row.get("prompt_text")
         if prompt_text is not None:
             (prompts_dir / prompt_file).write_text(str(prompt_text), encoding="utf-8")
@@ -377,7 +393,9 @@ def api_roster(tenant: str = "default") -> list[dict]:
     serialized = []
     for role in list_roles():
         data = role.model_dump()
-        data["prompt_file"] = Path(str(data["prompt_file"])).name if data.get("prompt_file") else None
+        data["prompt_file"] = (
+            Path(str(data["prompt_file"])).name if data.get("prompt_file") else None
+        )
         data["prompt_text"] = None
         serialized.append(data)
     return sorted(serialized, key=lambda r: (r.get("order", 0), r.get("name", "")))

@@ -111,12 +111,7 @@ def read_since(
     state_service.init_db()
     with db.connect() as conn:
         rows = conn.execute(
-            ph(
-                db.ph(
-                    "SELECT * FROM change_log WHERE id > ? AND channel = ? "
-                    "ORDER BY id LIMIT ?"
-                )
-            ),
+            ph(db.ph("SELECT * FROM change_log WHERE id > ? AND channel = ? ORDER BY id LIMIT ?")),
             (after_id, channel, limit),
         ).fetchall()
     return [_decode(dict(row)) for row in rows]

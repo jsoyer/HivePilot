@@ -3180,7 +3180,10 @@ class RoleWrite(BaseModel):
 
 
 def _apply_role_write(payload: RoleWrite) -> dict:
-    if payload.permission_mode == "bypassPermissions" and not settings.allow_dangerous_role_capabilities:
+    if (
+        payload.permission_mode == "bypassPermissions"
+        and not settings.allow_dangerous_role_capabilities
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
@@ -3190,7 +3193,8 @@ def _apply_role_write(payload: RoleWrite) -> dict:
         )
     if not (payload.prompt_text or payload.prompt_file):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="a role needs prompt_text or prompt_file"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="a role needs prompt_text or prompt_file",
         )
     try:
         roles.validate_role_fields(payload.model_dump(exclude_none=True))
@@ -3221,9 +3225,7 @@ def list_roles_endpoint(caller: token_service.TokenEntry = Depends(require_role(
 
 @v1.get("/roles/{name}")
 @app.get("/roles/{name}")
-def get_role_endpoint(
-    name: str, caller: token_service.TokenEntry = Depends(require_role("read"))
-):
+def get_role_endpoint(name: str, caller: token_service.TokenEntry = Depends(require_role("read"))):
     for row in roles.api_roster():
         if row.get("name") == name:
             return row

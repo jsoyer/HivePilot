@@ -802,7 +802,9 @@ def record_step(
         _step_event_row = conn.execute(
             ph(db.ph("SELECT tenant FROM runs WHERE id=?")), (run_id,)
         ).fetchone()
-    _step_event_tenant = (dict(_step_event_row).get("tenant") if _step_event_row else None) or "default"
+    _step_event_tenant = (
+        dict(_step_event_row).get("tenant") if _step_event_row else None
+    ) or "default"
     # Announce the step on the event stream. Until this existed the stream
     # carried a run's endpoints and never its middle -- `state.run_start`,
     # then silence for ten minutes, then `state.verdict` -- so anything
