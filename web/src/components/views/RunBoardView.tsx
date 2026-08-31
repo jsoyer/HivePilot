@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
 import { EmptyState } from '@/components/dashboard/EmptyState'
+import { StatusGlyph } from '@/components/dashboard/StatusGlyph'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { formatAge, formatClock, formatElapsed, formatTimestamp } from '@/lib/format-time'
@@ -225,7 +226,10 @@ function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunC
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('truncate font-medium', compact && 'text-xs')}>{run.project}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <StatusGlyph status={run.status} />
+          <span className={cn('truncate font-medium', compact && 'text-xs')}>{run.project}</span>
+        </div>
         <Badge variant={statusVariant(run.status)} className="shrink-0">
           {run.status}
         </Badge>

@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/
 import { Input } from '@/components/ui/input'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { SectionHeader } from '@/components/dashboard/SectionHeader'
+import { StatusGlyph } from '@/components/dashboard/StatusGlyph'
 import { SweepRadar, type RadarAgent, type RadarAgentStatus } from '@/components/dashboard/SweepRadar'
 import type { VizTone } from '@/components/dashboard/Sparkline'
 import { ApiForbiddenError } from '@/lib/api'
@@ -328,6 +329,7 @@ function AttentionRunRow({ run }: { run: RunSummary }) {
       data-testid={`home-attention-run-${run.id}`}
       className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3 text-sm transition-colors hover:bg-muted/40"
     >
+      <StatusGlyph status={run.status} />
       <Badge variant="destructive">{t('home.attentionFailedRunBadge')}</Badge>
       <span className="metric-mono text-xs text-muted-foreground">#{run.id}</span>
       <span className="font-medium">{run.project}</span>
