@@ -21,6 +21,7 @@ import {
   Boxes,
   Waypoints,
   ServerCog,
+  Plug,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -52,6 +53,7 @@ import { CacheView } from './views/CacheView'
 import { OrchestratorView } from './views/OrchestratorView'
 import { ProvidersView } from './views/ProvidersView'
 import { PluginsView } from './views/PluginsView'
+import { McpView } from './views/McpView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
@@ -88,6 +90,8 @@ const BUILTIN_TABS = [
   // installed (the interesting set) would be invisible. Read-only for any
   // token; the switches gate themselves on useRole().can('admin').
   { value: 'plugins', labelKey: 'nav.plugins', Panel: PluginsView, Icon: Blocks },
+  // MCP command center (HP-76): servers + catalog + paste-anything import.
+  { value: 'mcp', labelKey: 'nav.mcp', Panel: McpView, Icon: Plug },
   // Prompt-cache economics. Separate from the analytics screens on purpose:
   // those aggregate, and an aggregate is exactly what hid 1.7M tokens of
   // cache creation nobody ever read back behind an 85% hit rate.
