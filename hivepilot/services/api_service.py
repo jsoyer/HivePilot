@@ -2090,6 +2090,41 @@ def analytics_providers(
     return {"by_provider": by_provider, "by_model": by_model}
 
 
+@v1.get("/providers/fallbacks", dependencies=[Depends(require_role("read"))])
+@app.get("/providers/fallbacks", dependencies=[Depends(require_role("read"))])
+def provider_fallbacks_endpoint(hours: int = 24) -> dict:
+    """Recent HP-70 provider fallbacks (HP-73), aggregated by source provider.
+    Surfaces the otherwise invisible fallback signal: which runner fell over,
+    how often, when last, and why (quota / unavailable). Provider fallback is a
+    global infra fact (tenant-agnostic), so this is read-gated but not
+    tenant-scoped."""
+    from hivepilot.services import events
+
+    hours = max(1, min(hours, 24 * 30))
+    rows = events.recent("provider.fallback", hours=hours)
+    agg: dict[str, dict[str, Any]] = {}
+    for row in rows:  # rows are newest-first, so the first sighting is the latest
+        payload = row.get("payload") or {}
+        provider = payload.get("from") or row.get("entity_id") or "unknown"
+        entry = agg.setdefault(
+            provider,
+            {
+                "provider": provider,
+                "count": 0,
+                "last_at": None,
+                "last_reason": None,
+                "last_to": None,
+            },
+        )
+        entry["count"] += 1
+        if entry["last_at"] is None:
+            entry["last_at"] = row.get("ts")
+            entry["last_reason"] = payload.get("reason")
+            entry["last_to"] = payload.get("to")
+    providers = sorted(agg.values(), key=lambda e: (-e["count"], e["provider"]))
+    return {"hours": hours, "providers": providers}
+
+
 @v1.get("/analytics/cost")
 @app.get("/analytics/cost")
 def analytics_cost(

@@ -7192,6 +7192,30 @@ class Orchestrator:
                                             ).inc()
                                         except Exception:  # noqa: BLE001
                                             pass
+                                    # Record the fallback as a durable, queryable
+                                    # fact (HP-73) so the UI can surface HP-70's
+                                    # otherwise invisible fallbacks. `emit` is
+                                    # fail-safe and provider fallback is a global
+                                    # infra signal, so it is tenant-agnostic.
+                                    from hivepilot.services import events as _events
+
+                                    _events.emit(
+                                        "provider.fallback",
+                                        "provider",
+                                        _runner_def_to_try.kind,
+                                        payload={
+                                            "from": _runner_def_to_try.kind,
+                                            "to": _next_kind,
+                                            "reason": "quota"
+                                            if _quota_err is not None
+                                            else "unavailable",
+                                            "reset_at": str(_quota_err.reset_at)
+                                            if _quota_err
+                                            else None,
+                                            "role": task.role,
+                                            "run_id": run_id,
+                                        },
+                                    )
                                     # Derived from the runner this step
                                     # actually resolved to, swapping only the
                                     # kind: identical to the previous

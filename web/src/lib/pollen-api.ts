@@ -265,6 +265,29 @@ export function fetchSessionCosts(days = 30, limit = 25): Promise<SessionCostsRe
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/providers/fallbacks — recent HP-70 provider fallbacks (HP-73).
+// The queryable companion to HP-70's otherwise-invisible fallback: which
+// provider fell over, how often, when last, and why. Aggregated by source
+// provider from durable `provider.fallback` events (HP-40 bus).
+// ---------------------------------------------------------------------------
+
+export interface ProviderFallback {
+  provider: string
+  count: number
+  last_at: string | null
+  last_reason: string | null
+  last_to: string | null
+}
+
+export function fetchProviderFallbacks(
+  hours = 24,
+): Promise<{ hours: number; providers: ProviderFallback[] }> {
+  return apiFetch<{ hours: number; providers: ProviderFallback[] }>(
+    `/v1/providers/fallbacks?hours=${hours}`,
+  )
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/models — Mirador Home command-center sprint. Shape transcribed
 // from `hivepilot/services/analytics_service.py`'s `models_summary` — read
 // that before changing anything here. `latency_available` is always `false`

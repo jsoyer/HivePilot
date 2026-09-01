@@ -117,6 +117,35 @@ def read_since(
     return [_decode(dict(row)) for row in rows]
 
 
+def recent(
+    kind: str, *, hours: int = 24, limit: int = 500, channel: str = CHANNEL
+) -> list[dict[str, Any]]:
+    """Return decoded `change_log` rows of `kind` from the last `hours`, newest
+    first. Unlike `read_since` (an ordered catch-up cursor), this is a bounded
+    time-window lookup used to surface recent facts of one kind (e.g. provider
+    fallbacks, HP-73) without replaying the whole log."""
+    from datetime import datetime, timedelta, timezone
+
+    from hivepilot.services import state_service  # lazy: ensure schema exists
+
+    state_service.init_db()
+    # `change_log.ts` is a UTC `CURRENT_TIMESTAMP` ("YYYY-MM-DD HH:MM:SS"); a
+    # same-format UTC string compares correctly on both SQLite (lexicographic)
+    # and Postgres (timestamp cast).
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    with db.connect() as conn:
+        rows = conn.execute(
+            ph(
+                db.ph(
+                    "SELECT * FROM change_log WHERE kind = ? AND channel = ? AND ts >= ? "
+                    "ORDER BY id DESC LIMIT ?"
+                )
+            ),
+            (kind, channel, cutoff, limit),
+        ).fetchall()
+    return [_decode(dict(row)) for row in rows]
+
+
 def latest_change_id(*, channel: str = CHANNEL) -> int:
     """Highest `change_log.id` for `channel` (0 when empty). A fresh subscriber
     starts here so it streams only changes from now on."""

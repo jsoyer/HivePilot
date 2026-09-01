@@ -20,6 +20,7 @@ import {
   MessagesSquare,
   Boxes,
   Waypoints,
+  ServerCog,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -49,6 +50,7 @@ import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
 import { CacheView } from './views/CacheView'
 import { OrchestratorView } from './views/OrchestratorView'
+import { ProvidersView } from './views/ProvidersView'
 import { PluginsView } from './views/PluginsView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
@@ -75,6 +77,9 @@ const BUILTIN_TABS = [
   // signals, GET /v1/efficiency) — grouped with Cost under "Spend" in
   // nav-config.ts's NAV_GROUP_ORDER.
   { value: 'models', labelKey: 'nav.models', Panel: ModelsView, Icon: Cpu },
+  // Providers panel (HP-73): real per-provider spend + HP-70 fallback
+  // visibility. Grouped under "Spend" next to Cost/Models/Efficiency.
+  { value: 'providers', labelKey: 'nav.providers', Panel: ProvidersView, Icon: ServerCog },
   { value: 'efficiency', labelKey: 'nav.efficiency', Panel: EfficiencyView, Icon: Zap },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
   // One card per curated plugin: description, on/off switch, and what it

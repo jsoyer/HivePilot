@@ -186,6 +186,8 @@ const GROUPED_TAB_ORDER = [
   'Autopilot',
   'Cost',
   'Models',
+  // Providers panel (HP-73) sits in the Spend group next to Models.
+  'Providers',
   'Efficiency',
   'Analytics',
   'Memory',
