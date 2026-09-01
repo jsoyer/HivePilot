@@ -39,6 +39,8 @@ tokens_app = typer.Typer(help="Manage API tokens")
 app.add_typer(tokens_app, name="tokens")
 model_app = typer.Typer(help="Model connections: verify before you save")
 app.add_typer(model_app, name="model")
+mail_app = typer.Typer(help="Inbound email/IMAP watchers (restricted reader agents)")
+app.add_typer(mail_app, name="mail")
 
 
 @model_app.command("verify")
@@ -80,6 +82,36 @@ def model_verify_command(
     if result.error and not result.ok:
         typer.echo(f"  error : {result.error}")
     raise typer.Exit(code=0 if result.ok else 1)
+
+
+@mail_app.command("poll")
+def mail_poll_command(
+    watcher: Optional[str] = typer.Option(
+        None, "--watcher", help="Poll only this watcher (default: every enabled one)"
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
+) -> None:
+    """Poll inbound mail watchers ONCE: for each allowlisted new message, start a
+    restricted reader run. Read-only (never sends/modifies mail); dedup survives
+    restart. Intended to be invoked on a cadence (cron / scheduler).
+    """
+    _require_cli_role("run", token)
+    from hivepilot.services import mail_watcher
+
+    results = mail_watcher.poll_all(only=watcher)
+    if not results:
+        typer.echo("No mail watchers configured (see mail_watchers.yaml).")
+        return
+    for name, r in results.items():
+        if r.disabled:
+            typer.echo(f"{name}: disabled")
+            continue
+        typer.echo(
+            f"{name}: dispatched={r.dispatched} rejected={r.rejected} "
+            f"duplicates={r.duplicates} failed={r.failed} skipped={r.skipped}"
+        )
 
 
 config_app = typer.Typer(help="Config repo sync")

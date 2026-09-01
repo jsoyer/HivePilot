@@ -29,6 +29,7 @@ would this have caught" stays discoverable from the code itself:
     surfaced them outside ``plugins health`` -- folded into the single
     doctor report here).
   * ``check_dangling_references`` (+ ``_check_schedules_dangling`` /
+    ``_check_mail_watchers_dangling`` /
     ``_check_role_overrides_dangling`` / ``_check_only_modules_dangling``)
     — incident #7 (a removed project left behind in ``policies.yaml``; a
     stage's ``only_tags``/``only_modules`` referencing something no group/
@@ -813,6 +814,108 @@ def _check_schedules_dangling(config_dir: Path | None) -> list[DoctorFinding]:
     return findings
 
 
+def _check_mail_watchers_dangling(config_dir: Path | None) -> list[DoctorFinding]:
+    """HP-75: mail_watchers.yaml is not in validate_config's required_files,
+    so a dangling task/project, an enabled watcher with an empty allowlist
+    (admits nothing — fail-closed, but almost certainly a typo), or a
+    missing host/username only surfaces when `hivepilot mail poll` actually
+    runs. Same shape as `_check_schedules_dangling`."""
+    watchers_data, findings = _load_yaml_checked(_doctor_path("mail_watchers.yaml", config_dir))
+    projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    tasks_data, task_findings = _load_yaml_checked(_doctor_path("tasks.yaml", config_dir))
+    findings.extend(project_findings)
+    findings.extend(task_findings)
+
+    projects_section, projects_section_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(projects_section_findings)
+    tasks_section, tasks_section_findings = _checked_container(
+        tasks_data, "tasks", "'tasks.yaml' key 'tasks'"
+    )
+    findings.extend(tasks_section_findings)
+    watchers_section, watchers_section_findings = _checked_container(
+        watchers_data, "mail_watchers", "'mail_watchers.yaml' key 'mail_watchers'"
+    )
+    findings.extend(watchers_section_findings)
+
+    project_names: set[str] = set(projects_section.keys())
+    task_names: set[str] = set(tasks_section.keys())
+
+    for watcher_name, watcher in watchers_section.items():
+        if not isinstance(watcher, dict):
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_mail_watcher_entry",
+                    f"Mail watcher '{watcher_name}' is not a mapping (got "
+                    f"{type(watcher).__name__}) -- not checked",
+                    "a watcher entry that isn't a mapping was previously skipped with "
+                    "zero output, silently disabling the dangling-task/dangling-project "
+                    "and empty-allowlist checks for it",
+                    f"fix the '{watcher_name}' entry in mail_watchers.yaml to be a mapping "
+                    "with 'host'/'username'/'task'/'allow_senders' keys",
+                )
+            )
+            continue
+        enabled = bool(watcher.get("enabled", False))
+        if enabled:
+            for required in ("host", "username", "task"):
+                if not watcher.get(required):
+                    findings.append(
+                        _finding(
+                            "error",
+                            "mail_watcher_missing_field",
+                            f"Enabled mail watcher '{watcher_name}' is missing '{required}'",
+                            "an enabled watcher with a blank host/username/task only fails "
+                            "when `hivepilot mail poll` actually connects",
+                            f"set '{required}' on '{watcher_name}' in mail_watchers.yaml, "
+                            "or set enabled: false",
+                        )
+                    )
+            if not watcher.get("allow_senders"):
+                findings.append(
+                    _finding(
+                        "error",
+                        "mail_watcher_empty_allowlist",
+                        f"Enabled mail watcher '{watcher_name}' has an empty allow_senders "
+                        "-- fail-closed, so it will admit nothing",
+                        "an empty allowlist is the safety default, but enabling a watcher "
+                        "without listing senders is almost certainly a typo that silently "
+                        "drops every inbound message",
+                        f"add at least one address or @domain to allow_senders on "
+                        f"'{watcher_name}', or set enabled: false",
+                    )
+                )
+        task_ref = watcher.get("task")
+        if task_ref and task_ref not in task_names:
+            findings.append(
+                _finding(
+                    "error",
+                    "dangling_mail_watcher_task",
+                    f"Mail watcher '{watcher_name}' references unknown task '{task_ref}'",
+                    "a watcher with a dangling task only fails when mail poll actually "
+                    "dispatches it -- silent until then",
+                    f"add task '{task_ref}' to tasks.yaml, or fix/remove mail_watchers.yaml "
+                    f"entry '{watcher_name}'",
+                )
+            )
+        for project_ref in watcher.get("projects") or []:
+            if project_ref not in project_names:
+                findings.append(
+                    _finding(
+                        "error",
+                        "dangling_mail_watcher_project",
+                        f"Mail watcher '{watcher_name}' references unknown project '{project_ref}'",
+                        "a watcher targeting a removed/renamed project silently fails at "
+                        "run time instead of at config-check time",
+                        f"add project '{project_ref}' to projects.yaml, or fix/remove it "
+                        f"from mail_watchers.yaml entry '{watcher_name}'",
+                    )
+                )
+    return findings
+
+
 def _alias_to_role_map() -> dict[str, str]:
     """Invert `telegram_bot._CURATED_ALIASES` (alias -> real role key) --
     the authoritative source of which short names are Telegram command
@@ -1274,6 +1377,7 @@ def check_dangling_references(config_dir: Path | None) -> list[DoctorFinding]:
                 )
             )
     findings.extend(_check_schedules_dangling(config_dir))
+    findings.extend(_check_mail_watchers_dangling(config_dir))
     findings.extend(_check_role_overrides_dangling(config_dir))
     findings.extend(_check_only_modules_dangling(config_dir))
     return findings
