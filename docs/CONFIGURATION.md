@@ -857,6 +857,12 @@ Defines recurring task runs, executed by the scheduler daemon.
 - `projects: list`
 - `interval_minutes` (default `1440`)
 - `enabled` (default `True`)
+- `remember` (default `False`) — **cron that remembers** (HP-74). When true, the
+  entry carries the prior run's output into the next run's context
+  (`prior_context`) and **skips the model call entirely** when its inputs
+  (task + projects + each project's git HEAD) are unchanged since the last run.
+  Cadence is still stamped on a skip, so it never busy-loops. Off = legacy
+  behavior (always run).
 
 ```yaml
 schedules:
@@ -865,6 +871,7 @@ schedules:
     projects: [acme-api]
     interval_minutes: 1440
     enabled: true
+    remember: true   # carry context + skip when nothing changed
 ```
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for running the scheduler daemon.
