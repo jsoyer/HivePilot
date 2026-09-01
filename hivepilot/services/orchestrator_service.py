@@ -37,11 +37,15 @@ def _plan_summary(plan: mission_plan.MissionPlan) -> str:
 
 
 def _decompose_and_post(
-    goal: str, project: str, tenant: str
+    goal: str, project: str, tenant: str, strategy: str | None = None
 ) -> tuple[mission_plan.MissionPlan, int]:
     """Decompose `goal` and post the breakdown (with a per-task action trace)
-    into the project's Orchestrateur Espace. Returns `(plan, space_id)`."""
+    into the project's Orchestrateur Espace. Returns `(plan, space_id)`. An
+    explicit `strategy` (from the UI mode card) overrides the planner's choice;
+    an unknown name is ignored (the plan keeps its own valid strategy)."""
     plan = mission_plan.decompose(goal, project)
+    if strategy and strategy in mission_plan.STRATEGIES:
+        plan.strategy = strategy
     space_id = get_or_create_project_space(project, tenant)
     msg_id = state_service.add_space_message(
         space_id,
@@ -63,10 +67,12 @@ def _decompose_and_post(
     return plan, space_id
 
 
-def decompose_feature(goal: str, project: str, tenant: str = "default") -> dict:
+def decompose_feature(
+    goal: str, project: str, tenant: str = "default", strategy: str | None = None
+) -> dict:
     """Decompose `goal` into a `MissionPlan` and surface it in the Orchestrateur
     Espace — a PREVIEW (no spawn). Returns `{plan, space_id}`."""
-    plan, space_id = _decompose_and_post(goal, project, tenant)
+    plan, space_id = _decompose_and_post(goal, project, tenant, strategy)
     return {"plan": plan.to_dict(), "space_id": space_id}
 
 
@@ -143,11 +149,13 @@ def spawn_plan(
     return runs
 
 
-def launch_mission(goal: str, project: str, tenant: str = "default") -> dict:
+def launch_mission(
+    goal: str, project: str, tenant: str = "default", strategy: str | None = None
+) -> dict:
     """Decompose `goal`, post the plan, SPAWN each task as a background run, and
     persist the mission (for tracking + synthesis). Returns
     `{plan, space_id, runs, mission_id}`."""
-    plan, space_id = _decompose_and_post(goal, project, tenant)
+    plan, space_id = _decompose_and_post(goal, project, tenant, strategy)
     runs = spawn_plan(plan, project, space_id, tenant)
     mission_id = state_service.create_mission(space_id, project, goal, runs, tenant)
     return {

@@ -3552,6 +3552,25 @@ def post_space_message_endpoint(
 class DecomposeRequest(BaseModel):
     goal: str
     project: str | None = None
+    #: HP-69 — optional execution/merge strategy from the UI mode card. An
+    #: unknown name is ignored server-side (the plan keeps a valid strategy).
+    strategy: str | None = None
+
+
+@v1.get("/orchestrator/strategies", dependencies=[Depends(require_role("read"))])
+@app.get("/orchestrator/strategies", dependencies=[Depends(require_role("read"))])
+def orchestrator_strategies_endpoint() -> dict:
+    """The catalog of execution/merge strategy presets (HP-69) — one per mockup
+    mode card, in display order. The Pollen decomposition panel renders these
+    directly (stages / dispatch / merge policy / guarantee label)."""
+    from hivepilot.services import mission_plan
+
+    return {
+        "strategies": [
+            mission_plan.STRATEGY_PRESETS[name].to_dict() for name in mission_plan.STRATEGIES
+        ],
+        "default": mission_plan.DEFAULT_STRATEGY,
+    }
 
 
 @v1.post("/orchestrator/decompose")
@@ -3564,7 +3583,7 @@ def orchestrator_decompose_endpoint(
     from hivepilot.services import orchestrator_service
 
     return orchestrator_service.decompose_feature(
-        payload.goal, payload.project or "default", tenant=caller.tenant
+        payload.goal, payload.project or "default", tenant=caller.tenant, strategy=payload.strategy
     )
 
 
@@ -3578,7 +3597,7 @@ def orchestrator_mission_endpoint(
     from hivepilot.services import orchestrator_service
 
     return orchestrator_service.launch_mission(
-        payload.goal, payload.project or "default", tenant=caller.tenant
+        payload.goal, payload.project or "default", tenant=caller.tenant, strategy=payload.strategy
     )
 
 
