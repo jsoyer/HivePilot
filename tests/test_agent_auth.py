@@ -45,12 +45,26 @@ class TestTheContractsAreVerifiedOnly:
         assert c.login_argv == ["cursor-agent", "login"]
         assert c.login_env == {"NO_OPEN_BROWSER": "1"}
 
-    def test_claude_declares_its_store_and_NO_login(self):
-        """The credentials file was verified on the box; a headless login
-        command was NOT — so it is None, not a guess."""
+    def test_claude_declares_store_and_setup_token_login(self):
+        """`claude setup-token` is Anthropic's documented headless token flow;
+        the store is the credentials file."""
         c = agent_auth.AUTH_CONTRACTS["claude"]
 
         assert c.auth_store == "~/.claude/.credentials.json"
+        assert c.login_argv == ["claude", "setup-token"]
+
+    def test_codex_declares_store_and_chatgpt_login(self):
+        c = agent_auth.AUTH_CONTRACTS["codex"]
+
+        assert c.auth_store == "~/.codex/auth.json"
+        assert c.login_argv == ["codex", "login"]
+
+    def test_gemini_declares_store_only_no_headless_login(self):
+        """Gemini's sign-in is a browser OAuth flow with no documented headless
+        argv — store detection only, login stays None."""
+        c = agent_auth.AUTH_CONTRACTS["gemini"]
+
+        assert c.auth_store == "~/.gemini/oauth_creds.json"
         assert c.login_argv is None
 
     def test_gh_declares_store_and_probe_but_no_headless_login(self):
@@ -60,12 +74,11 @@ class TestTheContractsAreVerifiedOnly:
         assert c.probe_argv == ["gh", "auth", "status"]
         assert c.login_argv is None
 
-    def test_unverified_kinds_are_absent_not_guessed(self):
-        """codex auths via ChatGPT login, gemini via Google — neither flow was
-        verified on this box, so neither is in the registry. Absent means the
-        listing says "unknown"; an invented store path would say "absent" for
-        an agent that is in fact logged in."""
-        for kind in ("codex", "gemini", "opencode", "ollama", "antigravity"):
+    def test_still_uncovered_kinds_stay_unknown_not_guessed(self):
+        """opencode/ollama/antigravity had no store path or login flow
+        grounded, so they stay out of the registry and surface as "unknown"
+        rather than a fabricated "absent"."""
+        for kind in ("opencode", "ollama", "antigravity"):
             assert kind not in agent_auth.AUTH_CONTRACTS
 
 
@@ -104,7 +117,7 @@ class TestAuthState:
         assert agent_auth.auth_state("grok") == "absent"
 
     def test_an_undeclared_kind_is_unknown_never_guessed(self):
-        assert agent_auth.auth_state("codex") == "unknown"
+        assert agent_auth.auth_state("opencode") == "unknown"
 
     def test_the_state_never_reads_the_store_content(self):
         """Existence and size only. Reading content into a process that logs
@@ -118,8 +131,9 @@ class TestAuthState:
 
 class TestHeadlessLogin:
     def test_it_refuses_a_kind_without_a_login_command(self):
+        # gemini declares a store but no headless login flow.
         with pytest.raises(agent_auth.AgentAuthError, match="no verified headless login"):
-            agent_auth.start_headless_login("claude")
+            agent_auth.start_headless_login("gemini")
 
     def test_it_refuses_an_unknown_kind(self):
         with pytest.raises(agent_auth.AgentAuthError, match="no verified headless login"):
@@ -181,6 +195,9 @@ class TestTheListingCarriesAuth:
         rows = {r["kind"]: r for r in agent_admin.list_agents_admin()}
 
         assert rows["grok"]["auth"] in ("present", "absent")
-        assert rows["codex"]["auth"] == "unknown"
+        # codex is now a grounded contract → present/absent, never "unknown".
+        assert rows["codex"]["auth"] in ("present", "absent")
         assert rows["grok"]["login_available"] is True
-        assert rows["claude"]["login_available"] is False
+        # claude now has a headless login (`setup-token`); gemini has none.
+        assert rows["claude"]["login_available"] is True
+        assert rows["gemini"]["login_available"] is False

@@ -37,6 +37,51 @@ schedule_app = typer.Typer(help="Scheduler commands")
 app.add_typer(schedule_app, name="schedule")
 tokens_app = typer.Typer(help="Manage API tokens")
 app.add_typer(tokens_app, name="tokens")
+model_app = typer.Typer(help="Model connections: verify before you save")
+app.add_typer(model_app, name="model")
+
+
+@model_app.command("verify")
+def model_verify_command(
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="API provider: openai/anthropic/google/openrouter/mistral/perplexity/ollama",
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="Override endpoint, e.g. http://localhost:11434/v1"
+    ),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key", help="Credential (else read from the provider's env var)"
+    ),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Verify a CLI agent SESSION instead: claude/codex/cursor/grok/gemini"
+    ),
+) -> None:
+    """Verify a model connection responds BEFORE saving it — no config is written.
+
+    Sends a cheap authenticated `GET /models` (API providers), reuses the Ollama
+    probe (local), or checks the agent's login session (`--agent`). Exit 0 on
+    success, 1 on failure — usable as an onboarding gate.
+    """
+    from hivepilot.services import model_verify as mv
+
+    if agent:
+        result = mv.verify_agent(agent)
+    elif provider:
+        result = mv.verify(provider, base_url=base_url, api_key=api_key)
+    else:
+        raise typer.BadParameter("pass --provider <name> or --agent <kind>")
+
+    mark = "OK  " if result.ok else "FAIL"
+    typer.echo(f"[{mark}] {result.target}: {result.detail}")
+    if result.models:
+        typer.echo(f"  models: {', '.join(result.models[:8])}")
+    if result.error and not result.ok:
+        typer.echo(f"  error : {result.error}")
+    raise typer.Exit(code=0 if result.ok else 1)
+
+
 config_app = typer.Typer(help="Config repo sync")
 corrections_app = typer.Typer(help="Standing corrections injected into a role's prompts")
 topics_app = typer.Typer(help="Telegram forum topics: inspect the registry, prune strays")
