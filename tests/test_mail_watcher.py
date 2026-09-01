@@ -24,19 +24,23 @@ class FakeClient:
         return list(self._messages)
 
 
-def _watcher(**over) -> MailWatcher:
-    base = dict(
+def _watcher(
+    *,
+    enabled: bool = True,
+    allow_senders: list[str] | None = None,
+    max_admission_failures: int = 3,
+) -> MailWatcher:
+    return MailWatcher(
         name="support",
         host="imap.example.com",
         username="bot@example.com",
         password="${env:IMAP_PW}",
         task="triage",
         projects=["support"],
-        allow_senders=["@example.com"],
-        enabled=True,
+        allow_senders=["@example.com"] if allow_senders is None else allow_senders,
+        max_admission_failures=max_admission_failures,
+        enabled=enabled,
     )
-    base.update(over)
-    return MailWatcher(**base)
 
 
 def _msg(mid="<m1>", sender="alice@example.com", subject="hi", body="hello") -> InboundMessage:
