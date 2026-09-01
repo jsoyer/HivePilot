@@ -107,6 +107,89 @@ class TestDecompose:
         assert restored.roles_config["developer"]["repli"] == "grok/grok-4.6"
 
 
+class TestStrategyPresets:
+    def test_every_strategy_has_a_preset(self) -> None:
+        assert set(mission_plan.STRATEGY_PRESETS) == set(mission_plan.STRATEGIES)
+        for name, preset in mission_plan.STRATEGY_PRESETS.items():
+            assert preset.name == name
+            assert preset.dispatch in ("sequential", "parallel")
+            assert preset.merge in mission_plan.MERGE_POLICIES
+
+    def test_preset_encodes_the_mockup_modes(self) -> None:
+        pipeline = mission_plan.resolve_strategy("pipeline")
+        assert pipeline.stages == ("code", "review", "merge")
+        assert pipeline.dispatch == "parallel" and pipeline.merge == "per_task"
+
+        self_merge = mission_plan.resolve_strategy("code_only_self_merge")
+        assert self_merge.stages == ("code",) and self_merge.merge == "per_branch"
+
+        final_merge = mission_plan.resolve_strategy("code_only_final_merge")
+        assert final_merge.merge == "final"
+
+        assert mission_plan.resolve_strategy("new_mission").new_mission is True
+        assert mission_plan.resolve_strategy("sequential").dispatch == "sequential"
+
+    def test_resolve_unknown_falls_back_to_default(self) -> None:
+        assert mission_plan.resolve_strategy("bogus").name == mission_plan.DEFAULT_STRATEGY
+        assert mission_plan.resolve_strategy(None).name == mission_plan.DEFAULT_STRATEGY
+
+    def test_to_dict_exposes_strategy_detail_for_the_ui(self) -> None:
+        detail = MissionPlan(goal="g", strategy="pipeline").to_dict()["strategy_detail"]
+        assert detail["dispatch"] == "parallel"
+        assert detail["merge"] == "per_task"
+        assert detail["guarantee"].startswith("strategy.guarantee.")
+
+
+class TestSpawnOrdering:
+    def test_sequential_dispatch_honors_depends_on(self) -> None:
+        preset = mission_plan.resolve_strategy("sequential")
+        tasks = [
+            MissionTask(id="c", title="C", role="developer", depends_on=["b"]),
+            MissionTask(id="a", title="A", role="developer"),
+            MissionTask(id="b", title="B", role="developer", depends_on=["a"]),
+        ]
+        ordered = [t.id for t in orchestrator_service._ordered_tasks(tasks, preset)]
+        assert ordered == ["a", "b", "c"]
+
+    def test_parallel_dispatch_keeps_plan_order(self) -> None:
+        preset = mission_plan.resolve_strategy("pipeline")
+        tasks = [
+            MissionTask(id="c", title="C", role="developer", depends_on=["b"]),
+            MissionTask(id="a", title="A", role="developer"),
+        ]
+        assert [t.id for t in orchestrator_service._ordered_tasks(tasks, preset)] == ["c", "a"]
+
+    def test_cyclic_dependencies_do_not_drop_tasks(self) -> None:
+        preset = mission_plan.resolve_strategy("sequential")
+        tasks = [
+            MissionTask(id="x", title="X", role="developer", depends_on=["y"]),
+            MissionTask(id="y", title="Y", role="developer", depends_on=["x"]),
+        ]
+        ordered = [t.id for t in orchestrator_service._ordered_tasks(tasks, preset)]
+        assert sorted(ordered) == ["x", "y"]  # both present despite the cycle
+
+    def test_spawn_plan_orders_and_annotates_merge_policy(self) -> None:
+        space_id = orchestrator_service.get_or_create_project_space("atlas")
+        plan = MissionPlan(
+            goal="g",
+            strategy="sequential",
+            tasks=[
+                MissionTask(id="t2", title="second", role="developer", depends_on=["t1"]),
+                MissionTask(id="t1", title="first", role="developer"),
+            ],
+        )
+        runs = orchestrator_service.spawn_plan(plan, "atlas", space_id)
+        assert set(runs) == {"t1", "t2"}
+
+        traces = [
+            m["body"]
+            for m in state_service.list_space_messages(space_id)
+            if m["body"].startswith("→")
+        ]
+        assert traces[0].startswith("→ t1") and traces[1].startswith("→ t2")  # dependency order
+        assert "merge final groupé" in traces[0]  # sequential → final merge policy
+
+
 class TestOrchestratorService:
     def test_project_space_is_a_singleton(self) -> None:
         a = orchestrator_service.get_or_create_project_space("atlas")

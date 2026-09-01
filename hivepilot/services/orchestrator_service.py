@@ -70,23 +70,62 @@ def decompose_feature(goal: str, project: str, tenant: str = "default") -> dict:
     return {"plan": plan.to_dict(), "space_id": space_id}
 
 
+#: How each merge policy reads to the coder assigned the task (HP-69).
+_MERGE_NOTE = {
+    "per_task": "code→review→merge",
+    "per_branch": "merge sa branche",
+    "final": "merge final groupé",
+    "none": "sans merge",
+}
+
+
+def _ordered_tasks(
+    tasks: list[mission_plan.MissionTask], preset: mission_plan.StrategyPreset
+) -> list[mission_plan.MissionTask]:
+    """Dispatch order for a strategy. A `sequential` preset honors
+    `depends_on` (Kahn topological sort, stable on the plan's own order);
+    `parallel` keeps the plan order (partitions fan them out at once). Tolerant
+    of unknown or cyclic dependencies — any leftover tasks are appended in
+    their original order rather than dropped."""
+    if preset.dispatch != "sequential":
+        return list(tasks)
+    by_id = {t.id: t for t in tasks}
+    remaining = {t.id: {d for d in t.depends_on if d in by_id} for t in tasks}
+    ordered: list[mission_plan.MissionTask] = []
+    while remaining:
+        ready = [tid for tid in remaining if not remaining[tid]]
+        if not ready:  # cycle / unresolved — append the rest in plan order
+            ordered.extend(by_id[t.id] for t in tasks if t.id in remaining)
+            break
+        for tid in [t.id for t in tasks if t.id in ready]:  # stable
+            ordered.append(by_id[tid])
+            del remaining[tid]
+            for deps in remaining.values():
+                deps.discard(tid)
+    return ordered
+
+
 def spawn_plan(
     plan: mission_plan.MissionPlan, project: str, space_id: int, tenant: str = "default"
 ) -> dict[str, int]:
     """Spawn one background run per task in the plan (HP-48 `spawn_peer`),
     tracing each into the Orchestrateur Espace. Returns `{task_id: run_id}`.
 
-    Dependency ordering (`task.depends_on`) is carried by the plan and honored
-    by the execution STRATEGY (HP-69); this slice dispatches the tasks and
-    records the plan↔runs mapping."""
+    The plan's STRATEGY (HP-69) preconfigures HOW tasks dispatch and merge: a
+    `sequential` strategy spawns in dependency order; a `parallel` one fans
+    them out. Each task's spawn trace carries the resolved merge policy so the
+    assigned coder knows its merge responsibility (own branch vs a final
+    Merger vs a per-task pipeline)."""
+    preset = mission_plan.resolve_strategy(plan.strategy)
+    merge_note = _MERGE_NOTE.get(preset.merge, preset.merge)
     runs: dict[str, int] = {}
-    for task in plan.tasks:
+    for task in _ordered_tasks(plan.tasks, preset):
         run_id = delegation.spawn_peer(project, task.title or task.id, task.role, tenant=tenant)
         runs[task.id] = run_id
         msg_id = state_service.add_space_message(
             space_id,
             "system",
-            f"→ {task.id} · {task.title} ({task.role}) · run #{run_id}",
+            f"→ {task.id} · {task.title} ({task.role}) · run #{run_id} · {merge_note}",
             tenant=tenant,
         )
         events.emit(
