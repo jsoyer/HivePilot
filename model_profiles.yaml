@@ -3,14 +3,17 @@ claude_profiles:
     model: sonnet
     grok: grok-4.6
     cursor: gpt-5.3-codex-high
+    ollama: qwen2.5-coder
   architecture:
     model: opus
     grok: grok-4.6
     cursor: cursor-grok-4.6-high
+    ollama: llama3.1
   automation:
     model: haiku
     grok: grok-4.5
     cursor: composer-2.5-fast
+    ollama: llama3.2
 
 # Role-to-profile bindings for V4 agent roles (Phase 1 — all Claude).
 # Strategy/security roles use architecture (opus); implementation/review

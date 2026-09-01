@@ -614,7 +614,37 @@ class VibeRunner(PromptCliRunner):
 
 @dataclass
 class OllamaRunner(PromptCliRunner):
-    command_name: str = "ollama run codellama"
+    """Local Ollama.
+
+    CLI mode runs `ollama run <model> <prompt>` — Ollama takes the model as a
+    POSITIONAL argument, never a `--model` flag, so `_build_cli_args` is
+    overridden to place it correctly (the base class would emit `--model`,
+    which Ollama rejects). The model resolves step > definition > default.
+
+    `mode: api` targets Ollama's OpenAI-compatible endpoint
+    (`http://localhost:11434/v1`) out of the box — same zero-config contract as
+    `QwenCodeRunner`: `__post_init__` defaults `api_provider`/`api_model` and
+    injects `OPENAI_BASE_URL` + a placeholder `OPENAI_API_KEY` (Ollama ignores
+    the key, but the shared `_run_api` openai branch requires one present)."""
+
+    command_name: str = "ollama run"
+    default_model: ClassVar[str] = "llama3.2"
+    default_api_base: ClassVar[str] = "http://localhost:11434/v1"
+
+    def __post_init__(self) -> None:
+        options = dict(self.definition.options)
+        options.setdefault("api_provider", "openai")
+        options.setdefault("api_model", self.definition.model or self.default_model)
+        env = dict(self.definition.env)
+        env.setdefault("OPENAI_BASE_URL", self.default_api_base)
+        env.setdefault("OPENAI_API_KEY", "ollama")
+        self.definition = self.definition.model_copy(update={"options": options, "env": env})
+
+    def _build_cli_args(self, payload: RunnerPayload, prompt_text: str) -> list[str]:
+        model = payload.step.metadata.get("model") or self.definition.model or self.default_model
+        set_last_resolved_model(model)
+        base = shlex.split(self.definition.command or self.command_name)
+        return [*base, model, prompt_text]
 
 
 @dataclass
