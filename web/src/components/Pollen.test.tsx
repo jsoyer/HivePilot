@@ -176,6 +176,8 @@ const GROUPED_TAB_ORDER = [
   'Home',
   // Espaces (HP-45): conversation rooms lead the Operate group (nav-config.ts).
   'Spaces',
+  // Orchestrator decomposition panel (HP-49 / HP-69) sits next to Spaces.
+  'Orchestrator',
   'Runs',
   'Approvals',
   // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions joins the Operate

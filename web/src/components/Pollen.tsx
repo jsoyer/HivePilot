@@ -19,6 +19,7 @@ import {
   Gauge,
   MessagesSquare,
   Boxes,
+  Waypoints,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -47,6 +48,7 @@ import { HomeView } from './views/HomeView'
 import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
 import { CacheView } from './views/CacheView'
+import { OrchestratorView } from './views/OrchestratorView'
 import { PluginsView } from './views/PluginsView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
@@ -114,6 +116,10 @@ const BUILTIN_TABS = [
   // agents talk. `run`-gated posting (composer hides for a read-only token);
   // list/read for any token. Grouped under "Operate" (nav-config.ts).
   { value: 'spaces', labelKey: 'nav.spaces', Panel: EspacesView, Icon: Boxes },
+  // Orchestrator decomposition panel (HP-49 / HP-69): a goal → a MissionPlan
+  // preview + the five strategy mode cards (execution & merge), then launch.
+  // `run`-gated actions (hide for a read-only token); grouped under "Operate".
+  { value: 'orchestrator', labelKey: 'nav.orchestrator', Panel: OrchestratorView, Icon: Waypoints },
   // Mirador Autopilot view sprint: GET /v1/autopilot (guarded objective
   // queue state — real-or-honest-empty, tenant-locked) + POST /v1/autopilot/
   // pause|resume — read-only for any token, the Pause/Resume control inside

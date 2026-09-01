@@ -2048,3 +2048,70 @@ export function createSpace(
     on403: 'forbidden',
   })
 }
+
+// ---- Orchestrator: decomposition + mission strategies (HP-49 / HP-69) ------
+
+/** A resolved execution/merge strategy preset — one mockup mode card. */
+export interface MissionStrategyDetail {
+  name: string
+  stages: string[]
+  dispatch: 'sequential' | 'parallel'
+  merge: 'per_task' | 'per_branch' | 'final' | 'none'
+  new_mission: boolean
+  /** i18n key for the mockup's guarantee label. */
+  guarantee: string
+}
+
+export interface MissionTask {
+  id: string
+  title: string
+  role: string
+  description?: string
+  depends_on?: string[]
+}
+
+export interface MissionPlan {
+  goal: string
+  strategy: string
+  strategy_detail: MissionStrategyDetail
+  tasks: MissionTask[]
+  roles_config?: Record<string, Record<string, unknown>>
+}
+
+export interface DecomposeResult {
+  plan: MissionPlan
+  space_id: number
+}
+
+export interface LaunchMissionResult extends DecomposeResult {
+  runs: Record<string, number>
+  mission_id: number
+}
+
+/** The catalog of strategy presets (mockup mode cards) + the default name. */
+export function fetchMissionStrategies(): Promise<{
+  strategies: MissionStrategyDetail[]
+  default: string
+}> {
+  return apiFetch<{ strategies: MissionStrategyDetail[]; default: string }>(
+    '/v1/orchestrator/strategies',
+  )
+}
+
+/** Decompose a goal into a plan (PREVIEW — no spawn). `run`-gated. */
+export function decomposeFeature(
+  goal: string,
+  project?: string,
+  strategy?: string,
+): Promise<DecomposeResult> {
+  return postJson<DecomposeResult>('/v1/orchestrator/decompose', { goal, project, strategy })
+}
+
+/** Decompose + spawn each task as a background run. `run`-gated. */
+export function launchMission(
+  goal: string,
+  project?: string,
+  strategy?: string,
+): Promise<LaunchMissionResult> {
+  return postJson<LaunchMissionResult>('/v1/orchestrator/mission', { goal, project, strategy })
+}
