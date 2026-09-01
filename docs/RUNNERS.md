@@ -188,6 +188,23 @@ provider's HTTP API directly instead of invoking the CLI binary. Headless CLI ag
 still need an explicit permission mode to run non-interactively (e.g. claude's
 `--permission-mode`) — see [CONFIGURATION.md](CONFIGURATION.md).
 
+### Local models (Ollama)
+
+The `ollama` runner works against a local [Ollama](https://ollama.com) daemon with no
+cloud key:
+
+- **CLI mode (default):** runs `ollama run <model> <prompt>` — the model is positional
+  (Ollama has no `--model` flag). The model resolves step > role/definition > the runner
+  default (`llama3.2`).
+- **API mode (`mode: api`):** targets Ollama's OpenAI-compatible endpoint out of the box —
+  `OPENAI_BASE_URL` defaults to `http://localhost:11434/v1` and a placeholder
+  `OPENAI_API_KEY` is injected (Ollama ignores it). Override `OPENAI_BASE_URL` (or
+  `HIVEPILOT_OLLAMA_BASE_URL`) to point at a remote Ollama / LM Studio host.
+
+`model_profiles.yaml` carries an `ollama:` model per profile, so a role bound to a profile
+resolves a local model automatically. `hivepilot doctor` pings the local endpoint and lists
+the pulled models (a real reachability check, not just a PATH probe).
+
 ## Reasoning effort
 
 One closed enum: `low | medium | high | xhigh | max`. Settable on `RunnerDefinition`,

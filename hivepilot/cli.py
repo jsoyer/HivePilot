@@ -509,6 +509,25 @@ def doctor() -> None:
     except Exception as _exc:  # noqa: BLE001
         typer.echo(f"  (could not inspect runners: {_exc})")
 
+    # Local models (Ollama): verify the daemon actually ANSWERS, not just that
+    # the binary is on PATH — the honest minimum of "verify before use" for a
+    # local model (HP-78). Best-effort with a short timeout; never fatal.
+    typer.echo("\n=== Local models (Ollama) ===")
+    if shutil.which("ollama"):
+        from hivepilot.services.ollama_probe import probe_ollama
+
+        _op = probe_ollama()
+        if _op.reachable:
+            _models = ", ".join(_op.models[:8]) if _op.models else "(none pulled — `ollama pull …`)"
+            typer.echo(f"  endpoint    : reachable ({_op.base_url})")
+            typer.echo(f"  models      : {_models}")
+        else:
+            typer.echo(
+                f"  endpoint    : NOT reachable ({_op.base_url}) — is `ollama serve` running?"
+            )
+    else:
+        typer.echo("  ollama      : NOT on PATH (skip — install to use local models)")
+
     typer.echo("\n=== Mandatory agent CLIs ===")
     from hivepilot.services.agent_checks import MANDATORY_AGENTS, check_mandatory_agents
 
