@@ -50,7 +50,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // sur les modèles, rien de headroom/rtk") is specifically about spend
   // visibility, so it gets a dedicated, discoverable section rather than
   // being folded into general analytics.
-  { label: 'nav.spend', values: ['cost', 'models', 'efficiency'] },
+  { label: 'nav.spend', values: ['cost', 'models', 'providers', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
   // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
   // and memory-quality built-ins merged into ONE `memory` item backed by
