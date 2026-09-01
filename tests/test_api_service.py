@@ -2939,7 +2939,7 @@ class TestAgentLoginEndpoint:
 
     def test_an_unverified_kind_is_a_400_naming_the_verified_ones(self, monkeypatch):
         response, _ = self._call(
-            "codex", True, monkeypatch, error="'codex' has no verified headless login flow"
+            "opencode", True, monkeypatch, error="'opencode' has no verified headless login flow"
         )
 
         assert response.status_code == 400
