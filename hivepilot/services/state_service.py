@@ -314,6 +314,21 @@ def init_db() -> None:
             )
             """
         )
+        # Cron that remembers (HP-74): durable per-schedule memory. `scratch`
+        # carries into the next run's context; `last_input_hash` drives the
+        # no-op skip (skip the model when nothing changed). Keyed by the
+        # schedule entry name, like schedule_runs.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schedule_memory (
+                name TEXT PRIMARY KEY,
+                scratch TEXT,
+                last_output TEXT,
+                last_input_hash TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS approvals (
@@ -1542,6 +1557,45 @@ def update_schedule_run(name: str) -> None:
                 )
             ),
             (name,),
+        )
+
+
+def get_schedule_memory(name: str) -> dict[str, Any] | None:
+    """Durable memory for a `remember: true` schedule (HP-74): the prior run's
+    `scratch`/`last_output` (carried forward) and `last_input_hash` (no-op
+    skip). `None` before the first remembered run."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM schedule_memory WHERE name=?")), (name,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_schedule_memory(
+    name: str,
+    *,
+    scratch: str | None = None,
+    last_output: str | None = None,
+    last_input_hash: str | None = None,
+) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            INSERT INTO schedule_memory (name, scratch, last_output, last_input_hash, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(name) DO UPDATE SET
+                scratch=excluded.scratch,
+                last_output=excluded.last_output,
+                last_input_hash=excluded.last_input_hash,
+                updated_at=CURRENT_TIMESTAMP
+            """
+                )
+            ),
+            (name, scratch, last_output, last_input_hash),
         )
 
 
