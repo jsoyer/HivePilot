@@ -251,6 +251,40 @@ class TestDecomposeEndpoint:
         assert body["plan"]["goal"] == "ship the board"
         assert body["plan"]["tasks"]  # at least the fallback task
         assert isinstance(body["space_id"], int)
+        # HP-69: the resolved preset rides along for the UI mode card
+        assert body["plan"]["strategy_detail"]["dispatch"] in ("sequential", "parallel")
+
+    def test_strategy_override_is_applied(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("run", tenant="acme")
+        resp = api_client.post(
+            "/v1/orchestrator/decompose",
+            json={"goal": "g", "project": "atlas", "strategy": "code_only_self_merge"},
+            headers=_auth(raw),
+        )
+        assert resp.json()["plan"]["strategy"] == "code_only_self_merge"
+
+    def test_unknown_strategy_is_ignored(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("run", tenant="acme")
+        resp = api_client.post(
+            "/v1/orchestrator/decompose",
+            json={"goal": "g", "project": "atlas", "strategy": "bogus"},
+            headers=_auth(raw),
+        )
+        assert resp.json()["plan"]["strategy"] in mission_plan.STRATEGIES
+
+
+class TestStrategiesEndpoint:
+    def test_requires_read(self, api_client, tmp_tokens_file):
+        assert api_client.get("/v1/orchestrator/strategies").status_code == 401
+
+    def test_returns_all_presets_in_order(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        body = api_client.get("/v1/orchestrator/strategies", headers=_auth(raw)).json()
+        names = [s["name"] for s in body["strategies"]]
+        assert names == list(mission_plan.STRATEGIES)
+        assert body["default"] == mission_plan.DEFAULT_STRATEGY
+        for s in body["strategies"]:
+            assert s["guarantee"].startswith("strategy.guarantee.")
 
 
 class TestSpawnPlan:
