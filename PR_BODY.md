@@ -12,8 +12,8 @@ Linear: [HP-81](https://linear.app/js-workspace/issue/HP-81/whale-steps-surface-
 
 ## Testing
 
-- [ ] `pytest tests/test_analytics_service.py tests/test_api_service.py tests/test_pollen_contract.py -q`
-- [ ] `npm test` (`CostView.test.tsx`, `pollen-api.test.ts`, `Pollen.test.tsx`)
-- [ ] `hivepilot lint`
+- [x] `pytest tests/test_analytics_service.py tests/test_api_service.py tests/test_pollen_contract.py -q` — 14 new whale tests + existing analytics/contract suite
+- [x] `npm test` — CostView / pollen-api / Pollen: 91 passed
+- [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths in this env (not caused by this PR)
 
 Replay: `hivepilot run example-api docs --dry-run` (unchanged). New read: `GET /v1/analytics/whales`.
