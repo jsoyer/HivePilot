@@ -26,6 +26,7 @@ Endpoints covered (every one `web/src/lib/pollen-api.ts` calls):
     GET /v1/analytics/approvals/latency
     GET /v1/analytics/providers
     GET /v1/analytics/cost
+    GET /v1/analytics/whales
     GET /v1/plugins/health
     GET /v1/memories
     GET /v1/panels
@@ -290,6 +291,40 @@ class TestAnalyticsCostContract:
         assert role_row["role"] == "unknown"
         assert isinstance(data["by_role_note"], str) and data["by_role_note"]
         assert isinstance(data["unpriced_models"], list)
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/analytics/whales (HP-81)
+# ---------------------------------------------------------------------------
+
+
+_WHALE_KEYS = {
+    "step_id",
+    "run_id",
+    "project",
+    "task",
+    "step",
+    "provider",
+    "model",
+    "timestamp",
+    "input_tokens",
+    "output_tokens",
+    "cost_usd",
+    "priced",
+}
+
+
+class TestAnalyticsWhalesContract:
+    def test_top_level_keys(self, api_client, read_token, seeded_run):
+        resp = api_client.get("/v1/analytics/whales", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"whales", "limit"}
+        assert data["limit"] == 20
+        assert data["whales"]
+        assert set(data["whales"][0].keys()) == _WHALE_KEYS
+        # Envelopes only — a Langfuse-sized prompt body must never appear.
+        assert "detail" not in data["whales"][0]
 
 
 # ---------------------------------------------------------------------------

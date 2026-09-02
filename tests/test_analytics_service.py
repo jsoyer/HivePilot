@@ -1123,6 +1123,202 @@ class TestCostSummaryByProjectAndRole:
 
 
 # ---------------------------------------------------------------------------
+# HP-81 — cost_whales (top-N steps by spend / prompt tokens)
+# ---------------------------------------------------------------------------
+
+
+class TestCostWhales:
+    def test_empty_window_is_an_empty_list(self) -> None:
+        result = analytics_service.cost_whales(days=None)
+        assert result == {"whales": [], "limit": 20}
+
+    def test_stargate_sized_step_ranks_first(self) -> None:
+        """A $1.49 / 297k-token Claude Code call must not disappear into
+        ``claude · 30d``. Chloe's Langfuse row is the fixture."""
+        run1 = _seed_run(task="claude-code")
+        _seed_step_with_usage(
+            run1,
+            "agent",
+            "success",
+            provider="claude",
+            model="claude-opus-4-8",
+            input_tokens=296_865,
+            output_tokens=71,
+            cost_usd=1.4861,
+        )
+        _seed_step_with_usage(
+            run1,
+            "cheap",
+            "success",
+            provider="claude",
+            model="claude-haiku",
+            input_tokens=1_200,
+            output_tokens=80,
+            cost_usd=0.012,
+        )
+
+        whales = analytics_service.cost_whales(days=None)["whales"]
+        assert len(whales) == 2
+        assert whales[0]["model"] == "claude-opus-4-8"
+        assert whales[0]["cost_usd"] == 1.4861
+        assert whales[0]["input_tokens"] == 296_865
+        assert whales[0]["output_tokens"] == 71
+        assert whales[0]["task"] == "claude-code"
+        assert whales[0]["priced"] is True
+        assert whales[1]["model"] == "claude-haiku"
+
+    def test_envelope_only_never_selects_prompt_bodies(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "agent",
+            "success",
+            provider="claude",
+            model="claude-opus-4-8",
+            input_tokens=10_000,
+            output_tokens=20,
+            cost_usd=0.5,
+        )
+        whale = analytics_service.cost_whales(days=None)["whales"][0]
+        assert set(whale.keys()) == {
+            "step_id",
+            "run_id",
+            "project",
+            "task",
+            "step",
+            "provider",
+            "model",
+            "timestamp",
+            "input_tokens",
+            "output_tokens",
+            "cost_usd",
+            "priced",
+        }
+        assert "detail" not in whale
+        assert "prompt" not in whale
+        assert "messages" not in whale
+
+    def test_shell_and_skip_steps_are_not_whales(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "npm-test",
+            "success",
+            provider="shell",
+            model=None,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=None,
+        )
+        _seed_step_with_usage(
+            run1,
+            "skip:docs",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=50_000,
+            output_tokens=10,
+            cost_usd=0.4,
+        )
+        _seed_step_with_usage(
+            run1,
+            "real",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=10,
+            cost_usd=0.01,
+        )
+        whales = analytics_service.cost_whales(days=None)["whales"]
+        assert [w["step"] for w in whales] == ["real"]
+
+    def test_zero_cost_zero_token_steps_are_dropped(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "empty",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=None,
+            output_tokens=None,
+            cost_usd=None,
+        )
+        assert analytics_service.cost_whales(days=None)["whales"] == []
+
+    def test_same_cost_ranks_by_prompt_tokens(self) -> None:
+        run1 = _seed_run()
+        _seed_step_with_usage(
+            run1,
+            "small",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=1_000,
+            output_tokens=10,
+            cost_usd=0.5,
+        )
+        _seed_step_with_usage(
+            run1,
+            "huge",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=200_000,
+            output_tokens=10,
+            cost_usd=0.5,
+        )
+        whales = analytics_service.cost_whales(days=None)["whales"]
+        assert [w["step"] for w in whales] == ["huge", "small"]
+
+    def test_limit_caps_the_list(self) -> None:
+        run1 = _seed_run()
+        for i, cost in enumerate((0.3, 0.9, 0.1)):
+            _seed_step_with_usage(
+                run1,
+                f"s{i}",
+                "success",
+                provider="claude",
+                model="claude-sonnet-4-6",
+                input_tokens=100,
+                output_tokens=10,
+                cost_usd=cost,
+            )
+        result = analytics_service.cost_whales(days=None, limit=1)
+        assert result["limit"] == 1
+        assert len(result["whales"]) == 1
+        assert result["whales"][0]["cost_usd"] == 0.9
+
+    def test_tenant_isolation(self) -> None:
+        acme = _seed_run(tenant="acme")
+        other = _seed_run(tenant="other")
+        _seed_step_with_usage(
+            acme,
+            "a",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=10,
+            cost_usd=1.0,
+        )
+        _seed_step_with_usage(
+            other,
+            "o",
+            "success",
+            provider="claude",
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=10,
+            cost_usd=9.0,
+        )
+        whales = analytics_service.cost_whales(tenant="acme", days=None)["whales"]
+        assert len(whales) == 1
+        assert whales[0]["cost_usd"] == 1.0
+
+
+# ---------------------------------------------------------------------------
 # Pollen data endpoints sprint -- models_summary (GET /v1/models)
 # ---------------------------------------------------------------------------
 
