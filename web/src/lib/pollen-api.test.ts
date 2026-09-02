@@ -10,6 +10,7 @@ vi.mock('./api', async (importOriginal) => {
 import {
   fetchAgents,
   fetchAnalyticsCost,
+  fetchAnalyticsWhales,
   fetchAnalyticsDurations,
   fetchAnalyticsProviders,
   fetchAnalyticsSummary,
@@ -85,6 +86,11 @@ describe('pollen-api fetch wrappers', () => {
   it('fetchAnalyticsCost calls GET /v1/analytics/cost', async () => {
     await fetchAnalyticsCost(30)
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/analytics/cost?days=30')
+  })
+
+  it('fetchAnalyticsWhales calls GET /v1/analytics/whales', async () => {
+    await fetchAnalyticsWhales(7)
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/analytics/whales?days=7&limit=20')
   })
 
   it('fetchPluginsHealth calls GET /v1/plugins/health', async () => {

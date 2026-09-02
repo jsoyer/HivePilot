@@ -7,6 +7,7 @@ import type { AnalyticsCost } from '@/lib/pollen-api'
 
 const mocks = vi.hoisted(() => ({
   fetchAnalyticsCost: vi.fn(),
+  fetchAnalyticsWhales: vi.fn(),
   fetchSessionCosts: vi.fn(),
 }))
 
@@ -59,6 +60,7 @@ beforeEach(() => {
   // The sessions panel fetches alongside the summary on every mount. Give it
   // a benign default so tests about the SUMMARY do not have to know it exists.
   mocks.fetchSessionCosts.mockResolvedValue({ sessions: [], total_sessions: 0 })
+  mocks.fetchAnalyticsWhales.mockResolvedValue({ whales: [], limit: 20 })
   mocks.fetchAnalyticsCost.mockResolvedValue(emptyCost)
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -71,6 +73,67 @@ afterEach(() => {
   })
   container.remove()
   vi.restoreAllMocks()
+})
+
+describe('CostView — largest steps', () => {
+  const whale = {
+    step_id: 88,
+    run_id: 313,
+    project: 'stargate',
+    task: 'claude-code',
+    step: 'agent',
+    provider: 'claude',
+    model: 'claude-opus-4-8',
+    timestamp: '2026-09-02 16:46:40',
+    input_tokens: 296865,
+    output_tokens: 71,
+    cost_usd: 1.4861,
+    priced: true,
+  }
+
+  it('surfaces a 297k-token / $1.49 step instead of folding it into the model total', async () => {
+    mocks.fetchAnalyticsWhales.mockResolvedValue({ whales: [whale], limit: 20 })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const row = container.querySelector('[data-testid="whale-step-88"]')
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toContain('claude-opus-4-8')
+    expect(row?.textContent).toContain('296,865')
+    expect(row?.textContent).toContain('$1.486')
+    expect(row?.textContent).toContain('claude-code')
+    expect(mocks.fetchAnalyticsWhales).toHaveBeenCalledWith(30)
+  })
+
+  it('flags an unpriced whale so it never reads as cheap', async () => {
+    mocks.fetchAnalyticsWhales.mockResolvedValue({
+      whales: [{ ...whale, priced: false, cost_usd: 0 }],
+      limit: 20,
+    })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(
+      container.querySelector('[data-testid="whale-step-88"]')?.textContent,
+    ).toMatch(/unpriced/i)
+  })
+
+  it('renders an honest empty state when there are no whales', async () => {
+    mocks.fetchAnalyticsWhales.mockResolvedValue({ whales: [], limit: 20 })
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toMatch(/no large model steps/i)
+  })
 })
 
 describe('CostView — cost by session', () => {
@@ -223,6 +286,7 @@ describe('CostView', () => {
     })
 
     expect(mocks.fetchAnalyticsCost).toHaveBeenLastCalledWith(7)
+    expect(mocks.fetchAnalyticsWhales).toHaveBeenLastCalledWith(7)
   })
 
   it('renders an ApiForbiddenError as an error card instead of crashing', async () => {

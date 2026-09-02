@@ -199,6 +199,13 @@ export const fr: Record<TranslationKey, string> = {
   'cost.sessionInput': 'Entrée',
   'cost.sessionCacheRead': 'Lecture cache',
   'cost.sessionUnpriced': '{count} non chiffrées',
+  'cost.whalesTitle': 'Plus gros appels',
+  'cost.whalesDescription':
+    'Les appels que les totaux masquent. Un pas à 1,50 $ / 300k tokens disparaît dans « claude · 30j » — cette liste est la même enveloppe, jamais le corps du prompt.',
+  'cost.noWhales': 'Aucun gros appel modèle sur cette période.',
+  'cost.whaleStep': 'Étape',
+  'cost.whalesScrollLabel': 'Plus gros appels, faites défiler horizontalement pour voir les autres colonnes',
+  'cost.whaleUnpriced': 'non chiffré',
   'cost.title': 'Coûts et tokens',
   'cost.noCost': "Aucune donnée de coût pour l'instant.",
   'cost.totalCost': 'Coût total',

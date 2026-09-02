@@ -8,6 +8,7 @@ import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { useT } from '@/lib/i18n'
 import {
   fetchAnalyticsCost,
+  fetchAnalyticsWhales,
   fetchSessionCosts,
   type CostBasisFigure,
   type CostBasisReport,
@@ -142,6 +143,7 @@ export function CostView() {
   const t = useT()
   const [days, setDays] = useState<WindowDays>(30)
   const cost = useAsyncData(() => fetchAnalyticsCost(days), [days])
+  const whales = useAsyncData(() => fetchAnalyticsWhales(days), [days])
   const sessions = useAsyncData(() => fetchSessionCosts(days), [days])
 
   return (
@@ -282,6 +284,57 @@ export function CostView() {
                   )}
                 </div>
               </>
+            )}
+          </AsyncSection>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('cost.whalesTitle')}</CardTitle>
+          <CardDescription>{t('cost.whalesDescription')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AsyncSection
+            state={whales}
+            isEmpty={(data) => data.whales.length === 0}
+            emptyMessage={t('cost.noWhales')}
+          >
+            {(data) => (
+              <Table scrollLabel={t('cost.whalesScrollLabel')}>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t('cost.whaleStep')}</TableHead>
+                    <TableHead>{t('cost.model')}</TableHead>
+                    <TableHead className="text-right">{t('cost.tokensInOut')}</TableHead>
+                    <TableHead className="text-right">{t('cost.costLabel')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.whales.map((w) => (
+                    <TableRow key={w.step_id} data-testid={`whale-step-${w.step_id}`}>
+                      <TableCell>
+                        <span className="font-medium">{w.task}</span>{' '}
+                        <span className="text-xs text-muted-foreground">
+                          {w.step} #{w.run_id}
+                        </span>
+                        {!w.priced && (
+                          <span className="ml-2 text-xs text-amber-600 dark:text-amber-500">
+                            {t('cost.whaleUnpriced')}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>{w.model}</TableCell>
+                      <TableCell className="metric-mono text-right tabular-nums">
+                        {formatTokens(w.input_tokens)} / {formatTokens(w.output_tokens)}
+                      </TableCell>
+                      <TableCell className="metric-mono text-right tabular-nums">
+                        {formatCost(w.cost_usd)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </AsyncSection>
         </CardContent>
