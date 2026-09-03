@@ -6,7 +6,7 @@ This PR surfaces **top-N whale steps** from data we already store. It does **not
 
 - `analytics_service.cost_whales` — `steps JOIN runs`, exclude shell/container/`skip:`, order by effective `cost_usd` then `input_tokens`, default limit 20.
 - `GET /v1/analytics/whales?days=7&limit=20` — tenant-scoped like `/v1/analytics/cost`. Envelopes only: no prompt bodies, no invented latency.
-- Cost tab: **Largest steps** table, same 1/7/30 window.
+- Cost tab: **Largest steps** table, same 1/7/30 window. Each row shows **project** (e.g. `stargate`) so a Chloe-sized call is attributable, not just a model total.
 
 Linear: [HP-81](https://linear.app/js-workspace/issue/HP-81/whale-steps-surface-the-dollar150-300k-token-calls-on-cost). Related: HP-73.
 

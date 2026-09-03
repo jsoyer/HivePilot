@@ -105,6 +105,7 @@ describe('CostView — largest steps', () => {
     expect(row?.textContent).toContain('296,865')
     expect(row?.textContent).toContain('$1.486')
     expect(row?.textContent).toContain('claude-code')
+    expect(row?.textContent).toContain('stargate')
     expect(mocks.fetchAnalyticsWhales).toHaveBeenCalledWith(30)
   })
 

@@ -1135,7 +1135,7 @@ class TestCostWhales:
     def test_stargate_sized_step_ranks_first(self) -> None:
         """A $1.49 / 297k-token Claude Code call must not disappear into
         ``claude · 30d``. Chloe's Langfuse row is the fixture."""
-        run1 = _seed_run(task="claude-code")
+        run1 = _seed_run(project="stargate", task="claude-code")
         _seed_step_with_usage(
             run1,
             "agent",
@@ -1164,6 +1164,7 @@ class TestCostWhales:
         assert whales[0]["input_tokens"] == 296_865
         assert whales[0]["output_tokens"] == 71
         assert whales[0]["task"] == "claude-code"
+        assert whales[0]["project"] == "stargate"
         assert whales[0]["priced"] is True
         assert whales[1]["model"] == "claude-haiku"
 

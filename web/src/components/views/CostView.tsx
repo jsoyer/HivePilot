@@ -314,6 +314,7 @@ export function CostView() {
                   {data.whales.map((w) => (
                     <TableRow key={w.step_id} data-testid={`whale-step-${w.step_id}`}>
                       <TableCell>
+                        <span className="text-xs text-muted-foreground">{w.project}</span>{' '}
                         <span className="font-medium">{w.task}</span>{' '}
                         <span className="text-xs text-muted-foreground">
                           {w.step} #{w.run_id}
