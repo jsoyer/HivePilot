@@ -49,6 +49,8 @@ const mocks = vi.hoisted(() => ({
     latency_note: 'p50/p95 latency is not computable from current data.',
   }),
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
+  fetchMcpServers: vi.fn().mockResolvedValue({ servers: [], cost_note: '' }),
+  fetchMcpCatalog: vi.fn().mockResolvedValue({ catalog: [] }),
   fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
@@ -195,6 +197,8 @@ const GROUPED_TAB_ORDER = [
   // One card per curated plugin (GET /v1/plugins/catalog) — grouped under
   // System beside Health, which is where plugin state already lived.
   'Plugins',
+  // MCP command center (HP-76) sits next to Plugins under System.
+  'MCP',
   // Prompt-cache economics, beside Plugins under System. Separate from
   // Analytics on purpose: those aggregate, and an aggregate is what hid
   // 1.7M tokens of unread cache creation behind an 85% hit rate.

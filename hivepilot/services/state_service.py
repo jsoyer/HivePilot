@@ -329,6 +329,27 @@ def init_db() -> None:
             )
             """
         )
+        # MCP command center (HP-76): operator-added MCP servers. Config JSON
+        # is split into columns so probes/list don't have to re-parse; `env`
+        # stores only ${env:NAME} refs (literals are stripped on import).
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS mcp_servers (
+                id {pk},
+                name TEXT NOT NULL UNIQUE,
+                transport TEXT NOT NULL,
+                command TEXT,
+                args TEXT,
+                url TEXT,
+                env TEXT,
+                source TEXT NOT NULL DEFAULT 'import',
+                last_probe_status TEXT,
+                last_probe_detail TEXT,
+                last_probe_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         # Inbound mail watcher dedup + admission bookkeeping (HP-75). One row
         # per (watcher, message-id): `status` is dispatched/skipped/pending,
         # `attempts` bounds retries so a message that keeps failing admission
@@ -1615,6 +1636,97 @@ def upsert_schedule_memory(
             ),
             (name, scratch, last_output, last_input_hash),
         )
+
+
+def _decode_mcp_server(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    for key in ("args", "env"):
+        raw = out.get(key)
+        if isinstance(raw, str):
+            try:
+                out[key] = json.loads(raw)
+            except (ValueError, TypeError):
+                out[key] = [] if key == "args" else {}
+        elif out.get(key) is None:
+            out[key] = [] if key == "args" else {}
+    return out
+
+
+def list_mcp_servers() -> list[dict[str, Any]]:
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute("SELECT * FROM mcp_servers ORDER BY name").fetchall()
+    return [_decode_mcp_server(dict(row)) for row in rows]
+
+
+def get_mcp_server(server_id: int) -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM mcp_servers WHERE id=?")), (server_id,)
+        ).fetchone()
+    return _decode_mcp_server(dict(row)) if row else None
+
+
+def upsert_mcp_server(
+    *,
+    name: str,
+    transport: str,
+    command: str | None = None,
+    args: list[str] | None = None,
+    url: str | None = None,
+    env: dict[str, str] | None = None,
+    source: str = "import",
+) -> dict[str, Any]:
+    init_db()
+    args_json = json.dumps(args or [])
+    env_json = json.dumps(env or {})
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            INSERT INTO mcp_servers (name, transport, command, args, url, env, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                transport=excluded.transport,
+                command=excluded.command,
+                args=excluded.args,
+                url=excluded.url,
+                env=excluded.env,
+                source=excluded.source
+            """
+                )
+            ),
+            (name, transport, command, args_json, url, env_json, source),
+        )
+        row = conn.execute(ph(db.ph("SELECT * FROM mcp_servers WHERE name=?")), (name,)).fetchone()
+    assert row is not None
+    return _decode_mcp_server(dict(row))
+
+
+def update_mcp_probe(server_id: int, *, status: str, detail: str, probed_at: str) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            UPDATE mcp_servers
+            SET last_probe_status=?, last_probe_detail=?, last_probe_at=?
+            WHERE id=?
+            """
+                )
+            ),
+            (status, detail, probed_at, server_id),
+        )
+
+
+def delete_mcp_server(server_id: int) -> bool:
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(ph(db.ph("DELETE FROM mcp_servers WHERE id=?")), (server_id,))
+        return cur.rowcount > 0
 
 
 def get_mail_processed(watcher: str, message_id: str) -> dict[str, Any] | None:
