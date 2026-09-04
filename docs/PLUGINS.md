@@ -361,6 +361,15 @@ export HIVEPILOT_HINDSIGHT_BASE_URL=http://127.0.0.1:8888
 
 `before_step` calls `recall`; `after_step` calls `retain` with a redacted step output. `reflect()` is HP-54. mem0 is also a world-fact store — pick one primary; honcho (role model) and obsidian (vault) compose.
 
+Two bank namespaces (do not collapse them):
+
+| Bank id | Owner | Contents |
+|---|---|---|
+| `{project}:{task}:{role}` | HP-51 retain/recall | episodic step facts |
+| `role:{name}` | HP-52 role sync | Mission = full role prompt; Directives = `get_rules_for_role()` |
+
+`refresh_roles()` (API CRUD, SIGHUP, daemon adopt) pushes Mission + Directives into each `role:{name}` bank. Disposition (skepticism / literalism / empathy) is **not** a Role field — HivePilot never sends it, so Hindsight keeps its defaults. Path-like rules become `MUST read before acting: {path}`; prose cross-cutting rules are copied as-is. `allowed_tools` / `permission_mode` stay execution gates, not directives. Dormant unless `HIVEPILOT_HINDSIGHT_ENABLED`.
+
 `plugins install` prints each plugin's exact prerequisite after fetching; it never installs a binary or `pip install`s anything on your behalf — that stays an explicit operator decision, same as `hivepilot agents install`'s guided (never automatic) posture for agent CLIs. Restart HivePilot's services after installing for the plugin (and, if `--enable` persisted a flag, the flag) to take effect.
 
 **Trust note.** This is the one narrow exception to "no network fetch of plugin code" in the Trust model above — see that section for the honest accounting of what it does and doesn't change about the security posture.

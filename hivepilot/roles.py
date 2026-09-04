@@ -463,7 +463,22 @@ def refresh_roles() -> bool:
         return False
     ROLES = new_roles
     log.info("roles.refreshed — %d role(s) loaded", len(new_roles))
+    _sync_roles_to_hindsight(new_roles)
     return True
+
+
+def _sync_roles_to_hindsight(roles: dict[str, Role]) -> None:
+    """HP-52: push Mission + Directives into ``role:{name}`` banks.
+
+    Fail-soft: a Hindsight outage must never roll back a successful roster
+    swap. No-ops when ``HIVEPILOT_HINDSIGHT_ENABLED`` is off.
+    """
+    try:
+        from hivepilot.services.hindsight_role_sync import sync_all_roles
+
+        sync_all_roles(roles)
+    except Exception:  # noqa: BLE001 — refresh_roles already succeeded
+        log.warning("roles.hindsight_sync_failed", exc_info=True)
 
 
 # Module-level ROLES dict — sourced from roles.yaml at import time.
