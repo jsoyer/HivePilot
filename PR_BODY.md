@@ -13,7 +13,7 @@ Linear: [HP-51](https://linear.app/js-workspace/issue/HP-51/integrer-hindsight-c
 
 ## Testing
 
-- [x] `pytest tests/test_hindsight.py tests/test_gating_conformance.py tests/test_api_memory.py tests/test_plugin_installer.py tests/test_bundled_plugins_layout.py tests/test_config.py::TestHindsightEnabled -q` — 311 passed
+- [x] `pytest tests/test_hindsight.py tests/test_plugin_activity.py tests/test_gating_conformance.py tests/test_api_memory.py tests/test_plugin_installer.py tests/test_bundled_plugins_layout.py tests/test_config.py::TestHindsightEnabled -q`
 - [x] `npm test` — MemoryBackendsView (5)
 - [x] `npm run build` — Pollen static (i18n + backends card)
 - [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths
