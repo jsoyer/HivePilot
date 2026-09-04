@@ -870,6 +870,96 @@ class TestModelsVerify:
         assert resp.json()["target"] == "agent:claude"
 
 
+class TestModelsConnect:
+    def test_requires_auth(self, api_client):
+        assert (
+            api_client.post(
+                "/v1/models/connect",
+                json={"provider": "openai", "api_key": "sk-x", "consent": True},
+            ).status_code
+            == 401
+        )
+
+    def test_read_cannot_connect(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-x", "consent": True},
+        )
+        assert resp.status_code == 403
+
+    def test_requires_consent(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-x"},
+        )
+        assert resp.status_code == 400
+
+    def test_admin_saves_after_verify(self, api_client, tmp_tokens_file, tmp_path, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        env = tmp_path / ".env"
+        monkeypatch.setenv("HIVEPILOT_ENV_FILE", str(env))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(
+            mv,
+            "verify",
+            lambda provider, **kw: mv.VerifyResult(
+                ok=True, target=provider, detail="HTTP 200 · 1 models", models=["gpt-x"]
+            ),
+        )
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-never-echo", "consent": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["saved"] is True
+        assert body["env_key"] == "OPENAI_API_KEY"
+        assert "sk-never-echo" not in resp.text
+        assert "OPENAI_API_KEY=sk-never-echo" in env.read_text(encoding="utf-8")
+
+    def test_failed_verify_does_not_write(self, api_client, tmp_tokens_file, tmp_path, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        env = tmp_path / ".env"
+        monkeypatch.setenv("HIVEPILOT_ENV_FILE", str(env))
+        monkeypatch.setattr(
+            mv,
+            "verify",
+            lambda provider, **kw: mv.VerifyResult(ok=False, target=provider, detail="HTTP 401"),
+        )
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-bad", "consent": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["saved"] is False
+        assert not env.exists()
+
+    def test_rejects_ssrf_base_url(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={
+                "provider": "openai",
+                "api_key": "sk-x",
+                "base_url": "http://169.254.169.254/",
+                "consent": True,
+            },
+        )
+        assert resp.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # Pollen data endpoints sprint — GET /v1/efficiency
 # ---------------------------------------------------------------------------

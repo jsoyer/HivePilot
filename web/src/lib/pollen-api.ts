@@ -2273,3 +2273,21 @@ export function verifyModel(body: {
 }): Promise<ModelVerifyResult> {
   return postJson('/v1/models/verify', body)
 }
+
+export interface ModelConnectResult {
+  ok: boolean
+  provider: string
+  env_key: string | null
+  detail: string
+  models: string[]
+  saved: boolean
+  error: string | null
+}
+
+export function connectModel(body: {
+  provider: string
+  api_key: string
+  base_url?: string
+}): Promise<ModelConnectResult> {
+  return postJson('/v1/models/connect', { ...body, consent: true })
+}

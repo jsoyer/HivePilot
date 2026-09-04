@@ -1,19 +1,19 @@
 ## Summary
 
-Chloe (Ecurie / Stargate) wired Langfuse OSS onto LiteLLM. One `litellm-pass_through_endpoint` trace was **296,865 prompt tokens / $1.4861**. HivePilot already meters those envelopes on `steps` — Cost and Providers then fold them into `claude · 30d`.
+HP-65 first slice: **verify then save** a cloud API key, plus CLI Sign-in on Providers. Native OpenRouter/OpenAI OAuth and gemini device-code stay later.
 
-This PR surfaces **top-N whale steps** from data we already store. It does **not** ingest Langfuse/LiteLLM full traces (Langfuse itself truncates those payloads).
+- `model_connect.connect` — fail closed: no write unless `model_verify.verify` returns `ok`. Upserts the provider env var into the resolved `.env` (`0600`). Never echoes the key. Local daemons (Ollama / LM Studio) have nothing to persist.
+- `POST /v1/models/connect` — admin + `consent: true`. Audit row stores a SHA-256 fingerprint, never the secret. SSRF `base_url` is refused.
+- `hivepilot model connect` — same path; `--env-file` for tests.
+- Providers: **Connect a model** form (admin) and **Sign in** on absent CLI sessions (`login_available`).
 
-- `analytics_service.cost_whales` — `steps JOIN runs`, exclude shell/container/`skip:`, order by effective `cost_usd` then `input_tokens`, default limit 20.
-- `GET /v1/analytics/whales?days=7&limit=20` — tenant-scoped like `/v1/analytics/cost`. Envelopes only: no prompt bodies, no invented latency.
-- Cost tab: **Largest steps** table, same 1/7/30 window. Each row shows **project** (e.g. `stargate`) so a Chloe-sized call is attributable, not just a model total.
-
-Linear: [HP-81](https://linear.app/js-workspace/issue/HP-81/whale-steps-surface-the-dollar150-300k-token-calls-on-cost). Related: HP-73.
+Linear: [HP-65](https://linear.app/js-workspace/issue/HP-65/onboarding-connecter-un-modele-openrouteroauthdevice-codeopenai-compat). Builds on HP-78.
 
 ## Testing
 
-- [x] `pytest tests/test_analytics_service.py tests/test_api_service.py tests/test_pollen_contract.py -q` — 14 new whale tests + existing analytics/contract suite
-- [x] `npm test` — CostView / pollen-api / Pollen: 91 passed
+- [x] `pytest tests/test_model_connect.py tests/test_api_service.py::TestModelsConnect -q` — 15 passed
+- [x] `npm test` — 843 passed (ProvidersView connect/login + pollen-api)
+- [x] `npm run build` — Pollen static rebuilt (`hivepilot/webui/static`)
 - [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths in this env (not caused by this PR)
 
-Replay: `hivepilot run example-api docs --dry-run` (unchanged). New read: `GET /v1/analytics/whales`.
+Replay: `hivepilot model connect --provider openai --api-key <key>` (writes `.env` after a live `GET /models`). Read-only check: `hivepilot model verify --provider openai`.

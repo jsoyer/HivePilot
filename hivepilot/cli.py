@@ -84,6 +84,43 @@ def model_verify_command(
     raise typer.Exit(code=0 if result.ok else 1)
 
 
+@model_app.command("connect")
+def model_connect_command(
+    provider: str = typer.Option(
+        ...,
+        "--provider",
+        help="API provider: openai/openrouter/anthropic/google/mistral/perplexity",
+    ),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key", help="Credential to verify then save (prompted if omitted)"
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="Override endpoint; must be loopback or a known host"
+    ),
+    env_file: Optional[Path] = typer.Option(
+        None, "--env-file", help="Override the resolved .env path"
+    ),
+) -> None:
+    """Verify a cloud API key, then write it to the host .env (0600). Never echoes the key."""
+    from hivepilot.services import model_connect as mc
+
+    key = api_key or typer.prompt("API key", hide_input=True)
+    try:
+        result = mc.connect(provider, key, base_url=base_url, env_path=env_file)
+    except mc.ConnectError as exc:
+        typer.echo(f"[FAIL] {exc}")
+        raise typer.Exit(code=1) from exc
+    mark = "OK  " if result.ok and result.saved else "FAIL"
+    typer.echo(f"[{mark}] {result.provider}: {result.detail}")
+    if result.env_key and result.saved:
+        typer.echo(f"  saved : {result.env_key}")
+    if result.models:
+        typer.echo(f"  models: {', '.join(result.models[:8])}")
+    if result.error and not result.ok:
+        typer.echo(f"  error : {result.error}")
+    raise typer.Exit(code=0 if result.ok and result.saved else 1)
+
+
 @mail_app.command("poll")
 def mail_poll_command(
     watcher: Optional[str] = typer.Option(
