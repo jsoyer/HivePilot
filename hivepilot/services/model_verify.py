@@ -28,7 +28,15 @@ import urllib.request
 from dataclasses import dataclass, field
 
 #: Providers reachable through the OpenAI-compatible `GET /models` + Bearer key.
-_OPENAI_COMPATIBLE = {"openai", "openrouter", "mistral", "perplexity", "ollama", "local"}
+_OPENAI_COMPATIBLE = {
+    "openai",
+    "openrouter",
+    "mistral",
+    "perplexity",
+    "ollama",
+    "lmstudio",
+    "local",
+}
 
 _DEFAULT_BASE_URL = {
     "openai": "https://api.openai.com/v1",
@@ -36,6 +44,7 @@ _DEFAULT_BASE_URL = {
     "mistral": "https://api.mistral.ai/v1",
     "perplexity": "https://api.perplexity.ai",
     "ollama": "http://localhost:11434/v1",
+    "lmstudio": "http://127.0.0.1:1234/v1",
     "anthropic": "https://api.anthropic.com/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta",
 }

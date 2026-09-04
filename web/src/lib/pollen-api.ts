@@ -2197,3 +2197,46 @@ export function probeMcpServer(id: number): Promise<{ server: McpServer }> {
 export function deleteMcpServer(id: number): Promise<{ deleted: number }> {
   return apiFetch(`/v1/mcp/servers/${id}`, { method: 'DELETE', on403: 'forbidden' })
 }
+
+// ---------------------------------------------------------------------------
+// HP-78 — onboarding: reuse what's already on the machine, verify first.
+// ---------------------------------------------------------------------------
+
+export interface LocalBackend {
+  kind: string
+  base_url: string
+  reachable: boolean
+  models: string[]
+  error: string | null
+}
+
+export interface CliSession {
+  kind: string
+  state: string
+  login_available: boolean
+}
+
+export interface OnboardingMachine {
+  local: LocalBackend[]
+  cli: CliSession[]
+}
+
+export interface ModelVerifyResult {
+  ok: boolean
+  target: string
+  detail: string
+  models: string[]
+  error: string | null
+}
+
+export function fetchOnboardingMachine(): Promise<OnboardingMachine> {
+  return apiFetch<OnboardingMachine>('/v1/onboarding/machine')
+}
+
+export function verifyModel(body: {
+  provider?: string
+  agent_kind?: string
+  base_url?: string
+}): Promise<ModelVerifyResult> {
+  return postJson('/v1/models/verify', body)
+}

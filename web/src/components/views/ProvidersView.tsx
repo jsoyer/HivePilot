@@ -1,5 +1,7 @@
 import { ServerCog, TriangleAlert } from 'lucide-react'
+import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
@@ -7,7 +9,12 @@ import { formatAge, formatTimestamp } from '@/lib/format-time'
 import { useT } from '@/lib/i18n'
 import {
   fetchAnalyticsCost,
+  fetchOnboardingMachine,
   fetchProviderFallbacks,
+  verifyModel,
+  type CliSession,
+  type LocalBackend,
+  type ModelVerifyResult,
   type ProviderFallback,
 } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
@@ -49,7 +56,20 @@ export function ProvidersView() {
   const t = useT()
   const costState = useAsyncData(() => fetchAnalyticsCost(SPEND_DAYS), [])
   const fallbackState = useAsyncData(() => fetchProviderFallbacks(FALLBACK_HOURS), [])
+  const machine = useAsyncData(() => fetchOnboardingMachine(), [])
   const fallbacks = fallbackState.status === 'success' ? fallbackState.data.providers : NO_FALLBACKS
+  const [verifyKey, setVerifyKey] = useState<string | null>(null)
+  const [verifyByKey, setVerifyByKey] = useState<Record<string, ModelVerifyResult>>({})
+
+  async function runVerify(key: string, body: { provider?: string; agent_kind?: string; base_url?: string }) {
+    setVerifyKey(key)
+    try {
+      const result = await verifyModel(body)
+      setVerifyByKey((prev) => ({ ...prev, [key]: result }))
+    } finally {
+      setVerifyKey(null)
+    }
+  }
 
   function fallbackReason(reason: string | null): string {
     if (reason === 'quota') return t('providers.reason.quota')
@@ -58,6 +78,61 @@ export function ProvidersView() {
   }
 
   return (
+    <div className="flex flex-col gap-4">
+    <Card data-testid="providers-machine" className="border-dashed">
+      <CardHeader>
+        <CardTitle>{t('providers.machineTitle')}</CardTitle>
+        <CardDescription>{t('providers.machineDescription')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AsyncSection
+          state={machine}
+          emptyMessage={t('providers.machineEmpty')}
+          isEmpty={(data) =>
+            data.local.every((b) => !b.reachable && b.models.length === 0) &&
+            data.cli.every((s) => s.state !== 'present')
+          }
+        >
+          {(data) => (
+            <div className="flex flex-col gap-4">
+              <div>
+                <h3 className="mb-2 text-sm font-medium">{t('providers.localTitle')}</h3>
+                <ul className="flex flex-col gap-2">
+                  {data.local.map((b) => (
+                    <LocalBackendRow
+                      key={b.kind}
+                      backend={b}
+                      verifying={verifyKey === `local:${b.kind}`}
+                      result={verifyByKey[`local:${b.kind}`]}
+                      onVerify={() =>
+                        void runVerify(`local:${b.kind}`, {
+                          provider: b.kind,
+                          base_url: b.base_url,
+                        })
+                      }
+                    />
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h3 className="mb-2 text-sm font-medium">{t('providers.cliTitle')}</h3>
+                <ul className="flex flex-col gap-2">
+                  {data.cli.map((s) => (
+                    <CliSessionRow
+                      key={s.kind}
+                      session={s}
+                      verifying={verifyKey === `cli:${s.kind}`}
+                      result={verifyByKey[`cli:${s.kind}`]}
+                      onVerify={() => void runVerify(`cli:${s.kind}`, { agent_kind: s.kind })}
+                    />
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+        </AsyncSection>
+      </CardContent>
+    </Card>
     <Card data-testid="providers-view">
       <CardHeader>
         <CardTitle>{t('nav.providers')}</CardTitle>
@@ -177,5 +252,93 @@ export function ProvidersView() {
         </AsyncSection>
       </CardContent>
     </Card>
+    </div>
+  )
+}
+
+function LocalBackendRow({
+  backend,
+  verifying,
+  result,
+  onVerify,
+}: {
+  backend: LocalBackend
+  verifying: boolean
+  result?: ModelVerifyResult
+  onVerify: () => void
+}) {
+  const t = useT()
+  return (
+    <li
+      data-testid={`local-backend-${backend.kind}`}
+      className="flex flex-wrap items-center justify-between gap-2 text-sm"
+    >
+      <div>
+        <span className="font-medium">{backend.kind}</span>{' '}
+        <span className="text-xs text-muted-foreground">{backend.base_url}</span>
+        <div className="text-xs text-muted-foreground">
+          {backend.reachable
+            ? `${t('providers.reachable')}${backend.models.length ? ` · ${backend.models.join(', ')}` : ''}`
+            : t('providers.unreachable')}
+        </div>
+        {result && (
+          <div className="text-xs" data-testid={`local-verify-${backend.kind}`}>
+            {result.ok ? result.detail : result.error ?? result.detail}
+          </div>
+        )}
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={verifying}
+        onClick={onVerify}
+      >
+        {verifying ? t('providers.verifying') : t('providers.verify')}
+      </Button>
+    </li>
+  )
+}
+
+function CliSessionRow({
+  session,
+  verifying,
+  result,
+  onVerify,
+}: {
+  session: CliSession
+  verifying: boolean
+  result?: ModelVerifyResult
+  onVerify: () => void
+}) {
+  const t = useT()
+  return (
+    <li
+      data-testid={`cli-session-${session.kind}`}
+      className="flex flex-wrap items-center justify-between gap-2 text-sm"
+    >
+      <div>
+        <span className="font-medium">{session.kind}</span>{' '}
+        <span className="text-xs text-muted-foreground">
+          {session.state === 'present'
+            ? t('providers.sessionPresent')
+            : t('providers.sessionAbsent')}
+        </span>
+        {result && (
+          <div className="text-xs" data-testid={`cli-verify-${session.kind}`}>
+            {result.ok ? result.detail : result.error ?? result.detail}
+          </div>
+        )}
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={verifying}
+        onClick={onVerify}
+      >
+        {verifying ? t('providers.verifying') : t('providers.verify')}
+      </Button>
+    </li>
   )
 }

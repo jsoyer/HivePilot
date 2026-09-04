@@ -3,14 +3,23 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnalyticsCost, ProviderFallback } from '@/lib/pollen-api'
 
-const { fetchAnalyticsCost, fetchProviderFallbacks } = vi.hoisted(() => ({
-  fetchAnalyticsCost: vi.fn(),
-  fetchProviderFallbacks: vi.fn(),
-}))
+const { fetchAnalyticsCost, fetchProviderFallbacks, fetchOnboardingMachine, verifyModel } =
+  vi.hoisted(() => ({
+    fetchAnalyticsCost: vi.fn(),
+    fetchProviderFallbacks: vi.fn(),
+    fetchOnboardingMachine: vi.fn(),
+    verifyModel: vi.fn(),
+  }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchAnalyticsCost, fetchProviderFallbacks }
+  return {
+    ...actual,
+    fetchAnalyticsCost,
+    fetchProviderFallbacks,
+    fetchOnboardingMachine,
+    verifyModel,
+  }
 })
 
 import { ProvidersView } from './ProvidersView'
@@ -58,7 +67,21 @@ let root: Root
 beforeEach(() => {
   fetchAnalyticsCost.mockReset()
   fetchProviderFallbacks.mockReset()
+  fetchOnboardingMachine.mockReset()
+  verifyModel.mockReset()
   fetchProviderFallbacks.mockResolvedValue({ hours: 24, providers: [] })
+  fetchOnboardingMachine.mockResolvedValue({
+    local: [
+      {
+        kind: 'ollama',
+        base_url: 'http://127.0.0.1:11434/v1',
+        reachable: true,
+        models: ['llama3.2'],
+        error: null,
+      },
+    ],
+    cli: [{ kind: 'claude', state: 'present', login_available: true }],
+  })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -73,6 +96,7 @@ afterEach(() => {
 async function mountResolved() {
   await act(async () => {
     root.render(<ProvidersView />)
+    await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
@@ -129,5 +153,17 @@ describe('ProvidersView', () => {
 
     expect(container.querySelector('[data-testid="providers-table"]')).toBeNull()
     expect(container.textContent).toMatch(/No provider activity|Aucune activité/i)
+  })
+
+  it('lists a reachable local model and a CLI session already on the machine', async () => {
+    fetchAnalyticsCost.mockResolvedValue(cost([]))
+    await mountResolved()
+
+    expect(container.querySelector('[data-testid="local-backend-ollama"]')?.textContent).toContain(
+      'llama3.2',
+    )
+    expect(container.querySelector('[data-testid="cli-session-claude"]')?.textContent).toMatch(
+      /signed in|connecté/i,
+    )
   })
 })

@@ -26,6 +26,7 @@ import {
   fetchMemoryJournal,
   fetchMemoryReality,
   fetchModels,
+  fetchOnboardingMachine,
   fetchRun,
   fetchVerdicts,
   parseGraphRunSelector,
@@ -85,6 +86,11 @@ describe('pollen-api fetch wrappers', () => {
   it('fetchAnalyticsCost calls GET /v1/analytics/cost', async () => {
     await fetchAnalyticsCost(30)
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/analytics/cost?days=30')
+  })
+
+  it('fetchOnboardingMachine calls GET /v1/onboarding/machine', async () => {
+    await fetchOnboardingMachine()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/onboarding/machine')
   })
 
   it('fetchPluginsHealth calls GET /v1/plugins/health', async () => {
