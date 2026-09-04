@@ -188,6 +188,8 @@ hivepilot api serve --host 0.0.0.0 --port 8080 --workers 2
 | --- | --- | --- |
 | `verify` | Probe a model connection (API key / local Ollama / CLI agent session) before saving it. Does not write config. | No |
 
+Pollen Providers mirrors this (HP-78): `GET /v1/onboarding/machine` lists loopback Ollama/LM Studio plus CLI sign-ins; `POST /v1/models/verify` is the same probe and never persists. Non-loopback URLs are refused.
+
 ## `mail`
 
 Inbound email/IMAP watchers (HP-75). Read-only: the mailbox is selected `readonly=True` and the watcher never sends or modifies mail. See [CONFIGURATION.md](./CONFIGURATION.md#mail_watchersyaml--inbound-emailimap-watchers-hp-75).

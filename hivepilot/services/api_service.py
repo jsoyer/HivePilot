@@ -2222,6 +2222,80 @@ def models_endpoint(
     )
 
 
+@v1.get("/models/local")
+@app.get("/models/local")
+def models_local_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-78 — local daemons already answering on this machine.
+
+    Ollama (11434) and LM Studio (1234). Non-loopback URLs are refused, not
+    fetched. Unreachable is a row, not a 502.
+    """
+    from hivepilot.services import local_models
+
+    return {"backends": [b.__dict__ for b in local_models.discover()]}
+
+
+@v1.get("/onboarding/machine")
+@app.get("/onboarding/machine")
+def onboarding_machine_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-78 — CLI sign-ins + local models already on the box."""
+    from hivepilot.services import local_models
+
+    return local_models.machine_snapshot()
+
+
+class ModelVerifyRequest(BaseModel):
+    provider: str | None = None
+    agent_kind: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+@v1.post("/models/verify")
+@app.post("/models/verify")
+def models_verify_endpoint(
+    body: ModelVerifyRequest,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-78 — prove a connection answers before keeping it. Never persists.
+
+    Sending ``api_key`` in the body requires admin (a read token must not
+    become a place to park secrets). Local/env-based checks stay on ``read``.
+    """
+    from hivepilot.services import local_models, model_verify
+
+    if body.api_key and caller.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="api_key in the body requires an admin token",
+        )
+    if body.base_url and not local_models.verify_target_allowed(body.base_url):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="base_url must be loopback or a known model API host",
+        )
+    if body.agent_kind:
+        result = model_verify.verify_agent(body.agent_kind)
+    elif body.provider:
+        result = model_verify.verify(body.provider, base_url=body.base_url, api_key=body.api_key)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="provide provider or agent_kind",
+        )
+    return {
+        "ok": result.ok,
+        "target": result.target,
+        "detail": result.detail,
+        "models": result.models,
+        "error": result.error,
+    }
+
+
 @v1.get("/sessions/cost")
 @app.get("/sessions/cost")
 def session_costs_endpoint(

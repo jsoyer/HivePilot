@@ -170,6 +170,18 @@ export const fr: Record<TranslationKey, string> = {
   'providers.reason.unavailable': 'indispo',
   'providers.note':
     'Chiffres = enveloppes tokens/coût enregistrées, pas des factures provider. Le quota %/runway nécessite une API provider et n’est volontairement pas affiché.',
+  'providers.machineTitle': 'Sur cette machine',
+  'providers.machineDescription':
+    'Réutilise les sign-ins CLI et les modèles locaux déjà là. Vérifie avant de garder un choix — rien n’est sauvegardé ici.',
+  'providers.machineEmpty': 'Aucun démon local n’a répondu et aucune session CLI n’est stockée.',
+  'providers.localTitle': 'Modèles locaux',
+  'providers.cliTitle': 'Sessions CLI',
+  'providers.verify': 'Vérifier',
+  'providers.verifying': 'Vérification…',
+  'providers.reachable': 'joignable',
+  'providers.unreachable': 'éteint',
+  'providers.sessionPresent': 'connecté',
+  'providers.sessionAbsent': 'pas connecté',
   'nav.autopilot': 'Autopilote',
   'nav.partitions': 'Partitions',
   'nav.agents': 'Agents',

@@ -783,6 +783,94 @@ class TestModelsEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# HP-78 — local discovery + verify-before-save
+# ---------------------------------------------------------------------------
+
+
+class TestOnboardingMachine:
+    def test_requires_auth(self, api_client):
+        assert api_client.get("/v1/onboarding/machine").status_code == 401
+
+    def test_lists_local_and_cli(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import local_models
+        from hivepilot.services.local_models import LocalBackend
+
+        monkeypatch.setattr(
+            local_models,
+            "discover",
+            lambda: [
+                LocalBackend(
+                    kind="ollama",
+                    base_url="http://127.0.0.1:11434/v1",
+                    reachable=True,
+                    models=["llama3.2"],
+                )
+            ],
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/onboarding/machine", headers=_auth(raw))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["local"][0]["kind"] == "ollama"
+        assert body["local"][0]["models"] == ["llama3.2"]
+        assert any(row["kind"] == "claude" for row in body["cli"])
+
+
+class TestModelsVerify:
+    def test_requires_auth(self, api_client):
+        assert api_client.post("/v1/models/verify", json={"provider": "ollama"}).status_code == 401
+
+    def test_read_can_verify_local_without_key(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        monkeypatch.setattr(
+            mv,
+            "verify",
+            lambda provider, **kw: mv.VerifyResult(
+                ok=True, target=provider, detail="ok", models=["llama3.2"]
+            ),
+        )
+        raw, _ = add_token("read")
+        resp = api_client.post("/v1/models/verify", headers=_auth(raw), json={"provider": "ollama"})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert resp.json()["models"] == ["llama3.2"]
+
+    def test_read_cannot_submit_api_key(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.post(
+            "/v1/models/verify",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-secret"},
+        )
+        assert resp.status_code == 403
+
+    def test_rejects_ssrf_base_url(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/verify",
+            headers=_auth(raw),
+            json={"provider": "openai", "base_url": "http://169.254.169.254/"},
+        )
+        assert resp.status_code == 400
+
+    def test_agent_kind_uses_session_probe(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        monkeypatch.setattr(
+            mv,
+            "verify_agent",
+            lambda kind: mv.VerifyResult(ok=True, target=f"agent:{kind}", detail="session present"),
+        )
+        raw, _ = add_token("read")
+        resp = api_client.post(
+            "/v1/models/verify", headers=_auth(raw), json={"agent_kind": "claude"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["target"] == "agent:claude"
+
+
+# ---------------------------------------------------------------------------
 # Pollen data endpoints sprint — GET /v1/efficiency
 # ---------------------------------------------------------------------------
 

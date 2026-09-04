@@ -173,6 +173,18 @@ export const en = {
   'providers.reason.unavailable': 'unavailable',
   'providers.note':
     'Figures are recorded token/cost envelopes, not provider invoices. Quota %/runway needs a provider API and is intentionally not shown.',
+  'providers.machineTitle': 'On this machine',
+  'providers.machineDescription':
+    'Reuse CLI sign-ins and local models already running. Verify before you keep a choice — nothing here is saved.',
+  'providers.machineEmpty': 'No local daemon answered and no CLI session is stored.',
+  'providers.localTitle': 'Local models',
+  'providers.cliTitle': 'CLI sign-ins',
+  'providers.verify': 'Verify',
+  'providers.verifying': 'Checking…',
+  'providers.reachable': 'reachable',
+  'providers.unreachable': 'not running',
+  'providers.sessionPresent': 'signed in',
+  'providers.sessionAbsent': 'not signed in',
   'nav.autopilot': 'Autopilot',
   'nav.partitions': 'Partitions',
   'nav.agents': 'Agents',
