@@ -796,6 +796,68 @@ class TestSchedulesDangling:
         )
 
 
+class TestMailWatchersDangling:
+    def test_flags_unknown_task_project_and_empty_allowlist(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"real-proj": {}}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {"real-task": {}}}))
+        (tmp_path / "mail_watchers.yaml").write_text(
+            yaml.dump(
+                {
+                    "mail_watchers": {
+                        "support": {
+                            "enabled": True,
+                            "host": "imap.example.com",
+                            "username": "bot@example.com",
+                            "task": "ghost-task",
+                            "projects": ["ghost-project"],
+                            "allow_senders": [],
+                        }
+                    }
+                }
+            )
+        )
+
+        findings = config_doctor._check_mail_watchers_dangling(tmp_path)
+        checks = {f.check for f in findings}
+        assert "dangling_mail_watcher_task" in checks
+        assert "dangling_mail_watcher_project" in checks
+        assert "mail_watcher_empty_allowlist" in checks
+
+    def test_clean_when_references_are_valid(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"real-proj": {}}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {"real-task": {}}}))
+        (tmp_path / "mail_watchers.yaml").write_text(
+            yaml.dump(
+                {
+                    "mail_watchers": {
+                        "support": {
+                            "enabled": True,
+                            "host": "imap.example.com",
+                            "username": "bot@example.com",
+                            "task": "real-task",
+                            "projects": ["real-proj"],
+                            "allow_senders": ["@example.com"],
+                        }
+                    }
+                }
+            )
+        )
+        assert config_doctor._check_mail_watchers_dangling(tmp_path) == []
+
+    def test_disabled_watcher_with_empty_allowlist_is_silent(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {}}))
+        (tmp_path / "mail_watchers.yaml").write_text(
+            yaml.dump({"mail_watchers": {"draft": {"enabled": False}}})
+        )
+        assert config_doctor._check_mail_watchers_dangling(tmp_path) == []
+
+    def test_absent_file_is_silent(self, tmp_path: Path) -> None:
+        (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {}}))
+        (tmp_path / "tasks.yaml").write_text(yaml.dump({"tasks": {}}))
+        assert config_doctor._check_mail_watchers_dangling(tmp_path) == []
+
+
 class TestRoleOverridesDangling:
     def test_flags_alias_used_instead_of_real_role_key(self, tmp_path: Path) -> None:
         """FAILING fixture: incident #6 -- 'cos' is a Telegram command alias

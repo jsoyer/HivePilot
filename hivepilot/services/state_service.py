@@ -350,6 +350,24 @@ def init_db() -> None:
             )
             """
         )
+        # Inbound mail watcher dedup + admission bookkeeping (HP-75). One row
+        # per (watcher, message-id): `status` is dispatched/skipped/pending,
+        # `attempts` bounds retries so a message that keeps failing admission
+        # is recorded skipped rather than retried forever. Survives restart, so
+        # a message is never processed twice.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mail_processed (
+                watcher TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (watcher, message_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS approvals (
@@ -1709,6 +1727,46 @@ def delete_mcp_server(server_id: int) -> bool:
     with db.connect() as conn:
         cur = conn.execute(ph(db.ph("DELETE FROM mcp_servers WHERE id=?")), (server_id,))
         return cur.rowcount > 0
+
+
+def get_mail_processed(watcher: str, message_id: str) -> dict[str, Any] | None:
+    """Dedup/admission record for one inbound message (HP-75), or `None` if the
+    watcher has never seen this message-id."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM mail_processed WHERE watcher=? AND message_id=?")),
+            (watcher, message_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_mail_processed(
+    watcher: str,
+    message_id: str,
+    *,
+    status: str,
+    attempts: int = 0,
+    error: str | None = None,
+) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            INSERT INTO mail_processed (watcher, message_id, status, attempts, error, processed_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(watcher, message_id) DO UPDATE SET
+                status=excluded.status,
+                attempts=excluded.attempts,
+                error=excluded.error,
+                processed_at=CURRENT_TIMESTAMP
+            """
+                )
+            ),
+            (watcher, message_id, status, attempts, error),
+        )
 
 
 def record_approval_request(
