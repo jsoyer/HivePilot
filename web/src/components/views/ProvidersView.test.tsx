@@ -2,14 +2,25 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnalyticsCost, ProviderFallback } from '@/lib/pollen-api'
+import type { Role } from '@/lib/role-context'
 
-const { fetchAnalyticsCost, fetchProviderFallbacks, fetchOnboardingMachine, verifyModel } =
-  vi.hoisted(() => ({
-    fetchAnalyticsCost: vi.fn(),
-    fetchProviderFallbacks: vi.fn(),
-    fetchOnboardingMachine: vi.fn(),
-    verifyModel: vi.fn(),
-  }))
+const {
+  fetchAnalyticsCost,
+  fetchProviderFallbacks,
+  fetchOnboardingMachine,
+  verifyModel,
+  connectModel,
+  agentLogin,
+  useRoleMock,
+} = vi.hoisted(() => ({
+  fetchAnalyticsCost: vi.fn(),
+  fetchProviderFallbacks: vi.fn(),
+  fetchOnboardingMachine: vi.fn(),
+  verifyModel: vi.fn(),
+  connectModel: vi.fn(),
+  agentLogin: vi.fn(),
+  useRoleMock: vi.fn(),
+}))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
@@ -19,10 +30,26 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
     fetchProviderFallbacks,
     fetchOnboardingMachine,
     verifyModel,
+    connectModel,
+    agentLogin,
   }
 })
 
+vi.mock('@/lib/role-context', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/role-context')>()
+  return { ...actual, useRole: useRoleMock }
+})
+
 import { ProvidersView } from './ProvidersView'
+
+const RANK: Record<string, number> = { read: 1, run: 2, approve: 3, admin: 4 }
+
+function mockRole(role: Role) {
+  useRoleMock.mockReturnValue({
+    role,
+    can: (needed: Role) => RANK[role] >= RANK[needed],
+  })
+}
 
 function accum(overrides: Record<string, number>) {
   return {
@@ -61,6 +88,12 @@ function fallback(overrides: Partial<ProviderFallback>): ProviderFallback {
   }
 }
 
+function setInputValue(element: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+  setter!.call(element, value)
+  element.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 let container: HTMLDivElement
 let root: Root
 
@@ -69,6 +102,10 @@ beforeEach(() => {
   fetchProviderFallbacks.mockReset()
   fetchOnboardingMachine.mockReset()
   verifyModel.mockReset()
+  connectModel.mockReset()
+  agentLogin.mockReset()
+  useRoleMock.mockReset()
+  mockRole('admin')
   fetchProviderFallbacks.mockResolvedValue({ hours: 24, providers: [] })
   fetchOnboardingMachine.mockResolvedValue({
     local: [
@@ -80,7 +117,10 @@ beforeEach(() => {
         error: null,
       },
     ],
-    cli: [{ kind: 'claude', state: 'present', login_available: true }],
+    cli: [
+      { kind: 'claude', state: 'present', login_available: true },
+      { kind: 'grok', state: 'absent', login_available: true },
+    ],
   })
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -164,6 +204,69 @@ describe('ProvidersView', () => {
     )
     expect(container.querySelector('[data-testid="cli-session-claude"]')?.textContent).toMatch(
       /signed in|connecté/i,
+    )
+  })
+
+  it('lets an admin verify-then-save a cloud key', async () => {
+    fetchAnalyticsCost.mockResolvedValue(cost([]))
+    connectModel.mockResolvedValue({
+      ok: true,
+      provider: 'openai',
+      env_key: 'OPENAI_API_KEY',
+      detail: 'verified · saved OPENAI_API_KEY',
+      models: ['gpt-x'],
+      saved: true,
+      error: null,
+    })
+    await mountResolved()
+
+    const key = container.querySelector('[data-testid="providers-connect-key"]') as HTMLInputElement
+    await act(async () => {
+      setInputValue(key, 'sk-test')
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="providers-connect-submit"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(connectModel).toHaveBeenCalledWith({ provider: 'openai', api_key: 'sk-test' })
+    expect(container.querySelector('[data-testid="providers-connect-result"]')?.textContent).toMatch(
+      /OPENAI_API_KEY/,
+    )
+    expect(container.textContent).not.toContain('sk-test')
+  })
+
+  it('hides the save form from a read token', async () => {
+    mockRole('read')
+    fetchAnalyticsCost.mockResolvedValue(cost([]))
+    await mountResolved()
+
+    expect(container.querySelector('[data-testid="providers-connect-key"]')).toBeNull()
+    expect(container.textContent).toMatch(/admin token|jeton admin/i)
+  })
+
+  it('offers CLI login when a session is absent', async () => {
+    fetchAnalyticsCost.mockResolvedValue(cost([]))
+    agentLogin.mockResolvedValue({
+      kind: 'grok',
+      url: 'https://accounts.x.ai/device',
+      log: '/tmp/grok-login.log',
+    })
+    await mountResolved()
+
+    const login = container.querySelector('[data-testid="cli-login-grok"]') as HTMLButtonElement
+    expect(login).not.toBeNull()
+    expect(container.querySelector('[data-testid="cli-login-claude"]')).toBeNull()
+
+    await act(async () => {
+      login.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(agentLogin).toHaveBeenCalledWith('grok')
+    expect(container.querySelector('[data-testid="cli-login-url-grok"]')?.textContent).toContain(
+      'accounts.x.ai',
     )
   })
 })

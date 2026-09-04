@@ -187,8 +187,9 @@ hivepilot api serve --host 0.0.0.0 --port 8080 --workers 2
 | Command | Purpose | Mutating? |
 | --- | --- | --- |
 | `verify` | Probe a model connection (API key / local Ollama / CLI agent session) before saving it. Does not write config. | No |
+| `connect` | Verify a cloud API key, then upsert it into the resolved `.env` (`0600`). Local daemons have nothing to save. | **Yes** (writes `.env`) |
 
-Pollen Providers mirrors this (HP-78): `GET /v1/onboarding/machine` lists loopback Ollama/LM Studio plus CLI sign-ins; `POST /v1/models/verify` is the same probe and never persists. Non-loopback URLs are refused.
+Pollen Providers mirrors this (HP-78 / HP-65): `GET /v1/onboarding/machine` lists loopback Ollama/LM Studio plus CLI sign-ins; `POST /v1/models/verify` is the same probe and never persists; `POST /v1/models/connect` (admin + consent) is verify-then-save. Non-loopback URLs are refused. The key is never echoed.
 
 ## `mail`
 

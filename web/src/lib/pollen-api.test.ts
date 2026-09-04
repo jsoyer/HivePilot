@@ -28,6 +28,7 @@ import {
   fetchMemoryReality,
   fetchModels,
   fetchOnboardingMachine,
+  connectModel,
   fetchRun,
   fetchVerdicts,
   parseGraphRunSelector,
@@ -92,6 +93,17 @@ describe('pollen-api fetch wrappers', () => {
   it('fetchOnboardingMachine calls GET /v1/onboarding/machine', async () => {
     await fetchOnboardingMachine()
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/onboarding/machine')
+  })
+
+  it('connectModel posts /v1/models/connect with consent', async () => {
+    await connectModel({ provider: 'openai', api_key: 'sk-x' })
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/models/connect',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ provider: 'openai', api_key: 'sk-x', consent: true }),
+      }),
+    )
   })
 
   it('fetchAnalyticsWhales calls GET /v1/analytics/whales', async () => {

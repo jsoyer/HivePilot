@@ -1,24 +1,39 @@
 import { ServerCog, TriangleAlert } from 'lucide-react'
-import { useState } from 'react'
+import { type FormEvent, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
+import { describeApiError } from '@/lib/format-error'
 import { formatAge, formatTimestamp } from '@/lib/format-time'
 import { useT } from '@/lib/i18n'
 import {
+  agentLogin,
+  connectModel,
   fetchAnalyticsCost,
   fetchOnboardingMachine,
   fetchProviderFallbacks,
   verifyModel,
   type CliSession,
   type LocalBackend,
+  type ModelConnectResult,
   type ModelVerifyResult,
   type ProviderFallback,
 } from '@/lib/pollen-api'
+import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
+
+const CONNECT_PROVIDERS = [
+  'openai',
+  'openrouter',
+  'anthropic',
+  'google',
+  'mistral',
+  'perplexity',
+] as const
 
 /** Fixed 30-day spend window (matches ModelsView); fallbacks use a 24h window
  * since they are a "what's failing right now" signal. */
@@ -54,9 +69,12 @@ interface ProviderRow {
  */
 export function ProvidersView() {
   const t = useT()
+  const { can } = useRole()
+  const canAdmin = can('admin')
   const costState = useAsyncData(() => fetchAnalyticsCost(SPEND_DAYS), [])
   const fallbackState = useAsyncData(() => fetchProviderFallbacks(FALLBACK_HOURS), [])
-  const machine = useAsyncData(() => fetchOnboardingMachine(), [])
+  const [machineTick, setMachineTick] = useState(0)
+  const machine = useAsyncData(() => fetchOnboardingMachine(), [machineTick])
   const fallbacks = fallbackState.status === 'success' ? fallbackState.data.providers : NO_FALLBACKS
   const [verifyKey, setVerifyKey] = useState<string | null>(null)
   const [verifyByKey, setVerifyByKey] = useState<Record<string, ModelVerifyResult>>({})
@@ -124,6 +142,8 @@ export function ProvidersView() {
                       verifying={verifyKey === `cli:${s.kind}`}
                       result={verifyByKey[`cli:${s.kind}`]}
                       onVerify={() => void runVerify(`cli:${s.kind}`, { agent_kind: s.kind })}
+                      canAdmin={canAdmin}
+                      onChanged={() => setMachineTick((n) => n + 1)}
                     />
                   ))}
                 </ul>
@@ -133,6 +153,7 @@ export function ProvidersView() {
         </AsyncSection>
       </CardContent>
     </Card>
+    <ConnectModelCard canAdmin={canAdmin} />
     <Card data-testid="providers-view">
       <CardHeader>
         <CardTitle>{t('nav.providers')}</CardTitle>
@@ -256,6 +277,112 @@ export function ProvidersView() {
   )
 }
 
+function ConnectModelCard({ canAdmin }: { canAdmin: boolean }) {
+  const t = useT()
+  const [provider, setProvider] = useState<(typeof CONNECT_PROVIDERS)[number]>('openai')
+  const [apiKey, setApiKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [result, setResult] = useState<ModelConnectResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (!apiKey.trim()) {
+      setError(t('providers.connectNeedKey'))
+      return
+    }
+    setSaving(true)
+    setError(null)
+    setResult(null)
+    try {
+      const next = await connectModel({
+        provider,
+        api_key: apiKey,
+        base_url: baseUrl.trim() || undefined,
+      })
+      setResult(next)
+      if (next.ok) setApiKey('')
+    } catch (err) {
+      setError(describeApiError(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card data-testid="providers-connect">
+      <CardHeader>
+        <CardTitle>{t('providers.connectTitle')}</CardTitle>
+        <CardDescription>{t('providers.connectDescription')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {canAdmin ? (
+          <form className="flex flex-col gap-3" onSubmit={(e) => void onSubmit(e)}>
+            <label className="flex flex-col gap-1 text-sm">
+              <span>{t('providers.connectProvider')}</span>
+              <select
+                data-testid="providers-connect-provider"
+                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                value={provider}
+                onChange={(e) => setProvider(e.target.value as (typeof CONNECT_PROVIDERS)[number])}
+              >
+                {CONNECT_PROVIDERS.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span>{t('providers.connectKey')}</span>
+              <Input
+                data-testid="providers-connect-key"
+                type="password"
+                autoComplete="off"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span>{t('providers.connectBaseUrl')}</span>
+              <Input
+                data-testid="providers-connect-base-url"
+                type="url"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+              />
+            </label>
+            <div>
+              <Button type="submit" size="sm" disabled={saving} data-testid="providers-connect-submit">
+                {saving ? t('providers.connectSaving') : t('providers.connectSave')}
+              </Button>
+            </div>
+            {result && (
+              <p
+                data-testid="providers-connect-result"
+                className={result.ok ? 'text-sm' : 'text-sm text-destructive'}
+              >
+                {result.ok && result.env_key
+                  ? t('providers.connectSaved', { envKey: result.env_key })
+                  : (result.error ?? result.detail)}
+                {result.ok && result.detail ? ` · ${result.detail}` : ''}
+              </p>
+            )}
+            {error && (
+              <p data-testid="providers-connect-error" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+          </form>
+        ) : (
+          <p className="text-sm text-muted-foreground">{t('providers.connectNeedAdmin')}</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function LocalBackendRow({
   backend,
   verifying,
@@ -300,18 +427,42 @@ function LocalBackendRow({
   )
 }
 
+type LoginState =
+  | { kind: 'idle' }
+  | { kind: 'working' }
+  | { kind: 'url'; url: string | null; log: string }
+  | { kind: 'error'; message: string }
+
 function CliSessionRow({
   session,
   verifying,
   result,
   onVerify,
+  canAdmin,
+  onChanged,
 }: {
   session: CliSession
   verifying: boolean
   result?: ModelVerifyResult
   onVerify: () => void
+  canAdmin: boolean
+  onChanged: () => void
 }) {
   const t = useT()
+  const [login, setLogin] = useState<LoginState>({ kind: 'idle' })
+  const showLogin = canAdmin && session.login_available && session.state !== 'present'
+
+  const runLogin = async () => {
+    setLogin({ kind: 'working' })
+    try {
+      const next = await agentLogin(session.kind)
+      setLogin({ kind: 'url', url: next.url, log: next.log })
+      onChanged()
+    } catch (err) {
+      setLogin({ kind: 'error', message: describeApiError(err) })
+    }
+  }
+
   return (
     <li
       data-testid={`cli-session-${session.kind}`}
@@ -329,16 +480,47 @@ function CliSessionRow({
             {result.ok ? result.detail : result.error ?? result.detail}
           </div>
         )}
+        {login.kind === 'working' && (
+          <div className="text-xs text-muted-foreground">{t('providers.loginWorking')}</div>
+        )}
+        {login.kind === 'url' && (
+          <div className="text-xs" data-testid={`cli-login-url-${session.kind}`}>
+            {login.url ? (
+              <a href={login.url} target="_blank" rel="noreferrer" className="underline break-all">
+                {login.url}
+              </a>
+            ) : (
+              t('providers.loginNoUrl', { log: login.log })
+            )}
+          </div>
+        )}
+        {login.kind === 'error' && (
+          <div className="text-xs text-destructive">{login.message}</div>
+        )}
       </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={verifying}
-        onClick={onVerify}
-      >
-        {verifying ? t('providers.verifying') : t('providers.verify')}
-      </Button>
+      <span className="inline-flex flex-wrap gap-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={verifying}
+          onClick={onVerify}
+        >
+          {verifying ? t('providers.verifying') : t('providers.verify')}
+        </Button>
+        {showLogin && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={login.kind === 'working'}
+            data-testid={`cli-login-${session.kind}`}
+            onClick={() => void runLogin()}
+          >
+            {t('providers.login')}
+          </Button>
+        )}
+      </span>
     </li>
   )
 }

@@ -2296,6 +2296,58 @@ def models_verify_endpoint(
     }
 
 
+class ModelConnectRequest(BaseModel):
+    provider: str
+    api_key: str
+    base_url: str | None = None
+    consent: bool = False
+
+
+@v1.post("/models/connect")
+@app.post("/models/connect")
+def models_connect_endpoint(
+    body: ModelConnectRequest,
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """HP-65 — verify a cloud API key, then write it to the host ``.env``.
+
+    Admin + ``consent: true``. The response never echoes the key. A failed
+    live check is ``ok=false`` with no write. Structural refusals (unknown
+    provider, SSRF ``base_url``, empty key, local daemon) are 400.
+    """
+    from hivepilot.services import model_connect as mc
+
+    if body.consent is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='consent is required: POST {"consent": true} to save a verified key.',
+        )
+    try:
+        result = mc.connect(body.provider, body.api_key, base_url=body.base_url)
+    except mc.ConnectError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    state_service.record_audit(
+        token_hash=caller.token[:16],
+        role=f"model-connect:{caller.note or caller.role}",
+        endpoint="/v1/models/connect",
+        method="POST",
+        result=(
+            f"{'saved' if result.saved else 'verify-failed'} {result.provider} "
+            f"{result.env_key or '-'} fp={mc.key_fingerprint(body.api_key)}"
+        ),
+        tenant=caller.tenant,
+    )
+    return {
+        "ok": result.ok,
+        "provider": result.provider,
+        "env_key": result.env_key,
+        "detail": result.detail,
+        "models": result.models,
+        "saved": result.saved,
+        "error": result.error,
+    }
+
+
 @v1.get("/sessions/cost")
 @app.get("/sessions/cost")
 def session_costs_endpoint(
