@@ -2256,9 +2256,7 @@ def models_verify_endpoint(
     if body.agent_kind:
         result = model_verify.verify_agent(body.agent_kind)
     elif body.provider:
-        result = model_verify.verify(
-            body.provider, base_url=body.base_url, api_key=body.api_key
-        )
+        result = model_verify.verify(body.provider, base_url=body.base_url, api_key=body.api_key)
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

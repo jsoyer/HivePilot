@@ -763,9 +763,7 @@ class TestModelsVerify:
             ),
         )
         raw, _ = add_token("read")
-        resp = api_client.post(
-            "/v1/models/verify", headers=_auth(raw), json={"provider": "ollama"}
-        )
+        resp = api_client.post("/v1/models/verify", headers=_auth(raw), json={"provider": "ollama"})
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
         assert resp.json()["models"] == ["llama3.2"]
@@ -794,9 +792,7 @@ class TestModelsVerify:
         monkeypatch.setattr(
             mv,
             "verify_agent",
-            lambda kind: mv.VerifyResult(
-                ok=True, target=f"agent:{kind}", detail="session present"
-            ),
+            lambda kind: mv.VerifyResult(ok=True, target=f"agent:{kind}", detail="session present"),
         )
         raw, _ = add_token("read")
         resp = api_client.post(
