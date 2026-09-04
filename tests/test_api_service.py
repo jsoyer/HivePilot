@@ -584,6 +584,74 @@ class TestAnalyticsCostCsvExport:
 
 
 # ---------------------------------------------------------------------------
+# HP-81 — GET /v1/analytics/whales
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsWhalesAuth:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/analytics/whales")
+        assert resp.status_code == 401
+
+    def test_allows_read_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/whales", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json() == {"whales": [], "limit": 20}
+
+
+class TestAnalyticsWhalesTenantIsolation:
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(
+            run_acme,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-opus-4-8",
+            input_tokens=296_865,
+            output_tokens=71,
+            cost_usd=1.4861,
+        )
+        state_service.record_step(
+            run_other,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-opus-4-8",
+            input_tokens=10,
+            output_tokens=10,
+            cost_usd=9.0,
+        )
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/whales", headers=_auth(raw))
+        assert resp.status_code == 200
+        whales = resp.json()["whales"]
+        assert len(whales) == 1
+        assert whales[0]["cost_usd"] == 1.4861
+        assert whales[0]["input_tokens"] == 296_865
+
+
+class TestAnalyticsWhalesShape:
+    def test_days_limit_project_task_params_accepted(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get(
+            "/v1/analytics/whales?days=7&limit=5&project=p&task=t", headers=_auth(raw)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["limit"] == 5
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/analytics/whales", headers=_auth(raw))
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Pollen data endpoints sprint — /v1/analytics/cost by_project/by_role
 # ---------------------------------------------------------------------------
 

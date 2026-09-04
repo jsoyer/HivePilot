@@ -993,6 +993,107 @@ def cost_summary(
 
 
 # ---------------------------------------------------------------------------
+# cost_whales (HP-81) — top-N individual steps by spend / prompt tokens.
+# Aggregates on Cost / Providers hide a $1.50 / 300k-token call inside
+# "claude · 30d". This list is the same envelopes `cost_summary` already
+# meters — never prompt or completion bodies.
+# ---------------------------------------------------------------------------
+
+
+def cost_whales(
+    tenant: str | None = None,
+    days: int | None = 30,
+    since: str | None = None,
+    until: str | None = None,
+    project: str | None = None,
+    task: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Top-N model steps by effective cost, then prompt tokens.
+
+    Same tenant / window / project / task filters as `cost_summary`. Same
+    `_NON_MODEL_PROVIDERS` + ``skip:`` exclusion as the model view: a shell
+    command is not a whale. Effective cost uses `_step_cost` (self-reported
+    ``cost_usd`` wins, else the price map). Steps with neither cost nor
+    tokens are dropped — they are not whales, and a zero-step window is an
+    empty list, never a row of $0.00.
+
+    The payload is envelopes only: run/task/model/tokens/cost. Prompt and
+    completion bodies are not stored on ``steps`` and are never selected.
+    Per-step latency is omitted rather than fabricated — see
+    `_LATENCY_UNAVAILABLE_NOTE`.
+    """
+    if limit < 1:
+        limit = 1
+    state_service.init_db()
+    since_ts, until_ts = _resolve_window(days, since, until)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenant is not None:
+        clauses.append("r.tenant=?")
+        params.append(tenant)
+    if project is not None:
+        clauses.append("r.project=?")
+        params.append(project)
+    if task is not None:
+        clauses.append("r.task=?")
+        params.append(task)
+    if since_ts is not None:
+        clauses.append("s.timestamp>=?")
+        params.append(since_ts)
+    if until_ts is not None:
+        clauses.append("s.timestamp<=?")
+        params.append(until_ts)
+    placeholders = ", ".join("?" for _ in _NON_MODEL_PROVIDERS)
+    clauses.append(f"(s.provider IS NULL OR s.provider NOT IN ({placeholders}))")
+    params.extend(sorted(_NON_MODEL_PROVIDERS))
+    clauses.append("s.step NOT LIKE 'skip:%'")
+    where = f"WHERE {' AND '.join(clauses)}"
+    sql = f"""
+        SELECT s.id AS step_id, s.run_id AS run_id, s.step AS step,
+               s.provider AS provider, s.model AS model,
+               s.timestamp AS timestamp,
+               s.input_tokens AS input_tokens, s.output_tokens AS output_tokens,
+               s.cache_read_tokens AS cache_read_tokens,
+               s.cache_creation_tokens AS cache_creation_tokens,
+               s.cost_usd AS cost_usd,
+               r.project AS project, r.task AS task
+        FROM steps s
+        JOIN runs r ON r.id = s.run_id
+        {where}
+    """
+    with db.connect() as conn:
+        rows = [dict(row) for row in conn.execute(db.ph(sql), tuple(params)).fetchall()]
+
+    whales: list[dict[str, Any]] = []
+    for row in rows:
+        cost, priced = _step_cost(row)
+        input_tokens = int(row.get("input_tokens") or 0)
+        output_tokens = int(row.get("output_tokens") or 0)
+        if cost <= 0 and input_tokens <= 0 and output_tokens <= 0:
+            continue
+        whales.append(
+            {
+                "step_id": row["step_id"],
+                "run_id": row["run_id"],
+                "project": row.get("project") or "unknown",
+                "task": row.get("task") or "unknown",
+                "step": row.get("step") or "unknown",
+                "provider": row.get("provider") or "unknown",
+                "model": row.get("model") or "unknown",
+                "timestamp": row.get("timestamp"),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": round(float(cost), 6),
+                "priced": priced,
+            }
+        )
+    whales.sort(key=lambda w: (-w["cost_usd"], -w["input_tokens"], -w["step_id"]))
+    return {"whales": whales[:limit], "limit": limit}
+
+
+# ---------------------------------------------------------------------------
 # models_summary (Pollen data endpoints sprint) — per-model rollup for
 # GET /v1/models: cost, tokens, step count, success rate, share of spend,
 # and an overall cost-per-successful-run figure.

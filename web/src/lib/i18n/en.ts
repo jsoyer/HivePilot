@@ -237,6 +237,13 @@ export const en = {
   'cost.sessionInput': 'Input',
   'cost.sessionCacheRead': 'Cache read',
   'cost.sessionUnpriced': '{count} unpriced',
+  'cost.whalesTitle': 'Largest steps',
+  'cost.whalesDescription':
+    'The individual calls aggregates hide. A $1.50 / 300k-token step disappears into “claude · 30d” — this list is the same envelopes, never the prompt body.',
+  'cost.noWhales': 'No large model steps in this window.',
+  'cost.whaleStep': 'Step',
+  'cost.whalesScrollLabel': 'Largest steps, scroll horizontally for more columns',
+  'cost.whaleUnpriced': 'unpriced',
   'cost.title': 'Cost & tokens',
   'cost.noCost': 'No cost data yet.',
   'cost.totalCost': 'Total cost',
