@@ -22,12 +22,13 @@ when exactly one plugin writes to it:
 
 - ``headroom_compressions`` / ``headroom_skips`` — written solely by
   `plugins/headroom.py` via `hivepilot.services.headroom_metrics`.
-- ``memory_events`` — written by `plugins/mem0.py` AND `plugins/obsidian.py`
-  via `hivepilot.services.memory_service`, and attributed by its ``backend``
-  column rather than by a call-site assumption. It used to rest on mem0 being
-  the sole writer; a tripwire test guarded that and fired the moment Obsidian
-  was instrumented, which is exactly what it was for. A NULL backend counts as
-  mem0: every row predating the column was written by it.
+- ``memory_events`` — written by `plugins/mem0.py`, `plugins/obsidian.py`
+  and `plugins/hindsight.py` via `hivepilot.services.memory_service`, and
+  attributed by its ``backend`` column rather than by a call-site assumption.
+  It used to rest on mem0 being the sole writer; a tripwire test guarded that
+  and fired the moment Obsidian (then Hindsight) was instrumented, which is
+  exactly what it was for. A NULL backend counts as mem0: every row predating
+  the column was written by it.
 
 **Tenant-scoped.** Both source tables are tenant-partitioned. ``tenant=None``
 means unscoped (admin), matching the `_analytics_tenant` convention in
@@ -181,6 +182,19 @@ def _obsidian_activity(*, tenant: str | None, window_days: int) -> PluginActivit
     )
 
 
+def _hindsight_activity(*, tenant: str | None, window_days: int) -> PluginActivity:
+    from hivepilot.services import memory_service
+
+    memory_service.init_db()
+    return _probe(
+        tables=("memory_events",),
+        evidence="memory_events (backend=hindsight)",
+        tenant=tenant,
+        window_days=window_days,
+        backend="hindsight",
+    )
+
+
 # Plugin name -> probe. Membership answers "can this plugin's use be measured
 # at all", which is a static fact and stays true even when a probe fails at
 # runtime. Adding an entry requires the sole-writer proof in the module
@@ -189,6 +203,7 @@ _PROBES: dict[str, Callable[..., PluginActivity]] = {
     "headroom": _headroom_activity,
     "mem0": _mem0_activity,
     "obsidian": _obsidian_activity,
+    "hindsight": _hindsight_activity,
 }
 
 

@@ -290,6 +290,27 @@ class TestMem0Enabled:
         assert s.mem0_config is None
 
 
+class TestHindsightEnabled:
+    """`hindsight_enabled` defaults to False — HTTP client onto a server
+    the operator deploys, never an in-process MemoryEngine."""
+
+    def test_default_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_HINDSIGHT_ENABLED", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.hindsight_enabled is False
+
+    def test_default_base_url_is_loopback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_HINDSIGHT_BASE_URL", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert "127.0.0.1" in s.hindsight_base_url
+
+    def test_api_key_is_masked_in_repr(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_HINDSIGHT_API_KEY", "hs-secret")
+        s = Settings()
+        assert s.hindsight_api_key == "hs-secret"
+        assert "hs-secret" not in repr(s)
+
+
 # ---------------------------------------------------------------------------
 # llm_price_map — Phase 24b.2b cost/provider analytics price-map override
 # ---------------------------------------------------------------------------

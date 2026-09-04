@@ -192,6 +192,7 @@ Finding **zero** source files always prints the directories that were searched, 
 |---|---|---|
 | `headroom` | `before_step` context compression | OFF |
 | `mem0` | `before_step`/`after_step` memory recall/store | OFF |
+| `hindsight` | `before_step`/`after_step` Hindsight recall/retain (HTTP client) | OFF |
 | `sample` | hooks + panel demo | OFF |
 | `sample_skill` | skill demo | OFF |
 | `example_graph_source` | graph source `run-lineage` (demo) | `example_graph_source_enabled`, OFF (opt-in) |
@@ -336,11 +337,29 @@ hivepilot plugins install hugo --ref v0.3.0
 | `rtk`, `herdr`, `hugo`, `gh`, `tmux` | the matching binary on `PATH` |
 | `bitwarden`, `vaultwarden` | the official Bitwarden `bw` CLI on `PATH` |
 | `mem0` | `pip install mem0ai` |
+| `hindsight` | `pip install hindsight-client` (or `hivepilot[hindsight]`) plus a running Hindsight server |
 | `headroom` | `pip install "headroom-ai[all]"` |
 | `infisical` | `pip install infisicalsdk` (+ `HIVEPILOT_INFISICAL_TOKEN`/`_WORKSPACE_ID`/`_ENVIRONMENT`) |
 | `onepassword` | `pip install onepassword-sdk` for service-account mode (Connect mode needs no extra package) |
 | `kms` | `boto3` (AWS) / `google-cloud-kms` (GCP) / `azure-keyvault-keys`+`azure-identity` (Azure), matching `HIVEPILOT_KMS_PROVIDER` |
 | `obsidian` | none — just set `HIVEPILOT_OBSIDIAN_VAULT` to your vault's directory |
+
+### hindsight (HP-51)
+
+[Hindsight](https://github.com/vectorize-io/hindsight) is the world-fact memory engine (retain / recall / reflect) on Postgres + pgvector. HivePilot does **not** embed `MemoryEngine`. The bundled plugin is an HTTP client (`hindsight-client`) pointed at a server you deploy:
+
+```bash
+pip install "hivepilot[hindsight]"   # or: pip install hindsight-client
+# Docker (local Postgres is bundled unless you pass HINDSIGHT_API_DATABASE_URL):
+docker run --name hindsight -p 8888:8888 \
+  -e HINDSIGHT_API_LLM_PROVIDER=openrouter \
+  -e HINDSIGHT_API_LLM_API_KEY=$OPENROUTER_API_KEY \
+  ghcr.io/vectorize-io/hindsight:latest
+export HIVEPILOT_HINDSIGHT_ENABLED=true
+export HIVEPILOT_HINDSIGHT_BASE_URL=http://127.0.0.1:8888
+```
+
+`before_step` calls `recall`; `after_step` calls `retain` with a redacted step output. `reflect()` is HP-54. mem0 is also a world-fact store — pick one primary; honcho (role model) and obsidian (vault) compose.
 
 `plugins install` prints each plugin's exact prerequisite after fetching; it never installs a binary or `pip install`s anything on your behalf — that stays an explicit operator decision, same as `hivepilot agents install`'s guided (never automatic) posture for agent CLIs. Restart HivePilot's services after installing for the plugin (and, if `--enable` persisted a flag, the flag) to take effect.
 

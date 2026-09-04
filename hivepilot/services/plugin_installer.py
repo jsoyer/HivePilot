@@ -323,6 +323,20 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
         prereq_kind="pip",
         prereq_detail="`pip install mem0ai`",
     ),
+    "hindsight": ExamplePluginSpec(
+        name="hindsight",
+        description=(
+            "World-fact memory via Hindsight retain/recall (vectorize-io/hindsight). "
+            "HivePilot is an HTTP client; deploy Hindsight on Postgres/pgvector separately."
+        ),
+        env_flag="HIVEPILOT_HINDSIGHT_ENABLED",
+        prereq_kind="pip",
+        prereq_detail=(
+            "`pip install hindsight-client` (the HTTP SDK — not `hindsight-api`, "
+            "which is the server) plus a running Hindsight at "
+            "HIVEPILOT_HINDSIGHT_BASE_URL"
+        ),
+    ),
     "headroom": ExamplePluginSpec(
         name="headroom",
         description="Compresses each step's prompt/context before execution to reduce token usage.",
