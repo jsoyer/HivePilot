@@ -2171,3 +2171,62 @@ export function launchMission(
 ): Promise<LaunchMissionResult> {
   return postJson<LaunchMissionResult>('/v1/orchestrator/mission', { goal, project, strategy })
 }
+
+// ---------------------------------------------------------------------------
+// MCP command center (HP-76). GET /v1/mcp/servers + /catalog, POST /import,
+// POST /servers/{id}/probe, DELETE /servers/{id}. Shapes from mcp_registry
+// + mcp_probe + state_service.mcp_servers.
+// ---------------------------------------------------------------------------
+
+export interface McpServer {
+  id: number
+  name: string
+  transport: 'stdio' | 'http' | string
+  command?: string | null
+  args?: string[]
+  url?: string | null
+  env?: Record<string, string>
+  source?: string
+  last_probe_status?: string | null
+  last_probe_detail?: string | null
+  last_probe_at?: string | null
+}
+
+export interface McpCatalogEntry {
+  name: string
+  description: string
+  transport: string
+  command?: string | null
+  args?: string[]
+  url?: string | null
+  paste: string
+  installed: boolean
+}
+
+export function fetchMcpServers(): Promise<{ servers: McpServer[]; cost_note: string }> {
+  return apiFetch<{ servers: McpServer[]; cost_note: string }>('/v1/mcp/servers')
+}
+
+export function fetchMcpCatalog(): Promise<{ catalog: McpCatalogEntry[] }> {
+  return apiFetch<{ catalog: McpCatalogEntry[] }>('/v1/mcp/catalog')
+}
+
+export function importMcpConfig(text: string): Promise<{
+  drafts: unknown[]
+  servers: McpServer[]
+  stripped_env_keys: string[]
+}> {
+  return postJson('/v1/mcp/import', { text })
+}
+
+export function addMcpFromCatalog(name: string): Promise<{ server: McpServer }> {
+  return postJson('/v1/mcp/catalog/add', { name })
+}
+
+export function probeMcpServer(id: number): Promise<{ server: McpServer }> {
+  return postJson(`/v1/mcp/servers/${id}/probe`, {})
+}
+
+export function deleteMcpServer(id: number): Promise<{ deleted: number }> {
+  return apiFetch(`/v1/mcp/servers/${id}`, { method: 'DELETE', on403: 'forbidden' })
+}

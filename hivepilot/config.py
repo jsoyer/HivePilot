@@ -212,6 +212,10 @@ class Settings(BaseSettings):
     allow_dangerous_role_capabilities: bool = False
     groups_file: Path = Path("groups.yaml")
     schedules_file: Path = Path("schedules.yaml")
+    # Inbound email/IMAP watchers (HP-75): each entry starts a RESTRICTED
+    # reader agent per allowlisted new message. Disabled unless the file
+    # declares an enabled watcher; see `mail_watcher.py`.
+    mail_watchers_file: Path = Path("mail_watchers.yaml")
     # Obsidian vault folder taxonomy (folders / expected_folders / frozen_folders).
     # A vault's folder NAMES are the organisation's filing convention, so they are
     # config-owned -- see hivepilot/services/vault_layout.py. Its own file rather

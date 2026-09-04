@@ -3084,6 +3084,102 @@ def plugins_catalog_endpoint(
     return {"plugins": entries}
 
 
+# ---------------------------------------------------------------------------
+# HP-76 — MCP command center
+# ---------------------------------------------------------------------------
+
+
+class McpImportRequest(BaseModel):
+    text: str
+
+
+class McpCatalogAddRequest(BaseModel):
+    name: str
+
+
+@v1.get("/mcp/servers", dependencies=[Depends(require_role("read"))])
+@app.get("/mcp/servers", dependencies=[Depends(require_role("read"))])
+def mcp_servers_endpoint() -> dict:
+    """Installed MCP servers + last probe. Stale probes refresh on read
+    (60s TTL) so the page stays current without a dedicated scheduler."""
+    from hivepilot.services import mcp_probe
+
+    servers = mcp_probe.refresh_stale()
+    return {
+        "servers": servers,
+        "cost_note": (
+            "MCP tool calls are not metered yet — HP-73 tracks LLM providers, "
+            "not MCP servers. cost_usd is always null here."
+        ),
+    }
+
+
+@v1.get("/mcp/catalog", dependencies=[Depends(require_role("read"))])
+@app.get("/mcp/catalog", dependencies=[Depends(require_role("read"))])
+def mcp_catalog_endpoint() -> dict:
+    from hivepilot.services import mcp_registry
+
+    return {"catalog": mcp_registry.catalog()}
+
+
+@v1.post("/mcp/import")
+@app.post("/mcp/import")
+def mcp_import_endpoint(
+    payload: McpImportRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    """Paste-anything import (JSON / URL / command). Admin-only. Never
+    fetches a URL; literal env values are stripped."""
+    from hivepilot.services import mcp_registry
+
+    if not payload.text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty paste")
+    try:
+        return mcp_registry.import_and_save(payload.text)
+    except mcp_registry.McpImportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@v1.post("/mcp/catalog/add")
+@app.post("/mcp/catalog/add")
+def mcp_catalog_add_endpoint(
+    payload: McpCatalogAddRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    from hivepilot.services import mcp_registry
+
+    try:
+        server = mcp_registry.add_from_catalog(payload.name)
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown catalog entry '{payload.name}'"
+        ) from None
+    return {"server": server}
+
+
+@v1.post("/mcp/servers/{server_id}/probe", dependencies=[Depends(require_role("read"))])
+@app.post("/mcp/servers/{server_id}/probe", dependencies=[Depends(require_role("read"))])
+def mcp_probe_endpoint(server_id: int) -> dict:
+    from hivepilot.services import mcp_probe
+
+    row = mcp_probe.probe_and_store(server_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown server")
+    return {"server": row}
+
+
+@v1.delete("/mcp/servers/{server_id}")
+@app.delete("/mcp/servers/{server_id}")
+def mcp_delete_endpoint(
+    server_id: int, _caller: token_service.TokenEntry = Depends(require_role("admin"))
+) -> dict:
+    from hivepilot.services import state_service as _state
+
+    if not _state.delete_mcp_server(server_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown server")
+    return {"deleted": server_id}
+
+
 @v1.get("/agents/admin")
 @app.get("/agents/admin")
 def list_agents_admin_endpoint(
