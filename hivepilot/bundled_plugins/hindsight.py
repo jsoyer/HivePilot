@@ -85,6 +85,9 @@ def _client() -> Any | None:
 
 
 def _bank_id(payload: Any, role: Any) -> str:
+    # Episodic run memory: ``{project}:{task}:{role}``. Role identity
+    # (mission / directives) lives in ``role:{name}`` — see
+    # hivepilot.services.hindsight_role_sync (HP-52). Do not collapse the two.
     from hivepilot.config import settings
 
     override = (getattr(settings, "hindsight_bank_id", None) or "").strip()
