@@ -137,6 +137,7 @@ _SECRET_SETTING_FIELDS = frozenset(
         # Passed to `Memory.from_config()` with llm/embedder overrides, which
         # is exactly where a provider `api_key` lands.
         "mem0_config",
+        "hindsight_api_key",
         "slack_bot_token",
         "slack_signing_secret",
         "slack_app_token",
@@ -877,6 +878,17 @@ class Settings(BaseSettings):
     # over time and returns derived Representations, which is a different job
     # from mem0's fact store -- so the two compose rather than duplicate.
     honcho_enabled: bool = False
+    # env: HIVEPILOT_HINDSIGHT_ENABLED — HTTP client onto a Hindsight server
+    # (plugins/hindsight.py). OFF by default. HivePilot never embeds
+    # MemoryEngine; the operator deploys Hindsight (Docker / hindsight-api /
+    # Cloud) on Postgres+pgvector and points this URL at it.
+    hindsight_enabled: bool = False
+    # env: HIVEPILOT_HINDSIGHT_BASE_URL — default is the local Docker port.
+    hindsight_base_url: str = "http://127.0.0.1:8888"
+    # env: HIVEPILOT_HINDSIGHT_API_KEY — Cloud / locked-down self-host only.
+    hindsight_api_key: str | None = None
+    # env: HIVEPILOT_HINDSIGHT_BANK_ID — override the project:task:role bank.
+    hindsight_bank_id: str | None = None
     onepassword_enabled: bool = True
     rtk_enabled: bool = True
     sample_enabled: bool = False
