@@ -221,6 +221,39 @@ export function fetchAnalyticsCost(days = 30): Promise<AnalyticsCost> {
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/analytics/whales — HP-81. Top-N individual model steps by spend,
+// then prompt tokens. Aggregates on `/v1/analytics/cost` hide a $1.50 /
+// 300k-token call inside "claude · 30d". Envelopes only — never prompt
+// bodies. Shape transcribed from `analytics_service.cost_whales`.
+// ---------------------------------------------------------------------------
+
+export interface WhaleStep {
+  step_id: number
+  run_id: number
+  project: string
+  task: string
+  step: string
+  provider: string
+  model: string
+  timestamp: string | null
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  /** False when `_step_cost` could not price the step — shown so a huge
+   * unpriced call never reads as a cheap one. */
+  priced: boolean
+}
+
+export interface AnalyticsWhales {
+  whales: WhaleStep[]
+  limit: number
+}
+
+export function fetchAnalyticsWhales(days = 30, limit = 20): Promise<AnalyticsWhales> {
+  return apiFetch<AnalyticsWhales>(`/v1/analytics/whales?days=${days}&limit=${limit}`)
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/sessions/cost — per-run cost split by what was actually billed.
 //
 // A total answers "how much" and cannot answer "where did it go". Measured on

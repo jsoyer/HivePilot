@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
     by_role_note: 'by_role is unavailable',
     unpriced_models: [],
   }),
+  fetchAnalyticsWhales: vi.fn().mockResolvedValue({ whales: [], limit: 20 }),
   fetchAnalyticsProviders: vi.fn().mockResolvedValue({ by_provider: [], by_model: [] }),
   // Mirador Spend section sprint: ModelsView fetches its own /v1/models —
   // mocked genuinely-empty so this shell test exercises tab switching only,

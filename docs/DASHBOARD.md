@@ -93,6 +93,7 @@ non-latin characters degrade to `?` instead of failing the export:
 - durations (p50 / p95 / p99)
 - providers
 - cost
+- whales (largest individual model steps by spend — the calls aggregates hide)
 
 Cost analytics depend on an opt-in per-run token/cost usage capture (for example,
 Claude usage) plus a configurable price map set via `HIVEPILOT_LLM_PRICE_MAP`. The

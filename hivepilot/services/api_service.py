@@ -2168,6 +2168,31 @@ def analytics_cost(
     return data
 
 
+@v1.get("/analytics/whales")
+@app.get("/analytics/whales")
+def analytics_whales(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(20, ge=1, le=100),
+    project: str | None = None,
+    task: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-81 — largest individual model steps by spend, then prompt tokens.
+
+    Aggregates on `/v1/analytics/cost` hide a $1.50 / 300k-token call inside
+    "claude · 30d". This list is the same envelopes `cost_summary` already
+    meters — never prompt or completion bodies. Tenant-filtered via
+    `_analytics_tenant` like every other analytics endpoint.
+    """
+    return analytics_service.cost_whales(
+        tenant=_analytics_tenant(caller),
+        days=days,
+        project=project,
+        task=task,
+        limit=limit,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pollen data endpoints sprint — GET /v1/models, GET /v1/efficiency.
 # Same shape as the analytics endpoints above: Depends(require_role("read")),
