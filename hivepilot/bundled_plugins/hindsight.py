@@ -9,7 +9,8 @@ The three operations Hindsight names:
 
 - **retain** — store (our ``after_step`` / ``store``)
 - **recall** — retrieve (our ``before_step``)
-- **reflect** — reasoning over the bank (out of this slice; HP-54)
+- **reflect** — reasoning over the bank (HP-54: mission ``narrative`` via
+  ``hivepilot.services.hindsight_reflect``)
 
 **Semantics: ADDITIVE.** ``recall`` appends to ``extra_prompt`` and never
 replaces it, so Hindsight composes with honcho (role model) and obsidian

@@ -196,7 +196,7 @@ def mission_status(mission: dict) -> dict:
     }
 
 
-def _post_synthesis(mission: dict, status: dict, tenant: str) -> None:
+def _post_synthesis(mission: dict, status: dict, tenant: str, narrative: str | None = None) -> None:
     space_id = mission.get("space_id")
     if not space_id:
         return
@@ -204,6 +204,8 @@ def _post_synthesis(mission: dict, status: dict, tenant: str) -> None:
         f"Mission terminée — {status['succeeded']}/{status['total']} réussie(s)"
         f", {status['failed']} en échec."
     )
+    if narrative:
+        text = f"{text}\n\n{narrative}"
     msg_id = state_service.add_space_message(
         int(space_id),
         "system",
@@ -231,9 +233,33 @@ def check_mission(mission_id: int, tenant: str = "default") -> dict | None:
     if mission is None:
         return None
     status = mission_status(mission)
+    narrative = _mission_narrative(mission, status, tenant)
     synthesized = bool(mission["synthesized"])
     if status["done"] and not synthesized:
-        _post_synthesis(mission, status, tenant)
+        _post_synthesis(mission, status, tenant, narrative)
         state_service.mark_mission_synthesized(mission_id, tenant=tenant)
         synthesized = True
-    return {"mission_id": mission_id, "status": status, "synthesized": synthesized}
+    return {
+        "mission_id": mission_id,
+        "status": status,
+        "synthesized": synthesized,
+        "narrative": narrative,
+    }
+
+
+def _mission_narrative(mission: dict, status: dict, tenant: str) -> str | None:
+    """HP-54: Hindsight reflect() prose, cached per status snapshot. Fail-soft."""
+    try:
+        from hivepilot.services.hindsight_reflect import reflect_mission_progress
+
+        result = reflect_mission_progress(mission, status)
+    except Exception:  # noqa: BLE001 — numeric status must still return
+        return None
+    if result.text and not result.cached:
+        try:
+            state_service.save_mission_narrative(
+                int(mission["id"]), result.text, result.fingerprint, tenant=tenant
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return result.text
