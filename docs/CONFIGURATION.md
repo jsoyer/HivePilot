@@ -876,6 +876,39 @@ schedules:
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for running the scheduler daemon.
 
+## mail_watchers.yaml — inbound email/IMAP watchers (HP-75)
+
+An **inbound-only** trigger: for each new allowlisted message in a mailbox, HivePilot
+starts a **restricted reader run** — no HTTP hook, and it can neither send nor modify mail.
+
+### `MailWatcher`
+
+- `host`, `port` (default `993`), `username`, `password` (a literal, or `${env:NAME}`)
+- `mailbox` (default `INBOX`)
+- `allow_senders: list` — **required**; empty admits nothing (fail-closed). A rule
+  starting with `@` matches a whole domain, otherwise it's an exact address.
+- `task`, `projects` — the restricted reader run to start per admitted message.
+- `max_admission_failures` (default `3`) — a message whose dispatch keeps failing is
+  recorded skipped rather than retried forever.
+- `enabled` (default `False`)
+
+```yaml
+mail_watchers:
+  support-inbox:
+    enabled: true
+    host: imap.example.com
+    username: bot@example.com
+    password: ${env:IMAP_PASSWORD}
+    mailbox: INBOX
+    allow_senders: ["@example.com", "boss@acme.com"]
+    task: triage-email
+    projects: [support]
+```
+
+Run once with `hivepilot mail poll` (invoke on a cadence). The IMAP mailbox is selected
+`readonly=True` (never sets `\Seen`); dedup is by message-id in `mail_processed` and
+survives restart, so a message is never processed twice.
+
 ## model_profiles.yaml
 
 A plain dict, not a list-of-models schema. Two top-level keys:

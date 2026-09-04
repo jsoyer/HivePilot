@@ -45,7 +45,7 @@ before triggering a real pipeline run.
 - A fresh Alpine Linux host (container base image or bare metal — both covered below).
 - **A private config repo** — your own `projects.yaml` / `tasks.yaml` / `roles.yaml` /
   `pipelines.yaml` / `policies.yaml` / `groups.yaml` / `schedules.yaml` /
-  `model_profiles.yaml` / `prompts/` tree, in its own git repository. This is
+  `mail_watchers.yaml` / `model_profiles.yaml` / `prompts/` tree, in its own git repository. This is
   **not** part of the public HivePilot repo — see [Wire the config](#3-wire-the-config).
 - Git access to that config repo (an SSH deploy key or a token embedded in the
   clone URL — never commit either into HivePilot's own repo or `.env`-in-image).
@@ -340,7 +340,7 @@ the shell environment only.
 `config sync` clones the repo into `~/.local/share/hivepilot/config-repo`
 (`$XDG_DATA_HOME/hivepilot/config-repo`) and copies the managed files
 (`projects.yaml`, `tasks.yaml`, `pipelines.yaml`, `policies.yaml`,
-`schedules.yaml`, `roles.yaml`, `groups.yaml`, `model_profiles.yaml`, and the
+`schedules.yaml`, `mail_watchers.yaml`, `roles.yaml`, `groups.yaml`, `model_profiles.yaml`, and the
 `prompts/` directory) into `base_dir` (`/data` in the container image).
 
 **Prompt resolution note:** role/agent prompts resolve through a fallback

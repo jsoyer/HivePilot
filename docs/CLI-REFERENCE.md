@@ -182,6 +182,20 @@ hivepilot api serve --host 0.0.0.0 --port 8080 --workers 2
 | `list` | List scheduled jobs. | No |
 | `run` | Trigger a scheduled job immediately. | **Yes** |
 
+## `model`
+
+| Command | Purpose | Mutating? |
+| --- | --- | --- |
+| `verify` | Probe a model connection (API key / local Ollama / CLI agent session) before saving it. Does not write config. | No |
+
+## `mail`
+
+Inbound email/IMAP watchers (HP-75). Read-only: the mailbox is selected `readonly=True` and the watcher never sends or modifies mail. See [CONFIGURATION.md](./CONFIGURATION.md#mail_watchersyaml--inbound-emailimap-watchers-hp-75).
+
+| Command | Purpose | Mutating? |
+| --- | --- | --- |
+| `poll` | Poll configured watchers once; start a restricted reader run per allowlisted new message. Dedup survives restart. Intended for cron / the scheduler. | **Yes** (starts runs) |
+
 ## `tokens`
 
 | Command | Purpose | Mutating? |
