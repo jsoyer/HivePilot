@@ -214,6 +214,7 @@ class TestAllPluginStemsHaveEnabledFlag:
         # No-op: the still-dormant flag means metadata is left untouched.
         assert payload.metadata == {"prompt": "some long original text"}
 
+
 # ---------------------------------------------------------------------------
 # 6. init/doctor warn-only regression
 # ---------------------------------------------------------------------------

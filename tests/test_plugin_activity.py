@@ -39,9 +39,7 @@ def test_unprobed_plugin_is_not_measurable() -> None:
 def test_probed_plugins_are_the_documented_set() -> None:
     """Adding a name here requires the sole-writer proof in the docstring."""
     # memory_events is attributed by backend column; hindsight joined HP-51.
-    assert plugin_activity.probed_plugins() == frozenset(
-        {"headroom", "obsidian", "hindsight"}
-    )
+    assert plugin_activity.probed_plugins() == frozenset({"headroom", "obsidian", "hindsight"})
 
 
 # ---------------------------------------------------------------------------
