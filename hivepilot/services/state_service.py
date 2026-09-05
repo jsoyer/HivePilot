@@ -771,6 +771,10 @@ def init_db() -> None:
         # verdicts are not: the agreement rate the autonomy ladder needs was
         # not blocked on volume, it was blocked on the join.
         _add_column_if_missing(conn, "verdicts", "pipeline_run_id INTEGER")
+        # HP-50 structured nudge payload (file:line findings + je bloque si).
+        # Additive JSON text; existing debate/review rows stay NULL.
+        _add_column_if_missing(conn, "verdicts", "findings_json TEXT")
+        _add_column_if_missing(conn, "verdicts", "block_if_json TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_telemetry_lookup "
             "ON agent_telemetry (metric, session_id, recorded_at)"
@@ -1205,6 +1209,8 @@ def record_verdict(
     decision: str | None,
     confidence: float | None,
     summary: str | None = None,
+    findings_json: str | None = None,
+    block_if_json: str | None = None,
 ) -> int:
     """Persist a debate-judge / challenge-arbiter :class:`Verdict` (Debate
     Judge & Consensus PRD, Sprint 3). ``kind`` is ``"debate"``
@@ -1230,8 +1236,8 @@ def record_verdict(
             db.ph(
                 "INSERT INTO verdicts "
                 "(run_id, project, task, role, kind, decision, confidence, summary, "
-                "pipeline_run_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "pipeline_run_id, findings_json, block_if_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ),
             (
                 run_id,
@@ -1243,6 +1249,8 @@ def record_verdict(
                 confidence,
                 summary,
                 pipeline_run_id,
+                findings_json,
+                block_if_json,
             ),
         )
         logger.info(
