@@ -459,7 +459,13 @@ class TestHindsightPanelContract:
         resp = api_client.get("/v1/hindsight/roles/developer", headers=_auth(read_token))
         assert resp.status_code == 200
         data = resp.json()
-        assert set(data.keys()) >= {"configured", "role", "bank_id", "mental_models", "observations"}
+        assert set(data.keys()) >= {
+            "configured",
+            "role",
+            "bank_id",
+            "mental_models",
+            "observations",
+        }
         assert set(data["mental_models"][0].keys()) == {
             "id",
             "name",
