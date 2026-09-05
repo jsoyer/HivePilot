@@ -260,6 +260,19 @@ def init_db() -> None:
         _add_column_if_missing(conn, "missions", "narrative TEXT")
         _add_column_if_missing(conn, "missions", "narrative_fingerprint TEXT")
         _add_column_if_missing(conn, "missions", "reflected_at TIMESTAMP")
+        # HP-53: idempotency log for mem0 → Hindsight retain. Historical
+        # memory_events rows are never touched.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mem0_migration_log (
+                mem0_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                bank_id TEXT NOT NULL,
+                migrated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (mem0_id, user_id)
+            )
+            """
+        )
         # HP-47: a message can carry a collapsible tool-action trace (JSON list)
         # of {label, detail}). Additive migration for DBs created before HP-47.
         _add_column_if_missing(conn, "space_messages", "actions TEXT")
@@ -2211,6 +2224,32 @@ def mark_mission_synthesized(mission_id: int, tenant: str = "default") -> None:
         conn.execute(
             ph(db.ph("UPDATE missions SET synthesized=1 WHERE id=? AND tenant=?")),
             (mission_id, tenant),
+        )
+
+
+def mem0_already_migrated(mem0_id: str, user_id: str) -> bool:
+    """True when this mem0 memory was already retained into Hindsight (HP-53)."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT 1 FROM mem0_migration_log WHERE mem0_id=? AND user_id=?")),
+            (mem0_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
+def record_mem0_migrated(mem0_id: str, user_id: str, bank_id: str) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    "INSERT INTO mem0_migration_log (mem0_id, user_id, bank_id) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT (mem0_id, user_id) DO UPDATE SET bank_id=excluded.bank_id"
+                )
+            ),
+            (mem0_id, user_id, bank_id),
         )
 
 

@@ -1,18 +1,18 @@
 ## Summary
 
-HP-54 first slice: **mission « où elle en est » via Hindsight `reflect()`**.
+HP-53 first slice: **migrate mem0 memories into Hindsight**, start retirement, do not delete the plugin.
 
-- New `hivepilot/services/hindsight_reflect.py`: `reflect()` on the first spawned task's HP-51 episodic bank (`{project}:{task}:{role}`), `fact_types=["experience"]`, engine numeric status as context. Dormant unless `HIVEPILOT_HINDSIGHT_ENABLED`. Never invents prose when the client is missing or the call fails.
-- `GET /v1/orchestrator/missions/{id}` now returns additive `narrative`. Cached on the mission row (`narrative` / `narrative_fingerprint` / `reflected_at`) so a poll that hasn't moved the runs does not spend another LLM call.
-- End-of-mission Espace synthesis keeps the numeric header and appends the narrative when one exists.
+- New `hivepilot memory migrate-mem0` (`--dry-run`, `--user-id`, `--force`). Same bank key as HP-51: `{project}:{task}:{role}`. Each memory is `retain`ed with a `[migrated-from-mem0]` prefix (redacted).
+- Idempotent log table `mem0_migration_log` in `state.db`. A second run skips already-copied ids. One retain failure does not abort the rest.
+- Soft deprecation: `mem0.health()` and `plugins install` copy point at the new command. mem0 plugin, Search tab, `GET /v1/memories`, and historical `memory_events` stay.
 
-Out of slice: Missions board UI (HP-29), multi-bank merge, mem0 retirement (HP-53), Disposition.
+Out of slice: delete `bundled_plugins/mem0.py`, remove Search tab / `/v1/memories`, drop `KNOWN_BACKENDS` mem0, honcho/obsidian (untouched).
 
-Linear: [HP-54](https://linear.app/js-workspace/issue/HP-54/statut-mission-ou-elle-en-est-via-reflect). Parent HP-33. Related HP-29 / HP-51 / HP-52.
+Linear: [HP-53](https://linear.app/js-workspace/issue/HP-53/migrationretrait-de-mem0-bascule-des-memoires-existantes-suppression). Parent HP-32.
 
 ## Testing
 
-- [x] `pytest tests/test_hindsight_reflect.py tests/test_mission_plan.py tests/test_hindsight_role_sync.py -q`
+- [x] `pytest tests/test_mem0_hindsight_migration.py tests/test_mem0.py tests/test_hindsight.py -q`
 - [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths
 
-Replay: `export HIVEPILOT_HINDSIGHT_ENABLED=true` and point `HIVEPILOT_HINDSIGHT_BASE_URL` at a running Hindsight. Launch a mission, then `GET /v1/orchestrator/missions/{id}` — `narrative` fills after the first reflect. Disabled flag still returns `narrative: null`.
+Replay: enable both backends, then `hivepilot memory migrate-mem0 --dry-run` then without `--dry-run`. After verify recall, set `HIVEPILOT_MEM0_ENABLED=false`.

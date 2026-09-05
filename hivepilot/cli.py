@@ -41,6 +41,48 @@ model_app = typer.Typer(help="Model connections: verify before you save")
 app.add_typer(model_app, name="model")
 mail_app = typer.Typer(help="Inbound email/IMAP watchers (restricted reader agents)")
 app.add_typer(mail_app, name="mail")
+memory_app = typer.Typer(help="Memory backend utilities (mem0 → Hindsight)")
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("migrate-mem0")
+def memory_migrate_mem0_command(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="List what would be retained; no Hindsight writes"
+    ),
+    user_id: Optional[str] = typer.Option(
+        None, "--user-id", help="Migrate one bank key only (project:task[:role])"
+    ),
+    page_size: int = typer.Option(100, "--page-size", min=1, max=200),
+    force: bool = typer.Option(False, "--force", help="Re-retain already-logged memories"),
+) -> None:
+    """Copy mem0 memories into Hindsight episodic banks (same {project}:{task}:{role} keys).
+
+    Does not delete mem0. After a successful apply, set HIVEPILOT_MEM0_ENABLED=false
+    and keep Hindsight on. Plugin removal is a later slice.
+    """
+    from hivepilot.services.mem0_hindsight_migration import (
+        MigrationUnavailable,
+        iter_error_lines,
+        migrate,
+    )
+
+    try:
+        report = migrate(dry_run=dry_run, user_id=user_id, page_size=page_size, force=force)
+    except MigrationUnavailable as exc:
+        typer.echo(f"[FAIL] {exc.reason}")
+        raise typer.Exit(code=1) from exc
+
+    label = "DRY-RUN" if report.dry_run else "OK  " if report.failed == 0 else "PARTIAL"
+    typer.echo(
+        f"[{label}] keys={report.keys_scanned} found={report.memories_found} "
+        f"migrated={report.migrated} skipped={report.skipped} failed={report.failed}"
+    )
+    for line in iter_error_lines(report.errors):
+        typer.echo(f"  error : {line}")
+    if not report.dry_run and report.failed == 0:
+        typer.echo("  next  : set HIVEPILOT_MEM0_ENABLED=false after you verify recall")
+    raise typer.Exit(code=0 if report.failed == 0 else 1)
 
 
 @model_app.command("verify")
