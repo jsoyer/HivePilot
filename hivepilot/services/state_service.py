@@ -254,7 +254,13 @@ def init_db() -> None:
             )
             """
         )
-        # HP-47: a message can carry a collapsible tool-action trace (JSON list
+        # HP-54: cached Hindsight reflect() prose for the Missions board.
+        # Fingerprint is a hash of the numeric status snapshot so a poll that
+        # hasn't moved the runs does not spend another LLM call.
+        _add_column_if_missing(conn, "missions", "narrative TEXT")
+        _add_column_if_missing(conn, "missions", "narrative_fingerprint TEXT")
+        _add_column_if_missing(conn, "missions", "reflected_at TIMESTAMP")
+        # HP-47: a message can carry a collapsible tool-action trace (JSON list)
         # of {label, detail}). Additive migration for DBs created before HP-47.
         _add_column_if_missing(conn, "space_messages", "actions TEXT")
         # Idempotent migration (Phase 24b.1): persist provider/model per step.
@@ -2205,6 +2211,26 @@ def mark_mission_synthesized(mission_id: int, tenant: str = "default") -> None:
         conn.execute(
             ph(db.ph("UPDATE missions SET synthesized=1 WHERE id=? AND tenant=?")),
             (mission_id, tenant),
+        )
+
+
+def save_mission_narrative(
+    mission_id: int,
+    narrative: str,
+    fingerprint: str,
+    tenant: str = "default",
+) -> None:
+    """Persist a reflected 'où elle en est' for this status snapshot (HP-54)."""
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    "UPDATE missions SET narrative=?, narrative_fingerprint=?, "
+                    "reflected_at=CURRENT_TIMESTAMP WHERE id=? AND tenant=?"
+                )
+            ),
+            (narrative, fingerprint, mission_id, tenant),
         )
 
 

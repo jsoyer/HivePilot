@@ -175,6 +175,11 @@ def _raw_sdk_client() -> Any | None:
     return Hindsight(**kwargs)
 
 
+def hindsight_sdk_client() -> Any | None:
+    """Shared HTTP SDK constructor (HP-51 retain/recall, HP-52 banks, HP-54 reflect)."""
+    return _raw_sdk_client()
+
+
 class SdkHindsightBankClient:
     """Adapter that only ever forwards mission + directives — never disposition."""
 
