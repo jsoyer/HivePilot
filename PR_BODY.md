@@ -24,9 +24,11 @@ Linear: [HP-53](https://linear.app/js-workspace/issue/HP-53/migrationretrait-de-
 
 ## Testing
 
-- [ ] `pytest tests/test_mem0_hindsight_migration.py tests/test_plugin_activity.py tests/test_plugin_installer.py tests/test_config_doctor.py tests/test_dashboard.py tests/test_dashboard_panels.py tests/test_api_memory.py tests/test_memory_service.py tests/test_pollen_contract.py tests/test_gating_conformance.py -q`
-- [ ] `cd web && npm test -- --run src/components/views/MemoryView.test.tsx src/lib/pollen-api.test.ts`
-- [ ] `cd web && npm run build` (Node 26.5.0)
+- [x] `pytest` installer / doctor / dashboard / memory / pollen contract / gating / api_service (730+ passed; health alias isolated from host `plugins_disabled`)
+- [x] `cd web && npm test -- --run src/components/views/MemoryView.test.tsx src/lib/pollen-api.test.ts src/components/Pollen.test.tsx` (90 passed)
+- [x] `cd web && npm run build` (Node 26.5.0 → `index-mOBs-rFC.js`)
+- [x] `hivepilot memory migrate-mem0 --help` — CLI remains; docstring says plugin is retired
+- [x] `hivepilot plugins available` — no `mem0` catalog row
 - [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths
 
 Replay: `hivepilot memory migrate-mem0 --dry-run` still lists a mem0 export; Pollen Memory has Sources / Knowledge / Quality / Growth (no Search).
