@@ -61,7 +61,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials="*" not in _allowed_origins,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
@@ -2894,6 +2894,153 @@ def memory_growth(
     including why `authorship` (human vs. agent) is always `None` rather
     than a fabricated split."""
     return memory_service.growth_summary(tenant=_memory_tenant(caller), days=days)
+
+
+# ---------------------------------------------------------------------------
+# HP-55 — Pollen Memory panel (Hindsight role banks)
+# ---------------------------------------------------------------------------
+
+
+def _hindsight_panel_http(exc: Exception) -> HTTPException:
+    from hivepilot.services.hindsight_panel import PanelError, UnknownRole
+
+    if isinstance(exc, UnknownRole):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no role '{exc}'")
+    if isinstance(exc, PanelError):
+        return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@v1.get("/hindsight/status")
+def hindsight_panel_status(
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Role picker + whether Hindsight is usable. Does not call the server."""
+    from hivepilot.services import hindsight_panel
+
+    return hindsight_panel.panel_status()
+
+
+@v1.get("/hindsight/roles/{role}")
+def hindsight_role_panel(
+    role: str,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Mental models + observations for the HP-52 bank ``role:{name}``."""
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.role_panel(role)
+    except hindsight_panel.UnknownRole as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+class HindsightMentalModelWrite(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    source_query: str = Field(..., min_length=1, max_length=4000)
+    tags: list[str] | None = None
+
+    @field_validator("name", "source_query")
+    @classmethod
+    def _strip_required(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+
+class HindsightMentalModelPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=200)
+    source_query: str | None = Field(None, min_length=1, max_length=4000)
+
+    @field_validator("name", "source_query")
+    @classmethod
+    def _strip_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+
+class HindsightMemoryCurate(BaseModel):
+    text: str | None = Field(None, min_length=1, max_length=8000)
+    reason: str | None = Field(None, max_length=500)
+    state: str | None = Field(None, pattern="^(valid|invalidated)$")
+
+    @field_validator("text", "reason")
+    @classmethod
+    def _strip_curate(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+@v1.post("/hindsight/roles/{role}/mental-models")
+def hindsight_create_mental_model(
+    role: str,
+    body: HindsightMentalModelWrite,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.create_mental_model(
+            role, name=body.name, source_query=body.source_query, tags=body.tags
+        )
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+@v1.patch("/hindsight/roles/{role}/mental-models/{mental_model_id}")
+def hindsight_update_mental_model(
+    role: str,
+    mental_model_id: str,
+    body: HindsightMentalModelPatch,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.update_mental_model(
+            role, mental_model_id, name=body.name, source_query=body.source_query
+        )
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+@v1.post("/hindsight/roles/{role}/mental-models/{mental_model_id}/refresh")
+def hindsight_refresh_mental_model(
+    role: str,
+    mental_model_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.refresh_mental_model(role, mental_model_id)
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+@v1.patch("/hindsight/roles/{role}/memories/{memory_id}")
+def hindsight_curate_memory(
+    role: str,
+    memory_id: str,
+    body: HindsightMemoryCurate,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    """Correct or invalidate a source fact. Observations themselves are derived."""
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.curate_memory(
+            role, memory_id, text=body.text, reason=body.reason, state=body.state
+        )
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
 
 
 class MemoryEvaluationRequest(BaseModel):
