@@ -58,8 +58,8 @@ def memory_migrate_mem0_command(
 ) -> None:
     """Copy mem0 memories into Hindsight episodic banks (same {project}:{task}:{role} keys).
 
-    Does not delete mem0. After a successful apply, set HIVEPILOT_MEM0_ENABLED=false
-    and keep Hindsight on. Plugin removal is a later slice.
+    The mem0 plugin is retired. These flags only describe the migration source.
+    After a successful apply, set HIVEPILOT_MEM0_ENABLED=false and keep Hindsight on.
     """
     from hivepilot.services.mem0_hindsight_migration import (
         MigrationUnavailable,
@@ -4852,7 +4852,7 @@ def plugins_install(
         ...,
         help=(
             "Curated built-in example plugin name(s) to fetch, e.g. "
-            "rtk herdr mem0 (see `hivepilot plugins available`)"
+            "rtk herdr (see `hivepilot plugins available`)"
         ),
     ),
     enable: bool = typer.Option(

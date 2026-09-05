@@ -155,7 +155,7 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
         description=(
             "Memory backend that models a ROLE over time (honcho.dev) and returns "
             "derived Representations rather than stored facts -- a different job "
-            "from mem0's fact store, so the two compose instead of duplicating."
+            "from Hindsight's fact store, so the two compose instead of duplicating."
         ),
         env_flag="HIVEPILOT_HONCHO_ENABLED",
         prereq_kind="pip",
@@ -315,16 +315,6 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
         env_flag="HIVEPILOT_OBSIDIAN_ENABLED",
         prereq_kind="config",
         prereq_detail="set HIVEPILOT_OBSIDIAN_VAULT to your Obsidian vault's directory (no external binary/lib)",
-    ),
-    "mem0": ExamplePluginSpec(
-        name="mem0",
-        description=(
-            "DEPRECATED: persistent mem0 recall/store. Migrate with "
-            "`hivepilot memory migrate-mem0`, then prefer Hindsight (HP-53)."
-        ),
-        env_flag="HIVEPILOT_MEM0_ENABLED",
-        prereq_kind="pip",
-        prereq_detail="`pip install mem0ai`",
     ),
     "hindsight": ExamplePluginSpec(
         name="hindsight",

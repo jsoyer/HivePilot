@@ -40,7 +40,7 @@ def test_probed_plugins_are_the_documented_set() -> None:
     """Adding a name here requires the sole-writer proof in the docstring."""
     # memory_events is attributed by backend column; hindsight joined HP-51.
     assert plugin_activity.probed_plugins() == frozenset(
-        {"headroom", "mem0", "obsidian", "hindsight"}
+        {"headroom", "obsidian", "hindsight"}
     )
 
 
@@ -98,24 +98,6 @@ def test_last_used_is_not_bounded_by_the_window() -> None:
     assert activity is not None
     assert activity.events == 0, "a 90-day-old event is outside a 30-day window"
     assert activity.last_used is not None, "but it still happened, and we know when"
-
-
-# ---------------------------------------------------------------------------
-# mem0
-# ---------------------------------------------------------------------------
-
-
-def test_mem0_counts_memory_events() -> None:
-    memory_service.record_search(namespace="ns", query="q", result_count=5, actor="system")
-    memory_service.record_store(namespace="ns", key="k", actor="system")
-
-    activity = plugin_activity.activity_for("mem0")
-
-    assert activity is not None
-    assert activity.events == 2
-    # The evidence string names the FILTER, not just the table: two
-    # backends write here and the reading is only meaningful scoped.
-    assert activity.evidence == "memory_events (backend=mem0)"
 
 
 def test_hindsight_counts_memory_events() -> None:

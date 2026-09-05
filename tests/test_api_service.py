@@ -10,11 +10,9 @@ the auth/tenant-isolation patterns established in test_multi_tenant.py.
 from __future__ import annotations
 
 import importlib.util
-from types import ModuleType
 
 import pytest
 import yaml
-from conftest import BUNDLED_PLUGINS
 from fastapi.testclient import TestClient
 
 from hivepilot.services.token_service import add_token
@@ -1303,7 +1301,7 @@ class TestVerdictsEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Pollen web UI surface (Sprint 1): GET /v1/plugins/health, GET /v1/memories
+# Pollen web UI surface (Sprint 1): GET /v1/plugins/health
 # ---------------------------------------------------------------------------
 
 
@@ -1322,7 +1320,7 @@ class TestPluginsHealthEndpoint:
 
         fake_plugins = SimpleNamespace(
             check_all=lambda: {
-                "mem0": HealthStatus("ok", "self-host"),
+                "headroom": HealthStatus("ok", "headroom-ai installed"),
                 "rtk": HealthStatus("degraded", "not configured"),
             }
         )
@@ -1334,18 +1332,18 @@ class TestPluginsHealthEndpoint:
         assert resp.status_code == 200
         data = {row["name"]: row for row in resp.json()["plugins"]}
 
-        assert data["mem0"]["status"] == "ok"
-        assert data["mem0"]["detail"] == "self-host"
+        assert data["headroom"]["status"] == "ok"
+        assert data["headroom"]["detail"] == "headroom-ai installed"
         assert data["rtk"]["status"] == "degraded"
         assert data["rtk"]["detail"] == "not configured"
 
         # Health and activity are two independent answers, and the payload must
-        # keep them apart. `mem0` writes telemetry, so it gets a real reading --
+        # keep them apart. `headroom` writes telemetry, so it gets a real reading --
         # here `events == 0`, meaning "measured, and it has done nothing", which
         # is precisely the state its green `status="ok"` was hiding.
-        assert data["mem0"]["activity_available"] is True
-        assert data["mem0"]["activity"]["events"] == 0
-        assert data["mem0"]["activity"]["last_used"] is None
+        assert data["headroom"]["activity_available"] is True
+        assert data["headroom"]["activity"]["events"] == 0
+        assert data["headroom"]["activity"]["last_used"] is None
 
         # `rtk` is a PATH check that records nothing. It must report no reading
         # at all rather than a fabricated zero, which would read as "installed
@@ -1434,40 +1432,6 @@ class TestPluginsHealthEndpoint:
         resp = api_client.get("/v1/plugins/health", headers=_auth(raw))
         assert resp.status_code == 200
         assert resp.json()["disabled"] == ["rtk", "zeta"]
-
-    def test_mem0_health_detail_never_leaks_api_key(self, monkeypatch):
-        """Regression guard for the sprint's 'no secret in any detail'
-        requirement: calls the REAL `plugins/mem0.py` `health()` with a
-        configured api key and asserts the raw secret value never appears in
-        the returned detail string (Phase 19 discipline).
-
-        Loaded by file path — the SAME mechanism
-        `hivepilot.plugins._scan_local_plugins` and `tests/test_mem0.py` use
-        (never registers under `sys.modules["plugins"]`), so this test does
-        NOT make the top-level `plugins` package importable for the rest of
-        the suite (see `tests/test_plugins.py`
-        `TestLoadPluginsByPath.test_loads_plugin_without_plugins_on_syspath`,
-        which asserts exactly that invariant)."""
-        import importlib.util
-
-        from hivepilot.config import settings
-
-        plugin_path = BUNDLED_PLUGINS / "mem0.py"
-        spec = importlib.util.spec_from_file_location(
-            "hivepilot_plugin_mem0_health_test", plugin_path
-        )
-        assert spec and spec.loader
-        mem0_plugin = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mem0_plugin)
-
-        secret = "sk-super-secret-mem0-key-123"  # noqa: S105 - test fixture value
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
-        monkeypatch.setattr(settings, "mem0_api_key", secret, raising=False)
-        monkeypatch.setattr(mem0_plugin, "MemoryClient", lambda api_key: object())
-
-        result = mem0_plugin.health()
-        assert secret not in result.detail
-        assert secret not in result.status
 
 
 class TestAgentsLiveEndpoint:
@@ -1650,364 +1614,19 @@ class TestAgentsLiveEndpoint:
         assert body["dispatched"] is False
 
 
-class TestMemoriesEndpoint:
-    def test_requires_auth(self, api_client):
-        resp = api_client.get("/v1/memories?query=hello")
-        assert resp.status_code == 401
-
-    def test_read_role_forbidden(self, api_client, tmp_tokens_file):
-        raw, _ = add_token("read")
-        resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
-        assert resp.status_code == 403
-
-    def test_run_and_approve_roles_forbidden(self, api_client, tmp_tokens_file):
-        for role in ("run", "approve"):
-            raw, _ = add_token(role)
-            resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
-            assert resp.status_code == 403, role
-
-    def test_tenant_scope_guard_no_read_token_crosses_into_memories(
-        self, api_client, tmp_tokens_file
-    ):
-        """The key risk this sprint calls out: a `read` token for ANY tenant
-        must never reach mem0 memories that could belong to another tenant's
-        projects. HivePilot has no tenant->project mapping to filter
-        memories by (see the endpoint's own docstring), so the chosen
-        mitigation is gating the whole endpoint behind `admin`. Assert that
-        holds for two DIFFERENT tenants' `read` tokens — neither may read
-        memories at all, so neither can ever cross into the other's data."""
-        raw_a, _ = add_token("read", tenant="tenant-a")
-        raw_b, _ = add_token("read", tenant="tenant-b")
-        for raw in (raw_a, raw_b):
-            resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
-            assert resp.status_code == 403
-
-    def test_admin_role_allowed(self, api_client, tmp_tokens_file, monkeypatch):
-        from hivepilot.services import api_service
-
-        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: None)
-        raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
-        assert resp.status_code == 200
-        # No client at all: `configured: False` is the RIGHT answer here, and
-        # stays untouched. What changed is the FAILING-search case below --
-        # see `test_search_failure_never_500s`.
-        assert resp.json()["configured"] is False
-
-    def test_empty_result_is_neither_an_error_nor_unconfigured(
-        self, api_client, tmp_tokens_file, monkeypatch
-    ):
-        """'Nothing matched' is a real, successful answer. Reporting it like a
-        failure is what makes an audit of the corpus untrustworthy -- the audit
-        cannot tell 'the corpus is clean' from 'the search never ran'."""
-        from hivepilot.services import api_service
-
-        class _EmptyClient:
-            def search(self, *a, **k):
-                return []
-
-        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: _EmptyClient())
-        raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=hello&user_id=acme", headers=_auth(raw))
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["configured"] is True
-        assert body["memories"] == []
-        assert not body.get("error")
-
-    def test_unconfigured_returns_graceful_200_not_500(self, api_client, tmp_tokens_file):
-        """Default settings (mem0_enabled=False) — no mocking needed, this is
-        the real dormant-by-default behavior."""
-        raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["configured"] is False
-        assert data["memories"] == []
-
-    def test_configured_returns_memories(self, api_client, tmp_tokens_file, monkeypatch):
-        from unittest.mock import MagicMock
-
-        from hivepilot.services import api_service
-
-        mock_client = MagicMock()
-        mock_client.search.return_value = {
-            "results": [
-                {
-                    "id": "1",
-                    "memory": "prefers dark mode",
-                    "metadata": {"project": "acme-api"},
-                    "score": 0.9,
-                },
-            ]
-        }
-        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: mock_client)
-        raw, _ = add_token("admin")
-        resp = api_client.get(
-            "/v1/memories?query=dark+mode&limit=5&user_id=acme", headers=_auth(raw)
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["configured"] is True
-        assert data["memories"][0]["memory"] == "prefers dark mode"
-        assert data["memories"][0]["metadata"] == {"project": "acme-api"}
-        # mem0 v3 requires a NON-EMPTY filter: no `filters` answers 400
-        # "This field is required", and `filters={}` answers 400 "filters
-        # cannot be empty" -- both probed against the live API. The caller
-        # supplies the same `user_id` key plugins/mem0.py stores under.
-        mock_client.search.assert_called_once_with(
-            "dark mode", limit=5, filters={"user_id": "acme"}
-        )
-
-    def test_search_failure_never_500s(self, api_client, tmp_tokens_file, monkeypatch):
-        from hivepilot.services import api_service
-
-        class _BoomClient:
-            def search(self, *a, **k):
-                raise RuntimeError("mem0 backend unreachable")
-
-        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: _BoomClient())
-        raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=hello&user_id=acme", headers=_auth(raw))
-        assert resp.status_code == 200
-        # This asserted `configured is False`, which made a BROKEN search
-        # indistinguishable from an ABSENT configuration -- and that is exactly
-        # how the mem0 v3 breakage went unnoticed for a whole major version:
-        # probed live on 2026-08-17, the endpoint answered "not configured"
-        # while mem0 was configured and reachable, sending an operator to check
-        # a setting that was already correct. `configured` answers "is mem0 set
-        # up", and nothing else.
-        body = resp.json()
-        assert body["configured"] is True
-        assert body["memories"] == []
-        assert body["error"]
-
-    def test_no_secret_in_response(self, api_client, tmp_tokens_file, monkeypatch):
-        from unittest.mock import MagicMock
-
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        secret = "sk-real-mem0-secret-xyz"  # noqa: S105 - test fixture value
-        monkeypatch.setattr(settings, "mem0_api_key", secret, raising=False)
-        mock_client = MagicMock()
-        mock_client.search.return_value = {"results": [{"memory": "hello world"}]}
-        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: mock_client)
-        raw, _ = add_token("admin")
-        resp = api_client.get("/v1/memories?query=hello", headers=_auth(raw))
-        assert resp.status_code == 200
-        assert secret not in resp.text
-
-    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file, monkeypatch):
-        from hivepilot.services import api_service
-
-        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: None)
-        raw, _ = add_token("admin")
-        resp = api_client.get("/memories?query=hello", headers=_auth(raw))
-        assert resp.status_code == 200
-
-    def test_unversioned_route_read_role_forbidden(self, api_client, tmp_tokens_file):
-        """Mirrors `test_read_role_forbidden` above but against the
-        unversioned `/memories` twin — the admin-only gating must hold on
-        both dual-registered paths, not just the `/v1` one."""
-        raw, _ = add_token("read")
-        resp = api_client.get("/memories?query=hello", headers=_auth(raw))
-        assert resp.status_code == 403
-
-
-class TestMem0ClientHelper:
-    """Unit tests for `api_service._get_mem0_client()` — mirrors
-    `plugins/mem0.py`'s `_get_client()` construction logic but is a
-    standalone copy (see the function's own docstring for why)."""
-
-    def test_disabled_returns_none_without_importing(self):
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        assert settings.mem0_enabled is False  # dormant by default
-        assert api_service._get_mem0_client() is None
-
-    def test_missing_library_degrades_gracefully(self, monkeypatch):
-        """`mem0ai` is genuinely not installed in this test environment (it's
-        an optional extra, never a hivepilot dependency) — this exercises the
-        real ImportError path, not a mock."""
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
-        monkeypatch.setattr(settings, "mem0_api_key", None, raising=False)
-        assert api_service._get_mem0_client() is None
-
-    def test_client_construction_failure_degrades_gracefully(self, monkeypatch):
-        import sys
-        import types
-
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        fake_module = types.ModuleType("mem0")
-
-        class _BoomMemory:
-            def __init__(self, *a, **k):
-                raise RuntimeError("bad config")
-
-            @staticmethod
-            def from_config(config):
-                raise RuntimeError("bad config")
-
-        fake_module.Memory = _BoomMemory  # type: ignore[attr-defined]
-        fake_module.MemoryClient = None  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "mem0", fake_module)
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
-        monkeypatch.setattr(settings, "mem0_api_key", None, raising=False)
-        monkeypatch.setattr(settings, "mem0_config", None, raising=False)
-
-        assert api_service._get_mem0_client() is None
-
-    def test_hosted_client_built_when_api_key_set(self, monkeypatch):
-        import sys
-        import types
-
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        fake_module = types.ModuleType("mem0")
-        built = {}
-
-        class _FakeMemoryClient:
-            def __init__(self, api_key):
-                built["api_key"] = api_key
-
-        fake_module.Memory = None  # type: ignore[attr-defined]
-        fake_module.MemoryClient = _FakeMemoryClient  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "mem0", fake_module)
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
-        monkeypatch.setattr(settings, "mem0_api_key", "sk-test-hosted", raising=False)
-
-        client = api_service._get_mem0_client()
-        assert isinstance(client, _FakeMemoryClient)
-        assert built["api_key"] == "sk-test-hosted"
-
-    def test_csv_escapes_formula_injection_in_provider_name(self, api_client, tmp_tokens_file):
-        """CSV/formula-injection defense-in-depth: a provider value starting
-        with a formula-trigger character must never reach the CSV cell
-        unescaped."""
-        from hivepilot.services import state_service
-
-        run_id = state_service.record_run_start("p", "t", status="running")
-        state_service.record_step(run_id, "s1", "success", provider="=2+2", model="m")
-        raw, _ = add_token("read")
-        resp = api_client.get("/v1/analytics/providers?format=csv", headers=_auth(raw))
-        assert resp.status_code == 200
-        assert "'=2+2" in resp.text
-        assert ",=2+2," not in resp.text
-
-
-class TestMem0ClientParity:
-    """Anti-divergence guard: `api_service._get_mem0_client()` is a
-    deliberate standalone copy of `plugins/mem0.py`'s `_get_client()` (see
-    both functions' docstrings for why it isn't a shared import — `plugins/`
-    is user-editable/optional). Nothing enforces the two stay behaviorally
-    aligned except a human reading both diffs, so this test exercises BOTH
-    real implementations under the same settings and asserts they pick the
-    same client-construction branch. Not a refactor — the duplication is
-    intentional; this only catches silent drift between the two copies."""
-
-    @staticmethod
-    def _load_mem0_plugin_module() -> ModuleType:
-        import importlib.util
-
-        plugin_path = BUNDLED_PLUGINS / "mem0.py"
-        spec = importlib.util.spec_from_file_location(
-            "hivepilot_plugin_mem0_parity_test", plugin_path
-        )
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    def test_disabled_or_unconfigured_both_return_none(self, monkeypatch):
-        """Default settings: `mem0_enabled=False` and the real (not mocked)
-        `mem0ai` library isn't installed in this test environment. Under
-        that real, unmocked state both helpers must degrade to `None`."""
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        assert settings.mem0_enabled is False  # dormant by default
-
-        mem0_plugin = self._load_mem0_plugin_module()
-
-        assert api_service._get_mem0_client() is None
-        assert mem0_plugin._get_client() is None
-
-    def test_hosted_configured_both_build_same_client_type(self, monkeypatch):
-        """`mem0_api_key` set -> both helpers must take the hosted branch
-        and build an instance of the SAME `MemoryClient` type, constructed
-        with the same `api_key` kwarg."""
-        import sys
-        import types
-
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        built: dict[str, str] = {}
-
-        class _FakeMemoryClient:
-            def __init__(self, api_key):
-                built["api_key"] = api_key
-
-        fake_module = types.ModuleType("mem0")
-        fake_module.Memory = None  # type: ignore[attr-defined]
-        fake_module.MemoryClient = _FakeMemoryClient  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "mem0", fake_module)
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
-        monkeypatch.setattr(settings, "mem0_api_key", "sk-parity-test", raising=False)
-
-        mem0_plugin = self._load_mem0_plugin_module()
-        monkeypatch.setattr(mem0_plugin, "Memory", None, raising=False)
-        monkeypatch.setattr(mem0_plugin, "MemoryClient", _FakeMemoryClient, raising=False)
-
-        api_client = api_service._get_mem0_client()
-        plugin_client = mem0_plugin._get_client()
-
-        assert type(api_client) is type(plugin_client) is _FakeMemoryClient
-        assert isinstance(api_client, _FakeMemoryClient)
-        assert isinstance(plugin_client, _FakeMemoryClient)
-
-    def test_self_host_no_api_key_both_build_same_memory_type(self, monkeypatch):
-        """No `mem0_api_key` -> both helpers must take the self-host branch
-        and build an instance of the SAME `Memory` type."""
-        import sys
-        import types
-
-        from hivepilot.config import settings
-        from hivepilot.services import api_service
-
-        class _FakeMemory:
-            def __init__(self):
-                pass
-
-            @staticmethod
-            def from_config(config):
-                raise AssertionError("no config set — from_config must not be called")
-
-        fake_module = types.ModuleType("mem0")
-        fake_module.Memory = _FakeMemory  # type: ignore[attr-defined]
-        fake_module.MemoryClient = None  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "mem0", fake_module)
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
-        monkeypatch.setattr(settings, "mem0_api_key", None, raising=False)
-        monkeypatch.setattr(settings, "mem0_config", None, raising=False)
-
-        mem0_plugin = self._load_mem0_plugin_module()
-        monkeypatch.setattr(mem0_plugin, "Memory", _FakeMemory, raising=False)
-        monkeypatch.setattr(mem0_plugin, "MemoryClient", None, raising=False)
-
-        api_client = api_service._get_mem0_client()
-        plugin_client = mem0_plugin._get_client()
-
-        assert type(api_client) is type(plugin_client) is _FakeMemory
+def test_csv_escapes_formula_injection_in_provider_name(api_client, tmp_tokens_file):
+    """CSV/formula-injection defense-in-depth: a provider value starting
+    with a formula-trigger character must never reach the CSV cell
+    unescaped."""
+    from hivepilot.services import state_service
+
+    run_id = state_service.record_run_start("p", "t", status="running")
+    state_service.record_step(run_id, "s1", "success", provider="=2+2", model="m")
+    raw, _ = add_token("read")
+    resp = api_client.get("/v1/analytics/providers?format=csv", headers=_auth(raw))
+    assert resp.status_code == 200
+    assert "'=2+2" in resp.text
+    assert ",=2+2," not in resp.text
 
 
 # ---------------------------------------------------------------------------

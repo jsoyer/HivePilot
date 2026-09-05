@@ -52,12 +52,8 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // being folded into general analytics.
   { label: 'nav.spend', values: ['cost', 'models', 'providers', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
-  // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
-  // and memory-quality built-ins merged into ONE `memory` item backed by
-  // `MemoryView`'s internal Quality/Growth/Search tabs (see `Pollen.tsx`'s
-  // `BUILTIN_TABS`) — a single-entry-with-tabs destination reads cleaner
-  // than three separate top-level nav items for what is really one
-  // subject (memory).
+  // Memory: one nav item for Sources / Knowledge / Quality / Growth
+  // (see `Pollen.tsx` `BUILTIN_TABS`). The mem0 Search tab is retired (HP-53).
   { label: 'nav.memory', values: ['memory'] },
   // Mirador Operate section sprint: demoted to LAST — Graph (plugins/
   // pipeline/skills topology) is still fully reachable (sidebar/drawer/⌘K),

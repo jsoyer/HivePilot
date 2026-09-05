@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import re
 from typing import Any, cast
 
@@ -10,7 +9,6 @@ from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
-from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.plugins import (
     HealthStatus,
@@ -38,10 +36,6 @@ HOTSPOT_COLUMNS = ("Step", "Status", "Count")
 # `_print_health_table` (name/status/detail), read via
 # `PluginManager.check_all()` (never-raise).
 HEALTH_COLUMNS = ("Name", "Status", "Detail")
-
-# Mem0 table columns (Mem0 tab) — typed provenance metadata (see
-# `plugins/mem0.py::_provenance_metadata`) alongside a content snippet.
-MEM0_COLUMNS = ("Category", "Project", "Task", "Timestamp", "Memory")
 
 _SUCCEEDED = analytics_service.Outcome.SUCCEEDED.value
 _FAILED = analytics_service.Outcome.FAILED.value
@@ -169,81 +163,6 @@ def _panel_section_widgets(data: PanelData) -> list[Widget]:
     return widgets
 
 
-def _load_mem0_plugin_module() -> Any | None:
-    """Load `plugins/mem0.py` by file path so the Mem0 tab can reuse the
-    plugin's OWN client-building logic (`_get_client`) without requiring
-    `plugins` to be an importable package on `sys.path`.
-
-    Mirrors `hivepilot.plugins._scan_local_plugins`'s loading mechanism
-    exactly (same `settings.base_dir / "plugins"` resolution, same
-    `importlib.util.spec_from_file_location` load-by-path — see that
-    function's docstring: "the installed `hivepilot` binary ... doesn't have
-    the project root on sys.path"). Deliberately does NOT call
-    `module.register()` — the dashboard only wants the module's helpers, not
-    a second registration of its lifecycle hooks (those are already
-    registered once, by the real `PluginManager`, if plugins are enabled).
-
-    Honors the plugin-system kill switches exactly like `_scan_local_plugins`:
-    returns ``None`` when plugins are globally disabled (`plugins_enabled` is
-    False) or when `mem0` is in `plugins_disabled`, so an operator who turned
-    the plugin off never gets the Mem0 tab silently loading the module and
-    making live mem0 backend calls.
-
-    Returns ``None`` on any failure (file missing, load error) — never
-    raises.
-    """
-    try:
-        if not settings.plugins_enabled or "mem0" in settings.plugins_disabled:
-            return None
-        plugin_path = settings.base_dir / "plugins" / "mem0.py"
-        if not plugin_path.exists():
-            return None
-        spec = importlib.util.spec_from_file_location("hivepilot_dashboard_mem0", plugin_path)
-        if spec is None or spec.loader is None:
-            return None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    except Exception:  # noqa: BLE001 — the Mem0 tab must never crash the dashboard
-        return None
-
-
-def _mem0_memory_rows(results: Any, limit: int = 20) -> list[tuple[str, str, str, str, str]]:
-    """Best-effort extraction of (category, project, task, ts, text) rows
-    from a mem0 `get_all()`/`search()`-shaped result.
-
-    Tolerant of the same result-shape variance `plugins/mem0.py::
-    _extract_memory_texts` documents (a bare list of dicts, or
-    ``{"results": [...]}``); degrades to an empty list rather than raising.
-    Typed provenance fields (``category``/``project``/``task``/``ts`` — see
-    `plugins/mem0.py::_provenance_metadata`) are read from each item's
-    ``metadata`` dict when present, defaulting to ``""`` otherwise — never
-    fabricated.
-    """
-    items: Any = results
-    if isinstance(results, dict):
-        items = results.get("results", results.get("memories", []))
-    if not isinstance(items, list):
-        return []
-    rows: list[tuple[str, str, str, str, str]] = []
-    for item in items[:limit]:
-        if isinstance(item, dict):
-            meta = item.get("metadata") or {}
-            text = item.get("memory") or item.get("text") or item.get("content") or ""
-            rows.append(
-                (
-                    str(meta.get("category", "")),
-                    str(meta.get("project", "")),
-                    str(meta.get("task", "")),
-                    str(meta.get("ts", "")),
-                    str(text)[:80],
-                )
-            )
-        elif isinstance(item, str) and item:
-            rows.append(("", "", "", "", item[:80]))
-    return rows
-
-
 class RunDashboard(App):
     """Pollen — HivePilot's tabbed Textual insight dashboard.
 
@@ -254,12 +173,10 @@ class RunDashboard(App):
     `hivepilot/cli.py`), gated behind `HIVEPILOT_ENABLE_TEXTUAL_UI` exactly
     as before.
 
-    Four built-in tabs: **Analytics** (runs, metrics, step-failure hotspots,
+    Three built-in tabs: **Analytics** (runs, metrics, step-failure hotspots,
     recent interactions), **Cost** (per-provider/model cost & token
-    breakdown), **Health** (plugin health via `PluginManager.check_all()`),
-    and **Mem0** (recent memories when mem0 is configured+reachable, else a
-    clear "not configured" placeholder — never crashes, never shows a
-    secret). Plus one additional tab per Pollen **panel** plugin
+    breakdown), and **Health** (plugin health via `PluginManager.check_all()`).
+    Plus one additional tab per Pollen **panel** plugin
     (`hivepilot.plugins.PanelSpec` — see module docstring on `PanelData`),
     rendered generically from its `stat`/`table`/`text` sections (Sprint 2).
     """
@@ -288,12 +205,6 @@ class RunDashboard(App):
     #health {
         height: 100%;
     }
-    #mem0-status {
-        height: 3;
-    }
-    #mem0-table {
-        height: 1fr;
-    }
     .panel-content {
         height: 100%;
     }
@@ -305,15 +216,13 @@ class RunDashboard(App):
         self,
         *,
         health: dict[str, HealthStatus] | None = None,
-        mem0_module: Any | None = None,
         plugin_manager: Any | None = None,
     ) -> None:
-        """`health`/`mem0_module`/`plugin_manager` are injectable for
+        """`health`/`plugin_manager` are injectable for
         testing — same dependency-injection shape as `hivepilot.ui.
         plugin_manager.PluginManagerApp`. When omitted (real usage), the
         Health tab reads from a fresh `Orchestrator().plugins.check_all()`,
-        the Mem0 tab loads `plugins/mem0.py` by file path (see
-        `_load_mem0_plugin_module`), and the panel tabs are built from a
+        and the panel tabs are built from a
         fresh `Orchestrator().plugins` (an object exposing `list_panels()` /
         `run_panel_fetch(name)`, same shape as `hivepilot.plugins.
         PluginManager`).
@@ -327,7 +236,6 @@ class RunDashboard(App):
         """
         super().__init__()
         self._health_override = health
-        self._mem0_module_override = mem0_module
         self._plugin_manager_override = plugin_manager
         self._panel_manager = self._resolve_panel_manager()
         self._panels: list[PanelSpec] = self._list_panels_safe()
@@ -358,7 +266,7 @@ class RunDashboard(App):
         plugin bug raised from `list_panels()` itself (e.g. a panel plugin
         that misbehaves during registration/discovery) degrades to zero panel
         tabs rather than raising out of `__init__` — which would fail the
-        *whole* dashboard's construction, taking down the 4 built-in tabs
+        *whole* dashboard's construction, taking down the 3 built-in tabs
         with it. Mirrors `_resolve_panel_manager`'s own never-raise guard for
         `Orchestrator()` construction."""
         if self._panel_manager is None:
@@ -384,9 +292,6 @@ class RunDashboard(App):
         self.cost_table.add_columns(*COST_COLUMNS)
         self.health_table: DataTable = DataTable(id="health")
         self.health_table.add_columns(*HEALTH_COLUMNS)
-        self.mem0_status: Static = Static("Mem0: loading...", id="mem0-status")
-        self.mem0_table: DataTable = DataTable(id="mem0-table")
-        self.mem0_table.add_columns(*MEM0_COLUMNS)
 
         with TabbedContent(initial="analytics-tab"):
             with TabPane("Analytics", id="analytics-tab"):
@@ -399,9 +304,6 @@ class RunDashboard(App):
                 yield self.cost_table
             with TabPane("Health", id="health-tab"):
                 yield self.health_table
-            with TabPane("Mem0", id="mem0-tab"):
-                yield self.mem0_status
-                yield self.mem0_table
             for panel in self._panels:
                 name = panel["name"]
                 with TabPane(panel["title"], id=_panel_pane_id(name)):
@@ -423,8 +325,6 @@ class RunDashboard(App):
         self.set_interval(10, self.refresh_cost)
         self.refresh_health()
         self.set_interval(15, self.refresh_health)
-        self.refresh_mem0()
-        self.set_interval(15, self.refresh_mem0)
         self.runs_table.focus()
 
     def action_refresh(self) -> None:
@@ -433,7 +333,6 @@ class RunDashboard(App):
         self.refresh_interactions()
         self.refresh_cost()
         self.refresh_health()
-        self.refresh_mem0()
 
     def refresh_runs(self) -> None:
         runs = state_service.list_recent_runs(50)
@@ -538,47 +437,6 @@ class RunDashboard(App):
         if not results:
             self.health_table.add_row("-", "-", "-")
 
-    def refresh_mem0(self) -> None:
-        """Populate the Mem0 tab: recent memories when mem0 is configured
-        (`settings.mem0_enabled`) and reachable, else a clear "not
-        configured" placeholder in `mem0_status`. Reuses `plugins/mem0.py`'s
-        own `_get_client()` (via `_load_mem0_plugin_module`) rather than
-        re-deriving the hosted-vs-self-host client construction here. Never
-        raises, never surfaces a secret/token — only the exception TYPE name
-        is shown on failure, never `str(exc)` (which could echo back
-        configuration/error content)."""
-        self.mem0_table.clear()
-        module = (
-            self._mem0_module_override
-            if self._mem0_module_override is not None
-            else _load_mem0_plugin_module()
-        )
-        if module is None:
-            self.mem0_status.update("Mem0 not configured (plugin unavailable).")
-            return
-        try:
-            if not settings.mem0_enabled:
-                self.mem0_status.update("Mem0 not configured (HIVEPILOT_MEM0_ENABLED is False).")
-                return
-            get_client = getattr(module, "_get_client", None)
-            client = get_client() if callable(get_client) else None
-            if client is None:
-                self.mem0_status.update("Mem0 not configured (no client could be built).")
-                return
-            get_all = getattr(client, "get_all", None)
-            if not callable(get_all):
-                self.mem0_status.update(
-                    "Mem0 configured, but this client doesn't support listing memories."
-                )
-                return
-            rows = _mem0_memory_rows(get_all())
-        except Exception as exc:  # noqa: BLE001 — the Mem0 tab must never crash the dashboard
-            self.mem0_status.update(f"Mem0 configured but unreachable ({type(exc).__name__}).")
-            return
-        for row in rows:
-            self.mem0_table.add_row(*row)
-        self.mem0_status.update(f"Mem0: {len(rows)} recent memories.")
-
     async def refresh_panel(self, name: str) -> None:
         """Fetch+render a single panel's data into its tab, replacing any
         previous content.
@@ -597,7 +455,7 @@ class RunDashboard(App):
 
         The fetch+widget-build+mount step below is *additionally* wrapped in
         its own try/except — defense-in-depth on top of `run_panel_fetch`'s
-        own never-raise, mirroring `refresh_health`/`refresh_mem0`'s guards —
+        own never-raise, mirroring `refresh_health`'s guards —
         so a bug in `_panel_section_widgets` (or in the mount/remove_children
         calls themselves) degrades to a single error placeholder instead of
         crashing the dashboard. Never surfaces `str(exc)`, only the exception

@@ -174,15 +174,14 @@ class TestSampleAndSampleSkillDefaultOff:
 #    flag False unconditionally empties register() -- EXCEPT the two plugins
 #    below, which gate LAZILY inside their hook/health functions instead of
 #    in register() itself (pre-existing pattern, out of this sprint's file
-#    boundaries -- plugins/headroom.py / plugins/mem0.py are not in
-#    files_to_modify). register() for those two always returns its full
-#    hooks+health dict; each hook/health call reads
-#    settings.<stem>_enabled at CALL time and no-ops when False. That
-#    call-time gating is covered by their own dedicated tests
-#    (tests/test_headroom.py / tests/test_mem0.py), not here.
+#    boundaries -- plugins/headroom.py is not in files_to_modify).
+#    register() for that plugin always returns its full hooks+health dict;
+#    each hook/health call reads settings.<stem>_enabled at CALL time and
+#    no-ops when False. That call-time gating is covered by
+#    tests/test_headroom.py, not here.
 # ---------------------------------------------------------------------------
 
-_LAZILY_GATED_STEMS = {"headroom", "mem0"}
+_LAZILY_GATED_STEMS = {"headroom"}
 
 
 class TestAllPluginStemsHaveEnabledFlag:
@@ -214,13 +213,6 @@ class TestAllPluginStemsHaveEnabledFlag:
         hooks["before_step"](payload=payload)
         # No-op: the still-dormant flag means metadata is left untouched.
         assert payload.metadata == {"prompt": "some long original text"}
-
-    def test_mem0_register_is_non_empty_regardless_of_flag(self) -> None:
-        mem0 = _load_plugin_module("mem0")
-        assert settings.mem0_enabled is False  # default -- opt-in, dormant
-        hooks = mem0.register()
-        assert hooks != {}  # lazily-gated: register() itself is unconditional
-
 
 # ---------------------------------------------------------------------------
 # 6. init/doctor warn-only regression

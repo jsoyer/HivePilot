@@ -191,7 +191,6 @@ Finding **zero** source files always prints the directories that were searched, 
 | Plugin | Contributes | Default |
 |---|---|---|
 | `headroom` | `before_step` context compression | OFF |
-| `mem0` | `before_step`/`after_step` memory recall/store | OFF |
 | `hindsight` | `before_step`/`after_step` Hindsight recall/retain (HTTP client) | OFF |
 | `sample` | hooks + panel demo | OFF |
 | `sample_skill` | skill demo | OFF |
@@ -298,7 +297,7 @@ hivepilot plugins install <name>... [--enable/--no-enable] [--ref REF] [--yes]
 
 Fetches one or more curated built-in example plugins into the managed plugins dir and, by default, persists each `<NAME>_ENABLED=true`. See "Installing built-in example plugins" below for the full walkthrough.
 
-For the optional **agent-CLI plugin kinds** (`codex`, `cursor`, `gemini`, `opencode`, `ollama`, `pi`, `qwen-code`, `kimi-cli`, `antigravity`, `vibe` — `_OPTIONAL_AGENT_PLUGIN_KINDS` in `hivepilot/registry.py`), `plugins enable <kind>`/`plugins disable <kind>` toggle them directly: `enable` installs the CLI binary if missing (with consent), places the plugin file, sets the `<KIND>_ENABLED` flag, and verifies the kind actually resolves; `disable` only flips the flag off. For everything else — the CURATED example plugins `plugins install` fetches (`rtk`, `herdr`, `mem0`, …) — there is still no dedicated enable/disable subcommand once installed: toggle via `plugins tui` or by editing `HIVEPILOT_PLUGINS_DISABLED`/`HIVEPILOT_<NAME>_ENABLED` in `.env`, or set the flag at fetch time with `plugins install --enable`/`--no-enable` (see above).
+For the optional **agent-CLI plugin kinds** (`codex`, `cursor`, `gemini`, `opencode`, `ollama`, `pi`, `qwen-code`, `kimi-cli`, `antigravity`, `vibe` — `_OPTIONAL_AGENT_PLUGIN_KINDS` in `hivepilot/registry.py`), `plugins enable <kind>`/`plugins disable <kind>` toggle them directly: `enable` installs the CLI binary if missing (with consent), places the plugin file, sets the `<KIND>_ENABLED` flag, and verifies the kind actually resolves; `disable` only flips the flag off. For everything else — the CURATED example plugins `plugins install` fetches (`rtk`, `herdr`, `headroom`, …) — there is still no dedicated enable/disable subcommand once installed: toggle via `plugins tui` or by editing `HIVEPILOT_PLUGINS_DISABLED`/`HIVEPILOT_<NAME>_ENABLED` in `.env`, or set the flag at fetch time with `plugins install --enable`/`--no-enable` (see above).
 
 ```bash
 hivepilot plugins enable codex      # installs the codex CLI if missing, places plugins/codex.py, sets CODEX_ENABLED=true, verifies it resolves
@@ -307,14 +306,14 @@ hivepilot plugins disable codex     # flips CODEX_ENABLED=false — does not uni
 
 ## Installing built-in example plugins
 
-Before this command existed, trying one of the built-in example plugins (`rtk`, `herdr`, `mem0`, `headroom`, `hugo`, `obsidian`, `kms`, …) meant manually downloading its `plugins/<name>.py` into your config repo, committing, `hivepilot config sync`-ing, and setting its `<NAME>_ENABLED` flag by hand. `hivepilot plugins install` collapses that into one command.
+Before this command existed, trying one of the built-in example plugins (`rtk`, `herdr`, `headroom`, `hugo`, `obsidian`, `kms`, …) meant manually downloading its `plugins/<name>.py` into your config repo, committing, `hivepilot config sync`-ing, and setting its `<NAME>_ENABLED` flag by hand. `hivepilot plugins install` collapses that into one command.
 
 ```bash
 # See what's available
 hivepilot plugins available
 
 # Install one or more, review the confirm-then-run prompt, then confirm
-hivepilot plugins install rtk herdr mem0 headroom
+hivepilot plugins install rtk herdr headroom
 
 # Skip the confirmation prompt (e.g. scripted setup)
 hivepilot plugins install rtk --yes
@@ -336,7 +335,6 @@ hivepilot plugins install hugo --ref v0.3.0
 |---|---|
 | `rtk`, `herdr`, `hugo`, `gh`, `tmux` | the matching binary on `PATH` |
 | `bitwarden`, `vaultwarden` | the official Bitwarden `bw` CLI on `PATH` |
-| `mem0` | `pip install mem0ai` |
 | `hindsight` | `pip install hindsight-client` (or `hivepilot[hindsight]`) plus a running Hindsight server |
 | `headroom` | `pip install "headroom-ai[all]"` |
 | `infisical` | `pip install infisicalsdk` (+ `HIVEPILOT_INFISICAL_TOKEN`/`_WORKSPACE_ID`/`_ENVIRONMENT`) |
@@ -359,7 +357,7 @@ export HIVEPILOT_HINDSIGHT_ENABLED=true
 export HIVEPILOT_HINDSIGHT_BASE_URL=http://127.0.0.1:8888
 ```
 
-`before_step` calls `recall`; `after_step` calls `retain` with a redacted step output. `GET /v1/orchestrator/missions/{id}` calls `reflect()` (HP-54) against the first spawned task's episodic bank, with the engine numeric status as context; the prose is cached on the mission row until the status snapshot changes. mem0 is also a world-fact store and is **deprecated** (HP-53): `hivepilot memory migrate-mem0` copies existing memories into the same `{project}:{task}:{role}` Hindsight banks. The mem0 plugin stays loadable until a later removal slice. honcho (role model) and obsidian (vault) compose.
+`before_step` calls `recall`; `after_step` calls `retain` with a redacted step output. `GET /v1/orchestrator/missions/{id}` calls `reflect()` (HP-54) against the first spawned task's episodic bank, with the engine numeric status as context; the prose is cached on the mission row until the status snapshot changes. mem0 is retired (HP-53): `hivepilot memory migrate-mem0` copies existing memories into the same `{project}:{task}:{role}` Hindsight banks; the bundled plugin and `GET /v1/memories` are gone. honcho (role model) and obsidian (vault) compose.
 
 Two bank namespaces (do not collapse them):
 

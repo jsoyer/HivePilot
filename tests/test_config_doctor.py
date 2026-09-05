@@ -261,36 +261,40 @@ class TestSyncDrift:
 
 class TestEnabledPluginsLoaded:
     def test_flags_enabled_but_not_loaded(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """FAILING fixture: mem0_enabled=True but PluginManager never loaded
-        a 'mem0' plugin record -- incident #4 (env flag flipped, plugin FILE
-        missing from the plugins dir; only symptom was an empty panel)."""
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
+        """FAILING fixture: headroom_enabled=True but PluginManager never loaded
+        a 'headroom' plugin record -- incident #4 (env flag flipped, plugin FILE
+        missing from the plugins dir; only symptom was an empty panel).
+
+        mem0 is a NON_PLUGIN_ENABLED_FLAG_EXCEPTION (retired plugin; the flag
+        still gates `hivepilot memory migrate-mem0`), so this uses headroom.
+        """
+        monkeypatch.setattr(settings, "headroom_enabled", True, raising=False)
         fake_manager = SimpleNamespace(loaded=[])
 
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
-        mem0_findings = [f for f in findings if "'mem0'" in f.message]
-        assert mem0_findings, "expected a plugin_enabled_not_loaded finding for mem0"
-        assert mem0_findings[0].severity == "error"
-        assert mem0_findings[0].check == "plugin_enabled_not_loaded"
-        assert "plugins install mem0" in mem0_findings[0].fix
+        headroom_findings = [f for f in findings if "'headroom'" in f.message]
+        assert headroom_findings, "expected a plugin_enabled_not_loaded finding for headroom"
+        assert headroom_findings[0].severity == "error"
+        assert headroom_findings[0].check == "plugin_enabled_not_loaded"
+        assert "plugins install headroom" in headroom_findings[0].fix
 
     def test_clean_when_enabled_plugin_is_loaded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """PASSING fixture: the plugin IS in PluginManager.loaded."""
-        monkeypatch.setattr(settings, "mem0_enabled", True, raising=False)
-        fake_manager = SimpleNamespace(loaded=[SimpleNamespace(name="mem0")])
+        monkeypatch.setattr(settings, "headroom_enabled", True, raising=False)
+        fake_manager = SimpleNamespace(loaded=[SimpleNamespace(name="headroom")])
 
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
-        assert not any("'mem0'" in f.message for f in findings)
+        assert not any("'headroom'" in f.message for f in findings)
 
     def test_clean_when_flag_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(settings, "mem0_enabled", False, raising=False)
+        monkeypatch.setattr(settings, "headroom_enabled", False, raising=False)
         fake_manager = SimpleNamespace(loaded=[])
 
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
-        assert not any("'mem0'" in f.message for f in findings)
+        assert not any("'headroom'" in f.message for f in findings)
 
     def test_the_remaining_builtin_runner_flag_is_never_flagged(
         self, monkeypatch: pytest.MonkeyPatch
@@ -326,7 +330,7 @@ class TestEnabledPluginsLoaded:
 # gemini/codex/cursor/hugo/tmux/bitwarden/vaultwarden/opencode/ollama/pi/
 # qwen_code/kimi_cli/antigravity), never touched by the operator. Only an
 # EXPLICITLY-configured flag (env var / .env file / init kwarg) with a
-# missing plugin is a real incident (the mem0/headroom case this check was
+# missing plugin is a real incident (the headroom case this check was
 # built for) -- these tests pin that distinction.
 # ---------------------------------------------------------------------------
 
@@ -384,7 +388,8 @@ class _AmbiguousProvenanceSettings:
     empty/unknown-treated-as-no-constraint bug class this codebase has hit
     repeatedly."""
 
-    mem0_enabled = True
+    mem0_enabled = True  # retired flag; must not emit plugin_enabled_not_loaded
+    headroom_enabled = True
 
     def resolve_path(self, path: Path) -> Path:
         return Path("/fake") / path
@@ -469,19 +474,19 @@ class TestEnabledPluginsLoadedProvenance:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """THE REAL INCIDENT must stay caught: an operator who explicitly
-        set `HIVEPILOT_MEM0_ENABLED=true` via an env var, with the plugin
+        set `HIVEPILOT_HEADROOM_ENABLED=true` via an env var, with the plugin
         FILE missing, must still get an ERROR."""
-        monkeypatch.setenv("HIVEPILOT_MEM0_ENABLED", "true")
+        monkeypatch.setenv("HIVEPILOT_HEADROOM_ENABLED", "true")
         cfg = _fresh_settings(tmp_path, monkeypatch)
         monkeypatch.setattr(config_doctor, "settings", cfg)
         fake_manager = SimpleNamespace(loaded=[])
 
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
-        mem0_findings = [f for f in findings if "'mem0'" in f.message]
-        assert mem0_findings, "expected a plugin_enabled_not_loaded ERROR for mem0"
-        assert mem0_findings[0].severity == "error"
-        assert mem0_findings[0].check == "plugin_enabled_not_loaded"
+        headroom_findings = [f for f in findings if "'headroom'" in f.message]
+        assert headroom_findings, "expected a plugin_enabled_not_loaded ERROR for headroom"
+        assert headroom_findings[0].severity == "error"
+        assert headroom_findings[0].check == "plugin_enabled_not_loaded"
 
     def test_explicit_env_file_enabled_missing_plugin_is_still_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -489,16 +494,16 @@ class TestEnabledPluginsLoadedProvenance:
         """Same real incident, sourced from a `.env` config file instead of
         a live env var -- must also still be an ERROR."""
         env_file = tmp_path / "custom.env"
-        env_file.write_text("HIVEPILOT_MEM0_ENABLED=true\n")
+        env_file.write_text("HIVEPILOT_HEADROOM_ENABLED=true\n")
         cfg = _fresh_settings(tmp_path, monkeypatch, _env_file=str(env_file))
         monkeypatch.setattr(config_doctor, "settings", cfg)
         fake_manager = SimpleNamespace(loaded=[])
 
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
-        mem0_findings = [f for f in findings if "'mem0'" in f.message]
-        assert mem0_findings, "expected a plugin_enabled_not_loaded ERROR for mem0"
-        assert mem0_findings[0].severity == "error"
+        headroom_findings = [f for f in findings if "'headroom'" in f.message]
+        assert headroom_findings, "expected a plugin_enabled_not_loaded ERROR for headroom"
+        assert headroom_findings[0].severity == "error"
 
     def test_explicit_false_missing_plugin_is_silent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -523,8 +528,10 @@ class TestEnabledPluginsLoadedProvenance:
         findings = config_doctor.check_enabled_plugins_loaded(fake_manager)
 
         mem0_findings = [f for f in findings if "'mem0'" in f.message]
-        assert mem0_findings, "provenance-unknown + truthy must still emit a finding"
-        assert mem0_findings[0].severity == "warning"
+        assert not mem0_findings, "retired mem0 flag must not emit plugin_enabled_not_loaded"
+        headroom_findings = [f for f in findings if "'headroom'" in f.message]
+        assert headroom_findings, "provenance-unknown + truthy must still emit a finding"
+        assert headroom_findings[0].severity == "warning"
 
     def test_many_default_enabled_flags_yield_zero_errors(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -554,7 +561,7 @@ class TestEnabledPluginsLoadedProvenance:
 class TestPluginHealth:
     def test_surfaces_error_health_with_pip_fix(self) -> None:
         fake_manager = SimpleNamespace(
-            check_all=lambda: {"mem0": ("error", "mem0ai not installed")}
+            check_all=lambda: {"headroom": ("error", "headroom-ai not installed")}
         )
 
         findings = config_doctor.check_plugin_health(fake_manager)
@@ -562,12 +569,14 @@ class TestPluginHealth:
         assert len(findings) == 1
         assert findings[0].severity == "error"
         assert findings[0].check == "plugin_health"
-        assert "mem0" in findings[0].message
-        assert "pip install mem0ai" in findings[0].fix
+        assert "headroom" in findings[0].message
+        assert "headroom-ai" in findings[0].fix
 
     def test_degraded_is_a_warning_not_an_error(self) -> None:
         fake_manager = SimpleNamespace(
-            check_all=lambda: {"mem0": ("degraded", "installed but disabled (mem0_enabled=False)")}
+            check_all=lambda: {
+                "headroom": ("degraded", "installed but disabled (headroom_enabled=False)")
+            }
         )
 
         findings = config_doctor.check_plugin_health(fake_manager)

@@ -28,7 +28,6 @@ Endpoints covered (every one `web/src/lib/pollen-api.ts` calls):
     GET /v1/analytics/cost
     GET /v1/analytics/whales
     GET /v1/plugins/health
-    GET /v1/memories
     GET /v1/hindsight/status
     GET /v1/hindsight/roles/{role}
     GET /v1/panels
@@ -339,7 +338,9 @@ class TestPluginsHealthContract:
         from hivepilot.plugins import HealthStatus
         from hivepilot.services import api_service
 
-        fake_plugins = SimpleNamespace(check_all=lambda: {"mem0": HealthStatus("ok", "self-host")})
+        fake_plugins = SimpleNamespace(
+            check_all=lambda: {"headroom": HealthStatus("ok", "headroom-ai installed")}
+        )
         monkeypatch.setattr(
             api_service, "_get_orchestrator", lambda: SimpleNamespace(plugins=fake_plugins)
         )
@@ -368,51 +369,6 @@ class TestPluginsHealthContract:
             "activity_available",
             "activity",
         }
-
-
-# ---------------------------------------------------------------------------
-# GET /v1/memories
-# ---------------------------------------------------------------------------
-
-
-class TestMemoriesContract:
-    def test_configured_shape(self, api_client, admin_token, monkeypatch):
-        from hivepilot.services import api_service
-
-        mock_client = MagicMock()
-        mock_client.search.return_value = {
-            "results": [
-                {
-                    "id": "1",
-                    "memory": "prefers dark mode",
-                    "metadata": {"project": "acme-api", "task": "t1"},
-                    "score": 0.9,
-                },
-            ]
-        }
-        monkeypatch.setattr(api_service, "_get_mem0_client", lambda: mock_client)
-        # mem0 v3 requires a non-empty filter, so the Pollen contract carries
-        # a `user_id` -- probed live: no filter answers 400 "This field is
-        # required", `filters={}` answers 400 "filters cannot be empty".
-        resp = api_client.get(
-            "/v1/memories?query=dark+mode&user_id=acme", headers=_auth(admin_token)
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert set(data.keys()) >= {"configured", "memories"}
-        assert data["configured"] is True
-        assert len(data["memories"]) == 1
-        item = data["memories"][0]
-        assert set(item.keys()) >= {"memory"}
-        assert set(item.keys()) <= {"memory", "id", "metadata", "score"}
-
-    def test_unconfigured_shape(self, api_client, admin_token):
-        resp = api_client.get("/v1/memories?query=hello", headers=_auth(admin_token))
-        assert resp.status_code == 200
-        data = resp.json()
-        assert set(data.keys()) == {"configured", "memories", "detail"}
-        assert data["configured"] is False
-        assert data["memories"] == []
 
 
 # ---------------------------------------------------------------------------

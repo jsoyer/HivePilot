@@ -20,7 +20,6 @@ import {
   fetchAutopilot,
   fetchEfficiency,
   fetchLessons,
-  fetchMemories,
   fetchHindsightStatus,
   fetchHindsightRolePanel,
   createHindsightMentalModel,
@@ -120,13 +119,6 @@ describe('pollen-api fetch wrappers', () => {
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/plugins/health')
   })
 
-  it('fetchMemories calls GET /v1/memories with query/limit and opts into on403: "forbidden"', async () => {
-    await fetchMemories('deploy', 20)
-    expect(apiFetchMock).toHaveBeenCalledWith('/v1/memories?query=deploy&limit=20', {
-      on403: 'forbidden',
-    })
-  })
-
   it('fetchHindsightStatus calls GET /v1/hindsight/status with on403: "forbidden"', async () => {
     await fetchHindsightStatus()
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/hindsight/status', { on403: 'forbidden' })
@@ -157,13 +149,6 @@ describe('pollen-api fetch wrappers', () => {
       body: JSON.stringify({ text: 'fixed' }),
       on403: 'forbidden',
     })
-  })
-
-  it('fetchMemories URL-encodes the query text', async () => {
-    await fetchMemories('rate limit / retry', 10)
-    const [url] = apiFetchMock.mock.calls[0] as [string]
-    expect(url).toContain('query=rate+limit+%2F+retry')
-    expect(url).not.toContain(' ')
   })
 
   it('fetchPanels calls GET /v1/panels', async () => {

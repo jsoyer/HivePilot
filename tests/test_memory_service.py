@@ -405,19 +405,19 @@ class TestBackendAttribution:
 
         stats = memory_service.backend_stats()
         assert stats["obsidian"]["searches"] == 0
-        assert stats["mem0"]["searches"] == 0
+        assert stats["hindsight"]["searches"] == 0
+        assert "mem0" not in stats
 
 
 def test_both_backends_tag_their_writes(tmp_path, monkeypatch):
     """NULL must mean "written before the column existed", nothing else.
 
-    mem0 originally relied on NULL implying itself. With a second writer that
-    reads as "obsidian or unknown", and the distinction stops being provable
-    the moment a third backend appears.
+    Live writers must tag their own name. Historical mem0 rows stay readable
+    via `_LEGACY_BACKEND`; the bundled plugin is gone.
     """
 
     plugins_dir = BUNDLED_PLUGINS
-    for name in ("mem0", "obsidian"):
+    for name in ("obsidian", "hindsight"):
         source = (plugins_dir / f"{name}.py").read_text(encoding="utf-8")
         assert f'backend="{name}"' in source, f"{name} does not tag its memory writes"
 

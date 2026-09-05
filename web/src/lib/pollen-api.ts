@@ -1,6 +1,6 @@
 /**
  * Typed shapes + fetch wrappers for the Pollen web UI's data sources —
- * HivePilot's own `/v1/analytics/*`, `/v1/plugins/health`, and `/v1/memories`
+ * HivePilot's own `/v1/analytics/*`, `/v1/plugins/health`, and `/v1/hindsight/*`
  * endpoints. Field names/shapes are transcribed directly from
  * `hivepilot/services/analytics_service.py` and `hivepilot/services/
  * api_service.py` (read those before changing anything here — this file
@@ -779,40 +779,6 @@ export function installPlugin(name: string): Promise<PluginInstallResult> {
 
 export function fetchPluginsHealth(): Promise<PluginsHealthResponse> {
   return apiFetch<PluginsHealthResponse>('/v1/plugins/health')
-}
-
-// ---------------------------------------------------------------------------
-// GET /v1/memories — admin-only (see api_service.py `list_memories`
-// docstring for the full scope/tenant analysis). Uses `on403: 'forbidden'`
-// so a valid non-admin token isn't cleared just because this one endpoint is
-// out of its reach — see `ApiForbiddenError` in `./api`.
-// ---------------------------------------------------------------------------
-
-export interface MemoryProvenance {
-  project?: string
-  task?: string
-  role?: string
-  category?: string
-  ts?: string
-  [key: string]: unknown
-}
-
-export interface MemoryItem {
-  memory: string
-  id?: string | number
-  metadata?: MemoryProvenance
-  score?: number
-}
-
-export interface MemoriesResponse {
-  configured: boolean
-  memories: MemoryItem[]
-  detail?: string
-}
-
-export function fetchMemories(query: string, limit = 20): Promise<MemoriesResponse> {
-  const params = new URLSearchParams({ query, limit: String(limit) })
-  return apiFetch<MemoriesResponse>(`/v1/memories?${params.toString()}`, { on403: 'forbidden' })
 }
 
 // ---------------------------------------------------------------------------
