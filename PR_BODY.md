@@ -1,18 +1,22 @@
 ## Summary
 
-HP-53 first slice: **migrate mem0 memories into Hindsight**, start retirement, do not delete the plugin.
+HP-50: nudge engine + structured verdict (`decision` + « je bloque si » + `file:line` findings).
 
-- New `hivepilot memory migrate-mem0` (`--dry-run`, `--user-id`, `--force`). Same bank key as HP-51: `{project}:{task}:{role}`. Each memory is `retain`ed with a `[migrated-from-mem0]` prefix (redacted).
-- Idempotent log table `mem0_migration_log` in `state.db`. A second run skips already-copied ids. One retain failure does not abort the rest.
-- Soft deprecation: `mem0.health()` and `plugins install` copy point at the new command. mem0 plugin, Search tab, `GET /v1/memories`, and historical `memory_events` stay.
+An observer re-injects three signals to the owning role — without changing any gate:
 
-Out of slice: delete `bundled_plugins/mem0.py`, remove Search tab / `/v1/memories`, drop `KNOWN_BACKENDS` mem0, honcho/obsidian (untouched).
+- blocking CI / deterministic checks (`git_service.perform_git_actions`)
+- blocking in-pipeline review (`Orchestrator._run_review`)
+- file-ownership conflicts (`hivepilot ownership check --role`)
 
-Linear: [HP-53](https://linear.app/js-workspace/issue/HP-53/migrationretrait-de-mem0-bascule-des-memoires-existantes-suppression). Parent HP-32.
+Each nudge persists `verdicts.kind="nudge"` (new `findings_json` / `block_if_json` columns) and posts a system message into the project's Orchestrateur Espace (HP-49) with an HP-47 action trace. Fail-safe: a broken nudge never raises into git/orchestrator.
+
+Does not ingest GitHub review webhooks. Does not enforce ownership as a merge gate. Does not change `orchestrator.Verdict`. Disposition still unset. Banks stay `{project}:{task}:{role}` vs `role:{name}`.
+
+Linear: [HP-50](https://linear.app/js-workspace/issue/HP-50/nudge-engine-sortie-verdict-structuree-re-route-cireviewechec-je). Parent HP-31.
 
 ## Testing
 
-- [x] `pytest tests/test_mem0_hindsight_migration.py tests/test_mem0.py tests/test_hindsight.py -q`
-- [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths
+- [x] `pytest tests/test_structured_verdict.py tests/test_nudge_engine.py tests/test_file_ownership.py tests/test_delegation.py tests/test_mission_plan.py tests/test_state_service.py -k verdict -q`
+- [x] `ruff check` on new modules
 
-Replay: enable both backends, then `hivepilot memory migrate-mem0 --dry-run` then without `--dry-run`. After verify recall, set `HIVEPILOT_MEM0_ENABLED=false`.
+Replay: trigger a failing check or `hivepilot ownership check --role developer`; open the project's Orchestrateur Espace — a `Nudge · …` system message with `je bloque si` and file:line findings.
