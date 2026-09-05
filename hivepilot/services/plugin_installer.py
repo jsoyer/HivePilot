@@ -318,7 +318,10 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
     ),
     "mem0": ExamplePluginSpec(
         name="mem0",
-        description="Persistent cross-run agent memory via a recall/store hook pair backed by mem0.",
+        description=(
+            "DEPRECATED: persistent mem0 recall/store. Migrate with "
+            "`hivepilot memory migrate-mem0`, then prefer Hindsight (HP-53)."
+        ),
         env_flag="HIVEPILOT_MEM0_ENABLED",
         prereq_kind="pip",
         prereq_detail="`pip install mem0ai`",

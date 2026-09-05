@@ -359,7 +359,7 @@ export HIVEPILOT_HINDSIGHT_ENABLED=true
 export HIVEPILOT_HINDSIGHT_BASE_URL=http://127.0.0.1:8888
 ```
 
-`before_step` calls `recall`; `after_step` calls `retain` with a redacted step output. `GET /v1/orchestrator/missions/{id}` calls `reflect()` (HP-54) against the first spawned task's episodic bank, with the engine numeric status as context; the prose is cached on the mission row until the status snapshot changes. mem0 is also a world-fact store — pick one primary; honcho (role model) and obsidian (vault) compose.
+`before_step` calls `recall`; `after_step` calls `retain` with a redacted step output. `GET /v1/orchestrator/missions/{id}` calls `reflect()` (HP-54) against the first spawned task's episodic bank, with the engine numeric status as context; the prose is cached on the mission row until the status snapshot changes. mem0 is also a world-fact store and is **deprecated** (HP-53): `hivepilot memory migrate-mem0` copies existing memories into the same `{project}:{task}:{role}` Hindsight banks. The mem0 plugin stays loadable until a later removal slice. honcho (role model) and obsidian (vault) compose.
 
 Two bank namespaces (do not collapse them):
 
