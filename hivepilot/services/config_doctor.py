@@ -466,6 +466,7 @@ _NON_PLUGIN_ENABLED_FLAG_EXCEPTIONS = frozenset(
         "chatops_concierge",  # built-in NL feature flag, not a plugin
         "stage_cache",  # SQLite stage-memoization feature flag, not a plugin
         "otel_ingest",  # OTLP metric route on the API, not a plugin
+        "mem0",  # retired plugin; flag still gates hivepilot memory migrate-mem0
     }
 )
 
@@ -2623,7 +2624,6 @@ def verify_badge(result: PluginVerifyResult) -> str:
 # distribution cross-check here -- see `verify_plugins`'s docstring for what
 # is deliberately NOT covered (onepassword/kms have multiple SDK modes).
 _PIP_IMPORT_PROBES: dict[str, tuple[str, str]] = {
-    "mem0": ("mem0", "mem0ai"),
     "headroom": ("headroom", "headroom-ai"),
     "infisical": ("infisical_sdk", "infisicalsdk"),
 }

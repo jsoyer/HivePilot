@@ -487,7 +487,7 @@ def test_memory_backends_reports_both_even_when_idle(tmp_path, monkeypatch):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body["backends"]) >= {"mem0", "obsidian", "hindsight"}
+    assert set(body["backends"]) >= {"obsidian", "hindsight"}
     assert body["backends"]["obsidian"]["searches"] == 0
     assert body["backends"]["hindsight"]["searches"] == 0
     assert "hindsight" in body["egress"]

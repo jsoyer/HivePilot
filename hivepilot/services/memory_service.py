@@ -572,7 +572,7 @@ def activity_journal(tenant: str | None = None, limit: int = 50) -> list[dict[st
 #: A backend rendered as ABSENT reads as "not applicable"; rendered as zero it
 #: reads as "measured and idle". Only one of those is true, and getting it
 #: wrong is how Obsidian looked useless while simply being uninstrumented.
-KNOWN_BACKENDS: tuple[str, ...] = ("mem0", "obsidian", "hindsight")
+KNOWN_BACKENDS: tuple[str, ...] = ("obsidian", "hindsight")
 
 #: Rows written before the `backend` column existed. Every one of them is
 #: mem0's -- it was the only backend calling these recorders, verified against

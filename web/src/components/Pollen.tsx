@@ -106,11 +106,10 @@ const BUILTIN_TABS = [
   // role key all along, and nothing ever presented it as a thread. Replying
   // addresses the ROLE, not the finished run -- see ConversationsView.
   { value: 'conversations', labelKey: 'nav.conversations', Panel: ConversationsView, Icon: MessagesSquare },
-  // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
-  // and memory-quality built-ins merged into ONE `memory` item, plus a
-  // new Growth tab (`/v1/memory/growth`) — see `MemoryView`'s own
-  // docstring for the internal Quality/Growth/Search tab layout. Read-only
-  // for any token; individual `/v1/memory/*` endpoints gate themselves.
+  // Memory unification: Sources / Knowledge / Quality / Growth under one
+  // nav item (`/v1/memory/*` + `/v1/hindsight/*`). The mem0 Search tab is
+  // retired (HP-53). Read-only for any token; individual endpoints gate
+  // themselves.
   { value: 'memory', labelKey: 'nav.memory', Panel: MemoryView, Icon: Database },
   // Mirador actionable dashboard PRD, Sprint 2: read-only for any token,
   // Approve/Deny controls inside gate themselves on useRole().can('approve')
@@ -155,13 +154,12 @@ function panelTabValue(name: string): string {
 /**
  * The Pollen app shell — dark, grouped-sidebar insight dashboard (P0b:
  * sidebar nav + enriched header, upgrading the original flat top tab bar).
- * Eight built-in items (Home / Analytics / Cost / Health / Memory /
+ * Built-in items (Home / Analytics / Cost / Health / Memory /
  * Approvals / Runs / Graph, wired to real HivePilot API data — `/v1/models`,
- * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`,
- * `/v1/memory/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`, see `./views/*`
- * and `@/lib/pollen-api`) — Memory itself merges the FORMER separate Mem0
- * (search) and memory-quality built-ins into one item with internal
- * Quality/Growth/Search tabs (see `MemoryView`'s own docstring) — grouped by
+ * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`,
+ * `/v1/memory/*`, `/v1/hindsight/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`,
+ * see `./views/*` and `@/lib/pollen-api`) — Memory is Sources / Knowledge /
+ * Quality / Growth (mem0 Search retired, HP-53) — grouped by
  * `./nav/nav-config`'s `buildNavGroups`, plus one DYNAMIC item per
  * plugin-contributed `panel` (Sprint 3 web surface, `GET /v1/panels`) —
  * ungrouped panels fall into a trailing "Panels" group automatically (see

@@ -835,27 +835,20 @@ class Settings(BaseSettings):
     # call — loudly — so an optimisation can never take the fleet down.
     # env: HIVEPILOT_COMPRESSION_PROXY_URL
     compression_proxy_url: str | None = None
-    # Opt-in gate for the `mem0` before_step/after_step plugin (plugins/mem0.py):
-    # persistent cross-run agent memory (recall before a step, store after)
-    # via the optional `mem0ai` library. Defaults False — ships dormant even
-    # when the plugin file is present and the library is installed; mirrors
-    # headroom_enabled's opt-in-only gating above.
+    # DEPRECATED (HP-53). Migration-source gate only — the mem0 plugin is
+    # retired. `hivepilot memory migrate-mem0` still reads this flag to open
+    # a mem0 export. Defaults False.
     # env: HIVEPILOT_MEM0_ENABLED
     mem0_enabled: bool = False
-    # Hosted mem0 API key (https://mem0.ai). When set, plugins/mem0.py uses
-    # `mem0.MemoryClient(api_key=...)`. WARNING: hosted mode sends
-    # extra_prompt, prior_context, the step's output (the agent's actual
-    # generated result — more likely than extra_prompt/prior_context to
-    # contain secrets), AND the structured PROVENANCE metadata `store()`
-    # attaches to every memory (source/project/task/role/step/category/ts —
-    # see the "PROVENANCE metadata" note in plugins/mem0.py) off-machine to
-    # mem0.ai — do NOT use it for sensitive projects; leave unset to keep
-    # everything local via `mem0.Memory()`.
+    # Hosted mem0 API key (https://mem0.ai). Used only by
+    # `hivepilot memory migrate-mem0`. WARNING: hosted mode historically sent
+    # step output and provenance off-machine to mem0.ai — do NOT use it for
+    # sensitive projects; leave unset to read a local `mem0.Memory()` store.
     # env: HIVEPILOT_MEM0_API_KEY
     mem0_api_key: str | None = None
     # Optional self-host mem0 config dict, passed to `Memory.from_config()`
     # (vector store / embedder / llm overrides). Only used when mem0_api_key
-    # is unset. env: HIVEPILOT_MEM0_CONFIG (JSON string)
+    # is unset, and only by the migrator. env: HIVEPILOT_MEM0_CONFIG (JSON string)
     mem0_config: dict[str, Any] | None = None
     # Per-plugin enable flags for the six always-on bundled plugins. UNLIKE
     # headroom_enabled/mem0_enabled above (which default False — opt-IN,

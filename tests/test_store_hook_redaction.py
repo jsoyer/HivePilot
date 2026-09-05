@@ -4,15 +4,15 @@ redaction hole.
 
 Before this sprint, `Orchestrator._execute_task_body`'s `after_step`
 `run_hook(...)` call (`hivepilot/orchestrator.py`) handed persistence hooks
-(`plugins/mem0.py::store`, `plugins/obsidian.py::store`, and any future
+(`plugins/obsidian.py::store`, and any future
 lesson-distillation sink) the step's real captured `output` plus the live
 `payload.metadata` (`extra_prompt`/`prior_context`) completely UNREDACTED —
 unlike every other sink downstream of a resolved `${secret:NAME}` value
 (`record_interaction`/`record_step`/`record_verdict`/exception logging),
 which all route through `redact_text`/the resolved-secrets masking registry
 (`hivepilot/services/config_provenance.py`) first. A resolved secret echoed
-into a step's output or prompt context could therefore reach an external
-mem0 store or a plaintext Obsidian vault note verbatim.
+into a step's output or prompt context could therefore reach a
+plaintext Obsidian vault note verbatim.
 
 A follow-up opus adversarial review additionally caught that the hook-facing
 payload copy still carried `payload.secrets` — the RAW `{ENV_NAME:
@@ -27,8 +27,8 @@ Covers THREE layers, per the sprint spec:
     every step in the task, see `payload = RunnerPayload(...,
     metadata=metadata, ...)`) is never mutated in place, so later steps'
     real prompts are unaffected.
-(B) Defense-in-depth inside `plugins/mem0.py::store` and
-    `plugins/obsidian.py::store` — both redact the content they persist
+(B) Defense-in-depth inside `plugins/obsidian.py::store` — it redacts
+    the content it persists
     even if a future/other caller invokes `store()` directly without going
     through the orchestrator choke.
 (C) `payload.secrets` is blanked (`secrets={}`) on the hook-facing copy for
@@ -36,9 +36,9 @@ Covers THREE layers, per the sprint spec:
     must never reach a hook, regardless of whether the surrounding text was
     redacted. `before_step`'s copy keeps its `metadata` as the SAME dict
     reference as the live payload (no `metadata=` override), preserving
-    mem0/obsidian `recall`'s in-place-mutation injection contract — see
-    `tests/test_mem0.py` / `tests/test_plugin_obsidian_brain.py`'s recall
-    tests, which this sprint must not regress.
+    obsidian `recall`'s in-place-mutation injection contract — see
+    `tests/test_plugin_obsidian_brain.py`'s recall tests, which this
+    sprint must not regress.
 """
 
 from __future__ import annotations
@@ -62,7 +62,6 @@ from hivepilot.services import config_provenance
 MARKER = "LESSONS-S1-SECRET-MARKER-7e2f4a91-DO-NOT-LEAK"
 
 REPO_ROOT = Path(__file__).parent.parent
-MEM0_PLUGIN_PATH = BUNDLED_PLUGINS / "mem0.py"
 OBSIDIAN_PLUGIN_PATH = BUNDLED_PLUGINS / "obsidian.py"
 _HIVEPILOT_SUBTREE = conftest.TEST_VAULT_HIVEPILOT_FOLDER
 
@@ -300,77 +299,6 @@ class TestAfterStepChokeRedactsOutput:
         assert hook_payload.secrets == {}
         assert live_payload.secrets == {"API_KEY": MARKER}
         assert hook_payload is not live_payload
-
-
-# ---------------------------------------------------------------------------
-# (B) Plugin defense-in-depth — mem0
-# ---------------------------------------------------------------------------
-
-
-def _load_mem0_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("hivepilot_plugin_mem0_test", MEM0_PLUGIN_PATH)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class TestMem0StoreDefenseInDepth:
-    def test_store_redacts_a_resolved_secret_in_output_before_client_add(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from hivepilot.models import ProjectConfig, TaskStep
-        from hivepilot.runners.base import RunnerPayload
-
-        monkeypatch.setattr(config_mod.settings, "mem0_enabled", True, raising=False)
-        config_provenance.register_secret_value(MARKER)
-
-        mem0_module = _load_mem0_module()
-        mock_client = MagicMock()
-        payload = RunnerPayload(
-            project_name="proj",
-            project=ProjectConfig(path=tmp_path),
-            task_name="t",
-            step=TaskStep(name="s", runner="claude"),
-            metadata={},
-            secrets={},
-        )
-
-        with patch.object(mem0_module, "_get_client", return_value=mock_client):
-            mem0_module.store(payload=payload, output=f"the real result was {MARKER}")
-
-        assert mock_client.add.called
-        stored_text = mock_client.add.call_args.args[0]
-        assert MARKER not in stored_text
-        assert config_provenance.REDACTED in stored_text
-
-    def test_store_redacts_a_resolved_secret_in_extra_prompt_before_client_add(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from hivepilot.models import ProjectConfig, TaskStep
-        from hivepilot.runners.base import RunnerPayload
-
-        monkeypatch.setattr(config_mod.settings, "mem0_enabled", True, raising=False)
-        config_provenance.register_secret_value(MARKER)
-
-        mem0_module = _load_mem0_module()
-        mock_client = MagicMock()
-        payload = RunnerPayload(
-            project_name="proj",
-            project=ProjectConfig(path=tmp_path),
-            task_name="t",
-            step=TaskStep(name="s", runner="claude"),
-            metadata={"extra_prompt": f"use {MARKER} to authenticate"},
-            secrets={},
-        )
-
-        with patch.object(mem0_module, "_get_client", return_value=mock_client):
-            mem0_module.store(payload=payload)
-
-        assert mock_client.add.called
-        stored_text = mock_client.add.call_args.args[0]
-        assert MARKER not in stored_text
-        assert config_provenance.REDACTED in stored_text
 
 
 # ---------------------------------------------------------------------------
