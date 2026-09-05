@@ -1354,8 +1354,10 @@ class TestPluginsHealthEndpoint:
     def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file, monkeypatch):
         from types import SimpleNamespace
 
+        from hivepilot.config import settings
         from hivepilot.services import api_service
 
+        monkeypatch.setattr(settings, "plugins_disabled", [])
         monkeypatch.setattr(
             api_service,
             "_get_orchestrator",
