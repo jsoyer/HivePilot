@@ -370,6 +370,8 @@ Two bank namespaces (do not collapse them):
 
 `refresh_roles()` (API CRUD, SIGHUP, daemon adopt) pushes Mission + Directives into each `role:{name}` bank. Disposition (skepticism / literalism / empathy) is **not** a Role field — HivePilot never sends it, so Hindsight keeps its defaults. Path-like rules become `MUST read before acting: {path}`; prose cross-cutting rules are copied as-is. `allowed_tools` / `permission_mode` stay execution gates, not directives. Dormant unless `HIVEPILOT_HINDSIGHT_ENABLED`.
 
+Pollen Memory → Knowledge (HP-55) reads that same `role:{name}` bank: Mental Models (create / edit query / refresh) and Observations (quotes, proof count, optional confidence). Observations are derived — a human edit goes to the listed world/experience facts, which re-consolidates the observation. `GET /v1/hindsight/status` and `GET /v1/hindsight/roles/{role}` require `read`; writes require `run`.
+
 `plugins install` prints each plugin's exact prerequisite after fetching; it never installs a binary or `pip install`s anything on your behalf — that stays an explicit operator decision, same as `hivepilot agents install`'s guided (never automatic) posture for agent CLIs. Restart HivePilot's services after installing for the plugin (and, if `--enable` persisted a flag, the flag) to take effect.
 
 **Trust note.** This is the one narrow exception to "no network fetch of plugin code" in the Trust model above — see that section for the honest accounting of what it does and doesn't change about the security posture.
