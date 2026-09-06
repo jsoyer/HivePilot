@@ -1101,8 +1101,8 @@ class Settings(BaseSettings):
         1  # max concurrent claude steps (env: HIVEPILOT_CLAUDE_MAX_CONCURRENCY)
     )
     dev_fallback_runners: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["codex", "cursor"]
-    )  # fallback runner order for developer role on claude quota (env: HIVEPILOT_DEV_FALLBACK_RUNNERS)
+        default_factory=lambda: ["codex", "cursor", "openrouter"]
+    )  # fallback runner order for developer role on claude quota/unavailable (env: HIVEPILOT_DEV_FALLBACK_RUNNERS). openrouter last = Hermes-4 OSS (HP-71) after proprietary CLIs.
     dev_batch_size: int = Field(
         default=0,
         description="Max components per fan-out pass (0 = unlimited). env: HIVEPILOT_DEV_BATCH_SIZE",

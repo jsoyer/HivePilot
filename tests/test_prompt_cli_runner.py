@@ -403,6 +403,42 @@ class TestApiModeCaptureUsage:
             out = runner.capture(payload)
         assert out == "EXACT TEXT"
 
+    def test_nous_posts_to_inference_api(self, tmp_path: Path, monkeypatch) -> None:
+        """HP-71: api_provider=nous hits Nous Portal OpenAI-compat, not OpenRouter."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv("NOUS_API_KEY", "sk-nous-test")
+        payload = _api_payload(tmp_path)
+        runner = _api_runner("nous", model="Hermes-4-70B")
+        seen = {}
+
+        def _capture(url, json, headers, timeout):  # noqa: ANN001
+            seen["url"] = url
+            seen["json"] = json
+            seen["headers"] = headers
+            return _fake_response(
+                {
+                    "choices": [{"message": {"content": "HERMES"}}],
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+                }
+            )
+
+        with patch("hivepilot.runners.prompt_cli_runner.requests.post", side_effect=_capture):
+            out = runner.capture(payload)
+
+        assert out == "HERMES"
+        assert seen["url"] == "https://inference-api.nousresearch.com/v1/chat/completions"
+        assert seen["json"]["model"] == "Hermes-4-70B"
+        assert seen["headers"]["Authorization"] == "Bearer sk-nous-test"
+
+    def test_nous_missing_key_fails_closed(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.delenv("NOUS_API_KEY", raising=False)
+        monkeypatch.delenv("NOUS_PORTAL_API_KEY", raising=False)
+        monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+        runner = _api_runner("nous", model="Hermes-4-70B")
+        with pytest.raises(RuntimeError, match="NOUS_API_KEY"):
+            runner.capture(_api_payload(tmp_path))
+
 
 class TestApiModeUsagePersistsViaRecordStep:
     def test_captured_usage_persists_through_record_step(self, tmp_path: Path, monkeypatch) -> None:

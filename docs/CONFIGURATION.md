@@ -928,9 +928,19 @@ role_profiles:
   ciso: deep
 ```
 
-Per-runner keys (`grok:`, `cursor:`, `codex:`) sit beside the Claude `model:` value.
-`resolve_profile_model(profile, runner_kind)` picks the key for the **resolved** runner
-(after the roster preset). Claude `model:` stays so preset `claude` is unchanged.
+Per-runner keys (`grok:`, `cursor:`, `codex:`, `openrouter:`, `nous:`) sit beside the
+Claude `model:` value. `resolve_profile_model(profile, runner_kind)` picks the key for
+the **resolved** runner (after the roster preset). Claude `model:` stays so preset
+`claude` is unchanged.
+
+Hermes-4 (HP-71) is the OpenAI-compat OSS column — not the Hermes Agent framework:
+
+- `openrouter:` — OpenRouter slugs (`nousresearch/hermes-4-70b` / `hermes-4-405b`)
+- `nous:` — native Nous Portal names (`Hermes-4-70B` / `Hermes-4-405B`)
+- Dedicated profiles `hermes-4` and `hermes-4-405b` for using it as primary
+  (`runner: openrouter`, or a prompt-cli step with `api_provider: nous` + `NOUS_API_KEY`)
+- Default `HIVEPILOT_DEV_FALLBACK_RUNNERS` ends with `openrouter` so a developer
+  quota/credit miss falls over to Hermes-4 after `codex` / `cursor`
 
 ## api_tokens.yaml — auth tokens
 

@@ -683,6 +683,57 @@ def _resolve_step_provider_model(
     return runner_def.kind, model
 
 
+def _quota_fallback_definition(
+    runner_def: RunnerDefinition,
+    *,
+    role_name: str,
+    next_kind: str,
+) -> tuple[RunnerDefinition, dict[str, str]]:
+    """HP-70 kind swap plus HP-71 profile model / API-only mode.
+
+    Returns the substituted definition and step-metadata patches to apply
+    after ``_prepare_payload_for`` so a CLI developer step can fail over to
+    OpenRouter (Hermes-4) without sending the originating Claude slug or
+    failing closed on ``supported_modes == {api}``.
+    """
+    from typing import cast
+
+    from hivepilot.models import RunnerKind
+    from hivepilot.services.agent_checks import API_ONLY_AGENT_KINDS
+    from hivepilot.services.profile_service import resolve_profile_model
+
+    next_model: str | None = None
+    try:
+        from hivepilot.roles import get_role
+
+        role_obj = get_role(role_name)
+        profile = getattr(role_obj, "model_profile", None)
+        if isinstance(profile, str) and profile:
+            next_model = resolve_profile_model(profile, next_kind)
+    except Exception:  # noqa: BLE001 — profile lookup must not abort fallback
+        next_model = None
+
+    options = dict(runner_def.options or {})
+    step_meta: dict[str, str] = {}
+    if next_model:
+        options["api_model"] = next_model
+        step_meta["model"] = next_model
+    if next_kind in API_ONLY_AGENT_KINDS:
+        options["mode"] = "api"
+        options.setdefault("api_provider", next_kind)
+        step_meta["mode"] = "api"
+
+    update: dict[str, Any] = {
+        "name": f"role:{role_name}:{next_kind}",
+        "kind": cast(RunnerKind, next_kind),
+        "command": None,
+        "options": options,
+    }
+    if next_model:
+        update["model"] = next_model
+    return runner_def.model_copy(update=update), step_meta
+
+
 def _role_runner_options(role_name: str) -> dict[str, Any]:
     """A role's `permission_mode` + `allowed_tools`, as runner options.
 
@@ -7125,9 +7176,6 @@ class Orchestrator:
                             )
                             outputs.append(f"[simulated {runner_key}]")
                         elif task.role:
-                            from typing import cast
-
-                            from hivepilot.models import RunnerKind
                             from hivepilot.services.quota import parse_quota_error
                             from hivepilot.services.runner_throttle import semaphore_for_kind
 
@@ -7235,25 +7283,16 @@ class Orchestrator:
                                         },
                                     )
                                     # Derived from the runner this step
-                                    # actually resolved to, swapping only the
-                                    # kind: identical to the previous
-                                    # role-built definition when the step
-                                    # declares no `runner_ref`, and it now
-                                    # also carries a named runner's options
-                                    # through the fallback instead of
-                                    # dropping them. `command` is cleared
-                                    # because it belonged to the kind we are
-                                    # leaving.
-                                    from typing import cast
-
-                                    from hivepilot.models import RunnerKind
-
-                                    _runner_def_to_try = runner_def.model_copy(
-                                        update={
-                                            "name": f"role:{task.role}:{_next_kind}",
-                                            "kind": cast(RunnerKind, _next_kind),
-                                            "command": None,
-                                        }
+                                    # actually resolved to, swapping the
+                                    # kind and (HP-71) the profile model so
+                                    # OpenRouter receives Hermes-4 rather
+                                    # than the originating Claude slug.
+                                    # `command` is cleared because it
+                                    # belonged to the kind we are leaving.
+                                    _runner_def_to_try, _fallback_meta = _quota_fallback_definition(
+                                        runner_def,
+                                        role_name=task.role,
+                                        next_kind=_next_kind,
                                     )
                                     # Re-prepare the payload (mode
                                     # validation/injection + skill
@@ -7280,6 +7319,18 @@ class Orchestrator:
                                     #     scratch dir / appended system
                                     #     prompt).
                                     payload = _prepare_payload_for(_runner_def_to_try)
+                                    if _fallback_meta:
+                                        payload = replace(
+                                            payload,
+                                            step=payload.step.model_copy(
+                                                update={
+                                                    "metadata": {
+                                                        **payload.step.metadata,
+                                                        **_fallback_meta,
+                                                    }
+                                                }
+                                            ),
+                                        )
                                 finally:
                                     _sem.release()
 
