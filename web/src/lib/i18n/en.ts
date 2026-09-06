@@ -46,6 +46,12 @@ export const en = {
   // description of what the product is, not a slogan.
   'header.subtitle': 'HivePilot dashboard',
   'header.search': 'Search',
+  'pwa.install': 'Install Pollen',
+  'pwa.installHint': 'Add Pollen to your home screen.',
+  'pwa.dismiss': 'Not now',
+  'pwa.pushEnable': 'Enable notifications',
+  'pwa.pushEnabled': 'Notifications on',
+  'pwa.pushUnavailable': 'Push is not configured on this server.',
 
   // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
   'palette.title': 'Command palette',

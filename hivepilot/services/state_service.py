@@ -387,6 +387,20 @@ def init_db() -> None:
             )
             """
         )
+        # Pollen PWA push subscriptions (HP-63). Endpoint is the Push
+        # Service URL the browser minted — unique per install. Tenant-scoped
+        # so a token from tenant A cannot delete tenant B's endpoint.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+                endpoint TEXT PRIMARY KEY,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS approvals (

@@ -59,6 +59,11 @@ def fake_static_dir(tmp_path, monkeypatch):
     (assets_dir / "index-test.css").write_text("body{color:mirador}", encoding="utf-8")
     (assets_dir / "geist-test.woff2").write_bytes(b"\x00mirador-font")
     (static_dir / "favicon.svg").write_text("<svg><!-- mirador-favicon --></svg>", encoding="utf-8")
+    (static_dir / "manifest.webmanifest").write_text(
+        '{"name":"Pollen","start_url":"/ui/"}', encoding="utf-8"
+    )
+    (static_dir / "sw.js").write_text("/* pollen-sw */", encoding="utf-8")
+    (static_dir / "pwa-192.png").write_bytes(b"\x89PNG\r\n\x1a\nmirador-pwa")
 
     monkeypatch.setattr(webui, "STATIC_DIR", static_dir)
     monkeypatch.setattr(webui, "INDEX_HTML", static_dir / "index.html")
@@ -153,6 +158,22 @@ class TestRootAssetRoutes:
         assert resp.status_code == 200
         assert "mirador-favicon" in resp.text
 
+    def test_serves_pwa_manifest_at_root(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/manifest.webmanifest")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/manifest+json")
+        assert "/ui/" in resp.text
+
+    def test_serves_service_worker_at_root(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/sw.js")
+        assert resp.status_code == 200
+        assert "pollen-sw" in resp.text
+
+    def test_serves_pwa_icon_at_root(self, api_client, enable_webui, fake_static_dir):
+        resp = api_client.get("/pwa-192.png")
+        assert resp.status_code == 200
+        assert resp.content.endswith(b"mirador-pwa")
+
     def test_root_asset_404_for_unknown_file(self, api_client, enable_webui, fake_static_dir):
         resp = api_client.get("/assets/does-not-exist.js")
         assert resp.status_code == 404
@@ -165,6 +186,8 @@ class TestRootAssetRoutes:
     def test_root_assets_404_when_webui_disabled(self, api_client, disable_webui, fake_static_dir):
         assert api_client.get("/assets/index-test.js").status_code == 404
         assert api_client.get("/favicon.svg").status_code == 404
+        assert api_client.get("/manifest.webmanifest").status_code == 404
+        assert api_client.get("/sw.js").status_code == 404
 
     def test_root_assets_404_when_no_build(self, api_client, enable_webui, tmp_path, monkeypatch):
         from hivepilot import webui

@@ -150,6 +150,8 @@ _SECRET_SETTING_FIELDS = frozenset(
         # masked anyway because some sources admit an inline literal, and a
         # field named `*_secrets` is the wrong place to be optimistic.
         "swarm_secrets",
+        # PWA Web Push (HP-63) — the VAPID private key signs every push.
+        "web_push_vapid_private_key",
     }
 )
 
@@ -172,6 +174,8 @@ _PUBLIC_DESPITE_SECRET_NAME = frozenset(
         "discord_public_key",  # Ed25519 PUBLIC key, published by Discord
         "telegram_webhook_url",  # our own inbound endpoint, publicly reachable by design;
         # the guard is `telegram_webhook_secret`, which IS masked
+        "web_push_vapid_public_key",  # applicationServerKey sent to the browser; the
+        # private key IS masked
     }
 )
 
@@ -310,6 +314,16 @@ class Settings(BaseSettings):
     # — the route returns 404 if either condition isn't met.
     # env: HIVEPILOT_ENABLE_WEBUI
     enable_webui: bool = False
+    # Pollen PWA Web Push (HP-63). Both keys must be set before the shell
+    # advertises push or the `webpush` notifier sends. Private key is never
+    # returned by the API. Generate with `vapid` / `py_vapid`.
+    # env: HIVEPILOT_WEB_PUSH_VAPID_PUBLIC_KEY
+    web_push_vapid_public_key: str | None = None
+    # env: HIVEPILOT_WEB_PUSH_VAPID_PRIVATE_KEY
+    web_push_vapid_private_key: str | None = None
+    # RFC 8292 contact (`mailto:` or `https:`) sent with every VAPID claim.
+    # env: HIVEPILOT_WEB_PUSH_VAPID_SUBJECT
+    web_push_vapid_subject: str = "mailto:pollen@localhost"
     # Phase 18 — OpenTelemetry distributed tracing for pipeline/task/step
     # execution (hivepilot/observability/tracing.py). Off by default; mirrors
     # enable_webui/headroom_enabled's opt-in-only gating above. Also requires

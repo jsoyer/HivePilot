@@ -58,6 +58,7 @@ const mocks = vi.hoisted(() => ({
   // whoami() once on mount — mock it out like every other data source above
   // so this test exercises the shell only, not a real network call.
   whoami: vi.fn().mockResolvedValue({ role: 'admin', tenant: 'default' }),
+  fetchPushConfig: vi.fn().mockResolvedValue({ enabled: false, vapid_public_key: null }),
   // Mirador Graph View PRD, Sprint 3: the Graph tab's GraphView fetches its
   // own source list on mount — mocked empty so this shell test never makes
   // a real network call, same as every other built-in tab above.

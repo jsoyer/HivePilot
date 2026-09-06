@@ -42,6 +42,12 @@ export const fr: Record<TranslationKey, string> = {
   // ---- header / shell ----------------------------------------------------
   'header.subtitle': 'tableau de bord HivePilot',
   'header.search': 'Rechercher',
+  'pwa.install': 'Installer Pollen',
+  'pwa.installHint': 'Ajouter Pollen à l’écran d’accueil.',
+  'pwa.dismiss': 'Plus tard',
+  'pwa.pushEnable': 'Activer les notifications',
+  'pwa.pushEnabled': 'Notifications activées',
+  'pwa.pushUnavailable': 'Le push n’est pas configuré sur ce serveur.',
 
   // ---- command palette (P1b: Cmd+K / Ctrl+K) ----------------------------
   'palette.title': 'Palette de commandes',
