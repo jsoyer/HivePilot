@@ -139,6 +139,18 @@ The bundled `sample_skill` plugin is a default-OFF demo — enable it explicitly
 - Skill names must be unique across registered skills; config validation rejects unknown names on stages/steps.
 - Plugin-contributed skills take precedence over same-named skill directories.
 
+## Skill workshop (HP-79)
+
+Skills improve by **proposal**, not by silent rewrite.
+
+- A step that applies a skill records a `skill_usage_events` row (`skill.applied`).
+- A failed step that used a skill may queue a `SKILL.md` note (unified diff) in
+  `skill_patch_proposals`. An operator can also `POST /v1/skills/proposals`.
+- Pollen → Operate → **Skills** lists proposed diffs. Accept (`approve` rank)
+  writes **directory** skills under a configured `skills/` scan root. Plugin
+  skills can be proposed for review but are never written back.
+- Reject leaves the files untouched. There is no auto-apply path.
+
 ## See also
 
 - [PLUGINS.md](PLUGINS.md) — general plugin model, loading, and trust

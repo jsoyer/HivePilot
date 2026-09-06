@@ -24,6 +24,7 @@ import {
   Waypoints,
   ServerCog,
   Plug,
+  Sparkles,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -63,6 +64,7 @@ import { McpView } from './views/McpView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
+import { SkillsWorkshopView } from './views/SkillsWorkshopView'
 
 // FR/EN i18n (P1a): `labelKey` is a `TranslationKey` (see `@/lib/i18n`), NOT
 // display text — resolved to the current language via `t()` where
@@ -151,6 +153,7 @@ const BUILTIN_TABS = [
   // Review control and the whole ratification drawer inside gate themselves
   // on useRole().can('approve') — see PartitionsView.
   { value: 'partitions', labelKey: 'nav.partitions', Panel: PartitionsView, Icon: Split },
+  { value: 'workshop', labelKey: 'nav.workshop', Panel: SkillsWorkshopView, Icon: Sparkles },
   // Mirador Graph View PRD, Sprint 3: read-only for any token; a graph
   // source's own min_role (data-dependent, GET /v1/graph/{source}) gates
   // itself inside GraphView, exactly like PanelView's per-panel min_role.

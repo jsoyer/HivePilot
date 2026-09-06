@@ -793,6 +793,50 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_agent_telemetry_lookup "
             "ON agent_telemetry (metric, session_id, recorded_at)"
         )
+        # HP-79 skill workshop: usage is append-only telemetry; proposals are
+        # the human-gated patch queue. Never auto-apply a skill file write.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_usage_events (
+                id TEXT PRIMARY KEY,
+                skill_name TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                run_id INTEGER,
+                step TEXT,
+                runner_kind TEXT,
+                outcome TEXT NOT NULL DEFAULT 'applied',
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_usage_skill "
+            "ON skill_usage_events (skill_name, created_ts)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_patch_proposals (
+                id TEXT PRIMARY KEY,
+                skill_name TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                status TEXT NOT NULL DEFAULT 'proposed',
+                provider TEXT,
+                run_id INTEGER,
+                step TEXT,
+                rationale TEXT,
+                base_digest TEXT NOT NULL,
+                patch_json TEXT NOT NULL,
+                diff_text TEXT NOT NULL,
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                decided_ts TIMESTAMP,
+                decided_by TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_proposals_status "
+            "ON skill_patch_proposals (status, created_ts)"
+        )
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:

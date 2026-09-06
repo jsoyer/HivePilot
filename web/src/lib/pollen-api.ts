@@ -2558,3 +2558,39 @@ export function fetchSchedules(): Promise<ScheduleListResponse> {
 export function triggerSchedule(name: string): Promise<TriggerResponse> {
   return postJson<TriggerResponse>(`/v1/webhook/trigger/${encodeURIComponent(name)}`, {})
 }
+
+// ---------------------------------------------------------------------------
+// Skill workshop (HP-79) — usage + propose/accept/reject. Never auto-applies.
+// ---------------------------------------------------------------------------
+
+export interface SkillProposal {
+  id: string
+  skill_name: string
+  tenant: string
+  status: string
+  provider: string | null
+  run_id: number | null
+  step: string | null
+  rationale: string | null
+  base_digest: string
+  patch_json: string
+  diff_text: string
+  created_ts: string | null
+  decided_ts: string | null
+  decided_by: string | null
+}
+
+export function fetchSkillProposals(status = 'proposed'): Promise<SkillProposal[]> {
+  const params = new URLSearchParams({ status })
+  return apiFetch<SkillProposal[]>(`/v1/skills/proposals?${params.toString()}`, {
+    on403: 'forbidden',
+  })
+}
+
+export function acceptSkillProposal(id: string): Promise<SkillProposal> {
+  return postJson<SkillProposal>(`/v1/skills/proposals/${encodeURIComponent(id)}/accept`, {})
+}
+
+export function rejectSkillProposal(id: string): Promise<SkillProposal> {
+  return postJson<SkillProposal>(`/v1/skills/proposals/${encodeURIComponent(id)}/reject`, {})
+}

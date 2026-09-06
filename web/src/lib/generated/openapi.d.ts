@@ -866,6 +866,106 @@ export interface components {
             /** Task */
             task?: string | null;
         };
+        /** SkillProposalCreate */
+        SkillProposalCreate: {
+            /** Files */
+            files: {
+                [key: string]: string;
+            };
+            /**
+             * Rationale
+             * @default
+             */
+            rationale: string;
+            /** Skill Name */
+            skill_name: string;
+        };
+        /** SkillProposalDecision */
+        SkillProposalDecision: {
+            /**
+             * Actor
+             * @default operator
+             */
+            actor: string;
+        };
+        /** SkillProposalRow */
+        SkillProposalRow: {
+            /** Base Digest */
+            base_digest: string;
+            /** Created Ts */
+            created_ts?: string | null;
+            /** Decided By */
+            decided_by?: string | null;
+            /** Decided Ts */
+            decided_ts?: string | null;
+            /** Diff Text */
+            diff_text: string;
+            /** Id */
+            id: string;
+            /** Patch Json */
+            patch_json: string;
+            /** Provider */
+            provider?: string | null;
+            /** Rationale */
+            rationale?: string | null;
+            /** Run Id */
+            run_id?: number | null;
+            /** Skill Name */
+            skill_name: string;
+            /** Status */
+            status: string;
+            /** Step */
+            step?: string | null;
+            /**
+             * Tenant
+             * @default default
+             */
+            tenant: string;
+        };
+        /** SkillSummary */
+        SkillSummary: {
+            /** Applies To */
+            applies_to?: string[] | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Min Role */
+            min_role?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Provider
+             * @default
+             */
+            provider: string;
+        };
+        /** SkillUsageRow */
+        SkillUsageRow: {
+            /** Created Ts */
+            created_ts?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Outcome
+             * @default applied
+             */
+            outcome: string;
+            /** Run Id */
+            run_id?: number | null;
+            /** Runner Kind */
+            runner_kind?: string | null;
+            /** Skill Name */
+            skill_name: string;
+            /** Step */
+            step?: string | null;
+            /**
+             * Tenant
+             * @default default
+             */
+            tenant: string;
+        };
         /** SpaceCreate */
         SpaceCreate: {
             /**
