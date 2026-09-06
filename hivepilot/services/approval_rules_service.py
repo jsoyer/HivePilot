@@ -71,7 +71,8 @@ def _normalize(auto: str, project: str, task: str, action: str) -> tuple[Auto, s
     cleaned = (auto or "").strip().lower()
     if cleaned not in {"approve", "deny"}:
         raise ApprovalRuleError("auto must be approve or deny")
-    return cleaned, (project or "").strip(), (task or "").strip(), (action or "").strip()
+    resolved: Auto = "approve" if cleaned == "approve" else "deny"
+    return resolved, (project or "").strip(), (task or "").strip(), (action or "").strip()
 
 
 def replace_rules(payloads: list[dict[str, str]]) -> list[ApprovalRule]:
