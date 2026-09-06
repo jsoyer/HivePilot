@@ -223,6 +223,12 @@ Tokens are stored as hashes in `api_tokens.yaml`, each bound to a role. The stat
 store and API are tenant-scoped. Admin-only operations — for example toggling a
 plugin — are role-gated.
 
+MCP / OpenAPI credentials (HP-58) are optional Fernet blobs keyed by
+`HIVEPILOT_CREDENTIALS_KEY`. The fetch path refuses userinfo, remote HTTP,
+redirects, and DNS answers in private/link-local/metadata ranges. GET APIs never
+return ciphertext or plaintext — only `has_credentials`. Without the key, literal
+secrets are refused and `${env:NAME}` refs stay the only option.
+
 See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 
 ## Fail-closed checklist
@@ -233,6 +239,8 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - An error inside a destructiveness check = treat the step as destructive.
 - An absent debate/lessons override = inherit the stricter floor value.
 - A missing adjudication verdict = block PR promotion.
+- A missing `HIVEPILOT_CREDENTIALS_KEY` = refuse literal MCP/OpenAPI secrets (keep `${env:}` refs).
+- An MCP/OpenAPI fetch that resolves to a private or metadata address = refuse (SSRF).
 
 ## See also
 

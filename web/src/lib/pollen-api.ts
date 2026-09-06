@@ -2321,6 +2321,7 @@ export interface McpServer {
   last_probe_status?: string | null
   last_probe_detail?: string | null
   last_probe_at?: string | null
+  has_credentials?: boolean
 }
 
 export interface McpCatalogEntry {
@@ -2360,6 +2361,43 @@ export function probeMcpServer(id: number): Promise<{ server: McpServer }> {
 
 export function deleteMcpServer(id: number): Promise<{ deleted: number }> {
   return apiFetch(`/v1/mcp/servers/${id}`, { method: 'DELETE', on403: 'forbidden' })
+}
+
+export interface TypedTool {
+  id?: string | null
+  qualified_name: string
+  local_name: string
+  source_kind: string
+  source_id: string
+  description?: string
+  input_schema?: Record<string, unknown>
+}
+
+export function syncMcpServer(id: number): Promise<{ tools: TypedTool[] }> {
+  return postJson(`/v1/mcp/servers/${id}/sync`, {})
+}
+
+export function importOpenApi(payload: {
+  text?: string
+  url?: string
+  name?: string
+  credentials?: Record<string, string>
+}): Promise<{
+  source: { id: string; name: string; url?: string | null; has_credentials: boolean }
+  tools: TypedTool[]
+}> {
+  return postJson('/v1/tools/openapi/import', payload)
+}
+
+export function fetchTypedTools(params?: {
+  source_kind?: string
+  source_id?: string
+}): Promise<{ tools: TypedTool[] }> {
+  const query = new URLSearchParams()
+  if (params?.source_kind) query.set('source_kind', params.source_kind)
+  if (params?.source_id) query.set('source_id', params.source_id)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/v1/tools${suffix}`)
 }
 
 // ---------------------------------------------------------------------------
