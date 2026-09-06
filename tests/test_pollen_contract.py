@@ -27,6 +27,7 @@ Endpoints covered (every one `web/src/lib/pollen-api.ts` calls):
     GET /v1/analytics/providers
     GET /v1/analytics/cost
     GET /v1/analytics/whales
+    GET /v1/host/resources
     GET /v1/plugins/health
     GET /v1/hindsight/status
     GET /v1/hindsight/roles/{role}
@@ -325,6 +326,28 @@ class TestAnalyticsWhalesContract:
         assert set(data["whales"][0].keys()) == _WHALE_KEYS
         # Envelopes only — a Langfuse-sized prompt body must never appear.
         assert "detail" not in data["whales"][0]
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/host/resources (HP-68 slice 1)
+# ---------------------------------------------------------------------------
+
+
+class TestHostResourcesContract:
+    def test_top_level_keys(self, api_client, read_token):
+        resp = api_client.get("/v1/host/resources", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"available", "source", "ram", "cpu", "disk", "note"}
+        assert "servers" not in data
+        assert isinstance(data["available"], bool)
+        assert isinstance(data["note"], str) and data["note"]
+        if data["ram"] is not None:
+            assert set(data["ram"].keys()) == {"used_bytes", "total_bytes", "used_pct"}
+        if data["cpu"] is not None:
+            assert set(data["cpu"].keys()) == {"used_pct", "nproc"}
+        if data["disk"] is not None:
+            assert set(data["disk"].keys()) == {"used_bytes", "total_bytes", "used_pct", "path"}
 
 
 # ---------------------------------------------------------------------------

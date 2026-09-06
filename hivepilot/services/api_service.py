@@ -36,6 +36,7 @@ from hivepilot.services import (
     autopilot_queue,
     chatops_service,
     efficiency_service,
+    host_resources,
     memory_service,
     notification_service,
     plugin_activity,
@@ -2684,6 +2685,20 @@ def models_endpoint(
     return analytics_service.models_summary(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task
     )
+
+
+@v1.get("/host/resources")
+@app.get("/host/resources")
+def host_resources_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-68 slice 1 — this-host RAM / CPU / disk.
+
+    Readings come from Linux ``/proc`` plus ``shutil.disk_usage``. There is
+    no fleet or "servers" count: inventing one would be a lie. Quota % /
+    runway is also omitted — that needs a provider API (see Providers).
+    """
+    return host_resources.snapshot()
 
 
 @v1.get("/models/local")

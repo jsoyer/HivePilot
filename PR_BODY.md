@@ -1,17 +1,24 @@
 ## Summary
 
-HP-61: inline approval cards in Operate Chat plus persistable per-action auto-approve / auto-deny rules. No Disposition field. The existing `POST /v1/approvals/{id}` path stays the resolver.
+Paul-style spend density on Home / Models, plus an honest this-host resource strip (HP-68 slice 1).
 
-- Chat: concierge `approve`/`deny` with `run_id` renders `ApprovalActionCard` (not a proposal-only card)
-- `GET/PUT /v1/approval-rules` — admin writes; empty match fields are wildcards; more specific wins
-- Policy hook after `require_approval` / pipeline checkpoint: matching `approve` skips the pause; `deny` records denied
-- CORS allows `PUT`
+From the Hublot/AO mockups we kept only what HivePilot can actually measure:
 
-Linear: [HP-61](https://linear.app/js-workspace/issue/HP-61/cartes-dapprobation-regles-par-action-inline-dans-le-chat).
+- **Last 24h by provider** on Home — compact tokens (k / M / B) + cost, labeled as a rolling 24h window (not calendar “today”)
+- **By model** ranked list on Models — provider mark, compact tokens, cost (the detailed table stays)
+- **This host** RAM / CPU / disk from Linux `/proc` + `shutil.disk_usage` (`GET /v1/host/resources`)
 
-Replay: send a concierge “approve run N” in Chat; or `PUT /v1/approval-rules` then run a `require_approval` task.
+Intentionally **not** copied:
+
+- Provider quota % / runway days (needs a provider quota API — same honesty as HP-73)
+- A “servers” count (no inventory)
+- Real browser tabs / process list (rest of HP-68; threat model still open)
+
+Linear: [HP-68](https://linear.app/js-workspace/issue/HP-68/prototype-panneau-ressources-ramcpussd-serveurs-actifs-navigateur) slice 1 only.
+
+Replay: open Pollen Home after `hivepilot api` — last-24h list uses `GET /v1/analytics/cost?days=1`; host strip uses `GET /v1/host/resources`.
 
 ## Testing
 
-- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp61_approval_rules.py -q`
-- [x] `cd web && npm test -- --run src/components/views/ChatView.test.tsx src/lib/pollen-api.test.ts`
+- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp68_host_resources.py tests/test_pollen_contract.py -q`
+- [x] `cd web && npm test -- --run src/lib/format-usage.test.ts src/lib/pollen-api.test.ts src/components/views/HomeView.test.tsx src/components/views/ModelsView.test.tsx src/components/views/ProvidersView.test.tsx src/components/dashboard/ProviderMark.test.tsx src/components/Pollen.test.tsx`

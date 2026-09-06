@@ -374,6 +374,42 @@ export function fetchModels(days = 30, project?: string, task?: string): Promise
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/host/resources — HP-68 slice 1. This HivePilot host only.
+// No fleet / server count: the API omits that key rather than inventing it.
+// ---------------------------------------------------------------------------
+
+export interface HostRam {
+  used_bytes: number
+  total_bytes: number
+  used_pct: number | null
+}
+
+export interface HostCpu {
+  used_pct: number | null
+  nproc: number | null
+}
+
+export interface HostDisk {
+  used_bytes: number
+  total_bytes: number
+  used_pct: number
+  path: string
+}
+
+export interface HostResources {
+  available: boolean
+  source: string | null
+  ram: HostRam | null
+  cpu: HostCpu | null
+  disk: HostDisk | null
+  note: string
+}
+
+export function fetchHostResources(): Promise<HostResources> {
+  return apiFetch<HostResources>('/v1/host/resources')
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/efficiency — Mirador Home command-center sprint. Shape transcribed
 // from `hivepilot/services/efficiency_service.py`'s `efficiency_summary` —
 // read that (and `headroom_metrics.efficiency_summary`) before changing

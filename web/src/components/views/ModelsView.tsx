@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DistributionBar } from '@/components/dashboard/DistributionBar'
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
-import { useT } from '@/lib/i18n'
+import { SpendRankList } from '@/components/dashboard/SpendRankList'
+import { useLanguage, useT } from '@/lib/i18n'
 import { fetchModels, type SuccessRate } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
@@ -58,6 +59,7 @@ function SuccessRateCell({ rate }: { rate: SuccessRate }) {
  */
 export function ModelsView() {
   const t = useT()
+  const { language } = useLanguage()
   const models = useAsyncData(() => fetchModels(DAYS), [DAYS])
 
   return (
@@ -92,6 +94,25 @@ export function ModelsView() {
                   </div>
                   <DistributionBar
                     segments={data.models.map((row) => ({ key: row.model, label: row.model, value: row.cost_usd }))}
+                  />
+                </div>
+
+                <div data-testid="models-rank-list">
+                  <div className="mb-1 flex items-baseline justify-between gap-2">
+                    <h3 className="text-sm font-semibold">{t('models.byModelTitle')}</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {t('models.modelCount', { count: data.models.length })}
+                    </p>
+                  </div>
+                  <SpendRankList
+                    testId="models-rank"
+                    locale={language}
+                    rows={data.models.map((row) => ({
+                      key: row.model,
+                      label: row.model,
+                      tokens: row.input_tokens + row.output_tokens,
+                      costUsd: row.cost_usd,
+                    }))}
                   />
                 </div>
 

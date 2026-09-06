@@ -97,6 +97,7 @@ describe('ModelsView', () => {
     expect(container.textContent).toContain('claude-haiku')
     expect(container.textContent).toContain('$1.500')
     expect(container.textContent).toContain('8,000')
+    expect(container.querySelector('[data-testid="models-rank-row-claude-sonnet-5"]')?.textContent).toContain('11k')
     expect(container.textContent).toContain('92%')
     expect(container.textContent).toMatch(/no attempts/i)
     // step_count column (required by the sprint's per-model table contract)

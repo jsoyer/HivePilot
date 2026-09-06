@@ -6,6 +6,7 @@ import type {
   AnalyticsCost,
   Approval,
   EfficiencySummary,
+  HostResources,
   MemoryReality,
   RunSummary,
 } from '@/lib/pollen-api'
@@ -16,6 +17,7 @@ const {
   fetchAnalyticsSummary,
   fetchApprovals,
   fetchEfficiency,
+  fetchHostResources,
   fetchMemoryReality,
   fetchRuns,
   postApproval,
@@ -25,6 +27,7 @@ const {
   fetchAnalyticsSummary: vi.fn(),
   fetchApprovals: vi.fn(),
   fetchEfficiency: vi.fn(),
+  fetchHostResources: vi.fn(),
   fetchMemoryReality: vi.fn(),
   fetchRuns: vi.fn(),
   postApproval: vi.fn(),
@@ -39,6 +42,7 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
     fetchAnalyticsSummary,
     fetchApprovals,
     fetchEfficiency,
+    fetchHostResources,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -97,11 +101,30 @@ const ZERO_MEMORY: MemoryReality = {
   total_evaluations: 0,
 }
 
+const ZERO_HOST: HostResources = {
+  available: false,
+  source: null,
+  ram: null,
+  cpu: null,
+  disk: null,
+  note: 'unavailable',
+}
+
+const SAMPLE_HOST: HostResources = {
+  available: true,
+  source: 'procfs',
+  ram: { used_bytes: 11 * 1024 ** 3, total_bytes: 16 * 1024 ** 3, used_pct: 68.8 },
+  cpu: { used_pct: 46.2, nproc: 8 },
+  disk: { used_bytes: 50, total_bytes: 1000, used_pct: 5, path: '/' },
+  note: 'this host',
+}
+
 function mockAllZero() {
   fetchAnalyticsCost.mockResolvedValue(ZERO_COST)
   fetchAnalyticsSummary.mockResolvedValue(ZERO_SUMMARY)
   fetchApprovals.mockResolvedValue([])
   fetchEfficiency.mockResolvedValue(ZERO_EFFICIENCY)
+  fetchHostResources.mockResolvedValue(ZERO_HOST)
   fetchMemoryReality.mockResolvedValue(ZERO_MEMORY)
   fetchRuns.mockResolvedValue([])
 }
@@ -139,6 +162,7 @@ beforeEach(() => {
     fetchAnalyticsSummary,
     fetchApprovals,
     fetchEfficiency,
+    fetchHostResources,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -146,6 +170,7 @@ beforeEach(() => {
   ]) {
     mock.mockReset()
   }
+  fetchHostResources.mockResolvedValue(ZERO_HOST)
   onNavigate = vi.fn<(view: string) => void>()
   mockRole('approve')
   container = document.createElement('div')
@@ -572,5 +597,72 @@ describe('HomeView — 403 handling', () => {
 
     expect(container.querySelector('[data-testid="home-attention-forbidden"]')).not.toBeNull()
     expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+})
+
+describe('HomeView — last 24h by provider + this host', () => {
+  it('renders a compact provider spend list from the rolling 24h cost window', async () => {
+    mockAllZero()
+    fetchAnalyticsCost.mockResolvedValue({
+      ...ZERO_COST,
+      overall: { total_steps: 3, input_tokens: 2_400_000_000, output_tokens: 0, cost_usd: 2236.66, unpriced_steps: 0 },
+      by_provider: [
+        {
+          provider: 'anthropic',
+          total_steps: 2,
+          input_tokens: 2_400_000_000,
+          output_tokens: 0,
+          cost_usd: 1586.54,
+          unpriced_steps: 0,
+        },
+        {
+          provider: 'openai',
+          total_steps: 1,
+          input_tokens: 188_000_000,
+          output_tokens: 0,
+          cost_usd: 650.04,
+          unpriced_steps: 0,
+        },
+      ],
+    })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="home-last24h-list-row-anthropic"]')?.textContent).toContain('2.4B')
+    expect(container.querySelector('[data-testid="home-last24h-list-row-openai"]')?.textContent).toContain('188M')
+    expect(container.textContent).not.toMatch(/quota %|runway/i)
+  })
+
+  it('renders this-host RAM/CPU/disk and never invents a server count', async () => {
+    mockAllZero()
+    fetchHostResources.mockResolvedValue(SAMPLE_HOST)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="home-host-ram"]')?.textContent).toContain('11/16 GB')
+    expect(container.querySelector('[data-testid="home-host-cpu"]')?.textContent).toContain('46%')
+    expect(container.querySelector('[data-testid="home-host-disk"]')?.textContent).toContain('5%')
+    expect(container.textContent).not.toMatch(/servers/i)
+  })
+
+  it('shows an honest empty last-24h row when no provider spend is recorded', async () => {
+    mockAllZero()
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="home-last24h-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-host-unavailable"]')).not.toBeNull()
   })
 })
