@@ -112,7 +112,9 @@ class TestConciergeEndpoint:
             ),
         )
         raw, _ = add_token("read")
-        resp = api_client.post("/v1/concierge", json={"text": "dispatch dev and qa"}, headers=_auth(raw))
+        resp = api_client.post(
+            "/v1/concierge", json={"text": "dispatch dev and qa"}, headers=_auth(raw)
+        )
         assert resp.status_code == 200
         dispatches = resp.json()["dispatches"]
         assert [d["role_key"] for d in dispatches] == ["developer", "qa"]
