@@ -159,4 +159,5 @@ class TestTheWheelActuallyShipsThem:
         package_data = data["tool"]["setuptools"]["package-data"]
 
         assert "bundled_plugins/*.py" in package_data["hivepilot"]
+        assert "bundled_packs/*.yaml" in package_data["hivepilot"]
         assert "prompts/*.md" in package_data["hivepilot"]

@@ -1,0 +1,9 @@
+name: skills-kit
+version: "1.0.0"
+description: Improve + shadcn skill plugins (no binary prereq).
+host:
+  min_hivepilot: "0.2.0"
+plugins:
+  - improve
+  - shadcn
+capabilities: []

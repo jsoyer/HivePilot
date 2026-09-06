@@ -683,6 +683,29 @@ export interface components {
             /** Restart Required */
             restart_required: boolean;
         };
+        /** PluginPackImportRequest */
+        PluginPackImportRequest: {
+            /**
+             * Consent
+             * @default false
+             */
+            consent: boolean;
+            /**
+             * Install
+             * @default false
+             */
+            install: boolean;
+            /** Text */
+            text: string;
+        };
+        /** PluginPackInstallRequest */
+        PluginPackInstallRequest: {
+            /**
+             * Consent
+             * @default false
+             */
+            consent: boolean;
+        };
         /** PluginToggleResponse */
         PluginToggleResponse: {
             /** Disabled */

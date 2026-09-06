@@ -233,6 +233,8 @@ obsidian_app = typer.Typer(help="Obsidian vault integration")
 app.add_typer(obsidian_app, name="obsidian")
 plugins_app = typer.Typer(help="Inspect loaded plugins")
 app.add_typer(plugins_app, name="plugins")
+packs_app = typer.Typer(help="Declarative shareable plugin packs (HP-77)")
+plugins_app.add_typer(packs_app, name="packs")
 skills_app = typer.Typer(help="Inspect plugin-contributed skills")
 app.add_typer(skills_app, name="skills")
 scan_app = typer.Typer(help="Supply-chain security scanning (SBOM + vulnerability scan)")
@@ -4844,6 +4846,78 @@ def plugins_available() -> None:
         table.add_row(name, spec.description, spec.env_flag, spec.prereq_detail, installed, enabled)
     console.print(table)
     typer.echo("Install with: hivepilot plugins install <name> [<name> ...]")
+
+
+@packs_app.command("list")
+def plugin_packs_list() -> None:
+    """List bundled and imported plugin packs with host-compat preview."""
+    from hivepilot.services.plugin_pack_service import list_packs, preview_pack
+
+    packs = list_packs()
+    if not packs:
+        typer.echo("No plugin packs found.")
+        return
+    for pack in packs:
+        preview = preview_pack(pack)
+        status = "ok" if preview["compatible"] else "blocked"
+        typer.echo(f"{pack.name} {pack.version} [{pack.source}] {status} — {pack.description}")
+        if preview["blockers"]:
+            typer.echo(f"  blockers: {'; '.join(preview['blockers'])}")
+        if preview["warnings"]:
+            typer.echo(f"  warnings: {'; '.join(preview['warnings'])}")
+
+
+@packs_app.command("info")
+def plugin_packs_info(name: str = typer.Argument(..., help="Pack slug, e.g. skills-kit")) -> None:
+    """Show a pack manifest, capabilities, and credential refs."""
+    from hivepilot.services.plugin_pack_service import PackError, export_pack
+
+    try:
+        typer.echo(export_pack(name), nl=False)
+    except PackError as exc:
+        typer.echo(f"plugin packs info: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+@packs_app.command("install")
+def plugin_packs_install(
+    name: str = typer.Argument(..., help="Pack slug, e.g. skills-kit"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+) -> None:
+    """Install every curated plugin in a pack (confirm-then-run)."""
+    from hivepilot.services.plugin_pack_service import (
+        PackError,
+        get_pack,
+        install_pack,
+        preview_pack,
+    )
+
+    pack = get_pack(name)
+    if pack is None:
+        typer.echo(f"plugin packs install: unknown pack {name!r}", err=True)
+        raise typer.Exit(1)
+    preview = preview_pack(pack)
+    typer.echo(f"Pack {pack.name} {pack.version}: {pack.description}")
+    for plugin in preview["plugins"]:
+        typer.echo(f"  - {plugin['name']}: {plugin['prereq_detail']}")
+    if pack.capabilities:
+        typer.echo(f"Capabilities: {', '.join(pack.capabilities)}")
+    if pack.credentials:
+        typer.echo(f"Credential refs (names only): {', '.join(pack.credentials)}")
+    if preview["blockers"]:
+        typer.echo(f"Blocked: {'; '.join(preview['blockers'])}", err=True)
+        raise typer.Exit(1)
+    if not yes and not typer.confirm("Install this pack?", default=False):
+        typer.echo("Aborted.")
+        raise typer.Exit(0)
+    try:
+        result = install_pack(pack.name, consent=True)
+    except PackError as exc:
+        typer.echo(f"plugin packs install: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    for item in result["installed"]:
+        typer.echo(f"Installed {item['name']} -> {item['installed_to']}")
+    typer.echo("Restart HivePilot services for the change to take effect.")
 
 
 @plugins_app.command("install")

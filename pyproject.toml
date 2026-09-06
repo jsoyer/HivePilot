@@ -340,4 +340,4 @@ include = ["hivepilot*"]
 #
 # ONE key per package: `"hivepilot"` appearing twice in this table is a TOML
 # duplicate -- the prompts would silently stop shipping.
-"hivepilot" = ["prompts/*.md", "bundled_plugins/*.py"]
+"hivepilot" = ["prompts/*.md", "bundled_plugins/*.py", "bundled_packs/*.yaml"]

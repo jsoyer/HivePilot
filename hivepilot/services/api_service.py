@@ -3748,6 +3748,123 @@ class PluginInstallResponse(BaseModel):
     prereq_detail: str
 
 
+class PluginPackInstallRequest(BaseModel):
+    consent: bool = False
+
+
+class PluginPackImportRequest(BaseModel):
+    text: str
+    install: bool = False
+    consent: bool = False
+
+
+@v1.get("/plugin-packs")
+def list_plugin_packs_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    from hivepilot.services.plugin_pack_service import list_packs, preview_pack
+
+    return {
+        "packs": [preview_pack(pack) for pack in list_packs()],
+    }
+
+
+@v1.get("/plugin-packs/{name}")
+def get_plugin_pack_endpoint(
+    name: str,
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    from hivepilot.services.plugin_pack_service import (
+        PackError,
+        export_pack,
+        get_pack,
+        preview_pack,
+    )
+
+    pack = get_pack(name)
+    if pack is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown pack")
+    try:
+        yaml_text = export_pack(name)
+    except PackError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    preview = preview_pack(pack)
+    preview["yaml"] = yaml_text
+    return preview
+
+
+@v1.post("/plugin-packs/import")
+def import_plugin_pack_endpoint(
+    payload: PluginPackImportRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from hivepilot.services.plugin_pack_service import (
+        PackError,
+        install_pack,
+        parse_pack,
+        preview_pack,
+        save_imported_pack,
+    )
+
+    try:
+        pack = parse_pack(payload.text, source="import")
+        path = save_imported_pack(pack, payload.text)
+    except PackError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if payload.install:
+        if payload.consent is not True:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail='consent is required: POST {"consent": true} to install a pack.',
+            )
+        try:
+            result = install_pack(pack.name, consent=True)
+        except PackError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        result["saved_to"] = str(path)
+        return result
+    preview = preview_pack(pack)
+    preview["saved_to"] = str(path)
+    return preview
+
+
+@v1.post("/plugin-packs/{name}/install")
+def install_plugin_pack_endpoint(
+    name: str,
+    payload: PluginPackInstallRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from hivepilot.services.plugin_pack_service import PackError, install_pack
+
+    if payload.consent is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='consent is required: POST {"consent": true} to install a pack.',
+        )
+    try:
+        return install_pack(name, consent=True)
+    except PackError as exc:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if str(exc).startswith("unknown pack")
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@v1.get("/plugin-packs-hub")
+def plugin_packs_hub_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    from hivepilot.services.plugin_pack_service import PackError, fetch_hub_packs, preview_pack
+
+    try:
+        packs = fetch_hub_packs()
+    except PackError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"packs": [preview_pack(pack) for pack in packs]}
+
+
 @v1.get("/plugins/catalog")
 @app.get("/plugins/catalog")
 def plugins_catalog_endpoint(

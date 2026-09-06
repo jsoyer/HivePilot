@@ -464,6 +464,10 @@ class Settings(BaseSettings):
     # with a friendly message instead of making any network call.
     # env: HIVEPILOT_PLUGINS_INDEX_URL
     plugins_index_url: str = ""
+    # HP-77 — optional JSON index of *plugin packs* (metadata + manifests).
+    # METADATA ONLY: never used to fetch plugin code. Empty = local/bundled
+    # packs only. env: HIVEPILOT_PLUGIN_PACKS_INDEX_URL
+    plugin_packs_index_url: str = ""
     # Phase 26b — opt-in hot-reload of local-file plugins without a process
     # restart. When True, SchedulerDaemon polls `plugins/*.py` mtimes each
     # tick (`PluginManager.plugins_changed_on_disk()`) and, on a change,

@@ -1,0 +1,17 @@
+name: obsidian-memory
+version: "1.0.0"
+description: Obsidian vault recall plus Hindsight world-fact memory.
+host:
+  min_hivepilot: "0.2.0"
+plugins:
+  - obsidian
+  - hindsight
+config:
+  HIVEPILOT_HINDSIGHT_BASE_URL: "${env:HIVEPILOT_HINDSIGHT_BASE_URL}"
+  HIVEPILOT_OBSIDIAN_VAULT: "${env:HIVEPILOT_OBSIDIAN_VAULT}"
+credentials:
+  - HIVEPILOT_HINDSIGHT_API_KEY
+capabilities:
+  - filesystem
+  - network
+  - secrets_access
