@@ -8,6 +8,7 @@ const {
   fetchSpaces,
   fetchSpaceMessages,
   postSpaceMessage,
+  fetchRuns,
   useRoleMock,
   useEventStreamMock,
   lastStreamHandler,
@@ -15,6 +16,7 @@ const {
   fetchSpaces: vi.fn(),
   fetchSpaceMessages: vi.fn(),
   postSpaceMessage: vi.fn(),
+  fetchRuns: vi.fn(),
   useRoleMock: vi.fn(),
   useEventStreamMock: vi.fn(),
   lastStreamHandler: { current: null as ((event: { entity_type: string }) => void) | null },
@@ -22,7 +24,7 @@ const {
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchSpaces, fetchSpaceMessages, postSpaceMessage }
+  return { ...actual, fetchSpaces, fetchSpaceMessages, postSpaceMessage, fetchRuns }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -76,6 +78,8 @@ beforeEach(() => {
   fetchSpaces.mockReset()
   fetchSpaceMessages.mockReset()
   postSpaceMessage.mockReset()
+  fetchRuns.mockReset()
+  fetchRuns.mockResolvedValue([])
   useRoleMock.mockReset()
   useEventStreamMock.mockReset()
   lastStreamHandler.current = null
@@ -172,6 +176,47 @@ describe('EspacesView', () => {
 
     expect(container.querySelector('[data-testid="espaces-composer"]')).toBeNull()
     expect(container.textContent).toMatch(/read-only|Lecture seule/i)
+  })
+
+  it('shows recent runs in the missions rail beside the thread', async () => {
+    fetchSpaces.mockResolvedValue([space({ id: 7 })])
+    fetchSpaceMessages.mockResolvedValue([])
+    fetchRuns.mockResolvedValue([
+      {
+        id: 42,
+        project: 'example-api',
+        task: 'docs',
+        status: 'running',
+        started_at: '2026-07-18T10:00:00Z',
+        last_activity_at: '2026-07-18T10:01:00Z',
+      },
+    ])
+    mockRole('run')
+    await mountResolved()
+
+    expect(container.querySelector('[data-testid="espaces-rail"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="espaces-rail-row-42"]')?.textContent).toContain(
+      'example-api',
+    )
+    expect(container.querySelector('[data-testid="status-glyph"]')).not.toBeNull()
+    expect(fetchRuns).toHaveBeenCalledWith(12)
+  })
+
+  it('refetches the missions rail when a run event arrives', async () => {
+    fetchSpaces.mockResolvedValue([space({ id: 7 })])
+    fetchSpaceMessages.mockResolvedValue([])
+    fetchRuns.mockResolvedValue([])
+    mockRole('run')
+    await mountResolved()
+    const callsBefore = fetchRuns.mock.calls.length
+
+    await act(async () => {
+      lastStreamHandler.current?.({ entity_type: 'run' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchRuns.mock.calls.length).toBeGreaterThan(callsBefore)
   })
 
   it('shows an empty state when there are no spaces', async () => {

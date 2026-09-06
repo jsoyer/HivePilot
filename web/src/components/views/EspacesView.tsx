@@ -1,6 +1,7 @@
 import { Send } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { EmptyState } from '@/components/dashboard/EmptyState'
+import { MissionsRail } from '@/components/espaces/MissionsRail'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ApiForbiddenError } from '@/lib/api'
@@ -30,11 +31,13 @@ function spaceLabel(space: SpaceSummary, you: string): string {
 
 /**
  * Espaces (HP-45) — conversation rooms. Left: the room list (recency-ordered,
- * with unread-agnostic message counts). Right: the selected room's transcript
- * + a composer. Messages update live over the realtime bus (HP-41 SSE): a
- * `space.message` event for the open room refetches its thread, and any space
- * event refreshes the list order/counts. Posting is `run`-gated (the composer
- * hides for a read-only token; the server enforces it regardless).
+ * with unread-agnostic message counts). Center: the selected room's transcript
+ * + a composer. Right (HP-80): a compact missions rail of recent runs, using
+ * HP-42/HP-44 status glyphs. Messages update live over the realtime bus
+ * (HP-41 SSE): a `space.message` event for the open room refetches its thread,
+ * any space event refreshes the list order/counts, and a `run` event refreshes
+ * the rail. Posting is `run`-gated (the composer hides for a read-only token;
+ * the server enforces it regardless).
  */
 export function EspacesView() {
   const t = useT()
@@ -44,6 +47,7 @@ export function EspacesView() {
   const [spacesKey, setSpacesKey] = useState(0)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [messagesKey, setMessagesKey] = useState(0)
+  const [runsKey, setRunsKey] = useState(0)
 
   const spacesState = useAsyncData(() => fetchSpaces(), [spacesKey])
   const spaces = spacesState.status === 'success' ? spacesState.data : NO_SPACES
@@ -67,6 +71,10 @@ export function EspacesView() {
   // Live: a message in the open room refetches its thread; any space event
   // refreshes the list (recency + counts); typing events drive the indicator.
   useEventStream((event) => {
+    if (event.entity_type === 'run') {
+      setRunsKey((n) => n + 1)
+      return
+    }
     if (event.entity_type !== 'space') return
     const role = ((event.payload ?? {}) as { role?: string }).role
     const forSelected = selectedId !== null && event.entity_id === String(selectedId)
@@ -159,7 +167,7 @@ export function EspacesView() {
         )}
 
         {spacesState.status === 'success' && spaces.length > 0 && (
-          <div className="grid gap-4 sm:grid-cols-[16rem_1fr]">
+          <div className="grid gap-4 sm:grid-cols-[16rem_1fr] lg:grid-cols-[16rem_minmax(0,1fr)_14rem]">
             {/* Room list */}
             <ul data-testid="espaces-list" className="flex max-h-[32rem] flex-col gap-1 overflow-y-auto">
               {spaces.map((space) => (
@@ -300,6 +308,8 @@ export function EspacesView() {
                 </div>
               )}
             </div>
+
+            <MissionsRail refreshKey={runsKey} />
           </div>
         )}
       </CardContent>

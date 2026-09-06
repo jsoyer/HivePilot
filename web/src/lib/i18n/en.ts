@@ -134,6 +134,9 @@ export const en = {
   'spaces.actionCount': '{count} actions',
   'spaces.postForbidden': 'Posting a message needs a run-rank token.',
   'spaces.readOnly': 'Read-only — a run-rank token is required to post.',
+  'spaces.railTitle': 'Missions',
+  'spaces.railEmpty': 'No recent runs.',
+  'spaces.railForbidden': 'A run-rank token is required to see live runs.',
   // ---- Orchestrator decomposition panel (HP-49 / HP-69) ----------------
   'nav.orchestrator': 'Orchestrator',
   'orchestrator.description':
