@@ -11,6 +11,11 @@
  */
 
 import { apiFetch, apiFetchBlob } from './api'
+import type {
+  ScheduleListResponse,
+  ScheduleOut,
+  TriggerResponse,
+} from './generated/contract'
 
 // ---------------------------------------------------------------------------
 // Shared shapes
@@ -2458,10 +2463,21 @@ export interface RoleWritePayload {
   display_name?: string | null
   runner?: string | null
   model?: string | null
+  models?: string[] | null
+  optional_inputs?: string[] | null
+  allowed_tools?: string[] | null
+  permission_mode?: string | null
+  command_task?: string | null
+  host?: string | null
+  effort?: string | null
 }
 
 export function fetchRoles(): Promise<{ roles: StudioRole[] }> {
   return apiFetch<{ roles: StudioRole[] }>('/v1/roles')
+}
+
+export function fetchRole(name: string): Promise<StudioRole> {
+  return apiFetch<StudioRole>(`/v1/roles/${encodeURIComponent(name)}`)
 }
 
 export function createRole(payload: RoleWritePayload): Promise<StudioRole> {
@@ -2526,4 +2542,19 @@ export function synthesizeSpeech(text: string): Promise<Blob> {
     body: JSON.stringify({ text }),
     on403: 'forbidden',
   })
+}
+
+// ---------------------------------------------------------------------------
+// Schedules (HP-64) — GET /v1/schedules + POST /v1/webhook/trigger/{name}
+// ---------------------------------------------------------------------------
+
+export type ScheduleEntry = ScheduleOut
+export type { ScheduleListResponse }
+
+export function fetchSchedules(): Promise<ScheduleListResponse> {
+  return apiFetch<ScheduleListResponse>('/v1/schedules', { on403: 'forbidden' })
+}
+
+export function triggerSchedule(name: string): Promise<TriggerResponse> {
+  return postJson<TriggerResponse>(`/v1/webhook/trigger/${encodeURIComponent(name)}`, {})
 }

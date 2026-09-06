@@ -24,7 +24,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import generate_latest
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from hivepilot import roles
 from hivepilot.config import settings
@@ -1219,6 +1219,26 @@ class ConciergeAsk(BaseModel):
     conversation_id: str | None = None
 
 
+class ConciergeDispatchOut(BaseModel):
+    role_key: str
+    target: str | None = None
+    order: str = ""
+
+
+class ConciergeDecisionOut(BaseModel):
+    """Public concierge classifier result (HP-22 / HP-64 OpenAPI)."""
+
+    kind: str
+    answer_text: str | None = None
+    role_key: str | None = None
+    target: str | None = None
+    order: str | None = None
+    action: str | None = None
+    params: dict[str, Any] | None = None
+    destructive: bool = False
+    dispatches: list[ConciergeDispatchOut] = Field(default_factory=list)
+
+
 @v1.post("/approvals/{run_id}")
 @app.post("/approvals/{run_id}")
 def handle_approval(
@@ -2093,7 +2113,7 @@ def conversations_reply(
 def concierge_ask(
     payload: ConciergeAsk,
     caller: token_service.TokenEntry = Depends(require_role("read")),
-):
+) -> ConciergeDecisionOut:
     """Talk to the agents in natural language (HP-22) — the same concierge
     brain the Telegram bot uses, exposed to Pollen.
 
@@ -3868,6 +3888,31 @@ def admin_reload_endpoint(
 # ---------------------------------------------------------------------------
 
 
+class RoleOut(BaseModel):
+    """One roster row as returned by `GET /v1/roles` (HP-64 OpenAPI). Extra
+    store/YAML fields are allowed so the schema stays honest without pinning
+    every optional Role column."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    title: str = ""
+    model_profile: str = ""
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    can_block: bool = False
+    order: int = 0
+
+
+class RoleListResponse(BaseModel):
+    roles: list[RoleOut]
+
+
+class RoleDeleted(BaseModel):
+    deleted: bool
+    name: str
+
+
 class RoleWrite(BaseModel):
     """Create/update payload for a role. A role needs either `prompt_text`
     (inline, stored in the DB — Agent Studio default) or `prompt_file`."""
@@ -3933,22 +3978,26 @@ def _apply_role_write(payload: RoleWrite) -> dict:
 
 @v1.get("/roles")
 @app.get("/roles")
-def list_roles_endpoint(caller: token_service.TokenEntry = Depends(require_role("read"))):
-    return {"roles": roles.api_roster()}
+def list_roles_endpoint(
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> RoleListResponse:
+    return RoleListResponse(roles=roles.api_roster())
 
 
 @v1.get("/roles/{name}")
 @app.get("/roles/{name}")
-def get_role_endpoint(name: str, caller: token_service.TokenEntry = Depends(require_role("read"))):
+def get_role_endpoint(
+    name: str, caller: token_service.TokenEntry = Depends(require_role("read"))
+) -> RoleOut:
     for row in roles.api_roster():
         if row.get("name") == name:
-            return row
+            return RoleOut.model_validate(row)
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no role '{name}'")
 
 
 @v1.post("/roles", dependencies=[Depends(require_role("admin"))])
 @app.post("/roles", dependencies=[Depends(require_role("admin"))])
-def create_role_endpoint(payload: RoleWrite) -> dict:
+def create_role_endpoint(payload: RoleWrite) -> RoleOut:
     from hivepilot.services import state_service
 
     roles.seed_store_from_yaml()
@@ -3956,22 +4005,22 @@ def create_role_endpoint(payload: RoleWrite) -> dict:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=f"role '{payload.name}' already exists"
         )
-    return _apply_role_write(payload)
+    return RoleOut.model_validate(_apply_role_write(payload))
 
 
 @v1.put("/roles/{name}", dependencies=[Depends(require_role("admin"))])
 @app.put("/roles/{name}", dependencies=[Depends(require_role("admin"))])
-def update_role_endpoint(name: str, payload: RoleWrite) -> dict:
+def update_role_endpoint(name: str, payload: RoleWrite) -> RoleOut:
     if payload.name != name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="path name must match payload name"
         )
-    return _apply_role_write(payload)
+    return RoleOut.model_validate(_apply_role_write(payload))
 
 
 @v1.delete("/roles/{name}", dependencies=[Depends(require_role("admin"))])
 @app.delete("/roles/{name}", dependencies=[Depends(require_role("admin"))])
-def delete_role_endpoint(name: str) -> dict:
+def delete_role_endpoint(name: str) -> RoleDeleted:
     from hivepilot.services import state_service
 
     with _orch_lock:
@@ -3979,7 +4028,7 @@ def delete_role_endpoint(name: str) -> dict:
         existed = state_service.get_role_row(name) is not None
         state_service.delete_role(name)
         roles.refresh_roles()
-    return {"deleted": existed, "name": name}
+    return RoleDeleted(deleted=existed, name=name)
 
 
 # ---------------------------------------------------------------------------
@@ -4602,9 +4651,53 @@ class TriggerResponse(BaseModel):
     detail: str
 
 
+class ScheduleOut(BaseModel):
+    """One `schedules.yaml` entry plus last-run stamp (HP-64)."""
+
+    name: str
+    task: str | None = None
+    source: str | None = None
+    projects: list[str] = Field(default_factory=list)
+    interval_minutes: int = 1440
+    enabled: bool = True
+    remember: bool = False
+    last_run_at: str | None = None
+
+
+class ScheduleListResponse(BaseModel):
+    schedules: list[ScheduleOut]
+
+
+@v1.get("/schedules")
+def list_schedules(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> ScheduleListResponse:
+    """Named schedule entries from `schedules.yaml`. Last-run is best-effort."""
+    from hivepilot.services import schedule_service
+
+    entries = schedule_service.load_schedules(settings.resolve_config_path(settings.schedules_file))
+    rows: list[ScheduleOut] = []
+    for entry in entries.values():
+        last = state_service.get_schedule_last_run(entry.name)
+        rows.append(
+            ScheduleOut(
+                name=entry.name,
+                task=entry.task,
+                source=entry.source,
+                projects=list(entry.projects),
+                interval_minutes=entry.interval_minutes,
+                enabled=entry.enabled,
+                remember=entry.remember,
+                last_run_at=last.isoformat() if last is not None else None,
+            )
+        )
+    rows.sort(key=lambda r: r.name)
+    return ScheduleListResponse(schedules=rows)
+
+
 @app.post("/webhook/trigger/{schedule_name}", dependencies=[Depends(require_role("run"))])
 @v1.post("/webhook/trigger/{schedule_name}", dependencies=[Depends(require_role("run"))])
-def trigger_schedule(schedule_name: str, request: Request):
+def trigger_schedule(schedule_name: str, request: Request) -> TriggerResponse:
     """
     Fire a named schedule entry immediately, regardless of its cron expression.
     Useful for triggering automation from external tools (Zapier, n8n, mobile shortcuts).

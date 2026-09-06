@@ -24,6 +24,7 @@ import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { cn } from '@/lib/utils'
 import { AsyncSection } from './AsyncSection'
+import { SchedulesCard } from './SchedulesCard'
 
 /** Modest live-ish poll cadence — this is a control-plane summary (queue/
  * budget/dispatches), not an actively-watched run list, so a slower cadence
@@ -415,6 +416,8 @@ export function AutopilotView() {
                   <SectionHeader index="03" title={t('autopilot.allowlistTitle')} />
                   <AllowlistSection allowlist={data.auto_dispatch_allowlist} />
                 </section>
+
+                <SchedulesCard />
               </div>
             )}
           </AsyncSection>

@@ -49,6 +49,12 @@ has an **Call an agent** toggle that speaks concierge answers via
 `HIVEPILOT_VOICE_TTS_API_KEY`) is proxied at `POST /v1/voice/tts` so the key
 never reaches the browser.
 
+Autopilot lists **named schedules** from `schedules.yaml` (`GET /v1/schedules`)
+and can fire one immediately (`POST /v1/webhook/trigger/{name}`). The typed
+Pollen client for roles / concierge / schedules is generated from
+`web/openapi.json` — regenerate with `python scripts/export_openapi.py` then
+`npm run generate:api` in `web/`.
+
 ## Breaking change: synchronous `POST /run` removed (Phase 14b)
 
 The deprecated synchronous run-trigger endpoint (`POST /run` / `POST /v1/run`,

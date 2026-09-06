@@ -1,0 +1,2659 @@
+{
+  "components": {
+    "schemas": {
+      "AgentActionRequest": {
+        "description": "`consent` is the button's signature on the decision \u2014 the\nnon-interactive replacement for `agent_install.py`'s TTY \"yes\". It must be\nEXPLICITLY true; absent-means-no is the only safe default for a field that\nauthorises running a vendor's install pipeline.",
+        "properties": {
+          "consent": {
+            "default": false,
+            "title": "Consent",
+            "type": "boolean"
+          }
+        },
+        "title": "AgentActionRequest",
+        "type": "object"
+      },
+      "ApprovalAction": {
+        "properties": {
+          "approve": {
+            "default": true,
+            "title": "Approve",
+            "type": "boolean"
+          },
+          "approver": {
+            "default": "api",
+            "title": "Approver",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "ApprovalAction",
+        "type": "object"
+      },
+      "AutopilotControlResponse": {
+        "properties": {
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "paused"
+        ],
+        "title": "AutopilotControlResponse",
+        "type": "object"
+      },
+      "AutopilotDispatch": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "pipeline": {
+            "title": "Pipeline",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline",
+          "project",
+          "outcome",
+          "at"
+        ],
+        "title": "AutopilotDispatch",
+        "type": "object"
+      },
+      "AutopilotQueueItem": {
+        "properties": {
+          "enqueued_at": {
+            "title": "Enqueued At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "pipeline": {
+            "title": "Pipeline",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pipeline",
+          "project",
+          "reason",
+          "state",
+          "enqueued_at"
+        ],
+        "title": "AutopilotQueueItem",
+        "type": "object"
+      },
+      "AutopilotStateResponse": {
+        "properties": {
+          "auto_dispatch_allowlist": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Auto Dispatch Allowlist",
+            "type": "array"
+          },
+          "budget_daily_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Daily Usd"
+          },
+          "budget_remaining": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Remaining"
+          },
+          "budget_spent_today": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Spent Today"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/AutopilotQueueItem"
+            },
+            "title": "Queue",
+            "type": "array"
+          },
+          "queue_depth": {
+            "title": "Queue Depth",
+            "type": "integer"
+          },
+          "recent_dispatches": {
+            "items": {
+              "$ref": "#/components/schemas/AutopilotDispatch"
+            },
+            "title": "Recent Dispatches",
+            "type": "array"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "paused",
+          "queue",
+          "queue_depth",
+          "budget_daily_usd",
+          "budget_spent_today",
+          "budget_remaining",
+          "recent_dispatches",
+          "auto_dispatch_allowlist"
+        ],
+        "title": "AutopilotStateResponse",
+        "type": "object"
+      },
+      "CancelRunResponse": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status"
+        ],
+        "title": "CancelRunResponse",
+        "type": "object"
+      },
+      "ConciergeAsk": {
+        "description": "A free-text message for the natural-language concierge (HP-22).\n\n`conversation_id` scopes the per-session rolling memory and pending\nfollow-up offers, so a bare \"yes\"/\"oui\" resolves against what the\nconcierge just proposed \u2014 exactly the Telegram behaviour, in the web UI.",
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ConciergeAsk",
+        "type": "object"
+      },
+      "ConciergeDecisionOut": {
+        "description": "Public concierge classifier result (HP-22 / HP-64 OpenAPI).",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "answer_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Text"
+          },
+          "destructive": {
+            "default": false,
+            "title": "Destructive",
+            "type": "boolean"
+          },
+          "dispatches": {
+            "items": {
+              "$ref": "#/components/schemas/ConciergeDispatchOut"
+            },
+            "title": "Dispatches",
+            "type": "array"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "role_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Key"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ConciergeDecisionOut",
+        "type": "object"
+      },
+      "ConciergeDispatchOut": {
+        "properties": {
+          "order": {
+            "default": "",
+            "title": "Order",
+            "type": "string"
+          },
+          "role_key": {
+            "title": "Role Key",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "role_key"
+        ],
+        "title": "ConciergeDispatchOut",
+        "type": "object"
+      },
+      "ConversationReply": {
+        "description": "An operator instruction addressed to a role, not to a running agent.",
+        "properties": {
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "text"
+        ],
+        "title": "ConversationReply",
+        "type": "object"
+      },
+      "DecomposeRequest": {
+        "properties": {
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          }
+        },
+        "required": [
+          "goal"
+        ],
+        "title": "DecomposeRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HindsightMemoryCurate": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "pattern": "^(valid|invalidated)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "title": "HindsightMemoryCurate",
+        "type": "object"
+      },
+      "HindsightMentalModelPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "source_query": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Query"
+          }
+        },
+        "title": "HindsightMentalModelPatch",
+        "type": "object"
+      },
+      "HindsightMentalModelWrite": {
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "source_query": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Source Query",
+            "type": "string"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          }
+        },
+        "required": [
+          "name",
+          "source_query"
+        ],
+        "title": "HindsightMentalModelWrite",
+        "type": "object"
+      },
+      "McpCatalogAddRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "McpCatalogAddRequest",
+        "type": "object"
+      },
+      "McpImportRequest": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "McpImportRequest",
+        "type": "object"
+      },
+      "MemoryEvaluationRequest": {
+        "properties": {
+          "namespace": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "ref_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Key"
+          },
+          "useful": {
+            "title": "Useful",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "namespace",
+          "useful"
+        ],
+        "title": "MemoryEvaluationRequest",
+        "type": "object"
+      },
+      "ModelConnectRequest": {
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "consent": {
+            "default": false,
+            "title": "Consent",
+            "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "api_key"
+        ],
+        "title": "ModelConnectRequest",
+        "type": "object"
+      },
+      "ModelVerifyRequest": {
+        "properties": {
+          "agent_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Kind"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          }
+        },
+        "title": "ModelVerifyRequest",
+        "type": "object"
+      },
+      "NewRunRequest": {
+        "description": "Body for `POST /v1/runs` (Mirador actionable dashboard PRD, Sprint 3)\n-- the async, single-project successor to the removed sync `RunRequest`.\nReuses `_validate_extra_prompt` (see above) so its `extra_prompt`\nhandling is identical to `RunRequest`'s, never a weaker reimplementation.",
+        "properties": {
+          "auto_git": {
+            "default": false,
+            "title": "Auto Git",
+            "type": "boolean"
+          },
+          "extra_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Prompt"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "project"
+        ],
+        "title": "NewRunRequest",
+        "type": "object"
+      },
+      "NewRunResponse": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status"
+        ],
+        "title": "NewRunResponse",
+        "type": "object"
+      },
+      "PartitionCancelResponse": {
+        "properties": {
+          "cancelled_tasks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cancelled Tasks",
+            "type": "array"
+          },
+          "partition_id": {
+            "title": "Partition Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "partition_id",
+          "cancelled_tasks"
+        ],
+        "title": "PartitionCancelResponse",
+        "type": "object"
+      },
+      "PartitionDetail": {
+        "properties": {
+          "created_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created Ts"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "outward_actions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Outward Actions",
+            "type": "array"
+          },
+          "outward_consent": {
+            "default": false,
+            "title": "Outward Consent",
+            "type": "boolean"
+          },
+          "parallelism": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartitionParallelism"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposed_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Digest"
+          },
+          "proposed_json": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Json"
+          },
+          "ratified_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified At"
+          },
+          "ratified_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified By"
+          },
+          "ratified_diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified Diff"
+          },
+          "ratified_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified Digest"
+          },
+          "ratified_json": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified Json"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PartitionTaskRow"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          },
+          "updated_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Ts"
+          },
+          "waves": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Waves",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "PartitionDetail",
+        "type": "object"
+      },
+      "PartitionParallelism": {
+        "description": "The EFFECTIVE parallelism this host would give the plan.\n\nSurfaced (spec \u00a77) because `runner_throttle` caps the `claude` runner at\n`claude_max_concurrency`, default **1** -- so a `max_parallel: 3` plan is\none agent three times on a default install, and the ratify UI must say so\nrather than promising three.",
+        "properties": {
+          "concurrency_limit": {
+            "title": "Concurrency Limit",
+            "type": "integer"
+          },
+          "effective": {
+            "title": "Effective",
+            "type": "integer"
+          },
+          "notes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "integer"
+          },
+          "runner_cap": {
+            "title": "Runner Cap",
+            "type": "integer"
+          },
+          "runner_kinds": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Runner Kinds",
+            "type": "array"
+          }
+        },
+        "required": [
+          "requested",
+          "effective",
+          "concurrency_limit",
+          "runner_cap"
+        ],
+        "title": "PartitionParallelism",
+        "type": "object"
+      },
+      "PartitionPreviewRequest": {
+        "description": "A dry run of the gate over the plan currently in the operator's\neditor. `outward_consent` mirrors the checkbox's live state so the\nverdict the UI shows is the verdict it would actually get.",
+        "properties": {
+          "outward_consent": {
+            "default": false,
+            "title": "Outward Consent",
+            "type": "boolean"
+          },
+          "partition_json": {
+            "title": "Partition Json",
+            "type": "string"
+          }
+        },
+        "required": [
+          "partition_json"
+        ],
+        "title": "PartitionPreviewRequest",
+        "type": "object"
+      },
+      "PartitionPreviewResponse": {
+        "description": "The gate's verdict for a plan that has NOT been submitted.\n\n`ok` is the single thing Pollen gates its dispatch button on \u2014 it is\n`validate_ratification`'s own answer, not a browser-side re-derivation of\nthe rules. `code`/`status_code`/`detail` are the refusing\n`RatificationError`'s own attributes, carried verbatim so there is still\nexactly one definition of \"a stale digest is a 409\".\n\n`outward_actions` is always the LIVE-config-computed footprint (never the\nplan's self-declared `outward` flags), so the consent warning can name\nthe exact actions while the checkbox is still unticked.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "outward_actions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Outward Actions",
+            "type": "array"
+          },
+          "parallelism": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartitionParallelism"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          },
+          "task_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Task Ids",
+            "type": "array"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          },
+          "waves": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Waves",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PartitionPreviewResponse",
+        "type": "object"
+      },
+      "PartitionRatifyRequest": {
+        "properties": {
+          "approver": {
+            "default": "api",
+            "title": "Approver",
+            "type": "string"
+          },
+          "dispatch": {
+            "default": true,
+            "title": "Dispatch",
+            "type": "boolean"
+          },
+          "expected_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Digest"
+          },
+          "outward_consent": {
+            "default": false,
+            "title": "Outward Consent",
+            "type": "boolean"
+          },
+          "partition_json": {
+            "title": "Partition Json",
+            "type": "string"
+          }
+        },
+        "required": [
+          "partition_json"
+        ],
+        "title": "PartitionRatifyRequest",
+        "type": "object"
+      },
+      "PartitionRatifyResponse": {
+        "properties": {
+          "diff": {
+            "title": "Diff",
+            "type": "string"
+          },
+          "dispatching": {
+            "default": false,
+            "title": "Dispatching",
+            "type": "boolean"
+          },
+          "idempotent": {
+            "default": false,
+            "title": "Idempotent",
+            "type": "boolean"
+          },
+          "outward_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outward Actions",
+            "type": "array"
+          },
+          "outward_consent": {
+            "title": "Outward Consent",
+            "type": "boolean"
+          },
+          "parallelism": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartitionParallelism"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partition_id": {
+            "title": "Partition Id",
+            "type": "string"
+          },
+          "ratified_digest": {
+            "title": "Ratified Digest",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Task Ids",
+            "type": "array"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "partition_id",
+          "status",
+          "ratified_digest",
+          "outward_actions",
+          "outward_consent",
+          "task_ids",
+          "diff"
+        ],
+        "title": "PartitionRatifyResponse",
+        "type": "object"
+      },
+      "PartitionSummary": {
+        "properties": {
+          "created_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created Ts"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "outward_consent": {
+            "default": false,
+            "title": "Outward Consent",
+            "type": "boolean"
+          },
+          "proposed_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Digest"
+          },
+          "ratified_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified At"
+          },
+          "ratified_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified By"
+          },
+          "ratified_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratified Digest"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "updated_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Ts"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "PartitionSummary",
+        "type": "object"
+      },
+      "PartitionTaskRow": {
+        "properties": {
+          "attempt": {
+            "default": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At"
+          },
+          "claimed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed By"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "pr_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Url"
+          },
+          "queue_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "wall_clock_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Clock Seconds"
+          }
+        },
+        "required": [
+          "task_id",
+          "status"
+        ],
+        "title": "PartitionTaskRow",
+        "type": "object"
+      },
+      "PluginInstallResponse": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "installed_to": {
+            "title": "Installed To",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "prereq_detail": {
+            "title": "Prereq Detail",
+            "type": "string"
+          },
+          "restart_required": {
+            "title": "Restart Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "installed_to",
+          "enabled",
+          "restart_required",
+          "prereq_detail"
+        ],
+        "title": "PluginInstallResponse",
+        "type": "object"
+      },
+      "PluginToggleResponse": {
+        "properties": {
+          "disabled": {
+            "title": "Disabled",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "restart_required": {
+            "title": "Restart Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "disabled",
+          "restart_required"
+        ],
+        "title": "PluginToggleResponse",
+        "type": "object"
+      },
+      "PushSubscribeBody": {
+        "description": "Browser PushSubscription JSON (HP-63) \u2014 endpoint + p256dh/auth keys.",
+        "properties": {
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Keys",
+            "type": "object"
+          }
+        },
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "title": "PushSubscribeBody",
+        "type": "object"
+      },
+      "PushUnsubscribeBody": {
+        "properties": {
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint"
+        ],
+        "title": "PushUnsubscribeBody",
+        "type": "object"
+      },
+      "ReloadResponse": {
+        "properties": {
+          "config_reloaded": {
+            "title": "Config Reloaded",
+            "type": "boolean"
+          },
+          "roles_reloaded": {
+            "title": "Roles Reloaded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "roles_reloaded",
+          "config_reloaded"
+        ],
+        "title": "ReloadResponse",
+        "type": "object"
+      },
+      "RoleDeleted": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted",
+          "name"
+        ],
+        "title": "RoleDeleted",
+        "type": "object"
+      },
+      "RoleListResponse": {
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/RoleOut"
+            },
+            "title": "Roles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "roles"
+        ],
+        "title": "RoleListResponse",
+        "type": "object"
+      },
+      "RoleOut": {
+        "additionalProperties": true,
+        "description": "One roster row as returned by `GET /v1/roles` (HP-64 OpenAPI). Extra\nstore/YAML fields are allowed so the schema stays honest without pinning\nevery optional Role column.",
+        "properties": {
+          "can_block": {
+            "default": false,
+            "title": "Can Block",
+            "type": "boolean"
+          },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "model_profile": {
+            "default": "",
+            "title": "Model Profile",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "order": {
+            "default": 0,
+            "title": "Order",
+            "type": "integer"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RoleOut",
+        "type": "object"
+      },
+      "RoleWrite": {
+        "description": "Create/update payload for a role. A role needs either `prompt_text`\n(inline, stored in the DB \u2014 Agent Studio default) or `prompt_file`.",
+        "properties": {
+          "allowed_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Tools"
+          },
+          "can_block": {
+            "title": "Can Block",
+            "type": "boolean"
+          },
+          "command_task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Task"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "model_profile": {
+            "title": "Model Profile",
+            "type": "string"
+          },
+          "models": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Models"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "optional_inputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optional Inputs"
+          },
+          "order": {
+            "title": "Order",
+            "type": "integer"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "permission_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permission Mode"
+          },
+          "prompt_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt File"
+          },
+          "prompt_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Text"
+          },
+          "runner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "model_profile",
+          "inputs",
+          "outputs",
+          "can_block",
+          "order"
+        ],
+        "title": "RoleWrite",
+        "type": "object"
+      },
+      "RunDetailResponse": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/RunStepDetail"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "project",
+          "task",
+          "status",
+          "steps"
+        ],
+        "title": "RunDetailResponse",
+        "type": "object"
+      },
+      "RunStepDetail": {
+        "properties": {
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "step": {
+            "title": "Step",
+            "type": "string"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          }
+        },
+        "required": [
+          "step",
+          "status"
+        ],
+        "title": "RunStepDetail",
+        "type": "object"
+      },
+      "ScheduleListResponse": {
+        "properties": {
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleOut"
+            },
+            "title": "Schedules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schedules"
+        ],
+        "title": "ScheduleListResponse",
+        "type": "object"
+      },
+      "ScheduleOut": {
+        "description": "One `schedules.yaml` entry plus last-run stamp (HP-64).",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_minutes": {
+            "default": 1440,
+            "title": "Interval Minutes",
+            "type": "integer"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "remember": {
+            "default": false,
+            "title": "Remember",
+            "type": "boolean"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ScheduleOut",
+        "type": "object"
+      },
+      "SpaceCreate": {
+        "properties": {
+          "kind": {
+            "default": "dm",
+            "title": "Kind",
+            "type": "string"
+          },
+          "participants": {
+            "items": {
+              "$ref": "#/components/schemas/SpaceParticipant"
+            },
+            "title": "Participants",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "participants"
+        ],
+        "title": "SpaceCreate",
+        "type": "object"
+      },
+      "SpaceMessageCreate": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "sender_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender Id"
+          },
+          "sender_type": {
+            "default": "human",
+            "title": "Sender Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "title": "SpaceMessageCreate",
+        "type": "object"
+      },
+      "SpaceParticipant": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "SpaceParticipant",
+        "type": "object"
+      },
+      "TriggerResponse": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "schedule_name": {
+            "title": "Schedule Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_name",
+          "status",
+          "detail"
+        ],
+        "title": "TriggerResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VoiceSpeakBody": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "VoiceSpeakBody",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Curated OpenAPI for roles, concierge, and schedules (HP-64). Regenerate with `python scripts/export_openapi.py`.",
+    "title": "HivePilot Pollen contract",
+    "version": "0.2.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/concierge": {
+      "post": {
+        "description": "Talk to the agents in natural language (HP-22) \u2014 the same concierge\nbrain the Telegram bot uses, exposed to Pollen.\n\nFail-closed: `concierge_service.route` never raises and never fabricates an\nunvalidated route/action \u2014 any LLM/transport error degrades to a friendly\n`answer`. This endpoint only CLASSIFIES and returns the decision; it does\nnot execute anything, so it is safe at the `read` role. A returned\n`route`/`action`/`multi_route` is a PROPOSAL the UI surfaces (destructive\nexecution stays behind the existing approval/run flows).",
+        "operationId": "concierge_ask_v1_concierge_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConciergeAsk"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConciergeDecisionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Concierge Ask"
+      }
+    },
+    "/v1/roles": {
+      "get": {
+        "operationId": "list_roles_endpoint_v1_roles_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Roles Endpoint"
+      },
+      "post": {
+        "operationId": "create_role_endpoint_v1_roles_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Role Endpoint"
+      }
+    },
+    "/v1/roles/{name}": {
+      "delete": {
+        "operationId": "delete_role_endpoint_v1_roles__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDeleted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Role Endpoint"
+      },
+      "get": {
+        "operationId": "get_role_endpoint_v1_roles__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Role Endpoint"
+      },
+      "put": {
+        "operationId": "update_role_endpoint_v1_roles__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Role Endpoint"
+      }
+    },
+    "/v1/schedules": {
+      "get": {
+        "description": "Named schedule entries from `schedules.yaml`. Last-run is best-effort.",
+        "operationId": "list_schedules_v1_schedules_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Schedules"
+      }
+    },
+    "/v1/webhook/trigger/{schedule_name}": {
+      "post": {
+        "description": "Fire a named schedule entry immediately, regardless of its cron expression.\nUseful for triggering automation from external tools (Zapier, n8n, mobile shortcuts).\nThe run executes asynchronously \u2014 use GET /approvals or Telegram to track it.",
+        "operationId": "trigger_schedule_v1_webhook_trigger__schedule_name__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_name",
+            "required": true,
+            "schema": {
+              "title": "Schedule Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Schedule"
+      }
+    }
+  }
+}

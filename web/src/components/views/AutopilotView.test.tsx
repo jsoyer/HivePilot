@@ -5,16 +5,18 @@ import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { AutopilotState } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchAutopilot, pauseAutopilot, resumeAutopilot, useRoleMock } = vi.hoisted(() => ({
-  fetchAutopilot: vi.fn(),
-  pauseAutopilot: vi.fn(),
-  resumeAutopilot: vi.fn(),
-  useRoleMock: vi.fn(),
-}))
+const { fetchAutopilot, pauseAutopilot, resumeAutopilot, fetchSchedules, useRoleMock } =
+  vi.hoisted(() => ({
+    fetchAutopilot: vi.fn(),
+    pauseAutopilot: vi.fn(),
+    resumeAutopilot: vi.fn(),
+    fetchSchedules: vi.fn(),
+    useRoleMock: vi.fn(),
+  }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchAutopilot, pauseAutopilot, resumeAutopilot }
+  return { ...actual, fetchAutopilot, pauseAutopilot, resumeAutopilot, fetchSchedules }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -60,6 +62,8 @@ beforeEach(() => {
   fetchAutopilot.mockReset()
   pauseAutopilot.mockReset()
   resumeAutopilot.mockReset()
+  fetchSchedules.mockReset()
+  fetchSchedules.mockResolvedValue({ schedules: [] })
   useRoleMock.mockReset()
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   container = document.createElement('div')
