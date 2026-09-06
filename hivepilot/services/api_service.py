@@ -1317,6 +1317,231 @@ def handle_approval(
 
 
 # ---------------------------------------------------------------------------
+# Skills workshop (HP-79). Usage is telemetry; proposals never auto-apply.
+# GET list/detail -> read. POST propose -> run. accept/reject -> approve.
+# ---------------------------------------------------------------------------
+
+
+class SkillSummary(BaseModel):
+    name: str
+    description: str = ""
+    provider: str = ""
+    applies_to: list[str] | None = None
+    min_role: str | None = None
+
+
+class SkillUsageRow(BaseModel):
+    id: str
+    skill_name: str
+    tenant: str = "default"
+    run_id: int | None = None
+    step: str | None = None
+    runner_kind: str | None = None
+    outcome: str = "applied"
+    created_ts: str | None = None
+
+
+class SkillProposalRow(BaseModel):
+    id: str
+    skill_name: str
+    tenant: str = "default"
+    status: str
+    provider: str | None = None
+    run_id: int | None = None
+    step: str | None = None
+    rationale: str | None = None
+    base_digest: str
+    patch_json: str
+    diff_text: str
+    created_ts: str | None = None
+    decided_ts: str | None = None
+    decided_by: str | None = None
+
+
+class SkillProposalCreate(BaseModel):
+    skill_name: str
+    files: dict[str, str]
+    rationale: str = ""
+
+
+class SkillProposalDecision(BaseModel):
+    actor: str = "operator"
+
+
+def _skill_row_tenant(caller: token_service.TokenEntry) -> str | None:
+    return None if caller.role == "admin" else (caller.tenant or "default")
+
+
+def _skill_proposal_out(row: dict) -> SkillProposalRow:
+    return SkillProposalRow(
+        id=str(row["id"]),
+        skill_name=str(row["skill_name"]),
+        tenant=str(row.get("tenant") or "default"),
+        status=str(row.get("status") or "proposed"),
+        provider=row.get("provider"),
+        run_id=row.get("run_id"),
+        step=row.get("step"),
+        rationale=row.get("rationale"),
+        base_digest=str(row.get("base_digest") or ""),
+        patch_json=str(row.get("patch_json") or "{}"),
+        diff_text=str(row.get("diff_text") or ""),
+        created_ts=str(row["created_ts"]) if row.get("created_ts") is not None else None,
+        decided_ts=str(row["decided_ts"]) if row.get("decided_ts") is not None else None,
+        decided_by=row.get("decided_by"),
+    )
+
+
+@v1.get("/skills")
+def list_skills_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> list[SkillSummary]:
+    skills = _get_orchestrator().plugins.list_skills()
+    return [
+        SkillSummary(
+            name=str(s.get("name") or ""),
+            description=str(s.get("description") or ""),
+            provider=str(s.get("provider") or ""),
+            applies_to=s.get("applies_to"),
+            min_role=s.get("min_role"),
+        )
+        for s in skills
+        if s.get("name")
+    ]
+
+
+@v1.get("/skills/usage")
+def list_skill_usage_endpoint(
+    skill_name: str | None = None,
+    limit: int = 50,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> list[SkillUsageRow]:
+    from hivepilot.services import skill_workshop_service as sws
+
+    rows = sws.list_usage(
+        skill_name=skill_name,
+        tenant=_skill_row_tenant(caller),
+        limit=limit,
+    )
+    return [
+        SkillUsageRow(
+            id=str(r["id"]),
+            skill_name=str(r["skill_name"]),
+            tenant=str(r.get("tenant") or "default"),
+            run_id=r.get("run_id"),
+            step=r.get("step"),
+            runner_kind=r.get("runner_kind"),
+            outcome=str(r.get("outcome") or "applied"),
+            created_ts=str(r["created_ts"]) if r.get("created_ts") is not None else None,
+        )
+        for r in rows
+    ]
+
+
+@v1.get("/skills/proposals")
+def list_skill_proposals_endpoint(
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = 50,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> list[SkillProposalRow]:
+    from hivepilot.services import skill_workshop_service as sws
+
+    return [
+        _skill_proposal_out(r)
+        for r in sws.list_proposals(
+            status=status_filter, tenant=_skill_row_tenant(caller), limit=limit
+        )
+    ]
+
+
+@v1.get("/skills/proposals/{proposal_id}")
+def get_skill_proposal_endpoint(
+    proposal_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> SkillProposalRow:
+    from hivepilot.services import skill_workshop_service as sws
+
+    row = sws.get_proposal(proposal_id, tenant=_skill_row_tenant(caller))
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+    return _skill_proposal_out(row)
+
+
+@v1.post("/skills/proposals")
+def create_skill_proposal_endpoint(
+    body: SkillProposalCreate,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> SkillProposalRow:
+    from hivepilot.services import skill_workshop_service as sws
+    from hivepilot.services.skill_workshop_service import SkillWorkshopError
+
+    try:
+        row = sws.propose_patch(
+            body.skill_name,
+            body.files,
+            lookup=_get_orchestrator().plugins,
+            rationale=body.rationale,
+            tenant=caller.tenant or "default",
+        )
+    except SkillWorkshopError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _skill_proposal_out(row)
+
+
+@v1.post("/skills/proposals/{proposal_id}/accept")
+def accept_skill_proposal_endpoint(
+    proposal_id: str,
+    body: SkillProposalDecision | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> SkillProposalRow:
+    from hivepilot.services import skill_workshop_service as sws
+    from hivepilot.services.skill_workshop_service import SkillWorkshopError
+
+    actor = (body.actor if body else None) or caller.note or caller.role
+    try:
+        row = sws.decide_proposal(
+            proposal_id,
+            accept=True,
+            actor=str(actor),
+            lookup=_get_orchestrator().plugins,
+            tenant=_skill_row_tenant(caller),
+        )
+    except SkillWorkshopError as exc:
+        detail = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in detail
+            else status.HTTP_409_CONFLICT
+            if "changed since" in detail
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=detail) from exc
+    return _skill_proposal_out(row)
+
+
+@v1.post("/skills/proposals/{proposal_id}/reject")
+def reject_skill_proposal_endpoint(
+    proposal_id: str,
+    body: SkillProposalDecision | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> SkillProposalRow:
+    from hivepilot.services import skill_workshop_service as sws
+    from hivepilot.services.skill_workshop_service import SkillWorkshopError
+
+    actor = (body.actor if body else None) or caller.note or caller.role
+    try:
+        row = sws.decide_proposal(
+            proposal_id,
+            accept=False,
+            actor=str(actor),
+            lookup=_get_orchestrator().plugins,
+            tenant=_skill_row_tenant(caller),
+        )
+    except SkillWorkshopError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _skill_proposal_out(row)
+
+
+# ---------------------------------------------------------------------------
 # Partitions (propose -> ratify -> dispatch PRD, Sprint 3 -- spec §5/§7).
 #
 # `/v1`-only, like every other endpoint added after Phase 14b.

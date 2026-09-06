@@ -6892,6 +6892,7 @@ class Orchestrator:
                 # resolved, and updated to the fallback runner (if any) inside
                 # the quota-fallback loop below.
                 _used_runner_def: RunnerDefinition | None = None
+                _resolved_skills: list[SkillSpec] = []
                 from hivepilot.services.quota import QuotaDeferredError
 
                 with get_tracer().start_as_current_span(
@@ -7034,6 +7035,15 @@ class Orchestrator:
                             return _prepared
 
                         payload = _prepare_payload_for(runner_def)
+                        if _resolved_skills:
+                            from hivepilot.services.skill_workshop_service import record_usage
+
+                            record_usage(
+                                [str(s.get("name")) for s in _resolved_skills if s.get("name")],
+                                run_id=run_id,
+                                step=step.name,
+                                runner_kind=str(runner_def.kind),
+                            )
                         if payload.step is not step:
                             # Keep the outer `step` variable in sync with the
                             # mode-injected copy -- mirrors the pre-refactor
@@ -7526,6 +7536,18 @@ class Orchestrator:
                                 role=task.role,
                                 resolved_model=pop_last_resolved_model(),
                             )
+                            if _resolved_skills:
+                                from hivepilot.services.skill_workshop_service import (
+                                    propose_from_failure,
+                                )
+
+                                propose_from_failure(
+                                    [str(s.get("name")) for s in _resolved_skills if s.get("name")],
+                                    lookup=self.plugins,
+                                    detail=str(exc),
+                                    run_id=run_id,
+                                    step=step.name,
+                                )
                         if step.allow_failure:
                             logger.warning("step.failure_allowed", step=step.name, error=str(exc))
                             continue
