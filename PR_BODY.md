@@ -1,34 +1,24 @@
 ## Summary
 
-HP-53 slice 2: retire the mem0 plugin and Pollen Search tab. Slice 1 (#631) already migrated memories into Hindsight banks.
+HP-20: per-role procedural avatars on the Pollen Agents page.
 
-Kept (migration source only):
-- `hivepilot memory migrate-mem0`
-- `hivepilot/services/mem0_hindsight_migration.py`
-- `HIVEPILOT_MEM0_*` settings / `.env.example` comments
-- historical `memory_events` rows (`_LEGACY_BACKEND = "mem0"`)
-- `memoryBackends.about.mem0` i18n for leftover Quality/Sources cards
+- Pin `@bible-strong/avatar-react` + `@bible-strong/avatar-core` at `0.1.0`.
+- One Strobi base rig (`web/src/assets/avatars/base.avatar.json`); each of the 8 roles overrides body colour only.
+- `<RoleAvatar>` maps run state → animation (`idle` / `working` / `thinking` / `happy` / `sad` / `suspicious`).
+- Wired on the Agents roster, attention band, and role drawer. Unmapped roles keep the hashed initial badge.
+- AGPL-3.0-only renderer documented in `web/src/assets/avatars/ATTRIBUTION.md` (compatible with HivePilot GPL-3.0).
 
-Removed:
-- `hivepilot/bundled_plugins/mem0.py` and `tests/test_mem0.py`
-- Pollen `Mem0View` + Memory Search tab (`GET /v1/memories`)
-- TUI Mem0 tab
-- plugin catalog / activity / doctor probes for mem0
-- `memory_service.KNOWN_BACKENDS` entry (`obsidian`, `hindsight` only)
+Rebased onto current `main` (includes HP-55 Knowledge panel + HP-53 mem0 retirement). Rebuilt committed `hivepilot/webui/static/`.
 
-Does not collapse HP-51 `{project}:{task}:{role}` and HP-52 `role:{name}` banks. Disposition still unset.
+Does not author 8 unique Lab exports, and does not yet replace badges on Sweep graph nodes / activity feed / run cards.
 
-Stacked on HP-55 (`cursor/hp-55-memory-panel-6c07` / #632) so this review is retirement-only.
-
-Linear: [HP-53](https://linear.app/js-workspace/issue/HP-53/migrationretrait-de-mem0-bascule-des-memoires-existantes-suppression). Parent HP-32.
+Linear: [HP-20](https://linear.app/js-workspace/issue/HP-20/role-avatars-in-pollen-animated-bible-strongavatar-react).
 
 ## Testing
 
-- [x] `pytest` installer / doctor / dashboard / memory / pollen contract / gating / api_service (730+ passed; health alias isolated from host `plugins_disabled`)
-- [x] `cd web && npm test -- --run src/components/views/MemoryView.test.tsx src/lib/pollen-api.test.ts src/components/Pollen.test.tsx` (90 passed)
-- [x] `cd web && npm run build` (Node 26.5.0 → `index-mOBs-rFC.js`)
-- [x] `hivepilot memory migrate-mem0 --help` — CLI remains; docstring says plugin is retired
-- [x] `hivepilot plugins available` — no `mem0` catalog row
+- [x] `cd web && npm test -- --run src/components/RoleAvatar.test.tsx src/components/views/AgentsView.test.tsx`
+- [x] `cd web && npm run build` (Node 26.5.0)
+- [ ] `pytest` — re-run after push; previous CI failure was against stale `main`
 - [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths
 
-Replay: `hivepilot memory migrate-mem0 --dry-run` still lists a mem0 export; Pollen Memory has Sources / Knowledge / Quality / Growth (no Search).
+Replay: open Pollen → Agents; the eight first-class roles show coloured procedural avatars; custom roles stay initials.
