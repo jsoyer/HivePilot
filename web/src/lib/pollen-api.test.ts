@@ -29,6 +29,7 @@ import {
   fetchMemoryGrowth,
   fetchMemoryJournal,
   fetchMemoryReality,
+  fetchHostResources,
   fetchModels,
   fetchOnboardingMachine,
   fetchVoiceConfig,
@@ -261,6 +262,11 @@ describe('pollen-api fetch wrappers', () => {
 
   // ---- Mirador Home command-center sprint: /v1/models, /v1/efficiency,
   // /v1/memory/growth --------------------------------------------------
+
+  it('fetchHostResources calls GET /v1/host/resources', async () => {
+    await fetchHostResources()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/host/resources')
+  })
 
   it('fetchModels calls GET /v1/models with a days window', async () => {
     await fetchModels(30)

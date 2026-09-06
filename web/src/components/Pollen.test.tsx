@@ -43,6 +43,14 @@ const mocks = vi.hoisted(() => ({
   // mocked genuinely-empty so this shell test exercises tab switching only,
   // not ModelsView's own data/empty/error states (covered by
   // ModelsView.test.tsx).
+  fetchHostResources: vi.fn().mockResolvedValue({
+    available: false,
+    source: null,
+    ram: null,
+    cpu: null,
+    disk: null,
+    note: 'unavailable',
+  }),
   fetchModels: vi.fn().mockResolvedValue({
     models: [],
     overall: { total_steps: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0, unpriced_steps: 0, succeeded_runs: 0, cost_per_successful_run: null },

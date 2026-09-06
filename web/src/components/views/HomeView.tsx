@@ -21,16 +21,20 @@ import { SweepRadar, type RadarAgent, type RadarAgentStatus } from '@/components
 import type { VizTone } from '@/components/dashboard/Sparkline'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
-import { useT } from '@/lib/i18n'
+import { SpendRankList } from '@/components/dashboard/SpendRankList'
+import { useLanguage, useT } from '@/lib/i18n'
+import { formatGibPair, formatPct } from '@/lib/format-usage'
 import {
   type Approval,
   fetchAnalyticsCost,
   fetchAnalyticsSummary,
   fetchApprovals,
   fetchEfficiency,
+  fetchHostResources,
   fetchMemoryReality,
   fetchRuns,
   postApproval,
+  type HostResources,
   type RunSummary,
 } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
@@ -615,6 +619,54 @@ function ActivityFeedSection({ runsState, approvalsState }: ActivityFeedSectionP
   )
 }
 
+function HostStrip({ state }: { state: AsyncState<HostResources> }) {
+  const t = useT()
+  const { language } = useLanguage()
+
+  if (state.status === 'loading') {
+    return (
+      <div role="status" className="animate-pulse text-sm text-muted-foreground">
+        {t('common.loading')}
+      </div>
+    )
+  }
+  if (state.status === 'error') {
+    return (
+      <p data-testid="home-host-error" className="text-sm text-muted-foreground">
+        {state.error instanceof ApiForbiddenError ? t('home.kpiRequiresRole') : describeApiError(state.error)}
+      </p>
+    )
+  }
+  if (!state.data.available) {
+    return (
+      <p data-testid="home-host-unavailable" className="text-sm text-muted-foreground">
+        {t('home.hostUnavailable')}
+      </p>
+    )
+  }
+  const { ram, cpu, disk } = state.data
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      <div data-testid="home-host-ram">
+        <p className="text-xs tracking-wide text-muted-foreground uppercase">{t('home.hostRam')}</p>
+        <p className="metric-mono text-lg font-semibold">
+          {ram ? formatGibPair(ram.used_bytes, ram.total_bytes, language) : '—'}
+        </p>
+      </div>
+      <div data-testid="home-host-cpu">
+        <p className="text-xs tracking-wide text-muted-foreground uppercase">{t('home.hostCpu')}</p>
+        <p className="metric-mono text-lg font-semibold">
+          {cpu && cpu.used_pct != null ? formatPct(cpu.used_pct) : '—'}
+        </p>
+      </div>
+      <div data-testid="home-host-disk">
+        <p className="text-xs tracking-wide text-muted-foreground uppercase">{t('home.hostDisk')}</p>
+        <p className="metric-mono text-lg font-semibold">{disk ? formatPct(disk.used_pct) : '—'}</p>
+      </div>
+    </div>
+  )
+}
+
 /**
  * Pollen's Home view — the default landing view (consumes
  * FE-1's viz primitives + the Pollen data endpoints sprint's
@@ -642,6 +694,7 @@ function ActivityFeedSection({ runsState, approvalsState }: ActivityFeedSectionP
  */
 export function HomeView({ onNavigate }: HomeViewProps) {
   const t = useT()
+  const { language } = useLanguage()
   const { can } = useRole()
   const canApprove = can('approve')
   const [refreshKey, setRefreshKey] = useState(0)
@@ -654,6 +707,7 @@ export function HomeView({ onNavigate }: HomeViewProps) {
   }, [])
 
   const cost = useAsyncData(() => fetchAnalyticsCost(TODAY_DAYS), [refreshKey])
+  const host = useAsyncData(() => fetchHostResources(), [refreshKey])
   const approvalsState = useAsyncData(() => fetchApprovals(), [refreshKey])
   const runsState = useAsyncData(() => fetchRuns(), [refreshKey])
   const summary = useAsyncData(() => fetchAnalyticsSummary(TODAY_DAYS), [])
@@ -780,6 +834,56 @@ export function HomeView({ onNavigate }: HomeViewProps) {
           })}
         />
       </div>
+
+      <Card data-testid="home-last24h">
+        <CardHeader>
+          <SectionHeader index="01b" title={t('home.last24hTitle')} />
+          <CardDescription>{t('home.last24hDescription')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {cost.status === 'loading' && (
+            <div role="status" className="animate-pulse text-sm text-muted-foreground">
+              {t('common.loading')}
+            </div>
+          )}
+          {cost.status === 'error' && (
+            <p className="text-sm text-muted-foreground">
+              {cost.error instanceof ApiForbiddenError ? t('home.kpiRequiresRole') : describeApiError(cost.error)}
+            </p>
+          )}
+          {cost.status === 'success' && cost.data.by_provider.length === 0 && (
+            <p data-testid="home-last24h-empty" className="text-sm text-muted-foreground">
+              {t('home.last24hEmpty')}
+            </p>
+          )}
+          {cost.status === 'success' && cost.data.by_provider.length > 0 && (
+            <SpendRankList
+              testId="home-last24h-list"
+              locale={language}
+              onRowClick={() => onNavigate('providers')}
+              rows={[...cost.data.by_provider]
+                .sort((a, b) => b.cost_usd - a.cost_usd)
+                .map((row) => ({
+                  key: row.provider,
+                  label: row.provider,
+                  provider: row.provider,
+                  tokens: row.input_tokens + row.output_tokens,
+                  costUsd: row.cost_usd,
+                }))}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card data-testid="home-host">
+        <CardHeader>
+          <SectionHeader index="01c" title={t('home.hostTitle')} />
+          <CardDescription>{t('home.hostDescription')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <HostStrip state={host} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

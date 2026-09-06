@@ -1,17 +1,22 @@
 ## Summary
 
-HP-83: **use** OpenCodex as a local OpenAI-compat backend. HP-82 only discovered it.
+HP-68: rebase slice 1 (this-host RAM/CPU/disk + Paul-style spend ranks) onto current main, then add an honest **this-host process list** and **loopback browser tabs**.
 
-- Probe lists models from loopback `GET /v1/models`
-- `POST /v1/models/verify` accepts `provider: opencodex` (never `agent_kind: codex`)
-- A prompt-CLI step with `mode: api` + `api_provider: opencodex` POSTs `/v1/chat/completions` to `http://127.0.0.1:10100/v1`
-- Still no `kind: opencodex` runner, no `~/.codex/config.toml`, no Codex→OpenCodex fallback
+Kept only what HivePilot can measure:
 
-Linear: [HP-83](https://linear.app/js-workspace/issue/HP-83/utiliser-opencodex-comme-backend-openai-compat-local).
+- Last 24h by provider on Home
+- By-model ranked list on Models
+- This host RAM / CPU / disk (`GET /v1/host/resources`)
+- This host allowlisted agent processes (`GET /v1/host/processes`)
+- Real browser tabs only when a loopback Chrome DevTools endpoint answers (`GET /v1/host/browser`)
 
-Replay: `hivepilot run …` with a step `options.mode: api` / `api_provider: opencodex`, or Providers → Local proxies → Verify.
+Not invented: quota % / runway, a fake “N servers” count, remote CDP, a full `ps aux` dump.
+
+Linear: [HP-68](https://linear.app/js-workspace/issue/HP-68/prototype-panneau-ressources-ramcpussd-serveurs-actifs-navigateur).
+
+Replay: Home → This host. Processes come from `/proc`. Tabs appear only if `HIVEPILOT_BROWSER_CDP_URL` points at loopback (default `http://127.0.0.1:9222`).
 
 ## Testing
 
-- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp83_opencodex_use.py tests/test_hp82_opencodex_probe.py tests/test_model_verify.py tests/test_prompt_cli_runner.py::TestApiModeCaptureUsage -q`
-- [x] `cd web && npm test -- --run src/components/views/ProvidersView.test.tsx`
+- [ ] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp68_host_resources.py tests/test_pollen_contract.py -q`
+- [ ] `cd web && npm test -- --run src/components/views/HomeView.test.tsx`
